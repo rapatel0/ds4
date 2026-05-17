@@ -41,6 +41,21 @@ struct ds4_gpu_tensor {
     int owner;
 };
 
+struct ds4_gpu_arena {
+    void *ptr;
+    uint64_t bytes;
+    uint64_t used;
+    uint64_t peak_used;
+    size_t free_before;
+    size_t total_before;
+    size_t free_after_alloc;
+    size_t total_after_alloc;
+    size_t free_after_upload;
+    size_t total_after_upload;
+    int gpu;
+    int valid;
+};
+
 typedef struct {
     uint8_t scales[CUDA_QK_K / 16];
     uint8_t qs[CUDA_QK_K / 4];
@@ -1566,6 +1581,218 @@ extern "C" void ds4_gpu_print_memory_report(const char *label) {
     (void)cudaMemGetInfo(&free_b, &total_b);
     fprintf(stderr, "ds4: CUDA memory report %s: free %.2f MiB total %.2f MiB\n",
             label ? label : "", (double)free_b / 1048576.0, (double)total_b / 1048576.0);
+}
+
+extern "C" int ds4_gpu_device_count(void) {
+    int n = 0;
+    cudaError_t err = cudaGetDeviceCount(&n);
+    if (err != cudaSuccess) {
+        (void)cudaGetLastError();
+        return 0;
+    }
+    return n;
+}
+
+static int cuda_arena_range_ok(const ds4_gpu_arena *a, uint64_t offset, uint64_t bytes) {
+    return a && a->valid && offset <= a->bytes && bytes <= a->bytes - offset;
+}
+
+extern "C" int ds4_gpu_arena_open(ds4_gpu_arena **out, int gpu, uint64_t bytes) {
+    if (!out || gpu < 0) return 1;
+    *out = NULL;
+    int n_dev = ds4_gpu_device_count();
+    if (gpu >= n_dev) {
+        fprintf(stderr, "ds4: arena GPU %d is outside visible device count %d\n", gpu, n_dev);
+        return 1;
+    }
+    ds4_gpu_arena *a = (ds4_gpu_arena *)calloc(1, sizeof(*a));
+    if (!a) return 1;
+    a->gpu = gpu;
+    a->bytes = bytes;
+    a->valid = 1;
+    if (!cuda_ok(cudaSetDevice(gpu), "arena set device")) {
+        free(a);
+        return 1;
+    }
+    (void)cudaMemGetInfo(&a->free_before, &a->total_before);
+    uint64_t alloc_bytes = bytes ? bytes : 1;
+    if (!cuda_ok(cudaMalloc(&a->ptr, (size_t)alloc_bytes), "arena alloc")) {
+        free(a);
+        return 1;
+    }
+    (void)cudaMemGetInfo(&a->free_after_alloc, &a->total_after_alloc);
+    cudaPointerAttributes attr;
+    memset(&attr, 0, sizeof(attr));
+    cudaError_t attr_err = cudaPointerGetAttributes(&attr, a->ptr);
+    if (attr_err != cudaSuccess || attr.type != cudaMemoryTypeDevice) {
+        fprintf(stderr, "ds4: arena allocation is not device memory on gpu %d\n", gpu);
+        if (attr_err != cudaSuccess) (void)cudaGetLastError();
+        (void)cudaFree(a->ptr);
+        free(a);
+        return 1;
+    }
+    *out = a;
+    return 0;
+}
+
+extern "C" void ds4_gpu_arena_close(ds4_gpu_arena *arena) {
+    if (!arena) return;
+    if (arena->ptr) {
+        (void)cudaSetDevice(arena->gpu);
+        (void)cudaFree(arena->ptr);
+    }
+    free(arena);
+}
+
+extern "C" int ds4_gpu_arena_upload(ds4_gpu_arena *arena,
+                                    uint64_t offset,
+                                    const void *host_src,
+                                    uint64_t bytes) {
+    if (!cuda_arena_range_ok(arena, offset, bytes) || (bytes && !host_src)) {
+        if (arena) arena->valid = 0;
+        return 1;
+    }
+    if (bytes == 0) return 0;
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "arena upload set device") ||
+        !cuda_ok(cudaMemcpy((char *)arena->ptr + offset,
+                            host_src,
+                            (size_t)bytes,
+                            cudaMemcpyHostToDevice),
+                 "arena upload")) {
+        arena->valid = 0;
+        if (arena->ptr) {
+            (void)cudaFree(arena->ptr);
+            arena->ptr = NULL;
+        }
+        return 1;
+    }
+    if (offset + bytes > arena->used) arena->used = offset + bytes;
+    if (arena->used > arena->peak_used) arena->peak_used = arena->used;
+    (void)cudaMemGetInfo(&arena->free_after_upload, &arena->total_after_upload);
+    return 0;
+}
+
+extern "C" int ds4_gpu_arena_read(const ds4_gpu_arena *arena,
+                                  uint64_t offset,
+                                  void *dst,
+                                  uint64_t bytes) {
+    if (!cuda_arena_range_ok(arena, offset, bytes) || (bytes && !dst)) return 1;
+    if (bytes == 0) return 0;
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "arena read set device") ||
+        !cuda_ok(cudaMemcpy(dst,
+                            (const char *)arena->ptr + offset,
+                            (size_t)bytes,
+                            cudaMemcpyDeviceToHost),
+                 "arena read")) {
+        return 1;
+    }
+    return 0;
+}
+
+extern "C" uint64_t ds4_gpu_arena_bytes(const ds4_gpu_arena *arena) {
+    return arena ? arena->bytes : 0;
+}
+
+extern "C" uint64_t ds4_gpu_arena_used(const ds4_gpu_arena *arena) {
+    return arena ? arena->used : 0;
+}
+
+extern "C" uint64_t ds4_gpu_arena_free_after_upload_bytes(const ds4_gpu_arena *arena) {
+    return arena ? (uint64_t)arena->free_after_upload : 0;
+}
+
+extern "C" int ds4_gpu_arena_gpu(const ds4_gpu_arena *arena) {
+    return arena ? arena->gpu : -1;
+}
+
+extern "C" const char *ds4_gpu_arena_memory_kind(const ds4_gpu_arena *arena) {
+    (void)arena;
+    return "device";
+}
+
+extern "C" int ds4_gpu_arena_is_device_memory(const ds4_gpu_arena *arena) {
+    if (!arena || !arena->ptr) return 0;
+    cudaPointerAttributes attr;
+    memset(&attr, 0, sizeof(attr));
+    cudaError_t err = cudaPointerGetAttributes(&attr, arena->ptr);
+    if (err != cudaSuccess) {
+        (void)cudaGetLastError();
+        return 0;
+    }
+    return attr.type == cudaMemoryTypeDevice;
+}
+
+extern "C" void ds4_gpu_arena_print_memory_report(FILE *fp,
+                                                  ds4_gpu_arena * const *arenas,
+                                                  int n_arenas) {
+    if (!fp) fp = stderr;
+    fprintf(fp,
+            "gpu\tarena_bytes\tused_bytes\tpeak_used\tmemory_kind\t"
+            "free_before\ttotal_before\tfree_after_alloc\ttotal_after_alloc\t"
+            "free_after_upload\ttotal_after_upload\tvalid\n");
+    for (int i = 0; i < n_arenas; i++) {
+        ds4_gpu_arena *a = arenas ? arenas[i] : NULL;
+        if (!a) continue;
+        size_t free_now = 0;
+        size_t total_now = 0;
+        (void)cudaSetDevice(a->gpu);
+        (void)cudaMemGetInfo(&free_now, &total_now);
+        if (a->free_after_upload == 0) {
+            a->free_after_upload = free_now;
+            a->total_after_upload = total_now;
+        }
+        fprintf(fp,
+                "%d\t%llu\t%llu\t%llu\t%s\t"
+                "%zu\t%zu\t%zu\t%zu\t%zu\t%zu\t%d\n",
+                a->gpu,
+                (unsigned long long)a->bytes,
+                (unsigned long long)a->used,
+                (unsigned long long)a->peak_used,
+                ds4_gpu_arena_memory_kind(a),
+                a->free_before,
+                a->total_before,
+                a->free_after_alloc,
+                a->total_after_alloc,
+                a->free_after_upload,
+                a->total_after_upload,
+                a->valid);
+    }
+}
+
+extern "C" void ds4_gpu_print_topology_report(FILE *fp) {
+    if (!fp) fp = stderr;
+    int n = ds4_gpu_device_count();
+    fprintf(fp, "gpu_topology\tdevice_count\t%d\n", n);
+    fprintf(fp, "gpu\tname\tpci_bus_id\ttotal_global_mem\n");
+    for (int i = 0; i < n; i++) {
+        cudaDeviceProp prop;
+        memset(&prop, 0, sizeof(prop));
+        if (cudaGetDeviceProperties(&prop, i) != cudaSuccess) {
+            (void)cudaGetLastError();
+            continue;
+        }
+        char pci[32] = {0};
+        (void)cudaDeviceGetPCIBusId(pci, sizeof(pci), i);
+        fprintf(fp, "%d\t%s\t%s\t%zu\n", i, prop.name, pci, prop.totalGlobalMem);
+    }
+    fprintf(fp, "p2p_from\\to");
+    for (int j = 0; j < n; j++) fprintf(fp, "\t%d", j);
+    fputc('\n', fp);
+    for (int i = 0; i < n; i++) {
+        fprintf(fp, "%d", i);
+        for (int j = 0; j < n; j++) {
+            int can = (i == j) ? 1 : 0;
+            if (i != j) {
+                cudaError_t err = cudaDeviceCanAccessPeer(&can, i, j);
+                if (err != cudaSuccess) {
+                    (void)cudaGetLastError();
+                    can = 0;
+                }
+            }
+            fprintf(fp, "\t%d", can);
+        }
+        fputc('\n', fp);
+    }
 }
 
 extern "C" void ds4_gpu_set_quality(bool quality) {

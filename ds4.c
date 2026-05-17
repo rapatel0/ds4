@@ -35,6 +35,7 @@
 #include <unistd.h>
 
 #include "ds4.h"
+#include "ds4_pack.h"
 
 #ifndef DS4_NO_GPU
 #include "ds4_gpu.h"
@@ -14382,6 +14383,7 @@ struct ds4_vocab {
 struct ds4_engine {
     ds4_model model;
     ds4_model mtp_model;
+    ds4_pack *pack;
     ds4_vocab vocab;
     ds4_weights weights;
     ds4_mtp_weights mtp_weights;
@@ -14396,6 +14398,88 @@ struct ds4_engine {
     bool metal_ready;
     bool mtp_ready;
 };
+
+static char *tensor_shape_string(const ds4_tensor *t) {
+    char tmp[128];
+    size_t pos = 0;
+    tmp[pos++] = '[';
+    for (uint32_t i = 0; i < t->ndim; i++) {
+        int n = snprintf(tmp + pos, sizeof(tmp) - pos,
+                         "%s%" PRIu64, i ? "x" : "", t->dim[i]);
+        if (n < 0 || (size_t)n >= sizeof(tmp) - pos) {
+            ds4_die("tensor shape string is too long");
+        }
+        pos += (size_t)n;
+    }
+    if (pos + 2 > sizeof(tmp)) ds4_die("tensor shape string is too long");
+    tmp[pos++] = ']';
+    tmp[pos] = '\0';
+    return ds4_strdup(tmp);
+}
+
+static ds4_pack_source_tensor *model_pack_source_tensors(const ds4_model *m) {
+    ds4_pack_source_tensor *source =
+        xcalloc((size_t)m->n_tensors, sizeof(source[0]));
+    for (uint64_t i = 0; i < m->n_tensors; i++) {
+        const ds4_tensor *t = &m->tensors[i];
+        source[i].name = t->name.ptr;
+        source[i].name_len = (size_t)t->name.len;
+        source[i].source_dtype = tensor_type_name(t->type);
+        source[i].source_shape = tensor_shape_string(t);
+        source[i].source_offset = t->abs_offset;
+        source[i].byte_length = t->bytes;
+    }
+    return source;
+}
+
+static void model_pack_source_tensors_free(ds4_pack_source_tensor *source, uint64_t n) {
+    if (!source) return;
+    for (uint64_t i = 0; i < n; i++) free((char *)source[i].source_shape);
+    free(source);
+}
+
+static int engine_reconcile_pack(ds4_engine *e, const ds4_engine_options *opt) {
+    char err[512];
+    FILE *report = NULL;
+    bool close_report = false;
+    if (opt->pack_reconcile_report_path && opt->pack_reconcile_report_path[0]) {
+        report = fopen(opt->pack_reconcile_report_path, "w");
+        if (!report) {
+            fprintf(stderr, "ds4: cannot open pack reconcile report '%s': %s\n",
+                    opt->pack_reconcile_report_path, strerror(errno));
+            return 1;
+        }
+        close_report = true;
+    } else {
+        report = opt->inspect_only ? stdout : stderr;
+    }
+
+    ds4_pack_source_tensor *source = model_pack_source_tensors(&e->model);
+    ds4_pack_reconcile_summary summary;
+    int rc = ds4_pack_reconcile(e->pack,
+                                source,
+                                (size_t)e->model.n_tensors,
+                                e->model.size,
+                                8,
+                                report,
+                                &summary,
+                                err,
+                                sizeof(err));
+    if (close_report) fclose(report);
+    model_pack_source_tensors_free(source, e->model.n_tensors);
+
+    if (rc != 0) {
+        fprintf(stderr, "ds4: %s\n", err);
+        return 1;
+    }
+    fprintf(stderr,
+            "ds4: pack reconcile OK: source_tensors=%" PRIu64
+            " pack_rows=%" PRIu64 " ok=%" PRIu64 "\n",
+            summary.source_tensors,
+            summary.pack_rows,
+            summary.ok_rows);
+    return 0;
+}
 
 static bool cpu_directional_steering_enabled(
         const float *dirs,
@@ -17204,6 +17288,20 @@ int ds4_engine_open(ds4_engine **out, const ds4_engine_options *opt) {
     if (v100_source_layout) config_validate_v100_source_model(&e->model);
     else config_validate_model(&e->model);
     weights_bind(&e->weights, &e->model);
+    if (opt->pack_index_path && opt->pack_index_path[0]) {
+        char err[512];
+        if (ds4_pack_open(&e->pack, opt->pack_index_path, err, sizeof(err)) != 0) {
+            fprintf(stderr, "ds4: %s\n", err);
+            ds4_engine_close(e);
+            *out = NULL;
+            return 1;
+        }
+        if (engine_reconcile_pack(e, opt) != 0) {
+            ds4_engine_close(e);
+            *out = NULL;
+            return 1;
+        }
+    }
     if (e->weights.v100_source_layout && !opt->inspect_only) {
         fprintf(stderr,
                 "ds4: native DS4-Flash source layout is recognized, but V100 "
@@ -17316,6 +17414,7 @@ void ds4_engine_close(ds4_engine *e) {
     vocab_free(&e->vocab);
     ds4_threads_shutdown();
     if (e->mtp_ready) model_close(&e->mtp_model);
+    ds4_pack_close(e->pack);
     model_close(&e->model);
 #ifndef DS4_NO_GPU
     ds4_gpu_cleanup();

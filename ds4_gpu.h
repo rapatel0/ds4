@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 
 /* =========================================================================
  * GPU Tensor and Command Lifetime.
@@ -44,6 +45,35 @@ int ds4_gpu_cache_q8_f16_range(const void *model_map, uint64_t model_size, uint6
 int ds4_gpu_should_use_managed_kv_cache(uint64_t kv_cache_bytes, uint64_t context_bytes);
 void ds4_gpu_set_quality(bool quality);
 void ds4_gpu_print_memory_report(const char *label);
+
+/* Residency-only weight arenas for DS4 V100 pack smoke tests.
+ *
+ * These APIs intentionally do not participate in the production execution
+ * path. They prove that source-faithful packed bytes can reside on the owning
+ * GPU before later sprints design a real multi-device execution context. */
+typedef struct ds4_gpu_arena ds4_gpu_arena;
+
+int ds4_gpu_device_count(void);
+int ds4_gpu_arena_open(ds4_gpu_arena **out, int gpu, uint64_t bytes);
+void ds4_gpu_arena_close(ds4_gpu_arena *arena);
+int ds4_gpu_arena_upload(ds4_gpu_arena *arena,
+                         uint64_t offset,
+                         const void *host_src,
+                         uint64_t bytes);
+int ds4_gpu_arena_read(const ds4_gpu_arena *arena,
+                       uint64_t offset,
+                       void *dst,
+                       uint64_t bytes);
+uint64_t ds4_gpu_arena_bytes(const ds4_gpu_arena *arena);
+uint64_t ds4_gpu_arena_used(const ds4_gpu_arena *arena);
+uint64_t ds4_gpu_arena_free_after_upload_bytes(const ds4_gpu_arena *arena);
+int ds4_gpu_arena_gpu(const ds4_gpu_arena *arena);
+const char *ds4_gpu_arena_memory_kind(const ds4_gpu_arena *arena);
+int ds4_gpu_arena_is_device_memory(const ds4_gpu_arena *arena);
+void ds4_gpu_arena_print_memory_report(FILE *fp,
+                                       ds4_gpu_arena * const *arenas,
+                                       int n_arenas);
+void ds4_gpu_print_topology_report(FILE *fp);
 
 /* =========================================================================
  * Embeddings and Indexer Helpers.

@@ -1,0 +1,24 @@
+DS4 V100 packer
+manifest: docs/sprints/drafts/SPRINT-002-PACK-MANIFEST.tsv
+mode: emit-shards
+gpus: 8
+alignment: 256 bytes
+tensors: 1328
+source: /models/DSv4-Flash-256e-fixed.gguf
+out_dir: /workspace/ds4-pack.tmp
+
+Shard plan
+| GPU | Tensors | Payload | Padded shard size | Padding |
+|---:|---:|---:|---:|---:|
+| gpu0 | 173 | 20.98 GiB | 20.98 GiB | 0.004 MiB |
+| gpu1 | 186 | 20.02 GiB | 20.02 GiB | 0.004 MiB |
+| gpu2 | 186 | 20.02 GiB | 20.02 GiB | 0.004 MiB |
+| gpu3 | 186 | 20.02 GiB | 20.02 GiB | 0.004 MiB |
+| gpu4 | 186 | 20.02 GiB | 20.02 GiB | 0.004 MiB |
+| gpu5 | 158 | 16.69 GiB | 16.69 GiB | 0.004 MiB |
+| gpu6 | 152 | 16.67 GiB | 16.67 GiB | 0.004 MiB |
+| gpu7 | 101 | 11.01 GiB | 11.01 GiB | 0.003 MiB |
+| total | 1328 | 145.42 GiB | 145.42 GiB | 0.032 MiB |
+
+Wrote pack index: /workspace/ds4-pack.tmp/pack-index.tsv
+Wrote 8 GPU shard files under /workspace/ds4-pack.tmp

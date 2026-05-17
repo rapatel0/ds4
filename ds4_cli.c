@@ -154,6 +154,10 @@ static void usage(FILE *fp) {
         "Diagnostics:\n"
         "  --inspect\n"
         "      Load the model and print a summary only.\n"
+        "  --pack-index FILE\n"
+        "      Validate a DS4 V100 pack-index.tsv during model open.\n"
+        "  --pack-reconcile-report FILE\n"
+        "      Write pack reconciliation rows to FILE instead of stdout/stderr.\n"
         "  --dump-tokens\n"
         "      Tokenize -p/--prompt-file exactly as written, then exit without inference.\n"
         "  --dump-logprobs FILE\n"
@@ -1308,6 +1312,10 @@ static cli_config parse_options(int argc, char **argv) {
             exit(2);
         } else if (!strcmp(arg, "--inspect")) {
             c.inspect = true;
+        } else if (!strcmp(arg, "--pack-index")) {
+            c.engine.pack_index_path = need_arg(&i, argc, argv, arg);
+        } else if (!strcmp(arg, "--pack-reconcile-report")) {
+            c.engine.pack_reconcile_report_path = need_arg(&i, argc, argv, arg);
         } else if (!strcmp(arg, "--warm-weights")) {
             c.engine.warm_weights = true;
         } else if (!strcmp(arg, "--server")) {

@@ -12,11 +12,12 @@ OBJCFLAGS ?= -O3 -ffast-math $(NATIVE_CPU_FLAG) -Wall -Wextra -fobjc-arc
 
 LDLIBS ?= -lm -pthread
 METAL_SRCS := $(wildcard metal/*.metal)
+PACK_OBJS = ds4_pack.o
 
 ifeq ($(UNAME_S),Darwin)
 METAL_LDLIBS := $(LDLIBS) -framework Foundation -framework Metal
-CORE_OBJS = ds4.o ds4_metal.o
-CPU_CORE_OBJS = ds4_cpu.o
+CORE_OBJS = ds4.o ds4_metal.o $(PACK_OBJS)
+CPU_CORE_OBJS = ds4_cpu.o $(PACK_OBJS)
 else
 CFLAGS += -D_GNU_SOURCE -fno-finite-math-only
 CUDA_HOME ?= /usr/local/cuda
@@ -27,8 +28,8 @@ NVCC_ARCH_FLAGS := -arch=$(CUDA_ARCH)
 endif
 NVCCFLAGS ?= -O3 --use_fast_math $(NVCC_ARCH_FLAGS) -Xcompiler $(NATIVE_CPU_FLAG) -Xcompiler -pthread
 CUDA_LDLIBS ?= -lm -Xcompiler -pthread -L$(CUDA_HOME)/targets/sbsa-linux/lib -L$(CUDA_HOME)/lib64 -lcudart -lcublas
-CORE_OBJS = ds4.o ds4_cuda.o
-CPU_CORE_OBJS = ds4_cpu.o
+CORE_OBJS = ds4.o ds4_cuda.o $(PACK_OBJS)
+CPU_CORE_OBJS = ds4_cpu.o $(PACK_OBJS)
 METAL_LDLIBS := $(LDLIBS)
 endif
 
@@ -112,8 +113,11 @@ cuda-regression: tests/cuda_long_context_smoke
 	./tests/cuda_long_context_smoke
 endif
 
-ds4.o: ds4.c ds4.h ds4_gpu.h
+ds4.o: ds4.c ds4.h ds4_gpu.h ds4_pack.h
 	$(CC) $(CFLAGS) -c -o $@ ds4.c
+
+ds4_pack.o: ds4_pack.c ds4_pack.h
+	$(CC) $(CFLAGS) -c -o $@ ds4_pack.c
 
 ds4_cli.o: ds4_cli.c ds4.h linenoise.h
 	$(CC) $(CFLAGS) -c -o $@ ds4_cli.c
@@ -136,6 +140,32 @@ tools/ds4-v100-plan: tools/ds4-v100-plan.c
 tools/ds4-v100-pack: tools/ds4-v100-pack.c
 	$(CC) $(CFLAGS) -D_FILE_OFFSET_BITS=64 -o $@ tools/ds4-v100-pack.c $(LDLIBS)
 
+tools/ds4-v100-residency-smoke.o: tools/ds4-v100-residency-smoke.c ds4_pack.h ds4_gpu.h
+	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-residency-smoke.c
+
+ifeq ($(UNAME_S),Darwin)
+tools/ds4-v100-residency-smoke: tools/ds4-v100-residency-smoke.o ds4_pack.o ds4_gpu_arena_stub.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+else
+tools/ds4-v100-residency-smoke: tools/ds4-v100-residency-smoke.o ds4_pack.o ds4_cuda.o
+	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
+endif
+
+ds4_gpu_arena_stub.o: ds4_gpu_arena_stub.c ds4_gpu.h
+	$(CC) $(CFLAGS) -c -o $@ ds4_gpu_arena_stub.c
+
+tests/pack_index_smoke.o: tests/pack_index_smoke.c ds4_pack.h
+	$(CC) $(CFLAGS) -I. -c -o $@ tests/pack_index_smoke.c
+
+tests/pack_index_smoke: tests/pack_index_smoke.o ds4_pack.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+tests/gpu_arena_smoke.o: tests/gpu_arena_smoke.c ds4_gpu.h
+	$(CC) $(CFLAGS) -I. -c -o $@ tests/gpu_arena_smoke.c
+
+tests/gpu_arena_smoke: tests/gpu_arena_smoke.o ds4_gpu_arena_stub.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
 tests/cuda_long_context_smoke.o: tests/cuda_long_context_smoke.c ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -c -o $@ tests/cuda_long_context_smoke.c
 
@@ -145,7 +175,7 @@ rax.o: rax.c rax.h rax_malloc.h
 linenoise.o: linenoise.c linenoise.h
 	$(CC) $(CFLAGS) -c -o $@ linenoise.c
 
-ds4_cpu.o: ds4.c ds4.h ds4_gpu.h
+ds4_cpu.o: ds4.c ds4.h ds4_gpu.h ds4_pack.h
 	$(CC) $(CFLAGS) -DDS4_NO_GPU -c -o $@ ds4.c
 
 ds4_cli_cpu.o: ds4_cli.c ds4.h linenoise.h
@@ -180,4 +210,4 @@ test: ds4_test
 	./ds4_test
 
 clean:
-	rm -f ds4 ds4-server ds4-bench ds4-eval ds4_cpu ds4_native ds4_server_test ds4_test *.o tests/cuda_long_context_smoke tests/cuda_long_context_smoke.o tools/ds4-v100-plan tools/ds4-v100-pack
+	rm -f ds4 ds4-server ds4-bench ds4-eval ds4_cpu ds4_native ds4_server_test ds4_test *.o tests/*.o tests/cuda_long_context_smoke tests/pack_index_smoke tests/gpu_arena_smoke tools/*.o tools/ds4-v100-plan tools/ds4-v100-pack tools/ds4-v100-residency-smoke
