@@ -166,6 +166,12 @@ tests/gpu_arena_smoke.o: tests/gpu_arena_smoke.c ds4_gpu.h
 tests/gpu_arena_smoke: tests/gpu_arena_smoke.o ds4_gpu_arena_stub.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
+tests/bf16_probe_smoke.o: tests/bf16_probe_smoke.c ds4_gpu.h
+	$(CC) $(CFLAGS) -I. -c -o $@ tests/bf16_probe_smoke.c
+
+tests/bf16_probe_smoke: tests/bf16_probe_smoke.o ds4_gpu_arena_stub.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
 tests/cuda_long_context_smoke.o: tests/cuda_long_context_smoke.c ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -c -o $@ tests/cuda_long_context_smoke.c
 
@@ -210,4 +216,4 @@ test: ds4_test
 	./ds4_test
 
 clean:
-	rm -f ds4 ds4-server ds4-bench ds4-eval ds4_cpu ds4_native ds4_server_test ds4_test *.o tests/*.o tests/cuda_long_context_smoke tests/pack_index_smoke tests/gpu_arena_smoke tools/*.o tools/ds4-v100-plan tools/ds4-v100-pack tools/ds4-v100-residency-smoke
+	rm -f ds4 ds4-server ds4-bench ds4-eval ds4_cpu ds4_native ds4_server_test ds4_test *.o tests/*.o tests/cuda_long_context_smoke tests/pack_index_smoke tests/gpu_arena_smoke tests/bf16_probe_smoke tools/*.o tools/ds4-v100-plan tools/ds4-v100-pack tools/ds4-v100-residency-smoke
