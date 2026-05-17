@@ -111,6 +111,8 @@ typedef struct {
     uint32_t ndim;
     uint64_t dim[DS4_MAX_DIMS];
     uint32_t type;
+    uint64_t rel_offset;
+    uint64_t abs_offset;
     uint64_t elements;
     uint64_t bytes;
 } tensor_desc;
@@ -120,6 +122,8 @@ typedef struct {
     uint64_t n_kv;
     uint64_t n_tensors;
     uint64_t file_size;
+    uint64_t alignment;
+    uint64_t tensor_data_pos;
     tensor_desc *tensors;
 } gguf_inventory;
 
@@ -165,6 +169,7 @@ typedef struct {
     double scratch_gib;
     const char *inventory_path;
     const char *inventory_tsv;
+    const char *manifest_path;
 } options;
 
 static void die(const char *msg) {
@@ -196,6 +201,15 @@ static bool type_nbytes(uint32_t type, uint64_t elements, uint64_t *bytes) {
 static uint64_t checked_mul(uint64_t a, uint64_t b) {
     if (a != 0 && b > UINT64_MAX / a) die("integer overflow in byte planner");
     return a * b;
+}
+
+static uint64_t align_up(uint64_t value, uint64_t alignment) {
+    if (alignment == 0) return value;
+    const uint64_t rem = value % alignment;
+    if (rem == 0) return value;
+    const uint64_t delta = alignment - rem;
+    if (value > UINT64_MAX - delta) die("integer overflow while aligning GGUF tensor data");
+    return value + delta;
 }
 
 static uint64_t elems2(uint64_t a, uint64_t b) {
@@ -680,6 +694,7 @@ static void dims_string(const tensor_desc *t, char *buf, size_t len) {
 
 static void parse_gguf(const char *path, gguf_inventory *inv) {
     memset(inv, 0, sizeof(*inv));
+    inv->alignment = 32;
     struct stat st;
     if (stat(path, &st) != 0) die_errno("cannot stat inventory model", path);
     inv->file_size = (uint64_t)st.st_size;
@@ -701,6 +716,13 @@ static void parse_gguf(const char *path, gguf_inventory *inv) {
         if (!key) die(r.error);
         uint32_t type = 0;
         if (!read_u32(&r, &type)) die(r.error);
+        if (!strcmp(key, "general.alignment") && type == GGUF_VALUE_UINT32) {
+            uint32_t alignment = 0;
+            if (!read_u32(&r, &alignment)) die(r.error);
+            if (alignment != 0) inv->alignment = alignment;
+            free(key);
+            continue;
+        }
         free(key);
         if (!skip_value(&r, type, 0)) die(r.error);
     }
@@ -719,10 +741,19 @@ static void parse_gguf(const char *path, gguf_inventory *inv) {
             t->elements = checked_mul(t->elements, t->dim[d]);
         }
         if (!read_u32(&r, &t->type)) die(r.error);
-        uint64_t ignored_offset = 0;
-        if (!read_u64(&r, &ignored_offset)) die(r.error);
+        if (!read_u64(&r, &t->rel_offset)) die(r.error);
         if (!type_nbytes(t->type, t->elements, &t->bytes)) {
             t->bytes = 0;
+        }
+    }
+    inv->tensor_data_pos = align_up(r.pos, inv->alignment);
+    for (uint64_t i = 0; i < inv->n_tensors; i++) {
+        tensor_desc *t = &inv->tensors[i];
+        if (t->rel_offset > UINT64_MAX - inv->tensor_data_pos) die("GGUF tensor offset overflow");
+        t->abs_offset = inv->tensor_data_pos + t->rel_offset;
+        if (t->bytes != 0 &&
+            (t->abs_offset > inv->file_size || t->bytes > inv->file_size - t->abs_offset)) {
+            die("GGUF tensor points outside file");
         }
     }
     fclose(fp);
@@ -752,7 +783,116 @@ static void write_inventory_tsv(const gguf_inventory *inv, const char *path, uin
     if (fclose(fp) != 0) die_errno("cannot close inventory TSV", path);
 }
 
-static void run_inventory(const char *path, const char *tsv_path, uint32_t gpus) {
+static int owning_gpu_for_tensor(const char *name, uint32_t gpus) {
+    const int layer = tensor_layer(name);
+    if (layer >= 0) return layer_device((uint32_t)layer, gpus);
+    if (!strcmp(name, "token_embd.weight")) return 0;
+    if (!strcmp(name, "output.weight") ||
+        !strcmp(name, "output_norm.weight") ||
+        !strcmp(name, "hc_head_base") ||
+        !strcmp(name, "hc_head_fn") ||
+        !strcmp(name, "hc_head_scale")) {
+        return (int)gpus - 1;
+    }
+    return -1;
+}
+
+static const char *runtime_layout_for_tensor(const tensor_desc *t) {
+    const tensor_family family = classify_tensor(t->name);
+    switch (family) {
+    case FAMILY_ROUTED_EXPERT:
+        return t->type == 39 ? "source_mxfp4_grouped" : "unsupported_routed_source";
+    case FAMILY_ATTENTION:
+    case FAMILY_SHARED_EXPERT:
+        return t->type == 42 ? "source_f8_e4m3_b128_blocked" : "source_f32_control";
+    case FAMILY_COMPRESSOR:
+    case FAMILY_INDEXER:
+        if (t->type == 42) return "source_f8_e4m3_b128_blocked";
+        if (t->type == 30) return "source_bf16";
+        if (t->type == 0) return "source_f32";
+        return "source_mixed_unknown";
+    case FAMILY_OUTPUT_HEAD:
+        return t->type == 30 ? "source_bf16" : "source_output_unknown";
+    case FAMILY_HC:
+    case FAMILY_CONTROL:
+    case FAMILY_ROUTER:
+    case FAMILY_GLOBAL:
+        if (t->type == 30) return "source_bf16";
+        if (t->type == 26) return "source_i32";
+        if (t->type == 0) return "source_f32";
+        return "source_control_unknown";
+    case FAMILY_MTP:
+        return "mtp_deferred";
+    case FAMILY_UNKNOWN:
+    case FAMILY_COUNT:
+    default:
+        return "unknown";
+    }
+}
+
+static const char *kernel_family_for_tensor(const tensor_desc *t) {
+    const tensor_family family = classify_tensor(t->name);
+    switch (family) {
+    case FAMILY_ROUTED_EXPERT:
+        return "v100_grouped_mxfp4_pending";
+    case FAMILY_ATTENTION:
+        return t->type == 42 ? "v100_fp8_dequant_f16_hmma_pending" : "ds4_attention_control";
+    case FAMILY_COMPRESSOR:
+        return "ds4_compressor_bf16_f32_pending";
+    case FAMILY_INDEXER:
+        return "ds4_indexer_mixed_pending";
+    case FAMILY_SHARED_EXPERT:
+        return "v100_shared_fp8_dense_pending";
+    case FAMILY_OUTPUT_HEAD:
+        return "v100_bf16_output_pending";
+    case FAMILY_HC:
+        return "ds4_hc_control_f32";
+    case FAMILY_ROUTER:
+        return "ds4_router_f32_i32";
+    case FAMILY_CONTROL:
+        return "ds4_control_f32";
+    case FAMILY_GLOBAL:
+        if (!strcmp(t->name, "token_embd.weight")) return "ds4_embedding_bf16";
+        return "ds4_global_control";
+    case FAMILY_MTP:
+        return "mtp_deferred";
+    case FAMILY_UNKNOWN:
+    case FAMILY_COUNT:
+    default:
+        return "unknown";
+    }
+}
+
+static void write_manifest_tsv(const gguf_inventory *inv, const char *path, uint32_t gpus) {
+    FILE *fp = fopen(path, "w");
+    if (!fp) die_errno("cannot write manifest", path);
+    fprintf(fp,
+            "semantic_tensor_id\tsource_name\tsource_dtype\tsource_shape\t"
+            "runtime_layout\towning_gpu\tlayer_id\tkernel_family\t"
+            "byte_offset\tbyte_length\tscale_offset\tchecksum\tbyte_offset_basis\n");
+    for (uint64_t i = 0; i < inv->n_tensors; i++) {
+        const tensor_desc *t = &inv->tensors[i];
+        char dims[128];
+        dims_string(t, dims, sizeof(dims));
+        const int layer = tensor_layer(t->name);
+        const int gpu = owning_gpu_for_tensor(t->name, gpus);
+        fprintf(fp,
+                "%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%" PRIu64 "\t%" PRIu64 "\t-1\tpending\tabsolute_gguf_file\n",
+                t->name,
+                t->name,
+                type_name(t->type),
+                dims,
+                runtime_layout_for_tensor(t),
+                gpu,
+                layer,
+                kernel_family_for_tensor(t),
+                t->abs_offset,
+                t->bytes);
+    }
+    if (fclose(fp) != 0) die_errno("cannot close manifest", path);
+}
+
+static void run_inventory(const char *path, const char *tsv_path, const char *manifest_path, uint32_t gpus) {
     gguf_inventory inv;
     parse_gguf(path, &inv);
 
@@ -815,6 +955,10 @@ static void run_inventory(const char *path, const char *tsv_path, uint32_t gpus)
         write_inventory_tsv(&inv, tsv_path, gpus);
         printf("\nWrote tensor TSV: %s\n", tsv_path);
     }
+    if (manifest_path) {
+        write_manifest_tsv(&inv, manifest_path, gpus);
+        printf("Wrote pack manifest TSV: %s\n", manifest_path);
+    }
 
     free_inventory(&inv);
 }
@@ -856,10 +1000,11 @@ static void usage(FILE *fp) {
         "Inventory options:\n"
         "  --inventory FILE        Parse GGUF tensor directory and print dtype/family summary\n"
         "  --inventory-tsv FILE    Write full tensor inventory TSV\n"
+        "  --manifest FILE         Write first-pass pack manifest TSV\n"
         "\n"
         "Examples:\n"
         "  ds4-v100-plan --ctx 262144 --slots 4 --gpus 8 --mtp off\n"
-        "  ds4-v100-plan --inventory /models/DSv4-Flash-256e-fixed.gguf --inventory-tsv /tmp/ds4.tsv\n");
+        "  ds4-v100-plan --inventory /models/DSv4-Flash-256e-fixed.gguf --manifest /tmp/ds4-manifest.tsv\n");
 }
 
 int main(int argc, char **argv) {
@@ -896,6 +1041,8 @@ int main(int argc, char **argv) {
             opt.inventory_path = argv[++i];
         } else if (!strcmp(arg, "--inventory-tsv") && i + 1 < argc) {
             opt.inventory_tsv = argv[++i];
+        } else if (!strcmp(arg, "--manifest") && i + 1 < argc) {
+            opt.manifest_path = argv[++i];
         } else {
             usage(stderr);
             return 2;
@@ -905,10 +1052,13 @@ int main(int argc, char **argv) {
     if (opt.gpus == 0 || opt.gpus > 8) die("--gpus must be in 1..8");
     if (opt.slots == 0) die("--slots must be positive");
     if (opt.reserve_gib < 0.0 || opt.scratch_gib < 0.0) die("reserve/scratch must be non-negative");
+    if ((opt.inventory_tsv || opt.manifest_path) && !opt.inventory_path) {
+        die("--inventory-tsv and --manifest require --inventory");
+    }
 
     run_planner(&opt);
     if (opt.inventory_path) {
-        run_inventory(opt.inventory_path, opt.inventory_tsv, opt.gpus);
+        run_inventory(opt.inventory_path, opt.inventory_tsv, opt.manifest_path, opt.gpus);
     }
     return 0;
 }

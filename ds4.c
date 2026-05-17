@@ -883,6 +883,8 @@ static const gguf_type_info gguf_types[] = {
     [28] = {"f64",      1,   8},
     [29] = {"iq1_m",  256,  56},
     [30] = {"bf16",     1,   2},
+    [39] = {"mxfp4",   32,  17},
+    [42] = {"f8_e4m3_b128", 128, 129},
 };
 
 enum {
@@ -893,6 +895,9 @@ enum {
     DS4_TENSOR_Q4_K     = 12,
     DS4_TENSOR_IQ2_XXS  = 16,
     DS4_TENSOR_I32      = 26,
+    DS4_TENSOR_BF16     = 30,
+    DS4_TENSOR_MXFP4    = 39,
+    DS4_TENSOR_F8_E4M3_B128 = 42,
 };
 
 typedef struct {
@@ -2030,6 +2035,7 @@ typedef struct {
     ds4_tensor *output_norm;
     ds4_tensor *output;
     ds4_layer_weights layer[DS4_N_LAYER];
+    bool v100_source_layout;
 } ds4_weights;
 
 typedef struct {
@@ -2223,7 +2229,8 @@ static void tensor_expect_plain_layout(
 static bool tensor_is_routed_expert_type(uint32_t type) {
     return type == DS4_TENSOR_IQ2_XXS ||
            type == DS4_TENSOR_Q2_K ||
-           type == DS4_TENSOR_Q4_K;
+           type == DS4_TENSOR_Q4_K ||
+           type == DS4_TENSOR_MXFP4;
 }
 
 static DS4_MAYBE_UNUSED uint64_t routed_expert_block_bytes(uint32_t type) {
@@ -2231,6 +2238,7 @@ static DS4_MAYBE_UNUSED uint64_t routed_expert_block_bytes(uint32_t type) {
     case DS4_TENSOR_IQ2_XXS: return sizeof(block_iq2_xxs);
     case DS4_TENSOR_Q2_K:    return sizeof(block_q2_K);
     case DS4_TENSOR_Q4_K:    return sizeof(block_q4_K);
+    case DS4_TENSOR_MXFP4:   return 17;
     default:                 ds4_die("unsupported routed expert tensor type");
     }
     return 0;
@@ -2350,6 +2358,80 @@ static void weights_validate_layout(const ds4_weights *w) {
         if (il < DS4_N_HASH_LAYER) {
             tensor_expect_layout(l->ffn_gate_tid2eid, DS4_TENSOR_I32, 2, DS4_N_EXPERT_USED, DS4_N_VOCAB, 0);
         }
+    }
+}
+
+static void weights_validate_v100_source_layout(const ds4_weights *w) {
+    const uint64_t hc_dim = (uint64_t)DS4_N_EMBD * DS4_N_HC;
+    const uint64_t hc_mix_dim = 2u * DS4_N_HC + (uint64_t)DS4_N_HC * DS4_N_HC;
+    const uint64_t q_dim = (uint64_t)DS4_N_HEAD * DS4_N_HEAD_DIM;
+    const uint64_t out_low_dim = (uint64_t)DS4_N_OUT_GROUP * DS4_N_LORA_O;
+
+    tensor_expect_layout(w->token_embd,      DS4_TENSOR_BF16, 2, DS4_N_EMBD, DS4_N_VOCAB, 0);
+    tensor_expect_layout(w->output_hc_base,  DS4_TENSOR_F32,  1, DS4_N_HC, 0, 0);
+    tensor_expect_layout(w->output_hc_fn,    DS4_TENSOR_F32,  2, hc_dim, DS4_N_HC, 0);
+    tensor_expect_layout(w->output_hc_scale, DS4_TENSOR_F32,  1, 1, 0, 0);
+    tensor_expect_layout(w->output_norm,     DS4_TENSOR_F32,  1, DS4_N_EMBD, 0, 0);
+    tensor_expect_layout(w->output,          DS4_TENSOR_BF16, 2, DS4_N_EMBD, DS4_N_VOCAB, 0);
+
+    for (uint32_t il = 0; il < DS4_N_LAYER; il++) {
+        const ds4_layer_weights *l = &w->layer[il];
+        const uint32_t ratio = ds4_layer_compress_ratio(il);
+
+        tensor_expect_layout(l->hc_attn_fn,     DS4_TENSOR_F32,  2, hc_dim, hc_mix_dim, 0);
+        tensor_expect_layout(l->hc_attn_scale,  DS4_TENSOR_F32,  1, 3, 0, 0);
+        tensor_expect_layout(l->hc_attn_base,   DS4_TENSOR_F32,  1, hc_mix_dim, 0, 0);
+        tensor_expect_layout(l->attn_norm,      DS4_TENSOR_F32,  1, DS4_N_EMBD, 0, 0);
+        tensor_expect_layout(l->attn_q_a,       DS4_TENSOR_F8_E4M3_B128, 2, DS4_N_EMBD, DS4_N_LORA_Q, 0);
+        tensor_expect_layout(l->attn_q_a_norm,  DS4_TENSOR_F32,  1, DS4_N_LORA_Q, 0, 0);
+        tensor_expect_layout(l->attn_q_b,       DS4_TENSOR_F8_E4M3_B128, 2, DS4_N_LORA_Q, q_dim, 0);
+        tensor_expect_layout(l->attn_kv,        DS4_TENSOR_F8_E4M3_B128, 2, DS4_N_EMBD, DS4_N_HEAD_DIM, 0);
+        tensor_expect_layout(l->attn_kv_a_norm, DS4_TENSOR_F32,  1, DS4_N_HEAD_DIM, 0, 0);
+        tensor_expect_layout(l->attn_sinks,     DS4_TENSOR_F32,  1, DS4_N_HEAD, 0, 0);
+        tensor_expect_layout(l->attn_output_a,  DS4_TENSOR_F8_E4M3_B128, 2, DS4_N_HEAD_DIM * (DS4_N_HEAD / DS4_N_OUT_GROUP), out_low_dim, 0);
+        tensor_expect_layout(l->attn_output_b,  DS4_TENSOR_F8_E4M3_B128, 2, out_low_dim, DS4_N_EMBD, 0);
+
+        if (ratio != 0) {
+            const uint32_t coff = ratio == 4 ? 2u : 1u;
+            const uint64_t comp_width = (uint64_t)coff * DS4_N_HEAD_DIM;
+            tensor_expect_layout(l->attn_compressor_ape,  DS4_TENSOR_F32,  2, comp_width, ratio, 0);
+            tensor_expect_layout(l->attn_compressor_kv,   DS4_TENSOR_BF16, 2, DS4_N_EMBD, comp_width, 0);
+            tensor_expect_layout(l->attn_compressor_gate, DS4_TENSOR_BF16, 2, DS4_N_EMBD, comp_width, 0);
+            tensor_expect_layout(l->attn_compressor_norm, DS4_TENSOR_F32,  1, DS4_N_HEAD_DIM, 0, 0);
+        }
+        if (ratio == 4) {
+            const uint64_t index_q_dim = (uint64_t)DS4_N_INDEXER_HEAD * DS4_N_INDEXER_HEAD_DIM;
+            const uint64_t index_width = 2u * DS4_N_INDEXER_HEAD_DIM;
+            tensor_expect_layout(l->indexer_attn_q_b,          DS4_TENSOR_F8_E4M3_B128, 2, DS4_N_LORA_Q, index_q_dim, 0);
+            tensor_expect_layout(l->indexer_proj,              DS4_TENSOR_BF16, 2, DS4_N_EMBD, DS4_N_INDEXER_HEAD, 0);
+            tensor_expect_layout(l->indexer_compressor_ape,    DS4_TENSOR_F32,  2, index_width, ratio, 0);
+            tensor_expect_layout(l->indexer_compressor_kv,     DS4_TENSOR_BF16, 2, DS4_N_EMBD, index_width, 0);
+            tensor_expect_layout(l->indexer_compressor_gate,   DS4_TENSOR_BF16, 2, DS4_N_EMBD, index_width, 0);
+            tensor_expect_layout(l->indexer_compressor_norm,   DS4_TENSOR_F32,  1, DS4_N_INDEXER_HEAD_DIM, 0, 0);
+        }
+
+        tensor_expect_layout(l->hc_ffn_fn,      DS4_TENSOR_F32,  2, hc_dim, hc_mix_dim, 0);
+        tensor_expect_layout(l->hc_ffn_scale,   DS4_TENSOR_F32,  1, 3, 0, 0);
+        tensor_expect_layout(l->hc_ffn_base,    DS4_TENSOR_F32,  1, hc_mix_dim, 0, 0);
+        tensor_expect_layout(l->ffn_norm,       DS4_TENSOR_F32,  1, DS4_N_EMBD, 0, 0);
+        tensor_expect_layout(l->ffn_gate_inp,   DS4_TENSOR_F32,  2, DS4_N_EMBD, DS4_N_EXPERT, 0);
+        if (il < DS4_N_HASH_LAYER) {
+            tensor_expect_layout(l->ffn_gate_tid2eid, DS4_TENSOR_I32, 2, DS4_N_EXPERT_USED, DS4_N_VOCAB, 0);
+        } else {
+            tensor_expect_layout(l->ffn_exp_probs_b, DS4_TENSOR_F32, 1, DS4_N_EXPERT, 0, 0);
+        }
+        tensor_expect_routed_expert(l->ffn_gate_exps, 3, DS4_N_EMBD, DS4_N_FF_EXP, DS4_N_EXPERT);
+        tensor_expect_routed_expert(l->ffn_up_exps,   3, DS4_N_EMBD, DS4_N_FF_EXP, DS4_N_EXPERT);
+        tensor_expect_routed_expert(l->ffn_down_exps, 3, DS4_N_FF_EXP, DS4_N_EMBD, DS4_N_EXPERT);
+        if (l->ffn_gate_exps->type != DS4_TENSOR_MXFP4 ||
+            l->ffn_up_exps->type != DS4_TENSOR_MXFP4 ||
+            l->ffn_down_exps->type != DS4_TENSOR_MXFP4) {
+            fprintf(stderr, "ds4: source-routed experts in layer %u must be MXFP4\n", il);
+            exit(1);
+        }
+        tensor_expect_layout(l->ffn_gate_shexp, DS4_TENSOR_F8_E4M3_B128, 2, DS4_N_EMBD, DS4_N_FF_EXP, 0);
+        tensor_expect_layout(l->ffn_up_shexp,   DS4_TENSOR_F8_E4M3_B128, 2, DS4_N_EMBD, DS4_N_FF_EXP, 0);
+        tensor_expect_layout(l->ffn_down_shexp, DS4_TENSOR_F8_E4M3_B128, 2, DS4_N_FF_EXP, DS4_N_EMBD, 0);
     }
 }
 
@@ -2573,14 +2655,76 @@ static void config_validate_model(const ds4_model *m) {
     config_expect_bool("expert_weights_norm", expert_weight_norm, true);
 }
 
+static void config_validate_v100_source_model(const ds4_model *m) {
+    const uint32_t n_layer = required_u32(m, "deepseek4.block_count");
+    const uint32_t n_embd = required_u32(m, "deepseek4.embedding_length");
+    const uint32_t n_vocab = required_u32(m, "deepseek4.vocab_size");
+    const uint32_t n_head = required_u32(m, "deepseek4.attention.head_count");
+    const uint32_t n_head_kv = required_u32(m, "deepseek4.attention.head_count_kv");
+    const uint32_t n_head_dim = required_u32(m, "deepseek4.attention.key_length");
+    const uint32_t n_value_dim = required_u32(m, "deepseek4.attention.value_length");
+    const uint32_t n_rot = required_u32(m, "deepseek4.rope.dimension_count");
+    const uint32_t n_lora_q = required_u32(m, "deepseek4.attention.q_lora_rank");
+    const uint32_t n_expert = required_u32(m, "deepseek4.expert_count");
+    const uint32_t n_expert_used = required_u32(m, "deepseek4.expert_used_count");
+    const uint32_t n_ff_exp = required_u32(m, "deepseek4.expert_feed_forward_length");
+    const uint32_t n_expert_shared = required_u32(m, "deepseek4.expert_shared_count");
+    const uint32_t n_swa = required_u32(m, "deepseek4.attention.sliding_window");
+    const uint32_t n_dense = required_u32(m, "deepseek4.leading_dense_block_count");
+    const uint32_t n_indexer_head = required_u32(m, "deepseek4.attention.indexer.head_count");
+    const uint32_t n_indexer_head_dim = required_u32(m, "deepseek4.attention.indexer.key_length");
+    const uint32_t n_indexer_top_k = required_u32(m, "deepseek4.attention.indexer.top_k");
+
+    config_expect_u32("block_count",                  n_layer,          DS4_N_LAYER);
+    config_expect_u32("embedding_length",             n_embd,           DS4_N_EMBD);
+    config_expect_u32("vocab_size",                   n_vocab,          DS4_N_VOCAB);
+    config_expect_u32("attention.head_count",         n_head,           DS4_N_HEAD);
+    config_expect_u32("attention.head_count_kv",      n_head_kv,        DS4_N_HEAD_KV);
+    config_expect_u32("attention.key_length",         n_head_dim,       DS4_N_HEAD_DIM);
+    config_expect_u32("attention.value_length",       n_value_dim,      DS4_N_VALUE_DIM);
+    config_expect_u32("rope.dimension_count",         n_rot,            DS4_N_ROT);
+    config_expect_u32("attention.q_lora_rank",        n_lora_q,         DS4_N_LORA_Q);
+    config_expect_u32("expert_count",                 n_expert,         DS4_N_EXPERT);
+    config_expect_u32("expert_used_count",            n_expert_used,    DS4_N_EXPERT_USED);
+    config_expect_u32("expert_feed_forward_length",   n_ff_exp,         DS4_N_FF_EXP);
+    config_expect_u32("expert_shared_count",          n_expert_shared,  DS4_N_EXPERT_SHARED);
+    config_expect_u32("attention.sliding_window",     n_swa,            DS4_N_SWA);
+    config_expect_u32("leading_dense_block_count",    n_dense,          0);
+    config_expect_u32("attention.indexer.head_count", n_indexer_head,   DS4_N_INDEXER_HEAD);
+    config_expect_u32("attention.indexer.key_length", n_indexer_head_dim, DS4_N_INDEXER_HEAD_DIM);
+    config_expect_u32("attention.indexer.top_k",      n_indexer_top_k,  DS4_N_INDEXER_TOP_K);
+
+    const float rope_freq_base = required_f32(m, "deepseek4.rope.freq_base");
+    config_expect_f32("rope.freq_base", rope_freq_base, DS4_ROPE_FREQ_BASE);
+    const float rms_eps = required_f32(m, "deepseek4.attention.layer_norm_rms_epsilon");
+    config_expect_f32("attention.layer_norm_rms_epsilon", rms_eps, DS4_RMS_EPS);
+    const float expert_weight_scale = required_f32(m, "deepseek4.expert_weights_scale");
+    config_expect_f32("expert_weights_scale", expert_weight_scale, DS4_EXPERT_WEIGHT_SCALE);
+    const bool expert_weight_norm = required_bool(m, "deepseek4.expert_weights_norm");
+    config_expect_bool("expert_weights_norm", expert_weight_norm, true);
+
+    validate_swiglu_clamp_metadata(m);
+}
+
+static bool model_uses_v100_source_layout(const ds4_model *m) {
+    const ds4_tensor *output = model_find_tensor(m, "output.weight");
+    return model_find_tensor(m, "hc_head_fn") != NULL &&
+           model_find_tensor(m, "blk.0.attn_kv_latent.weight") != NULL &&
+           model_find_tensor(m, "blk.0.ffn_gate_exps.weight") != NULL &&
+           output != NULL &&
+           output->type == DS4_TENSOR_BF16;
+}
+
 /* Bind tensor names once into the fixed DS4 layer layout.  This is the point
  * where stringly GGUF metadata becomes direct model-specific pointers. */
 static void weights_bind(ds4_weights *w, const ds4_model *m) {
     memset(w, 0, sizeof(*w));
+    w->v100_source_layout = model_uses_v100_source_layout(m);
+
     w->token_embd       = required_tensor(m, "token_embd.weight");
-    w->output_hc_base   = required_tensor(m, "output_hc_base.weight");
-    w->output_hc_fn     = required_tensor(m, "output_hc_fn.weight");
-    w->output_hc_scale  = required_tensor(m, "output_hc_scale.weight");
+    w->output_hc_base   = required_tensor(m, w->v100_source_layout ? "hc_head_base" : "output_hc_base.weight");
+    w->output_hc_fn     = required_tensor(m, w->v100_source_layout ? "hc_head_fn" : "output_hc_fn.weight");
+    w->output_hc_scale  = required_tensor(m, w->v100_source_layout ? "hc_head_scale" : "output_hc_scale.weight");
     w->output_norm      = required_tensor(m, "output_norm.weight");
     w->output           = required_tensor(m, "output.weight");
 
@@ -2588,38 +2732,38 @@ static void weights_bind(ds4_weights *w, const ds4_model *m) {
         ds4_layer_weights *l = &w->layer[il];
         const uint32_t compress_ratio = ds4_layer_compress_ratio(il);
 
-        l->hc_attn_fn      = required_tensorf(m, "blk.%u.hc_attn_fn.weight", il);
-        l->hc_attn_scale   = required_tensorf(m, "blk.%u.hc_attn_scale.weight", il);
-        l->hc_attn_base    = required_tensorf(m, "blk.%u.hc_attn_base.weight", il);
+        l->hc_attn_fn      = required_tensorf(m, w->v100_source_layout ? "blk.%u.hc_attn_fn" : "blk.%u.hc_attn_fn.weight", il);
+        l->hc_attn_scale   = required_tensorf(m, w->v100_source_layout ? "blk.%u.hc_attn_scale" : "blk.%u.hc_attn_scale.weight", il);
+        l->hc_attn_base    = required_tensorf(m, w->v100_source_layout ? "blk.%u.hc_attn_base" : "blk.%u.hc_attn_base.weight", il);
         l->attn_norm       = required_tensorf(m, "blk.%u.attn_norm.weight", il);
         l->attn_q_a        = required_tensorf(m, "blk.%u.attn_q_a.weight", il);
         l->attn_q_a_norm   = required_tensorf(m, "blk.%u.attn_q_a_norm.weight", il);
         l->attn_q_b        = required_tensorf(m, "blk.%u.attn_q_b.weight", il);
-        l->attn_kv         = required_tensorf(m, "blk.%u.attn_kv.weight", il);
+        l->attn_kv         = required_tensorf(m, w->v100_source_layout ? "blk.%u.attn_kv_latent.weight" : "blk.%u.attn_kv.weight", il);
         l->attn_kv_a_norm  = required_tensorf(m, "blk.%u.attn_kv_a_norm.weight", il);
-        l->attn_sinks      = required_tensorf(m, "blk.%u.attn_sinks.weight", il);
+        l->attn_sinks      = required_tensorf(m, w->v100_source_layout ? "blk.%u.attn_sinks" : "blk.%u.attn_sinks.weight", il);
         l->attn_output_a   = required_tensorf(m, "blk.%u.attn_output_a.weight", il);
         l->attn_output_b   = required_tensorf(m, "blk.%u.attn_output_b.weight", il);
         if (compress_ratio != 0) {
-            l->attn_compressor_ape  = required_tensorf(m, "blk.%u.attn_compressor_ape.weight", il);
-            l->attn_compressor_kv   = required_tensorf(m, "blk.%u.attn_compressor_kv.weight", il);
-            l->attn_compressor_gate = required_tensorf(m, "blk.%u.attn_compressor_gate.weight", il);
-            l->attn_compressor_norm = required_tensorf(m, "blk.%u.attn_compressor_norm.weight", il);
+            l->attn_compressor_ape  = required_tensorf(m, w->v100_source_layout ? "blk.%u.attn_compress_ape" : "blk.%u.attn_compressor_ape.weight", il);
+            l->attn_compressor_kv   = required_tensorf(m, w->v100_source_layout ? "blk.%u.attn_compress_kv.weight" : "blk.%u.attn_compressor_kv.weight", il);
+            l->attn_compressor_gate = required_tensorf(m, w->v100_source_layout ? "blk.%u.attn_compress_gate.weight" : "blk.%u.attn_compressor_gate.weight", il);
+            l->attn_compressor_norm = required_tensorf(m, w->v100_source_layout ? "blk.%u.attn_compress_norm.weight" : "blk.%u.attn_compressor_norm.weight", il);
         }
         if (compress_ratio == 4) {
             l->indexer_attn_q_b = required_tensorf(m, "blk.%u.indexer.attn_q_b.weight", il);
             l->indexer_proj     = required_tensorf(m, "blk.%u.indexer.proj.weight", il);
-            l->indexer_compressor_ape  = required_tensorf(m, "blk.%u.indexer_compressor_ape.weight", il);
-            l->indexer_compressor_kv   = required_tensorf(m, "blk.%u.indexer_compressor_kv.weight", il);
-            l->indexer_compressor_gate = required_tensorf(m, "blk.%u.indexer_compressor_gate.weight", il);
-            l->indexer_compressor_norm = required_tensorf(m, "blk.%u.indexer_compressor_norm.weight", il);
+            l->indexer_compressor_ape  = required_tensorf(m, w->v100_source_layout ? "blk.%u.indexer.compress_ape" : "blk.%u.indexer_compressor_ape.weight", il);
+            l->indexer_compressor_kv   = required_tensorf(m, w->v100_source_layout ? "blk.%u.indexer.compress_kv.weight" : "blk.%u.indexer_compressor_kv.weight", il);
+            l->indexer_compressor_gate = required_tensorf(m, w->v100_source_layout ? "blk.%u.indexer.compress_gate.weight" : "blk.%u.indexer_compressor_gate.weight", il);
+            l->indexer_compressor_norm = required_tensorf(m, w->v100_source_layout ? "blk.%u.indexer.compress_norm.weight" : "blk.%u.indexer_compressor_norm.weight", il);
         }
-        l->hc_ffn_fn       = required_tensorf(m, "blk.%u.hc_ffn_fn.weight", il);
-        l->hc_ffn_scale    = required_tensorf(m, "blk.%u.hc_ffn_scale.weight", il);
-        l->hc_ffn_base     = required_tensorf(m, "blk.%u.hc_ffn_base.weight", il);
+        l->hc_ffn_fn       = required_tensorf(m, w->v100_source_layout ? "blk.%u.hc_ffn_fn" : "blk.%u.hc_ffn_fn.weight", il);
+        l->hc_ffn_scale    = required_tensorf(m, w->v100_source_layout ? "blk.%u.hc_ffn_scale" : "blk.%u.hc_ffn_scale.weight", il);
+        l->hc_ffn_base     = required_tensorf(m, w->v100_source_layout ? "blk.%u.hc_ffn_base" : "blk.%u.hc_ffn_base.weight", il);
         l->ffn_norm        = required_tensorf(m, "blk.%u.ffn_norm.weight", il);
         l->ffn_gate_inp    = required_tensorf(m, "blk.%u.ffn_gate_inp.weight", il);
-        l->ffn_exp_probs_b = tensor_by_namef(m, "blk.%u.exp_probs_b.bias", il);
+        l->ffn_exp_probs_b = tensor_by_namef(m, w->v100_source_layout ? "blk.%u.exp_probs_b" : "blk.%u.exp_probs_b.bias", il);
         l->ffn_gate_exps   = required_tensorf(m, "blk.%u.ffn_gate_exps.weight", il);
         l->ffn_up_exps     = required_tensorf(m, "blk.%u.ffn_up_exps.weight", il);
         l->ffn_down_exps   = required_tensorf(m, "blk.%u.ffn_down_exps.weight", il);
@@ -2628,11 +2772,12 @@ static void weights_bind(ds4_weights *w, const ds4_model *m) {
         l->ffn_down_shexp  = required_tensorf(m, "blk.%u.ffn_down_shexp.weight", il);
 
         if (il < DS4_N_HASH_LAYER) {
-            l->ffn_gate_tid2eid = required_tensorf(m, "blk.%u.ffn_gate_tid2eid.weight", il);
+            l->ffn_gate_tid2eid = required_tensorf(m, w->v100_source_layout ? "blk.%u.ffn_gate_tid2eid" : "blk.%u.ffn_gate_tid2eid.weight", il);
         }
     }
 
-    weights_validate_layout(w);
+    if (w->v100_source_layout) weights_validate_v100_source_layout(w);
+    else weights_validate_layout(w);
 }
 
 static void mtp_weights_bind(ds4_mtp_weights *w, const ds4_model *m) {
@@ -17051,12 +17196,23 @@ int ds4_engine_open(ds4_engine **out, const ds4_engine_options *opt) {
     if (opt->n_threads > 0) g_requested_threads = (uint32_t)opt->n_threads;
     ds4_acquire_instance_lock();
 
-    const bool graph_backend = ds4_backend_uses_graph(opt->backend);
+    const bool graph_backend = !opt->inspect_only && ds4_backend_uses_graph(opt->backend);
     model_open(&e->model, opt->model_path, graph_backend, true);
     if (opt->warm_weights) model_warm_weights(&e->model);
     vocab_load(&e->vocab, &e->model);
-    config_validate_model(&e->model);
+    const bool v100_source_layout = model_uses_v100_source_layout(&e->model);
+    if (v100_source_layout) config_validate_v100_source_model(&e->model);
+    else config_validate_model(&e->model);
     weights_bind(&e->weights, &e->model);
+    if (e->weights.v100_source_layout && !opt->inspect_only) {
+        fprintf(stderr,
+                "ds4: native DS4-Flash source layout is recognized, but V100 "
+                "FP8/MXFP4 execution kernels are not wired into runtime yet; "
+                "use --inspect or ds4-v100-plan --manifest for this model\n");
+        ds4_engine_close(e);
+        *out = NULL;
+        return 1;
+    }
     if (e->backend == DS4_BACKEND_CPU && !cpu_load_directional_steering(e)) {
         ds4_engine_close(e);
         *out = NULL;
