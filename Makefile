@@ -130,6 +130,9 @@ ds4_eval.o: ds4_eval.c ds4.h
 ds4_test.o: tests/ds4_test.c ds4_server.c ds4.h rax.h
 	$(CC) $(CFLAGS) -Wno-unused-function -c -o $@ tests/ds4_test.c
 
+tools/ds4-v100-plan: tools/ds4-v100-plan.c
+	$(CC) $(CFLAGS) -D_FILE_OFFSET_BITS=64 -o $@ tools/ds4-v100-plan.c $(LDLIBS)
+
 tests/cuda_long_context_smoke.o: tests/cuda_long_context_smoke.c ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -c -o $@ tests/cuda_long_context_smoke.c
 
@@ -174,4 +177,4 @@ test: ds4_test
 	./ds4_test
 
 clean:
-	rm -f ds4 ds4-server ds4-bench ds4-eval ds4_cpu ds4_native ds4_server_test ds4_test *.o tests/cuda_long_context_smoke tests/cuda_long_context_smoke.o
+	rm -f ds4 ds4-server ds4-bench ds4-eval ds4_cpu ds4_native ds4_server_test ds4_test *.o tests/cuda_long_context_smoke tests/cuda_long_context_smoke.o tools/ds4-v100-plan
