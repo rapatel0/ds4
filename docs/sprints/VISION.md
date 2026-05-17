@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-17
-last_updated_by: vision
-revision: 1
+last_updated_by: sprint-plan
+revision: 2
 ---
 
 # Vision: DS4 V100 Appliance
@@ -78,13 +78,15 @@ it is a narrow DS4 runtime tuned for this hardware.
   providers loaded all 1328 tensors into CUDA device arenas, spot checks and a
   cross-provider check passed, and all GPUs retained the required reserve.
 
-### Sprint 005 - First Resident Source-Format Compute Probe [planned]
+### Sprint 005 - First Resident BF16 Compute Probe [planned]
 
-- **Goal**: Execute the first narrow source-format compute path directly from
-  resident packed bytes without enabling full decode.
-- **Rationale**: The next sprint should prove the pointer, descriptor, scale,
-  and kernel contract on one bounded tensor family before introducing the full
-  multi-GPU layer scheduler.
+- **Goal**: Execute a diagnostic BF16 row-gather probe from resident
+  `ds4_gpu_arena` bytes, using `token_embd.weight` as the first source-format
+  tensor family and returning host F32 samples for exact verification.
+- **Rationale**: BF16 embedding is the lowest-risk useful compute proof after
+  residency. It validates arena pointers, descriptor bounds, dtype conversion,
+  and CUDA launch semantics before Sprint 006 introduces production multi-GPU
+  execution context.
 
 ### Sprint 006 - Multi-GPU Execution Context And Layer Skeleton [planned]
 
@@ -141,6 +143,10 @@ it is a narrow DS4 runtime tuned for this hardware.
   runtime boot.
 - See `docs/sprints/SPRINT-004-FOLLOWUPS.md`: model-less default test target,
   direct CUDA arena unit target, and upload timing metrics.
+- See `docs/sprints/SPRINT-005-DEFERRED.md`: HC expansion, device-output and
+  stream-aware probe variants, source-layout embedding dtype cleanup, F16
+  output, F32 control tensor probe, additional BF16 tensors, FP8/MXFP4 compute
+  probes, and default model-less `make test` cleanup.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -155,17 +161,16 @@ it is a narrow DS4 runtime tuned for this hardware.
 | Date | What Changed | Why | Sprints Affected |
 |------|-------------|-----|-----------------|
 | 2026-05-17 | Created the first DS4 V100 appliance vision after Sprint 004 residency shipped. | The project has moved from feasibility and pack-residency proof to source-format compute, correctness, deployment, and performance sequencing. | Sprint 005+ |
+| 2026-05-17 | Refined Sprint 005 from a generic source-format compute probe to a BF16 resident row-gather probe on `token_embd.weight`. | Planning consensus found BF16 embedding is the smallest useful proof of arena-resident compute and avoids premature FP8/MXFP4, scheduler, or decode work. | Sprint 005-006 |
 
 ## Open Questions
 
-1. Which tensor family should Sprint 005 use as the first resident compute
-   probe: BF16/F32 control path, FP8 dense path, or MXFP4 routed expert path?
-2. What reference should define correctness tolerances for mixed
+1. What reference should define correctness tolerances for mixed
    BF16/F32/F8_E4M3_B128/MXFP4 execution on V100?
-3. What minimum serving milestone counts as "usable" before optimization:
+2. What minimum serving milestone counts as "usable" before optimization:
    one-slot small context, 256K context, or a deployed endpoint with narrower
    context limits?
-4. How long should MTP and multi-slot throughput stay deferred after base
+3. How long should MTP and multi-slot throughput stay deferred after base
    decode works?
-5. Should the persistent `/srv/dev/ds4-sprint004` pack become the seed
+4. Should the persistent `/srv/dev/ds4-sprint004` pack become the seed
    deployment artifact, or should a formal pack release format come first?
