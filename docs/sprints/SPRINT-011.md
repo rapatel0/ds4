@@ -75,10 +75,10 @@ model GEMMs.
 - `ds4_source_formats.[ch]`
 
 **Tasks:**
-- [ ] Add a bounded V100 source F8_E4M3_B128 dense projection/tile diagnostic.
-- [ ] Compare against CPU source-format decode plus reference matmul.
-- [ ] Keep decoded data bounded to output rows or scratch tiles.
-- [ ] Reject unsupported shapes, invalid source views, and undersized tensors.
+- [x] Add a bounded V100 source F8_E4M3_B128 dense projection/tile diagnostic.
+- [x] Compare against CPU source-format decode plus reference matmul.
+- [x] Keep decoded data bounded to output rows or scratch tiles.
+- [x] Reject unsupported shapes, invalid source views, and undersized tensors.
 
 ### Phase 2: BF16 Runtime Boundary Check
 
