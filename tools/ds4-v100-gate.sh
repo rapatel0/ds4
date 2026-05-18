@@ -113,6 +113,7 @@ if [ -n "$pack_index" ]; then
     targets+=(tests/cuda_v100_output_head_parity_smoke)
     targets+=(tests/cuda_v100_selected_token_smoke)
     targets+=(tests/cuda_v100_scheduler_checkpoint_parity_smoke)
+    targets+=(tools/ds4-v100-replay)
 fi
 
 if [ -n "$log_dir" ]; then
@@ -131,6 +132,7 @@ fi
 failures=0
 full_scheduler_ready=0
 selected_token_ready=0
+throughput_ready=0
 
 run_gate() {
     local name="$1"
@@ -212,6 +214,9 @@ if [ -n "$pack_index" ]; then
             if run_gate "scheduler_output_head" ./tests/cuda_v100_selected_token_smoke --index "$pack_index" --model "$model" --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt --expected-token-hex 3136; then
                 selected_token_ready=1
             fi
+            if run_gate "v100_replay_tool" ./tools/ds4-v100-replay --index "$pack_index" --model "$model" --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt --tokens 2 --expected-token-hex 3136 --json; then
+                throughput_ready=1
+            fi
         else
             echo "gate	descriptor_bound_attention	SKIP	no_model"
             echo "gate	descriptor_bound_ffn	SKIP	no_model"
@@ -223,6 +228,7 @@ if [ -n "$pack_index" ]; then
             echo "gate	scheduler_checkpoint_parity	SKIP	no_model"
             echo "gate	output_head_parity	SKIP	no_model"
             echo "gate	scheduler_output_head	SKIP	no_model"
+            echo "gate	v100_replay_tool	SKIP	no_model"
         fi
     fi
 else
@@ -239,6 +245,7 @@ else
     echo "gate	scheduler_checkpoint_parity	SKIP	no_pack_index"
     echo "gate	output_head_parity	SKIP	no_pack_index"
     echo "gate	scheduler_output_head	SKIP	no_pack_index"
+    echo "gate	v100_replay_tool	SKIP	no_pack_index"
 fi
 
 if [ "$failures" -ne 0 ]; then
@@ -263,7 +270,9 @@ if [ "$selected_token_ready" -eq 0 ]; then
 fi
 add_missing "public_serving"
 add_missing "mtp"
-add_missing "throughput_benchmark"
+if [ "$throughput_ready" -eq 0 ]; then
+    add_missing "throughput_benchmark"
+fi
 echo "gate	readiness	NOT_READY	missing=$missing"
 echo "gate	summary	PASS	failures=0 ready=false"
 exit 0

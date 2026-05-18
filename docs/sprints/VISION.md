@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-18
 last_updated_by: sprint-execute
-revision: 38
+revision: 39
 ---
 
 # Vision: DS4 V100 Appliance
@@ -168,6 +168,11 @@ it is a narrow DS4 runtime tuned for this hardware.
   and layer-4 after-attention match the CPU source-layout oracle, while
   layer-4 final HC still shows FFN numeric drift. The current readiness
   blockers are now public serving, MTP, and throughput benchmarking.
+- Sprint 028 extracted the selected-token path into a reusable one-shot V100
+  replay runtime and `tools/ds4-v100-replay`. The tool loads all eight resident
+  stages, replays prompt tokens, generates greedy continuations, verifies token
+  bytes, and emits timing/memory JSON. Throughput/timing evidence now exists;
+  the remaining readiness blockers are public serving and MTP.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -533,6 +538,18 @@ it is a narrow DS4 runtime tuned for this hardware.
   passes the selected-token gate for expected bytes `3136`. The gate remains
   `ready=false` only for public serving, MTP, and throughput.
 
+### Sprint 028 - V100 Replay Runtime And Timing Tool [complete]
+
+- **Goal**: Move selected-token replay out of a smoke test and into a reusable
+  appliance runtime/tool with timing counters.
+- **Rationale**: Correctness alone was not a usable surface. The project needed
+  a commandable path that loads the resident 8-stage scheduler, emits tokens,
+  and measures where time is going.
+- **Outcome**: `SHIP`. `tools/ds4-v100-replay` generates tokens through the V100
+  scheduler, verifies expected bytes `3136`, and emits JSON timing/memory data.
+  The gate should now remove `throughput_benchmark`; public serving and MTP
+  remain open.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -601,6 +618,9 @@ it is a narrow DS4 runtime tuned for this hardware.
   throughput counters, layer-4 FFN numeric drift, explicit FP8 KV validation,
   and continued deferral of MTP/multi-slot scheduling until the single-slot
   baseline is usable.
+- See `docs/sprints/SPRINT-028-FOLLOWUPS.md`: HTTP/process serving around the
+  replay runtime, scheduler reset or single-session semantics, open/upload
+  reduction, longer decode baselines, and continued MTP/multi-slot deferral.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -641,6 +661,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-18 | Extended Sprint 025 with scheduler-owned output-head selected-token execution. | The output-head path now runs and produces finite logits/top-1 on V100, but official-vector comparison fails (`3136` expected, `0a0a` selected), so the next blocker is divergence localization rather than more scheduling structure. | Sprint 026+ |
 | 2026-05-18 | Shipped Sprint 026 output-head divergence localization. | Deterministic CPU-vs-V100 output-head parity passes on gpu7, so the selected-token mismatch is now scoped to the 43-layer scheduler body; the next sprint should checkpoint HC after layer/stage boundaries. | Sprint 027+ |
 | 2026-05-18 | Shipped Sprint 027 selected-token correctness and HC checkpoint diagnostics. | BF16 embedding decode and F16 KV/cache semantics now match the CPU source-layout oracle closely enough for the official V100 selected-token gate to pass; the next milestone moves from correctness blocking to public serving and measurement. | Sprint 028+ |
+| 2026-05-18 | Shipped Sprint 028 V100 replay runtime and timing tool. | The working scheduler path is now callable outside a smoke test and emits machine-readable token/timing/memory evidence; the next milestone is keeping that runtime resident behind an HTTP or process-serving surface. | Sprint 029+ |
 
 ## Open Questions
 

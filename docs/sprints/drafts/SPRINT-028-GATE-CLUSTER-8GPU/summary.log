@@ -1,0 +1,28 @@
+gate	build	PASS
+gate	nvidia_smi	PASS
+gate	source_guards	PASS
+gate	source_dtypes	PASS
+gate	bf16_probe	PASS
+gate	context_kv	PASS
+gate	compressor_bridge	PASS
+gate	prefill_kv	PASS
+gate	hc_relay	PASS
+gate	projection_attention	PASS
+gate	bounded_logits	PASS
+gate	mxfp4_moe	PASS
+gate	layer_descriptors	PASS
+gate	layer_bindings	PASS
+gate	layer_state	PASS
+gate	descriptor_bound_attention	PASS
+gate	descriptor_bound_ffn	PASS
+gate	integrated_layer	PASS
+gate	integrated_layer_bias	PASS
+gate	stage_scheduler	PASS
+gate	two_stage_scheduler	PASS
+gate	full_scheduler	PASS
+gate	scheduler_checkpoint_parity	PASS
+gate	output_head_parity	PASS
+gate	scheduler_output_head	PASS
+gate	v100_replay_tool	PASS
+gate	readiness	NOT_READY	missing=public_serving,mtp
+gate	summary	PASS	failures=0 ready=false

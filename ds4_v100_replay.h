@@ -1,0 +1,84 @@
+#ifndef DS4_V100_REPLAY_H
+#define DS4_V100_REPLAY_H
+
+#include "ds4.h"
+#include "ds4_v100_scheduler.h"
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct ds4_v100_replay ds4_v100_replay;
+
+typedef struct {
+    const char *model_path;
+    const char *pack_index_path;
+    uint64_t kv_ctx_tokens;
+    uint32_t attn_comp_cap;
+    uint32_t index_comp_cap;
+    uint32_t indexer_top_k;
+    bool fp8_kv_cache;
+} ds4_v100_replay_options;
+
+typedef struct {
+    uint32_t token;
+    float logit;
+    char *text;
+    size_t text_len;
+} ds4_v100_replay_output;
+
+typedef struct {
+    uint32_t prompt_tokens;
+    uint32_t generated_tokens;
+    uint32_t total_input_tokens;
+    uint32_t layers_executed;
+    uint64_t uploaded_tensors;
+    uint64_t uploaded_bytes;
+    uint64_t arena_bytes[DS4_V100_EXPECTED_GPUS];
+    double open_ms[DS4_V100_EXPECTED_GPUS];
+    double open_total_ms;
+    double prompt_replay_ms;
+    double continuation_decode_ms;
+    double stage_decode_ms[DS4_V100_EXPECTED_GPUS];
+    double handoff_ms[DS4_V100_EXPECTED_GPUS - 1];
+    double output_head_ms;
+    double token_text_ms;
+    double total_ms;
+} ds4_v100_replay_counters;
+
+void ds4_v100_replay_options_init(ds4_v100_replay_options *opts);
+
+int ds4_v100_replay_open(ds4_v100_replay **out,
+                         const ds4_v100_replay_options *opts,
+                         char *err,
+                         size_t errlen);
+
+void ds4_v100_replay_close(ds4_v100_replay *rt);
+
+void ds4_v100_replay_encode_prompt(ds4_v100_replay *rt,
+                                   const char *system,
+                                   const char *prompt,
+                                   ds4_think_mode think_mode,
+                                   ds4_tokens *out);
+
+int ds4_v100_replay_generate(ds4_v100_replay *rt,
+                             const ds4_tokens *prompt,
+                             uint32_t max_tokens,
+                             ds4_v100_replay_output *outputs,
+                             uint32_t output_cap,
+                             uint32_t *out_count,
+                             ds4_v100_replay_counters *counters,
+                             char *err,
+                             size_t errlen);
+
+void ds4_v100_replay_output_free(ds4_v100_replay_output *out);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
