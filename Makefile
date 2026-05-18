@@ -13,12 +13,13 @@ OBJCFLAGS ?= -O3 -ffast-math $(NATIVE_CPU_FLAG) -Wall -Wextra -fobjc-arc
 LDLIBS ?= -lm -pthread
 METAL_SRCS := $(wildcard metal/*.metal)
 PACK_OBJS = ds4_pack.o
+SOURCE_FORMAT_OBJS = ds4_source_formats.o
 V100_CONTEXT_OBJS = ds4_v100_context.o $(PACK_OBJS)
 
 ifeq ($(UNAME_S),Darwin)
 METAL_LDLIBS := $(LDLIBS) -framework Foundation -framework Metal
-CORE_OBJS = ds4.o ds4_metal.o $(PACK_OBJS)
-CPU_CORE_OBJS = ds4_cpu.o $(PACK_OBJS)
+CORE_OBJS = ds4.o ds4_metal.o $(PACK_OBJS) $(SOURCE_FORMAT_OBJS)
+CPU_CORE_OBJS = ds4_cpu.o $(PACK_OBJS) $(SOURCE_FORMAT_OBJS)
 else
 CFLAGS += -D_GNU_SOURCE -fno-finite-math-only
 CUDA_HOME ?= /usr/local/cuda
@@ -29,8 +30,8 @@ NVCC_ARCH_FLAGS := -arch=$(CUDA_ARCH)
 endif
 NVCCFLAGS ?= -O3 --use_fast_math $(NVCC_ARCH_FLAGS) -Xcompiler $(NATIVE_CPU_FLAG) -Xcompiler -pthread
 CUDA_LDLIBS ?= -lm -Xcompiler -pthread -L$(CUDA_HOME)/targets/sbsa-linux/lib -L$(CUDA_HOME)/lib64 -lcudart -lcublas
-CORE_OBJS = ds4.o ds4_cuda.o $(PACK_OBJS)
-CPU_CORE_OBJS = ds4_cpu.o $(PACK_OBJS)
+CORE_OBJS = ds4.o ds4_cuda.o $(PACK_OBJS) $(SOURCE_FORMAT_OBJS)
+CPU_CORE_OBJS = ds4_cpu.o $(PACK_OBJS) $(SOURCE_FORMAT_OBJS)
 METAL_LDLIBS := $(LDLIBS)
 endif
 
@@ -120,6 +121,9 @@ ds4.o: ds4.c ds4.h ds4_gpu.h ds4_pack.h
 ds4_pack.o: ds4_pack.c ds4_pack.h
 	$(CC) $(CFLAGS) -c -o $@ ds4_pack.c
 
+ds4_source_formats.o: ds4_source_formats.c ds4_source_formats.h
+	$(CC) $(CFLAGS) -c -o $@ ds4_source_formats.c
+
 ds4_v100_context.o: ds4_v100_context.c ds4_v100_context.h ds4_pack.h
 	$(CC) $(CFLAGS) -I. -c -o $@ ds4_v100_context.c
 
@@ -189,6 +193,12 @@ tests/v100_context_smoke.o: tests/v100_context_smoke.c ds4_v100_context.h
 	$(CC) $(CFLAGS) -I. -c -o $@ tests/v100_context_smoke.c
 
 tests/v100_context_smoke: tests/v100_context_smoke.o $(V100_CONTEXT_OBJS)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+tests/source_dtypes_smoke.o: tests/source_dtypes_smoke.c ds4_source_formats.h
+	$(CC) $(CFLAGS) -I. -c -o $@ tests/source_dtypes_smoke.c
+
+tests/source_dtypes_smoke: tests/source_dtypes_smoke.o ds4_source_formats.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
 tests/cuda_long_context_smoke.o: tests/cuda_long_context_smoke.c ds4_gpu.h
@@ -263,4 +273,4 @@ test: ds4_test
 	./ds4_test
 
 clean:
-	rm -f ds4 ds4-server ds4-bench ds4-eval ds4_cpu ds4_native ds4_server_test ds4_test *.o tests/*.o tests/cuda_long_context_smoke tests/cuda_bf16_probe tests/cuda_v100_context_smoke tests/cuda_hc_relay_smoke tests/pack_index_smoke tests/gpu_arena_smoke tests/bf16_probe_smoke tests/v100_context_smoke tools/*.o tools/ds4-v100-plan tools/ds4-v100-pack tools/ds4-v100-residency-smoke tools/ds4-v100-context-smoke
+	rm -f ds4 ds4-server ds4-bench ds4-eval ds4_cpu ds4_native ds4_server_test ds4_test *.o tests/*.o tests/cuda_long_context_smoke tests/cuda_bf16_probe tests/cuda_v100_context_smoke tests/cuda_hc_relay_smoke tests/pack_index_smoke tests/gpu_arena_smoke tests/bf16_probe_smoke tests/v100_context_smoke tests/source_dtypes_smoke tools/*.o tools/ds4-v100-plan tools/ds4-v100-pack tools/ds4-v100-residency-smoke tools/ds4-v100-context-smoke

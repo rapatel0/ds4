@@ -1,0 +1,1 @@
+cc -O3 -Wall -Wextra -std=c11 -mcpu=native -D_GNU_SOURCE -I.. -o deepseek4-quantize deepseek4-quantize.c quants.c ../ds4_source_formats.c -lm -pthread

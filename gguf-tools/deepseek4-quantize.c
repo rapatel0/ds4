@@ -22,6 +22,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "quants.h"
+#include "ds4_source_formats.h"
 
 #include <assert.h>
 #include <ctype.h>
@@ -627,26 +628,15 @@ static st_value db_read(st_db *db, const char *name) {
  */
 
 static float e8m0_to_f32(uint8_t e) {
-    const uint32_t bits = e == 0 ? 0x00400000u : ((uint32_t)e << 23);
-    float result;
-    memcpy(&result, &bits, sizeof(result));
-    return result;
+    return ds4_src_e8m0_to_f32(e);
 }
 
 static float e4m3fn_to_f32(uint8_t x) {
-    const uint8_t abs = x & 0x7f;
-    const bool sign = (x & 0x80) != 0;
-    if (abs == 0) return sign ? -0.0f : 0.0f;
-    if (abs == 0x7f) return 0.0f;
-    const int exp = (x >> 3) & 0x0f;
-    const int man = x & 0x07;
-    float value = exp == 0 ? ldexpf((float)man, -9)
-                           : ldexpf(1.0f + (float)man / 8.0f, exp - 7);
-    return sign ? -value : value;
+    return ds4_src_e4m3fn_to_f32(x);
 }
 
 static float bf16_to_f32_bits(uint16_t bits) {
-    return ds4q_bf16_to_f32(bits);
+    return ds4_src_bf16_to_f32(bits);
 }
 
 static int64_t value_nelements(const st_value *v) {

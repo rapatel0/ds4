@@ -29,8 +29,8 @@ CPPFLAGS ?= -D_GNU_SOURCE
 
 all: deepseek4-quantize
 
-deepseek4-quantize: deepseek4-quantize.c quants.c quants.h
-	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ deepseek4-quantize.c quants.c -lm -pthread
+deepseek4-quantize: deepseek4-quantize.c quants.c quants.h ../ds4_source_formats.c ../ds4_source_formats.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) -I.. -o $@ deepseek4-quantize.c quants.c ../ds4_source_formats.c -lm -pthread
 
 quality-score:
 	$(MAKE) -C .. $(QUALITY_TARGETS)
