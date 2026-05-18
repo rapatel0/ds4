@@ -72,6 +72,7 @@ typedef struct {
     bool warm_weights;
     bool quality;
     bool inspect_only;
+    bool source_layout_oracle;
     const char *pack_index_path;
     const char *pack_reconcile_report_path;
 } ds4_engine_options;

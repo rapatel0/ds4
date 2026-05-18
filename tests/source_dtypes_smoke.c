@@ -103,6 +103,15 @@ static void test_f8_row(void) {
     expect_close(dst[128], 2.0f, "f8 block1 scaled one");
     expect_close(dst[129], 4.0f, "f8 block1 scaled two");
     expect_close(dst[130], 0x1.0p-8f, "f8 block1 scaled subnormal");
+    float x[DS4_SRC_F8_E4M3_B128_BLOCK_ELEMS * 2];
+    memset(x, 0, sizeof(x));
+    x[0] = 2.0f;
+    x[1] = 4.0f;
+    x[128] = -1.0f;
+    float dot = 0.0f;
+    check(ds4_src_f8_e4m3_b128_row_dot(&dot, row, x, 256, err, sizeof(err)) == 0,
+          "f8 row dot");
+    expect_close(dot, 6.0f, "f8 dot value");
     check(ds4_src_f8_e4m3_b128_row_to_f32(dst, row, 129, err, sizeof(err)) != 0,
           "f8 accepted misaligned row");
     check(err[0] != '\0', "f8 error message");
@@ -131,6 +140,15 @@ static void test_mxfp4_row(void) {
     expect_close(dst[33], 4.0f, "mxfp4 block1 scaled high");
     expect_close(dst[34], 0.0f, "mxfp4 block1 zero code");
     expect_close(dst[35], -2.0f, "mxfp4 block1 negative one scaled");
+    float x[DS4_SRC_MXFP4_BLOCK_ELEMS * 2];
+    memset(x, 0, sizeof(x));
+    x[0] = 2.0f;
+    x[1] = 3.0f;
+    x[32] = -1.0f;
+    float dot = 0.0f;
+    check(ds4_src_mxfp4_row_dot(&dot, row, x, 64, err, sizeof(err)) == 0,
+          "mxfp4 row dot");
+    expect_close(dot, 1.0f + 3.0f - 3.0f, "mxfp4 dot value");
     check(ds4_src_mxfp4_row_to_f32(dst, row, 33, err, sizeof(err)) != 0,
           "mxfp4 accepted misaligned row");
     check(err[0] != '\0', "mxfp4 error message");

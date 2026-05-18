@@ -87,6 +87,32 @@ int ds4_src_f8_e4m3_b128_row_to_f32(float *dst, const uint8_t *src,
     return 0;
 }
 
+int ds4_src_f8_e4m3_b128_row_dot(float *dst, const uint8_t *src, const float *x,
+                                 uint64_t ncols, char *err, size_t err_size) {
+    if (!dst || !src || !x) {
+        set_err(err, err_size, "null f8 dot buffer");
+        return -1;
+    }
+    if (ncols == 0 || ncols % DS4_SRC_F8_E4M3_B128_BLOCK_ELEMS) {
+        set_err(err, err_size, "f8 dot length is not a nonzero multiple of 128");
+        return -1;
+    }
+
+    double acc = 0.0;
+    const uint64_t nblocks = ncols / DS4_SRC_F8_E4M3_B128_BLOCK_ELEMS;
+    for (uint64_t b = 0; b < nblocks; b++) {
+        const uint8_t *block = src + b * DS4_SRC_F8_E4M3_B128_BLOCK_BYTES;
+        const float scale = ds4_src_e8m0_to_f32(block[0]);
+        const uint8_t *qs = block + 1;
+        const float *xb = x + b * DS4_SRC_F8_E4M3_B128_BLOCK_ELEMS;
+        for (uint64_t i = 0; i < DS4_SRC_F8_E4M3_B128_BLOCK_ELEMS; i++) {
+            acc += (double)(ds4_src_e4m3fn_to_f32(qs[i]) * scale) * (double)xb[i];
+        }
+    }
+    *dst = (float)acc;
+    return 0;
+}
+
 int ds4_src_mxfp4_row_to_f32(float *dst, const uint8_t *src, uint64_t ncols,
                              char *err, size_t err_size) {
     if (!dst || !src) {
@@ -110,6 +136,36 @@ int ds4_src_mxfp4_row_to_f32(float *dst, const uint8_t *src, uint64_t ncols,
             out[2 * j + 1] = ds4_src_mxfp4_nibble_to_f32((q >> 4) & 0x0f) * scale;
         }
     }
+    return 0;
+}
+
+int ds4_src_mxfp4_row_dot(float *dst, const uint8_t *src, const float *x,
+                          uint64_t ncols, char *err, size_t err_size) {
+    if (!dst || !src || !x) {
+        set_err(err, err_size, "null mxfp4 dot buffer");
+        return -1;
+    }
+    if (ncols == 0 || ncols % DS4_SRC_MXFP4_BLOCK_ELEMS) {
+        set_err(err, err_size, "mxfp4 dot length is not a nonzero multiple of 32");
+        return -1;
+    }
+
+    double acc = 0.0;
+    const uint64_t nblocks = ncols / DS4_SRC_MXFP4_BLOCK_ELEMS;
+    for (uint64_t b = 0; b < nblocks; b++) {
+        const uint8_t *block = src + b * DS4_SRC_MXFP4_BLOCK_BYTES;
+        const float scale = ds4_src_e8m0_to_f32(block[0]);
+        const uint8_t *qs = block + 1;
+        const float *xb = x + b * DS4_SRC_MXFP4_BLOCK_ELEMS;
+        for (uint64_t j = 0; j < DS4_SRC_MXFP4_BLOCK_ELEMS / 2; j++) {
+            const uint8_t q = qs[j];
+            acc += (double)(ds4_src_mxfp4_nibble_to_f32(q & 0x0f) * scale) *
+                   (double)xb[2 * j + 0];
+            acc += (double)(ds4_src_mxfp4_nibble_to_f32((q >> 4) & 0x0f) * scale) *
+                   (double)xb[2 * j + 1];
+        }
+    }
+    *dst = (float)acc;
     return 0;
 }
 

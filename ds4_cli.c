@@ -158,6 +158,8 @@ static void usage(FILE *fp) {
         "      Validate a DS4 V100 pack-index.tsv during model open.\n"
         "  --pack-reconcile-report FILE\n"
         "      Write pack reconciliation rows to FILE instead of stdout/stderr.\n"
+        "  --source-layout-oracle\n"
+        "      CPU-only diagnostic unlock for native DS4-Flash source-layout first-token tests.\n"
         "  --dump-tokens\n"
         "      Tokenize -p/--prompt-file exactly as written, then exit without inference.\n"
         "  --dump-logprobs FILE\n"
@@ -1316,6 +1318,8 @@ static cli_config parse_options(int argc, char **argv) {
             c.engine.pack_index_path = need_arg(&i, argc, argv, arg);
         } else if (!strcmp(arg, "--pack-reconcile-report")) {
             c.engine.pack_reconcile_report_path = need_arg(&i, argc, argv, arg);
+        } else if (!strcmp(arg, "--source-layout-oracle")) {
+            c.engine.source_layout_oracle = true;
         } else if (!strcmp(arg, "--warm-weights")) {
             c.engine.warm_weights = true;
         } else if (!strcmp(arg, "--server")) {

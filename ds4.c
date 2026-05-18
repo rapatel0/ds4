@@ -36,6 +36,7 @@
 
 #include "ds4.h"
 #include "ds4_pack.h"
+#include "ds4_source_formats.h"
 
 #ifndef DS4_NO_GPU
 #include "ds4_gpu.h"
@@ -2833,12 +2834,17 @@ static void embed_token_f16(const ds4_model *m, const ds4_weights *w, int token,
         ds4_die("token id is outside the embedding table");
     }
 
-    const uint16_t *base = tensor_data(m, te);
     const uint64_t stride = te->dim[0];
-    const uint16_t *row = base + (uint64_t)token * stride;
+    if (te->type != DS4_TENSOR_F16 && te->type != DS4_TENSOR_BF16) {
+        ds4_die("expected an F16 or BF16 embedding table");
+    }
 
-    for (uint64_t i = 0; i < stride; i++) {
-        out[i] = f16_to_f32(row[i]);
+    const uint16_t *base = tensor_data(m, te);
+    const uint16_t *row = base + (uint64_t)token * stride;
+    if (te->type == DS4_TENSOR_BF16) {
+        for (uint64_t i = 0; i < stride; i++) out[i] = ds4_src_bf16_to_f32(row[i]);
+    } else {
+        for (uint64_t i = 0; i < stride; i++) out[i] = f16_to_f32(row[i]);
     }
 }
 
@@ -3841,14 +3847,146 @@ static void matvec_f32(float *out, const ds4_model *m, const ds4_tensor *w, cons
     ds4_parallel_for(w->dim[1], matvec_f32_worker, &ctx);
 }
 
-/* Dispatch for dense F32/F16/Q8_0 tensors used by auxiliary projections. */
+typedef struct {
+    float *out;
+    const uint16_t *data;
+    const float *x;
+    uint64_t in_dim;
+} matvec_bf16_ctx;
+
+static void matvec_bf16_worker(void *vctx, uint64_t row0, uint64_t row1) {
+    matvec_bf16_ctx *ctx = vctx;
+
+    for (uint64_t o = row0; o < row1; o++) {
+        const uint16_t *row = ctx->data + o * ctx->in_dim;
+        double acc = 0.0;
+        for (uint64_t i = 0; i < ctx->in_dim; i++) {
+            acc += (double)ds4_src_bf16_to_f32(row[i]) * (double)ctx->x[i];
+        }
+        ctx->out[o] = (float)acc;
+    }
+}
+
+static void matvec_bf16(float *out, const ds4_model *m, const ds4_tensor *w, const float *x) {
+    if (w->type != DS4_TENSOR_BF16 || w->ndim != 2) ds4_die("expected a 2D BF16 tensor");
+
+    matvec_bf16_ctx ctx = {
+        .out = out,
+        .data = tensor_data(m, w),
+        .x = x,
+        .in_dim = w->dim[0],
+    };
+    ds4_parallel_for(w->dim[1], matvec_bf16_worker, &ctx);
+}
+
+typedef struct {
+    float *out;
+    const uint8_t *data;
+    const float *x;
+    uint64_t in_dim;
+    uint64_t row_bytes;
+} matvec_f8_e4m3_b128_ctx;
+
+static void matvec_f8_e4m3_b128_worker(void *vctx, uint64_t row0, uint64_t row1) {
+    matvec_f8_e4m3_b128_ctx *ctx = vctx;
+
+    for (uint64_t o = row0; o < row1; o++) {
+        char err[96];
+        const uint8_t *row = ctx->data + o * ctx->row_bytes;
+        if (ds4_src_f8_e4m3_b128_row_dot(&ctx->out[o], row, ctx->x,
+                                         ctx->in_dim, err, sizeof(err)) != 0) {
+            ds4_die(err);
+        }
+    }
+}
+
+static void matvec_f8_e4m3_b128(float *out, const ds4_model *m, const ds4_tensor *w, const float *x) {
+    if (w->type != DS4_TENSOR_F8_E4M3_B128 || w->ndim != 2) {
+        ds4_die("expected a 2D F8_E4M3_B128 tensor");
+    }
+
+    const uint64_t row_bytes = ds4_src_f8_e4m3_b128_row_bytes(w->dim[0]);
+    if (row_bytes == 0) ds4_die("F8_E4M3_B128 tensor row is not 128-aligned");
+    matvec_f8_e4m3_b128_ctx ctx = {
+        .out = out,
+        .data = tensor_data(m, w),
+        .x = x,
+        .in_dim = w->dim[0],
+        .row_bytes = row_bytes,
+    };
+    ds4_parallel_for(w->dim[1], matvec_f8_e4m3_b128_worker, &ctx);
+}
+
+typedef struct {
+    float *out;
+    const uint8_t *data;
+    const float *x;
+    uint64_t group_dim;
+    uint64_t row_bytes;
+    uint64_t rank;
+} matvec_f8_e4m3_b128_grouped_ctx;
+
+static void matvec_f8_e4m3_b128_grouped_worker(void *vctx, uint64_t row0, uint64_t row1) {
+    matvec_f8_e4m3_b128_grouped_ctx *ctx = vctx;
+
+    for (uint64_t idx = row0; idx < row1; idx++) {
+        const uint64_t group = idx / ctx->rank;
+        const uint64_t row_in_group = idx - group * ctx->rank;
+        const uint64_t tensor_row = group * ctx->rank + row_in_group;
+        const uint8_t *row = ctx->data + tensor_row * ctx->row_bytes;
+        const float *x = ctx->x + group * ctx->group_dim;
+        char err[96];
+        if (ds4_src_f8_e4m3_b128_row_dot(&ctx->out[idx], row, x,
+                                         ctx->group_dim, err, sizeof(err)) != 0) {
+            ds4_die(err);
+        }
+    }
+}
+
+static void matvec_any_grouped_rows(
+        float           * out,
+        const ds4_model * m,
+        const ds4_tensor * w,
+        const float     * x,
+        uint32_t          n_groups,
+        uint64_t          group_dim,
+        uint64_t          rank) {
+    if (w->type == DS4_TENSOR_Q8_0) {
+        matvec_q8_0_grouped_rows(out, m, w, x, n_groups, group_dim, rank);
+        return;
+    }
+    if (w->type != DS4_TENSOR_F8_E4M3_B128 || w->ndim != 2) {
+        ds4_die("expected a grouped Q8_0 or F8_E4M3_B128 tensor");
+    }
+    if (w->dim[0] != group_dim || w->dim[1] < (uint64_t)n_groups * rank) {
+        ds4_die("grouped F8_E4M3_B128 tensor has an unexpected layout");
+    }
+    const uint64_t row_bytes = ds4_src_f8_e4m3_b128_row_bytes(group_dim);
+    if (row_bytes == 0) ds4_die("grouped F8_E4M3_B128 row is not 128-aligned");
+
+    matvec_f8_e4m3_b128_grouped_ctx ctx = {
+        .out = out,
+        .data = tensor_data(m, w),
+        .x = x,
+        .group_dim = group_dim,
+        .row_bytes = row_bytes,
+        .rank = rank,
+    };
+    ds4_parallel_for((uint64_t)n_groups * rank, matvec_f8_e4m3_b128_grouped_worker, &ctx);
+}
+
+/* Dispatch for dense F32/F16/BF16/Q8_0/F8 tensors used by reference projections. */
 static void matvec_any(float *out, const ds4_model *m, const ds4_tensor *w, const float *x) {
     switch (w->type) {
-    case 0: matvec_f32(out, m, w, x); break;
-    case 1: matvec_f16(out, m, w, x); break;
-    case 8: matvec_q8_0(out, m, w, x); break;
+    case DS4_TENSOR_F32: matvec_f32(out, m, w, x); break;
+    case DS4_TENSOR_F16: matvec_f16(out, m, w, x); break;
+    case DS4_TENSOR_Q8_0: matvec_q8_0(out, m, w, x); break;
+    case DS4_TENSOR_BF16: matvec_bf16(out, m, w, x); break;
+    case DS4_TENSOR_F8_E4M3_B128: matvec_f8_e4m3_b128(out, m, w, x); break;
     default:
-        ds4_die("unsupported tensor type for dense matvec");
+        fprintf(stderr, "ds4: unsupported tensor type for dense matvec: %s\n",
+                tensor_type_name(w->type));
+        exit(1);
     }
 }
 
@@ -3861,6 +3999,10 @@ static float tensor_1d_value(const ds4_model *m, const ds4_tensor *t, uint64_t i
     if (t->type == 1) {
         const uint16_t *p = tensor_data(m, t);
         return f16_to_f32(p[i]);
+    }
+    if (t->type == DS4_TENSOR_BF16) {
+        const uint16_t *p = tensor_data(m, t);
+        return ds4_src_bf16_to_f32(p[i]);
     }
     ds4_die("unsupported tensor scalar type");
     return 0.0f;
@@ -3894,6 +4036,122 @@ static const uint8_t *tensor_expert_bytes(
 
     const uint64_t expert_bytes = *out_dim * *row_bytes;
     return (const uint8_t *)tensor_data(m, w) + (uint64_t)expert * expert_bytes;
+}
+
+typedef struct {
+    float *out;
+    const uint8_t *base;
+    const float *x;
+    uint64_t in_dim;
+    uint64_t row_bytes;
+} matvec_mxfp4_ctx;
+
+static void matvec_mxfp4_worker(void *vctx, uint64_t row0, uint64_t row1) {
+    matvec_mxfp4_ctx *ctx = vctx;
+
+    for (uint64_t row_id = row0; row_id < row1; row_id++) {
+        char err[96];
+        const uint8_t *row = ctx->base + row_id * ctx->row_bytes;
+        if (ds4_src_mxfp4_row_dot(&ctx->out[row_id], row, ctx->x,
+                                  ctx->in_dim, err, sizeof(err)) != 0) {
+            ds4_die(err);
+        }
+    }
+}
+
+static void matvec_mxfp4_expert(
+        float             * out,
+        const ds4_model   * model,
+        const ds4_tensor  * w,
+        const float       * x,
+        uint32_t            expert) {
+    if (w->type != DS4_TENSOR_MXFP4) ds4_die("expected an MXFP4 expert tensor");
+    uint64_t in_dim = 0;
+    uint64_t out_dim = 0;
+    uint64_t row_bytes = 0;
+    const uint8_t *base = tensor_expert_bytes(model, w, expert, &in_dim, &out_dim, &row_bytes);
+    if (row_bytes != ds4_src_mxfp4_row_bytes(in_dim)) {
+        ds4_die("MXFP4 expert row has an unexpected byte stride");
+    }
+
+    matvec_mxfp4_ctx ctx = {
+        .out = out,
+        .base = base,
+        .x = x,
+        .in_dim = in_dim,
+        .row_bytes = row_bytes,
+    };
+    ds4_parallel_for(out_dim, matvec_mxfp4_worker, &ctx);
+}
+
+typedef struct {
+    float *out0;
+    float *out1;
+    const uint8_t *base0;
+    const uint8_t *base1;
+    const float *x;
+    uint64_t in_dim;
+    uint64_t row_bytes0;
+    uint64_t row_bytes1;
+} matvec_mxfp4_pair_ctx;
+
+static void matvec_mxfp4_pair_worker(void *vctx, uint64_t row0, uint64_t row1) {
+    matvec_mxfp4_pair_ctx *ctx = vctx;
+
+    for (uint64_t row_id = row0; row_id < row1; row_id++) {
+        char err[96];
+        const uint8_t *row0_ptr = ctx->base0 + row_id * ctx->row_bytes0;
+        const uint8_t *row1_ptr = ctx->base1 + row_id * ctx->row_bytes1;
+        if (ds4_src_mxfp4_row_dot(&ctx->out0[row_id], row0_ptr, ctx->x,
+                                  ctx->in_dim, err, sizeof(err)) != 0) {
+            ds4_die(err);
+        }
+        if (ds4_src_mxfp4_row_dot(&ctx->out1[row_id], row1_ptr, ctx->x,
+                                  ctx->in_dim, err, sizeof(err)) != 0) {
+            ds4_die(err);
+        }
+    }
+}
+
+static void matvec_mxfp4_expert_pair(
+        float             * out0,
+        float             * out1,
+        const ds4_model   * model,
+        const ds4_tensor  * w0,
+        const ds4_tensor  * w1,
+        const float       * x,
+        uint32_t            expert) {
+    if (w0->type != DS4_TENSOR_MXFP4 || w1->type != DS4_TENSOR_MXFP4) {
+        ds4_die("expected MXFP4 expert tensors");
+    }
+
+    uint64_t in_dim0 = 0;
+    uint64_t out_dim0 = 0;
+    uint64_t row_bytes0 = 0;
+    uint64_t in_dim1 = 0;
+    uint64_t out_dim1 = 0;
+    uint64_t row_bytes1 = 0;
+    const uint8_t *base0 = tensor_expert_bytes(model, w0, expert, &in_dim0, &out_dim0, &row_bytes0);
+    const uint8_t *base1 = tensor_expert_bytes(model, w1, expert, &in_dim1, &out_dim1, &row_bytes1);
+    if (in_dim0 != in_dim1 || out_dim0 != out_dim1) {
+        ds4_die("MXFP4 expert pair layout mismatch");
+    }
+    if (row_bytes0 != ds4_src_mxfp4_row_bytes(in_dim0) ||
+        row_bytes1 != ds4_src_mxfp4_row_bytes(in_dim1)) {
+        ds4_die("MXFP4 expert pair row has an unexpected byte stride");
+    }
+
+    matvec_mxfp4_pair_ctx ctx = {
+        .out0 = out0,
+        .out1 = out1,
+        .base0 = base0,
+        .base1 = base1,
+        .x = x,
+        .in_dim = in_dim0,
+        .row_bytes0 = row_bytes0,
+        .row_bytes1 = row_bytes1,
+    };
+    ds4_parallel_for(out_dim0, matvec_mxfp4_pair_worker, &ctx);
 }
 
 typedef struct {
@@ -4445,10 +4703,10 @@ static void hc_pre_from_state_one_scratch(
     float split[24];
 
     rms_norm_no_weight(flat, residual_hc, hc_dim, DS4_RMS_EPS);
-    if (serial_fn) {
+    if (serial_fn && fn->type == DS4_TENSOR_F16) {
         matvec_f16_serial(mix, model, fn, flat);
     } else {
-        matvec_f16(mix, model, fn, flat);
+        matvec_any(mix, model, fn, flat);
     }
 
     const float *scale = tensor_data(model, scale_tensor);
@@ -4749,9 +5007,9 @@ static void layer_q_projection_normed_one(
 
     const float *q_a_norm = tensor_data(model, layer->attn_q_a_norm);
 
-    matvec_q8_0(qr, model, layer->attn_q_a, norm);
+    matvec_any(qr, model, layer->attn_q_a, norm);
     rms_norm_weight(qr_norm, qr, q_a_norm, 1024, DS4_RMS_EPS);
-    matvec_q8_0(q, model, layer->attn_q_b, qr_norm);
+    matvec_any(q, model, layer->attn_q_b, qr_norm);
     head_rms_norm_inplace(q, DS4_N_HEAD, DS4_N_HEAD_DIM, DS4_RMS_EPS);
 
     free(qr_norm);
@@ -4767,9 +5025,9 @@ static void layer_q_projection_with_lora_one(
     float *qr = xmalloc(1024 * sizeof(qr[0]));
     const float *q_a_norm = tensor_data(model, layer->attn_q_a_norm);
 
-    matvec_q8_0(qr, model, layer->attn_q_a, norm);
+    matvec_any(qr, model, layer->attn_q_a, norm);
     rms_norm_weight(qr_norm, qr, q_a_norm, 1024, DS4_RMS_EPS);
-    matvec_q8_0(q, model, layer->attn_q_b, qr_norm);
+    matvec_any(q, model, layer->attn_q_b, qr_norm);
     head_rms_norm_inplace(q, DS4_N_HEAD, DS4_N_HEAD_DIM, DS4_RMS_EPS);
 
     free(qr);
@@ -4785,7 +5043,7 @@ static void layer_kv_projection_normed_one(
 
     const float *kv_norm = tensor_data(model, layer->attn_kv_a_norm);
 
-    matvec_q8_0(raw, model, layer->attn_kv, normed);
+    matvec_any(raw, model, layer->attn_kv, normed);
     rms_norm_weight(kv, raw, kv_norm, DS4_N_HEAD_DIM, DS4_RMS_EPS);
 
     free(raw);
@@ -5103,9 +5361,9 @@ static void layer_grouped_out_one(
 
     float *low = xcalloc((size_t)n_groups * rank, sizeof(low[0]));
 
-    matvec_q8_0_grouped_rows(low, model, layer->attn_output_a, heads, n_groups, group_dim, rank);
+    matvec_any_grouped_rows(low, model, layer->attn_output_a, heads, n_groups, group_dim, rank);
 
-    matvec_q8_0(out, model, layer->attn_output_b, low);
+    matvec_any(out, model, layer->attn_output_b, low);
     free(low);
 }
 
@@ -5181,26 +5439,40 @@ static void layer_shared_ffn_one(
     float *up = xmalloc((size_t)DS4_N_FF_EXP * sizeof(up[0]));
     float *mid = xmalloc((size_t)DS4_N_FF_EXP * sizeof(mid[0]));
     const uint64_t in_dim = layer->ffn_gate_shexp->dim[0];
-    const uint64_t blocks = (in_dim + 31) / 32;
-    int8_t *xq = xmalloc((size_t)blocks * 32);
-    float *xscale = xmalloc((size_t)blocks * sizeof(xscale[0]));
 
-    if (layer->ffn_up_shexp->type != 8 ||
-        layer->ffn_gate_shexp->type != 8 ||
-        layer->ffn_up_shexp->dim[0] != in_dim) {
-        ds4_die("shared expert gate/up tensors do not share a Q8_0 input layout");
+    if (layer->ffn_up_shexp->dim[0] != in_dim ||
+        layer->ffn_gate_shexp->dim[1] != DS4_N_FF_EXP ||
+        layer->ffn_up_shexp->dim[1] != DS4_N_FF_EXP ||
+        layer->ffn_down_shexp->dim[0] != DS4_N_FF_EXP ||
+        layer->ffn_down_shexp->dim[1] != DS4_N_EMBD) {
+        ds4_die("shared expert tensors do not share the expected input layout");
     }
 
-    quantize_q8_0_activation(x, xq, xscale, in_dim);
-    matvec_q8_0_pair_prequant(gate, up, model,
-                              layer->ffn_gate_shexp,
-                              layer->ffn_up_shexp,
-                              xq, xscale);
-    swiglu(mid, gate, up, DS4_N_FF_EXP);
-    matvec_q8_0(out, model, layer->ffn_down_shexp, mid);
+    if (layer->ffn_gate_shexp->type == DS4_TENSOR_Q8_0 &&
+        layer->ffn_up_shexp->type == DS4_TENSOR_Q8_0 &&
+        layer->ffn_down_shexp->type == DS4_TENSOR_Q8_0) {
+        const uint64_t blocks = (in_dim + 31) / 32;
+        int8_t *xq = xmalloc((size_t)blocks * 32);
+        float *xscale = xmalloc((size_t)blocks * sizeof(xscale[0]));
+        quantize_q8_0_activation(x, xq, xscale, in_dim);
+        matvec_q8_0_pair_prequant(gate, up, model,
+                                  layer->ffn_gate_shexp,
+                                  layer->ffn_up_shexp,
+                                  xq, xscale);
+        free(xscale);
+        free(xq);
+    } else if (layer->ffn_gate_shexp->type == DS4_TENSOR_F8_E4M3_B128 &&
+               layer->ffn_up_shexp->type == DS4_TENSOR_F8_E4M3_B128 &&
+               layer->ffn_down_shexp->type == DS4_TENSOR_F8_E4M3_B128) {
+        matvec_any(gate, model, layer->ffn_gate_shexp, x);
+        matvec_any(up, model, layer->ffn_up_shexp, x);
+    } else {
+        ds4_die("shared expert tensors do not share a supported source layout");
+    }
 
-    free(xscale);
-    free(xq);
+    swiglu(mid, gate, up, DS4_N_FF_EXP);
+    matvec_any(out, model, layer->ffn_down_shexp, mid);
+
     free(mid);
     free(up);
     free(gate);
@@ -5319,7 +5591,7 @@ static void layer_router_probs_one(
         const float       * x) {
     float logits[DS4_N_EXPERT];
 
-    matvec_f16(logits, model, layer->ffn_gate_inp, x);
+    matvec_any(logits, model, layer->ffn_gate_inp, x);
     for (int i = 0; i < DS4_N_EXPERT; i++) {
         probs[i] = sqrtf(softplus_stable(logits[i]));
     }
@@ -5419,6 +5691,91 @@ static void layer_topk_selected_experts_from_probs(
 
 static void print_vec_stats(const char *name, const float *x, uint64_t n);
 
+static void layer_routed_moe_mxfp4_one(
+        float             * out,
+        const ds4_model   * model,
+        const ds4_layer_weights * layer,
+        const float       * x,
+        uint32_t            il,
+        int                 token,
+        float               clamp,
+        bool                trace) {
+    int selected[DS4_N_EXPERT_USED];
+    float expert_weight[DS4_N_EXPERT_USED];
+    const uint64_t expert_in_dim = layer->ffn_gate_exps->dim[0];
+    const uint64_t expert_out_dim = layer->ffn_gate_exps->dim[1];
+    const uint64_t down_in_dim = layer->ffn_down_exps->dim[0];
+    const uint64_t down_out_dim = layer->ffn_down_exps->dim[1];
+
+    if (layer->ffn_gate_exps->type != DS4_TENSOR_MXFP4 ||
+        layer->ffn_up_exps->type != DS4_TENSOR_MXFP4 ||
+        layer->ffn_down_exps->type != DS4_TENSOR_MXFP4) {
+        ds4_die("source routed MoE expected MXFP4 expert tensors");
+    }
+    if (layer->ffn_up_exps->dim[0] != expert_in_dim ||
+        layer->ffn_up_exps->dim[1] != expert_out_dim ||
+        down_in_dim != expert_out_dim ||
+        down_out_dim != DS4_N_EMBD) {
+        ds4_die("source routed MoE MXFP4 tensor layout mismatch");
+    }
+
+    float *gate = xmalloc((size_t)expert_out_dim * sizeof(gate[0]));
+    float *up = xmalloc((size_t)expert_out_dim * sizeof(up[0]));
+    float *mid = xmalloc((size_t)expert_out_dim * sizeof(mid[0]));
+    float *down = xmalloc((size_t)DS4_N_EMBD * sizeof(down[0]));
+
+    memset(out, 0, (size_t)DS4_N_EMBD * sizeof(out[0]));
+
+    if (layer->ffn_gate_tid2eid) {
+        layer_hash_selected_experts(selected, model, layer, token);
+        layer_hash_router_weights_one(expert_weight, model, layer, x, selected);
+    } else {
+        layer_topk_selected_experts(selected, expert_weight, model, layer, x);
+    }
+
+    for (int i = 0; i < DS4_N_EXPERT_USED; i++) {
+        const uint32_t expert = (uint32_t)selected[i];
+        if (selected[i] < 0 || selected[i] >= DS4_N_EXPERT) {
+            ds4_die("selected MXFP4 expert is outside range");
+        }
+
+        matvec_mxfp4_expert_pair(gate, up, model,
+                                  layer->ffn_gate_exps,
+                                  layer->ffn_up_exps,
+                                  x,
+                                  expert);
+        if (trace) {
+            char name[64];
+            snprintf(name, sizeof(name), "blk.%u expert %u source gate", il, expert);
+            print_vec_stats(name, gate, expert_out_dim);
+            snprintf(name, sizeof(name), "blk.%u expert %u source up", il, expert);
+            print_vec_stats(name, up, expert_out_dim);
+        }
+
+        for (uint64_t j = 0; j < expert_out_dim; j++) {
+            if (clamp > 1.0e-6f) {
+                if (gate[j] > clamp) gate[j] = clamp;
+                if (up[j] > clamp) up[j] = clamp;
+                if (up[j] < -clamp) up[j] = -clamp;
+            }
+            mid[j] = silu(gate[j]) * up[j] * expert_weight[i];
+        }
+
+        matvec_mxfp4_expert(down, model, layer->ffn_down_exps, mid, expert);
+        if (trace) {
+            char name[64];
+            snprintf(name, sizeof(name), "blk.%u expert %u source down", il, expert);
+            print_vec_stats(name, down, DS4_N_EMBD);
+        }
+        for (uint32_t j = 0; j < DS4_N_EMBD; j++) out[j] += down[j];
+    }
+
+    free(down);
+    free(mid);
+    free(up);
+    free(gate);
+}
+
 /* Single-token routed MoE.  It selects six experts, runs IQ2_XXS gate/up,
  * applies SwiGLU and router weights, then accumulates Q2_K down projections. */
 static void layer_routed_moe_one(
@@ -5430,6 +5787,13 @@ static void layer_routed_moe_one(
         int                 token,
         float               clamp,
         bool                trace) {
+    if (layer->ffn_gate_exps->type == DS4_TENSOR_MXFP4 ||
+        layer->ffn_up_exps->type == DS4_TENSOR_MXFP4 ||
+        layer->ffn_down_exps->type == DS4_TENSOR_MXFP4) {
+        layer_routed_moe_mxfp4_one(out, model, layer, x, il, token, clamp, trace);
+        return;
+    }
+
     int selected[DS4_N_EXPERT_USED];
     float expert_weight[DS4_N_EXPERT_USED];
     float *gate = trace ? xmalloc((size_t)DS4_N_FF_EXP * sizeof(gate[0])) : NULL;
@@ -8074,7 +8438,7 @@ static void output_hc_head_one(
     float *w = xmalloc((size_t)n_hc * sizeof(w[0]));
 
     rms_norm_no_weight(flat, inp_hc, hc_dim, DS4_RMS_EPS);
-    matvec_f16(pre, model, weights->output_hc_fn, flat);
+    matvec_any(pre, model, weights->output_hc_fn, flat);
 
     const float *scale = tensor_data(model, weights->output_hc_scale);
     const float *base = tensor_data(model, weights->output_hc_base);
@@ -8089,7 +8453,7 @@ static void output_hc_head_one(
     free(flat);
 }
 
-/* Final language-model head: HC collapse, RMSNorm, and Q8_0 vocab projection. */
+/* Final language-model head: HC collapse, RMSNorm, and vocab projection. */
 static void output_logits_one(
         float             * logits,
         const ds4_model   * model,
@@ -8101,7 +8465,7 @@ static void output_logits_one(
     output_hc_head_one(embd, model, weights, inp_hc);
     rms_norm_weight(norm, embd, tensor_data(model, weights->output_norm), DS4_N_EMBD, DS4_RMS_EPS);
 
-    matvec_q8_0(logits, model, weights->output, norm);
+    matvec_any(logits, model, weights->output, norm);
 
     free(norm);
     free(embd);
@@ -14395,6 +14759,7 @@ struct ds4_engine {
     float directional_steering_attn_scale;
     float directional_steering_ffn_scale;
     bool quality;
+    bool source_layout_oracle;
     bool metal_ready;
     bool mtp_ready;
 };
@@ -17040,6 +17405,11 @@ int ds4_engine_generate_argmax(
     const ds4_vocab *vocab = &e->vocab;
     const ds4_weights *weights = &e->weights;
 
+    if (e->source_layout_oracle) {
+        fprintf(stderr, "ds4: source-layout oracle is diagnostic-only; use --first-token-test\n");
+        return 1;
+    }
+
     if (ds4_backend_uses_graph(e->backend)) {
 #ifndef DS4_NO_GPU
         if (!e->metal_ready) {
@@ -17261,6 +17631,7 @@ int ds4_engine_open(ds4_engine **out, const ds4_engine_options *opt) {
     e->mtp_model.fd = -1;
     e->backend = opt->backend;
     e->quality = opt->quality;
+    e->source_layout_oracle = opt->source_layout_oracle;
     e->mtp_draft_tokens = opt->mtp_draft_tokens > 0 ? opt->mtp_draft_tokens : 1;
     if (e->mtp_draft_tokens > 16) e->mtp_draft_tokens = 16;
     e->mtp_margin = opt->mtp_margin >= 0.0f ? opt->mtp_margin : 3.0f;
@@ -17302,7 +17673,27 @@ int ds4_engine_open(ds4_engine **out, const ds4_engine_options *opt) {
             return 1;
         }
     }
-    if (e->weights.v100_source_layout && !opt->inspect_only) {
+    if (opt->source_layout_oracle) {
+        if (opt->inspect_only || e->backend != DS4_BACKEND_CPU) {
+            fprintf(stderr, "ds4: --source-layout-oracle requires CPU backend and is not an inspect mode\n");
+            ds4_engine_close(e);
+            *out = NULL;
+            return 1;
+        }
+        if (!e->weights.v100_source_layout) {
+            fprintf(stderr, "ds4: --source-layout-oracle requires the native DS4-Flash source layout\n");
+            ds4_engine_close(e);
+            *out = NULL;
+            return 1;
+        }
+        if (opt->mtp_path && opt->mtp_path[0]) {
+            fprintf(stderr, "ds4: --source-layout-oracle rejects MTP sidecars\n");
+            ds4_engine_close(e);
+            *out = NULL;
+            return 1;
+        }
+    }
+    if (e->weights.v100_source_layout && !opt->inspect_only && !opt->source_layout_oracle) {
         fprintf(stderr,
                 "ds4: native DS4-Flash source layout is recognized, but V100 "
                 "FP8/MXFP4 execution kernels are not wired into runtime yet; "
@@ -17427,6 +17818,10 @@ void ds4_engine_close(ds4_engine *e) {
 
 int ds4_session_create(ds4_session **out, ds4_engine *e, int ctx_size) {
     if (!out || !e || ctx_size <= 0) return 1;
+    if (e->source_layout_oracle) {
+        fprintf(stderr, "ds4: source-layout oracle is diagnostic-only and does not create generation sessions\n");
+        return 1;
+    }
     if (e->backend == DS4_BACKEND_CPU) {
         ds4_session *s = xcalloc(1, sizeof(*s));
         s->engine = e;

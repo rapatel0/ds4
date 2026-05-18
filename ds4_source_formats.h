@@ -19,8 +19,12 @@ float ds4_src_mxfp4_nibble_to_f32(uint8_t q);
 int ds4_src_bf16_row_to_f32(float *dst, const uint16_t *src, uint64_t n);
 int ds4_src_f8_e4m3_b128_row_to_f32(float *dst, const uint8_t *src,
                                     uint64_t ncols, char *err, size_t err_size);
+int ds4_src_f8_e4m3_b128_row_dot(float *dst, const uint8_t *src, const float *x,
+                                 uint64_t ncols, char *err, size_t err_size);
 int ds4_src_mxfp4_row_to_f32(float *dst, const uint8_t *src, uint64_t ncols,
                              char *err, size_t err_size);
+int ds4_src_mxfp4_row_dot(float *dst, const uint8_t *src, const float *x,
+                          uint64_t ncols, char *err, size_t err_size);
 int ds4_src_i32_row_to_u32(uint32_t *dst, const int32_t *src, uint64_t n,
                            char *err, size_t err_size);
 

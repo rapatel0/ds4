@@ -115,7 +115,7 @@ cuda-regression: tests/cuda_long_context_smoke
 	./tests/cuda_long_context_smoke
 endif
 
-ds4.o: ds4.c ds4.h ds4_gpu.h ds4_pack.h
+ds4.o: ds4.c ds4.h ds4_gpu.h ds4_pack.h ds4_source_formats.h
 	$(CC) $(CFLAGS) -c -o $@ ds4.c
 
 ds4_pack.o: ds4_pack.c ds4_pack.h
@@ -219,7 +219,7 @@ rax.o: rax.c rax.h rax_malloc.h
 linenoise.o: linenoise.c linenoise.h
 	$(CC) $(CFLAGS) -c -o $@ linenoise.c
 
-ds4_cpu.o: ds4.c ds4.h ds4_gpu.h ds4_pack.h
+ds4_cpu.o: ds4.c ds4.h ds4_gpu.h ds4_pack.h ds4_source_formats.h
 	$(CC) $(CFLAGS) -DDS4_NO_GPU -c -o $@ ds4.c
 
 ds4_cli_cpu.o: ds4_cli.c ds4.h linenoise.h
