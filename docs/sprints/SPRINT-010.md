@@ -50,6 +50,16 @@ Normal source-layout generation remains fail-closed.
 - No persistent dequantized copies of large source weights.
 - No F8 KV baseline; F16 KV remains the correctness baseline.
 
+## Precision Policy
+
+V100 has no native BF16, FP8, or FP4 tensor-core execution. Sprint 010 must not
+introduce a broad BF16 runtime path or a broad FP32 GEMM fallback. Source BF16
+tensors should become FP16 runtime pack data or bounded FP16 scratch tiles
+before production V100 GEMMs. Main dense and projection paths should target FP16
+HMMA with FP32 accumulation, while FP32 remains limited to small
+control/reduction paths, compressor state/score buffers, logits selection,
+debug/oracle paths, and other accuracy-sensitive non-GEMM work.
+
 ## Planning Inputs
 
 | File | Role |
