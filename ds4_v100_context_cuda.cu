@@ -23,6 +23,8 @@ typedef struct {
     void *relay_f32_in;
     void *relay_f32_out;
     uint64_t relay_f32_bytes;
+    void *kv_arena;
+    uint64_t kv_arena_bytes;
 } ds4_v100_cuda_stage;
 
 struct ds4_v100_cuda_context {
@@ -106,6 +108,7 @@ int ds4_v100_cuda_collect_device_facts(ds4_v100_device_fact *facts,
 static void stage_free(ds4_v100_cuda_stage *s) {
     if (!s) return;
     if (s->gpu >= 0) (void)cudaSetDevice(s->gpu);
+    if (s->kv_arena) (void)cudaFree(s->kv_arena);
     if (s->relay_f32_out) (void)cudaFree(s->relay_f32_out);
     if (s->relay_f32_in) (void)cudaFree(s->relay_f32_in);
     if (s->relay_f16_out) (void)cudaFree(s->relay_f16_out);
@@ -128,6 +131,10 @@ static int stage_alloc(ds4_v100_cuda_stage *s,
     s->scratch_bytes = info->scratch_bytes;
     s->relay_f16_bytes = info->relay_f16_bytes;
     s->relay_f32_bytes = enable_f32_debug ? info->relay_f32_debug_bytes : 0;
+    s->kv_arena_bytes = info->kv_arena.total_bytes;
+    if (s->kv_arena_bytes > (uint64_t)((size_t)-1)) {
+        return cuda_v100_error(err, errlen, "kv arena is too large for cudaMalloc");
+    }
     if (cuda_v100_ok(cudaSetDevice(s->gpu), "cudaSetDevice", err, errlen)) return 1;
     if (cuda_v100_ok(cudaStreamCreateWithFlags(&s->stream, cudaStreamNonBlocking),
                      "cudaStreamCreate", err, errlen)) return 1;
@@ -151,6 +158,11 @@ static int stage_alloc(ds4_v100_cuda_stage *s,
                          "cudaMalloc relay f32 in", err, errlen)) return 1;
         if (cuda_v100_ok(cudaMalloc(&s->relay_f32_out, (size_t)s->relay_f32_bytes),
                          "cudaMalloc relay f32 out", err, errlen)) return 1;
+    }
+    if (s->kv_arena_bytes &&
+        cuda_v100_ok(cudaMalloc(&s->kv_arena, (size_t)s->kv_arena_bytes),
+                     "cudaMalloc kv arena", err, errlen)) {
+        return 1;
     }
     return 0;
 }

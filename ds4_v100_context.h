@@ -73,6 +73,18 @@ typedef struct {
 } ds4_v100_kv_budget;
 
 typedef struct {
+    uint64_t raw_swa_offset;
+    uint64_t raw_swa_bytes;
+    uint64_t compressed_attn_offset;
+    uint64_t compressed_attn_bytes;
+    uint64_t indexer_kv_offset;
+    uint64_t indexer_kv_bytes;
+    uint64_t compression_state_offset;
+    uint64_t compression_state_bytes;
+    uint64_t total_bytes;
+} ds4_v100_kv_arena_plan;
+
+typedef struct {
     ds4_v100_source_dtype source_dtype;
     ds4_v100_tensor_family family;
     ds4_v100_exec_kind exec_kind;
@@ -103,6 +115,7 @@ typedef struct {
     uint64_t relay_f16_bytes;
     uint64_t relay_f32_debug_bytes;
     uint64_t planned_kv_bytes;
+    ds4_v100_kv_arena_plan kv_arena;
     uint64_t kv_raw_swa_bytes;
     uint64_t kv_compressed_attn_bytes;
     uint64_t kv_indexer_bytes;

@@ -14,6 +14,40 @@ static void require_true(int cond, const char *msg) {
     if (!cond) die(msg);
 }
 
+static void require_kv_arena_plan(const ds4_v100_stage_info *s, const char *label) {
+    char msg[128];
+    uint64_t off = 0;
+
+    snprintf(msg, sizeof(msg), "%s raw kv offset", label);
+    require_true(s->kv_arena.raw_swa_offset == off, msg);
+    snprintf(msg, sizeof(msg), "%s raw kv arena bytes", label);
+    require_true(s->kv_arena.raw_swa_bytes == s->kv_raw_swa_bytes, msg);
+    off += s->kv_raw_swa_bytes;
+
+    snprintf(msg, sizeof(msg), "%s compressed kv offset", label);
+    require_true(s->kv_arena.compressed_attn_offset == off, msg);
+    snprintf(msg, sizeof(msg), "%s compressed kv arena bytes", label);
+    require_true(s->kv_arena.compressed_attn_bytes == s->kv_compressed_attn_bytes, msg);
+    off += s->kv_compressed_attn_bytes;
+
+    snprintf(msg, sizeof(msg), "%s indexer kv offset", label);
+    require_true(s->kv_arena.indexer_kv_offset == off, msg);
+    snprintf(msg, sizeof(msg), "%s indexer kv arena bytes", label);
+    require_true(s->kv_arena.indexer_kv_bytes == s->kv_indexer_bytes, msg);
+    off += s->kv_indexer_bytes;
+
+    snprintf(msg, sizeof(msg), "%s compression state kv offset", label);
+    require_true(s->kv_arena.compression_state_offset == off, msg);
+    snprintf(msg, sizeof(msg), "%s compression state arena bytes", label);
+    require_true(s->kv_arena.compression_state_bytes == s->kv_compression_state_bytes, msg);
+    off += s->kv_compression_state_bytes;
+
+    snprintf(msg, sizeof(msg), "%s kv arena total", label);
+    require_true(s->kv_arena.total_bytes == off, msg);
+    snprintf(msg, sizeof(msg), "%s planned kv total", label);
+    require_true(s->planned_kv_bytes == s->kv_arena.total_bytes, msg);
+}
+
 static void write_file(const char *path, const char *body) {
     FILE *fp = fopen(path, "wb");
     if (!fp) die("cannot create temp pack index");
@@ -288,10 +322,7 @@ static void test_kv_stage_admission(void) {
     require_true(s0->kv_compression_state_bytes ==
                  2ull * ratio4_state + 2ull * ratio128_state,
                  "stage0 compression state bytes");
-    require_true(s0->planned_kv_bytes == s0->kv_raw_swa_bytes +
-                 s0->kv_compressed_attn_bytes + s0->kv_indexer_bytes +
-                 s0->kv_compression_state_bytes,
-                 "stage0 planned kv total");
+    require_kv_arena_plan(s0, "stage0");
 
     const ds4_v100_stage_info *s1 = ds4_v100_context_stage(ctx, 1);
     require_true(s1 != NULL, "stage 1 kv info");
@@ -304,6 +335,7 @@ static void test_kv_stage_admission(void) {
     require_true(s1->kv_compression_state_bytes ==
                  3ull * ratio4_state + 3ull * ratio128_state,
                  "stage1 compression state bytes");
+    require_kv_arena_plan(s1, "stage1");
     ds4_v100_context_close(ctx);
 }
 

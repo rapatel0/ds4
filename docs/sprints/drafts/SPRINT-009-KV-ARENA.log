@@ -1,0 +1,72 @@
+ds4_v100_context_report
+expected_gpus	8
+mode	0
+policy	bf16_fp8_fp4_are_not_native_v100_tensor_core_formats
+policy	production_dense_gemm_target_fp16_hmma_with_fp32_accumulation
+kv_ctx_tokens	1048576
+kv_active_slots	1
+tensor_count	0
+exec_count	f32_control	0
+exec_count	f16_hmma_after_convert	0
+exec_count	lowbit_kernel	0
+exec_count	diagnostic_only	0
+exec_count	unsupported	0
+layer_class_count	swa_only	2
+layer_class_count	ratio_4	21
+layer_class_count	ratio_128	20
+stage	gpu	layers	arena_bytes	scratch_bytes	relay_f16_bytes	relay_f32_debug_bytes	kv_raw_swa_offset	kv_raw_swa_bytes	kv_compressed_attn_offset	kv_compressed_attn_bytes	kv_indexer_offset	kv_indexer_bytes	kv_compression_state_offset	kv_compression_state_bytes	planned_kv_bytes	reserve_bytes	device_total_bytes
+0	0	0-5	0	0	65536	0	0	786432	786432	553648128	554434560	134217728	688652288	1212416	689864704	2147483648	0
+1	1	6-11	0	0	65536	0	0	786432	786432	830472192	831258624	201326592	1032585216	1818624	1034403840	2147483648	0
+2	2	12-17	0	0	65536	0	0	786432	786432	830472192	831258624	201326592	1032585216	1818624	1034403840	2147483648	0
+3	3	18-23	0	0	65536	0	0	786432	786432	830472192	831258624	201326592	1032585216	1818624	1034403840	2147483648	0
+4	4	24-29	0	0	65536	0	0	786432	786432	830472192	831258624	201326592	1032585216	1818624	1034403840	2147483648	0
+5	5	30-34	0	0	65536	0	0	655360	655360	822083584	822738944	201326592	1024065536	1294336	1025359872	2147483648	0
+6	6	35-39	0	0	65536	0	0	655360	655360	562036736	562692096	134217728	696909824	1736704	698646528	2147483648	0
+7	7	40-42	0	0	65536	0	0	393216	393216	545259520	545652736	134217728	679870464	688128	680558592	2147483648	0
+layer_skeleton_begin
+layer	stage	class	kv_bytes	tensors	f32_control	fp8_dense	mxfp4_expert	hc_control	status
+0	0	swa_only	131072	0	0	0	0	0	OK
+1	0	swa_only	131072	0	0	0	0	0	OK
+2	0	ratio_4	335757312	0	0	0	0	0	OK
+3	0	ratio_128	9043968	0	0	0	0	0	OK
+4	0	ratio_4	335757312	0	0	0	0	0	OK
+5	0	ratio_128	9043968	0	0	0	0	0	OK
+6	1	ratio_4	335757312	0	0	0	0	0	OK
+7	1	ratio_128	9043968	0	0	0	0	0	OK
+8	1	ratio_4	335757312	0	0	0	0	0	OK
+9	1	ratio_128	9043968	0	0	0	0	0	OK
+10	1	ratio_4	335757312	0	0	0	0	0	OK
+11	1	ratio_128	9043968	0	0	0	0	0	OK
+12	2	ratio_4	335757312	0	0	0	0	0	OK
+13	2	ratio_128	9043968	0	0	0	0	0	OK
+14	2	ratio_4	335757312	0	0	0	0	0	OK
+15	2	ratio_128	9043968	0	0	0	0	0	OK
+16	2	ratio_4	335757312	0	0	0	0	0	OK
+17	2	ratio_128	9043968	0	0	0	0	0	OK
+18	3	ratio_4	335757312	0	0	0	0	0	OK
+19	3	ratio_128	9043968	0	0	0	0	0	OK
+20	3	ratio_4	335757312	0	0	0	0	0	OK
+21	3	ratio_128	9043968	0	0	0	0	0	OK
+22	3	ratio_4	335757312	0	0	0	0	0	OK
+23	3	ratio_128	9043968	0	0	0	0	0	OK
+24	4	ratio_4	335757312	0	0	0	0	0	OK
+25	4	ratio_128	9043968	0	0	0	0	0	OK
+26	4	ratio_4	335757312	0	0	0	0	0	OK
+27	4	ratio_128	9043968	0	0	0	0	0	OK
+28	4	ratio_4	335757312	0	0	0	0	0	OK
+29	4	ratio_128	9043968	0	0	0	0	0	OK
+30	5	ratio_4	335757312	0	0	0	0	0	OK
+31	5	ratio_128	9043968	0	0	0	0	0	OK
+32	5	ratio_4	335757312	0	0	0	0	0	OK
+33	5	ratio_128	9043968	0	0	0	0	0	OK
+34	5	ratio_4	335757312	0	0	0	0	0	OK
+35	6	ratio_128	9043968	0	0	0	0	0	OK
+36	6	ratio_4	335757312	0	0	0	0	0	OK
+37	6	ratio_128	9043968	0	0	0	0	0	OK
+38	6	ratio_4	335757312	0	0	0	0	0	OK
+39	6	ratio_128	9043968	0	0	0	0	0	OK
+40	7	ratio_4	335757312	0	0	0	0	0	OK
+41	7	ratio_128	9043968	0	0	0	0	0	OK
+42	7	ratio_4	335757312	0	0	0	0	0	OK
+layer_skeleton_result	OK
+context_smoke_result	OK

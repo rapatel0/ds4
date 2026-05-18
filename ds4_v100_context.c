@@ -169,6 +169,14 @@ static uint64_t sat_add_u64(uint64_t a, uint64_t b) {
     return a + b;
 }
 
+static uint64_t align_up_u64(uint64_t v, uint64_t align) {
+    if (align == 0) return v;
+    uint64_t mask = align - 1u;
+    if ((align & mask) != 0) return v;
+    if (v > UINT64_MAX - mask) return UINT64_MAX;
+    return (v + mask) & ~mask;
+}
+
 ds4_v100_kv_budget ds4_v100_kv_budget_for_layer(int layer_id,
                                                 uint64_t ctx_tokens,
                                                 uint64_t active_slots) {
@@ -321,6 +329,7 @@ static void apply_derived_kv_plan(ds4_v100_context *ctx) {
     const uint64_t slots = ctx->opts.kv_active_slots;
     for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
         ctx->stages[i].planned_kv_bytes = 0;
+        memset(&ctx->stages[i].kv_arena, 0, sizeof(ctx->stages[i].kv_arena));
         ctx->stages[i].kv_raw_swa_bytes = 0;
         ctx->stages[i].kv_compressed_attn_bytes = 0;
         ctx->stages[i].kv_indexer_bytes = 0;
@@ -340,6 +349,30 @@ static void apply_derived_kv_plan(ds4_v100_context *ctx) {
             sat_add_u64(stage->kv_compression_state_bytes, li->kv_budget.compression_state_bytes);
         stage->planned_kv_bytes =
             sat_add_u64(stage->planned_kv_bytes, li->kv_budget.total_bytes);
+    }
+    for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
+        ds4_v100_stage_info *stage = &ctx->stages[i];
+        ds4_v100_kv_arena_plan *arena = &stage->kv_arena;
+        uint64_t off = 0;
+
+        arena->raw_swa_offset = off;
+        arena->raw_swa_bytes = stage->kv_raw_swa_bytes;
+        off = align_up_u64(sat_add_u64(off, arena->raw_swa_bytes), 256ull);
+
+        arena->compressed_attn_offset = off;
+        arena->compressed_attn_bytes = stage->kv_compressed_attn_bytes;
+        off = align_up_u64(sat_add_u64(off, arena->compressed_attn_bytes), 256ull);
+
+        arena->indexer_kv_offset = off;
+        arena->indexer_kv_bytes = stage->kv_indexer_bytes;
+        off = align_up_u64(sat_add_u64(off, arena->indexer_kv_bytes), 256ull);
+
+        arena->compression_state_offset = off;
+        arena->compression_state_bytes = stage->kv_compression_state_bytes;
+        off = align_up_u64(sat_add_u64(off, arena->compression_state_bytes), 256ull);
+
+        arena->total_bytes = off;
+        stage->planned_kv_bytes = arena->total_bytes;
     }
 }
 
@@ -694,15 +727,18 @@ void ds4_v100_context_print_report(const ds4_v100_context *ctx, FILE *fp) {
     fprintf(fp, "layer_class_count\t%s\t%d\n",
             ds4_v100_layer_class_name(DS4_V100_LAYER_RATIO_128),
             class_counts[DS4_V100_LAYER_RATIO_128]);
-    fprintf(fp, "stage\tgpu\tlayers\tarena_bytes\tscratch_bytes\trelay_f16_bytes\trelay_f32_debug_bytes\tkv_raw_swa_bytes\tkv_compressed_attn_bytes\tkv_indexer_bytes\tkv_compression_state_bytes\tplanned_kv_bytes\treserve_bytes\tdevice_total_bytes\n");
+    fprintf(fp, "stage\tgpu\tlayers\tarena_bytes\tscratch_bytes\trelay_f16_bytes\trelay_f32_debug_bytes\tkv_arena_bytes\tkv_raw_swa_offset\tkv_raw_swa_bytes\tkv_compressed_attn_offset\tkv_compressed_attn_bytes\tkv_indexer_offset\tkv_indexer_bytes\tkv_compression_state_offset\tkv_compression_state_bytes\tplanned_kv_bytes\treserve_bytes\tdevice_total_bytes\n");
     for (int i = 0; i < ctx->opts.expected_gpus; i++) {
         const ds4_v100_stage_info *s = &ctx->stages[i];
-        fprintf(fp, "%d\t%d\t%d-%d\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\n",
+        fprintf(fp, "%d\t%d\t%d-%d\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\n",
                 s->stage_id, s->gpu, s->layer_begin, s->layer_end,
                 s->arena_bytes, s->scratch_bytes, s->relay_f16_bytes,
-                s->relay_f32_debug_bytes, s->kv_raw_swa_bytes,
-                s->kv_compressed_attn_bytes, s->kv_indexer_bytes,
-                s->kv_compression_state_bytes, s->planned_kv_bytes,
+                s->relay_f32_debug_bytes, s->kv_arena.total_bytes,
+                s->kv_arena.raw_swa_offset,
+                s->kv_arena.raw_swa_bytes, s->kv_arena.compressed_attn_offset,
+                s->kv_arena.compressed_attn_bytes, s->kv_arena.indexer_kv_offset,
+                s->kv_arena.indexer_kv_bytes, s->kv_arena.compression_state_offset,
+                s->kv_arena.compression_state_bytes, s->planned_kv_bytes,
                 s->reserve_bytes, s->device_total_bytes);
     }
 }

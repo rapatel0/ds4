@@ -122,12 +122,12 @@ not normal `ds4` generation flags.
 - `tests/cuda_v100_context_smoke.c`
 
 **Tasks:**
-- [ ] Add a stage-local KV arena descriptor derived from
+- [x] Add a stage-local KV arena descriptor derived from
       `ds4_v100_kv_budget_for_layer`.
-- [ ] Allocate raw SWA, compressed attention KV, indexer KV, and compression
+- [x] Allocate raw SWA, compressed attention KV, indexer KV, and compression
       state buffers for explicit `ctx` and `slots`.
-- [ ] Fail closed if allocation would exceed the stage memory reserve.
-- [ ] Print stable allocation offsets/sizes in the context report.
+- [x] Fail closed if allocation would exceed the stage memory reserve.
+- [x] Print stable allocation offsets/sizes in the context report.
 
 ### Phase 2: Bounded Raw SWA And Compressed KV Update
 
