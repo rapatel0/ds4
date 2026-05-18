@@ -1,0 +1,7 @@
+pack_index_smoke: ok
+gpu	arena_bytes	used_bytes	memory_kind	valid
+0	32	32	host-stub	1
+gpu_topology	stub	device_count	0
+gpu_arena_smoke: ok
+bf16_probe_smoke: ok
+v100_context_smoke: ok

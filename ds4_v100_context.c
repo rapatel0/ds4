@@ -520,6 +520,44 @@ bool ds4_v100_context_has_token_embedding(const ds4_v100_context *ctx) {
     return ctx && ctx->has_token_embedding;
 }
 
+int ds4_v100_context_validate_layer_skeleton(const ds4_v100_context *ctx,
+                                             FILE *report,
+                                             char *err,
+                                             size_t errlen) {
+    if (!ctx) return v100_error(err, errlen, "missing V100 context");
+    if (report) {
+        fprintf(report, "layer\tstage\ttensors\tf32_control\tfp8_dense\tmxfp4_expert\thc_control\tstatus\n");
+    }
+    for (int layer = 0; layer < DS4_V100_N_LAYERS; layer++) {
+        const ds4_v100_layer_info *li = &ctx->layers[layer];
+        int expect_stage = ds4_v100_stage_for_layer(layer);
+        const char *status = "OK";
+        if (li->stage_id != expect_stage) status = "BAD_STAGE";
+        else if (ctx->n_descs > 0 && li->tensor_count == 0) status = "MISSING_LAYER_DESCRIPTORS";
+        else if (ctx->n_descs > 0 && !li->has_f32_control) status = "MISSING_F32_CONTROL";
+        else if (ctx->n_descs > 0 && !li->has_fp8_dense) status = "MISSING_FP8_DENSE";
+        else if (ctx->n_descs > 0 && !li->has_mxfp4_expert) status = "MISSING_MXFP4_EXPERT";
+        else if (ctx->n_descs > 0 && !li->has_hc_control) status = "MISSING_HC_CONTROL";
+        if (report) {
+            fprintf(report, "%d\t%d\t%" PRIu64 "\t%d\t%d\t%d\t%d\t%s\n",
+                    layer, li->stage_id, li->tensor_count,
+                    li->has_f32_control ? 1 : 0,
+                    li->has_fp8_dense ? 1 : 0,
+                    li->has_mxfp4_expert ? 1 : 0,
+                    li->has_hc_control ? 1 : 0,
+                    status);
+        }
+        if (strcmp(status, "OK")) {
+            return v100_error(err, errlen, "layer %d skeleton validation failed: %s",
+                              layer, status);
+        }
+    }
+    if (ctx->n_descs > 0 && !ctx->has_token_embedding) {
+        return v100_error(err, errlen, "missing token embedding descriptor");
+    }
+    return 0;
+}
+
 void ds4_v100_context_print_report(const ds4_v100_context *ctx, FILE *fp) {
     if (!ctx || !fp) return;
     fprintf(fp, "ds4_v100_context_report\n");

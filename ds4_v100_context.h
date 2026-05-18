@@ -6,6 +6,10 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define DS4_V100_EXPECTED_GPUS 8
 #define DS4_V100_N_LAYERS 43
 #define DS4_V100_HC_ROWS 4
@@ -64,8 +68,8 @@ typedef struct {
     int cc_major;
     int cc_minor;
     uint64_t total_global_mem;
-    const char *pci_bus_id;
-    const char *uuid;
+    char pci_bus_id[32];
+    char uuid[64];
     bool peer_access[DS4_V100_EXPECTED_GPUS];
 } ds4_v100_device_fact;
 
@@ -147,6 +151,39 @@ uint64_t ds4_v100_context_tensor_count(const ds4_v100_context *ctx);
 uint64_t ds4_v100_context_exec_count(const ds4_v100_context *ctx,
                                      ds4_v100_exec_kind kind);
 bool ds4_v100_context_has_token_embedding(const ds4_v100_context *ctx);
+int ds4_v100_context_validate_layer_skeleton(const ds4_v100_context *ctx,
+                                             FILE *report,
+                                             char *err,
+                                             size_t errlen);
 void ds4_v100_context_print_report(const ds4_v100_context *ctx, FILE *fp);
+
+typedef struct ds4_v100_cuda_context ds4_v100_cuda_context;
+
+typedef enum {
+    DS4_V100_RELAY_F16 = 0,
+    DS4_V100_RELAY_F32_DEBUG = 1,
+} ds4_v100_relay_dtype;
+
+int ds4_v100_cuda_collect_device_facts(ds4_v100_device_fact *facts,
+                                       int fact_cap,
+                                       int *out_count,
+                                       char *err,
+                                       size_t errlen);
+int ds4_v100_cuda_context_open(ds4_v100_cuda_context **out,
+                               const ds4_v100_context_options *opts,
+                               char *err,
+                               size_t errlen);
+void ds4_v100_cuda_context_close(ds4_v100_cuda_context *ctx);
+int ds4_v100_cuda_context_relay_smoke(ds4_v100_cuda_context *ctx,
+                                      int src_stage,
+                                      int dst_stage,
+                                      ds4_v100_relay_dtype dtype,
+                                      uint64_t active_slots,
+                                      char *err,
+                                      size_t errlen);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

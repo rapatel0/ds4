@@ -1,0 +1,3 @@
+ds4: context buffers 441.00 MiB (ctx=32768, backend=cpu, prefill_chunk=0, raw_kv_rows=128, compressed_kv_rows=8194)
+ds4: native DS4-Flash source layout is recognized, but V100 FP8/MXFP4 execution kernels are not wired into runtime yet; use --inspect or ds4-v100-plan --manifest for this model
+exit_code=1

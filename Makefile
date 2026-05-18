@@ -123,6 +123,9 @@ ds4_pack.o: ds4_pack.c ds4_pack.h
 ds4_v100_context.o: ds4_v100_context.c ds4_v100_context.h ds4_pack.h
 	$(CC) $(CFLAGS) -I. -c -o $@ ds4_v100_context.c
 
+ds4_v100_context_cuda.o: ds4_v100_context_cuda.cu ds4_v100_context.h
+	$(NVCC) $(NVCCFLAGS) -I. -c -o $@ ds4_v100_context_cuda.cu
+
 ds4_cli.o: ds4_cli.c ds4.h linenoise.h
 	$(CC) $(CFLAGS) -c -o $@ ds4_cli.c
 
@@ -147,6 +150,9 @@ tools/ds4-v100-pack: tools/ds4-v100-pack.c
 tools/ds4-v100-residency-smoke.o: tools/ds4-v100-residency-smoke.c ds4_pack.h ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-residency-smoke.c
 
+tools/ds4-v100-context-smoke.o: tools/ds4-v100-context-smoke.c ds4_v100_context.h
+	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-context-smoke.c
+
 ifeq ($(UNAME_S),Darwin)
 tools/ds4-v100-residency-smoke: tools/ds4-v100-residency-smoke.o ds4_pack.o ds4_gpu_arena_stub.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
@@ -154,6 +160,9 @@ else
 tools/ds4-v100-residency-smoke: tools/ds4-v100-residency-smoke.o ds4_pack.o ds4_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 endif
+
+tools/ds4-v100-context-smoke: tools/ds4-v100-context-smoke.o $(V100_CONTEXT_OBJS)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
 ds4_gpu_arena_stub.o: ds4_gpu_arena_stub.c ds4_gpu.h
 	$(CC) $(CFLAGS) -c -o $@ ds4_gpu_arena_stub.c
@@ -187,6 +196,12 @@ tests/cuda_long_context_smoke.o: tests/cuda_long_context_smoke.c ds4_gpu.h
 
 tests/cuda_bf16_probe.o: tests/cuda_bf16_probe.c ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -c -o $@ tests/cuda_bf16_probe.c
+
+tests/cuda_v100_context_smoke.o: tests/cuda_v100_context_smoke.c ds4_v100_context.h
+	$(CC) $(CFLAGS) -I. -c -o $@ tests/cuda_v100_context_smoke.c
+
+tests/cuda_hc_relay_smoke.o: tests/cuda_hc_relay_smoke.c ds4_v100_context.h
+	$(CC) $(CFLAGS) -I. -c -o $@ tests/cuda_hc_relay_smoke.c
 
 rax.o: rax.c rax.h rax_malloc.h
 	$(CC) $(CFLAGS) -c -o $@ rax.c
@@ -222,8 +237,18 @@ ifeq ($(UNAME_S),Darwin)
 tests/cuda_bf16_probe:
 	@echo "tests/cuda_bf16_probe requires a CUDA build"
 	@exit 2
+tests/cuda_v100_context_smoke:
+	@echo "tests/cuda_v100_context_smoke requires a CUDA build"
+	@exit 2
+tests/cuda_hc_relay_smoke:
+	@echo "tests/cuda_hc_relay_smoke requires a CUDA build"
+	@exit 2
 else
 tests/cuda_bf16_probe: tests/cuda_bf16_probe.o ds4_cuda.o
+	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
+tests/cuda_v100_context_smoke: tests/cuda_v100_context_smoke.o ds4_v100_context.o ds4_v100_context_cuda.o ds4_pack.o
+	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
+tests/cuda_hc_relay_smoke: tests/cuda_hc_relay_smoke.o ds4_v100_context.o ds4_v100_context_cuda.o ds4_pack.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 endif
 
@@ -238,4 +263,4 @@ test: ds4_test
 	./ds4_test
 
 clean:
-	rm -f ds4 ds4-server ds4-bench ds4-eval ds4_cpu ds4_native ds4_server_test ds4_test *.o tests/*.o tests/cuda_long_context_smoke tests/cuda_bf16_probe tests/pack_index_smoke tests/gpu_arena_smoke tests/bf16_probe_smoke tests/v100_context_smoke tools/*.o tools/ds4-v100-plan tools/ds4-v100-pack tools/ds4-v100-residency-smoke
+	rm -f ds4 ds4-server ds4-bench ds4-eval ds4_cpu ds4_native ds4_server_test ds4_test *.o tests/*.o tests/cuda_long_context_smoke tests/cuda_bf16_probe tests/cuda_v100_context_smoke tests/cuda_hc_relay_smoke tests/pack_index_smoke tests/gpu_arena_smoke tests/bf16_probe_smoke tests/v100_context_smoke tools/*.o tools/ds4-v100-plan tools/ds4-v100-pack tools/ds4-v100-residency-smoke tools/ds4-v100-context-smoke
