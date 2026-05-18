@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-18
-last_updated_by: sprint-execute
-revision: 27
+last_updated_by: sprint-plan
+revision: 28
 ---
 
 # Vision: DS4 V100 Appliance
@@ -350,19 +350,20 @@ it is a narrow DS4 runtime tuned for this hardware.
   real source-byte q/kv/output projection, residual add, and FFN pre-norm
   surfaces on V100 against CPU source-format references.
 
-### Sprint 019 - V100 Full Attention And Layer Output Slice [planned]
+### Sprint 019 - V100 Integrated Single-Layer Runtime Slice [planned]
 
-- **Goal**: Replace Sprint 018's bounded attention-output proxy with real
-  attention softmax over raw/compressed KV rows and compose a coherent
-  descriptor-bound layer output through the scheduler-owned layer state.
+- **Goal**: Replace Sprint 018's bounded attention-output proxy with a
+  scheduler-owned single-layer executor that produces a real next-hidden vector
+  for a representative ratio-4 layer by composing semantic attention,
+  residual/norm, and router-selected FFN.
 - **Rationale**: The appliance still cannot produce the next hidden state from
   a real layer. Sprint 018 proved real projection/control surfaces; Sprint 019
-  should prove the semantic attention output and prepare the combined
-  attention+FFN layer slice.
+  should ship a reusable runtime slice instead of another isolated primitive.
 - **Plan**: Use the descriptor-bound q/kv projection surfaces, existing
-  compressor/KV kernels, and attention kernels to produce a real attention
-  result for a bounded representative context, then compare the resulting
-  layer-output slice against CPU/source-format references.
+  compressor/KV/attention kernels, and descriptor-bound router/FFN path to
+  execute layer 2 through attention plus FFN. Validate first on one V100 via
+  direct host execution, then wire the integrated smoke into the full appliance
+  gate.
 
 ## Parking Lot
 
