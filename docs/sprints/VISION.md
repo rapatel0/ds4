@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-18
-last_updated_by: sprint-execute
-revision: 21
+last_updated_by: sprint-plan
+revision: 22
 ---
 
 # Vision: DS4 V100 Appliance
@@ -288,13 +288,16 @@ it is a narrow DS4 runtime tuned for this hardware.
   smoke executes real routed MXFP4 plus shared F8 bytes from the source GGUF at
   real pack offsets.
 
-### Sprint 016 - V100 Descriptor-Bound Layer Slice [planned]
+### Sprint 016 - V100 Descriptor-Bound Router FFN Gate [planned]
 
-- **Goal**: Convert descriptor-bound FFN proof into a scheduler-owned layer
-  slice with real router selection and enough attention/residual/norm plumbing
-  to approach selected-token logits.
+- **Goal**: Upgrade descriptor-bound FFN compute from fixed expert to
+  model-selected routed experts using real `ffn_gate_inp.weight` and
+  `ffn_gate_tid2eid` descriptors.
 - **Rationale**: Sprint 015 proves real-byte FFN compute, but serving requires
-  a coherent layer state machine rather than a standalone smoke.
+  real router scheduling before a coherent layer state machine can be trusted.
+- **Plan**: Add source-F32 arena matmul, compute router logits from real
+  descriptor-bound bytes, select hash-routed experts, and execute all selected
+  routed experts plus the shared expert in the V100 smoke.
 
 ## Parking Lot
 
