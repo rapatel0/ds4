@@ -75,6 +75,21 @@ static void test_classification(void) {
                  "bf16 embedding should classify");
     require_true(p.exec_kind == DS4_V100_EXEC_DIAGNOSTIC_ONLY,
                  "bf16 embedding must be diagnostic only");
+    require_true(p.conversion_stub &&
+                 !strcmp(p.conversion_stub, "bf16_source_to_fp16_or_f32_boundary"),
+                 "bf16 must declare conversion boundary");
+    require_true(p.forbidden_claim &&
+                 !strcmp(p.forbidden_claim, "native_bf16_tensor_core_execution"),
+                 "bf16 must forbid native v100 bf16 claim");
+
+    require_true(ds4_v100_classify_or_die("bf16", "source_bf16",
+                                          "native_bf16_tensor_core_execution",
+                                          &p, err, sizeof(err)) == 0,
+                 "native bf16 claim should remain diagnostic policy");
+    require_true(p.exec_kind == DS4_V100_EXEC_DIAGNOSTIC_ONLY &&
+                 p.forbidden_claim &&
+                 !strcmp(p.forbidden_claim, "native_bf16_tensor_core_execution"),
+                 "native bf16 claim must not become executable");
 
     require_true(ds4_v100_classify_or_die("f8_e4m3_b128",
                                           "source_f8_e4m3_b128_blocked",
@@ -96,6 +111,14 @@ static void test_classification(void) {
                                           "v100_fp8_dequant_f16_hmma_pending",
                                           &p, err, sizeof(err)) != 0,
                  "bf16 must not classify as fp8 dense");
+    require_true(ds4_v100_classify_or_die("f32", "source_f32",
+                                          "v100_fp32_gemm",
+                                          &p, err, sizeof(err)) != 0,
+                 "f32 model gemm fallback must fail policy");
+    require_true(ds4_v100_classify_or_die("f32", "source_f32_matmul",
+                                          "ds4_control",
+                                          &p, err, sizeof(err)) != 0,
+                 "f32 matmul layout must fail policy");
 }
 
 static void test_layer_map(void) {

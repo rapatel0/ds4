@@ -88,10 +88,10 @@ model GEMMs.
 - BF16/source-format tests
 
 **Tasks:**
-- [ ] Verify BF16 source tensors only enter V100 math through FP16/F32
+- [x] Verify BF16 source tensors only enter V100 math through FP16/F32
       diagnostic conversion surfaces.
-- [ ] Add or extend tests so no code path claims native BF16 V100 compute.
-- [ ] Preserve the no-broad-FP32-GEMM policy in reports/tests.
+- [x] Add or extend tests so no code path claims native BF16 V100 compute.
+- [x] Preserve the no-broad-FP32-GEMM policy in reports/tests.
 
 ### Phase 3: Projection-To-Attention/Compressor Slice
 

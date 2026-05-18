@@ -267,11 +267,18 @@ int ds4_v100_classify_or_die(const char *source_dtype,
     case DS4_V100_FAMILY_BF16_GLOBAL:
         if (dtype != DS4_V100_SOURCE_BF16) break;
         p.exec_kind = DS4_V100_EXEC_DIAGNOSTIC_ONLY;
+        p.conversion_stub = "bf16_source_to_fp16_or_f32_boundary";
         p.forbidden_claim = "native_bf16_tensor_core_execution";
         break;
     case DS4_V100_FAMILY_HC_CONTROL:
     case DS4_V100_FAMILY_F32_CONTROL:
         if (dtype != DS4_V100_SOURCE_F32 && dtype != DS4_V100_SOURCE_I32) break;
+        if (contains_ci(kernel_family, "gemm") ||
+            contains_ci(kernel_family, "matmul") ||
+            contains_ci(runtime_layout, "gemm") ||
+            contains_ci(runtime_layout, "matmul")) {
+            break;
+        }
         p.exec_kind = DS4_V100_EXEC_F32_CONTROL;
         p.forbidden_claim = "decode_completion";
         break;

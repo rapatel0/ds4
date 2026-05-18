@@ -1,0 +1,4 @@
+make: `tests/v100_context_smoke' is up to date.
+make: `tools/ds4-v100-context-smoke' is up to date.
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -I. -c -o tests/cuda_bf16_probe.o tests/cuda_bf16_probe.c
+v100_context_smoke: ok
