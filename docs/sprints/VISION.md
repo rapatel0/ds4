@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-18
-last_updated_by: sprint-plan
-revision: 16
+last_updated_by: sprint-execute
+revision: 17
 ---
 
 # Vision: DS4 V100 Appliance
@@ -71,6 +71,12 @@ it is a narrow DS4 runtime tuned for this hardware.
   all implemented CUDA smokes on the 8x V100 pod, but reports `ready=false`
   because full layer/MoE execution, full selected-token decode, public serving,
   MTP, and throughput benchmarks remain missing.
+- Sprint 013 shipped the first source-MXFP4 routed expert execution surface and
+  a bounded MoE/logits selected-token smoke. The gate now validates router
+  selection, MXFP4 gate/up/down expert matmuls, SwiGLU accumulation, BF16
+  output-head logits, and selected-token comparison on V100. It still reports
+  `ready=false` because the path is synthetic and not yet bound to real
+  pack-index layer descriptors or the full layer scheduler.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -231,7 +237,7 @@ it is a narrow DS4 runtime tuned for this hardware.
   appliance gate passes implemented checks and correctly reports `ready=false`
   until full MoE/selected-token serving exists.
 
-### Sprint 013 - V100 Source MXFP4 MoE And Selected-Token Gate [planned]
+### Sprint 013 - V100 Source MXFP4 MoE And Selected-Token Gate [complete]
 
 - **Goal**: Add a bounded source-MXFP4 routed expert primitive and a
   single-token router/MoE/output-head fixture that produces a selected-token
@@ -240,24 +246,29 @@ it is a narrow DS4 runtime tuned for this hardware.
   still reports not-ready. The next concrete blocker is the routed expert path:
   DS4 Flash stores routed gate/up/down experts as MXFP4 source tensors, and
   deployment should wait until MoE and selected-token evidence exist.
+- **Outcome**: `SHIP`. MXFP4 source expert matmuls and a bounded router/MoE/
+  output-head selected-token smoke pass on V100. The remaining readiness gap is
+  real pack-index layer integration and shared-expert/full scheduler wiring.
 
-### Sprint 014 - V100 Appliance Deployment [planned]
+### Sprint 014 - V100 Real Layer Descriptor Integration [planned]
+
+- **Goal**: Bind the bounded source-F8, source-BF16, source-MXFP4, router,
+  attention, compressor, and output-head primitives to real pack-index
+  descriptors for at least one source-layout layer or short selected-token
+  path.
+- **Rationale**: Sprint 013 proves synthetic MoE composition. Deployment should
+  wait until the same kernel surfaces consume real model descriptors and include
+  the shared expert/full layer scheduler path.
+
+### Sprint 015 - V100 Appliance Deployment And Optimization [tentative]
 
 - **Goal**: Package the runtime as a cluster-deployed CLI/server path with
-  startup residency validation, the appliance gate wired into readiness,
-  guarded operational defaults, and source-layout serving controlled by
-  explicit readiness gates.
-- **Rationale**: Deployment should follow selected-token correctness so
-  failures mean serving issues, not basic model execution gaps.
-
-### Sprint 015 - Throughput, MTP, And Advanced Scheduling [tentative]
-
-- **Goal**: Improve aggregate tokens/sec and context-tier admission through
-  slot batching, wavefront scheduling, expert kernel selection, relay overlap,
-  KV format choices, output-head tuning, MTP/speculative decoding, and
+  startup residency validation and readiness gates, then begin measured
+  throughput work: slot batching, wavefront scheduling, expert kernel
+  selection, relay overlap, output-head tuning, MTP/speculative decoding, and
   selective tensor-parallel exceptions.
 - **Rationale**: Optimization should be driven by measured bottlenecks from a
-  verified deployed path, not by assumptions from bounded smokes.
+  verified real-descriptor path, not by assumptions from bounded smokes.
 
 ## Parking Lot
 

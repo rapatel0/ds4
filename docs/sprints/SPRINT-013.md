@@ -1,12 +1,13 @@
 ---
 sprint: 013
 title: V100 Source MXFP4 MoE And Selected-Token Gate
-status: planned
+status: completed
 date: 2026-05-18
 target_repo: rapatel0/ds4
 architecture: ../architecture/DS4-V100-LAYOUT.md
 intent: drafts/SPRINT-013-INTENT.md
 deferred: SPRINT-013-DEFERRED.md
+verdict: SHIP
 ---
 
 # SPRINT-013: V100 Source MXFP4 MoE And Selected-Token Gate
@@ -59,12 +60,12 @@ integration substrate, not the final performance kernel.
 - source dtype tests
 
 **Tasks:**
-- [ ] Add `ds4_gpu_arena_mxfp4_matmul_f32` using `ds4_gpu_source_row_view`.
-- [ ] Validate MXFP4 rows, cols, row stride, byte ranges, input tensor, and
+- [x] Add `ds4_gpu_arena_mxfp4_matmul_f32` using `ds4_gpu_source_row_view`.
+- [x] Validate MXFP4 rows, cols, row stride, byte ranges, input tensor, and
       output tensor.
-- [ ] Decode low-half/high-half nibble ordering to match
+- [x] Decode low-half/high-half nibble ordering to match
       `ds4_src_mxfp4_row_dot`.
-- [ ] Add focused CUDA coverage and invalid-view checks.
+- [x] Add focused CUDA coverage and invalid-view checks.
 
 ### Phase 2: Bounded Router/MoE Selected-Token Smoke
 
@@ -73,13 +74,13 @@ integration substrate, not the final performance kernel.
 - `Makefile`
 
 **Tasks:**
-- [ ] Build a deterministic single-token fixture with 256 router logits and
+- [x] Build a deterministic single-token fixture with 256 router logits and
       six selected routes.
-- [ ] Run router selection on device and compare selected expert ids/weights
+- [x] Run router selection on device and compare selected expert ids/weights
       against CPU reference.
-- [ ] Run source-MXFP4 gate/up/down expert matmuls for selected routes.
-- [ ] Run SwiGLU and route accumulation on device.
-- [ ] Run BF16 bounded output-head logits and selected-token comparison.
+- [x] Run source-MXFP4 gate/up/down expert matmuls for selected routes.
+- [x] Run SwiGLU and route accumulation on device.
+- [x] Run BF16 bounded output-head logits and selected-token comparison.
 
 ### Phase 3: Appliance Gate Extension
 
@@ -88,10 +89,10 @@ integration substrate, not the final performance kernel.
 - sprint logs
 
 **Tasks:**
-- [ ] Add the new MoE selected-token smoke to the gate target list.
-- [ ] Preserve `ready=false` until real layer descriptors and full selected
+- [x] Add the new MoE selected-token smoke to the gate target list.
+- [x] Preserve `ready=false` until real layer descriptors and full selected
       token are wired.
-- [ ] Run the gate on the V100 pod and archive logs.
+- [x] Run the gate on the V100 pod and archive logs.
 
 ### Phase 4: Closeout
 
@@ -102,10 +103,10 @@ integration substrate, not the final performance kernel.
 - `docs/sprints/VISION.md`
 
 **Tasks:**
-- [ ] Run local validation and `git diff --check`.
-- [ ] Run V100 `sm_70` validation.
-- [ ] Archive cluster logs.
-- [ ] Write report/follow-ups and update the vision.
+- [x] Run local validation and `git diff --check`.
+- [x] Run V100 `sm_70` validation.
+- [x] Archive cluster logs.
+- [x] Write report/follow-ups and update the vision.
 
 ## Definition Of Done
 

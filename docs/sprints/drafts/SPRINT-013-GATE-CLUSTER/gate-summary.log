@@ -1,0 +1,13 @@
+gate	nvidia_smi	PASS	command=nvidia-smi -L
+gate	source_guards	PASS	command=./tools/ds4-source-oracle-vector --model /models/DSv4-Flash-256e-fixed.gguf --guards-only
+gate	source_dtypes	PASS	command=./tests/cuda_source_dtypes_smoke
+gate	bf16_probe	PASS	command=./tests/cuda_bf16_probe
+gate	context_kv	PASS	command=./tests/cuda_v100_context_smoke --production --kv-ctx 1048576 --kv-slots 1
+gate	compressor_bridge	PASS	command=./tests/cuda_v100_compressor_bridge_smoke
+gate	prefill_kv	PASS	command=./tests/cuda_v100_prefill_kv_smoke
+gate	hc_relay	PASS	command=./tests/cuda_hc_relay_smoke
+gate	projection_attention	PASS	command=./tests/cuda_v100_projection_attention_smoke
+gate	bounded_logits	PASS	command=./tests/cuda_v100_bounded_logits_smoke
+gate	mxfp4_moe	PASS	command=./tests/cuda_v100_mxfp4_moe_smoke
+gate	readiness	NOT_READY	missing=real_pack_layer_scheduler,shared_expert,real_model_selected_token,public_serving,mtp,throughput_benchmark
+gate	summary	PASS	failures=0 ready=false

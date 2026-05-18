@@ -82,6 +82,7 @@ targets=(
     tests/cuda_hc_relay_smoke
     tests/cuda_v100_projection_attention_smoke
     tests/cuda_v100_bounded_logits_smoke
+    tests/cuda_v100_mxfp4_moe_smoke
 )
 
 if [ -n "$log_dir" ]; then
@@ -155,13 +156,14 @@ run_gate "prefill_kv" ./tests/cuda_v100_prefill_kv_smoke || true
 run_gate "hc_relay" ./tests/cuda_hc_relay_smoke || true
 run_gate "projection_attention" ./tests/cuda_v100_projection_attention_smoke || true
 run_gate "bounded_logits" ./tests/cuda_v100_bounded_logits_smoke || true
+run_gate "mxfp4_moe" ./tests/cuda_v100_mxfp4_moe_smoke || true
 
 if [ "$failures" -ne 0 ]; then
     echo "gate	summary	FAIL	failures=$failures ready=false"
     exit 1
 fi
 
-missing="full_layer_moe,full_selected_token,public_serving,mtp,throughput_benchmark"
+missing="real_pack_layer_scheduler,shared_expert,real_model_selected_token,public_serving,mtp,throughput_benchmark"
 echo "gate	readiness	NOT_READY	missing=$missing"
 echo "gate	summary	PASS	failures=0 ready=false"
 exit 0

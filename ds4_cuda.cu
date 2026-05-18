@@ -1641,6 +1641,14 @@ static int f8_e4m3_b128_row_bytes(uint32_t cols, uint64_t *out) {
     return 0;
 }
 
+static int mxfp4_row_bytes(uint32_t cols, uint64_t *out) {
+    if (cols == 0 || cols % 32u) return 1;
+    uint64_t blocks = (uint64_t)cols / 32ull;
+    if (blocks > UINT64_MAX / 17ull) return 1;
+    *out = blocks * 17ull;
+    return 0;
+}
+
 static int cuda_bf16_view_range_ok(const ds4_gpu_arena *arena,
                                    const ds4_gpu_bf16_matrix_view *view,
                                    const uint32_t *row_ids,
@@ -1782,6 +1790,27 @@ __device__ static float arena_e4m3fn_to_f32(uint8_t x) {
     return sign ? -v : v;
 }
 
+__device__ static float arena_mxfp4_nibble_to_f32(uint8_t q) {
+    switch (q & 0x0fu) {
+        case 0x0u: return 0.0f;
+        case 0x1u: return 0.5f;
+        case 0x2u: return 1.0f;
+        case 0x3u: return 1.5f;
+        case 0x4u: return 2.0f;
+        case 0x5u: return 3.0f;
+        case 0x6u: return 4.0f;
+        case 0x7u: return 6.0f;
+        case 0x8u: return 0.0f;
+        case 0x9u: return -0.5f;
+        case 0xau: return -1.0f;
+        case 0xbu: return -1.5f;
+        case 0xcu: return -2.0f;
+        case 0xdu: return -3.0f;
+        case 0xeu: return -4.0f;
+        default: return -6.0f;
+    }
+}
+
 __global__ static void arena_f8_e4m3_b128_row_decode_kernel(
         float *out,
         const uint8_t *base,
@@ -1815,6 +1844,36 @@ __global__ static void arena_f8_e4m3_b128_matmul_kernel(
         const uint8_t *block = row + (uint64_t)(c / 128u) * 129ull;
         const float scale = arena_e8m0_to_f32(block[0]);
         const float w = arena_e4m3fn_to_f32(block[1u + (c % 128u)]) * scale;
+        acc += w * x[c];
+    }
+
+    __shared__ float partial[256];
+    partial[threadIdx.x] = acc;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) partial[threadIdx.x] += partial[threadIdx.x + stride];
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) out[r] = partial[0];
+}
+
+__global__ static void arena_mxfp4_matmul_kernel(
+        float *out,
+        const uint8_t *base,
+        const float *x,
+        uint32_t rows,
+        uint32_t cols,
+        uint32_t row_stride_bytes) {
+    const uint32_t r = blockIdx.x;
+    if (r >= rows) return;
+    const uint8_t *row = base + (uint64_t)r * row_stride_bytes;
+    float acc = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        const uint8_t *block = row + (uint64_t)(c / 32u) * 17ull;
+        const uint32_t lane = c % 32u;
+        const uint8_t packed = block[1u + (lane % 16u)];
+        const uint8_t q = lane < 16u ? (packed & 0x0fu) : ((packed >> 4) & 0x0fu);
+        const float w = arena_mxfp4_nibble_to_f32(q) * arena_e8m0_to_f32(block[0]);
         acc += w * x[c];
     }
 
@@ -2241,6 +2300,54 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_f32(
         view->cols,
         view->row_stride_bytes);
     return cuda_ok(cudaGetLastError(), "f8 source matmul launch") ? 0 : 1;
+}
+
+static int cuda_mxfp4_matmul_view_ok(const ds4_gpu_arena *arena,
+                                     const ds4_gpu_source_row_view *view,
+                                     const ds4_gpu_tensor *x_f32,
+                                     const ds4_gpu_tensor *out_f32) {
+    if (!arena || !view || !x_f32 || !out_f32 || !arena->valid ||
+        !arena->ptr || !x_f32->ptr || !out_f32->ptr) {
+        return 0;
+    }
+    if (view->rows == 0 || view->cols == 0 || view->row_stride_bytes == 0) return 0;
+    if (!cuda_arena_range_ok(arena, view->arena_offset, view->byte_length)) return 0;
+    uint64_t row_bytes = 0;
+    if (mxfp4_row_bytes(view->cols, &row_bytes)) return 0;
+    if ((uint64_t)view->row_stride_bytes < row_bytes) return 0;
+    uint64_t last_start = 0;
+    if (checked_mul_u64((uint64_t)view->rows - 1u,
+                        (uint64_t)view->row_stride_bytes,
+                        &last_start)) {
+        return 0;
+    }
+    if (last_start > view->byte_length || row_bytes > view->byte_length - last_start) {
+        return 0;
+    }
+    uint64_t x_bytes = 0;
+    uint64_t out_bytes = 0;
+    if (checked_mul_u64((uint64_t)view->cols, sizeof(float), &x_bytes)) return 0;
+    if (checked_mul_u64((uint64_t)view->rows, sizeof(float), &out_bytes)) return 0;
+    if (x_f32->bytes < x_bytes || out_f32->bytes < out_bytes) return 0;
+    return 1;
+}
+
+extern "C" int ds4_gpu_arena_mxfp4_matmul_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *view,
+        const ds4_gpu_tensor          *x_f32,
+        ds4_gpu_tensor                *out_f32) {
+    if (!cuda_mxfp4_matmul_view_ok(arena, view, x_f32, out_f32)) return 1;
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "mxfp4 source matmul set device")) return 1;
+    const uint8_t *base = (const uint8_t *)((const char *)arena->ptr + view->arena_offset);
+    arena_mxfp4_matmul_kernel<<<view->rows, 256>>>(
+        (float *)out_f32->ptr,
+        base,
+        (const float *)x_f32->ptr,
+        view->rows,
+        view->cols,
+        view->row_stride_bytes);
+    return cuda_ok(cudaGetLastError(), "mxfp4 source matmul launch") ? 0 : 1;
 }
 
 extern "C" void ds4_gpu_set_quality(bool quality) {
