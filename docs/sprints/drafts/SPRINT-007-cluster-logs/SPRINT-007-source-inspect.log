@@ -1,0 +1,16 @@
+model: DeepSeek-V4-Flash-256e-fixed
+arch:  deepseek4
+gguf:  v3, 45 metadata keys, 1328 tensors
+layers: 43
+attention: heads=64 kv_heads=1 head_dim=512 swa=128
+indexer: heads=64 head_dim=128 top_k=512
+experts: count=256 used=6 groups=0 groups_used=0
+file size: 145.42 GiB
+tensor bytes described by GGUF: 145.42 GiB
+logical parameters: 284.33 B
+tensor types:
+  f32        684 tensors, 0.30 GiB
+  i32          3 tensors, 0.01 GiB
+  bf16       147 tensors, 2.55 GiB
+  mxfp4      129 tensors, 137.06 GiB
+  f8_e4m3_b128   365 tensors, 5.50 GiB

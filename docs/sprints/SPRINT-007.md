@@ -1,13 +1,15 @@
 ---
 sprint: 007
 title: Source-Layout Single-Slot Decode Oracle
-status: planned
+status: completed
+verdict: SHIP
 date: 2026-05-18
 target_repo: rapatel0/ds4
 architecture: ../architecture/DS4-V100-LAYOUT.md
 intent: drafts/SPRINT-007-INTENT.md
 merge_notes: drafts/SPRINT-007-MERGE-NOTES.md
 deferred: SPRINT-007-DEFERRED.md
+report: SPRINT-007-REPORT.md
 ---
 
 # SPRINT-007: Source-Layout Single-Slot Decode Oracle
@@ -39,6 +41,25 @@ The V100 precision policy remains unchanged:
   It is not the production model-math default.
 - Normal source-layout generation remains guarded unless an explicit oracle
   option is set by a test or dedicated diagnostic tool.
+
+## Execution Result
+
+Sprint 007 shipped as `SHIP`.
+
+The implementation added shared source-format helpers, source-aware CPU
+reference dispatch for the diagnostic path, a narrow source-layout oracle
+session gate, and cluster evidence that the official `short_reasoning_plain`
+fixture selects the expected first token exactly. During validation the oracle
+exposed an MXFP4 block-layout mismatch; the source helper now matches GGML's
+`block_mxfp4` nibble order. It also confirmed that source-layout correctness
+starts from F16 KV, with F8 KV left as a later optimization gate.
+
+Normal source-layout generation still fails closed. The successful path is a
+bounded diagnostic `--dump-logprobs` oracle run, not a deployed serving path and
+not a production V100 kernel path.
+
+The full verdict, evidence, deviations, and Sprint 008 handoff are recorded in
+`docs/sprints/SPRINT-007-REPORT.md`.
 
 ## Outcome Contract
 

@@ -159,7 +159,7 @@ static void usage(FILE *fp) {
         "  --pack-reconcile-report FILE\n"
         "      Write pack reconciliation rows to FILE instead of stdout/stderr.\n"
         "  --source-layout-oracle\n"
-        "      CPU-only diagnostic unlock for native DS4-Flash source-layout first-token tests.\n"
+        "      CPU-only diagnostic unlock for native DS4-Flash source-layout oracle tests.\n"
         "  --dump-tokens\n"
         "      Tokenize -p/--prompt-file exactly as written, then exit without inference.\n"
         "  --dump-logprobs FILE\n"
@@ -1365,6 +1365,9 @@ int main(int argc, char **argv) {
     if (!cfg.inspect) {
         log_context_memory(cfg.engine.backend, cfg.gen.ctx_size);
         cli_warn_think_max_downgraded(&cfg.gen, "--think-max");
+    }
+    if (cfg.engine.source_layout_oracle && cfg.gen.dump_logprobs_path) {
+        cfg.engine.source_layout_oracle_sessions = true;
     }
     ds4_engine *engine = NULL;
     if (ds4_engine_open(&engine, &cfg.engine) != 0) {

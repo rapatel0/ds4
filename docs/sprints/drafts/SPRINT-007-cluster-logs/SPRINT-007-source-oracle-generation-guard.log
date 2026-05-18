@@ -1,0 +1,2 @@
+ds4: context buffers 64.69 MiB (ctx=4096, backend=cpu, prefill_chunk=0, raw_kv_rows=128, compressed_kv_rows=1026)
+ds4: source-layout oracle is diagnostic-only; use --first-token-test or --dump-logprobs

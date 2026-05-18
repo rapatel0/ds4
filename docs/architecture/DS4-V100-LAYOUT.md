@@ -7,9 +7,9 @@ while keeping VRAM residency and data movement explicit.
 
 ## Ground Rules
 
-- V100 does not have native Blackwell FP4 or FP8 tensor-core compute. FP4/FP8
-  are source and packed runtime formats that feed custom unpack/dequant,
-  integer, or FP16-HMMA kernels.
+- V100 does not have native BF16, Blackwell FP4, or FP8 tensor-core compute.
+  BF16/FP4/FP8 are source and packed runtime formats that feed explicit
+  conversion, custom unpack/dequant, integer, or FP16-HMMA kernels.
 - When this note says FP16 in the runtime columns, it usually means activation,
   cache, or accumulator-adjacent data on V100. It does not mean the source
   DeepSeek V4 Flash tensor is necessarily FP16.
@@ -19,6 +19,9 @@ while keeping VRAM residency and data movement explicit.
   not keep MXFP4, FP8, and INT8 copies resident together.
 - Keep activations FP16 through the layer. Use FP32 internally for reductions,
   softmax, routing scores, and debug paths.
+- Convert source BF16 weights to FP16 runtime storage, or decode BF16 into
+  FP16 scratch tiles, before any production V100 GEMM. Use FP32 only for the
+  CPU oracle and small control/reduction paths, not for large BF16 matmuls.
 - Start with F16 KV cache. Add F8 KV only after decode correctness and
   long-context accounting are stable.
 - Keep cross-GPU payloads small. The layer-sharded baseline only moves hidden
@@ -83,10 +86,10 @@ few percent; the planner should use exact packed byte counts once packers exist.
 
 | Tensor Family | Dimensions | Expected Native/Source Dtype | Starting Runtime Layout | Est. Resident Bytes |
 |---|---:|---|---|---:|
-| token embedding | `[4096 x 129280]` | BF16 | BF16/F16 row-gather table on gpu0 | about 1010 MiB |
+| token embedding | `[4096 x 129280]` | BF16 | FP16 row-gather table on gpu0, converted from source BF16 | about 1010 MiB |
 | output HC control | `hc_head_fn [16384 x 4]`, base `[4]`, scale `[1]` | F32 | F32 small tensors on output GPU | about 0.25 MiB |
 | output norm | `[4096]` | F32 | F32 | 0.016 MiB |
-| output head | `[4096 x 129280]` | BF16 | BF16 source-faithful on gpu7; later FP8/Q8 or vocab TP only after quality gate | about 1010 MiB |
+| output head | `[4096 x 129280]` | BF16 | FP16 projection on gpu7 converted from source BF16; later FP8/Q8 or vocab TP only after quality gate | about 1010 MiB |
 
 ## Transformer Layer Schedule
 
@@ -100,8 +103,8 @@ Kernel names below are kernel families, not final C symbol names.
 | 4 | KV projection | `attn_kv_latent [4096 x 512]` | F8_E4M3_B128 | source FP8 blocked pack | about 2.1 MiB | FP8 dequant + FP16 HMMA dense kernel | FP16 KV row |
 | 5 | RoPE + KV append | KV row `[512]`; raw SWA `[128 x 512]` | cache, not source weight | F16 cache first | 0.125 MiB raw SWA per layer per slot | DS4 RoPE/cache append kernel | updated raw SWA KV |
 | 6 | compressed attention | ratio-4 `attn_kv [262272 x 512]` at 1M; ratio-128 `[8320 x 512]` at 1M | cache, not source weight | F16 cache first | ratio-4 about 256.1 MiB per slot; ratio-128 about 8.1 MiB per slot | DS4 attention kernel | FP16 attention heads |
-| 7 | attention compressor | ratio-4 `attn_compress_ape [1024 x 4]`, KV/gate `[4096 x 1024]`; ratio-128 APE `[512 x 128]`, KV/gate `[4096 x 512]` | APE/norm F32, KV/gate BF16 | BF16/F32 | ratio-4 about 16.0 MiB; ratio-128 about 8.3 MiB | DS4 compressor kernels | compressed KV rows |
-| 8 | ratio-4 indexer | `indexer.attn_q_b [1024 x 8192]`, proj `[4096 x 64]`, compressor KV/gate `[4096 x 256]` | attn_q_b F8_E4M3_B128, proj/KV/gate BF16, APE/norm F32 | source FP8 + BF16/F32 | about 12.6 MiB on ratio-4 layers only; indexer KV cache adds about 64 MiB per slot at 1M | DS4 indexer score + top-k kernels | selected compressed rows |
+| 7 | attention compressor | ratio-4 `attn_compress_ape [1024 x 4]`, KV/gate `[4096 x 1024]`; ratio-128 APE `[512 x 128]`, KV/gate `[4096 x 512]` | APE/norm F32, KV/gate BF16 | FP16 compressor projections converted from BF16 plus F32 control tensors | ratio-4 about 16.0 MiB; ratio-128 about 8.3 MiB | DS4 compressor kernels | compressed KV rows |
+| 8 | ratio-4 indexer | `indexer.attn_q_b [1024 x 8192]`, proj `[4096 x 64]`, compressor KV/gate `[4096 x 256]` | attn_q_b F8_E4M3_B128, proj/KV/gate BF16, APE/norm F32 | source FP8 plus FP16 projections converted from BF16 and F32 control tensors | about 12.6 MiB on ratio-4 layers only; indexer KV cache adds about 64 MiB per slot at 1M | DS4 indexer score + top-k kernels | selected compressed rows |
 | 9 | attention output A/B | `attn_output_a [4096 x 8192]`, `attn_output_b [8192 x 4096]` | F8_E4M3_B128 expected | source FP8 blocked pack | about 66.0 MiB | FP8 dequant + FP16 HMMA dense kernel | FP16 attention output |
 | 10 | HC attention post | uses HC attention control state | F32 | F32 small tensors | included in step 1 | DS4 HC post kernel | FP16 HC |
 | 11 | FFN RMSNorm | `ffn_norm [4096]` | F32 | F32 | 0.016 MiB | DS4 RMSNorm kernel | FP16 FFN input |
@@ -171,7 +174,7 @@ table still fits with that reserve.
 | routed experts | source MXFP4 grouped pack | INT4 grouped, INT8 expanded, FP8 grouped | must fit VRAM and pass decode-quality checks |
 | shared expert | source FP8 dense pack | INT8 dense/shared pack | prior unsafe dense path must stay disabled until tested |
 | router | F32 | INT8 only if fused and exact enough | routing quality |
-| output head | BF16 source-faithful projection | vocab TP, FP8/Q8/INT8 after quality gate | memory/latency and top-k correctness |
+| output head | FP16 projection converted from source BF16 | vocab TP, FP8/Q8/INT8 after quality gate | memory/latency and top-k correctness |
 | KV cache | F16 | F8 | long-context correctness |
 
 The expert path is the main fork. MXFP4 best preserves VRAM and source
@@ -247,7 +250,7 @@ Start with the layer-sharded design:
 dense weights:     source FP8 packed
 routed experts:    source MXFP4 grouped packed
 shared expert:     source FP8 packed
-embedding/output:  BF16 source-faithful first
+embedding/output:  FP16 converted from source BF16
 activations:       FP16
 KV cache:          F16
 HC relay:          FP16 normal, FP32 debug

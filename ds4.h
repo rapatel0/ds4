@@ -73,6 +73,7 @@ typedef struct {
     bool quality;
     bool inspect_only;
     bool source_layout_oracle;
+    bool source_layout_oracle_sessions;
     const char *pack_index_path;
     const char *pack_reconcile_report_path;
 } ds4_engine_options;

@@ -1636,10 +1636,20 @@ static float dsv4_e4m3fn_dequant_cpu(float x) {
     return sign * dsv4_e4m3fn_value_cpu(best);
 }
 
+static bool g_source_layout_oracle_f16_kv;
+
+static bool dsv4_skip_fp8_kv_roundtrip_cpu(void) {
+    if (g_source_layout_oracle_f16_kv) return true;
+    const char *env = getenv("DS4_SOURCE_ORACLE_F16_KV");
+    return env && env[0] && strcmp(env, "0") != 0;
+}
+
 /* DeepSeek V4 stores the non-RoPE part of compressed KV through an E4M3-style
  * round trip.  Keeping this in the CPU reference makes cache values comparable
- * to the Metal graph's compressed-cache behavior. */
+ * to the Metal graph's compressed-cache behavior.  The native source-layout
+ * oracle skips this so it starts from the default F16 KV contract. */
 static void dsv4_fp8_kv_quantize_row_inplace_cpu(float *x, uint32_t head_dim, uint32_t n_rot) {
+    if (dsv4_skip_fp8_kv_roundtrip_cpu()) return;
     const uint32_t n_nope = head_dim - n_rot;
     for (uint32_t off = 0; off < n_nope; off += 64) {
         float amax = 0.0f;
@@ -5058,9 +5068,9 @@ static void layer_q_projection_with_lora_one_decode_scratch(
         ds4_cpu_decode_scratch  * scratch) {
     const float *q_a_norm = tensor_data(model, layer->attn_q_a_norm);
 
-    matvec_q8_0_decode_scratch(scratch->qr, model, layer->attn_q_a, norm, scratch);
+    matvec_any_decode_scratch(scratch->qr, model, layer->attn_q_a, norm, scratch);
     rms_norm_weight(qr_norm, scratch->qr, q_a_norm, 1024, DS4_RMS_EPS);
-    matvec_q8_0_decode_scratch(q, model, layer->attn_q_b, qr_norm, scratch);
+    matvec_any_decode_scratch(q, model, layer->attn_q_b, qr_norm, scratch);
     head_rms_norm_inplace(q, DS4_N_HEAD, DS4_N_HEAD_DIM, DS4_RMS_EPS);
 }
 
@@ -5072,7 +5082,7 @@ static void layer_kv_projection_normed_one_decode_scratch(
         ds4_cpu_decode_scratch  * scratch) {
     const float *kv_norm = tensor_data(model, layer->attn_kv_a_norm);
 
-    matvec_q8_0_decode_scratch(scratch->kv_raw, model, layer->attn_kv, normed, scratch);
+    matvec_any_decode_scratch(scratch->kv_raw, model, layer->attn_kv, normed, scratch);
     rms_norm_weight(kv, scratch->kv_raw, kv_norm, DS4_N_HEAD_DIM, DS4_RMS_EPS);
 }
 
@@ -5379,9 +5389,14 @@ static void layer_grouped_out_one_decode_scratch(
     const uint32_t rank = 1024;
 
     memset(scratch->attn_low, 0, (size_t)n_groups * rank * sizeof(scratch->attn_low[0]));
-    matvec_q8_0_grouped_rows_decode_scratch(scratch->attn_low, model, layer->attn_output_a,
-                                            heads, n_groups, group_dim, rank, scratch);
-    matvec_q8_0_decode_scratch(out, model, layer->attn_output_b, scratch->attn_low, scratch);
+    if (layer->attn_output_a->type == DS4_TENSOR_Q8_0) {
+        matvec_q8_0_grouped_rows_decode_scratch(scratch->attn_low, model, layer->attn_output_a,
+                                                heads, n_groups, group_dim, rank, scratch);
+    } else {
+        matvec_any_grouped_rows(scratch->attn_low, model, layer->attn_output_a,
+                                heads, n_groups, group_dim, rank);
+    }
+    matvec_any_decode_scratch(out, model, layer->attn_output_b, scratch->attn_low, scratch);
 }
 
 static void layer_grouped_out_batch(
@@ -5485,21 +5500,33 @@ static void layer_shared_ffn_one_decode_scratch(
         const float            * x,
         ds4_cpu_decode_scratch * scratch) {
     const uint64_t in_dim = layer->ffn_gate_shexp->dim[0];
-    if (layer->ffn_up_shexp->type != 8 ||
-        layer->ffn_gate_shexp->type != 8 ||
-        layer->ffn_up_shexp->dim[0] != in_dim) {
-        ds4_die("shared expert gate/up tensors do not share a Q8_0 input layout");
+    if (layer->ffn_up_shexp->dim[0] != in_dim ||
+        layer->ffn_gate_shexp->dim[1] != DS4_N_FF_EXP ||
+        layer->ffn_up_shexp->dim[1] != DS4_N_FF_EXP ||
+        layer->ffn_down_shexp->dim[0] != DS4_N_FF_EXP) {
+        ds4_die("shared expert tensors do not share the expected input layout");
     }
 
-    matvec_q8_0_pair_decode_scratch(scratch->shared_gate,
-                                    scratch->shared_up,
-                                    model,
-                                    layer->ffn_gate_shexp,
-                                    layer->ffn_up_shexp,
-                                    x,
-                                    scratch);
+    if (layer->ffn_gate_shexp->type == DS4_TENSOR_Q8_0 &&
+        layer->ffn_up_shexp->type == DS4_TENSOR_Q8_0 &&
+        layer->ffn_down_shexp->type == DS4_TENSOR_Q8_0) {
+        matvec_q8_0_pair_decode_scratch(scratch->shared_gate,
+                                        scratch->shared_up,
+                                        model,
+                                        layer->ffn_gate_shexp,
+                                        layer->ffn_up_shexp,
+                                        x,
+                                        scratch);
+    } else if (layer->ffn_gate_shexp->type == DS4_TENSOR_F8_E4M3_B128 &&
+               layer->ffn_up_shexp->type == DS4_TENSOR_F8_E4M3_B128 &&
+               layer->ffn_down_shexp->type == DS4_TENSOR_F8_E4M3_B128) {
+        matvec_any_decode_scratch(scratch->shared_gate, model, layer->ffn_gate_shexp, x, scratch);
+        matvec_any_decode_scratch(scratch->shared_up, model, layer->ffn_up_shexp, x, scratch);
+    } else {
+        ds4_die("shared expert tensors do not share a supported source layout");
+    }
     swiglu(scratch->shared_mid, scratch->shared_gate, scratch->shared_up, DS4_N_FF_EXP);
-    matvec_q8_0_decode_scratch(out, model, layer->ffn_down_shexp, scratch->shared_mid, scratch);
+    matvec_any_decode_scratch(out, model, layer->ffn_down_shexp, scratch->shared_mid, scratch);
 }
 
 typedef struct {
@@ -5894,6 +5921,16 @@ static void layer_routed_moe_one_prealloc(
         float              * mid_all,
         block_q8_K         * xq,
         block_q8_K         * midq) {
+    if (layer->ffn_gate_exps->type == DS4_TENSOR_MXFP4 ||
+        layer->ffn_up_exps->type == DS4_TENSOR_MXFP4 ||
+        layer->ffn_down_exps->type == DS4_TENSOR_MXFP4) {
+        layer_routed_moe_mxfp4_one(out, model, layer, x, il, token, clamp, false);
+        (void)mid_all;
+        (void)xq;
+        (void)midq;
+        return;
+    }
+
     int selected[DS4_N_EXPERT_USED];
     float expert_weight[DS4_N_EXPERT_USED];
     const uint64_t expert_in_dim = layer->ffn_gate_exps->dim[0];
@@ -8197,10 +8234,11 @@ static void prefill_layer_major_cpu(
     float *attn = xmalloc((size_t)n_tok * hc_dim * sizeof(attn[0]));
     float *plain = xmalloc((size_t)DS4_N_EMBD * sizeof(plain[0]));
     uint32_t ffn_batch = 128;
-    const bool batched_attn = getenv("DS4_NO_BATCHED_ATTN") == NULL;
-    const bool batched_ffn = getenv("DS4_BATCHED_FFN") != NULL;
-    const bool parallel_ffn = getenv("DS4_PARALLEL_FFN") != NULL;
-    const bool shared_batch_ffn = getenv("DS4_NO_SHARED_BATCH_FFN") == NULL;
+    const bool source_layout = weights->v100_source_layout;
+    const bool batched_attn = !source_layout && getenv("DS4_NO_BATCHED_ATTN") == NULL;
+    const bool batched_ffn = !source_layout && getenv("DS4_BATCHED_FFN") != NULL;
+    const bool parallel_ffn = !source_layout && getenv("DS4_PARALLEL_FFN") != NULL;
+    const bool shared_batch_ffn = !source_layout && getenv("DS4_NO_SHARED_BATCH_FFN") == NULL;
     const char *batch_env = getenv("DS4_PREFILL_BATCH");
     ds4_cpu_decode_scratch decode_scratch;
     bool decode_scratch_ready = false;
@@ -8482,7 +8520,8 @@ static void output_logits_one_decode_scratch(
     const uint64_t hc_dim = (uint64_t)DS4_N_EMBD * n_hc;
 
     rms_norm_no_weight(scratch->output_flat, inp_hc, hc_dim, DS4_RMS_EPS);
-    matvec_f16(scratch->output_pre, model, weights->output_hc_fn, scratch->output_flat);
+    matvec_any_decode_scratch(scratch->output_pre, model, weights->output_hc_fn,
+                              scratch->output_flat, scratch);
 
     const float *scale = tensor_data(model, weights->output_hc_scale);
     const float *base = tensor_data(model, weights->output_hc_base);
@@ -8494,7 +8533,7 @@ static void output_logits_one_decode_scratch(
     rms_norm_weight(scratch->output_norm, scratch->output_embd,
                     tensor_data(model, weights->output_norm),
                     DS4_N_EMBD, DS4_RMS_EPS);
-    matvec_q8_0_decode_scratch(logits, model, weights->output, scratch->output_norm, scratch);
+    matvec_any_decode_scratch(logits, model, weights->output, scratch->output_norm, scratch);
 }
 
 #ifndef DS4_NO_GPU
@@ -14760,6 +14799,7 @@ struct ds4_engine {
     float directional_steering_ffn_scale;
     bool quality;
     bool source_layout_oracle;
+    bool source_layout_oracle_sessions;
     bool metal_ready;
     bool mtp_ready;
 };
@@ -17406,7 +17446,7 @@ int ds4_engine_generate_argmax(
     const ds4_weights *weights = &e->weights;
 
     if (e->source_layout_oracle) {
-        fprintf(stderr, "ds4: source-layout oracle is diagnostic-only; use --first-token-test\n");
+        fprintf(stderr, "ds4: source-layout oracle is diagnostic-only; use --first-token-test or --dump-logprobs\n");
         return 1;
     }
 
@@ -17632,6 +17672,7 @@ int ds4_engine_open(ds4_engine **out, const ds4_engine_options *opt) {
     e->backend = opt->backend;
     e->quality = opt->quality;
     e->source_layout_oracle = opt->source_layout_oracle;
+    e->source_layout_oracle_sessions = opt->source_layout_oracle_sessions;
     e->mtp_draft_tokens = opt->mtp_draft_tokens > 0 ? opt->mtp_draft_tokens : 1;
     if (e->mtp_draft_tokens > 16) e->mtp_draft_tokens = 16;
     e->mtp_margin = opt->mtp_margin >= 0.0f ? opt->mtp_margin : 3.0f;
@@ -17692,6 +17733,7 @@ int ds4_engine_open(ds4_engine **out, const ds4_engine_options *opt) {
             *out = NULL;
             return 1;
         }
+        g_source_layout_oracle_f16_kv = true;
     }
     if (e->weights.v100_source_layout && !opt->inspect_only && !opt->source_layout_oracle) {
         fprintf(stderr,
@@ -17801,6 +17843,7 @@ void ds4_engine_summary(ds4_engine *e) {
 
 void ds4_engine_close(ds4_engine *e) {
     if (!e) return;
+    if (e->source_layout_oracle) g_source_layout_oracle_f16_kv = false;
     weights_free(&e->weights);
     vocab_free(&e->vocab);
     ds4_threads_shutdown();
@@ -17818,8 +17861,8 @@ void ds4_engine_close(ds4_engine *e) {
 
 int ds4_session_create(ds4_session **out, ds4_engine *e, int ctx_size) {
     if (!out || !e || ctx_size <= 0) return 1;
-    if (e->source_layout_oracle) {
-        fprintf(stderr, "ds4: source-layout oracle is diagnostic-only and does not create generation sessions\n");
+    if (e->source_layout_oracle && !e->source_layout_oracle_sessions) {
+        fprintf(stderr, "ds4: source-layout oracle sessions require an explicit diagnostic session unlock\n");
         return 1;
     }
     if (e->backend == DS4_BACKEND_CPU) {

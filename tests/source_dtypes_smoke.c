@@ -60,7 +60,7 @@ static void test_scalar_formats(void) {
     expect_close(ds4_src_e4m3fn_to_f32(0x3c), 1.5f, "e4m3 one point five");
     expect_close(ds4_src_e4m3fn_to_f32(0x40), 2.0f, "e4m3 two");
     expect_close(ds4_src_e4m3fn_to_f32(0xb8), -1.0f, "e4m3 negative one");
-    expect_bits(ds4_src_e4m3fn_to_f32(0x7f), 0x00000000u, "e4m3 fn nan maps zero");
+    check(isnan(ds4_src_e4m3fn_to_f32(0x7f)), "e4m3 fn nan code did not produce NaN");
 
     expect_close(ds4_src_mxfp4_nibble_to_f32(0x0), 0.0f, "mxfp4 zero");
     expect_close(ds4_src_mxfp4_nibble_to_f32(0x1), 0.5f, "mxfp4 half");
@@ -132,18 +132,18 @@ static void test_mxfp4_row(void) {
     check(ds4_src_mxfp4_row_bytes(64) == sizeof(row), "mxfp4 row bytes");
     check(ds4_src_mxfp4_row_to_f32(dst, row, 64, err, sizeof(err)) == 0,
           "mxfp4 row decode");
-    expect_close(dst[0], 0.5f, "mxfp4 low nibble first");
-    expect_close(dst[1], 1.0f, "mxfp4 high nibble second");
-    expect_close(dst[2], 6.0f, "mxfp4 positive max");
-    expect_close(dst[3], -6.0f, "mxfp4 negative max");
+    expect_close(dst[0], 0.5f, "mxfp4 low nibble first half");
+    expect_close(dst[1], 6.0f, "mxfp4 low nibble second byte");
+    expect_close(dst[16], 1.0f, "mxfp4 high nibble second half");
+    expect_close(dst[17], -6.0f, "mxfp4 high nibble second byte");
     expect_close(dst[32], 3.0f, "mxfp4 block1 scaled low");
-    expect_close(dst[33], 4.0f, "mxfp4 block1 scaled high");
-    expect_close(dst[34], 0.0f, "mxfp4 block1 zero code");
-    expect_close(dst[35], -2.0f, "mxfp4 block1 negative one scaled");
+    expect_close(dst[33], 0.0f, "mxfp4 block1 low second byte");
+    expect_close(dst[48], 4.0f, "mxfp4 block1 scaled high");
+    expect_close(dst[49], -2.0f, "mxfp4 block1 negative one scaled");
     float x[DS4_SRC_MXFP4_BLOCK_ELEMS * 2];
     memset(x, 0, sizeof(x));
     x[0] = 2.0f;
-    x[1] = 3.0f;
+    x[16] = 3.0f;
     x[32] = -1.0f;
     float dot = 0.0f;
     check(ds4_src_mxfp4_row_dot(&dot, row, x, 64, err, sizeof(err)) == 0,

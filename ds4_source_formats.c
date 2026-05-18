@@ -29,7 +29,7 @@ float ds4_src_e4m3fn_to_f32(uint8_t x) {
     const uint8_t abs = x & 0x7f;
     const bool sign = (x & 0x80) != 0;
     if (abs == 0) return f32_from_bits(sign ? 0x80000000u : 0u);
-    if (abs == 0x7f) return 0.0f;
+    if (abs == 0x7f) return f32_from_bits(0x7fc00000u);
 
     const int exp = (x >> 3) & 0x0f;
     const int man = x & 0x07;
@@ -132,8 +132,11 @@ int ds4_src_mxfp4_row_to_f32(float *dst, const uint8_t *src, uint64_t ncols,
         float *out = dst + b * DS4_SRC_MXFP4_BLOCK_ELEMS;
         for (uint64_t j = 0; j < DS4_SRC_MXFP4_BLOCK_ELEMS / 2; j++) {
             const uint8_t q = qs[j];
-            out[2 * j + 0] = ds4_src_mxfp4_nibble_to_f32(q & 0x0f) * scale;
-            out[2 * j + 1] = ds4_src_mxfp4_nibble_to_f32((q >> 4) & 0x0f) * scale;
+            /* GGML block_mxfp4 stores low nibbles in the first half of the
+             * block and high nibbles in the second half. */
+            out[j] = ds4_src_mxfp4_nibble_to_f32(q & 0x0f) * scale;
+            out[j + DS4_SRC_MXFP4_BLOCK_ELEMS / 2] =
+                ds4_src_mxfp4_nibble_to_f32((q >> 4) & 0x0f) * scale;
         }
     }
     return 0;
@@ -160,9 +163,9 @@ int ds4_src_mxfp4_row_dot(float *dst, const uint8_t *src, const float *x,
         for (uint64_t j = 0; j < DS4_SRC_MXFP4_BLOCK_ELEMS / 2; j++) {
             const uint8_t q = qs[j];
             acc += (double)(ds4_src_mxfp4_nibble_to_f32(q & 0x0f) * scale) *
-                   (double)xb[2 * j + 0];
+                   (double)xb[j];
             acc += (double)(ds4_src_mxfp4_nibble_to_f32((q >> 4) & 0x0f) * scale) *
-                   (double)xb[2 * j + 1];
+                   (double)xb[j + DS4_SRC_MXFP4_BLOCK_ELEMS / 2];
         }
     }
     *dst = (float)acc;

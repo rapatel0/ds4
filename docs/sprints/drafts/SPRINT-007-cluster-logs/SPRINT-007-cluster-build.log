@@ -1,0 +1,10 @@
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -DDS4_NO_GPU -c -o ds4_cli_cpu.o ds4_cli.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -DDS4_NO_GPU -c -o ds4_server_cpu.o ds4_server.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -DDS4_NO_GPU -c -o ds4_bench_cpu.o ds4_bench.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -DDS4_NO_GPU -c -o ds4_cpu.o ds4.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -o ds4 ds4_cli_cpu.o linenoise.o ds4_cpu.o ds4_pack.o ds4_source_formats.o -lm -pthread
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -o ds4-server ds4_server_cpu.o rax.o ds4_cpu.o ds4_pack.o ds4_source_formats.o -lm -pthread
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -o ds4-bench ds4_bench_cpu.o ds4_cpu.o ds4_pack.o ds4_source_formats.o -lm -pthread
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -o ds4-eval ds4_eval_cpu.o ds4_cpu.o ds4_pack.o ds4_source_formats.o -lm -pthread
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -c -o tests/source_dtypes_smoke.o tests/source_dtypes_smoke.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -o tests/source_dtypes_smoke tests/source_dtypes_smoke.o ds4_source_formats.o -lm -pthread

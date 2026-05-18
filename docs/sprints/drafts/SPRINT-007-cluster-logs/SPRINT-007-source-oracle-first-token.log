@@ -1,0 +1,13 @@
+ds4: context buffers 441.00 MiB (ctx=32768, backend=cpu, prefill_chunk=0, raw_kv_rows=128, compressed_kv_rows=8194)
+first-token final_hc: min=-20.938 max=59.9395 rms=3.11237
+first-token logits: min=-42.4935 max=20.3695 rms=5.23356
+top logits after first-token whole-model CPU pass:
+     734    20.3695  's
+      15    20.3202  -
+      91    19.9139  y
+     980    19.7171  Ġem
+     381    19.1808  em
+      67    18.8860  a
+      74    18.6815  h
+    6366    18.5175  hi
+ds4: diagnostic run completed on the native cpu path.
