@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-18
-last_updated_by: sprint-execute
-revision: 29
+last_updated_by: sprint-plan
+revision: 30
 ---
 
 # Vision: DS4 V100 Appliance
