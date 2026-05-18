@@ -225,6 +225,9 @@ tests/cuda_v100_prefill_kv_smoke.o: tests/cuda_v100_prefill_kv_smoke.c ds4_gpu.h
 tests/cuda_v100_compressor_bridge_smoke.o: tests/cuda_v100_compressor_bridge_smoke.c ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -c -o $@ tests/cuda_v100_compressor_bridge_smoke.c
 
+tests/cuda_v100_projection_attention_smoke.o: tests/cuda_v100_projection_attention_smoke.c ds4_gpu.h ds4_source_formats.h ds4_v100_context.h
+	$(CC) $(CFLAGS) -I. -c -o $@ tests/cuda_v100_projection_attention_smoke.c
+
 tests/cuda_hc_relay_smoke.o: tests/cuda_hc_relay_smoke.c ds4_v100_context.h
 	$(CC) $(CFLAGS) -I. -c -o $@ tests/cuda_hc_relay_smoke.c
 
@@ -274,6 +277,9 @@ tests/cuda_v100_prefill_kv_smoke:
 tests/cuda_v100_compressor_bridge_smoke:
 	@echo "tests/cuda_v100_compressor_bridge_smoke requires a CUDA build"
 	@exit 2
+tests/cuda_v100_projection_attention_smoke:
+	@echo "tests/cuda_v100_projection_attention_smoke requires a CUDA build"
+	@exit 2
 tests/cuda_hc_relay_smoke:
 	@echo "tests/cuda_hc_relay_smoke requires a CUDA build"
 	@exit 2
@@ -287,6 +293,8 @@ tests/cuda_source_dtypes_smoke: tests/cuda_source_dtypes_smoke.o ds4_cuda.o ds4_
 tests/cuda_v100_prefill_kv_smoke: tests/cuda_v100_prefill_kv_smoke.o ds4_cuda.o ds4_source_formats.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tests/cuda_v100_compressor_bridge_smoke: tests/cuda_v100_compressor_bridge_smoke.o ds4_cuda.o
+	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
+tests/cuda_v100_projection_attention_smoke: tests/cuda_v100_projection_attention_smoke.o ds4_cuda.o ds4_source_formats.o ds4_v100_context.o ds4_v100_context_cuda.o ds4_pack.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tests/cuda_hc_relay_smoke: tests/cuda_hc_relay_smoke.o ds4_v100_context.o ds4_v100_context_cuda.o ds4_pack.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
@@ -303,4 +311,4 @@ test: ds4_test
 	./ds4_test
 
 clean:
-	rm -f ds4 ds4-server ds4-bench ds4-eval ds4_cpu ds4_native ds4_server_test ds4_test *.o tests/*.o tests/cuda_long_context_smoke tests/cuda_bf16_probe tests/cuda_v100_context_smoke tests/cuda_source_dtypes_smoke tests/cuda_v100_prefill_kv_smoke tests/cuda_v100_compressor_bridge_smoke tests/cuda_hc_relay_smoke tests/pack_index_smoke tests/gpu_arena_smoke tests/bf16_probe_smoke tests/v100_context_smoke tests/source_dtypes_smoke tools/*.o tools/ds4-v100-plan tools/ds4-v100-pack tools/ds4-v100-residency-smoke tools/ds4-v100-context-smoke tools/ds4-source-oracle-vector
+	rm -f ds4 ds4-server ds4-bench ds4-eval ds4_cpu ds4_native ds4_server_test ds4_test *.o tests/*.o tests/cuda_long_context_smoke tests/cuda_bf16_probe tests/cuda_v100_context_smoke tests/cuda_source_dtypes_smoke tests/cuda_v100_prefill_kv_smoke tests/cuda_v100_compressor_bridge_smoke tests/cuda_v100_projection_attention_smoke tests/cuda_hc_relay_smoke tests/pack_index_smoke tests/gpu_arena_smoke tests/bf16_probe_smoke tests/v100_context_smoke tests/source_dtypes_smoke tools/*.o tools/ds4-v100-plan tools/ds4-v100-pack tools/ds4-v100-residency-smoke tools/ds4-v100-context-smoke tools/ds4-source-oracle-vector

@@ -238,6 +238,14 @@ typedef struct {
     const float *indexer_row_f32;
 } ds4_v100_cuda_prefill_kv_update;
 
+typedef struct {
+    uint32_t slot;
+    uint32_t raw_row;
+    uint32_t comp_row;
+    const void *attn_row_device_f32;
+    const void *indexer_row_device_f32;
+} ds4_v100_cuda_prefill_kv_update_device;
+
 typedef enum {
     DS4_V100_RELAY_F16 = 0,
     DS4_V100_RELAY_F32_DEBUG = 1,
@@ -264,6 +272,12 @@ int ds4_v100_cuda_context_prefill_kv_update_f16(
         const ds4_v100_cuda_prefill_kv_update   *update,
         char                                    *err,
         size_t                                   errlen);
+int ds4_v100_cuda_context_prefill_kv_update_f16_device(
+        ds4_v100_cuda_context                           *ctx,
+        int                                             layer_id,
+        const ds4_v100_cuda_prefill_kv_update_device   *update,
+        char                                           *err,
+        size_t                                          errlen);
 int ds4_v100_cuda_context_read_kv_arena(ds4_v100_cuda_context *ctx,
                                         int stage_id,
                                         uint64_t offset,

@@ -101,12 +101,12 @@ model GEMMs.
 - V100 CUDA smoke(s)
 
 **Tasks:**
-- [ ] Feed device projection-equivalent outputs into ratio-128 attention and
+- [x] Feed device projection-equivalent outputs into ratio-128 attention and
       compressor recurrence.
-- [ ] Feed device projection-equivalent outputs into ratio-4 attention,
+- [x] Feed device projection-equivalent outputs into ratio-4 attention,
       compressor recurrence, and indexer-shaped recurrence.
-- [ ] Write resulting rows through stage-owned KV arena views where applicable.
-- [ ] Compare bounded outputs against CPU/source references.
+- [x] Write resulting rows through stage-owned KV arena views where applicable.
+- [x] Compare bounded outputs against CPU/source references.
 
 ### Phase 4: Guard Validation And Closeout
 

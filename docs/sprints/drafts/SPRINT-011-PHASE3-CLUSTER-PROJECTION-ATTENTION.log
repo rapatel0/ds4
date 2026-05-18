@@ -1,0 +1,13 @@
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -c -o tests/cuda_v100_projection_attention_smoke.o tests/cuda_v100_projection_attention_smoke.c
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -c -o ds4_cuda.o ds4_cuda.cu
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -c -o ds4_source_formats.o ds4_source_formats.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -c -o ds4_v100_context.o ds4_v100_context.c
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -I. -c -o ds4_v100_context_cuda.o ds4_v100_context_cuda.cu
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -c -o ds4_pack.o ds4_pack.c
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -o tests/cuda_v100_projection_attention_smoke tests/cuda_v100_projection_attention_smoke.o ds4_cuda.o ds4_source_formats.o ds4_v100_context.o ds4_v100_context_cuda.o ds4_pack.o -lm -Xcompiler -pthread -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/local/cuda/lib64 -lcudart -lcublas
+ds4: CUDA backend initialized on Tesla V100-SXM2-32GB (sm_70)
+ds4: CUDA copying 0.00 GiB model to device memory
+ds4: CUDA model copy complete in 0.000s
+ds4: CUDA copying 0.00 GiB model to device memory
+ds4: CUDA model copy complete in 0.000s
+cuda_v100_projection_attention_smoke: ok
