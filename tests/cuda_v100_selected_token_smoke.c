@@ -31,7 +31,7 @@ static void check(int cond, const char *msg) {
 static void usage(FILE *fp) {
     fprintf(fp,
             "usage: tests/cuda_v100_selected_token_smoke --index FILE --model FILE "
-            "[--prompt-file FILE] [--expected-token-hex HEX]\n");
+            "[--prompt-file FILE] [--expected-token-hex HEX] [--top-k N]\n");
 }
 
 static int hex_value(char c) {
@@ -147,6 +147,7 @@ int main(int argc, char **argv) {
     const char *model_path = NULL;
     const char *prompt_file = "tests/test-vectors/prompts/short_reasoning_plain.txt";
     const char *expected_hex = NULL;
+    uint32_t top_k = 5;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--index") && i + 1 < argc) {
@@ -157,6 +158,13 @@ int main(int argc, char **argv) {
             prompt_file = argv[++i];
         } else if (!strcmp(argv[i], "--expected-token-hex") && i + 1 < argc) {
             expected_hex = argv[++i];
+        } else if (!strcmp(argv[i], "--top-k") && i + 1 < argc) {
+            long v = strtol(argv[++i], NULL, 10);
+            if (v <= 0 || v > 32) {
+                fprintf(stderr, "cuda_v100_selected_token_smoke: invalid --top-k\n");
+                return 2;
+            }
+            top_k = (uint32_t)v;
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             usage(stdout);
             return 0;
@@ -222,6 +230,12 @@ int main(int argc, char **argv) {
     memset(scheds, 0, sizeof(scheds));
     uint32_t selected = UINT32_MAX;
     float selected_logit = 0.0f;
+    uint32_t top_tokens[32];
+    float top_logits[32];
+    for (uint32_t i = 0; i < 32; i++) {
+        top_tokens[i] = UINT32_MAX;
+        top_logits[i] = 0.0f;
+    }
 
     ds4_v100_stage_scheduler_options opts;
     ds4_v100_stage_scheduler_options_init(&opts);
@@ -279,12 +293,15 @@ int main(int argc, char **argv) {
 
     if (failures == 0) {
         err[0] = '\0';
-        check(ds4_v100_stage_scheduler_select_token(scheds[DS4_V100_EXPECTED_GPUS - 1],
-                                                    &selected,
-                                                    &selected_logit,
-                                                    err,
-                                                    sizeof(err)) == 0,
+        check(ds4_v100_stage_scheduler_select_topk(scheds[DS4_V100_EXPECTED_GPUS - 1],
+                                                   top_tokens,
+                                                   top_logits,
+                                                   top_k,
+                                                   err,
+                                                   sizeof(err)) == 0,
               err[0] ? err : "selected token");
+        selected = top_tokens[0];
+        selected_logit = top_logits[0];
     }
     if (failures == 0 && expected) {
         size_t got_len = 0;
@@ -313,6 +330,18 @@ cleanup:
            selected_logit);
     if (expected) print_hex(stdout, expected, expected_len);
     else printf("none");
+    printf(" topk=");
+    for (uint32_t i = 0; i < top_k; i++) {
+        size_t len = 0;
+        char *txt = top_tokens[i] == UINT32_MAX
+            ? NULL
+            : ds4_token_text(tok_engine, (int)top_tokens[i], &len);
+        if (i) printf(",");
+        printf("%" PRIu32 ":%.8g:", top_tokens[i], top_logits[i]);
+        if (txt) print_hex(stdout, (const unsigned char *)txt, len);
+        else printf("none");
+        free(txt);
+    }
     printf(" %s\n", failures ? "FAIL" : "ok");
 
     for (int i = DS4_V100_EXPECTED_GPUS - 1; i >= 0; i--) {

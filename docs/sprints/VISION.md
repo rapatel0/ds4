@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-18
 last_updated_by: sprint-execute
-revision: 36
+revision: 37
 ---
 
 # Vision: DS4 V100 Appliance
@@ -157,6 +157,11 @@ it is a narrow DS4 runtime tuned for this hardware.
   select top-1. The explicit oracle check fails today: expected token bytes
   `3136`, got `0a0a` at token id 271. The next critical gap is localizing the
   numerical divergence across the 43-layer body.
+- Sprint 026 localized the first selected-token failure away from the
+  output-head adapter. A deterministic HC parity smoke matches CPU and V100
+  output-head top-5 on gpu7, while the prompt replay top-k remains dominated
+  by punctuation/newline-like tokens. The next critical gap is finding the
+  first divergent layer or stage in the 43-layer scheduler body.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -498,6 +503,18 @@ it is a narrow DS4 runtime tuned for this hardware.
   the selected token does not match the official/source oracle. Readiness still
   blocks on `real_model_selected_token`.
 
+### Sprint 026 - Output-Head Divergence Localization [complete]
+
+- **Goal**: Prove or eliminate the gpu7 output-head adapter as the cause of the
+  selected-token mismatch.
+- **Rationale**: Sprint 025 proved that the scheduler can produce logits, but
+  not whether the mismatch comes from final HC collapse/vocab projection or
+  from earlier layer execution.
+- **Outcome**: `SHIP`. The deterministic HC parity smoke matches CPU and V100
+  output-head top-5 exactly enough for the diagnostic tolerance, and the prompt
+  top-k diagnostic records the remaining oracle mismatch. The next blocker is
+  stage/layer HC divergence localization inside the 43-layer body.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -559,6 +576,9 @@ it is a narrow DS4 runtime tuned for this hardware.
 - See `docs/sprints/SPRINT-025-FOLLOWUPS.md`: selected-token divergence
   localization, top-k diagnostics, output-head CPU parity, prompt replay
   counters, and failure-preserving logs.
+- See `docs/sprints/SPRINT-026-FOLLOWUPS.md`: stage/layer HC divergence
+  checkpoints, per-layer execution reports, full-gate build guards, parallel
+  resident uploads, and continued deferral of serving/MTP/throughput.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -597,6 +617,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-18 | Shipped Sprint 023 cross-GPU two-stage scheduling. | The runtime now executes layers 0-11 across gpu0 and gpu1 with a peer HC handoff and device-local CUDA model caches; the next blocker is generalizing the stage chain through gpu7. | Sprint 024+ |
 | 2026-05-18 | Shipped Sprint 024 full 8-stage scheduling. | The runtime now executes all 43 layers across the 8x V100 body and removes `full_43_layer_scheduler` from gate readiness; the next blocker is output-head selected-token comparison against the source oracle. | Sprint 025+ |
 | 2026-05-18 | Extended Sprint 025 with scheduler-owned output-head selected-token execution. | The output-head path now runs and produces finite logits/top-1 on V100, but official-vector comparison fails (`3136` expected, `0a0a` selected), so the next blocker is divergence localization rather than more scheduling structure. | Sprint 026+ |
+| 2026-05-18 | Shipped Sprint 026 output-head divergence localization. | Deterministic CPU-vs-V100 output-head parity passes on gpu7, so the selected-token mismatch is now scoped to the 43-layer scheduler body; the next sprint should checkpoint HC after layer/stage boundaries. | Sprint 027+ |
 
 ## Open Questions
 

@@ -1,0 +1,6 @@
+command:
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 timeout 1800 ./tests/cuda_v100_output_head_parity_smoke --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --model /models/DSv4-Flash-256e-fixed.gguf
+
+output:
+ds4: CUDA loading model tensors into device cache
+cuda_v100_output_head_parity_smoke: cpu_top1=83253 gpu_top1=83253 cpu_logit=21.160488 gpu_logit=21.160488 ok

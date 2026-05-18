@@ -1,0 +1,10 @@
+command:
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 timeout 3600 ./tools/ds4-v100-gate.sh --build --cuda-arch sm_70 --pack-index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --model /models/DSv4-Flash-256e-fixed.gguf --log-dir /tmp/ds4-sprint026-gate-full
+
+key output:
+gate	build	PASS
+gate	full_scheduler	PASS	command=./tests/cuda_v100_full_scheduler_smoke --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --model /models/DSv4-Flash-256e-fixed.gguf --token 16 --position 16
+gate	output_head_parity	PASS	command=./tests/cuda_v100_output_head_parity_smoke --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --model /models/DSv4-Flash-256e-fixed.gguf
+gate	scheduler_output_head	PASS	command=./tests/cuda_v100_selected_token_smoke --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --model /models/DSv4-Flash-256e-fixed.gguf --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt
+gate	readiness	NOT_READY	missing=real_model_selected_token,public_serving,mtp,throughput_benchmark
+gate	summary	PASS	failures=0 ready=false

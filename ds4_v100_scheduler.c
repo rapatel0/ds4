@@ -469,6 +469,19 @@ int ds4_v100_stage_scheduler_read_hc(const ds4_v100_stage_scheduler *sched,
     return ds4_gpu_tensor_read(sched->cur_hc, 0, dst, bytes);
 }
 
+int ds4_v100_stage_scheduler_write_hc(ds4_v100_stage_scheduler *sched,
+                                      const void *src,
+                                      uint64_t bytes) {
+    if (!sched || !sched->hc_a || !src) return 0;
+    const uint64_t hc_bytes =
+        (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS * sizeof(float);
+    if (bytes != hc_bytes) return 0;
+    if (!ds4_gpu_set_device(sched->stage.gpu)) return 0;
+    if (!ds4_gpu_tensor_write(sched->hc_a, 0, src, bytes)) return 0;
+    sched->cur_hc = sched->hc_a;
+    return 1;
+}
+
 static int output_bf16_view(const ds4_v100_tensor_binding *b,
                             ds4_gpu_bf16_matrix_view *out,
                             char *err,
@@ -490,16 +503,37 @@ static int output_bf16_view(const ds4_v100_tensor_binding *b,
     return 0;
 }
 
-int ds4_v100_stage_scheduler_select_token(ds4_v100_stage_scheduler *sched,
-                                          uint32_t *token,
-                                          float *logit,
-                                          char *err,
-                                          size_t errlen) {
-    if (!sched || !sched->cur_hc || !token) {
+static void insert_topk(uint32_t *tokens,
+                        float *logits,
+                        uint32_t k,
+                        uint32_t token,
+                        float logit) {
+    for (uint32_t i = 0; i < k; i++) {
+        if (tokens[i] == UINT32_MAX || logit > logits[i]) {
+            for (uint32_t j = k - 1; j > i; j--) {
+                tokens[j] = tokens[j - 1];
+                logits[j] = logits[j - 1];
+            }
+            tokens[i] = token;
+            logits[i] = logit;
+            return;
+        }
+    }
+}
+
+int ds4_v100_stage_scheduler_select_topk(ds4_v100_stage_scheduler *sched,
+                                         uint32_t *tokens,
+                                         float *out_logits,
+                                         uint32_t k,
+                                         char *err,
+                                         size_t errlen) {
+    if (!sched || !sched->cur_hc || !tokens || !out_logits || k == 0) {
         return scheduler_error(err, errlen, "missing scheduler output-head input");
     }
-    *token = UINT32_MAX;
-    if (logit) *logit = 0.0f;
+    for (uint32_t i = 0; i < k; i++) {
+        tokens[i] = UINT32_MAX;
+        out_logits[i] = -FLT_MAX;
+    }
     if (!sched->stage.owns_output_head) {
         return scheduler_error(err, errlen, "select-token requires output-head stage");
     }
@@ -583,21 +617,14 @@ int ds4_v100_stage_scheduler_select_token(ds4_v100_stage_scheduler *sched,
         goto done;
     }
 
-    uint32_t best = UINT32_MAX;
-    float best_v = -FLT_MAX;
     for (uint32_t i = 0; i < n_vocab; i++) {
         const float v = host_logits[i];
         if (!isfinite(v)) {
             scheduler_error(err, errlen, "output-head logits contained non-finite values");
             goto done;
         }
-        if (best == UINT32_MAX || v > best_v) {
-            best = i;
-            best_v = v;
-        }
+        insert_topk(tokens, out_logits, k, i, v);
     }
-    *token = best;
-    if (logit) *logit = best_v;
     rc = 0;
 
 done:
@@ -608,5 +635,26 @@ done:
     ds4_gpu_tensor_free(head_weights);
     ds4_gpu_tensor_free(head_pre);
     ds4_gpu_tensor_free(hc_norm);
+    return rc;
+}
+
+int ds4_v100_stage_scheduler_select_token(ds4_v100_stage_scheduler *sched,
+                                          uint32_t *token,
+                                          float *logit,
+                                          char *err,
+                                          size_t errlen) {
+    if (!token) return scheduler_error(err, errlen, "missing selected-token output");
+    uint32_t top_token = UINT32_MAX;
+    float top_logit = 0.0f;
+    int rc = ds4_v100_stage_scheduler_select_topk(sched,
+                                                  &top_token,
+                                                  &top_logit,
+                                                  1,
+                                                  err,
+                                                  errlen);
+    if (rc == 0) {
+        *token = top_token;
+        if (logit) *logit = top_logit;
+    }
     return rc;
 }

@@ -1,0 +1,7 @@
+command:
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 timeout 3600 ./tests/cuda_v100_selected_token_smoke --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --model /models/DSv4-Flash-256e-fixed.gguf --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt --expected-token-hex 3136 --top-k 8
+
+output:
+ds4: CUDA loading model tensors into device cache
+cuda_v100_selected_token_smoke: selected token mismatch expected=3136 got=0a0a token=271 logit=20.014683
+cuda_v100_selected_token_smoke: prompt_tokens=18 selected=271 logit=20.014683 expected=3136 topk=271:20.014683:0a0a,6328:16.67861:0a0a0a,1613:16.59844:2e2e2e,15:16.51009:2d,223:15.869394:20,16:15.587646:2e,426:15.115372:2e2e,743:15.038074:e68890 FAIL

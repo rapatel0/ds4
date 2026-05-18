@@ -1,0 +1,6 @@
+command:
+./tests/cuda_v100_selected_token_smoke --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --model /models/DSv4-Flash-256e-fixed.gguf --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt
+
+output:
+ds4: CUDA loading model tensors into device cache
+cuda_v100_selected_token_smoke: prompt_tokens=18 selected=271 logit=20.014683 expected=none topk=271:20.014683:0a0a,6328:16.67861:0a0a0a,1613:16.59844:2e2e2e,15:16.51009:2d,223:15.869394:20 ok
