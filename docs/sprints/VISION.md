@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-18
-last_updated_by: sprint-execute
-revision: 7
+last_updated_by: sprint-plan
+revision: 8
 ---
 
 # Vision: DS4 V100 Appliance
@@ -44,9 +44,11 @@ it is a narrow DS4 runtime tuned for this hardware.
   on the cluster. The sprint corrected MXFP4 row layout to match GGML's
   `block_mxfp4` low-half/high-half nibble ordering and reset source-layout KV
   correctness to the default F16 cache contract.
-- Sprint 008 is the next correctness milestone: prompt prefill, compressed KV,
-  indexer state, and the first production-relevant device-side source-format
-  kernel anchors must validate against the Sprint 007 oracle.
+- Sprint 008 is now planned as a bridge from the CPU source oracle to V100
+  execution: automate the official-vector oracle, harden guards, make F16 KV
+  admission exact by stage/context/slot, and land one bounded CUDA source-format
+  anchor. Full V100 source-layout prefill execution moves to the next runtime
+  sprint.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -137,14 +139,26 @@ it is a narrow DS4 runtime tuned for this hardware.
   MXFP4 row semantics were corrected, and source-layout KV defaults to F16
   before Sprint 008 device-kernel work.
 
-### Sprint 008 - Prefill, KV, And Compressed Attention [planned]
+### Sprint 008 - Source Oracle Harness And V100 KV Admission Anchors [planned]
 
-- **Goal**: Implement prompt prefill plus DS4 SWA, compressed KV, indexer, and
-  context-state updates for the layer-owned topology.
-- **Rationale**: This turns first-token decode into usable prompt handling and
-  establishes the real memory and bandwidth facts for long-context operation.
+- **Goal**: Turn Sprint 007's manual source-oracle proof into automated
+  official-vector validation, add source-layout guard regressions, expose exact
+  F16 KV admission/reporting for the layer-owned V100 topology, and land one
+  bounded CUDA source-format anchor.
+- **Rationale**: Full V100 source-layout prefill should not begin until the
+  oracle, guard, memory-admission, and source-format device-anchor contracts are
+  executable and tested.
 
-### Sprint 009 - V100 Appliance Deployment [planned]
+### Sprint 009 - V100 Prefill And Compressed KV Execution [planned]
+
+- **Goal**: Implement the first layer-owned V100 source-layout prompt prefill
+  and compressed KV/indexer state update path, validated against the Sprint 007
+  oracle and Sprint 008 KV admission contract.
+- **Rationale**: This turns the planning/anchor surfaces into usable prompt
+  handling while preserving fail-closed normal serving until correctness is
+  demonstrated.
+
+### Sprint 010 - V100 Appliance Deployment [planned]
 
 - **Goal**: Package the runtime as a cluster-deployed CLI/server path with
   startup residency validation, health checks, and guarded operational defaults.
@@ -152,7 +166,7 @@ it is a narrow DS4 runtime tuned for this hardware.
   prefill are correct enough that failures mean serving issues, not basic model
   execution gaps.
 
-### Sprint 010 - Throughput And Context Optimization [tentative]
+### Sprint 011 - Throughput And Context Optimization [tentative]
 
 - **Goal**: Improve aggregate tokens/sec and context-tier admission through
   slot batching, wavefront scheduling, expert kernel selection, relay overlap,
@@ -160,7 +174,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 - **Rationale**: Optimization should be driven by measured bottlenecks from the
   verified decode and prefill path, not by assumptions from the residency sprint.
 
-### Sprint 011 - MTP And Advanced Throughput [tentative]
+### Sprint 012 - MTP And Advanced Throughput [tentative]
 
 - **Goal**: Add MTP/speculative decoding and evaluate selective tensor-parallel
   exceptions after the base appliance path is stable.
@@ -211,6 +225,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-17 | Shipped Sprint 006 and moved the next milestone to single-slot decode correctness. | The 8-GPU context, descriptor policy, peer topology, memory reserve, and HC relay contract are now verified; the next unknown is numerical correctness through actual attention, MoE, KV, and output-head math. | Sprint 007+ |
 | 2026-05-18 | Refined Sprint 007 into a guarded source-layout oracle sprint. | Planning consensus found that exact FP8/MXFP4/BF16 source semantics and a narrow CPU-only diagnostic unlock are the right next gate before production V100 kernels, prefill, or deployment. | Sprint 007-008 |
 | 2026-05-18 | Shipped Sprint 007 source-layout oracle, corrected MXFP4 row ordering, and restored F16 KV as the source correctness baseline. | The official vector exposed both a bad interleaved MXFP4 assumption and an unsafe forced FP8 KV round-trip; matching GGML's low-half/high-half layout and the default F16 KV contract produced the expected first token and gives Sprint 008 a real correctness anchor. | Sprint 007-008 |
+| 2026-05-18 | Re-scoped Sprint 008 as oracle automation, F16 KV admission, and one CUDA source-format anchor. | Full V100 source-layout prefill combines too many unproven contracts; making oracle, guard, memory, and source-format device checks executable first reduces risk before runtime KV execution. | Sprint 008-010 |
 
 ## Open Questions
 
