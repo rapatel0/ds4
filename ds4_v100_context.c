@@ -72,6 +72,7 @@ void ds4_v100_context_options_init(ds4_v100_context_options *opts) {
     opts->mode = DS4_V100_INIT_PROBE_ONLY;
     opts->relay_max_active_slots = 1;
     opts->reserve_bytes_per_gpu = DS4_V100_DEFAULT_RESERVE_BYTES;
+    opts->kv_active_slots = 1;
 }
 
 ds4_v100_source_dtype ds4_v100_source_dtype_parse(const char *s) {
@@ -141,6 +142,74 @@ const char *ds4_v100_exec_kind_name(ds4_v100_exec_kind kind) {
     case DS4_V100_EXEC_COUNT:
     default: return "invalid";
     }
+}
+
+ds4_v100_layer_class ds4_v100_layer_class_for_layer(int layer_id) {
+    if (layer_id < 0 || layer_id >= DS4_V100_N_LAYERS) return DS4_V100_LAYER_SWA_ONLY;
+    if (layer_id <= 1) return DS4_V100_LAYER_SWA_ONLY;
+    return (layer_id % 2) == 0 ? DS4_V100_LAYER_RATIO_4 : DS4_V100_LAYER_RATIO_128;
+}
+
+const char *ds4_v100_layer_class_name(ds4_v100_layer_class layer_class) {
+    switch (layer_class) {
+    case DS4_V100_LAYER_SWA_ONLY: return "swa_only";
+    case DS4_V100_LAYER_RATIO_4: return "ratio_4";
+    case DS4_V100_LAYER_RATIO_128: return "ratio_128";
+    default: return "unknown";
+    }
+}
+
+static uint64_t sat_mul_u64(uint64_t a, uint64_t b) {
+    if (a != 0 && b > UINT64_MAX / a) return UINT64_MAX;
+    return a * b;
+}
+
+static uint64_t sat_add_u64(uint64_t a, uint64_t b) {
+    if (b > UINT64_MAX - a) return UINT64_MAX;
+    return a + b;
+}
+
+ds4_v100_kv_budget ds4_v100_kv_budget_for_layer(int layer_id,
+                                                uint64_t ctx_tokens,
+                                                uint64_t active_slots) {
+    ds4_v100_kv_budget b;
+    memset(&b, 0, sizeof(b));
+    if (layer_id < 0 || layer_id >= DS4_V100_N_LAYERS || ctx_tokens == 0 || active_slots == 0) {
+        return b;
+    }
+
+    const ds4_v100_layer_class layer_class = ds4_v100_layer_class_for_layer(layer_id);
+    const uint64_t elem_bytes = 2;
+    const uint64_t raw_per_slot =
+        (uint64_t)DS4_V100_SWA_ROWS * DS4_V100_HEAD_DIM * elem_bytes;
+    b.raw_swa_bytes = sat_mul_u64(raw_per_slot, active_slots);
+
+    if (layer_class == DS4_V100_LAYER_RATIO_4) {
+        const uint64_t comp_slots = ctx_tokens / 4;
+        const uint64_t comp_per_slot = sat_mul_u64(comp_slots, DS4_V100_HEAD_DIM * elem_bytes);
+        const uint64_t index_per_slot =
+            sat_mul_u64(comp_slots, DS4_V100_INDEXER_HEAD_DIM * elem_bytes);
+        b.compressed_attn_bytes = sat_mul_u64(comp_per_slot, active_slots);
+        b.indexer_kv_bytes = sat_mul_u64(index_per_slot, active_slots);
+        /* Mirrors llama_memory_deepseek4: two F32 state tensors per compressor,
+         * shaped as ape_ne0 by comp_slots*ratio for the fixed DS4 compressor. */
+        b.compression_state_bytes =
+            2ull * (2ull * DS4_V100_HEAD_DIM) * (2ull * 4ull) * sizeof(float);
+        b.compression_state_bytes = sat_add_u64(
+            b.compression_state_bytes,
+            2ull * (2ull * DS4_V100_INDEXER_HEAD_DIM) * (2ull * 4ull) * sizeof(float));
+    } else if (layer_class == DS4_V100_LAYER_RATIO_128) {
+        const uint64_t comp_slots = ctx_tokens / 128;
+        const uint64_t comp_per_slot = sat_mul_u64(comp_slots, DS4_V100_HEAD_DIM * elem_bytes);
+        b.compressed_attn_bytes = sat_mul_u64(comp_per_slot, active_slots);
+        b.compression_state_bytes =
+            2ull * (uint64_t)DS4_V100_HEAD_DIM * 128ull * sizeof(float);
+    }
+
+    b.total_bytes = sat_add_u64(b.raw_swa_bytes, b.compressed_attn_bytes);
+    b.total_bytes = sat_add_u64(b.total_bytes, b.indexer_kv_bytes);
+    b.total_bytes = sat_add_u64(b.total_bytes, b.compression_state_bytes);
+    return b;
 }
 
 int ds4_v100_classify_or_die(const char *source_dtype,
@@ -243,6 +312,34 @@ static void init_stage_map(ds4_v100_context *ctx) {
     for (int layer = 0; layer < DS4_V100_N_LAYERS; layer++) {
         ctx->layers[layer].layer_id = layer;
         ctx->layers[layer].stage_id = ds4_v100_stage_for_layer(layer);
+        ctx->layers[layer].layer_class = ds4_v100_layer_class_for_layer(layer);
+    }
+}
+
+static void apply_derived_kv_plan(ds4_v100_context *ctx) {
+    if (!ctx || ctx->opts.kv_ctx_tokens == 0) return;
+    const uint64_t slots = ctx->opts.kv_active_slots;
+    for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
+        ctx->stages[i].planned_kv_bytes = 0;
+        ctx->stages[i].kv_raw_swa_bytes = 0;
+        ctx->stages[i].kv_compressed_attn_bytes = 0;
+        ctx->stages[i].kv_indexer_bytes = 0;
+        ctx->stages[i].kv_compression_state_bytes = 0;
+    }
+    for (int layer = 0; layer < DS4_V100_N_LAYERS; layer++) {
+        ds4_v100_layer_info *li = &ctx->layers[layer];
+        li->kv_budget = ds4_v100_kv_budget_for_layer(layer, ctx->opts.kv_ctx_tokens, slots);
+        ds4_v100_stage_info *stage = &ctx->stages[li->stage_id];
+        stage->kv_raw_swa_bytes =
+            sat_add_u64(stage->kv_raw_swa_bytes, li->kv_budget.raw_swa_bytes);
+        stage->kv_compressed_attn_bytes =
+            sat_add_u64(stage->kv_compressed_attn_bytes, li->kv_budget.compressed_attn_bytes);
+        stage->kv_indexer_bytes =
+            sat_add_u64(stage->kv_indexer_bytes, li->kv_budget.indexer_kv_bytes);
+        stage->kv_compression_state_bytes =
+            sat_add_u64(stage->kv_compression_state_bytes, li->kv_budget.compression_state_bytes);
+        stage->planned_kv_bytes =
+            sat_add_u64(stage->planned_kv_bytes, li->kv_budget.total_bytes);
     }
 }
 
@@ -468,11 +565,19 @@ int ds4_v100_context_open(ds4_v100_context **out,
     if (local.relay_max_active_slots == 0) {
         return v100_error(err, errlen, "relay_max_active_slots must be nonzero");
     }
+    if (local.kv_ctx_tokens != 0 && local.kv_active_slots == 0) {
+        return v100_error(err, errlen, "kv_active_slots must be nonzero when kv_ctx_tokens is set");
+    }
+    if (local.kv_ctx_tokens != 0 && local.planned_kv_bytes_per_gpu != 0) {
+        return v100_error(err, errlen,
+                          "planned_kv_bytes_per_gpu cannot be combined with derived kv_ctx_tokens");
+    }
 
     ds4_v100_context *ctx = (ds4_v100_context *)calloc(1, sizeof(*ctx));
     if (!ctx) return v100_error(err, errlen, "out of memory allocating V100 context");
     ctx->opts = local;
     init_stage_map(ctx);
+    apply_derived_kv_plan(ctx);
     if (validate_topology(ctx, err, errlen) ||
         bind_pack(ctx, err, errlen) ||
         validate_memory_budget(ctx, err, errlen)) {
@@ -526,7 +631,7 @@ int ds4_v100_context_validate_layer_skeleton(const ds4_v100_context *ctx,
                                              size_t errlen) {
     if (!ctx) return v100_error(err, errlen, "missing V100 context");
     if (report) {
-        fprintf(report, "layer\tstage\ttensors\tf32_control\tfp8_dense\tmxfp4_expert\thc_control\tstatus\n");
+        fprintf(report, "layer\tstage\tclass\tkv_bytes\ttensors\tf32_control\tfp8_dense\tmxfp4_expert\thc_control\tstatus\n");
     }
     for (int layer = 0; layer < DS4_V100_N_LAYERS; layer++) {
         const ds4_v100_layer_info *li = &ctx->layers[layer];
@@ -539,8 +644,11 @@ int ds4_v100_context_validate_layer_skeleton(const ds4_v100_context *ctx,
         else if (ctx->n_descs > 0 && !li->has_mxfp4_expert) status = "MISSING_MXFP4_EXPERT";
         else if (ctx->n_descs > 0 && !li->has_hc_control) status = "MISSING_HC_CONTROL";
         if (report) {
-            fprintf(report, "%d\t%d\t%" PRIu64 "\t%d\t%d\t%d\t%d\t%s\n",
-                    layer, li->stage_id, li->tensor_count,
+            fprintf(report, "%d\t%d\t%s\t%" PRIu64 "\t%" PRIu64 "\t%d\t%d\t%d\t%d\t%s\n",
+                    layer, li->stage_id,
+                    ds4_v100_layer_class_name(li->layer_class),
+                    li->kv_budget.total_bytes,
+                    li->tensor_count,
                     li->has_f32_control ? 1 : 0,
                     li->has_fp8_dense ? 1 : 0,
                     li->has_mxfp4_expert ? 1 : 0,
@@ -565,19 +673,36 @@ void ds4_v100_context_print_report(const ds4_v100_context *ctx, FILE *fp) {
     fprintf(fp, "mode\t%d\n", (int)ctx->opts.mode);
     fprintf(fp, "policy\tbf16_fp8_fp4_are_not_native_v100_tensor_core_formats\n");
     fprintf(fp, "policy\tproduction_dense_gemm_target_fp16_hmma_with_fp32_accumulation\n");
+    fprintf(fp, "kv_ctx_tokens\t%" PRIu64 "\n", ctx->opts.kv_ctx_tokens);
+    fprintf(fp, "kv_active_slots\t%" PRIu64 "\n", ctx->opts.kv_active_slots);
     fprintf(fp, "tensor_count\t%" PRIu64 "\n", ctx->n_descs);
     for (int k = 0; k < DS4_V100_EXEC_COUNT; k++) {
         fprintf(fp, "exec_count\t%s\t%" PRIu64 "\n",
                 ds4_v100_exec_kind_name((ds4_v100_exec_kind)k),
                 ctx->exec_counts[k]);
     }
-    fprintf(fp, "stage\tgpu\tlayers\tarena_bytes\tscratch_bytes\trelay_f16_bytes\trelay_f32_debug_bytes\tplanned_kv_bytes\treserve_bytes\tdevice_total_bytes\n");
+    int class_counts[3] = {0, 0, 0};
+    for (int layer = 0; layer < DS4_V100_N_LAYERS; layer++) {
+        class_counts[ctx->layers[layer].layer_class]++;
+    }
+    fprintf(fp, "layer_class_count\t%s\t%d\n",
+            ds4_v100_layer_class_name(DS4_V100_LAYER_SWA_ONLY),
+            class_counts[DS4_V100_LAYER_SWA_ONLY]);
+    fprintf(fp, "layer_class_count\t%s\t%d\n",
+            ds4_v100_layer_class_name(DS4_V100_LAYER_RATIO_4),
+            class_counts[DS4_V100_LAYER_RATIO_4]);
+    fprintf(fp, "layer_class_count\t%s\t%d\n",
+            ds4_v100_layer_class_name(DS4_V100_LAYER_RATIO_128),
+            class_counts[DS4_V100_LAYER_RATIO_128]);
+    fprintf(fp, "stage\tgpu\tlayers\tarena_bytes\tscratch_bytes\trelay_f16_bytes\trelay_f32_debug_bytes\tkv_raw_swa_bytes\tkv_compressed_attn_bytes\tkv_indexer_bytes\tkv_compression_state_bytes\tplanned_kv_bytes\treserve_bytes\tdevice_total_bytes\n");
     for (int i = 0; i < ctx->opts.expected_gpus; i++) {
         const ds4_v100_stage_info *s = &ctx->stages[i];
-        fprintf(fp, "%d\t%d\t%d-%d\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\n",
+        fprintf(fp, "%d\t%d\t%d-%d\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\n",
                 s->stage_id, s->gpu, s->layer_begin, s->layer_end,
                 s->arena_bytes, s->scratch_bytes, s->relay_f16_bytes,
-                s->relay_f32_debug_bytes, s->planned_kv_bytes,
+                s->relay_f32_debug_bytes, s->kv_raw_swa_bytes,
+                s->kv_compressed_attn_bytes, s->kv_indexer_bytes,
+                s->kv_compression_state_bytes, s->planned_kv_bytes,
                 s->reserve_bytes, s->device_total_bytes);
     }
 }

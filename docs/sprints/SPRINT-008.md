@@ -1,7 +1,7 @@
 ---
 sprint: 008
 title: Source Oracle Harness And V100 KV Admission Anchors
-status: planned
+status: active
 date: 2026-05-18
 target_repo: rapatel0/ds4
 architecture: ../architecture/DS4-V100-LAYOUT.md
@@ -185,13 +185,13 @@ normal source-model generation.
 - `tools/ds4-v100-context-smoke.c`
 
 **Tasks:**
-- [ ] Add layer-class metadata: SWA-only, ratio-4/indexer, ratio-128.
-- [ ] Add F16 KV budget structures with raw, compressed attention, indexer, and
+- [x] Add layer-class metadata: SWA-only, ratio-4/indexer, ratio-128.
+- [x] Add F16 KV budget structures with raw, compressed attention, indexer, and
       compression-state fields.
-- [ ] Derive per-stage KV totals from `ctx_size`, `slots`, and layer ownership.
-- [ ] Add reserve/admission checks that fail closed when the KV plan would
+- [x] Derive per-stage KV totals from `ctx_size`, `slots`, and layer ownership.
+- [x] Add reserve/admission checks that fail closed when the KV plan would
       overfill a V100 stage.
-- [ ] Print stable context-smoke report fields for context, slots, layer class
+- [x] Print stable context-smoke report fields for context, slots, layer class
       counts, and per-stage KV bytes.
 
 ### Phase 3: Source Dtype Parity Hardening

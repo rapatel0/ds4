@@ -20,6 +20,8 @@ int main(int argc, char **argv) {
     unsigned long long reserve_mib = 2048;
     unsigned long long output_head_mib = 0;
     unsigned long long mtp_mib = 0;
+    unsigned long long kv_ctx = 0;
+    unsigned long long kv_slots = 1;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--production")) {
             production = 1;
@@ -29,6 +31,10 @@ int main(int argc, char **argv) {
             pack_index = argv[++i];
         } else if (!strcmp(argv[i], "--planned-kv-mib") && i + 1 < argc) {
             if (parse_u64(argv[++i], &planned_kv_mib)) return 2;
+        } else if (!strcmp(argv[i], "--kv-ctx") && i + 1 < argc) {
+            if (parse_u64(argv[++i], &kv_ctx)) return 2;
+        } else if (!strcmp(argv[i], "--kv-slots") && i + 1 < argc) {
+            if (parse_u64(argv[++i], &kv_slots) || kv_slots == 0) return 2;
         } else if (!strcmp(argv[i], "--reserve-mib") && i + 1 < argc) {
             if (parse_u64(argv[++i], &reserve_mib)) return 2;
         } else if (!strcmp(argv[i], "--output-head-mib") && i + 1 < argc) {
@@ -39,6 +45,7 @@ int main(int argc, char **argv) {
             fprintf(stderr,
                     "usage: tests/cuda_v100_context_smoke [--production] [--stages N]\n"
                     "                                    [--pack-index PATH] [--planned-kv-mib N]\n"
+                    "                                    [--kv-ctx N] [--kv-slots N]\n"
                     "                                    [--reserve-mib N] [--output-head-mib N] [--mtp-mib N]\n");
             return 2;
         }
@@ -66,6 +73,8 @@ int main(int argc, char **argv) {
     opts.enable_f32_debug_relay = true;
     opts.require_production_topology = production != 0;
     opts.planned_kv_bytes_per_gpu = planned_kv_mib * 1048576ull;
+    opts.kv_ctx_tokens = kv_ctx;
+    opts.kv_active_slots = kv_slots;
     opts.reserve_bytes_per_gpu = reserve_mib * 1048576ull;
     opts.output_head_reserve_bytes = output_head_mib * 1048576ull;
     opts.mtp_reserve_bytes = mtp_mib * 1048576ull;

@@ -72,6 +72,16 @@ static void test_layer_map(void) {
     require_true(ds4_v100_stage_for_layer(34) == 5, "layer 34 gpu5");
     require_true(ds4_v100_stage_for_layer(42) == 7, "layer 42 gpu7");
     require_true(ds4_v100_stage_for_layer(43) == -1, "layer 43 invalid");
+    require_true(ds4_v100_layer_class_for_layer(0) == DS4_V100_LAYER_SWA_ONLY,
+                 "layer 0 swa-only class");
+    require_true(ds4_v100_layer_class_for_layer(1) == DS4_V100_LAYER_SWA_ONLY,
+                 "layer 1 swa-only class");
+    require_true(ds4_v100_layer_class_for_layer(2) == DS4_V100_LAYER_RATIO_4,
+                 "layer 2 ratio-4 class");
+    require_true(ds4_v100_layer_class_for_layer(3) == DS4_V100_LAYER_RATIO_128,
+                 "layer 3 ratio-128 class");
+    require_true(!strcmp(ds4_v100_layer_class_name(DS4_V100_LAYER_RATIO_4), "ratio_4"),
+                 "ratio-4 class name");
 }
 
 static void test_topology_fail_closed(void) {
@@ -201,6 +211,153 @@ static void test_memory_reserve_fail_closed(void) {
                  "memory reserve failure must fail closed");
 }
 
+static void test_kv_budget_math(void) {
+    const uint64_t ctx = 1048576ull;
+    const uint64_t raw = 128ull * 512ull * 2ull;
+    const uint64_t ratio4_comp = (ctx / 4ull) * 512ull * 2ull;
+    const uint64_t ratio4_indexer = (ctx / 4ull) * 128ull * 2ull;
+    const uint64_t ratio4_state =
+        2ull * (2ull * 512ull) * (2ull * 4ull) * 4ull +
+        2ull * (2ull * 128ull) * (2ull * 4ull) * 4ull;
+    const uint64_t ratio128_comp = (ctx / 128ull) * 512ull * 2ull;
+    const uint64_t ratio128_state = 2ull * 512ull * 128ull * 4ull;
+
+    ds4_v100_kv_budget b = ds4_v100_kv_budget_for_layer(0, ctx, 1);
+    require_true(b.raw_swa_bytes == raw, "swa raw bytes");
+    require_true(b.compressed_attn_bytes == 0, "swa compressed bytes");
+    require_true(b.indexer_kv_bytes == 0, "swa indexer bytes");
+    require_true(b.compression_state_bytes == 0, "swa compression state bytes");
+    require_true(b.total_bytes == raw, "swa total bytes");
+
+    b = ds4_v100_kv_budget_for_layer(2, ctx, 1);
+    require_true(b.raw_swa_bytes == raw, "ratio4 raw bytes");
+    require_true(b.compressed_attn_bytes == ratio4_comp, "ratio4 compressed bytes");
+    require_true(b.indexer_kv_bytes == ratio4_indexer, "ratio4 indexer bytes");
+    require_true(b.compression_state_bytes == ratio4_state, "ratio4 compression state bytes");
+    require_true(b.total_bytes == raw + ratio4_comp + ratio4_indexer + ratio4_state,
+                 "ratio4 total bytes");
+
+    b = ds4_v100_kv_budget_for_layer(3, ctx, 2);
+    require_true(b.raw_swa_bytes == raw * 2ull, "ratio128 raw bytes slots");
+    require_true(b.compressed_attn_bytes == ratio128_comp * 2ull,
+                 "ratio128 compressed bytes slots");
+    require_true(b.indexer_kv_bytes == 0, "ratio128 indexer bytes");
+    require_true(b.compression_state_bytes == ratio128_state,
+                 "ratio128 compression state bytes");
+}
+
+static void test_kv_stage_admission(void) {
+    const uint64_t ctx_tokens = 1048576ull;
+    const uint64_t raw = 128ull * 512ull * 2ull;
+    const uint64_t ratio4_comp = (ctx_tokens / 4ull) * 512ull * 2ull;
+    const uint64_t ratio4_indexer = (ctx_tokens / 4ull) * 128ull * 2ull;
+    const uint64_t ratio4_state =
+        2ull * (2ull * 512ull) * (2ull * 4ull) * 4ull +
+        2ull * (2ull * 128ull) * (2ull * 4ull) * 4ull;
+    const uint64_t ratio128_comp = (ctx_tokens / 128ull) * 512ull * 2ull;
+    const uint64_t ratio128_state = 2ull * 512ull * 128ull * 4ull;
+
+    ds4_v100_context_options opts;
+    ds4_v100_context_options_init(&opts);
+    opts.kv_ctx_tokens = ctx_tokens;
+    opts.kv_active_slots = 1;
+
+    char err[256];
+    ds4_v100_context *ctx = NULL;
+    require_true(ds4_v100_context_open(&ctx, &opts, err, sizeof(err)) == 0,
+                 "context should open with derived kv plan");
+
+    int counts[3] = {0, 0, 0};
+    for (int layer = 0; layer < DS4_V100_N_LAYERS; layer++) {
+        const ds4_v100_layer_info *li = ds4_v100_context_layer(ctx, layer);
+        require_true(li != NULL, "layer info for kv count");
+        counts[li->layer_class]++;
+    }
+    require_true(counts[DS4_V100_LAYER_SWA_ONLY] == 2, "swa-only layer count");
+    require_true(counts[DS4_V100_LAYER_RATIO_4] == 21, "ratio4 layer count");
+    require_true(counts[DS4_V100_LAYER_RATIO_128] == 20, "ratio128 layer count");
+
+    const ds4_v100_stage_info *s0 = ds4_v100_context_stage(ctx, 0);
+    require_true(s0 != NULL, "stage 0 kv info");
+    require_true(s0->kv_raw_swa_bytes == 6ull * raw, "stage0 raw kv bytes");
+    require_true(s0->kv_compressed_attn_bytes ==
+                 2ull * ratio4_comp + 2ull * ratio128_comp,
+                 "stage0 compressed kv bytes");
+    require_true(s0->kv_indexer_bytes == 2ull * ratio4_indexer,
+                 "stage0 indexer kv bytes");
+    require_true(s0->kv_compression_state_bytes ==
+                 2ull * ratio4_state + 2ull * ratio128_state,
+                 "stage0 compression state bytes");
+    require_true(s0->planned_kv_bytes == s0->kv_raw_swa_bytes +
+                 s0->kv_compressed_attn_bytes + s0->kv_indexer_bytes +
+                 s0->kv_compression_state_bytes,
+                 "stage0 planned kv total");
+
+    const ds4_v100_stage_info *s1 = ds4_v100_context_stage(ctx, 1);
+    require_true(s1 != NULL, "stage 1 kv info");
+    require_true(s1->kv_raw_swa_bytes == 6ull * raw, "stage1 raw kv bytes");
+    require_true(s1->kv_compressed_attn_bytes ==
+                 3ull * ratio4_comp + 3ull * ratio128_comp,
+                 "stage1 compressed kv bytes");
+    require_true(s1->kv_indexer_bytes == 3ull * ratio4_indexer,
+                 "stage1 indexer kv bytes");
+    require_true(s1->kv_compression_state_bytes ==
+                 3ull * ratio4_state + 3ull * ratio128_state,
+                 "stage1 compression state bytes");
+    ds4_v100_context_close(ctx);
+}
+
+static void test_kv_context_tiers(void) {
+    const uint64_t tiers[] = { 131072ull, 262144ull, 524288ull, 1048576ull };
+    uint64_t prev_stage0 = 0;
+
+    for (size_t i = 0; i < sizeof(tiers) / sizeof(tiers[0]); i++) {
+        ds4_v100_context_options opts;
+        ds4_v100_context_options_init(&opts);
+        opts.kv_ctx_tokens = tiers[i];
+        opts.kv_active_slots = 1;
+
+        char err[256];
+        ds4_v100_context *ctx = NULL;
+        require_true(ds4_v100_context_open(&ctx, &opts, err, sizeof(err)) == 0,
+                     "context tier should open with derived kv plan");
+        const ds4_v100_stage_info *s0 = ds4_v100_context_stage(ctx, 0);
+        require_true(s0 != NULL, "stage 0 tier kv info");
+        require_true(s0->planned_kv_bytes > prev_stage0,
+                     "stage0 kv budget must increase with context tier");
+        prev_stage0 = s0->planned_kv_bytes;
+        ds4_v100_context_close(ctx);
+    }
+}
+
+static void test_kv_reserve_fail_closed(void) {
+    ds4_v100_device_fact facts[DS4_V100_EXPECTED_GPUS];
+    fill_good_facts(facts);
+    ds4_v100_context_options opts;
+    ds4_v100_context_options_init(&opts);
+    opts.require_production_topology = true;
+    opts.device_facts = facts;
+    opts.n_device_facts = DS4_V100_EXPECTED_GPUS;
+    opts.kv_ctx_tokens = 1048576ull;
+    opts.kv_active_slots = 64;
+    char err[256];
+    ds4_v100_context *ctx = NULL;
+    require_true(ds4_v100_context_open(&ctx, &opts, err, sizeof(err)) != 0,
+                 "oversized derived kv plan must fail closed");
+}
+
+static void test_kv_plan_mode_fail_closed(void) {
+    ds4_v100_context_options opts;
+    ds4_v100_context_options_init(&opts);
+    opts.kv_ctx_tokens = 262144ull;
+    opts.planned_kv_bytes_per_gpu = 512ull * 1024ull * 1024ull;
+
+    char err[256];
+    ds4_v100_context *ctx = NULL;
+    require_true(ds4_v100_context_open(&ctx, &opts, err, sizeof(err)) != 0,
+                 "coarse and derived kv plans must not be combined");
+}
+
 int main(void) {
     test_classification();
     test_layer_map();
@@ -208,6 +365,11 @@ int main(void) {
     test_pack_binding();
     test_bad_pack_binding();
     test_memory_reserve_fail_closed();
+    test_kv_budget_math();
+    test_kv_stage_admission();
+    test_kv_context_tiers();
+    test_kv_reserve_fail_closed();
+    test_kv_plan_mode_fail_closed();
     printf("v100_context_smoke: ok\n");
     return 0;
 }

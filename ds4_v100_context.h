@@ -15,6 +15,9 @@ extern "C" {
 #define DS4_V100_HC_ROWS 4
 #define DS4_V100_HC_COLS 4096
 #define DS4_V100_RELAY_BUFFERS 2
+#define DS4_V100_SWA_ROWS 128
+#define DS4_V100_HEAD_DIM 512
+#define DS4_V100_INDEXER_HEAD_DIM 128
 #define DS4_V100_MIN_VRAM_BYTES (31ull * 1024ull * 1024ull * 1024ull)
 #define DS4_V100_DEFAULT_RESERVE_BYTES (2ull * 1024ull * 1024ull * 1024ull)
 
@@ -55,6 +58,20 @@ typedef enum {
     DS4_V100_EXEC_COUNT,
 } ds4_v100_exec_kind;
 
+typedef enum {
+    DS4_V100_LAYER_SWA_ONLY = 0,
+    DS4_V100_LAYER_RATIO_4 = 1,
+    DS4_V100_LAYER_RATIO_128 = 2,
+} ds4_v100_layer_class;
+
+typedef struct {
+    uint64_t raw_swa_bytes;
+    uint64_t compressed_attn_bytes;
+    uint64_t indexer_kv_bytes;
+    uint64_t compression_state_bytes;
+    uint64_t total_bytes;
+} ds4_v100_kv_budget;
+
 typedef struct {
     ds4_v100_source_dtype source_dtype;
     ds4_v100_tensor_family family;
@@ -86,6 +103,10 @@ typedef struct {
     uint64_t relay_f16_bytes;
     uint64_t relay_f32_debug_bytes;
     uint64_t planned_kv_bytes;
+    uint64_t kv_raw_swa_bytes;
+    uint64_t kv_compressed_attn_bytes;
+    uint64_t kv_indexer_bytes;
+    uint64_t kv_compression_state_bytes;
     uint64_t output_head_reserve_bytes;
     uint64_t mtp_reserve_bytes;
     uint64_t reserve_bytes;
@@ -95,6 +116,8 @@ typedef struct {
 typedef struct {
     int layer_id;
     int stage_id;
+    ds4_v100_layer_class layer_class;
+    ds4_v100_kv_budget kv_budget;
     uint64_t tensor_count;
     bool has_f32_control;
     bool has_fp8_dense;
@@ -112,6 +135,8 @@ typedef struct {
     uint64_t relay_max_active_slots;
     uint64_t reserve_bytes_per_gpu;
     uint64_t planned_kv_bytes_per_gpu;
+    uint64_t kv_ctx_tokens;
+    uint64_t kv_active_slots;
     uint64_t output_head_reserve_bytes;
     uint64_t mtp_reserve_bytes;
     const ds4_v100_device_fact *device_facts;
@@ -127,6 +152,11 @@ ds4_v100_tensor_family ds4_v100_tensor_family_infer(const char *source_dtype,
                                                     const char *kernel_family);
 const char *ds4_v100_tensor_family_name(ds4_v100_tensor_family family);
 const char *ds4_v100_exec_kind_name(ds4_v100_exec_kind kind);
+ds4_v100_layer_class ds4_v100_layer_class_for_layer(int layer_id);
+const char *ds4_v100_layer_class_name(ds4_v100_layer_class layer_class);
+ds4_v100_kv_budget ds4_v100_kv_budget_for_layer(int layer_id,
+                                                uint64_t ctx_tokens,
+                                                uint64_t active_slots);
 
 int ds4_v100_classify_or_die(const char *source_dtype,
                              const char *runtime_layout,

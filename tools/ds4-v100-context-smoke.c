@@ -17,6 +17,8 @@ static void usage(FILE *fp) {
             "  --scratch-bytes N          Scratch budget per GPU\n"
             "  --reserve-mib N            Reserve floor per GPU (default 2048)\n"
             "  --planned-kv-mib N         Planned KV reserve per GPU\n"
+            "  --kv-ctx N                 Derive F16 KV bytes for this per-slot context\n"
+            "  --kv-slots N               Active slots for derived F16 KV budget\n"
             "  --output-head-mib N        gpu7 output-head reserve placeholder\n"
             "  --mtp-mib N                gpu7 MTP reserve placeholder\n"
             "  --f32-debug-relay          Include FP32 debug relay buffers\n"
@@ -82,6 +84,18 @@ int main(int argc, char **argv) {
                 return 2;
             }
             opts.planned_kv_bytes_per_gpu = n * 1048576ull;
+        } else if (!strcmp(arg, "--kv-ctx")) {
+            if (next_arg(&i, argc, argv, &val) || parse_u64(val, &n) || n == 0) {
+                fprintf(stderr, "bad value for %s\n", arg);
+                return 2;
+            }
+            opts.kv_ctx_tokens = n;
+        } else if (!strcmp(arg, "--kv-slots")) {
+            if (next_arg(&i, argc, argv, &val) || parse_u64(val, &n) || n == 0) {
+                fprintf(stderr, "bad value for %s\n", arg);
+                return 2;
+            }
+            opts.kv_active_slots = n;
         } else if (!strcmp(arg, "--output-head-mib")) {
             if (next_arg(&i, argc, argv, &val) || parse_u64(val, &n)) {
                 fprintf(stderr, "bad value for %s\n", arg);

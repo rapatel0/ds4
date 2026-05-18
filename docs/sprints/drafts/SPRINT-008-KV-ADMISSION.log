@@ -1,0 +1,303 @@
+$ rm -f ds4_v100_context.o tests/v100_context_smoke tools/ds4-v100-context-smoke && make tests/v100_context_smoke tools/ds4-v100-context-smoke
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -I. -c -o ds4_v100_context.o ds4_v100_context.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -o tests/v100_context_smoke tests/v100_context_smoke.o ds4_v100_context.o ds4_pack.o -lm -pthread
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -o tools/ds4-v100-context-smoke tools/ds4-v100-context-smoke.o ds4_v100_context.o ds4_pack.o -lm -pthread
+
+$ ./tests/v100_context_smoke
+v100_context_smoke: ok
+
+$ ./tools/ds4-v100-context-smoke --kv-ctx 131072 --kv-slots 1
+ds4_v100_context_report
+expected_gpus	8
+mode	0
+policy	bf16_fp8_fp4_are_not_native_v100_tensor_core_formats
+policy	production_dense_gemm_target_fp16_hmma_with_fp32_accumulation
+kv_ctx_tokens	131072
+kv_active_slots	1
+tensor_count	0
+exec_count	f32_control	0
+exec_count	f16_hmma_after_convert	0
+exec_count	lowbit_kernel	0
+exec_count	diagnostic_only	0
+exec_count	unsupported	0
+layer_class_count	swa_only	2
+layer_class_count	ratio_4	21
+layer_class_count	ratio_128	20
+stage	gpu	layers	arena_bytes	scratch_bytes	relay_f16_bytes	relay_f32_debug_bytes	kv_raw_swa_bytes	kv_compressed_attn_bytes	kv_indexer_bytes	kv_compression_state_bytes	planned_kv_bytes	reserve_bytes	device_total_bytes
+0	0	0-5	0	0	65536	0	786432	69206016	16777216	1212416	87982080	2147483648	0
+1	1	6-11	0	0	65536	0	786432	103809024	25165824	1818624	131579904	2147483648	0
+2	2	12-17	0	0	65536	0	786432	103809024	25165824	1818624	131579904	2147483648	0
+3	3	18-23	0	0	65536	0	786432	103809024	25165824	1818624	131579904	2147483648	0
+4	4	24-29	0	0	65536	0	786432	103809024	25165824	1818624	131579904	2147483648	0
+5	5	30-34	0	0	65536	0	655360	102760448	25165824	1294336	129875968	2147483648	0
+6	6	35-39	0	0	65536	0	655360	70254592	16777216	1736704	89423872	2147483648	0
+7	7	40-42	0	0	65536	0	393216	68157440	16777216	688128	86016000	2147483648	0
+layer_skeleton_begin
+layer	stage	class	kv_bytes	tensors	f32_control	fp8_dense	mxfp4_expert	hc_control	status
+0	0	swa_only	131072	0	0	0	0	0	OK
+1	0	swa_only	131072	0	0	0	0	0	OK
+2	0	ratio_4	42156032	0	0	0	0	0	OK
+3	0	ratio_128	1703936	0	0	0	0	0	OK
+4	0	ratio_4	42156032	0	0	0	0	0	OK
+5	0	ratio_128	1703936	0	0	0	0	0	OK
+6	1	ratio_4	42156032	0	0	0	0	0	OK
+7	1	ratio_128	1703936	0	0	0	0	0	OK
+8	1	ratio_4	42156032	0	0	0	0	0	OK
+9	1	ratio_128	1703936	0	0	0	0	0	OK
+10	1	ratio_4	42156032	0	0	0	0	0	OK
+11	1	ratio_128	1703936	0	0	0	0	0	OK
+12	2	ratio_4	42156032	0	0	0	0	0	OK
+13	2	ratio_128	1703936	0	0	0	0	0	OK
+14	2	ratio_4	42156032	0	0	0	0	0	OK
+15	2	ratio_128	1703936	0	0	0	0	0	OK
+16	2	ratio_4	42156032	0	0	0	0	0	OK
+17	2	ratio_128	1703936	0	0	0	0	0	OK
+18	3	ratio_4	42156032	0	0	0	0	0	OK
+19	3	ratio_128	1703936	0	0	0	0	0	OK
+20	3	ratio_4	42156032	0	0	0	0	0	OK
+21	3	ratio_128	1703936	0	0	0	0	0	OK
+22	3	ratio_4	42156032	0	0	0	0	0	OK
+23	3	ratio_128	1703936	0	0	0	0	0	OK
+24	4	ratio_4	42156032	0	0	0	0	0	OK
+25	4	ratio_128	1703936	0	0	0	0	0	OK
+26	4	ratio_4	42156032	0	0	0	0	0	OK
+27	4	ratio_128	1703936	0	0	0	0	0	OK
+28	4	ratio_4	42156032	0	0	0	0	0	OK
+29	4	ratio_128	1703936	0	0	0	0	0	OK
+30	5	ratio_4	42156032	0	0	0	0	0	OK
+31	5	ratio_128	1703936	0	0	0	0	0	OK
+32	5	ratio_4	42156032	0	0	0	0	0	OK
+33	5	ratio_128	1703936	0	0	0	0	0	OK
+34	5	ratio_4	42156032	0	0	0	0	0	OK
+35	6	ratio_128	1703936	0	0	0	0	0	OK
+36	6	ratio_4	42156032	0	0	0	0	0	OK
+37	6	ratio_128	1703936	0	0	0	0	0	OK
+38	6	ratio_4	42156032	0	0	0	0	0	OK
+39	6	ratio_128	1703936	0	0	0	0	0	OK
+40	7	ratio_4	42156032	0	0	0	0	0	OK
+41	7	ratio_128	1703936	0	0	0	0	0	OK
+42	7	ratio_4	42156032	0	0	0	0	0	OK
+layer_skeleton_result	OK
+context_smoke_result	OK
+
+$ ./tools/ds4-v100-context-smoke --kv-ctx 262144 --kv-slots 1
+ds4_v100_context_report
+expected_gpus	8
+mode	0
+policy	bf16_fp8_fp4_are_not_native_v100_tensor_core_formats
+policy	production_dense_gemm_target_fp16_hmma_with_fp32_accumulation
+kv_ctx_tokens	262144
+kv_active_slots	1
+tensor_count	0
+exec_count	f32_control	0
+exec_count	f16_hmma_after_convert	0
+exec_count	lowbit_kernel	0
+exec_count	diagnostic_only	0
+exec_count	unsupported	0
+layer_class_count	swa_only	2
+layer_class_count	ratio_4	21
+layer_class_count	ratio_128	20
+stage	gpu	layers	arena_bytes	scratch_bytes	relay_f16_bytes	relay_f32_debug_bytes	kv_raw_swa_bytes	kv_compressed_attn_bytes	kv_indexer_bytes	kv_compression_state_bytes	planned_kv_bytes	reserve_bytes	device_total_bytes
+0	0	0-5	0	0	65536	0	786432	138412032	33554432	1212416	173965312	2147483648	0
+1	1	6-11	0	0	65536	0	786432	207618048	50331648	1818624	260554752	2147483648	0
+2	2	12-17	0	0	65536	0	786432	207618048	50331648	1818624	260554752	2147483648	0
+3	3	18-23	0	0	65536	0	786432	207618048	50331648	1818624	260554752	2147483648	0
+4	4	24-29	0	0	65536	0	786432	207618048	50331648	1818624	260554752	2147483648	0
+5	5	30-34	0	0	65536	0	655360	205520896	50331648	1294336	257802240	2147483648	0
+6	6	35-39	0	0	65536	0	655360	140509184	33554432	1736704	176455680	2147483648	0
+7	7	40-42	0	0	65536	0	393216	136314880	33554432	688128	170950656	2147483648	0
+layer_skeleton_begin
+layer	stage	class	kv_bytes	tensors	f32_control	fp8_dense	mxfp4_expert	hc_control	status
+0	0	swa_only	131072	0	0	0	0	0	OK
+1	0	swa_only	131072	0	0	0	0	0	OK
+2	0	ratio_4	84099072	0	0	0	0	0	OK
+3	0	ratio_128	2752512	0	0	0	0	0	OK
+4	0	ratio_4	84099072	0	0	0	0	0	OK
+5	0	ratio_128	2752512	0	0	0	0	0	OK
+6	1	ratio_4	84099072	0	0	0	0	0	OK
+7	1	ratio_128	2752512	0	0	0	0	0	OK
+8	1	ratio_4	84099072	0	0	0	0	0	OK
+9	1	ratio_128	2752512	0	0	0	0	0	OK
+10	1	ratio_4	84099072	0	0	0	0	0	OK
+11	1	ratio_128	2752512	0	0	0	0	0	OK
+12	2	ratio_4	84099072	0	0	0	0	0	OK
+13	2	ratio_128	2752512	0	0	0	0	0	OK
+14	2	ratio_4	84099072	0	0	0	0	0	OK
+15	2	ratio_128	2752512	0	0	0	0	0	OK
+16	2	ratio_4	84099072	0	0	0	0	0	OK
+17	2	ratio_128	2752512	0	0	0	0	0	OK
+18	3	ratio_4	84099072	0	0	0	0	0	OK
+19	3	ratio_128	2752512	0	0	0	0	0	OK
+20	3	ratio_4	84099072	0	0	0	0	0	OK
+21	3	ratio_128	2752512	0	0	0	0	0	OK
+22	3	ratio_4	84099072	0	0	0	0	0	OK
+23	3	ratio_128	2752512	0	0	0	0	0	OK
+24	4	ratio_4	84099072	0	0	0	0	0	OK
+25	4	ratio_128	2752512	0	0	0	0	0	OK
+26	4	ratio_4	84099072	0	0	0	0	0	OK
+27	4	ratio_128	2752512	0	0	0	0	0	OK
+28	4	ratio_4	84099072	0	0	0	0	0	OK
+29	4	ratio_128	2752512	0	0	0	0	0	OK
+30	5	ratio_4	84099072	0	0	0	0	0	OK
+31	5	ratio_128	2752512	0	0	0	0	0	OK
+32	5	ratio_4	84099072	0	0	0	0	0	OK
+33	5	ratio_128	2752512	0	0	0	0	0	OK
+34	5	ratio_4	84099072	0	0	0	0	0	OK
+35	6	ratio_128	2752512	0	0	0	0	0	OK
+36	6	ratio_4	84099072	0	0	0	0	0	OK
+37	6	ratio_128	2752512	0	0	0	0	0	OK
+38	6	ratio_4	84099072	0	0	0	0	0	OK
+39	6	ratio_128	2752512	0	0	0	0	0	OK
+40	7	ratio_4	84099072	0	0	0	0	0	OK
+41	7	ratio_128	2752512	0	0	0	0	0	OK
+42	7	ratio_4	84099072	0	0	0	0	0	OK
+layer_skeleton_result	OK
+context_smoke_result	OK
+
+$ ./tools/ds4-v100-context-smoke --kv-ctx 524288 --kv-slots 1
+ds4_v100_context_report
+expected_gpus	8
+mode	0
+policy	bf16_fp8_fp4_are_not_native_v100_tensor_core_formats
+policy	production_dense_gemm_target_fp16_hmma_with_fp32_accumulation
+kv_ctx_tokens	524288
+kv_active_slots	1
+tensor_count	0
+exec_count	f32_control	0
+exec_count	f16_hmma_after_convert	0
+exec_count	lowbit_kernel	0
+exec_count	diagnostic_only	0
+exec_count	unsupported	0
+layer_class_count	swa_only	2
+layer_class_count	ratio_4	21
+layer_class_count	ratio_128	20
+stage	gpu	layers	arena_bytes	scratch_bytes	relay_f16_bytes	relay_f32_debug_bytes	kv_raw_swa_bytes	kv_compressed_attn_bytes	kv_indexer_bytes	kv_compression_state_bytes	planned_kv_bytes	reserve_bytes	device_total_bytes
+0	0	0-5	0	0	65536	0	786432	276824064	67108864	1212416	345931776	2147483648	0
+1	1	6-11	0	0	65536	0	786432	415236096	100663296	1818624	518504448	2147483648	0
+2	2	12-17	0	0	65536	0	786432	415236096	100663296	1818624	518504448	2147483648	0
+3	3	18-23	0	0	65536	0	786432	415236096	100663296	1818624	518504448	2147483648	0
+4	4	24-29	0	0	65536	0	786432	415236096	100663296	1818624	518504448	2147483648	0
+5	5	30-34	0	0	65536	0	655360	411041792	100663296	1294336	513654784	2147483648	0
+6	6	35-39	0	0	65536	0	655360	281018368	67108864	1736704	350519296	2147483648	0
+7	7	40-42	0	0	65536	0	393216	272629760	67108864	688128	340819968	2147483648	0
+layer_skeleton_begin
+layer	stage	class	kv_bytes	tensors	f32_control	fp8_dense	mxfp4_expert	hc_control	status
+0	0	swa_only	131072	0	0	0	0	0	OK
+1	0	swa_only	131072	0	0	0	0	0	OK
+2	0	ratio_4	167985152	0	0	0	0	0	OK
+3	0	ratio_128	4849664	0	0	0	0	0	OK
+4	0	ratio_4	167985152	0	0	0	0	0	OK
+5	0	ratio_128	4849664	0	0	0	0	0	OK
+6	1	ratio_4	167985152	0	0	0	0	0	OK
+7	1	ratio_128	4849664	0	0	0	0	0	OK
+8	1	ratio_4	167985152	0	0	0	0	0	OK
+9	1	ratio_128	4849664	0	0	0	0	0	OK
+10	1	ratio_4	167985152	0	0	0	0	0	OK
+11	1	ratio_128	4849664	0	0	0	0	0	OK
+12	2	ratio_4	167985152	0	0	0	0	0	OK
+13	2	ratio_128	4849664	0	0	0	0	0	OK
+14	2	ratio_4	167985152	0	0	0	0	0	OK
+15	2	ratio_128	4849664	0	0	0	0	0	OK
+16	2	ratio_4	167985152	0	0	0	0	0	OK
+17	2	ratio_128	4849664	0	0	0	0	0	OK
+18	3	ratio_4	167985152	0	0	0	0	0	OK
+19	3	ratio_128	4849664	0	0	0	0	0	OK
+20	3	ratio_4	167985152	0	0	0	0	0	OK
+21	3	ratio_128	4849664	0	0	0	0	0	OK
+22	3	ratio_4	167985152	0	0	0	0	0	OK
+23	3	ratio_128	4849664	0	0	0	0	0	OK
+24	4	ratio_4	167985152	0	0	0	0	0	OK
+25	4	ratio_128	4849664	0	0	0	0	0	OK
+26	4	ratio_4	167985152	0	0	0	0	0	OK
+27	4	ratio_128	4849664	0	0	0	0	0	OK
+28	4	ratio_4	167985152	0	0	0	0	0	OK
+29	4	ratio_128	4849664	0	0	0	0	0	OK
+30	5	ratio_4	167985152	0	0	0	0	0	OK
+31	5	ratio_128	4849664	0	0	0	0	0	OK
+32	5	ratio_4	167985152	0	0	0	0	0	OK
+33	5	ratio_128	4849664	0	0	0	0	0	OK
+34	5	ratio_4	167985152	0	0	0	0	0	OK
+35	6	ratio_128	4849664	0	0	0	0	0	OK
+36	6	ratio_4	167985152	0	0	0	0	0	OK
+37	6	ratio_128	4849664	0	0	0	0	0	OK
+38	6	ratio_4	167985152	0	0	0	0	0	OK
+39	6	ratio_128	4849664	0	0	0	0	0	OK
+40	7	ratio_4	167985152	0	0	0	0	0	OK
+41	7	ratio_128	4849664	0	0	0	0	0	OK
+42	7	ratio_4	167985152	0	0	0	0	0	OK
+layer_skeleton_result	OK
+context_smoke_result	OK
+
+$ ./tools/ds4-v100-context-smoke --kv-ctx 1048576 --kv-slots 1
+ds4_v100_context_report
+expected_gpus	8
+mode	0
+policy	bf16_fp8_fp4_are_not_native_v100_tensor_core_formats
+policy	production_dense_gemm_target_fp16_hmma_with_fp32_accumulation
+kv_ctx_tokens	1048576
+kv_active_slots	1
+tensor_count	0
+exec_count	f32_control	0
+exec_count	f16_hmma_after_convert	0
+exec_count	lowbit_kernel	0
+exec_count	diagnostic_only	0
+exec_count	unsupported	0
+layer_class_count	swa_only	2
+layer_class_count	ratio_4	21
+layer_class_count	ratio_128	20
+stage	gpu	layers	arena_bytes	scratch_bytes	relay_f16_bytes	relay_f32_debug_bytes	kv_raw_swa_bytes	kv_compressed_attn_bytes	kv_indexer_bytes	kv_compression_state_bytes	planned_kv_bytes	reserve_bytes	device_total_bytes
+0	0	0-5	0	0	65536	0	786432	553648128	134217728	1212416	689864704	2147483648	0
+1	1	6-11	0	0	65536	0	786432	830472192	201326592	1818624	1034403840	2147483648	0
+2	2	12-17	0	0	65536	0	786432	830472192	201326592	1818624	1034403840	2147483648	0
+3	3	18-23	0	0	65536	0	786432	830472192	201326592	1818624	1034403840	2147483648	0
+4	4	24-29	0	0	65536	0	786432	830472192	201326592	1818624	1034403840	2147483648	0
+5	5	30-34	0	0	65536	0	655360	822083584	201326592	1294336	1025359872	2147483648	0
+6	6	35-39	0	0	65536	0	655360	562036736	134217728	1736704	698646528	2147483648	0
+7	7	40-42	0	0	65536	0	393216	545259520	134217728	688128	680558592	2147483648	0
+layer_skeleton_begin
+layer	stage	class	kv_bytes	tensors	f32_control	fp8_dense	mxfp4_expert	hc_control	status
+0	0	swa_only	131072	0	0	0	0	0	OK
+1	0	swa_only	131072	0	0	0	0	0	OK
+2	0	ratio_4	335757312	0	0	0	0	0	OK
+3	0	ratio_128	9043968	0	0	0	0	0	OK
+4	0	ratio_4	335757312	0	0	0	0	0	OK
+5	0	ratio_128	9043968	0	0	0	0	0	OK
+6	1	ratio_4	335757312	0	0	0	0	0	OK
+7	1	ratio_128	9043968	0	0	0	0	0	OK
+8	1	ratio_4	335757312	0	0	0	0	0	OK
+9	1	ratio_128	9043968	0	0	0	0	0	OK
+10	1	ratio_4	335757312	0	0	0	0	0	OK
+11	1	ratio_128	9043968	0	0	0	0	0	OK
+12	2	ratio_4	335757312	0	0	0	0	0	OK
+13	2	ratio_128	9043968	0	0	0	0	0	OK
+14	2	ratio_4	335757312	0	0	0	0	0	OK
+15	2	ratio_128	9043968	0	0	0	0	0	OK
+16	2	ratio_4	335757312	0	0	0	0	0	OK
+17	2	ratio_128	9043968	0	0	0	0	0	OK
+18	3	ratio_4	335757312	0	0	0	0	0	OK
+19	3	ratio_128	9043968	0	0	0	0	0	OK
+20	3	ratio_4	335757312	0	0	0	0	0	OK
+21	3	ratio_128	9043968	0	0	0	0	0	OK
+22	3	ratio_4	335757312	0	0	0	0	0	OK
+23	3	ratio_128	9043968	0	0	0	0	0	OK
+24	4	ratio_4	335757312	0	0	0	0	0	OK
+25	4	ratio_128	9043968	0	0	0	0	0	OK
+26	4	ratio_4	335757312	0	0	0	0	0	OK
+27	4	ratio_128	9043968	0	0	0	0	0	OK
+28	4	ratio_4	335757312	0	0	0	0	0	OK
+29	4	ratio_128	9043968	0	0	0	0	0	OK
+30	5	ratio_4	335757312	0	0	0	0	0	OK
+31	5	ratio_128	9043968	0	0	0	0	0	OK
+32	5	ratio_4	335757312	0	0	0	0	0	OK
+33	5	ratio_128	9043968	0	0	0	0	0	OK
+34	5	ratio_4	335757312	0	0	0	0	0	OK
+35	6	ratio_128	9043968	0	0	0	0	0	OK
+36	6	ratio_4	335757312	0	0	0	0	0	OK
+37	6	ratio_128	9043968	0	0	0	0	0	OK
+38	6	ratio_4	335757312	0	0	0	0	0	OK
+39	6	ratio_128	9043968	0	0	0	0	0	OK
+40	7	ratio_4	335757312	0	0	0	0	0	OK
+41	7	ratio_128	9043968	0	0	0	0	0	OK
+42	7	ratio_4	335757312	0	0	0	0	0	OK
+layer_skeleton_result	OK
+context_smoke_result	OK
