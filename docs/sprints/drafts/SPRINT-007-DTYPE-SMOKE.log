@@ -1,1 +1,4 @@
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -I. -c -o tests/source_dtypes_smoke.o tests/source_dtypes_smoke.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -c -o ds4_source_formats.o ds4_source_formats.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -o tests/source_dtypes_smoke tests/source_dtypes_smoke.o ds4_source_formats.o -lm -pthread
 source_dtypes_smoke: ok

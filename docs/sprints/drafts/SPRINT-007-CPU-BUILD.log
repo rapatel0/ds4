@@ -1,3 +1,12 @@
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -DDS4_NO_GPU -c -o ds4_cli_cpu.o ds4_cli.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -DDS4_NO_GPU -c -o ds4_server_cpu.o ds4_server.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -DDS4_NO_GPU -c -o ds4_bench_cpu.o ds4_bench.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -DDS4_NO_GPU -c -o ds4_eval_cpu.o ds4_eval.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -c -o linenoise.o linenoise.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -c -o rax.o rax.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -DDS4_NO_GPU -c -o ds4_cpu.o ds4.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -c -o ds4_pack.o ds4_pack.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -c -o ds4_source_formats.o ds4_source_formats.c
 cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -o ds4 ds4_cli_cpu.o linenoise.o ds4_cpu.o ds4_pack.o ds4_source_formats.o -lm -pthread
 cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -o ds4-server ds4_server_cpu.o rax.o ds4_cpu.o ds4_pack.o ds4_source_formats.o -lm -pthread
 cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -o ds4-bench ds4_bench_cpu.o ds4_cpu.o ds4_pack.o ds4_source_formats.o -lm -pthread
