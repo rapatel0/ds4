@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-18
-last_updated_by: sprint-execute
-revision: 25
+last_updated_by: sprint-plan
+revision: 26
 ---
 
 # Vision: DS4 V100 Appliance
@@ -328,19 +328,19 @@ it is a narrow DS4 runtime tuned for this hardware.
   arena-span sizing. The descriptor-bound FFN smoke uses it, and the V100
   appliance gate includes and passes `layer_state`.
 
-### Sprint 018 - V100 Descriptor-Bound Attention And Layer Output Slice [planned]
+### Sprint 018 - V100 Descriptor-Bound Attention Projection Residual Norm Gate [planned]
 
 - **Goal**: Extend the scheduler-owned layer state from router/FFN ownership to
-  a bounded descriptor-bound attention/residual/norm slice that can produce a
-  coherent next hidden state for one representative layer.
+  descriptor-bound attention projection/control ownership, then run real
+  source-byte attention projection, residual add, and norm work on V100.
 - **Rationale**: Serving is still blocked by the lack of full layer output.
-  Sprint 017 created the state surface; Sprint 018 should make that state
-  execute enough attention/control work to retire the `attention_residual_norm`
-  readiness gap or expose a concrete blocker.
+  Sprint 017 created the state surface; Sprint 018 should bridge existing
+  synthetic attention kernels to real descriptor-bound attention source bytes
+  without claiming full softmax/compressed-KV layer correctness.
 - **Plan**: Bind attention/control descriptors through the layer state, reuse
-  existing source-F8 projection and compressor/KV kernels, add bounded residual
-  and RMSNorm/HC composition helpers, and gate a one-layer output comparison
-  against CPU/source-format references.
+  source-F8 projection and RMSNorm kernels on real layer-2 bytes, add residual
+  and FFN pre-norm composition, and gate the slice against CPU source-format
+  references.
 
 ## Parking Lot
 
