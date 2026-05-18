@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-18
-last_updated_by: sprint-plan
-revision: 8
+last_updated_by: sprint-execute
+revision: 9
 ---
 
 # Vision: DS4 V100 Appliance
@@ -44,11 +44,11 @@ it is a narrow DS4 runtime tuned for this hardware.
   on the cluster. The sprint corrected MXFP4 row layout to match GGML's
   `block_mxfp4` low-half/high-half nibble ordering and reset source-layout KV
   correctness to the default F16 cache contract.
-- Sprint 008 is now planned as a bridge from the CPU source oracle to V100
-  execution: automate the official-vector oracle, harden guards, make F16 KV
-  admission exact by stage/context/slot, and land one bounded CUDA source-format
-  anchor. Full V100 source-layout prefill execution moves to the next runtime
-  sprint.
+- Sprint 008 shipped the bridge from CPU source oracle to first V100 source
+  anchors: automated official-vector validation, source-layout guard checks,
+  exact F16 KV admission by stage/context/slot, MXFP4 parity hardening, and a
+  bounded CUDA F8_E4M3_B128 source-format row-decode probe on `sm_70`. Full
+  V100 source-layout prefill execution is now the next runtime sprint.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -139,7 +139,7 @@ it is a narrow DS4 runtime tuned for this hardware.
   MXFP4 row semantics were corrected, and source-layout KV defaults to F16
   before Sprint 008 device-kernel work.
 
-### Sprint 008 - Source Oracle Harness And V100 KV Admission Anchors [planned]
+### Sprint 008 - Source Oracle Harness And V100 KV Admission Anchors [complete]
 
 - **Goal**: Turn Sprint 007's manual source-oracle proof into automated
   official-vector validation, add source-layout guard regressions, expose exact
@@ -148,6 +148,11 @@ it is a narrow DS4 runtime tuned for this hardware.
 - **Rationale**: Full V100 source-layout prefill should not begin until the
   oracle, guard, memory-admission, and source-format device-anchor contracts are
   executable and tested.
+- **Outcome**: `SHIP`. The source oracle runner selected
+  `short_reasoning_plain` token bytes `3136`, guard checks passed on the source
+  model, exact F16 KV admission is reported by stage and fails closed on
+  over-budget slots, MXFP4 source layout parity is hardened, and a bounded CUDA
+  F8_E4M3_B128 row-decode anchor passed on V100 `sm_70`.
 
 ### Sprint 009 - V100 Prefill And Compressed KV Execution [planned]
 
@@ -226,6 +231,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-18 | Refined Sprint 007 into a guarded source-layout oracle sprint. | Planning consensus found that exact FP8/MXFP4/BF16 source semantics and a narrow CPU-only diagnostic unlock are the right next gate before production V100 kernels, prefill, or deployment. | Sprint 007-008 |
 | 2026-05-18 | Shipped Sprint 007 source-layout oracle, corrected MXFP4 row ordering, and restored F16 KV as the source correctness baseline. | The official vector exposed both a bad interleaved MXFP4 assumption and an unsafe forced FP8 KV round-trip; matching GGML's low-half/high-half layout and the default F16 KV contract produced the expected first token and gives Sprint 008 a real correctness anchor. | Sprint 007-008 |
 | 2026-05-18 | Re-scoped Sprint 008 as oracle automation, F16 KV admission, and one CUDA source-format anchor. | Full V100 source-layout prefill combines too many unproven contracts; making oracle, guard, memory, and source-format device checks executable first reduces risk before runtime KV execution. | Sprint 008-010 |
+| 2026-05-18 | Shipped Sprint 008 source oracle harness, F16 KV admission, source dtype hardening, and CUDA F8 source-format anchor. | The project now has executable correctness, memory-admission, and first device source-format contracts for the Sprint 009 V100 prefill/KV implementation. | Sprint 008-009 |
 
 ## Open Questions
 

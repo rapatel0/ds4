@@ -1,7 +1,7 @@
 ---
 sprint: 008
 title: Source Oracle Harness And V100 KV Admission Anchors
-status: active
+status: completed
 date: 2026-05-18
 target_repo: rapatel0/ds4
 architecture: ../architecture/DS4-V100-LAYOUT.md
@@ -167,7 +167,7 @@ normal source-model generation.
 **Tasks:**
 - [x] Add a source-oracle official-vector test mode that opens the source model
       through CPU oracle settings and diagnostic session unlock.
-- [ ] Verify selected-token equality for `short_reasoning_plain` without
+- [x] Verify selected-token equality for `short_reasoning_plain` without
       manual JSON inspection.
 - [x] Reuse existing official-vector parsing/top-logprob helpers where
       practical.
@@ -216,12 +216,12 @@ normal source-model generation.
 - `Makefile`
 
 **Tasks:**
-- [ ] Add a bounded device API for one packed source-format row, preferably
+- [x] Add a bounded device API for one packed source-format row, preferably
       `F8_E4M3_B128`.
-- [ ] Upload synthetic packed rows to a CUDA arena and execute the device probe.
-- [ ] Compare device output against `ds4_source_formats` CPU helper results.
-- [ ] Fail closed on row bounds, shape/span mismatch, or undersized output.
-- [ ] Keep the anchor disconnected from normal decode/prefill paths.
+- [x] Upload synthetic packed rows to a CUDA arena and execute the device probe.
+- [x] Compare device output against `ds4_source_formats` CPU helper results.
+- [x] Fail closed on row bounds, shape/span mismatch, or undersized output.
+- [x] Keep the anchor disconnected from normal decode/prefill paths.
 
 ### Phase 5: Validation And Report
 
@@ -235,14 +235,14 @@ normal source-model generation.
 - `docs/sprints/VISION.md`
 
 **Tasks:**
-- [ ] Run local build and model-less tests.
-- [ ] Run the source oracle official-vector automation on the cluster against
+- [x] Run local build and model-less tests.
+- [x] Run the source oracle official-vector automation on the cluster against
       `/models/DSv4-Flash-256e-fixed.gguf`.
-- [ ] Run CUDA source-format anchor on `sm_70` if cluster access is available.
-- [ ] Archive command logs under `docs/sprints/drafts/`.
-- [ ] Write the report with verdict, evidence, deviations, and Sprint 009
+- [x] Run CUDA source-format anchor on `sm_70` if cluster access is available.
+- [x] Archive command logs under `docs/sprints/drafts/`.
+- [x] Write the report with verdict, evidence, deviations, and Sprint 009
       handoff.
-- [ ] Update `VISION.md` after the sprint verdict.
+- [x] Update `VISION.md` after the sprint verdict.
 
 ## Files Summary
 

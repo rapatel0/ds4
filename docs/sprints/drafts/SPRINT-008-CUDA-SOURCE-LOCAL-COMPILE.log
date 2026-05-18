@@ -1,0 +1,1 @@
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -I. -c -o tests/cuda_source_dtypes_smoke.o tests/cuda_source_dtypes_smoke.c

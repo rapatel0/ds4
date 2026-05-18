@@ -1,0 +1,4 @@
+guard	normal_source_layout_rejection	OK
+guard	non_cpu_oracle_rejection	OK
+guard	mtp_oracle_rejection	OK
+guard	missing_session_unlock	OK

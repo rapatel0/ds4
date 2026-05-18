@@ -61,6 +61,14 @@ typedef struct {
     uint32_t row_stride_elements;
 } ds4_gpu_bf16_matrix_view;
 
+typedef struct {
+    uint64_t arena_offset;
+    uint64_t byte_length;
+    uint32_t rows;
+    uint32_t cols;
+    uint32_t row_stride_bytes;
+} ds4_gpu_source_row_view;
+
 int ds4_gpu_device_count(void);
 int ds4_gpu_arena_open(ds4_gpu_arena **out, int gpu, uint64_t bytes);
 void ds4_gpu_arena_close(ds4_gpu_arena *arena);
@@ -85,6 +93,13 @@ void ds4_gpu_print_topology_report(FILE *fp);
 int ds4_gpu_arena_bf16_row_gather_f32(
         const ds4_gpu_arena            *arena,
         const ds4_gpu_bf16_matrix_view *view,
+        const uint32_t                 *row_ids,
+        uint32_t                        n_rows,
+        float                          *out_f32,
+        uint64_t                        out_bytes);
+int ds4_gpu_arena_f8_e4m3_b128_row_decode_f32(
+        const ds4_gpu_arena            *arena,
+        const ds4_gpu_source_row_view  *view,
         const uint32_t                 *row_ids,
         uint32_t                        n_rows,
         float                          *out_f32,

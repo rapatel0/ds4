@@ -1,9 +1,4 @@
-$ rm -f tools/ds4-source-oracle-vector tools/ds4-source-oracle-vector.o ds4_cpu.o && make tools/ds4-source-oracle-vector
-cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -I. -DDS4_NO_GPU -D_FILE_OFFSET_BITS=64 -c -o tools/ds4-source-oracle-vector.o tools/ds4-source-oracle-vector.c
-cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -DDS4_NO_GPU -c -o ds4_cpu.o ds4.c
-cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -c -o ds4_source_formats.o ds4_source_formats.c
-cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -o tools/ds4-source-oracle-vector tools/ds4-source-oracle-vector.o ds4_cpu.o ds4_pack.o ds4_source_formats.o -lm -pthread
-
-$ ./tools/ds4-source-oracle-vector --dry-parse --only short_reasoning_plain
 vector	short_reasoning_plain	PARSED	ctx=4096	selected=3136	prompt=tests/test-vectors/prompts/short_reasoning_plain.txt
 ds4-source-oracle-vector: dry-parse ok
+vector	short_reasoning_plain	OK	selected=3136	token=926
+ds4-source-oracle-vector: ok

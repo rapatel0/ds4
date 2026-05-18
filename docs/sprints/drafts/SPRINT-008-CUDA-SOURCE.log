@@ -1,0 +1,5 @@
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -c -o tests/cuda_source_dtypes_smoke.o tests/cuda_source_dtypes_smoke.c
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -c -o ds4_cuda.o ds4_cuda.cu
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -c -o ds4_source_formats.o ds4_source_formats.c
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -o tests/cuda_source_dtypes_smoke tests/cuda_source_dtypes_smoke.o ds4_cuda.o ds4_source_formats.o -lm -Xcompiler -pthread -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/local/cuda/lib64 -lcudart -lcublas
+cuda_source_dtypes_smoke: ok

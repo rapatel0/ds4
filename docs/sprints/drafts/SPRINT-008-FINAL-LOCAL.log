@@ -1,0 +1,25 @@
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -I. -DDS4_NO_GPU -D_FILE_OFFSET_BITS=64 -c -o tools/ds4-source-oracle-vector.o tools/ds4-source-oracle-vector.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -DDS4_NO_GPU -c -o ds4_cpu.o ds4.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -c -o ds4_pack.o ds4_pack.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -c -o ds4_source_formats.o ds4_source_formats.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -o tools/ds4-source-oracle-vector tools/ds4-source-oracle-vector.o ds4_cpu.o ds4_pack.o ds4_source_formats.o -lm -pthread
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -I. -c -o tests/source_dtypes_smoke.o tests/source_dtypes_smoke.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -o tests/source_dtypes_smoke tests/source_dtypes_smoke.o ds4_source_formats.o -lm -pthread
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -I. -c -o tests/cuda_source_dtypes_smoke.o tests/cuda_source_dtypes_smoke.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -DDS4_NO_GPU -c -o ds4_cli_cpu.o ds4_cli.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -DDS4_NO_GPU -c -o ds4_server_cpu.o ds4_server.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -DDS4_NO_GPU -c -o ds4_bench_cpu.o ds4_bench.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -DDS4_NO_GPU -c -o ds4_eval_cpu.o ds4_eval.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -c -o linenoise.o linenoise.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -c -o rax.o rax.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -o ds4 ds4_cli_cpu.o linenoise.o ds4_cpu.o ds4_pack.o ds4_source_formats.o -lm -pthread
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -o ds4-server ds4_server_cpu.o rax.o ds4_cpu.o ds4_pack.o ds4_source_formats.o -lm -pthread
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -o ds4-bench ds4_bench_cpu.o ds4_cpu.o ds4_pack.o ds4_source_formats.o -lm -pthread
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -o ds4-eval ds4_eval_cpu.o ds4_cpu.o ds4_pack.o ds4_source_formats.o -lm -pthread
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -c -o ds4_cli.o ds4_cli.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -c -o ds4.o ds4.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -fobjc-arc -c -o ds4_metal.o ds4_metal.m
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -o ds4 ds4_cli.o linenoise.o ds4.o ds4_metal.o ds4_pack.o ds4_source_formats.o -lm -pthread -framework Foundation -framework Metal
+vector	short_reasoning_plain	PARSED	ctx=4096	selected=3136	prompt=tests/test-vectors/prompts/short_reasoning_plain.txt
+ds4-source-oracle-vector: dry-parse ok
+source_dtypes_smoke: ok

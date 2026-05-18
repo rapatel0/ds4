@@ -1,21 +1,25 @@
 ---
 sprint: 008
 title: Source Oracle Harness And V100 KV Admission Anchors
-status: in_progress
+status: completed
 date: 2026-05-18
+verdict: SHIP
 ---
 
-# SPRINT-008 Report
+# SPRINT-008 Report: Source Oracle Harness And V100 KV Admission Anchors
 
-## Current Verdict
+## Verdict
 
-`IN_PROGRESS`.
+`SHIP`
 
-Phase 2, V100 F16 KV admission, is implemented and validated locally and on the
-8x V100 pod. The sprint is not complete: oracle automation, guard hardening,
-source dtype parity hardening, and the bounded CUDA source-format anchor remain.
+Sprint 008 turned the Sprint 007 one-off source-layout oracle into repeatable
+validation, added exact DS4-aware F16 KV admission for the layer-owned V100
+topology, hardened source-format helpers, and landed a bounded CUDA
+F8_E4M3_B128 source-format anchor on `sm_70`.
 
-## Shipped In This Slice
+Normal source-layout generation remains fail-closed.
+
+## What Shipped
 
 - Added DS4 layer-class metadata for SWA-only, ratio-4/indexer, and ratio-128
   layers.
@@ -29,6 +33,19 @@ source dtype parity hardening, and the bounded CUDA source-format anchor remain.
   and `--kv-slots`.
 - Printed stable report fields for context, active slots, layer-class counts,
   per-stage KV bytes, and per-layer KV class/bytes.
+- Added `tools/ds4-source-oracle-vector` for automated official-vector source
+  oracle validation and guard checks.
+- Documented the source oracle command and `--dry-parse`/`--guard-checks`
+  options in `tests/test-vectors/README.md`.
+- Added packed-row span validators for F8_E4M3_B128 and MXFP4 source helpers.
+- Added direct MXFP4 GGML `block_mxfp4` low-half/high-half ordering regression
+  coverage and undersized packed-row span tests.
+- Added a bounded `ds4_gpu_arena_f8_e4m3_b128_row_decode_f32` diagnostic API in
+  the CUDA arena path plus a host stub implementation.
+- Added `tests/cuda_source_dtypes_smoke.c`, which uploads strided synthetic
+  F8_E4M3_B128 rows, decodes selected rows on CUDA, compares them to
+  `ds4_source_formats`, and rejects invalid row ids, output spans, row strides,
+  column counts, and truncated row views.
 
 ## Evidence
 
@@ -43,6 +60,25 @@ Local validation:
 - `docs/sprints/drafts/SPRINT-008-CLI-BUILD.log`
   - `make -B ds4`
 - `docs/sprints/drafts/SPRINT-008-DIFF-CHECK.log`
+  - Empty output from `git diff --check`.
+- `docs/sprints/drafts/SPRINT-008-LOCAL-PHASE1-3.log`
+  - Builds `tools/ds4-source-oracle-vector` and `tests/source_dtypes_smoke`.
+  - `tools/ds4-source-oracle-vector --dry-parse --only short_reasoning_plain`
+    parses the selected token bytes.
+  - `source_dtypes_smoke: ok`.
+- `docs/sprints/drafts/SPRINT-008-PHASE1-3-DIFF-CHECK.log`
+  - Empty output from `git diff --check`.
+- `docs/sprints/drafts/SPRINT-008-SOURCE-DTYPES.log`
+  - `source_dtypes_smoke: ok`.
+- `docs/sprints/drafts/SPRINT-008-CUDA-SOURCE-LOCAL-COMPILE.log`
+  - Local C compile check for `tests/cuda_source_dtypes_smoke.o`.
+- `docs/sprints/drafts/SPRINT-008-CUDA-SOURCE-DIFF-CHECK.log`
+  - Empty output from `git diff --check`.
+- `docs/sprints/drafts/SPRINT-008-FINAL-LOCAL.log`
+  - Final local build of the oracle tool, source dtype smoke, CUDA source test
+    object, CPU binaries, and default `ds4`.
+  - Final dry parse and `source_dtypes_smoke: ok`.
+- `docs/sprints/drafts/SPRINT-008-FINAL-DIFF-CHECK.log`
   - Empty output from `git diff --check`.
 
 Cluster validation:
@@ -60,14 +96,41 @@ Cluster validation:
 - `docs/sprints/drafts/SPRINT-008-cluster-logs/cuda-v100-kv-overbudget.log`
   - `--kv-ctx 1048576 --kv-slots 64` fails closed:
     `stage 0 falls below reserve`.
+- `docs/sprints/drafts/SPRINT-008-cluster-logs/source-oracle-and-dtypes.log`
+  - Builds `tools/ds4-source-oracle-vector` and `tests/source_dtypes_smoke`.
+  - `source_dtypes_smoke: ok`.
+  - Guard checks pass for normal source-layout rejection, non-CPU oracle
+    rejection, MTP oracle rejection, and missing diagnostic session unlock.
+  - `vector short_reasoning_plain OK selected=3136 token=926`.
+- `docs/sprints/drafts/SPRINT-008-ORACLE.log`
+  - Condensed source-oracle selected-token evidence.
+- `docs/sprints/drafts/SPRINT-008-GUARD.log`
+  - Condensed source-layout guard evidence.
+- `docs/sprints/drafts/SPRINT-008-CUDA-SOURCE.log`
+  - Builds `tests/cuda_source_dtypes_smoke` with `CUDA_ARCH=sm_70`.
+  - `cuda_source_dtypes_smoke: ok`.
 
-## Not Yet Done
+## Deviations
 
-- Phase 1: automated official-vector source oracle and guard regressions.
-- Phase 3: MXFP4/source dtype parity hardening.
-- Phase 4: bounded CUDA source-format anchor.
-- Phase 5: final sprint report, follow-ups, and `VISION.md` update after the
-  full Sprint 008 verdict.
+- The CUDA source-format anchor uses F8_E4M3_B128 row decode rather than a
+  row-dot. This is the narrower anchor and directly supports the next dense
+  source-format path.
+- The oracle harness lives in a dedicated tool instead of broadening
+  `tests/ds4_test.c`. This keeps the real-model requirement and diagnostic
+  session unlock out of model-less default tests.
+- The CUDA anchor is synthetic and diagnostic-only. It is intentionally not
+  wired into decode, prefill, or production serving.
+
+## Remaining Scope
+
+The project is still not deployed or performance optimized. Sprint 009 should
+consume these contracts to start real V100 prompt prefill and compressed-KV
+state population:
+
+- source oracle runner and guard checks as correctness gates;
+- exact F16 KV admission by context/slot/stage;
+- F8_E4M3_B128 device row-decode parity as the first source-format CUDA anchor;
+- MXFP4 low-half/high-half CPU parity as the routed expert layout reference.
 
 ## Sprint 009 Handoff Notes
 

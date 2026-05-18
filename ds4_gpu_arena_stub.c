@@ -1,6 +1,7 @@
 #include "ds4_gpu.h"
 
 #include <inttypes.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,9 +25,39 @@ static float bf16_to_f32(uint16_t v) {
     return f;
 }
 
+static float f32_from_bits(uint32_t bits) {
+    float f;
+    memcpy(&f, &bits, sizeof(f));
+    return f;
+}
+
+static float e8m0_to_f32(uint8_t e) {
+    return f32_from_bits(e == 0 ? 0x00400000u : ((uint32_t)e << 23));
+}
+
+static float e4m3fn_to_f32(uint8_t x) {
+    const uint8_t ax = x & 0x7fu;
+    const int sign = (x & 0x80u) != 0;
+    if (ax == 0) return f32_from_bits(sign ? 0x80000000u : 0u);
+    if (ax == 0x7f) return f32_from_bits(0x7fc00000u);
+    const int exp = (x >> 3) & 0x0f;
+    const int man = x & 0x07;
+    float v = exp == 0 ? ldexpf((float)man, -9)
+                       : ldexpf(1.0f + (float)man / 8.0f, exp - 7);
+    return sign ? -v : v;
+}
+
 static int checked_mul_u64(uint64_t a, uint64_t b, uint64_t *out) {
     if (a != 0 && b > UINT64_MAX / a) return 1;
     *out = a * b;
+    return 0;
+}
+
+static int f8_e4m3_b128_row_bytes(uint32_t cols, uint64_t *out) {
+    if (cols == 0 || cols % 128u) return 1;
+    uint64_t blocks = (uint64_t)cols / 128ull;
+    if (blocks > UINT64_MAX / 129ull) return 1;
+    *out = blocks * 129ull;
     return 0;
 }
 
@@ -57,6 +88,40 @@ static int bf16_view_range_ok(const ds4_gpu_arena *arena,
         last_start > total_elements - (uint64_t)view->cols) {
         return 0;
     }
+
+    for (uint32_t i = 0; i < n_rows; i++) {
+        if (row_ids[i] >= view->rows) return 0;
+    }
+
+    if (out_values) *out_values = values;
+    return 1;
+}
+
+static int f8_view_range_ok(const ds4_gpu_arena *arena,
+                            const ds4_gpu_source_row_view *view,
+                            const uint32_t *row_ids,
+                            uint32_t n_rows,
+                            const float *out_f32,
+                            uint64_t out_bytes,
+                            uint64_t *out_values) {
+    if (!arena || !view || !row_ids || !out_f32 || !arena->valid) return 0;
+    if (n_rows == 0 || view->rows == 0 || view->cols == 0 || view->row_stride_bytes == 0) return 0;
+    if (!arena_range_ok(arena, view->arena_offset, view->byte_length)) return 0;
+
+    uint64_t row_bytes = 0;
+    if (f8_e4m3_b128_row_bytes(view->cols, &row_bytes)) return 0;
+    if ((uint64_t)view->row_stride_bytes < row_bytes) return 0;
+
+    uint64_t values = 0;
+    uint64_t output_bytes = 0;
+    if (checked_mul_u64((uint64_t)n_rows, (uint64_t)view->cols, &values)) return 0;
+    if (checked_mul_u64(values, sizeof(float), &output_bytes)) return 0;
+    if (out_bytes < output_bytes) return 0;
+
+    uint64_t last_row = (uint64_t)view->rows - 1u;
+    uint64_t last_start = 0;
+    if (checked_mul_u64(last_row, (uint64_t)view->row_stride_bytes, &last_start)) return 0;
+    if (last_start > view->byte_length || row_bytes > view->byte_length - last_start) return 0;
 
     for (uint32_t i = 0; i < n_rows; i++) {
         if (row_ids[i] >= view->rows) return 0;
@@ -180,6 +245,31 @@ int ds4_gpu_arena_bf16_row_gather_f32(
         const uint16_t *row = base + (uint64_t)row_ids[r] * view->row_stride_elements;
         for (uint32_t c = 0; c < view->cols; c++) {
             out_f32[out_i++] = bf16_to_f32(row[c]);
+        }
+    }
+    return 0;
+}
+
+int ds4_gpu_arena_f8_e4m3_b128_row_decode_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *view,
+        const uint32_t                *row_ids,
+        uint32_t                       n_rows,
+        float                         *out_f32,
+        uint64_t                       out_bytes) {
+    uint64_t values = 0;
+    if (!f8_view_range_ok(arena, view, row_ids, n_rows, out_f32, out_bytes, &values)) {
+        return 1;
+    }
+    (void)values;
+
+    uint64_t out_i = 0;
+    const uint8_t *base = arena->ptr + view->arena_offset;
+    for (uint32_t r = 0; r < n_rows; r++) {
+        const uint8_t *row = base + (uint64_t)row_ids[r] * view->row_stride_bytes;
+        for (uint32_t c = 0; c < view->cols; c++) {
+            const uint8_t *block = row + (uint64_t)(c / 128u) * 129ull;
+            out_f32[out_i++] = e4m3fn_to_f32(block[1u + (c % 128u)]) * e8m0_to_f32(block[0]);
         }
     }
     return 0;

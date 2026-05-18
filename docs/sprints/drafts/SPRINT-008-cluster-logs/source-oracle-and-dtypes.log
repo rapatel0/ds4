@@ -1,0 +1,21 @@
+80
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -DDS4_NO_GPU -D_FILE_OFFSET_BITS=64 -c -o tools/ds4-source-oracle-vector.o tools/ds4-source-oracle-vector.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -DDS4_NO_GPU -c -o ds4_cpu.o ds4.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -c -o ds4_pack.o ds4_pack.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -c -o ds4_source_formats.o ds4_source_formats.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -o tools/ds4-source-oracle-vector tools/ds4-source-oracle-vector.o ds4_cpu.o ds4_pack.o ds4_source_formats.o -lm -pthread
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -c -o tests/source_dtypes_smoke.o tests/source_dtypes_smoke.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -o tests/source_dtypes_smoke tests/source_dtypes_smoke.o ds4_source_formats.o -lm -pthread
+vector	short_reasoning_plain	PARSED	ctx=4096	selected=3136	prompt=tests/test-vectors/prompts/short_reasoning_plain.txt
+ds4-source-oracle-vector: dry-parse ok
+source_dtypes_smoke: ok
+ds4: native DS4-Flash source layout is recognized, but V100 FP8/MXFP4 execution kernels are not wired into runtime yet; use --inspect or ds4-v100-plan --manifest for this model
+ds4: --source-layout-oracle requires CPU backend and is not an inspect mode
+ds4: --source-layout-oracle rejects MTP sidecars
+ds4: source-layout oracle sessions require an explicit diagnostic session unlock
+ds4: prefill layer 1/43ds4: prefill layer 2/43ds4: prefill layer 3/43ds4: prefill layer 4/43ds4: prefill layer 5/43ds4: prefill layer 6/43ds4: prefill layer 7/43ds4: prefill layer 8/43ds4: prefill layer 9/43ds4: prefill layer 10/43ds4: prefill layer 11/43ds4: prefill layer 12/43ds4: prefill layer 13/43ds4: prefill layer 14/43ds4: prefill layer 15/43ds4: prefill layer 16/43ds4: prefill layer 17/43ds4: prefill layer 18/43ds4: prefill layer 19/43ds4: prefill layer 20/43ds4: prefill layer 21/43ds4: prefill layer 22/43ds4: prefill layer 23/43ds4: prefill layer 24/43ds4: prefill layer 25/43ds4: prefill layer 26/43ds4: prefill layer 27/43ds4: prefill layer 28/43ds4: prefill layer 29/43ds4: prefill layer 30/43ds4: prefill layer 31/43ds4: prefill layer 32/43ds4: prefill layer 33/43ds4: prefill layer 34/43ds4: prefill layer 35/43ds4: prefill layer 36/43ds4: prefill layer 37/43ds4: prefill layer 38/43ds4: prefill layer 39/43ds4: prefill layer 40/43ds4: prefill layer 41/43ds4: prefill layer 42/43ds4: prefill layer 43/43guard	normal_source_layout_rejection	OK
+guard	non_cpu_oracle_rejection	OK
+guard	mtp_oracle_rejection	OK
+guard	missing_session_unlock	OK
+vector	short_reasoning_plain	OK	selected=3136	token=926
+ds4-source-oracle-vector: ok
