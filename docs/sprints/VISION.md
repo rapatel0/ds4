@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-18
-last_updated_by: sprint-execute
-revision: 23
+last_updated_by: sprint-plan
+revision: 24
 ---
 
 # Vision: DS4 V100 Appliance
@@ -317,8 +317,10 @@ it is a narrow DS4 runtime tuned for this hardware.
   smoke. The next readiness gap is making descriptor-bound execution a runtime
   surface the appliance scheduler can call instead of a test-local composition.
 - **Plan**: Factor descriptor-bound layer bindings and source row views into a
-  reusable layer state, run the router-selected FFN through that state, and wire
-  the state gate into the appliance readiness script.
+  reusable layer state carrying layer/stage/KV metadata, router kind, FFN
+  bindings, route matrix views, and arena-span helpers. Then run the existing
+  router-selected FFN gate through that state and add a `layer_state` appliance
+  gate check.
 
 ## Parking Lot
 
