@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-18
-last_updated_by: sprint-plan
-revision: 14
+last_updated_by: sprint-execute
+revision: 15
 ---
 
 # Vision: DS4 V100 Appliance
@@ -66,6 +66,11 @@ it is a narrow DS4 runtime tuned for this hardware.
   attention/compressor smokes, and device-resident writes into stage-owned KV
   views. It did not ship full layer output, MoE, output-head logits,
   selected-token decode, or serving.
+- Sprint 012 shipped the bounded source-BF16 output-head/logits gate and a
+  runnable V100 appliance gate. The gate passes real-model source guards and
+  all implemented CUDA smokes on the 8x V100 pod, but reports `ready=false`
+  because full layer/MoE execution, full selected-token decode, public serving,
+  MTP, and throughput benchmarks remain missing.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -212,7 +217,7 @@ it is a narrow DS4 runtime tuned for this hardware.
   references, and stage-owned KV writes can consume device-resident projection
   rows.
 
-### Sprint 012 - V100 Appliance Gate And Bounded Output-Head Logits [planned]
+### Sprint 012 - V100 Appliance Gate And Bounded Output-Head Logits [complete]
 
 - **Goal**: Add a bounded source-BF16 output-head/logits primitive on V100 and
   a runnable appliance readiness gate that validates real-model guards,
@@ -221,30 +226,37 @@ it is a narrow DS4 runtime tuned for this hardware.
   path. Sprint 011 proves projection-fed attention/compressor slices; Sprint
   012 fills the output-head/logits surface and makes readiness status explicit
   without pretending full MoE or serving are complete.
+- **Outcome**: `SHIP`. Source-BF16 output-head rows can now be reduced into
+  bounded logits on V100 and top-k compared against a CPU reference. The
+  appliance gate passes implemented checks and correctly reports `ready=false`
+  until full MoE/selected-token serving exists.
 
-### Sprint 013 - V100 Appliance Deployment [planned]
+### Sprint 013 - V100 Layer/MoE Selected-Token Gate [planned]
+
+- **Goal**: Wire a coherent bounded V100 source-layout layer/MoE path through
+  attention output, residual/HC update, router, shared expert, routed expert,
+  output-head/top-k, and selected-token comparison.
+- **Rationale**: Sprint 012 proves the output-head/logits surface but the gate
+  still reports not-ready. Deployment should wait until the full single-slot
+  correctness path includes MoE and selected-token evidence.
+
+### Sprint 014 - V100 Appliance Deployment [planned]
 
 - **Goal**: Package the runtime as a cluster-deployed CLI/server path with
-  startup residency validation, health checks, guarded operational defaults,
-  and source-layout generation still controlled by explicit readiness gates.
-- **Rationale**: Deployment should follow a verified logits-producing V100
-  path so failures mean serving issues, not basic model execution gaps.
+  startup residency validation, the appliance gate wired into readiness,
+  guarded operational defaults, and source-layout serving controlled by
+  explicit readiness gates.
+- **Rationale**: Deployment should follow selected-token correctness so
+  failures mean serving issues, not basic model execution gaps.
 
-### Sprint 014 - Throughput And Context Optimization [tentative]
+### Sprint 015 - Throughput, MTP, And Advanced Scheduling [tentative]
 
 - **Goal**: Improve aggregate tokens/sec and context-tier admission through
   slot batching, wavefront scheduling, expert kernel selection, relay overlap,
-  KV format choices, and output-head tuning.
-- **Rationale**: Optimization should be driven by measured bottlenecks from the
-  verified decode and prefill path, not by assumptions from the residency sprint.
-
-### Sprint 015 - MTP And Advanced Throughput [tentative]
-
-- **Goal**: Add MTP/speculative decoding and evaluate selective tensor-parallel
-  exceptions after the base appliance path is stable.
-- **Rationale**: MTP and tensor-parallel variants can amplify a correct runtime,
-  but they should not mask correctness issues in the baseline layer-sharded
-  scheduler.
+  KV format choices, output-head tuning, MTP/speculative decoding, and
+  selective tensor-parallel exceptions.
+- **Rationale**: Optimization should be driven by measured bottlenecks from a
+  verified deployed path, not by assumptions from bounded smokes.
 
 ## Parking Lot
 

@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+set -u
+
+model="/models/DSv4-Flash-256e-fixed.gguf"
+ctx="1048576"
+slots="1"
+build=0
+skip_model=0
+log_dir=""
+cuda_arch="${CUDA_ARCH:-sm_70}"
+
+usage() {
+    cat <<'USAGE'
+usage: tools/ds4-v100-gate.sh [options]
+
+Options:
+  --model FILE      Source-layout GGUF model path
+  --ctx N           KV context tier for the V100 context smoke (default 1048576)
+  --slots N         KV slots for the V100 context smoke (default 1)
+  --build           Build required targets before running the gate
+  --cuda-arch ARCH  CUDA arch to pass to make when --build is used (default sm_70)
+  --log-dir DIR     Write each command's output to DIR
+  --skip-model      Skip real-model source guard check
+  --help            Show this help
+USAGE
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --model)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --model requires a value" >&2; exit 2; }
+            model="$2"
+            shift 2
+            ;;
+        --ctx)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --ctx requires a value" >&2; exit 2; }
+            ctx="$2"
+            shift 2
+            ;;
+        --slots)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --slots requires a value" >&2; exit 2; }
+            slots="$2"
+            shift 2
+            ;;
+        --build)
+            build=1
+            shift
+            ;;
+        --cuda-arch)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --cuda-arch requires a value" >&2; exit 2; }
+            cuda_arch="$2"
+            shift 2
+            ;;
+        --log-dir)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --log-dir requires a value" >&2; exit 2; }
+            log_dir="$2"
+            shift 2
+            ;;
+        --skip-model)
+            skip_model=1
+            shift
+            ;;
+        --help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "ds4-v100-gate: unknown option: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+
+targets=(
+    tools/ds4-source-oracle-vector
+    tests/cuda_source_dtypes_smoke
+    tests/cuda_bf16_probe
+    tests/cuda_v100_context_smoke
+    tests/cuda_v100_compressor_bridge_smoke
+    tests/cuda_v100_prefill_kv_smoke
+    tests/cuda_hc_relay_smoke
+    tests/cuda_v100_projection_attention_smoke
+    tests/cuda_v100_bounded_logits_smoke
+)
+
+if [ -n "$log_dir" ]; then
+    mkdir -p "$log_dir" || exit 2
+fi
+
+if [ "$build" -eq 1 ]; then
+    echo "gate	build	CUDA_ARCH=$cuda_arch targets=${targets[*]}"
+    if ! CUDA_ARCH="$cuda_arch" make "${targets[@]}"; then
+        echo "gate	build	FAIL"
+        exit 1
+    fi
+    echo "gate	build	PASS"
+fi
+
+failures=0
+
+run_gate() {
+    local name="$1"
+    shift
+    local log_path=""
+    local tmp=""
+    if [ -n "$log_dir" ]; then
+        log_path="$log_dir/${name}.log"
+        tmp="$log_path"
+    else
+        tmp="$(mktemp -t ds4-v100-gate-${name}.XXXXXX)"
+    fi
+
+    if "$@" >"$tmp" 2>&1; then
+        echo "gate	${name}	PASS	command=$*"
+        if [ -z "$log_dir" ]; then
+            rm -f "$tmp"
+        fi
+        return 0
+    fi
+
+    echo "gate	${name}	FAIL	command=$*"
+    cat "$tmp"
+    if [ -z "$log_dir" ]; then
+        rm -f "$tmp"
+    else
+        echo "gate	${name}	LOG	$log_path"
+    fi
+    failures=$((failures + 1))
+    return 1
+}
+
+if command -v nvidia-smi >/dev/null 2>&1; then
+    run_gate "nvidia_smi" nvidia-smi -L || true
+else
+    echo "gate	nvidia_smi	SKIP	command_not_found"
+fi
+
+if [ "$skip_model" -eq 0 ]; then
+    if [ ! -f "$model" ]; then
+        echo "gate	source_guards	FAIL	missing_model=$model"
+        failures=$((failures + 1))
+    else
+        run_gate "source_guards" ./tools/ds4-source-oracle-vector --model "$model" --guards-only || true
+    fi
+else
+    echo "gate	source_guards	SKIP	--skip-model"
+fi
+
+run_gate "source_dtypes" ./tests/cuda_source_dtypes_smoke || true
+run_gate "bf16_probe" ./tests/cuda_bf16_probe || true
+run_gate "context_kv" ./tests/cuda_v100_context_smoke --production --kv-ctx "$ctx" --kv-slots "$slots" || true
+run_gate "compressor_bridge" ./tests/cuda_v100_compressor_bridge_smoke || true
+run_gate "prefill_kv" ./tests/cuda_v100_prefill_kv_smoke || true
+run_gate "hc_relay" ./tests/cuda_hc_relay_smoke || true
+run_gate "projection_attention" ./tests/cuda_v100_projection_attention_smoke || true
+run_gate "bounded_logits" ./tests/cuda_v100_bounded_logits_smoke || true
+
+if [ "$failures" -ne 0 ]; then
+    echo "gate	summary	FAIL	failures=$failures ready=false"
+    exit 1
+fi
+
+missing="full_layer_moe,full_selected_token,public_serving,mtp,throughput_benchmark"
+echo "gate	readiness	NOT_READY	missing=$missing"
+echo "gate	summary	PASS	failures=0 ready=false"
+exit 0

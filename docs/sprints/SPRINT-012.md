@@ -1,12 +1,13 @@
 ---
 sprint: 012
 title: V100 Appliance Gate And Bounded Output-Head Logits
-status: planned
+status: completed
 date: 2026-05-18
 target_repo: rapatel0/ds4
 architecture: ../architecture/DS4-V100-LAYOUT.md
 intent: drafts/SPRINT-012-INTENT.md
 deferred: SPRINT-012-DEFERRED.md
+verdict: SHIP
 ---
 
 # SPRINT-012: V100 Appliance Gate And Bounded Output-Head Logits
@@ -84,15 +85,15 @@ quality permits.
 - CUDA/source dtype tests
 
 **Tasks:**
-- [ ] Add a bounded `ds4_gpu_arena_bf16_matmul_f32` API that reads a
+- [x] Add a bounded `ds4_gpu_arena_bf16_matmul_f32` API that reads a
       `ds4_gpu_bf16_matrix_view` from a resident arena and multiplies it by a
       device F32 hidden vector.
-- [ ] Validate rows, cols, row stride, byte ranges, tensor dtype, and output
+- [x] Validate rows, cols, row stride, byte ranges, tensor dtype, and output
       capacity.
-- [ ] Accumulate to F32 for diagnostic correctness.
-- [ ] Keep the API explicitly labeled as BF16 source conversion/diagnostic, not
+- [x] Accumulate to F32 for diagnostic correctness.
+- [x] Keep the API explicitly labeled as BF16 source conversion/diagnostic, not
       native BF16 V100 compute.
-- [ ] Add host-stub behavior or a fail-closed stub consistent with existing
+- [x] Add host-stub behavior or a fail-closed stub consistent with existing
       arena APIs.
 
 ### Phase 2: Bounded Logits And Top-K Smoke
@@ -103,13 +104,13 @@ quality permits.
 - `ds4_source_formats.[ch]` if a reusable CPU helper is needed
 
 **Tasks:**
-- [ ] Build a deterministic synthetic source-BF16 output-head matrix and hidden
+- [x] Build a deterministic synthetic source-BF16 output-head matrix and hidden
       vector.
-- [ ] Run the V100 BF16 matmul primitive to produce bounded logits.
-- [ ] Compare logits against a CPU BF16 reference within a tight deterministic
+- [x] Run the V100 BF16 matmul primitive to produce bounded logits.
+- [x] Compare logits against a CPU BF16 reference within a tight deterministic
       tolerance.
-- [ ] Compare top-1 or top-k selection against the CPU reference.
-- [ ] Add invalid-view/shape checks for undersized source and output buffers.
+- [x] Compare top-1 or top-k selection against the CPU reference.
+- [x] Add invalid-view/shape checks for undersized source and output buffers.
 
 ### Phase 3: Appliance Readiness Gate
 
@@ -119,13 +120,13 @@ quality permits.
 - sprint draft logs
 
 **Tasks:**
-- [ ] Add a runnable gate that can execute on the V100 pod.
-- [ ] Run real-model source-layout guards.
-- [ ] Run current V100 regression smokes from Sprints 009-011.
-- [ ] Run the new bounded logits smoke.
-- [ ] Emit a concise report that distinguishes test failure from fail-closed
+- [x] Add a runnable gate that can execute on the V100 pod.
+- [x] Run real-model source-layout guards.
+- [x] Run current V100 regression smokes from Sprints 009-011.
+- [x] Run the new bounded logits smoke.
+- [x] Emit a concise report that distinguishes test failure from fail-closed
       missing readiness gates.
-- [ ] Keep final readiness false until MoE/full selected-token serving is
+- [x] Keep final readiness false until MoE/full selected-token serving is
       validated.
 
 ### Phase 4: Validation And Closeout
@@ -137,11 +138,11 @@ quality permits.
 - `docs/sprints/VISION.md`
 
 **Tasks:**
-- [ ] Run local build/test checks and `git diff --check`.
-- [ ] Build and run V100 `sm_70` cluster validation.
-- [ ] Archive logs under `docs/sprints/drafts/`.
-- [ ] Write the sprint report and any follow-ups discovered during execution.
-- [ ] Update the vision with the Sprint 012 outcome.
+- [x] Run local build/test checks and `git diff --check`.
+- [x] Build and run V100 `sm_70` cluster validation.
+- [x] Archive logs under `docs/sprints/drafts/`.
+- [x] Write the sprint report and any follow-ups discovered during execution.
+- [x] Update the vision with the Sprint 012 outcome.
 
 ## Definition Of Done
 
