@@ -20,6 +20,7 @@ extern "C" {
 #define DS4_V100_INDEXER_HEAD_DIM 128
 #define DS4_V100_MIN_VRAM_BYTES (31ull * 1024ull * 1024ull * 1024ull)
 #define DS4_V100_DEFAULT_RESERVE_BYTES (2ull * 1024ull * 1024ull * 1024ull)
+#define DS4_V100_MAX_SHAPE_DIMS 4
 
 typedef struct ds4_v100_context ds4_v100_context;
 
@@ -158,6 +159,25 @@ typedef struct {
 } ds4_v100_layer_info;
 
 typedef struct {
+    const char *semantic_tensor_id;
+    const char *source_name;
+    const char *source_dtype;
+    const char *source_shape;
+    const char *runtime_layout;
+    const char *kernel_family;
+    const char *shard_file;
+    int owning_gpu;
+    int layer_id;
+    int64_t scale_offset;
+    uint64_t source_offset;
+    uint64_t byte_length;
+    uint64_t shard_offset;
+    ds4_v100_policy policy;
+    uint32_t n_shape_dims;
+    uint64_t shape[DS4_V100_MAX_SHAPE_DIMS];
+} ds4_v100_tensor_binding;
+
+typedef struct {
     const char *pack_index_path;
     int expected_gpus;
     ds4_v100_init_mode mode;
@@ -213,6 +233,21 @@ uint64_t ds4_v100_context_tensor_count(const ds4_v100_context *ctx);
 uint64_t ds4_v100_context_exec_count(const ds4_v100_context *ctx,
                                      ds4_v100_exec_kind kind);
 bool ds4_v100_context_has_token_embedding(const ds4_v100_context *ctx);
+int ds4_v100_context_lookup_tensor_binding(const ds4_v100_context *ctx,
+                                           const char *semantic_tensor_id,
+                                           ds4_v100_tensor_binding *out,
+                                           char *err,
+                                           size_t errlen);
+int ds4_v100_context_require_layer_tensor_binding(const ds4_v100_context *ctx,
+                                                  int layer_id,
+                                                  const char *tensor_suffix,
+                                                  ds4_v100_tensor_binding *out,
+                                                  char *err,
+                                                  size_t errlen);
+int ds4_v100_context_output_head_binding(const ds4_v100_context *ctx,
+                                         ds4_v100_tensor_binding *out,
+                                         char *err,
+                                         size_t errlen);
 int ds4_v100_context_validate_layer_skeleton(const ds4_v100_context *ctx,
                                              FILE *report,
                                              char *err,

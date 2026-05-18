@@ -1,12 +1,13 @@
 ---
 sprint: 015
 title: V100 Descriptor-Bound FFN Compute Gate
-status: planned
+status: completed
 date: 2026-05-18
 target_repo: rapatel0/ds4
 architecture: ../architecture/DS4-V100-LAYOUT.md
 intent: drafts/SPRINT-015-INTENT.md
 deferred: SPRINT-015-DEFERRED.md
+verdict: SHIP
 ---
 
 # SPRINT-015: V100 Descriptor-Bound FFN Compute Gate
@@ -51,11 +52,11 @@ This sprint should not unlock serving. It should remove the current gap between
 - `ds4_v100_context.c`
 
 **Tasks:**
-- [ ] Add a public `ds4_v100_tensor_binding` struct.
-- [ ] Add lookup helpers for semantic tensor id, layer tensor suffix, and
+- [x] Add a public `ds4_v100_tensor_binding` struct.
+- [x] Add lookup helpers for semantic tensor id, layer tensor suffix, and
       output head.
-- [ ] Parse source shape dimensions into stable binding metadata.
-- [ ] Fail closed on missing tensors, bad layer ids, bad suffixes, or shapes
+- [x] Parse source shape dimensions into stable binding metadata.
+- [x] Fail closed on missing tensors, bad layer ids, bad suffixes, or shapes
       with too many dimensions.
 
 ### Phase 2: Local Binding Smoke
@@ -65,11 +66,11 @@ This sprint should not unlock serving. It should remove the current gap between
 - `Makefile`
 
 **Tasks:**
-- [ ] Open the real pack-index fixture through `ds4_v100_context`.
-- [ ] Materialize layer-2 routed expert, shared expert, router, HC, and
+- [x] Open the real pack-index fixture through `ds4_v100_context`.
+- [x] Materialize layer-2 routed expert, shared expert, router, HC, and
       output-head bindings.
-- [ ] Verify expected dtypes, owners, dimensions, offsets, and byte lengths.
-- [ ] Add a negative missing-tensor or bad-layer case.
+- [x] Verify expected dtypes, owners, dimensions, offsets, and byte lengths.
+- [x] Add a negative missing-tensor or bad-layer case.
 
 ### Phase 3: Descriptor-Bound CUDA FFN Smoke
 
@@ -78,14 +79,14 @@ This sprint should not unlock serving. It should remove the current gap between
 - `Makefile`
 
 **Tasks:**
-- [ ] Load layer-2 routed MXFP4 gate/up/down expert bytes from the source GGUF
+- [x] Load layer-2 routed MXFP4 gate/up/down expert bytes from the source GGUF
       using pack-index source offsets.
-- [ ] Load layer-2 shared F8 gate/up/down expert bytes from the source GGUF.
-- [ ] Upload bytes into a V100 arena at the real shard offsets from the pack
+- [x] Load layer-2 shared F8 gate/up/down expert bytes from the source GGUF.
+- [x] Upload bytes into a V100 arena at the real shard offsets from the pack
       descriptors.
-- [ ] Run routed MXFP4 gate/up/down plus SwiGLU for one fixed expert.
-- [ ] Run shared F8 gate/up/down plus SwiGLU.
-- [ ] Sum routed and shared FFN outputs and compare with CPU source-format
+- [x] Run routed MXFP4 gate/up/down plus SwiGLU for one fixed expert.
+- [x] Run shared F8 gate/up/down plus SwiGLU.
+- [x] Sum routed and shared FFN outputs and compare with CPU source-format
       references.
 
 ### Phase 4: Appliance Gate Integration
@@ -94,11 +95,11 @@ This sprint should not unlock serving. It should remove the current gap between
 - `tools/ds4-v100-gate.sh`
 
 **Tasks:**
-- [ ] Build the new local/CUDA smoke targets when `--build` is used.
-- [ ] Run local binding validation when `--pack-index` is supplied.
-- [ ] Run descriptor-bound FFN smoke when both `--pack-index` and `--model`
+- [x] Build the new local/CUDA smoke targets when `--build` is used.
+- [x] Run local binding validation when `--pack-index` is supplied.
+- [x] Run descriptor-bound FFN smoke when both `--pack-index` and `--model`
       are available.
-- [ ] Keep existing behavior unchanged when no pack index is supplied.
+- [x] Keep existing behavior unchanged when no pack index is supplied.
 
 ### Phase 5: Validation And Closeout
 
@@ -109,10 +110,10 @@ This sprint should not unlock serving. It should remove the current gap between
 - `docs/sprints/VISION.md`
 
 **Tasks:**
-- [ ] Run local validation and `git diff --check`.
-- [ ] Run cluster validation with `--model` and `--pack-index`.
-- [ ] Archive logs.
-- [ ] Write report/follow-ups and update vision.
+- [x] Run local validation and `git diff --check`.
+- [x] Run cluster validation with `--model` and `--pack-index`.
+- [x] Archive logs.
+- [x] Write report/follow-ups and update vision.
 
 ## Definition Of Done
 

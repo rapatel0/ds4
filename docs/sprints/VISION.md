@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-18
-last_updated_by: sprint-plan
-revision: 20
+last_updated_by: sprint-execute
+revision: 21
 ---
 
 # Vision: DS4 V100 Appliance
@@ -83,6 +83,13 @@ it is a narrow DS4 runtime tuned for this hardware.
   pack index on the 8x V100 pod. It still reports `ready=false` because
   descriptors are not yet materialized as runtime bindings and no real
   descriptor-bound layer compute has shipped.
+- Sprint 015 shipped runtime tensor bindings and the first descriptor-bound
+  real-byte FFN compute gate. The V100 pod now runs layer-2 routed MXFP4 plus
+  shared F8 FFN bytes from the source GGUF at real pack offsets and compares
+  the output against CPU source-format references. The gate still reports
+  `ready=false` because real router scheduling, full attention/residual/norm
+  layer execution, selected-token decode, serving, MTP, and throughput remain
+  incomplete.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -268,7 +275,7 @@ it is a narrow DS4 runtime tuned for this hardware.
   descriptors, fails closed on missing required rows, and is wired into the
   V100 appliance gate behind `--pack-index`.
 
-### Sprint 015 - V100 Descriptor-Bound Layer Compute [planned]
+### Sprint 015 - V100 Descriptor-Bound FFN Compute Gate [complete]
 
 - **Goal**: Materialize validated pack-index descriptors into runtime bindings
   and consume real source-model bytes at real pack offsets in a
@@ -276,10 +283,18 @@ it is a narrow DS4 runtime tuned for this hardware.
 - **Rationale**: Descriptor validation is necessary but not sufficient; the
   next readiness jump is executing real model bytes through the bounded kernel
   surfaces, including the shared expert path.
-- **Plan**: Add runtime tensor binding APIs, validate layer-2 bindings locally,
-  and run a V100 CUDA smoke that uploads layer-2 routed MXFP4 plus shared F8
-  FFN bytes from the source GGUF into real arena offsets and compares against
-  CPU source-format references.
+- **Outcome**: `SHIP`. Runtime tensor bindings landed, layer-2 binding
+  validation passes locally and on the pod, and a descriptor-bound V100 FFN
+  smoke executes real routed MXFP4 plus shared F8 bytes from the source GGUF at
+  real pack offsets.
+
+### Sprint 016 - V100 Descriptor-Bound Layer Slice [planned]
+
+- **Goal**: Convert descriptor-bound FFN proof into a scheduler-owned layer
+  slice with real router selection and enough attention/residual/norm plumbing
+  to approach selected-token logits.
+- **Rationale**: Sprint 015 proves real-byte FFN compute, but serving requires
+  a coherent layer state machine rather than a standalone smoke.
 
 ## Parking Lot
 
@@ -318,6 +333,9 @@ it is a narrow DS4 runtime tuned for this hardware.
 - See `docs/sprints/SPRINT-014-FOLLOWUPS.md`: runtime descriptor table,
   descriptor-bound layer compute, layer-class descriptor coverage, shared
   expert execution, and readiness-policy cleanup.
+- See `docs/sprints/SPRINT-015-FOLLOWUPS.md`: real router scheduling,
+  descriptor-bound layer state, attention/residual/norm integration,
+  selected-token real-model gate, and production memory reuse.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -345,12 +363,13 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-18 | Split Sprint 011 into a source projection and attention-slice gate before the full logits gate. | Planning showed the next concrete risk is source FP8/BF16 projection on V100; full logits remain too broad until projection and bounded attention/compressor slices are trusted. | Sprint 011-013 |
 | 2026-05-18 | Shipped Sprint 011 source projection and attention/compressor slice, keeping deployment behind Sprint 012's logits gate. | V100 now has device-resident source-F8 projection diagnostics, BF16/F32 policy checks, projection-fed ratio-4/ratio-128 attention/compressor smokes, and device-row KV writes, but still lacks MoE, output head, and selected-token correctness. | Sprint 012-013 |
 | 2026-05-18 | Shipped Sprint 014 real pack-index descriptor validation and moved Sprint 015 to descriptor-bound layer compute. | The appliance gate now proves the real layer-2 descriptor contract on the V100 pod, so the next risk is converting those descriptors into runtime bindings that launch compute on real resident shard bytes. | Sprint 015+ |
+| 2026-05-18 | Shipped Sprint 015 descriptor-bound FFN compute from real source bytes and moved Sprint 016 to scheduler-owned layer slicing. | The appliance now proves real pack offsets can feed routed MXFP4 and shared F8 FFN compute on V100; the next blocker is real router/layer state and attention/residual/norm integration. | Sprint 016+ |
 
 ## Open Questions
 
-1. Which descriptor-bound layer slice should Sprint 015 execute first: a
-   layer-2 FFN/shared+routed expert slice, a fuller attention+FFN layer, or a
-   short selected-token path that reaches output logits?
+1. What is the smallest Sprint 016 layer slice that meaningfully advances
+   serving: real router+FFN, attention+KV plus FFN, or a narrow path that also
+   reaches output logits?
 2. What reference should define correctness tolerances for mixed
    BF16/F32/F8_E4M3_B128/MXFP4 execution on V100 after MoE is included?
 3. What minimum serving milestone counts as "usable" before optimization:

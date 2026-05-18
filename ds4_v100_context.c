@@ -514,11 +514,15 @@ static int validate_topology(ds4_v100_context *ctx, char *err, size_t errlen) {
     return 0;
 }
 
-static int parse_shape_elements(const char *shape, uint64_t *out) {
+static int parse_shape_dims(const char *shape,
+                            uint64_t *dims,
+                            uint32_t cap,
+                            uint32_t *out_n,
+                            uint64_t *out_elements) {
     if (!shape || shape[0] != '[') return 1;
     const char *p = shape + 1;
     uint64_t product = 1;
-    bool saw_dim = false;
+    uint32_t n = 0;
     while (*p && *p != ']') {
         if (!isdigit((unsigned char)*p)) return 1;
         uint64_t dim = 0;
@@ -529,17 +533,24 @@ static int parse_shape_elements(const char *shape, uint64_t *out) {
             p++;
         }
         if (dim == 0 || product > UINT64_MAX / dim) return 1;
+        if (n >= cap) return 1;
+        if (dims) dims[n] = dim;
+        n++;
         product *= dim;
-        saw_dim = true;
         if (*p == 'x') {
             p++;
             continue;
         }
         if (*p != ']') return 1;
     }
-    if (*p != ']' || p[1] != '\0' || !saw_dim) return 1;
-    *out = product;
+    if (*p != ']' || p[1] != '\0' || n == 0) return 1;
+    if (out_n) *out_n = n;
+    if (out_elements) *out_elements = product;
     return 0;
+}
+
+static int parse_shape_elements(const char *shape, uint64_t *out) {
+    return parse_shape_dims(shape, NULL, DS4_V100_MAX_SHAPE_DIMS, NULL, out);
 }
 
 static int expected_bytes_for_entry(const ds4_pack_entry *e, uint64_t *out) {
@@ -754,6 +765,86 @@ uint64_t ds4_v100_context_exec_count(const ds4_v100_context *ctx,
 
 bool ds4_v100_context_has_token_embedding(const ds4_v100_context *ctx) {
     return ctx && ctx->has_token_embedding;
+}
+
+static int fill_binding(const ds4_v100_tensor_desc *desc,
+                        ds4_v100_tensor_binding *out,
+                        char *err,
+                        size_t errlen) {
+    if (!desc || !desc->entry || !out) {
+        return v100_error(err, errlen, "missing descriptor binding output");
+    }
+    const ds4_pack_entry *e = desc->entry;
+    memset(out, 0, sizeof(*out));
+    out->semantic_tensor_id = e->semantic_tensor_id;
+    out->source_name = e->source_name;
+    out->source_dtype = e->source_dtype;
+    out->source_shape = e->source_shape;
+    out->runtime_layout = e->runtime_layout;
+    out->kernel_family = e->kernel_family;
+    out->shard_file = e->shard_file;
+    out->owning_gpu = e->owning_gpu;
+    out->layer_id = e->layer_id;
+    out->scale_offset = e->scale_offset;
+    out->source_offset = e->source_offset;
+    out->byte_length = e->byte_length;
+    out->shard_offset = e->shard_offset;
+    out->policy = desc->policy;
+    if (parse_shape_dims(e->source_shape,
+                         out->shape,
+                         DS4_V100_MAX_SHAPE_DIMS,
+                         &out->n_shape_dims,
+                         NULL)) {
+        return v100_error(err, errlen, "%s has invalid source shape %s",
+                          e->semantic_tensor_id, e->source_shape);
+    }
+    return 0;
+}
+
+int ds4_v100_context_lookup_tensor_binding(const ds4_v100_context *ctx,
+                                           const char *semantic_tensor_id,
+                                           ds4_v100_tensor_binding *out,
+                                           char *err,
+                                           size_t errlen) {
+    if (!ctx) return v100_error(err, errlen, "missing V100 context");
+    if (!semantic_tensor_id || !semantic_tensor_id[0]) {
+        return v100_error(err, errlen, "missing semantic tensor id");
+    }
+    if (!out) return v100_error(err, errlen, "missing tensor binding output");
+    for (uint64_t i = 0; i < ctx->n_descs; i++) {
+        const ds4_v100_tensor_desc *desc = &ctx->descs[i];
+        if (desc->entry && !strcmp(desc->entry->semantic_tensor_id, semantic_tensor_id)) {
+            return fill_binding(desc, out, err, errlen);
+        }
+    }
+    return v100_error(err, errlen, "missing tensor descriptor %s", semantic_tensor_id);
+}
+
+int ds4_v100_context_require_layer_tensor_binding(const ds4_v100_context *ctx,
+                                                  int layer_id,
+                                                  const char *tensor_suffix,
+                                                  ds4_v100_tensor_binding *out,
+                                                  char *err,
+                                                  size_t errlen) {
+    if (layer_id < 0 || layer_id >= DS4_V100_N_LAYERS) {
+        return v100_error(err, errlen, "bad layer id %d", layer_id);
+    }
+    if (!tensor_suffix || !tensor_suffix[0]) {
+        return v100_error(err, errlen, "missing layer tensor suffix");
+    }
+    char id[192];
+    int n = snprintf(id, sizeof(id), "blk.%d.%s", layer_id, tensor_suffix);
+    if (n < 0 || (size_t)n >= sizeof(id)) {
+        return v100_error(err, errlen, "layer tensor id too long");
+    }
+    return ds4_v100_context_lookup_tensor_binding(ctx, id, out, err, errlen);
+}
+
+int ds4_v100_context_output_head_binding(const ds4_v100_context *ctx,
+                                         ds4_v100_tensor_binding *out,
+                                         char *err,
+                                         size_t errlen) {
+    return ds4_v100_context_lookup_tensor_binding(ctx, "output.weight", out, err, errlen);
 }
 
 int ds4_v100_context_validate_layer_skeleton(const ds4_v100_context *ctx,
