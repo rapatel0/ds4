@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-18
 last_updated_by: sprint-execute
-revision: 39
+revision: 40
 ---
 
 # Vision: DS4 V100 Appliance
@@ -173,6 +173,11 @@ it is a narrow DS4 runtime tuned for this hardware.
   stages, replays prompt tokens, generates greedy continuations, verifies token
   bytes, and emits timing/memory JSON. Throughput/timing evidence now exists;
   the remaining readiness blockers are public serving and MTP.
+- Sprint 029 shipped the first resident HTTP appliance surface. The replay
+  runtime can now reset all eight stage schedulers between independent one-slot
+  loopback requests, `tools/ds4-v100-replay --serve` returns the expected token
+  bytes `3136`, and the full gate now reports readiness with only `mtp`
+  missing.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -550,6 +555,18 @@ it is a narrow DS4 runtime tuned for this hardware.
   The gate should now remove `throughput_benchmark`; public serving and MTP
   remain open.
 
+### Sprint 029 - V100 Resident HTTP Appliance Smoke [complete]
+
+- **Goal**: Keep the V100 replay runtime resident behind a minimal loopback
+  HTTP endpoint and prove selected-token correctness through the served path.
+- **Rationale**: A CLI replay tool is useful for measurement, but the appliance
+  needs a long-running process that keeps all eight stage schedulers resident
+  and handles independent requests without reuploading weights each time.
+- **Outcome**: `SHIP`. `tools/ds4-v100-replay --serve` exposes
+  `/v100/selected-token`, resets scheduler KV/HC state per request, returns
+  expected bytes `3136`, and the full V100 gate now reports
+  `missing=mtp`.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -621,6 +638,9 @@ it is a narrow DS4 runtime tuned for this hardware.
 - See `docs/sprints/SPRINT-028-FOLLOWUPS.md`: HTTP/process serving around the
   replay runtime, scheduler reset or single-session semantics, open/upload
   reduction, longer decode baselines, and continued MTP/multi-slot deferral.
+- See `docs/sprints/SPRINT-029-FOLLOWUPS.md`: MTP implementation/validation,
+  parallel resident stage open/upload, longer resident decode baselines,
+  serving API hardening, and continued multi-slot deferral.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -662,15 +682,15 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-18 | Shipped Sprint 026 output-head divergence localization. | Deterministic CPU-vs-V100 output-head parity passes on gpu7, so the selected-token mismatch is now scoped to the 43-layer scheduler body; the next sprint should checkpoint HC after layer/stage boundaries. | Sprint 027+ |
 | 2026-05-18 | Shipped Sprint 027 selected-token correctness and HC checkpoint diagnostics. | BF16 embedding decode and F16 KV/cache semantics now match the CPU source-layout oracle closely enough for the official V100 selected-token gate to pass; the next milestone moves from correctness blocking to public serving and measurement. | Sprint 028+ |
 | 2026-05-18 | Shipped Sprint 028 V100 replay runtime and timing tool. | The working scheduler path is now callable outside a smoke test and emits machine-readable token/timing/memory evidence; the next milestone is keeping that runtime resident behind an HTTP or process-serving surface. | Sprint 029+ |
+| 2026-05-18 | Shipped Sprint 029 resident HTTP appliance smoke. | The one-slot selected-token path is now served through a resident loopback process and `public_serving` is no longer a gate blocker; the next milestone is MTP correctness and then performance work such as parallel upload and longer resident decode baselines. | Sprint 030+ |
 
 ## Open Questions
 
 1. What reference should define correctness tolerances for mixed
    BF16/F32/F8_E4M3_B128/MXFP4 execution on V100 after MoE is included?
-2. What minimum serving milestone counts as "usable" before optimization:
-   one-slot small context, 256K context, or a deployed endpoint with narrower
-   context limits?
-3. How long should MTP and multi-slot throughput stay deferred after base
-   decode works?
+2. What production serving milestone should follow the loopback smoke:
+   OpenAI-compatible API, process supervision, or a narrower internal endpoint?
+3. How much MTP work should land before longer resident decode benchmarks and
+   upload optimization?
 4. Should the persistent `/srv/dev/ds4-sprint004` pack become the seed
    deployment artifact, or should a formal pack release format come first?

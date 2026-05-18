@@ -132,6 +132,7 @@ fi
 failures=0
 full_scheduler_ready=0
 selected_token_ready=0
+public_serving_ready=0
 throughput_ready=0
 
 run_gate() {
@@ -217,6 +218,22 @@ if [ -n "$pack_index" ]; then
             if run_gate "v100_replay_tool" ./tools/ds4-v100-replay --index "$pack_index" --model "$model" --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt --tokens 2 --expected-token-hex 3136 --json; then
                 throughput_ready=1
             fi
+            appliance_args=(
+                --index "$pack_index"
+                --model "$model"
+                --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt
+                --tokens 1
+                --requests 2
+                --expected-token-hex 3136
+                --host 127.0.0.1
+                --port 18080
+            )
+            if [ -n "$log_dir" ]; then
+                appliance_args+=(--log-dir "$log_dir/v100_appliance_http")
+            fi
+            if run_gate "v100_appliance_http" ./tools/ds4-v100-appliance-smoke.sh "${appliance_args[@]}"; then
+                public_serving_ready=1
+            fi
         else
             echo "gate	descriptor_bound_attention	SKIP	no_model"
             echo "gate	descriptor_bound_ffn	SKIP	no_model"
@@ -229,6 +246,7 @@ if [ -n "$pack_index" ]; then
             echo "gate	output_head_parity	SKIP	no_model"
             echo "gate	scheduler_output_head	SKIP	no_model"
             echo "gate	v100_replay_tool	SKIP	no_model"
+            echo "gate	v100_appliance_http	SKIP	no_model"
         fi
     fi
 else
@@ -246,6 +264,7 @@ else
     echo "gate	output_head_parity	SKIP	no_pack_index"
     echo "gate	scheduler_output_head	SKIP	no_pack_index"
     echo "gate	v100_replay_tool	SKIP	no_pack_index"
+    echo "gate	v100_appliance_http	SKIP	no_pack_index"
 fi
 
 if [ "$failures" -ne 0 ]; then
@@ -268,7 +287,9 @@ fi
 if [ "$selected_token_ready" -eq 0 ]; then
     add_missing "real_model_selected_token"
 fi
-add_missing "public_serving"
+if [ "$public_serving_ready" -eq 0 ]; then
+    add_missing "public_serving"
+fi
 add_missing "mtp"
 if [ "$throughput_ready" -eq 0 ]; then
     add_missing "throughput_benchmark"

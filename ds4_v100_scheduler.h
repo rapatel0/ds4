@@ -69,6 +69,10 @@ int ds4_v100_stage_scheduler_open(ds4_v100_stage_scheduler **out,
 
 void ds4_v100_stage_scheduler_close(ds4_v100_stage_scheduler *sched);
 
+int ds4_v100_stage_scheduler_reset(ds4_v100_stage_scheduler *sched,
+                                   char *err,
+                                   size_t errlen);
+
 int ds4_v100_stage_scheduler_decode_token(ds4_v100_stage_scheduler *sched,
                                           uint32_t token,
                                           uint32_t position,

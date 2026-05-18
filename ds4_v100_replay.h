@@ -59,6 +59,8 @@ int ds4_v100_replay_open(ds4_v100_replay **out,
 
 void ds4_v100_replay_close(ds4_v100_replay *rt);
 
+int ds4_v100_replay_reset(ds4_v100_replay *rt, char *err, size_t errlen);
+
 void ds4_v100_replay_encode_prompt(ds4_v100_replay *rt,
                                    const char *system,
                                    const char *prompt,

@@ -85,6 +85,15 @@ void ds4_v100_replay_close(ds4_v100_replay *rt) {
     free(rt);
 }
 
+int ds4_v100_replay_reset(ds4_v100_replay *rt, char *err, size_t errlen) {
+    if (!rt) return replay_error(err, errlen, "missing V100 replay reset input");
+    for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
+        if (ds4_v100_stage_scheduler_reset(rt->scheds[i], err, errlen)) return 1;
+    }
+    rt->used = false;
+    return 0;
+}
+
 int ds4_v100_replay_open(ds4_v100_replay **out,
                          const ds4_v100_replay_options *opts,
                          char *err,

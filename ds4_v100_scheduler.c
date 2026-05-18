@@ -266,6 +266,78 @@ static int alloc_layer_cache(ds4_v100_stage_scheduler *sched,
     return 0;
 }
 
+static int reset_layer_cache(ds4_v100_stage_scheduler *sched,
+                             int layer,
+                             char *err,
+                             size_t errlen) {
+    const ds4_v100_layer_state *state = &sched->states[layer];
+    scheduler_layer_cache *lc = &sched->caches[layer];
+    const uint32_t kv_width = state->kv_latent_width;
+    const uint32_t raw_cap = sched->raw_cap ? sched->raw_cap : DS4_V100_SWA_ROWS;
+    if (!lc->raw_kv ||
+        !ds4_gpu_tensor_fill_f32(lc->raw_kv, 0.0f, (uint64_t)raw_cap * kv_width)) {
+        return scheduler_errorf(err, errlen, "raw KV reset failed for layer %d", layer);
+    }
+    lc->cache.n_attn_comp = 0;
+    lc->cache.n_index_comp = 0;
+    if (state->compress_ratio == 0) return 0;
+
+    const uint32_t coff = state->compress_ratio == 4u ? 2u : 1u;
+    const uint32_t attn_state_rows = coff * state->compress_ratio;
+    const uint32_t attn_state_width = coff * DS4_V100_HEAD_DIM;
+    const uint32_t attn_comp_cap = sched->attn_comp_cap ? sched->attn_comp_cap : 1u;
+    if (!lc->attn_state_kv || !lc->attn_state_score || !lc->attn_comp_kv ||
+        !ds4_gpu_tensor_fill_f32(lc->attn_state_kv,
+                                 0.0f,
+                                 (uint64_t)attn_state_rows * attn_state_width) ||
+        !ds4_gpu_tensor_fill_f32(lc->attn_state_score,
+                                 -1.0e30f,
+                                 (uint64_t)attn_state_rows * attn_state_width) ||
+        !ds4_gpu_tensor_fill_f32(lc->attn_comp_kv,
+                                 0.0f,
+                                 (uint64_t)attn_comp_cap * kv_width)) {
+        return scheduler_errorf(err, errlen, "attention cache reset failed for layer %d", layer);
+    }
+    if (state->compress_ratio != 4u) return 0;
+
+    const uint32_t index_state_rows = 2u * state->compress_ratio;
+    const uint32_t index_state_width = 2u * DS4_V100_INDEXER_HEAD_DIM;
+    const uint32_t index_comp_cap = sched->index_comp_cap ? sched->index_comp_cap : 1u;
+    if (!lc->index_state_kv || !lc->index_state_score || !lc->index_comp_kv ||
+        !ds4_gpu_tensor_fill_f32(lc->index_state_kv,
+                                 0.0f,
+                                 (uint64_t)index_state_rows * index_state_width) ||
+        !ds4_gpu_tensor_fill_f32(lc->index_state_score,
+                                 -1.0e30f,
+                                 (uint64_t)index_state_rows * index_state_width) ||
+        !ds4_gpu_tensor_fill_f32(lc->index_comp_kv,
+                                 0.0f,
+                                 (uint64_t)index_comp_cap * DS4_V100_INDEXER_HEAD_DIM)) {
+        return scheduler_errorf(err, errlen, "indexer cache reset failed for layer %d", layer);
+    }
+    return 0;
+}
+
+int ds4_v100_stage_scheduler_reset(ds4_v100_stage_scheduler *sched,
+                                   char *err,
+                                   size_t errlen) {
+    if (!sched) return scheduler_error(err, errlen, "missing scheduler reset input");
+    if (!ds4_gpu_set_device(sched->stage.gpu)) {
+        return scheduler_errorf(err, errlen, "failed to set scheduler reset device gpu%d",
+                                sched->stage.gpu);
+    }
+    for (int layer = sched->stage.layer_begin; layer <= sched->stage.layer_end; layer++) {
+        if (reset_layer_cache(sched, layer, err, errlen)) return 1;
+    }
+    const uint64_t hc_values = (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS;
+    if (!ds4_gpu_tensor_fill_f32(sched->hc_a, 0.0f, hc_values) ||
+        !ds4_gpu_tensor_fill_f32(sched->hc_b, 0.0f, hc_values)) {
+        return scheduler_error(err, errlen, "scheduler HC reset failed");
+    }
+    sched->cur_hc = sched->hc_a;
+    return 0;
+}
+
 int ds4_v100_stage_scheduler_open(ds4_v100_stage_scheduler **out,
                                   const ds4_v100_stage_scheduler_options *opts,
                                   char *err,
