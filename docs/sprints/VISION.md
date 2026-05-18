@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-18
-last_updated_by: sprint-execute
-revision: 19
+last_updated_by: sprint-plan
+revision: 20
 ---
 
 # Vision: DS4 V100 Appliance
@@ -271,11 +271,15 @@ it is a narrow DS4 runtime tuned for this hardware.
 ### Sprint 015 - V100 Descriptor-Bound Layer Compute [planned]
 
 - **Goal**: Materialize validated pack-index descriptors into runtime bindings
-  and consume real resident shard bytes in a descriptor-bound layer or short
-  selected-token compute path.
+  and consume real source-model bytes at real pack offsets in a
+  descriptor-bound FFN compute path.
 - **Rationale**: Descriptor validation is necessary but not sufficient; the
   next readiness jump is executing real model bytes through the bounded kernel
   surfaces, including the shared expert path.
+- **Plan**: Add runtime tensor binding APIs, validate layer-2 bindings locally,
+  and run a V100 CUDA smoke that uploads layer-2 routed MXFP4 plus shared F8
+  FFN bytes from the source GGUF into real arena offsets and compares against
+  CPU source-format references.
 
 ## Parking Lot
 
