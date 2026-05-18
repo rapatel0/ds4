@@ -42,6 +42,10 @@ typedef struct {
     ds4_v100_layer_kv_view kv_view;
 
     uint32_t hidden_size;
+    uint32_t q_lora_rank;
+    uint32_t q_width;
+    uint32_t kv_latent_width;
+    uint32_t attention_output_rank;
     uint32_t intermediate_size;
     uint32_t routed_experts;
     uint32_t routes_per_token;
@@ -53,6 +57,19 @@ typedef struct {
     ds4_v100_tensor_binding router_bias;
     bool has_hash_router;
     bool has_bias_router;
+
+    ds4_v100_bound_matrix attn_q_a;
+    ds4_v100_bound_matrix attn_q_b;
+    ds4_v100_bound_matrix attn_kv_latent;
+    ds4_v100_bound_matrix attn_output_a;
+    ds4_v100_bound_matrix attn_output_b;
+    ds4_v100_tensor_binding attn_norm;
+    ds4_v100_tensor_binding attn_q_a_norm;
+    ds4_v100_tensor_binding attn_kv_a_norm;
+    ds4_v100_tensor_binding attn_sinks;
+    ds4_v100_tensor_binding hc_attn_fn;
+    ds4_v100_tensor_binding hc_attn_base;
+    ds4_v100_tensor_binding hc_attn_scale;
 
     ds4_v100_tensor_binding routed_gate_binding;
     ds4_v100_tensor_binding routed_up_binding;
@@ -87,6 +104,11 @@ int ds4_v100_layer_state_ffn_arena_span(const ds4_v100_layer_state *state,
                                         uint64_t *out_bytes,
                                         char *err,
                                         size_t errlen);
+
+int ds4_v100_layer_state_attention_arena_span(const ds4_v100_layer_state *state,
+                                              uint64_t *out_bytes,
+                                              char *err,
+                                              size_t errlen);
 
 uint64_t ds4_v100_bound_matrix_arena_offset(const ds4_v100_bound_matrix *matrix);
 

@@ -210,6 +210,18 @@ int ds4_v100_layer_state_init(ds4_v100_layer_state *out,
         bind_required(ctx, layer_id, "ffn_up_shexp.weight", &out->shared_up.binding, err, errlen) ||
         bind_required(ctx, layer_id, "ffn_down_shexp.weight", &out->shared_down.binding, err, errlen) ||
         bind_required(ctx, layer_id, "ffn_gate_inp.weight", &out->router.binding, err, errlen) ||
+        bind_required(ctx, layer_id, "attn_q_a.weight", &out->attn_q_a.binding, err, errlen) ||
+        bind_required(ctx, layer_id, "attn_q_b.weight", &out->attn_q_b.binding, err, errlen) ||
+        bind_required(ctx, layer_id, "attn_kv_latent.weight", &out->attn_kv_latent.binding, err, errlen) ||
+        bind_required(ctx, layer_id, "attn_output_a.weight", &out->attn_output_a.binding, err, errlen) ||
+        bind_required(ctx, layer_id, "attn_output_b.weight", &out->attn_output_b.binding, err, errlen) ||
+        bind_required(ctx, layer_id, "attn_norm.weight", &out->attn_norm, err, errlen) ||
+        bind_required(ctx, layer_id, "attn_q_a_norm.weight", &out->attn_q_a_norm, err, errlen) ||
+        bind_required(ctx, layer_id, "attn_kv_a_norm.weight", &out->attn_kv_a_norm, err, errlen) ||
+        bind_required(ctx, layer_id, "attn_sinks", &out->attn_sinks, err, errlen) ||
+        bind_required(ctx, layer_id, "hc_attn_fn", &out->hc_attn_fn, err, errlen) ||
+        bind_required(ctx, layer_id, "hc_attn_base", &out->hc_attn_base, err, errlen) ||
+        bind_required(ctx, layer_id, "hc_attn_scale", &out->hc_attn_scale, err, errlen) ||
         bind_required(ctx, layer_id, "ffn_norm.weight", &out->ffn_norm, err, errlen) ||
         bind_required(ctx, layer_id, "hc_ffn_fn", &out->hc_ffn_fn, err, errlen) ||
         bind_required(ctx, layer_id, "hc_ffn_base", &out->hc_ffn_base, err, errlen) ||
@@ -221,6 +233,11 @@ int ds4_v100_layer_state_init(ds4_v100_layer_state *out,
     out->has_bias_router = bind_optional(ctx, layer_id, "exp_probs_b", &out->router_bias);
 
     if (make_f32_matrix(&out->router.binding, &out->router, "ffn_gate_inp.weight", err, errlen) ||
+        make_f8_matrix(&out->attn_q_a.binding, &out->attn_q_a, "attn_q_a.weight", err, errlen) ||
+        make_f8_matrix(&out->attn_q_b.binding, &out->attn_q_b, "attn_q_b.weight", err, errlen) ||
+        make_f8_matrix(&out->attn_kv_latent.binding, &out->attn_kv_latent, "attn_kv_latent.weight", err, errlen) ||
+        make_f8_matrix(&out->attn_output_a.binding, &out->attn_output_a, "attn_output_a.weight", err, errlen) ||
+        make_f8_matrix(&out->attn_output_b.binding, &out->attn_output_b, "attn_output_b.weight", err, errlen) ||
         make_f8_matrix(&out->shared_gate.binding, &out->shared_gate, "ffn_gate_shexp.weight", err, errlen) ||
         make_f8_matrix(&out->shared_up.binding, &out->shared_up, "ffn_up_shexp.weight", err, errlen) ||
         make_f8_matrix(&out->shared_down.binding, &out->shared_down, "ffn_down_shexp.weight", err, errlen) ||
@@ -236,6 +253,18 @@ int ds4_v100_layer_state_init(ds4_v100_layer_state *out,
         &out->shared_up.binding,
         &out->shared_down.binding,
         &out->router.binding,
+        &out->attn_q_a.binding,
+        &out->attn_q_b.binding,
+        &out->attn_kv_latent.binding,
+        &out->attn_output_a.binding,
+        &out->attn_output_b.binding,
+        &out->attn_norm,
+        &out->attn_q_a_norm,
+        &out->attn_kv_a_norm,
+        &out->attn_sinks,
+        &out->hc_attn_fn,
+        &out->hc_attn_base,
+        &out->hc_attn_scale,
         &out->ffn_norm,
         &out->hc_ffn_fn,
         &out->hc_ffn_base,
@@ -249,6 +278,18 @@ int ds4_v100_layer_state_init(ds4_v100_layer_state *out,
         "ffn_up_shexp.weight",
         "ffn_down_shexp.weight",
         "ffn_gate_inp.weight",
+        "attn_q_a.weight",
+        "attn_q_b.weight",
+        "attn_kv_latent.weight",
+        "attn_output_a.weight",
+        "attn_output_b.weight",
+        "attn_norm.weight",
+        "attn_q_a_norm.weight",
+        "attn_kv_a_norm.weight",
+        "attn_sinks",
+        "hc_attn_fn",
+        "hc_attn_base",
+        "hc_attn_scale",
         "ffn_norm.weight",
         "hc_ffn_fn",
         "hc_ffn_base",
@@ -264,7 +305,33 @@ int ds4_v100_layer_state_init(ds4_v100_layer_state *out,
         return state_error(err, errlen, "routed expert tensors must be 3D");
     }
     out->hidden_size = out->router.cols;
+    out->q_lora_rank = out->attn_q_a.rows;
+    out->q_width = out->attn_q_b.rows;
+    out->kv_latent_width = out->attn_kv_latent.rows;
+    out->attention_output_rank = out->attn_output_a.rows;
     out->intermediate_size = out->shared_gate.rows;
+    if (out->attn_q_a.cols != out->hidden_size ||
+        out->attn_q_b.cols != out->q_lora_rank ||
+        out->attn_kv_latent.cols != out->hidden_size ||
+        out->attn_output_a.cols != out->hidden_size ||
+        out->attn_output_b.cols != out->attention_output_rank ||
+        out->attn_output_b.rows != out->hidden_size ||
+        out->q_lora_rank != 1024 ||
+        out->q_width != 32768 ||
+        out->kv_latent_width != DS4_V100_HEAD_DIM ||
+        out->attention_output_rank != 8192) {
+        return state_error(err, errlen, "attention projection dimensions do not match DS4 layer state");
+    }
+    if (!dtype_is(&out->attn_norm, "f32") ||
+        !dtype_is(&out->attn_q_a_norm, "f32") ||
+        !dtype_is(&out->attn_kv_a_norm, "f32") ||
+        !dtype_is(&out->attn_sinks, "f32") ||
+        out->attn_norm.n_shape_dims != 1 || out->attn_norm.shape[0] != out->hidden_size ||
+        out->attn_q_a_norm.n_shape_dims != 1 || out->attn_q_a_norm.shape[0] != out->q_lora_rank ||
+        out->attn_kv_a_norm.n_shape_dims != 1 || out->attn_kv_a_norm.shape[0] != out->kv_latent_width ||
+        out->attn_sinks.n_shape_dims != 1 || out->attn_sinks.shape[0] != 64) {
+        return state_error(err, errlen, "attention control dimensions do not match DS4 layer state");
+    }
     out->routed_experts = (uint32_t)out->routed_gate_binding.shape[2];
     if (out->routed_up_binding.shape[2] != out->routed_experts ||
         out->routed_down_binding.shape[2] != out->routed_experts) {
@@ -357,6 +424,23 @@ int ds4_v100_layer_state_ffn_arena_span(const ds4_v100_layer_state *state,
             grow_span_for_matrix(&route.down, &span)) {
             return state_error(err, errlen, "routed FFN arena span overflow");
         }
+    }
+    *out_bytes = span;
+    return 0;
+}
+
+int ds4_v100_layer_state_attention_arena_span(const ds4_v100_layer_state *state,
+                                              uint64_t *out_bytes,
+                                              char *err,
+                                              size_t errlen) {
+    if (!state || !out_bytes) return state_error(err, errlen, "missing attention arena span output");
+    uint64_t span = 0;
+    if (grow_span_for_matrix(&state->attn_q_a, &span) ||
+        grow_span_for_matrix(&state->attn_q_b, &span) ||
+        grow_span_for_matrix(&state->attn_kv_latent, &span) ||
+        grow_span_for_matrix(&state->attn_output_a, &span) ||
+        grow_span_for_matrix(&state->attn_output_b, &span)) {
+        return state_error(err, errlen, "attention arena span overflow");
     }
     *out_bytes = span;
     return 0;

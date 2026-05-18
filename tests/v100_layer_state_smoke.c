@@ -78,6 +78,10 @@ int main(int argc, char **argv) {
     check(state.owning_gpu == state.stage_id, "owning GPU matches stage");
     check(state.layer_class == ds4_v100_layer_class_for_layer(layer), "layer class matches schedule");
     check(state.hidden_size == 4096, "hidden size");
+    check(state.q_lora_rank == 1024, "q lora rank");
+    check(state.q_width == 32768, "q width");
+    check(state.kv_latent_width == 512, "kv latent width");
+    check(state.attention_output_rank == 8192, "attention output rank");
     check(state.intermediate_size == 2048, "intermediate size");
     check(state.routed_experts == 256, "routed expert count");
     check(state.routes_per_token == 6, "routes per token");
@@ -119,16 +123,27 @@ int main(int argc, char **argv) {
     check(stage && span <= stage->arena_bytes, "ffn arena span fits owning stage arena");
     check(state.kv_view.total_bytes == li->kv_view.total_bytes, "kv view snapshot");
 
-    printf("v100_layer_state_smoke: layer=%d stage=%d gpu=%d class=%s router=%s hidden=%u mid=%u experts=%u span=%" PRIu64 " %s\n",
+    uint64_t attn_span = 0;
+    check(ds4_v100_layer_state_attention_arena_span(&state,
+                                                    &attn_span,
+                                                    err,
+                                                    sizeof(err)) == 0,
+          "attention arena span");
+    check(stage && attn_span <= stage->arena_bytes, "attention arena span fits owning stage arena");
+
+    printf("v100_layer_state_smoke: layer=%d stage=%d gpu=%d class=%s router=%s hidden=%u q=%u kv=%u mid=%u experts=%u ffn_span=%" PRIu64 " attn_span=%" PRIu64 " %s\n",
            state.layer_id,
            state.stage_id,
            state.owning_gpu,
            ds4_v100_layer_class_name(state.layer_class),
            ds4_v100_router_kind_name(state.router_kind),
            state.hidden_size,
+           state.q_width,
+           state.kv_latent_width,
            state.intermediate_size,
            state.routed_experts,
            span,
+           attn_span,
            failures ? "FAIL" : "ok");
 
     ds4_v100_context_close(ctx);

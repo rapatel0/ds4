@@ -1,12 +1,13 @@
 ---
 sprint: 018
 title: V100 Descriptor-Bound Attention Projection Residual Norm Gate
-status: planned
+status: completed
 date: 2026-05-18
 target_repo: rapatel0/ds4
 architecture: ../architecture/DS4-V100-LAYOUT.md
 intent: drafts/SPRINT-018-INTENT.md
 deferred: SPRINT-018-DEFERRED.md
+verdict: SHIP
 ---
 
 # SPRINT-018: V100 Descriptor-Bound Attention Projection Residual Norm Gate
@@ -47,10 +48,10 @@ synthetic attention kernels to real descriptor-bound attention source bytes.
 - `tests/v100_layer_state_smoke.c`
 
 **Tasks:**
-- [ ] Add attention bound matrices and control bindings to layer state.
-- [ ] Validate q/kv/output projection dimensions.
-- [ ] Add attention arena-span helper.
-- [ ] Extend the layer-state smoke to validate attention state.
+- [x] Add attention bound matrices and control bindings to layer state.
+- [x] Validate q/kv/output projection dimensions.
+- [x] Add attention arena-span helper.
+- [x] Extend the layer-state smoke to validate attention state.
 
 ### Phase 2: Descriptor-Bound Attention Smoke
 
@@ -59,11 +60,11 @@ synthetic attention kernels to real descriptor-bound attention source bytes.
 - `Makefile`
 
 **Tasks:**
-- [ ] Map the real source model and layer state.
-- [ ] Upload real attention FP8 source matrices to a V100 arena.
-- [ ] Run CPU/GPU attn RMSNorm, q_a, q_a_norm, q_b, kv_latent, output_a,
+- [x] Map the real source model and layer state.
+- [x] Upload real attention FP8 source matrices to a V100 arena.
+- [x] Run CPU/GPU attn RMSNorm, q_a, q_a_norm, q_b, kv_latent, output_a,
       output_b, residual add, and ffn_norm references.
-- [ ] Compare GPU outputs against CPU source-format references.
+- [x] Compare GPU outputs against CPU source-format references.
 
 ### Phase 3: Gate, Validation, Closeout
 
@@ -75,12 +76,12 @@ synthetic attention kernels to real descriptor-bound attention source bytes.
 - `docs/sprints/VISION.md`
 
 **Tasks:**
-- [ ] Add `descriptor_bound_attention` to the appliance gate when
+- [x] Add `descriptor_bound_attention` to the appliance gate when
       `--pack-index` and model are supplied.
-- [ ] Run local validation.
-- [ ] Run cluster attention smoke and full appliance gate.
-- [ ] Archive logs.
-- [ ] Update sprint docs and vision.
+- [x] Run local validation.
+- [x] Run cluster attention smoke and full appliance gate.
+- [x] Archive logs.
+- [x] Update sprint docs and vision.
 
 ## Definition Of Done
 
