@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-18
-last_updated_by: sprint-execute
-revision: 17
+last_updated_by: sprint-plan
+revision: 18
 ---
 
 # Vision: DS4 V100 Appliance
@@ -250,25 +250,22 @@ it is a narrow DS4 runtime tuned for this hardware.
   output-head selected-token smoke pass on V100. The remaining readiness gap is
   real pack-index layer integration and shared-expert/full scheduler wiring.
 
-### Sprint 014 - V100 Real Layer Descriptor Integration [planned]
+### Sprint 014 - V100 Real Pack-Index Layer Descriptor Gate [planned]
 
-- **Goal**: Bind the bounded source-F8, source-BF16, source-MXFP4, router,
-  attention, compressor, and output-head primitives to real pack-index
-  descriptors for at least one source-layout layer or short selected-token
-  path.
+- **Goal**: Add a fail-closed descriptor gate that validates the real pack-index
+  rows needed by a source-layout layer, including attention, compressor/indexer,
+  router, routed/shared experts, HC controls, and output head.
 - **Rationale**: Sprint 013 proves synthetic MoE composition. Deployment should
-  wait until the same kernel surfaces consume real model descriptors and include
-  the shared expert/full layer scheduler path.
+  wait until the same kernel surfaces consume real model descriptors. A strict
+  descriptor contract is the next integration step before real layer compute.
 
-### Sprint 015 - V100 Appliance Deployment And Optimization [tentative]
+### Sprint 015 - V100 Descriptor-Bound Layer Compute [tentative]
 
-- **Goal**: Package the runtime as a cluster-deployed CLI/server path with
-  startup residency validation and readiness gates, then begin measured
-  throughput work: slot batching, wavefront scheduling, expert kernel
-  selection, relay overlap, output-head tuning, MTP/speculative decoding, and
-  selective tensor-parallel exceptions.
-- **Rationale**: Optimization should be driven by measured bottlenecks from a
-  verified real-descriptor path, not by assumptions from bounded smokes.
+- **Goal**: Consume validated pack-index descriptors in a real layer or short
+  selected-token compute path.
+- **Rationale**: Descriptor validation is necessary but not sufficient; the
+  next readiness jump is executing real model bytes through the bounded kernel
+  surfaces.
 
 ## Parking Lot
 
