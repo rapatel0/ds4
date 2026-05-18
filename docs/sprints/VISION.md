@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-18
-last_updated_by: sprint-execute
-revision: 15
+last_updated_by: sprint-plan
+revision: 16
 ---
 
 # Vision: DS4 V100 Appliance
@@ -231,14 +231,15 @@ it is a narrow DS4 runtime tuned for this hardware.
   appliance gate passes implemented checks and correctly reports `ready=false`
   until full MoE/selected-token serving exists.
 
-### Sprint 013 - V100 Layer/MoE Selected-Token Gate [planned]
+### Sprint 013 - V100 Source MXFP4 MoE And Selected-Token Gate [planned]
 
-- **Goal**: Wire a coherent bounded V100 source-layout layer/MoE path through
-  attention output, residual/HC update, router, shared expert, routed expert,
-  output-head/top-k, and selected-token comparison.
+- **Goal**: Add a bounded source-MXFP4 routed expert primitive and a
+  single-token router/MoE/output-head fixture that produces a selected-token
+  comparison on V100.
 - **Rationale**: Sprint 012 proves the output-head/logits surface but the gate
-  still reports not-ready. Deployment should wait until the full single-slot
-  correctness path includes MoE and selected-token evidence.
+  still reports not-ready. The next concrete blocker is the routed expert path:
+  DS4 Flash stores routed gate/up/down experts as MXFP4 source tensors, and
+  deployment should wait until MoE and selected-token evidence exist.
 
 ### Sprint 014 - V100 Appliance Deployment [planned]
 
