@@ -1,13 +1,13 @@
 ---
 sprint: 019
 title: V100 Integrated Single-Layer Runtime Slice
-status: planned
+status: completed
 date: 2026-05-18
 target_repo: rapatel0/ds4
 architecture: ../architecture/DS4-V100-LAYOUT.md
 intent: drafts/SPRINT-019-INTENT.md
 deferred: SPRINT-019-DEFERRED.md
-verdict: pending
+verdict: SHIP
 ---
 
 # SPRINT-019: V100 Integrated Single-Layer Runtime Slice
@@ -68,14 +68,16 @@ hardware execution/logs.
 - `tests/cuda_v100_descriptor_bound_attention_smoke.c`
 
 **Tasks:**
-- [ ] Extract or share the CPU bounded attention reference for raw plus
+- [x] Extract or share the CPU bounded attention reference for raw plus
       compressed rows.
-- [ ] Drive the existing GPU attention/compressor kernels from real layer-state
-      descriptors instead of synthetic rows.
-- [ ] Include attention sink contribution and ratio-4 compressed-row visibility
+- [x] Drive the existing GPU attention kernel from real layer-state attention
+      descriptors and explicit raw/compressed KV inputs.
+- [x] Include attention sink contribution and ratio-4 compressed-row visibility
       in the bounded comparison.
-- [ ] Emit a semantic attention vector suitable for the output A/B projection,
+- [x] Emit a semantic attention vector suitable for the output A/B projection,
       not the Sprint 018 proxy.
+- [ ] Bind and execute real compressor/indexer descriptors inside the layer
+      executor. Deferred to the next sprint.
 
 ### Phase 2: Layer Execution Surface
 
@@ -86,13 +88,14 @@ hardware execution/logs.
 - `ds4_v100_layer_state.c`
 
 **Tasks:**
-- [ ] Add a small execution config for layer id, token row, context rows,
+- [x] Add a small execution config for layer id, token row, context rows,
       active slots, and scratch ownership.
-- [ ] Add a callable single-layer decode/prefill-slice function that consumes
+- [x] Add a callable single-layer decode/prefill-slice function that consumes
       `ds4_v100_layer_state`.
-- [ ] Keep API boundaries explicit: source descriptors in state, KV views in
+- [x] Keep API boundaries explicit: source descriptors in state, KV views in
       config, scratch in caller-owned arenas, no hidden persistent dequant.
 - [ ] Return per-phase timing/counter fields for later throughput work.
+      Deferred to performance instrumentation.
 
 ### Phase 3: Integrated Layer Smoke
 
@@ -101,12 +104,12 @@ hardware execution/logs.
 - `Makefile`
 
 **Tasks:**
-- [ ] Map the real model and pack index.
-- [ ] Upload only the required layer-2 source bytes into bounded V100 arenas.
-- [ ] Execute attention, residual, FFN pre-norm, real router selection,
+- [x] Map the real model and pack index.
+- [x] Upload only the required layer-2 source bytes into bounded V100 arenas.
+- [x] Execute attention, residual, FFN pre-norm, real router selection,
       routed/shared FFN, and final residual through the new layer executor.
-- [ ] Compare the bounded next-hidden output to CPU/source-format references.
-- [ ] Print memory, layer, token, context, selected experts, arena span, and
+- [x] Compare the bounded next-hidden output to CPU/source-format references.
+- [x] Print memory, layer, token, context, selected experts, arena span, and
       max-difference diagnostics.
 
 ### Phase 4: Gate And Hardware Validation
@@ -119,12 +122,12 @@ hardware execution/logs.
 - `docs/sprints/VISION.md`
 
 **Tasks:**
-- [ ] Add the integrated layer smoke to the appliance gate when model and pack
+- [x] Add the integrated layer smoke to the appliance gate when model and pack
       index are supplied.
-- [ ] Run one-card direct-host validation using `CUDA_VISIBLE_DEVICES=0`.
-- [ ] Run the full appliance gate on the V100 host.
-- [ ] Update readiness reasons honestly after the new evidence.
-- [ ] Archive logs and update sprint report, follow-ups, and vision.
+- [x] Run one-card V100 validation using `CUDA_VISIBLE_DEVICES=0`.
+- [x] Run the full appliance gate on the V100 host.
+- [x] Update readiness reasons honestly after the new evidence.
+- [x] Archive logs and update sprint report, follow-ups, and vision.
 
 ## Direct V100 Validation Plan
 
@@ -155,6 +158,18 @@ stage behavior is being tested. Save the full 8-GPU run for the final gate.
   readiness summary.
 - Sprint report, follow-ups, logs, and vision update are committed.
 
+## Outcome
+
+`SHIP`. Sprint 019 adds a scheduler-callable hidden-vector layer executor and
+an integrated V100 smoke that composes descriptor-bound attention projection,
+semantic raw/compressed attention with sinks, grouped F8 attention output,
+residual, FFN pre-norm, real hash-router selected MXFP4 experts, shared F8
+expert, and final residual next-hidden output.
+
+The sprint does not yet bind real compressor/indexer descriptors into the
+executor and does not include DS4 HC pre/post composition. Those remain the next
+runtime blockers before a full 43-layer selected-token path.
+
 ## Risks
 
 - The DS4 attention reference may require more exact compressed-row/indexer
@@ -175,4 +190,3 @@ stage behavior is being tested. Save the full 8-GPU run for the final gate.
    prefill microbatch while the attention reference is already loaded?
 3. Is a checked-in direct-host helper script worth adding, or are captured
    commands in the sprint report enough?
-

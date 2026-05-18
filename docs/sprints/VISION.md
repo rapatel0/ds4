@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-18
-last_updated_by: sprint-plan
-revision: 28
+last_updated_by: sprint-execute
+revision: 29
 ---
 
 # Vision: DS4 V100 Appliance
@@ -112,6 +112,14 @@ it is a narrow DS4 runtime tuned for this hardware.
   source-format references. This still is not full attention semantics: softmax
   over raw/compressed KV, semantic layer output, real selected-token decode,
   serving, MTP, and throughput remain incomplete.
+- Sprint 019 shipped the first reusable hidden-vector layer execution surface.
+  The V100 pod now validates layer-2 semantic attention over explicit raw plus
+  compressed KV rows with sinks, grouped F8 attention output, residual,
+  FFN pre-norm, real hash-router selected MXFP4 experts, shared F8 expert, and
+  final next-hidden residual. The gate now includes `integrated_layer` and
+  reports `ready=false` because full HC pre/post scheduling, real compressor/
+  indexer descriptor binding, full 43-layer selected-token decode, serving,
+  MTP, and throughput remain incomplete.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -350,7 +358,7 @@ it is a narrow DS4 runtime tuned for this hardware.
   real source-byte q/kv/output projection, residual add, and FFN pre-norm
   surfaces on V100 against CPU source-format references.
 
-### Sprint 019 - V100 Integrated Single-Layer Runtime Slice [planned]
+### Sprint 019 - V100 Integrated Single-Layer Runtime Slice [complete]
 
 - **Goal**: Replace Sprint 018's bounded attention-output proxy with a
   scheduler-owned single-layer executor that produces a real next-hidden vector
@@ -359,11 +367,27 @@ it is a narrow DS4 runtime tuned for this hardware.
 - **Rationale**: The appliance still cannot produce the next hidden state from
   a real layer. Sprint 018 proved real projection/control surfaces; Sprint 019
   should ship a reusable runtime slice instead of another isolated primitive.
-- **Plan**: Use the descriptor-bound q/kv projection surfaces, existing
-  compressor/KV/attention kernels, and descriptor-bound router/FFN path to
-  execute layer 2 through attention plus FFN. Validate first on one V100 via
-  direct host execution, then wire the integrated smoke into the full appliance
-  gate.
+- **Outcome**: `SHIP`. `ds4_v100_layer_execute` now composes real
+  descriptor-bound projection bytes, semantic raw/compressed attention inputs,
+  grouped F8 attention output, residual, FFN pre-norm, router-selected MXFP4
+  routed experts, shared F8 expert, and final next-hidden residual. The
+  integrated smoke passes on one V100 and in the full appliance gate. Real
+  compressor/indexer descriptor binding and HC pre/post scheduling remain the
+  next blockers.
+
+### Sprint 020 - V100 Compressor/Indexer And HC Scheduler Bridge [planned]
+
+- **Goal**: Bind real compressor/indexer descriptors into layer state, execute
+  compressed row generation/selection inside the layer executor, and wrap the
+  hidden-vector body with DS4 HC pre/post scheduling.
+- **Rationale**: Sprint 019 proves the hidden-vector body of one layer, but the
+  appliance still needs real compressed-KV production, ratio-4 indexer
+  visibility, and HC state handling before a full 43-layer selected-token path
+  is credible.
+- **Plan**: Extend `ds4_v100_layer_state` for compressor/indexer tensors, add
+  executor-owned compressed row update/selection for layer 2, validate HC
+  pre/post output against CPU references, and keep the V100 gate honest with
+  `ready=false` until selected-token decode exists.
 
 ## Parking Lot
 
@@ -414,6 +438,9 @@ it is a narrow DS4 runtime tuned for this hardware.
 - See `docs/sprints/SPRINT-018-FOLLOWUPS.md`: full attention softmax over
   raw/compressed KV, combined attention plus FFN layer slice, real-model
   selected-token gate, and production arena reuse.
+- See `docs/sprints/SPRINT-019-FOLLOWUPS.md`: compressor/indexer descriptor
+  binding, HC pre/post layer scheduling, full 43-layer selected-token gate,
+  production arena reuse, and timing/throughput counters.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -445,6 +472,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-18 | Shipped Sprint 016 descriptor-bound real router FFN compute and moved Sprint 017 to scheduler-owned layer state. | The appliance now proves real layer-2 router logits, hash-router selected experts, all six routed MXFP4 experts, and shared F8 FFN compute on V100; the next blocker is moving this out of a standalone smoke into a scheduler-owned runtime layer surface. | Sprint 017+ |
 | 2026-05-18 | Shipped Sprint 017 scheduler-owned layer state and moved Sprint 018 to descriptor-bound attention/layer output. | Router/FFN descriptor ownership is now a reusable runtime surface instead of test-local glue; the next blocker is producing a coherent hidden state through attention, residual, norm, and HC composition. | Sprint 018+ |
 | 2026-05-18 | Shipped Sprint 018 descriptor-bound attention projection/residual/norm and moved Sprint 019 to full attention/layer output. | Real source-byte q/kv/output projection, residual add, and FFN pre-norm now pass on V100 through layer state; the next blocker is semantic attention softmax over raw/compressed KV and a coherent next hidden state. | Sprint 019+ |
+| 2026-05-18 | Shipped Sprint 019 integrated hidden-vector layer executor and moved Sprint 020 to compressor/indexer plus HC scheduling. | Layer 2 now produces a bounded next-hidden vector through semantic raw/compressed attention inputs and real router-selected FFN on V100; the remaining blocker is generating those compressed rows from real descriptors and running the true HC-state layer scheduler. | Sprint 020+ |
 
 ## Open Questions
 

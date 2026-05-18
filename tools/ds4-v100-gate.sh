@@ -106,6 +106,7 @@ if [ -n "$pack_index" ]; then
     targets+=(tests/v100_layer_state_smoke)
     targets+=(tests/cuda_v100_descriptor_bound_attention_smoke)
     targets+=(tests/cuda_v100_descriptor_bound_ffn_smoke)
+    targets+=(tests/cuda_v100_integrated_layer_smoke)
 fi
 
 if [ -n "$log_dir" ]; then
@@ -191,9 +192,11 @@ if [ -n "$pack_index" ]; then
         if [ "$skip_model" -eq 0 ] && [ -f "$model" ]; then
             run_gate "descriptor_bound_attention" ./tests/cuda_v100_descriptor_bound_attention_smoke --index "$pack_index" --model "$model" --layer "$descriptor_layer" || true
             run_gate "descriptor_bound_ffn" ./tests/cuda_v100_descriptor_bound_ffn_smoke --index "$pack_index" --model "$model" --layer "$descriptor_layer" --router-token 16 || true
+            run_gate "integrated_layer" ./tests/cuda_v100_integrated_layer_smoke --index "$pack_index" --model "$model" --layer "$descriptor_layer" --router-token 16 --position 16 || true
         else
             echo "gate	descriptor_bound_attention	SKIP	no_model"
             echo "gate	descriptor_bound_ffn	SKIP	no_model"
+            echo "gate	integrated_layer	SKIP	no_model"
         fi
     fi
 else
@@ -202,6 +205,7 @@ else
     echo "gate	layer_state	SKIP	no_pack_index"
     echo "gate	descriptor_bound_attention	SKIP	no_pack_index"
     echo "gate	descriptor_bound_ffn	SKIP	no_pack_index"
+    echo "gate	integrated_layer	SKIP	no_pack_index"
 fi
 
 if [ "$failures" -ne 0 ]; then
@@ -209,7 +213,7 @@ if [ "$failures" -ne 0 ]; then
     exit 1
 fi
 
-missing="full_layer_scheduler,attention_residual_norm,real_model_selected_token,public_serving,mtp,throughput_benchmark"
+missing="full_43_layer_scheduler,real_model_selected_token,public_serving,mtp,throughput_benchmark"
 echo "gate	readiness	NOT_READY	missing=$missing"
 echo "gate	summary	PASS	failures=0 ready=false"
 exit 0

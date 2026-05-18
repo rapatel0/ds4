@@ -1,0 +1,1 @@
+cuda_v100_integrated_layer_smoke: layer=2 token=16 pos=16 expert0=84 gpu=0 arena_bytes=11784434944 hidden=4096 raw=3 comp=3 ok
