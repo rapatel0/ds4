@@ -1,0 +1,1 @@
+v100_layer_binding_smoke: layer=2 gpu=0 routed_expert_bytes=4456448 shared_row_bytes=4128 ok

@@ -104,6 +104,36 @@ enum {
     DS4_HC_CHECKPOINT_AFTER_ATTN_BASE = 1000,
 };
 
+#define DS4_MTP_SIDECAR_TENSOR_COUNT 32
+#define DS4_MTP_SIDECAR_MAX_NAME 96
+#define DS4_MTP_SIDECAR_MAX_DTYPE 32
+#define DS4_MTP_SIDECAR_MAX_KERNEL 64
+#define DS4_MTP_SIDECAR_MAX_DIMS 4
+
+typedef struct {
+    char name[DS4_MTP_SIDECAR_MAX_NAME];
+    char dtype[DS4_MTP_SIDECAR_MAX_DTYPE];
+    char kernel_family[DS4_MTP_SIDECAR_MAX_KERNEL];
+    uint32_t type;
+    uint32_t n_dims;
+    uint64_t shape[DS4_MTP_SIDECAR_MAX_DIMS];
+    uint64_t source_offset;
+    uint64_t byte_length;
+    uint64_t resident_offset;
+} ds4_mtp_sidecar_tensor_info;
+
+typedef struct {
+    uint32_t gguf_version;
+    uint64_t metadata_count;
+    uint64_t tensor_count;
+    uint64_t alignment;
+    uint64_t tensor_data_pos;
+    uint64_t file_bytes;
+    uint64_t described_tensor_bytes;
+    uint64_t resident_bytes;
+    ds4_mtp_sidecar_tensor_info tensors[DS4_MTP_SIDECAR_TENSOR_COUNT];
+} ds4_mtp_sidecar_info;
+
 int ds4_engine_open(ds4_engine **out, const ds4_engine_options *opt);
 void ds4_engine_close(ds4_engine *e);
 void ds4_engine_summary(ds4_engine *e);
@@ -157,6 +187,11 @@ int ds4_engine_cpu_route_checkpoints(ds4_engine *e,
                                      char *err,
                                      size_t errlen);
 
+int ds4_mtp_sidecar_inspect(const char *mtp_path,
+                            ds4_mtp_sidecar_info *out,
+                            FILE *report,
+                            char *err,
+                            size_t errlen);
 int ds4_mtp_sidecar_report(const char *mtp_path, FILE *report, char *err, size_t errlen);
 
 void ds4_tokens_push(ds4_tokens *tv, int token);

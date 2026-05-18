@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-18
 last_updated_by: sprint-execute
-revision: 41
+revision: 42
 ---
 
 # Vision: DS4 V100 Appliance
@@ -182,6 +182,10 @@ it is a narrow DS4 runtime tuned for this hardware.
   the real `deepseek4_mtp_support` companion GGUF, reports its exact
   F32/Q8_0/Q4_K tensor contract, keeps selected-token and HTTP readiness green,
   and narrows the remaining blocker from generic `mtp` to `mtp_runtime`.
+- Sprint 031 shipped the first MTP runtime bridge. The appliance now exposes a
+  typed MTP tensor inventory, uploads all 32 sidecar tensors into a compact
+  gpu7 device arena, spot-checks resident bytes, and narrows readiness from
+  `missing=mtp_runtime` to `missing=mtp_forward`.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -583,6 +587,17 @@ it is a narrow DS4 runtime tuned for this hardware.
   described sidecar tensor bytes, and the full V100 gate now reports
   `missing=mtp_runtime`.
 
+### Sprint 031 - V100 MTP Resident Sidecar Runtime Bridge [complete]
+
+- **Goal**: Turn the validated MTP sidecar into a V100-resident runtime asset
+  without enabling speculative decode prematurely.
+- **Rationale**: MTP needs its own Q8_0/Q4_K sidecar path. Reusing the main
+  source-layout MXFP4/F8 V100 layer-state binder would hide dtype and residency
+  mistakes.
+- **Outcome**: `SHIP`. `ds4_v100_mtp_sidecar_open` maps the sidecar, allocates
+  a compact gpu7 device arena, uploads all 32 MTP tensors, spot-checks resident
+  bytes, and the full V100 gate now reports `missing=mtp_forward`.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -661,6 +676,10 @@ it is a narrow DS4 runtime tuned for this hardware.
   Q4_K MTP separate from the MXFP4 path, MTP memory planner updates, parallel
   upload, longer decode baselines, and continued speculative-serving/multi-slot
   deferral.
+- See `docs/sprints/SPRINT-031-FOLLOWUPS.md`: K=1 MTP forward probe, Q4_K
+  routed expert tests, gpu7 scheduler HC access, explicit draft/verify state,
+  and continued separation between resident MTP sidecar tensors and the main
+  source-layout pack path.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -704,6 +723,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-18 | Shipped Sprint 028 V100 replay runtime and timing tool. | The working scheduler path is now callable outside a smoke test and emits machine-readable token/timing/memory evidence; the next milestone is keeping that runtime resident behind an HTTP or process-serving surface. | Sprint 029+ |
 | 2026-05-18 | Shipped Sprint 029 resident HTTP appliance smoke. | The one-slot selected-token path is now served through a resident loopback process and `public_serving` is no longer a gate blocker; the next milestone is MTP correctness and then performance work such as parallel upload and longer resident decode baselines. | Sprint 030+ |
 | 2026-05-18 | Shipped Sprint 030 MTP sidecar readiness gate. | The appliance now validates the real MTP companion GGUF and keeps baseline serving green; the remaining blocker is no longer sidecar format uncertainty but the concrete V100 MTP runtime forward/verify path. | Sprint 031+ |
+| 2026-05-18 | Shipped Sprint 031 MTP resident sidecar bridge. | The appliance now uploads the real 3.807600108 GB MTP sidecar into gpu7 device memory and spot-checks residency; the remaining blocker is the K=1 MTP forward/draft path, not sidecar loading or memory fit. | Sprint 032+ |
 
 ## Open Questions
 

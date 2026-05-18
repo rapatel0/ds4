@@ -1,0 +1,285 @@
+#include "ds4_v100_mtp.h"
+
+#include <errno.h>
+#include <fcntl.h>
+#include <inttypes.h>
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+enum {
+    DS4_V100_MTP_DEFAULT_UPLOAD_CHUNK = 8 * 1024 * 1024,
+    DS4_V100_MTP_SPOT_BYTES = 32,
+};
+
+struct ds4_v100_mtp_sidecar {
+    ds4_mtp_sidecar_info info;
+    int fd;
+    const unsigned char *map;
+    uint64_t size;
+    ds4_gpu_arena *arena;
+    uint64_t uploaded_tensors;
+    uint64_t uploaded_bytes;
+    uint64_t spot_checks;
+    int gpu;
+};
+
+static int mtp_error(char *err, size_t errlen, const char *msg) {
+    if (err && errlen) snprintf(err, errlen, "%s", msg ? msg : "MTP sidecar error");
+    return 1;
+}
+
+static int mtp_errorf(char *err, size_t errlen, const char *fmt, ...) {
+    if (err && errlen) {
+        va_list ap;
+        va_start(ap, fmt);
+        vsnprintf(err, errlen, fmt, ap);
+        va_end(ap);
+    }
+    return 1;
+}
+
+void ds4_v100_mtp_sidecar_options_init(ds4_v100_mtp_sidecar_options *opts) {
+    if (!opts) return;
+    memset(opts, 0, sizeof(*opts));
+    opts->gpu = 7;
+    opts->upload_chunk_bytes = DS4_V100_MTP_DEFAULT_UPLOAD_CHUNK;
+    opts->require_device_arena = true;
+}
+
+static uint64_t file_size_or_error(int fd, const char *path, char *err, size_t errlen) {
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
+        mtp_errorf(err, errlen, "cannot stat MTP sidecar %s: %s", path, strerror(errno));
+        return 0;
+    }
+    if (st.st_size <= 0) {
+        mtp_errorf(err, errlen, "invalid MTP sidecar size for %s", path);
+        return 0;
+    }
+    return (uint64_t)st.st_size;
+}
+
+static int map_sidecar(ds4_v100_mtp_sidecar *s,
+                       const char *path,
+                       char *err,
+                       size_t errlen) {
+    s->fd = open(path, O_RDONLY);
+    if (s->fd < 0) {
+        return mtp_errorf(err, errlen, "cannot open MTP sidecar %s: %s", path, strerror(errno));
+    }
+    s->size = file_size_or_error(s->fd, path, err, errlen);
+    if (!s->size) return 1;
+    s->map = (const unsigned char *)mmap(NULL,
+                                         (size_t)s->size,
+                                         PROT_READ,
+                                         MAP_PRIVATE,
+                                         s->fd,
+                                         0);
+    if (s->map == MAP_FAILED) {
+        s->map = NULL;
+        return mtp_errorf(err, errlen, "cannot mmap MTP sidecar %s: %s", path, strerror(errno));
+    }
+    return 0;
+}
+
+static int validate_ranges(const ds4_v100_mtp_sidecar *s, char *err, size_t errlen) {
+    if (s->size != s->info.file_bytes) {
+        return mtp_errorf(err,
+                          errlen,
+                          "MTP sidecar mapped size %" PRIu64 " != inspected size %" PRIu64,
+                          s->size,
+                          s->info.file_bytes);
+    }
+    for (uint32_t i = 0; i < DS4_MTP_SIDECAR_TENSOR_COUNT; i++) {
+        const ds4_mtp_sidecar_tensor_info *t = &s->info.tensors[i];
+        if (t->source_offset > s->size ||
+            t->byte_length > s->size - t->source_offset) {
+            return mtp_errorf(err, errlen, "MTP tensor %s is outside mapped sidecar", t->name);
+        }
+        if (t->resident_offset > s->info.resident_bytes ||
+            t->byte_length > s->info.resident_bytes - t->resident_offset) {
+            return mtp_errorf(err, errlen, "MTP tensor %s is outside resident arena", t->name);
+        }
+    }
+    return 0;
+}
+
+static int upload_tensor(ds4_v100_mtp_sidecar *s,
+                         const ds4_mtp_sidecar_tensor_info *t,
+                         unsigned char *chunk,
+                         uint64_t chunk_bytes,
+                         char *err,
+                         size_t errlen) {
+    uint64_t done = 0;
+    while (done < t->byte_length) {
+        uint64_t n = t->byte_length - done;
+        if (n > chunk_bytes) n = chunk_bytes;
+        memcpy(chunk, s->map + t->source_offset + done, (size_t)n);
+        if (ds4_gpu_arena_upload(s->arena, t->resident_offset + done, chunk, n) != 0) {
+            return mtp_errorf(err, errlen, "MTP upload failed for %s on gpu%d", t->name, s->gpu);
+        }
+        done += n;
+    }
+    s->uploaded_tensors++;
+    s->uploaded_bytes += t->byte_length;
+    return 0;
+}
+
+static int spot_check_range(ds4_v100_mtp_sidecar *s,
+                            const ds4_mtp_sidecar_tensor_info *t,
+                            uint64_t rel,
+                            uint64_t bytes,
+                            char *err,
+                            size_t errlen) {
+    unsigned char actual[DS4_V100_MTP_SPOT_BYTES];
+    if (bytes > sizeof(actual)) bytes = sizeof(actual);
+    if (ds4_gpu_arena_read(s->arena, t->resident_offset + rel, actual, bytes) != 0) {
+        return mtp_errorf(err, errlen, "MTP readback failed for %s", t->name);
+    }
+    if (memcmp(actual, s->map + t->source_offset + rel, (size_t)bytes) != 0) {
+        return mtp_errorf(err, errlen, "MTP resident bytes mismatch for %s", t->name);
+    }
+    s->spot_checks++;
+    return 0;
+}
+
+static int spot_check_tensor(ds4_v100_mtp_sidecar *s,
+                             const ds4_mtp_sidecar_tensor_info *t,
+                             char *err,
+                             size_t errlen) {
+    if (!t->byte_length) return 0;
+    uint64_t n = t->byte_length < DS4_V100_MTP_SPOT_BYTES
+        ? t->byte_length
+        : DS4_V100_MTP_SPOT_BYTES;
+    if (spot_check_range(s, t, 0, n, err, errlen)) return 1;
+    if (t->byte_length > n) {
+        if (spot_check_range(s, t, t->byte_length - n, n, err, errlen)) return 1;
+    }
+    return 0;
+}
+
+int ds4_v100_mtp_sidecar_open(ds4_v100_mtp_sidecar **out,
+                              const ds4_v100_mtp_sidecar_options *opts,
+                              FILE *report,
+                              char *err,
+                              size_t errlen) {
+    if (err && errlen) err[0] = '\0';
+    if (!out) return mtp_error(err, errlen, "missing MTP sidecar output");
+    *out = NULL;
+    if (!opts || !opts->mtp_path || !opts->mtp_path[0]) {
+        return mtp_error(err, errlen, "missing MTP sidecar path");
+    }
+    if (opts->gpu < 0) return mtp_error(err, errlen, "invalid MTP sidecar gpu");
+
+    ds4_v100_mtp_sidecar *s = (ds4_v100_mtp_sidecar *)calloc(1, sizeof(*s));
+    if (!s) return mtp_error(err, errlen, "failed to allocate MTP sidecar");
+    s->fd = -1;
+    s->gpu = opts->gpu;
+
+    int rc = 1;
+    unsigned char *chunk = NULL;
+    const uint64_t chunk_bytes = opts->upload_chunk_bytes
+        ? opts->upload_chunk_bytes
+        : DS4_V100_MTP_DEFAULT_UPLOAD_CHUNK;
+
+    if (ds4_mtp_sidecar_inspect(opts->mtp_path, &s->info, report, err, errlen) != 0 ||
+        map_sidecar(s, opts->mtp_path, err, errlen) ||
+        validate_ranges(s, err, errlen)) {
+        goto done;
+    }
+
+    if (ds4_gpu_arena_open(&s->arena, s->gpu, s->info.resident_bytes) != 0) {
+        mtp_errorf(err,
+                   errlen,
+                   "failed to allocate MTP resident arena on gpu%d for %" PRIu64 " bytes",
+                   s->gpu,
+                   s->info.resident_bytes);
+        goto done;
+    }
+    if (opts->require_device_arena && !ds4_gpu_arena_is_device_memory(s->arena)) {
+        mtp_errorf(err, errlen, "MTP resident arena on gpu%d is not device memory", s->gpu);
+        goto done;
+    }
+
+    chunk = (unsigned char *)malloc((size_t)chunk_bytes);
+    if (!chunk) {
+        mtp_error(err, errlen, "failed to allocate MTP upload chunk");
+        goto done;
+    }
+
+    for (uint32_t i = 0; i < DS4_MTP_SIDECAR_TENSOR_COUNT; i++) {
+        if (upload_tensor(s, &s->info.tensors[i], chunk, chunk_bytes, err, errlen)) goto done;
+    }
+    for (uint32_t i = 0; i < DS4_MTP_SIDECAR_TENSOR_COUNT; i++) {
+        if (spot_check_tensor(s, &s->info.tensors[i], err, errlen)) goto done;
+    }
+
+    if (report) {
+        fprintf(report, "mtp_runtime\tgpu\t%d\n", s->gpu);
+        fprintf(report, "mtp_runtime\tarena_kind\t%s\n", ds4_gpu_arena_memory_kind(s->arena));
+        fprintf(report, "mtp_runtime\tarena_bytes\t%" PRIu64 "\n", ds4_gpu_arena_bytes(s->arena));
+        fprintf(report, "mtp_runtime\tuploaded_tensors\t%" PRIu64 "\n", s->uploaded_tensors);
+        fprintf(report, "mtp_runtime\tuploaded_bytes\t%" PRIu64 "\n", s->uploaded_bytes);
+        fprintf(report, "mtp_runtime\tspot_checks\t%" PRIu64 "\n", s->spot_checks);
+        fprintf(report,
+                "mtp_runtime\tfree_after_upload_bytes\t%" PRIu64 "\n",
+                ds4_gpu_arena_free_after_upload_bytes(s->arena));
+        fprintf(report, "mtp_runtime\tPASS\tresident_sidecar=1\n");
+    }
+
+    *out = s;
+    s = NULL;
+    rc = 0;
+
+done:
+    free(chunk);
+    ds4_v100_mtp_sidecar_close(s);
+    return rc;
+}
+
+void ds4_v100_mtp_sidecar_close(ds4_v100_mtp_sidecar *sidecar) {
+    if (!sidecar) return;
+    ds4_gpu_arena_close(sidecar->arena);
+    if (sidecar->map) munmap((void *)sidecar->map, (size_t)sidecar->size);
+    if (sidecar->fd >= 0) close(sidecar->fd);
+    free(sidecar);
+}
+
+const ds4_mtp_sidecar_info *ds4_v100_mtp_sidecar_info(
+        const ds4_v100_mtp_sidecar *sidecar) {
+    return sidecar ? &sidecar->info : NULL;
+}
+
+const ds4_mtp_sidecar_tensor_info *ds4_v100_mtp_sidecar_tensor(
+        const ds4_v100_mtp_sidecar *sidecar,
+        const char *name) {
+    if (!sidecar || !name) return NULL;
+    for (uint32_t i = 0; i < DS4_MTP_SIDECAR_TENSOR_COUNT; i++) {
+        const ds4_mtp_sidecar_tensor_info *t = &sidecar->info.tensors[i];
+        if (!strcmp(t->name, name)) return t;
+    }
+    return NULL;
+}
+
+ds4_gpu_arena *ds4_v100_mtp_sidecar_arena(ds4_v100_mtp_sidecar *sidecar) {
+    return sidecar ? sidecar->arena : NULL;
+}
+
+uint64_t ds4_v100_mtp_sidecar_uploaded_bytes(const ds4_v100_mtp_sidecar *sidecar) {
+    return sidecar ? sidecar->uploaded_bytes : 0;
+}
+
+uint64_t ds4_v100_mtp_sidecar_spot_checks(const ds4_v100_mtp_sidecar *sidecar) {
+    return sidecar ? sidecar->spot_checks : 0;
+}
+
+int ds4_v100_mtp_sidecar_gpu(const ds4_v100_mtp_sidecar *sidecar) {
+    return sidecar ? sidecar->gpu : -1;
+}

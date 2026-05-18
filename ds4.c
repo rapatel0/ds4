@@ -2833,6 +2833,41 @@ static void mtp_weights_bind(ds4_mtp_weights *w, const ds4_model *m) {
     mtp_weights_validate_layout(w);
 }
 
+static const char *mtp_required_tensors[DS4_MTP_SIDECAR_TENSOR_COUNT] = {
+    "mtp.0.hc_head_base.weight",
+    "mtp.0.hc_head_fn.weight",
+    "mtp.0.hc_head_scale.weight",
+    "mtp.0.e_proj.weight",
+    "mtp.0.h_proj.weight",
+    "mtp.0.enorm.weight",
+    "mtp.0.hnorm.weight",
+    "mtp.0.norm.weight",
+    "mtp.0.hc_attn_fn.weight",
+    "mtp.0.hc_attn_scale.weight",
+    "mtp.0.hc_attn_base.weight",
+    "mtp.0.attn_norm.weight",
+    "mtp.0.attn_q_a.weight",
+    "mtp.0.attn_q_a_norm.weight",
+    "mtp.0.attn_q_b.weight",
+    "mtp.0.attn_kv.weight",
+    "mtp.0.attn_kv_a_norm.weight",
+    "mtp.0.attn_sinks.weight",
+    "mtp.0.attn_output_a.weight",
+    "mtp.0.attn_output_b.weight",
+    "mtp.0.hc_ffn_fn.weight",
+    "mtp.0.hc_ffn_scale.weight",
+    "mtp.0.hc_ffn_base.weight",
+    "mtp.0.ffn_norm.weight",
+    "mtp.0.ffn_gate_inp.weight",
+    "mtp.0.exp_probs_b.bias",
+    "mtp.0.ffn_gate_exps.weight",
+    "mtp.0.ffn_up_exps.weight",
+    "mtp.0.ffn_down_exps.weight",
+    "mtp.0.ffn_gate_shexp.weight",
+    "mtp.0.ffn_up_shexp.weight",
+    "mtp.0.ffn_down_shexp.weight",
+};
+
 static void mtp_report_shape(FILE *fp, const ds4_tensor *t) {
     fputc('[', fp);
     for (uint32_t i = 0; i < t->ndim; i++) {
@@ -2875,48 +2910,43 @@ static void mtp_report_tensor(FILE *fp, const ds4_model *m, const char *name) {
             mtp_kernel_family(name, t));
 }
 
-int ds4_mtp_sidecar_report(const char *mtp_path, FILE *report, char *err, size_t errlen) {
+static uint64_t mtp_align_u64(uint64_t v, uint64_t align) {
+    if (align == 0) return v;
+    uint64_t rem = v % align;
+    if (rem == 0) return v;
+    return v + (align - rem);
+}
+
+static void mtp_fill_tensor_info(ds4_mtp_sidecar_tensor_info *out,
+                                 const char *name,
+                                 const ds4_tensor *t,
+                                 uint64_t resident_offset) {
+    memset(out, 0, sizeof(*out));
+    snprintf(out->name, sizeof(out->name), "%s", name);
+    snprintf(out->dtype, sizeof(out->dtype), "%s", tensor_type_name(t->type));
+    snprintf(out->kernel_family,
+             sizeof(out->kernel_family),
+             "%s",
+             mtp_kernel_family(name, t));
+    out->type = t->type;
+    out->n_dims = t->ndim > DS4_MTP_SIDECAR_MAX_DIMS ? DS4_MTP_SIDECAR_MAX_DIMS : t->ndim;
+    for (uint32_t i = 0; i < out->n_dims; i++) out->shape[i] = t->dim[i];
+    out->source_offset = t->abs_offset;
+    out->byte_length = t->bytes;
+    out->resident_offset = resident_offset;
+}
+
+int ds4_mtp_sidecar_inspect(const char *mtp_path,
+                            ds4_mtp_sidecar_info *out,
+                            FILE *report,
+                            char *err,
+                            size_t errlen) {
     if (err && errlen) err[0] = '\0';
+    if (out) memset(out, 0, sizeof(*out));
     if (!mtp_path || !mtp_path[0]) {
         if (err && errlen) snprintf(err, errlen, "missing MTP sidecar path");
         return 1;
     }
-    if (!report) report = stdout;
-
-    static const char *required_tensors[] = {
-        "mtp.0.hc_head_base.weight",
-        "mtp.0.hc_head_fn.weight",
-        "mtp.0.hc_head_scale.weight",
-        "mtp.0.e_proj.weight",
-        "mtp.0.h_proj.weight",
-        "mtp.0.enorm.weight",
-        "mtp.0.hnorm.weight",
-        "mtp.0.norm.weight",
-        "mtp.0.hc_attn_fn.weight",
-        "mtp.0.hc_attn_scale.weight",
-        "mtp.0.hc_attn_base.weight",
-        "mtp.0.attn_norm.weight",
-        "mtp.0.attn_q_a.weight",
-        "mtp.0.attn_q_a_norm.weight",
-        "mtp.0.attn_q_b.weight",
-        "mtp.0.attn_kv.weight",
-        "mtp.0.attn_kv_a_norm.weight",
-        "mtp.0.attn_sinks.weight",
-        "mtp.0.attn_output_a.weight",
-        "mtp.0.attn_output_b.weight",
-        "mtp.0.hc_ffn_fn.weight",
-        "mtp.0.hc_ffn_scale.weight",
-        "mtp.0.hc_ffn_base.weight",
-        "mtp.0.ffn_norm.weight",
-        "mtp.0.ffn_gate_inp.weight",
-        "mtp.0.exp_probs_b.bias",
-        "mtp.0.ffn_gate_exps.weight",
-        "mtp.0.ffn_up_exps.weight",
-        "mtp.0.ffn_down_exps.weight",
-        "mtp.0.ffn_gate_shexp.weight",
-        "mtp.0.ffn_up_shexp.weight",
-        "mtp.0.ffn_down_shexp.weight",
-    };
 
     ds4_model model;
     model_open(&model, mtp_path, false, false);
@@ -2935,15 +2965,13 @@ int ds4_mtp_sidecar_report(const char *mtp_path, FILE *report, char *err, size_t
         return 1;
     }
 
-    const uint64_t expected_tensors =
-        (uint64_t)(sizeof(required_tensors) / sizeof(required_tensors[0]));
-    if (model.n_tensors != expected_tensors) {
+    if (model.n_tensors != DS4_MTP_SIDECAR_TENSOR_COUNT) {
         if (err && errlen) {
             snprintf(err,
                      errlen,
                      "MTP sidecar has %" PRIu64 " tensors, expected %" PRIu64,
                      model.n_tensors,
-                     expected_tensors);
+                     (uint64_t)DS4_MTP_SIDECAR_TENSOR_COUNT);
         }
         model_close(&model);
         return 1;
@@ -2953,17 +2981,29 @@ int ds4_mtp_sidecar_report(const char *mtp_path, FILE *report, char *err, size_t
     mtp_weights_bind(&weights, &model);
 
     uint64_t tensor_bytes = 0;
-    fprintf(report, "mtp_sidecar\tpath\t%s\n", mtp_path);
-    fprintf(report, "mtp_sidecar\tarchitecture\t%.*s\n", (int)arch.len, arch.ptr);
-    fprintf(report,
-            "mtp_sidecar\tgguf\tversion=%u\tmetadata=%" PRIu64 "\ttensors=%" PRIu64
-            "\talignment=%" PRIu64 "\ttensor_data_pos=%" PRIu64 "\tfile_bytes=%" PRIu64 "\n",
-            model.version,
-            model.n_kv,
-            model.n_tensors,
-            model.alignment,
-            model.tensor_data_pos,
-            model.size);
+    uint64_t resident_bytes = 0;
+    uint64_t resident_offsets[DS4_MTP_SIDECAR_TENSOR_COUNT] = {0};
+    if (out) {
+        out->gguf_version = model.version;
+        out->metadata_count = model.n_kv;
+        out->tensor_count = model.n_tensors;
+        out->alignment = model.alignment;
+        out->tensor_data_pos = model.tensor_data_pos;
+        out->file_bytes = model.size;
+    }
+    if (report) {
+        fprintf(report, "mtp_sidecar\tpath\t%s\n", mtp_path);
+        fprintf(report, "mtp_sidecar\tarchitecture\t%.*s\n", (int)arch.len, arch.ptr);
+        fprintf(report,
+                "mtp_sidecar\tgguf\tversion=%u\tmetadata=%" PRIu64 "\ttensors=%" PRIu64
+                "\talignment=%" PRIu64 "\ttensor_data_pos=%" PRIu64 "\tfile_bytes=%" PRIu64 "\n",
+                model.version,
+                model.n_kv,
+                model.n_tensors,
+                model.alignment,
+                model.tensor_data_pos,
+                model.size);
+    }
 
     for (uint32_t type = 0; type < sizeof(gguf_types) / sizeof(gguf_types[0]); type++) {
         uint64_t count = 0;
@@ -2976,22 +3016,53 @@ int ds4_mtp_sidecar_report(const char *mtp_path, FILE *report, char *err, size_t
         }
         if (count) {
             tensor_bytes += bytes;
-            fprintf(report,
-                    "mtp_dtype\t%s\tcount=%" PRIu64 "\tbytes=%" PRIu64 "\n",
-                    tensor_type_name(type),
-                    count,
-                    bytes);
+            if (report) {
+                fprintf(report,
+                        "mtp_dtype\t%s\tcount=%" PRIu64 "\tbytes=%" PRIu64 "\n",
+                        tensor_type_name(type),
+                        count,
+                        bytes);
+            }
         }
     }
-    fprintf(report, "mtp_sidecar\tdescribed_tensor_bytes\t%" PRIu64 "\n", tensor_bytes);
+    if (out) out->described_tensor_bytes = tensor_bytes;
 
-    for (uint64_t i = 0; i < expected_tensors; i++) {
-        mtp_report_tensor(report, &model, required_tensors[i]);
+    for (uint64_t i = 0; i < DS4_MTP_SIDECAR_TENSOR_COUNT; i++) {
+        const char *name = mtp_required_tensors[i];
+        const ds4_tensor *t = required_tensor(&model, name);
+        resident_bytes = mtp_align_u64(resident_bytes, 256);
+        resident_offsets[i] = resident_bytes;
+        if (out) mtp_fill_tensor_info(&out->tensors[i], name, t, resident_bytes);
+        resident_bytes += t->bytes;
     }
-    fprintf(report, "mtp_sidecar\tPASS\tlayout=deepseek4_mtp_support_q4k_q8_0_f32\n");
+    resident_bytes = mtp_align_u64(resident_bytes, 256);
+    if (out) out->resident_bytes = resident_bytes;
+
+    if (report) {
+        fprintf(report, "mtp_sidecar\tdescribed_tensor_bytes\t%" PRIu64 "\n", tensor_bytes);
+        fprintf(report, "mtp_sidecar\tresident_bytes\t%" PRIu64 "\n", resident_bytes);
+    }
+
+    if (report) {
+        for (uint64_t i = 0; i < DS4_MTP_SIDECAR_TENSOR_COUNT; i++) {
+            const char *name = mtp_required_tensors[i];
+            mtp_report_tensor(report, &model, name);
+            fprintf(report,
+                    "mtp_resident\t%s\toffset=%" PRIu64 "\tbytes=%" PRIu64 "\n",
+                    name,
+                    resident_offsets[i],
+                    required_tensor(&model, name)->bytes);
+        }
+        fprintf(report, "mtp_sidecar\tPASS\tlayout=deepseek4_mtp_support_q4k_q8_0_f32\n");
+    }
 
     model_close(&model);
     return 0;
+}
+
+int ds4_mtp_sidecar_report(const char *mtp_path, FILE *report, char *err, size_t errlen) {
+    if (!report) report = stdout;
+    return ds4_mtp_sidecar_inspect(mtp_path, NULL, report, err, errlen);
 }
 
 static void weights_free(ds4_weights *w) {

@@ -109,6 +109,7 @@ targets=(
 
 if [ -n "$mtp_model" ]; then
     targets+=(tools/ds4-v100-mtp-sidecar-gate)
+    targets+=(tools/ds4-v100-mtp-residency-smoke)
 fi
 
 if [ -n "$pack_index" ]; then
@@ -146,6 +147,7 @@ selected_token_ready=0
 public_serving_ready=0
 throughput_ready=0
 mtp_sidecar_ready=0
+mtp_residency_ready=0
 
 run_gate() {
     local name="$1"
@@ -203,9 +205,14 @@ if [ -n "$mtp_model" ]; then
         if run_gate "mtp_sidecar" ./tools/ds4-v100-mtp-sidecar-gate --mtp-model "$mtp_model"; then
             mtp_sidecar_ready=1
         fi
+        if run_gate "mtp_residency" ./tools/ds4-v100-mtp-residency-smoke \
+            --mtp-model "$mtp_model" --gpu 7 --require-gpus 8 --reserve-mib 4096; then
+            mtp_residency_ready=1
+        fi
     fi
 else
     echo "gate	mtp_sidecar	SKIP	no_mtp_model"
+    echo "gate	mtp_residency	SKIP	no_mtp_model"
 fi
 
 run_gate "source_dtypes" ./tests/cuda_source_dtypes_smoke || true
@@ -318,8 +325,10 @@ fi
 if [ -n "$mtp_model" ]; then
     if [ "$mtp_sidecar_ready" -eq 0 ]; then
         add_missing "mtp_sidecar"
+    elif [ "$mtp_residency_ready" -eq 0 ]; then
+        add_missing "mtp_residency"
     else
-        add_missing "mtp_runtime"
+        add_missing "mtp_forward"
     fi
 else
     add_missing "mtp"
