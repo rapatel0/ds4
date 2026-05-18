@@ -696,8 +696,10 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
                              ds4_v100_layer_execute_report *report,
                              char *err,
                              size_t errlen) {
-    if (state->router_kind != DS4_V100_ROUTER_HASH || !state->has_hash_router) {
-        return exec_error(err, errlen, "Sprint 019 layer executor currently supports hash-router layers only");
+    const bool hash_mode = state->router_kind == DS4_V100_ROUTER_HASH && state->has_hash_router;
+    const bool bias_mode = state->router_kind == DS4_V100_ROUTER_BIAS && state->has_bias_router;
+    if (!hash_mode && !bias_mode) {
+        return exec_error(err, errlen, "layer executor requires hash or bias router metadata");
     }
 
     const uint32_t hidden = state->hidden_size;
@@ -747,14 +749,14 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
                                       probs_t,
                                       cfg->model_map,
                                       cfg->model_size,
-                                      0,
-                                      state->router_hash.source_offset,
-                                      (uint32_t)state->router_hash.shape[1],
+                                      bias_mode ? state->router_bias.source_offset : 0,
+                                      hash_mode ? state->router_hash.source_offset : 0,
+                                      hash_mode ? (uint32_t)state->router_hash.shape[1] : 0,
                                       cfg->router_token,
                                       0,
                                       0,
-                                      false,
-                                      true,
+                                      bias_mode,
+                                      hash_mode,
                                       router_t)) {
         exec_error(err, errlen, "router select failed");
         goto done;

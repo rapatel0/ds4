@@ -107,6 +107,7 @@ if [ -n "$pack_index" ]; then
     targets+=(tests/cuda_v100_descriptor_bound_attention_smoke)
     targets+=(tests/cuda_v100_descriptor_bound_ffn_smoke)
     targets+=(tests/cuda_v100_integrated_layer_smoke)
+    targets+=(tests/cuda_v100_stage_scheduler_smoke)
 fi
 
 if [ -n "$log_dir" ]; then
@@ -193,10 +194,14 @@ if [ -n "$pack_index" ]; then
             run_gate "descriptor_bound_attention" ./tests/cuda_v100_descriptor_bound_attention_smoke --index "$pack_index" --model "$model" --layer "$descriptor_layer" || true
             run_gate "descriptor_bound_ffn" ./tests/cuda_v100_descriptor_bound_ffn_smoke --index "$pack_index" --model "$model" --layer "$descriptor_layer" --router-token 16 || true
             run_gate "integrated_layer" ./tests/cuda_v100_integrated_layer_smoke --index "$pack_index" --model "$model" --layer "$descriptor_layer" --router-token 16 --position 16 || true
+            run_gate "integrated_layer_bias" ./tests/cuda_v100_integrated_layer_smoke --index "$pack_index" --model "$model" --layer 3 --router-token 16 --position 16 || true
+            run_gate "stage_scheduler" ./tests/cuda_v100_stage_scheduler_smoke --index "$pack_index" --model "$model" --stage 0 --token 16 --position 16 || true
         else
             echo "gate	descriptor_bound_attention	SKIP	no_model"
             echo "gate	descriptor_bound_ffn	SKIP	no_model"
             echo "gate	integrated_layer	SKIP	no_model"
+            echo "gate	integrated_layer_bias	SKIP	no_model"
+            echo "gate	stage_scheduler	SKIP	no_model"
         fi
     fi
 else
@@ -206,6 +211,8 @@ else
     echo "gate	descriptor_bound_attention	SKIP	no_pack_index"
     echo "gate	descriptor_bound_ffn	SKIP	no_pack_index"
     echo "gate	integrated_layer	SKIP	no_pack_index"
+    echo "gate	integrated_layer_bias	SKIP	no_pack_index"
+    echo "gate	stage_scheduler	SKIP	no_pack_index"
 fi
 
 if [ "$failures" -ne 0 ]; then

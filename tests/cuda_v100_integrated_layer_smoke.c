@@ -4,6 +4,7 @@
 #include "ds4_v100_layer_state.h"
 
 #include <errno.h>
+#include <float.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <math.h>
@@ -213,26 +214,70 @@ static float swiglu_ref(float gate, float up, float clamp, float weight) {
     return (gate / (1.0f + expf(-gate))) * up * weight;
 }
 
-static void cpu_hash_router_select(const ds4_v100_tensor_binding *hash_b,
-                                   const model_map *model,
-                                   const float logits[256],
-                                   uint32_t token,
-                                   int32_t selected[6],
-                                   float weights[6]) {
+static int router_score_better_ref(float a_score, uint32_t a_idx,
+                                   float b_score, uint32_t b_idx) {
+    return a_score > b_score || (a_score == b_score && a_idx < b_idx);
+}
+
+static void cpu_router_select(const ds4_v100_layer_state *state,
+                              const model_map *model,
+                              const float logits[256],
+                              uint32_t token,
+                              int32_t selected[6],
+                              float weights[6]) {
     float probs[256];
     for (uint32_t e = 0; e < 256; e++) probs[e] = sqrtf(softplus_ref(logits[e]));
-    if (!hash_b || hash_b->n_shape_dims != 2 || hash_b->shape[0] != 6 ||
-        token >= hash_b->shape[1] ||
-        hash_b->source_offset > model->size ||
-        hash_b->byte_length > model->size - hash_b->source_offset) {
+    if (state->router_kind == DS4_V100_ROUTER_HASH && state->has_hash_router) {
+        const ds4_v100_tensor_binding *hash_b = &state->router_hash;
+        if (hash_b->n_shape_dims != 2 || hash_b->shape[0] != 6 ||
+            token >= hash_b->shape[1] ||
+            hash_b->source_offset > model->size ||
+            hash_b->byte_length > model->size - hash_b->source_offset) {
+            failures++;
+            return;
+        }
+        const int32_t *hash = (const int32_t *)(const void *)(model->ptr + hash_b->source_offset);
+        const int32_t *row = hash + (uint64_t)token * 6u;
+        for (uint32_t i = 0; i < 6; i++) selected[i] = row[i];
+    } else if (state->router_kind == DS4_V100_ROUTER_BIAS && state->has_bias_router) {
+        const ds4_v100_tensor_binding *bias_b = &state->router_bias;
+        if (bias_b->n_shape_dims != 1 || bias_b->shape[0] != 256 ||
+            bias_b->source_offset > model->size ||
+            bias_b->byte_length > model->size - bias_b->source_offset) {
+            failures++;
+            return;
+        }
+        const float *bias = (const float *)(const void *)(model->ptr + bias_b->source_offset);
+        float best_scores[6];
+        for (uint32_t i = 0; i < 6; i++) {
+            selected[i] = -1;
+            best_scores[i] = -FLT_MAX;
+        }
+        for (uint32_t e = 0; e < 256; e++) {
+            const float score = probs[e] + bias[e];
+            for (uint32_t k = 0; k < 6; k++) {
+                if (selected[k] < 0 ||
+                    router_score_better_ref(score,
+                                            e,
+                                            best_scores[k],
+                                            (uint32_t)selected[k])) {
+                    for (uint32_t j = 5; j > k; j--) {
+                        selected[j] = selected[j - 1];
+                        best_scores[j] = best_scores[j - 1];
+                    }
+                    selected[k] = (int32_t)e;
+                    best_scores[k] = score;
+                    break;
+                }
+            }
+        }
+    } else {
         failures++;
         return;
     }
-    const int32_t *hash = (const int32_t *)(const void *)(model->ptr + hash_b->source_offset);
-    const int32_t *row = hash + (uint64_t)token * 6u;
+
     float sum = 0.0f;
     for (uint32_t i = 0; i < 6; i++) {
-        selected[i] = row[i];
         const int32_t e = selected[i];
         weights[i] = (e >= 0 && e < 256) ? probs[(uint32_t)e] : 0.0f;
         sum += weights[i];
@@ -538,8 +583,9 @@ int main(int argc, char **argv) {
         unmap_model_file(&model);
         return 1;
     }
-    if (state.router_kind != DS4_V100_ROUTER_HASH || !state.has_hash_router) {
-        fprintf(stderr, "cuda_v100_integrated_layer_smoke: layer %d is not a hash-router layer\n",
+    if (!((state.router_kind == DS4_V100_ROUTER_HASH && state.has_hash_router) ||
+          (state.router_kind == DS4_V100_ROUTER_BIAS && state.has_bias_router))) {
+        fprintf(stderr, "cuda_v100_integrated_layer_smoke: layer %d has unsupported router metadata\n",
                 layer);
         ds4_v100_context_close(ctx);
         unmap_model_file(&model);
@@ -633,8 +679,7 @@ int main(int argc, char **argv) {
         cpu_rms_norm_weight(ffn_norm, residual, &model, &state.ffn_norm, hidden, DS4_V100_RMS_EPS);
 
         cpu_f32_matmul(&state.router, &model, ffn_norm, logits);
-        cpu_hash_router_select(&state.router_hash, &model, logits, (uint32_t)router_token,
-                               selected, weights);
+        cpu_router_select(&state, &model, logits, (uint32_t)router_token, selected, weights);
         for (uint32_t route = 0; route < 6; route++) {
             check(selected[route] >= 0 && selected[route] < 256, "CPU selected invalid expert");
             ds4_v100_route_matrices route_views;

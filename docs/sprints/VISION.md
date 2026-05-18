@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-18
 last_updated_by: sprint-execute
-revision: 32
+revision: 33
 ---
 
 # Vision: DS4 V100 Appliance
@@ -133,6 +133,12 @@ it is a narrow DS4 runtime tuned for this hardware.
   mixed attention, the existing HC layer entrypoint, and the full appliance
   gate. The next critical gap is the full 43-layer single-slot scheduler that
   produces a real selected token.
+- Sprint 022 shipped the first resident multi-layer scheduler surface. The
+  executor now supports both hash and bias router layers, the V100 gate
+  validates a real ratio-128 bias-router layer, and the stage scheduler uploads
+  the complete gpu0 shard and executes layers 0-5 from a token embedding seed.
+  The next critical gap is cross-GPU HC relay through stages 1-7 and the final
+  output-head selected-token gate.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -420,6 +426,21 @@ it is a narrow DS4 runtime tuned for this hardware.
   full V100 gate passes and remains `ready=false` pending full scheduler,
   selected-token decode, serving, MTP, and throughput.
 
+### Sprint 022 - Bias Router And Resident Stage Scheduler [complete]
+
+- **Goal**: Remove the hash-router-only execution limit and introduce a
+  scheduler-owned resident stage walk over real pack bytes.
+- **Rationale**: The model cannot reach full selected-token decode if the
+  executor stops at layer 2 or if scheduling remains a single-layer test
+  fixture. Stage 0 is the right first target because it owns token embedding
+  and includes SWA-only, ratio-4, and ratio-128 layers.
+- **Outcome**: `SHIP`. The layer executor now supports hash and bias routers,
+  layer 3 ratio-128 bias routing passes on V100, and
+  `ds4_v100_stage_scheduler` uploads the full gpu0 shard into a resident arena
+  and executes layers 0-5 from a token embedding seed. The full V100 gate
+  passes and remains `ready=false` pending cross-GPU 43-layer scheduling,
+  selected-token decode, serving, MTP, and throughput.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -509,6 +530,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-18 | Shipped Sprint 019 integrated hidden-vector layer executor and moved Sprint 020 to compressor/indexer plus HC scheduling. | Layer 2 now produces a bounded next-hidden vector through semantic raw/compressed attention inputs and real router-selected FFN on V100; the remaining blocker is generating those compressed rows from real descriptors and running the true HC-state layer scheduler. | Sprint 020+ |
 | 2026-05-18 | Extended Sprint 020 with compressor/indexer descriptor binding and a V100 HC-state layer entrypoint. | The runtime now has the true `[4 x 4096]` HC layer surface and real compressor/indexer descriptor ownership, but still needs executor-owned compressed-row generation before selected-token decode. | Sprint 021+ |
 | 2026-05-18 | Shipped Sprint 021 executor-owned compressor/indexer decode rows and indexed ratio-4 attention. | The representative layer now owns raw/compressed/indexer cache mutation from real descriptors on V100; the next blocker is wiring all 43 layers into a single-slot selected-token scheduler. | Sprint 022+ |
+| 2026-05-18 | Shipped Sprint 022 bias-router execution and a resident stage-0 scheduler. | The runtime now walks layers 0-5 from resident gpu0 pack bytes and validates both router families on V100; the next blocker is cross-GPU HC relay through all stages and output-head selected-token comparison. | Sprint 023+ |
 
 ## Open Questions
 
