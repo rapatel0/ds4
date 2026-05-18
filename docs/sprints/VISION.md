@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-17
-last_updated_by: sprint-plan
-revision: 2
+last_updated_by: sprint-execute
+revision: 3
 ---
 
 # Vision: DS4 V100 Appliance
@@ -25,6 +25,10 @@ it is a narrow DS4 runtime tuned for this hardware.
   uploaded to all 8 V100s as CUDA device memory.
 - The source model generation guard is still active by design. No source-format
   decode, prefill, KV path, MTP path, or throughput benchmark has been enabled.
+- Sprint 005 proved a first resident source-dtype diagnostic: native BF16
+  `token_embd.weight` bytes can be gathered from V100 device memory and expanded
+  to F32 bit-exactly. This is not native BF16 math; V100 production GEMMs must
+  target FP16 tensor cores or the selected low-bit/integer kernels.
 - The tightest observed residency case still leaves more than the planned 3 GiB
   reserve on a 32 GB V100. Weight VRAM fit is no longer the primary blocker.
 - The main remaining risk is numerical correctness and kernel coverage for the
@@ -78,23 +82,29 @@ it is a narrow DS4 runtime tuned for this hardware.
   providers loaded all 1328 tensors into CUDA device arenas, spot checks and a
   cross-provider check passed, and all GPUs retained the required reserve.
 
-### Sprint 005 - First Resident BF16 Compute Probe [planned]
+### Sprint 005 - First Resident BF16 Gather/Expand Probe [complete]
 
-- **Goal**: Execute a diagnostic BF16 row-gather probe from resident
+- **Goal**: Execute a diagnostic BF16 row-gather/expand probe from resident
   `ds4_gpu_arena` bytes, using `token_embd.weight` as the first source-format
   tensor family and returning host F32 samples for exact verification.
-- **Rationale**: BF16 embedding is the lowest-risk useful compute proof after
-  residency. It validates arena pointers, descriptor bounds, dtype conversion,
-  and CUDA launch semantics before Sprint 006 introduces production multi-GPU
-  execution context.
+- **Rationale**: BF16 embedding is the lowest-risk useful source-dtype proof
+  after residency. It validates arena pointers, descriptor bounds, dtype
+  expansion, and CUDA launch semantics before Sprint 006 introduces production
+  multi-GPU execution context.
+- **Outcome**: `SHIP`. Host-stub and CUDA probes passed, GGUF and shard
+  provider `token_embd.weight` probes passed on the 8x V100 pod, and source
+  model generation remains guarded.
 
 ### Sprint 006 - Multi-GPU Execution Context And Layer Skeleton [planned]
 
 - **Goal**: Introduce the production 8-GPU execution context and a layer-owned
-  execution skeleton with hidden-context relay boundaries.
+  execution skeleton with hidden-context relay boundaries and explicit V100
+  execution-format policy.
 - **Rationale**: Full decode requires streams, handles, scratch, tensor
   descriptors, device ownership, and boundary transfer semantics that are
-  shaped by the first real compute path.
+  shaped by the first resident tensor probe. V100 has no native BF16, FP8, or
+  FP4 tensor-core path, so Sprint 006 must decide where to use FP16 tensor-core
+  execution, FP32 control math, and the existing low-bit/integer kernels.
 
 ### Sprint 007 - Single-Slot Decode Correctness [planned]
 
@@ -162,6 +172,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 |------|-------------|-----|-----------------|
 | 2026-05-17 | Created the first DS4 V100 appliance vision after Sprint 004 residency shipped. | The project has moved from feasibility and pack-residency proof to source-format compute, correctness, deployment, and performance sequencing. | Sprint 005+ |
 | 2026-05-17 | Refined Sprint 005 from a generic source-format compute probe to a BF16 resident row-gather probe on `token_embd.weight`. | Planning consensus found BF16 embedding is the smallest useful proof of arena-resident compute and avoids premature FP8/MXFP4, scheduler, or decode work. | Sprint 005-006 |
+| 2026-05-17 | Corrected Sprint 005 language from BF16 compute to BF16 gather/expand and shipped the probe. | V100 has no native BF16 tensor-core execution; the useful proof is resident addressing and exact dtype expansion, while production compute must target FP16 or low-bit/integer kernels. | Sprint 005-006 |
 
 ## Open Questions
 

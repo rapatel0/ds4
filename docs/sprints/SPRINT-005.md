@@ -1,7 +1,7 @@
 ---
 sprint: 005
-title: First Resident BF16 Compute Probe
-status: planned
+title: First Resident BF16 Gather/Expand Probe
+status: shipped
 date: 2026-05-17
 target_repo: rapatel0/ds4
 architecture: ../architecture/DS4-V100-LAYOUT.md
@@ -10,7 +10,7 @@ merge_notes: drafts/SPRINT-005-MERGE-NOTES.md
 deferred: SPRINT-005-DEFERRED.md
 ---
 
-# SPRINT-005: First Resident BF16 Compute Probe
+# SPRINT-005: First Resident BF16 Gather/Expand Probe
 
 ## Overview
 
@@ -18,9 +18,11 @@ Sprint 004 proved that source-faithful DS4 V100 packed weights can be
 reconciled, sharded, uploaded, and held resident on the owning V100 devices.
 The runtime still has no proven compute contract over those resident bytes.
 
-Sprint 005 adds the smallest useful resident compute probe: gather BF16 rows
-from a `ds4_gpu_arena`, convert the source BF16 bit patterns to F32, and
-compare against a CPU reference. The first semantic target is
+Sprint 005 adds the smallest useful resident tensor probe: gather BF16 rows
+from a `ds4_gpu_arena`, expand the source BF16 bit patterns to F32, and compare
+against a CPU reference. V100 does not have native BF16 tensor-core execution;
+this is a diagnostic gather/expand path, not the production performance path.
+The first semantic target is
 `token_embd.weight`, which is source BF16, owned by `gpu0`, and large enough to
 exercise real arena offsets without requiring decode, KV, MTP, or layer
 scheduling.
@@ -248,7 +250,10 @@ The CUDA implementation must:
 ### Phase 4: Cluster Validation And Close-Out
 
 **Files:**
-- `docs/sprints/drafts/SPRINT-005-BF16-PROBE.log`
+- `docs/sprints/drafts/SPRINT-005-CUDA-SYNTHETIC.log`
+- `docs/sprints/drafts/SPRINT-005-BF16-PROBE-GGUF.log`
+- `docs/sprints/drafts/SPRINT-005-BF16-PROBE-SHARD.log`
+- `docs/sprints/drafts/SPRINT-005-GUARD.log`
 - `docs/sprints/SPRINT-005-REPORT.md`
 - `docs/sprints/SPRINT-005-FOLLOWUPS.md` if needed
 - `docs/sprints/VISION.md`
@@ -277,7 +282,10 @@ The CUDA implementation must:
 | `tools/ds4-v100-residency-smoke.c` | Modify | Add focused BF16 probe mode |
 | `tests/residency_smoke_synthetic.sh` | Modify | Exercise synthetic probe mode |
 | `Makefile` | Modify | Add new test/tool targets and clean rules |
-| `docs/sprints/drafts/SPRINT-005-BF16-PROBE.log` | Create | Cluster probe artifact |
+| `docs/sprints/drafts/SPRINT-005-CUDA-SYNTHETIC.log` | Create | Cluster synthetic CUDA validation artifact |
+| `docs/sprints/drafts/SPRINT-005-BF16-PROBE-GGUF.log` | Create | GGUF-provider cluster probe artifact |
+| `docs/sprints/drafts/SPRINT-005-BF16-PROBE-SHARD.log` | Create | Shard-provider cluster probe artifact |
+| `docs/sprints/drafts/SPRINT-005-GUARD.log` | Create | Source-model generation guard artifact |
 | `docs/sprints/SPRINT-005-REPORT.md` | Create | Execution report |
 | `docs/sprints/VISION.md` | Modify | Record planned sprint refinement now and outcome after execution |
 

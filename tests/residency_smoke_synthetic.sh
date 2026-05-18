@@ -9,15 +9,38 @@ MODEL="$TMP/model.bin"
 INDEX="$TMP/pack-index.tsv"
 SHARD="$TMP/gpu0.weights"
 
-printf '0123456789abcdefABCDEFGHIJKLMNOPqrstuvwxyzUVWXYZ--++!!??' > "$MODEL"
-dd if="$MODEL" of="$SHARD" bs=1 count=48 2>/dev/null
+printf '0123456789abcdefABCDEFGHIJKLMNOPqrstuvwxyzUVWXYZ--++!!??ABCDEFGH' > "$MODEL"
+dd if="$MODEL" of="$SHARD" bs=1 count=64 2>/dev/null
 
 cat > "$INDEX" <<'TSV'
 semantic_tensor_id	source_name	source_dtype	source_shape	runtime_layout	owning_gpu	layer_id	kernel_family	source_offset	byte_length	shard_file	shard_offset	scale_offset	checksum
-tok	tok	bf16	[4x4]	source_bf16	0	-1	embed	0	16	gpu0.weights	0	-1	pending
-ctl	ctl	f32	[4]	source_f32_control	0	0	control	16	16	gpu0.weights	16	-1	pending
-lyr	lyr	f8_e4m3_b128	[16x8]	source_f8	0	1	fp8	32	16	gpu0.weights	32	-1	pending
+tok	tok	bf16	[4x4]	source_bf16	0	-1	embed	0	32	gpu0.weights	0	-1	pending
+ctl	ctl	f32	[4]	source_f32_control	0	0	control	32	16	gpu0.weights	32	-1	pending
+lyr	lyr	f8_e4m3_b128	[16x8]	source_f8	0	1	fp8	48	16	gpu0.weights	48	-1	pending
 TSV
+
+"$ROOT/tools/ds4-v100-residency-smoke" \
+  --model "$MODEL" \
+  --index "$INDEX" \
+  --provider gguf \
+  --bf16-probe tok \
+  --probe-row 0 \
+  --probe-row 3 \
+  --probe-samples 4 \
+  --probe-only \
+  --report "$TMP/bf16-probe.log"
+
+"$ROOT/tools/ds4-v100-residency-smoke" \
+  --model "$MODEL" \
+  --index "$INDEX" \
+  --provider shard \
+  --shard-dir "$TMP" \
+  --bf16-probe tok \
+  --probe-row 0 \
+  --probe-row 3 \
+  --probe-samples 4 \
+  --probe-only \
+  --report "$TMP/bf16-probe-shard.log"
 
 "$ROOT/tools/ds4-v100-residency-smoke" \
   --model "$MODEL" \
@@ -35,6 +58,8 @@ TSV
 
 grep -q 'result	OK' "$TMP/gguf.log"
 grep -q 'result	OK' "$TMP/shard.log"
+grep -q 'bf16_probe_result	OK' "$TMP/bf16-probe.log"
+grep -q 'bf16_probe_result	OK' "$TMP/bf16-probe-shard.log"
 grep -q 'crosscheck	' "$TMP/shard.log"
 
 echo "residency_smoke_synthetic: ok"

@@ -57,6 +57,14 @@ struct ds4_gpu_arena {
 };
 
 typedef struct {
+    uint64_t arena_offset;
+    uint64_t byte_length;
+    uint32_t rows;
+    uint32_t cols;
+    uint32_t row_stride_elements;
+} ds4_gpu_bf16_matrix_view;
+
+typedef struct {
     uint8_t scales[CUDA_QK_K / 16];
     uint8_t qs[CUDA_QK_K / 4];
     uint16_t d;
@@ -1597,6 +1605,73 @@ static int cuda_arena_range_ok(const ds4_gpu_arena *a, uint64_t offset, uint64_t
     return a && a->valid && offset <= a->bytes && bytes <= a->bytes - offset;
 }
 
+static int checked_mul_u64(uint64_t a, uint64_t b, uint64_t *out) {
+    if (a != 0 && b > UINT64_MAX / a) return 1;
+    *out = a * b;
+    return 0;
+}
+
+static int cuda_bf16_view_range_ok(const ds4_gpu_arena *arena,
+                                   const ds4_gpu_bf16_matrix_view *view,
+                                   const uint32_t *row_ids,
+                                   uint32_t n_rows,
+                                   const float *out_f32,
+                                   uint64_t out_bytes,
+                                   uint64_t *out_values,
+                                   uint64_t *out_row_id_bytes) {
+    if (!arena || !view || !row_ids || !out_f32 || !arena->valid || !arena->ptr) return 0;
+    if (n_rows == 0 || view->rows == 0 || view->cols == 0) return 0;
+    if (view->row_stride_elements < view->cols) return 0;
+    if ((view->arena_offset & 1ull) != 0 || (view->byte_length & 1ull) != 0) return 0;
+    if (!cuda_arena_range_ok(arena, view->arena_offset, view->byte_length)) return 0;
+
+    uint64_t values = 0;
+    uint64_t output_bytes = 0;
+    if (checked_mul_u64((uint64_t)n_rows, (uint64_t)view->cols, &values)) return 0;
+    if (checked_mul_u64(values, sizeof(float), &output_bytes)) return 0;
+    if (out_bytes < output_bytes) return 0;
+
+    uint64_t row_id_bytes = 0;
+    if (checked_mul_u64((uint64_t)n_rows, sizeof(uint32_t), &row_id_bytes)) return 0;
+
+    uint64_t total_elements = view->byte_length / sizeof(uint16_t);
+    uint64_t last_row = (uint64_t)view->rows - 1u;
+    uint64_t last_start = 0;
+    if (checked_mul_u64(last_row, (uint64_t)view->row_stride_elements, &last_start)) return 0;
+    if ((uint64_t)view->cols > total_elements ||
+        last_start > total_elements - (uint64_t)view->cols) {
+        return 0;
+    }
+
+    for (uint32_t i = 0; i < n_rows; i++) {
+        if (row_ids[i] >= view->rows) return 0;
+    }
+
+    if (out_values) *out_values = values;
+    if (out_row_id_bytes) *out_row_id_bytes = row_id_bytes;
+    return 1;
+}
+
+__device__ static float arena_bf16_to_f32(uint16_t v) {
+    return __uint_as_float((uint32_t)v << 16);
+}
+
+__global__ static void arena_bf16_row_gather_kernel(
+        float *out,
+        const uint16_t *base,
+        const uint32_t *row_ids,
+        uint32_t n_rows,
+        uint32_t cols,
+        uint32_t row_stride_elements) {
+    uint64_t gid = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    uint64_t n = (uint64_t)n_rows * cols;
+    if (gid >= n) return;
+    uint32_t c = (uint32_t)(gid % cols);
+    uint32_t r = (uint32_t)(gid / cols);
+    uint64_t src = (uint64_t)row_ids[r] * row_stride_elements + c;
+    out[gid] = arena_bf16_to_f32(base[src]);
+}
+
 extern "C" int ds4_gpu_arena_open(ds4_gpu_arena **out, int gpu, uint64_t bytes) {
     if (!out || gpu < 0) return 1;
     *out = NULL;
@@ -1793,6 +1868,66 @@ extern "C" void ds4_gpu_print_topology_report(FILE *fp) {
         }
         fputc('\n', fp);
     }
+}
+
+extern "C" int ds4_gpu_arena_bf16_row_gather_f32(
+        const ds4_gpu_arena            *arena,
+        const ds4_gpu_bf16_matrix_view *view,
+        const uint32_t                 *row_ids,
+        uint32_t                        n_rows,
+        float                          *out_f32,
+        uint64_t                        out_bytes) {
+    uint64_t values = 0;
+    uint64_t row_id_bytes = 0;
+    if (!cuda_bf16_view_range_ok(arena, view, row_ids, n_rows, out_f32,
+                                 out_bytes, &values, &row_id_bytes)) {
+        return 1;
+    }
+    uint64_t output_bytes = values * sizeof(float);
+    if (output_bytes > (uint64_t)SIZE_MAX || row_id_bytes > (uint64_t)SIZE_MAX) return 1;
+
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "bf16 probe set device")) return 1;
+
+    uint32_t *dev_rows = NULL;
+    float *dev_out = NULL;
+    if (!cuda_ok(cudaMalloc(&dev_rows, (size_t)row_id_bytes), "bf16 probe row ids alloc")) return 1;
+    if (!cuda_ok(cudaMalloc(&dev_out, (size_t)output_bytes), "bf16 probe output alloc")) {
+        (void)cudaFree(dev_rows);
+        return 1;
+    }
+    int ok = 1;
+    if (!cuda_ok(cudaMemcpy(dev_rows, row_ids, (size_t)row_id_bytes, cudaMemcpyHostToDevice),
+                 "bf16 probe row ids upload")) {
+        ok = 0;
+    }
+    if (ok) {
+        const uint16_t *base =
+            (const uint16_t *)((const char *)arena->ptr + view->arena_offset);
+        uint64_t blocks = (values + 255) / 256;
+        if (blocks > (uint64_t)UINT32_MAX) {
+            ok = 0;
+        } else {
+            arena_bf16_row_gather_kernel<<<(unsigned int)blocks, 256>>>(
+                dev_out,
+                base,
+                dev_rows,
+                n_rows,
+                view->cols,
+                view->row_stride_elements);
+            if (!cuda_ok(cudaGetLastError(), "bf16 probe launch") ||
+                !cuda_ok(cudaDeviceSynchronize(), "bf16 probe synchronize")) {
+                ok = 0;
+            }
+        }
+    }
+    if (ok &&
+        !cuda_ok(cudaMemcpy(out_f32, dev_out, (size_t)output_bytes, cudaMemcpyDeviceToHost),
+                 "bf16 probe output read")) {
+        ok = 0;
+    }
+    (void)cudaFree(dev_out);
+    (void)cudaFree(dev_rows);
+    return ok ? 0 : 1;
 }
 
 extern "C" void ds4_gpu_set_quality(bool quality) {
