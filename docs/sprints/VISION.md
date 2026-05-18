@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-18
 last_updated_by: sprint-execute
-revision: 33
+revision: 34
 ---
 
 # Vision: DS4 V100 Appliance
@@ -139,6 +139,12 @@ it is a narrow DS4 runtime tuned for this hardware.
   the complete gpu0 shard and executes layers 0-5 from a token embedding seed.
   The next critical gap is cross-GPU HC relay through stages 1-7 and the final
   output-head selected-token gate.
+- Sprint 023 shipped the first cross-GPU scheduler handoff. The V100 pod now
+  executes layers 0-5 on gpu0, peer-copies HC, and executes layers 6-11 on
+  gpu1 with resident arenas. It also fixed CUDA model-range caching so cached
+  control tensors are device-local instead of being reused across GPUs. The
+  next critical gap is extending the stage chain through gpu7, then attaching
+  output-head selected-token validation.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -441,6 +447,21 @@ it is a narrow DS4 runtime tuned for this hardware.
   passes and remains `ready=false` pending cross-GPU 43-layer scheduling,
   selected-token decode, serving, MTP, and throughput.
 
+### Sprint 023 - Cross-GPU Two-Stage Scheduler Handoff [complete]
+
+- **Goal**: Prove the first real scheduler handoff between resident stage
+  owners.
+- **Rationale**: Stage-local scheduling is insufficient for a layer-sharded
+  appliance. The next risk is whether HC can move between GPUs and whether the
+  CUDA backend can safely run the same source-model helpers on more than one
+  device in one process.
+- **Outcome**: `SHIP`. The scheduler now runs layers 0-5 on gpu0, copies HC to
+  gpu1 with `cudaMemcpyPeer`, and runs layers 6-11 on gpu1. CUDA tensor
+  allocation/copy paths now track device ownership, and model-range caches are
+  device-local to avoid cross-GPU pointer reuse. The full V100 gate passes and
+  remains `ready=false` pending full 43-layer scheduling, selected-token
+  decode, serving, MTP, and throughput.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -531,6 +552,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-18 | Extended Sprint 020 with compressor/indexer descriptor binding and a V100 HC-state layer entrypoint. | The runtime now has the true `[4 x 4096]` HC layer surface and real compressor/indexer descriptor ownership, but still needs executor-owned compressed-row generation before selected-token decode. | Sprint 021+ |
 | 2026-05-18 | Shipped Sprint 021 executor-owned compressor/indexer decode rows and indexed ratio-4 attention. | The representative layer now owns raw/compressed/indexer cache mutation from real descriptors on V100; the next blocker is wiring all 43 layers into a single-slot selected-token scheduler. | Sprint 022+ |
 | 2026-05-18 | Shipped Sprint 022 bias-router execution and a resident stage-0 scheduler. | The runtime now walks layers 0-5 from resident gpu0 pack bytes and validates both router families on V100; the next blocker is cross-GPU HC relay through all stages and output-head selected-token comparison. | Sprint 023+ |
+| 2026-05-18 | Shipped Sprint 023 cross-GPU two-stage scheduling. | The runtime now executes layers 0-11 across gpu0 and gpu1 with a peer HC handoff and device-local CUDA model caches; the next blocker is generalizing the stage chain through gpu7. | Sprint 024+ |
 
 ## Open Questions
 

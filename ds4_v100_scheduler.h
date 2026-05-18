@@ -56,6 +56,18 @@ int ds4_v100_stage_scheduler_decode_token(ds4_v100_stage_scheduler *sched,
                                           char *err,
                                           size_t errlen);
 
+int ds4_v100_stage_scheduler_handoff(ds4_v100_stage_scheduler *dst,
+                                     const ds4_v100_stage_scheduler *src,
+                                     char *err,
+                                     size_t errlen);
+
+int ds4_v100_stage_scheduler_decode_hc(ds4_v100_stage_scheduler *sched,
+                                       uint32_t token,
+                                       uint32_t position,
+                                       ds4_v100_stage_scheduler_report *report,
+                                       char *err,
+                                       size_t errlen);
+
 int ds4_v100_stage_scheduler_read_hc(const ds4_v100_stage_scheduler *sched,
                                      void *dst,
                                      uint64_t bytes);

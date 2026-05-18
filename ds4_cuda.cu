@@ -39,6 +39,7 @@ struct ds4_gpu_tensor {
     void *ptr;
     uint64_t bytes;
     int owner;
+    int device;
 };
 
 struct ds4_gpu_arena {
@@ -142,12 +143,14 @@ struct cuda_model_range {
     uint64_t registered_bytes;
     int host_registered;
     int arena_allocated;
+    int device;
 };
 
 struct cuda_model_arena {
     char *device_ptr;
     uint64_t bytes;
     uint64_t used;
+    int device;
 };
 
 struct cuda_q8_f16_range {
@@ -252,16 +255,24 @@ static const char *cuda_model_range_ptr(const void *model_map, uint64_t offset, 
     if (direct_env && direct_env[0]) return cuda_model_ptr(model_map, offset);
 
     const uint64_t end = offset + bytes;
+    int cur_dev = 0;
+    if (cudaGetDevice(&cur_dev) != cudaSuccess) {
+        cur_dev = 0;
+        (void)cudaGetLastError();
+    }
     auto exact = g_model_range_by_offset.find(offset);
     if (exact != g_model_range_by_offset.end()) {
         const cuda_model_range &r = g_model_ranges[exact->second];
-        if (r.host_base == model_map && end >= offset && bytes <= r.bytes) return r.device_ptr;
+        if (r.host_base == model_map && r.device == cur_dev &&
+            end >= offset && bytes <= r.bytes) return r.device_ptr;
     }
     for (const cuda_model_range &r : g_model_ranges) {
-        if (r.host_base == model_map && offset >= r.offset && end >= offset && end <= r.offset + r.bytes) {
+        if (r.host_base == model_map && r.device == cur_dev &&
+            offset >= r.offset && end >= offset && end <= r.offset + r.bytes) {
             return r.device_ptr + (offset - r.offset);
         }
-        if (r.host_base == model_map && r.host_registered && r.registered_base && r.registered_device_base) {
+        if (r.host_base == model_map && r.device == cur_dev &&
+            r.host_registered && r.registered_base && r.registered_device_base) {
             const uintptr_t h0 = (uintptr_t)((const char *)model_map + offset);
             const uintptr_t h1 = h0 + bytes;
             const uintptr_t r0 = (uintptr_t)r.registered_base;
@@ -291,7 +302,7 @@ static const char *cuda_model_range_ptr(const void *model_map, uint64_t offset, 
             err = cudaHostGetDevicePointer(&reg_dev, (void *)reg_addr, 0);
             if (err == cudaSuccess && reg_dev) {
                 char *dev_ptr = (char *)reg_dev + reg_delta;
-                g_model_ranges.push_back({model_map, offset, bytes, dev_ptr, (void *)reg_addr, (char *)reg_dev, reg_bytes, 1, 0});
+                g_model_ranges.push_back({model_map, offset, bytes, dev_ptr, (void *)reg_addr, (char *)reg_dev, reg_bytes, 1, 0, cur_dev});
                 g_model_range_by_offset[offset] = g_model_ranges.size() - 1u;
                 if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE")) {
                     fprintf(stderr, "ds4: CUDA mapped %s %.2f MiB\n",
@@ -335,7 +346,7 @@ static const char *cuda_model_range_ptr(const void *model_map, uint64_t offset, 
             return NULL;
         }
     }
-    g_model_ranges.push_back({model_map, offset, bytes, (char *)dev, NULL, NULL, 0, 0, 0});
+    g_model_ranges.push_back({model_map, offset, bytes, (char *)dev, NULL, NULL, 0, 0, 0, cur_dev});
     g_model_range_by_offset[offset] = g_model_ranges.size() - 1u;
     g_model_range_bytes += bytes;
     if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE")) {
@@ -353,13 +364,20 @@ static int cuda_model_range_is_cached(const void *model_map, uint64_t offset, ui
 
     const uint64_t end = offset + bytes;
     if (end < offset) return 0;
+    int cur_dev = 0;
+    if (cudaGetDevice(&cur_dev) != cudaSuccess) {
+        cur_dev = 0;
+        (void)cudaGetLastError();
+    }
     for (const cuda_model_range &r : g_model_ranges) {
         if (r.host_base == model_map &&
+            r.device == cur_dev &&
             offset >= r.offset &&
             end <= r.offset + r.bytes) {
             return 1;
         }
         if (r.host_base == model_map &&
+            r.device == cur_dev &&
             r.host_registered &&
             r.registered_base &&
             r.registered_device_base) {
@@ -1004,8 +1022,14 @@ static char *cuda_model_arena_alloc(uint64_t bytes, const char *what) {
     if (g_model_cache_full) return NULL;
     const uint64_t align = 256u;
     const uint64_t aligned = (bytes + align - 1u) & ~(align - 1u);
+    int cur_dev = 0;
+    if (cudaGetDevice(&cur_dev) != cudaSuccess) {
+        cur_dev = 0;
+        (void)cudaGetLastError();
+    }
 
     for (cuda_model_arena &a : g_model_arenas) {
+        if (a.device != cur_dev) continue;
         const uint64_t used = (a.used + align - 1u) & ~(align - 1u);
         if (used <= a.bytes && aligned <= a.bytes - used) {
             char *ptr = a.device_ptr + used;
@@ -1029,7 +1053,7 @@ static char *cuda_model_arena_alloc(uint64_t bytes, const char *what) {
         g_model_cache_full = 1;
         return NULL;
     }
-    g_model_arenas.push_back({(char *)dev, chunk, aligned});
+    g_model_arenas.push_back({(char *)dev, chunk, aligned, cur_dev});
     if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE")) {
         uint64_t arena_bytes = 0;
         for (const cuda_model_arena &a : g_model_arenas) arena_bytes += a.bytes;
@@ -1123,7 +1147,12 @@ static const char *cuda_model_range_ptr_from_fd(
         return NULL;
     }
 
-    g_model_ranges.push_back({model_map, offset, bytes, dev, NULL, NULL, 0, 0, 1});
+    int cur_dev = 0;
+    if (cudaGetDevice(&cur_dev) != cudaSuccess) {
+        cur_dev = 0;
+        (void)cudaGetLastError();
+    }
+    g_model_ranges.push_back({model_map, offset, bytes, dev, NULL, NULL, 0, 0, 1, cur_dev});
     g_model_range_by_offset[offset] = g_model_ranges.size() - 1u;
     g_model_range_bytes += bytes;
     cuda_model_load_progress_note(g_model_range_bytes);
@@ -1228,11 +1257,15 @@ static void cuda_model_range_release_all(void) {
         if (r.host_registered && r.registered_base) {
             (void)cudaHostUnregister(r.registered_base);
         } else if (r.device_ptr && !r.arena_allocated) {
+            (void)cudaSetDevice(r.device);
             (void)cudaFree(r.device_ptr);
         }
     }
     for (const cuda_model_arena &a : g_model_arenas) {
-        if (a.device_ptr) (void)cudaFree(a.device_ptr);
+        if (a.device_ptr) {
+            (void)cudaSetDevice(a.device);
+            (void)cudaFree(a.device_ptr);
+        }
     }
     g_model_arenas.clear();
     g_model_ranges.clear();
@@ -1332,6 +1365,11 @@ extern "C" void ds4_gpu_cleanup(void) {
     }
 }
 
+extern "C" int ds4_gpu_set_device(int gpu) {
+    if (gpu < 0) return 0;
+    return cuda_ok(cudaSetDevice(gpu), "set device");
+}
+
 __global__ static void fill_f32_kernel(float *x, uint64_t n, float v);
 
 extern "C" ds4_gpu_tensor *ds4_gpu_tensor_alloc(uint64_t bytes) {
@@ -1344,6 +1382,10 @@ extern "C" ds4_gpu_tensor *ds4_gpu_tensor_alloc(uint64_t bytes) {
     }
     t->bytes = bytes;
     t->owner = 1;
+    if (cudaGetDevice(&t->device) != cudaSuccess) {
+        t->device = 0;
+        (void)cudaGetLastError();
+    }
     return t;
 }
 
@@ -1357,6 +1399,10 @@ extern "C" ds4_gpu_tensor *ds4_gpu_tensor_alloc_managed(uint64_t bytes) {
     }
     t->bytes = bytes;
     t->owner = 1;
+    if (cudaGetDevice(&t->device) != cudaSuccess) {
+        t->device = 0;
+        (void)cudaGetLastError();
+    }
     return t;
 }
 
@@ -1403,12 +1449,16 @@ extern "C" ds4_gpu_tensor *ds4_gpu_tensor_view(const ds4_gpu_tensor *base, uint6
     t->ptr = (char *)base->ptr + offset;
     t->bytes = bytes;
     t->owner = 0;
+    t->device = base->device;
     return t;
 }
 
 extern "C" void ds4_gpu_tensor_free(ds4_gpu_tensor *tensor) {
     if (!tensor) return;
-    if (tensor->owner && tensor->ptr) (void)cudaFree(tensor->ptr);
+    if (tensor->owner && tensor->ptr) {
+        (void)cudaSetDevice(tensor->device);
+        (void)cudaFree(tensor->ptr);
+    }
     free(tensor);
 }
 
@@ -1418,6 +1468,7 @@ extern "C" uint64_t ds4_gpu_tensor_bytes(const ds4_gpu_tensor *tensor) {
 
 extern "C" void *ds4_gpu_tensor_contents(ds4_gpu_tensor *tensor) {
     if (!tensor) return NULL;
+    (void)cudaSetDevice(tensor->device);
     (void)cudaDeviceSynchronize();
     return tensor->ptr;
 }
@@ -1425,17 +1476,20 @@ extern "C" void *ds4_gpu_tensor_contents(ds4_gpu_tensor *tensor) {
 extern "C" int ds4_gpu_tensor_fill_f32(ds4_gpu_tensor *tensor, float value, uint64_t count) {
     if (!tensor || count > tensor->bytes / sizeof(float)) return 0;
     if (count == 0) return 1;
+    if (!cuda_ok(cudaSetDevice(tensor->device), "tensor fill set device")) return 0;
     fill_f32_kernel<<<(count + 255u) / 256u, 256>>>((float *)tensor->ptr, count, value);
     return cuda_ok(cudaGetLastError(), "tensor fill f32 launch");
 }
 
 extern "C" int ds4_gpu_tensor_write(ds4_gpu_tensor *tensor, uint64_t offset, const void *data, uint64_t bytes) {
     if (!tensor || !data || offset > tensor->bytes || bytes > tensor->bytes - offset) return 0;
+    if (!cuda_ok(cudaSetDevice(tensor->device), "tensor write set device")) return 0;
     return cuda_ok(cudaMemcpy((char *)tensor->ptr + offset, data, (size_t)bytes, cudaMemcpyHostToDevice), "tensor write");
 }
 
 extern "C" int ds4_gpu_tensor_read(const ds4_gpu_tensor *tensor, uint64_t offset, void *data, uint64_t bytes) {
     if (!tensor || !data || offset > tensor->bytes || bytes > tensor->bytes - offset) return 0;
+    if (!cuda_ok(cudaSetDevice(tensor->device), "tensor read set device")) return 0;
     return cuda_ok(cudaMemcpy(data, (const char *)tensor->ptr + offset, (size_t)bytes, cudaMemcpyDeviceToHost), "tensor read");
 }
 
@@ -1447,11 +1501,20 @@ extern "C" int ds4_gpu_tensor_copy(ds4_gpu_tensor *dst, uint64_t dst_offset,
         return 0;
     }
     if (bytes == 0) return 1;
-    return cuda_ok(cudaMemcpy((char *)dst->ptr + dst_offset,
-                              (const char *)src->ptr + src_offset,
-                              (size_t)bytes,
-                              cudaMemcpyDeviceToDevice),
-                   "tensor copy");
+    if (dst->device == src->device) {
+        if (!cuda_ok(cudaSetDevice(dst->device), "tensor copy set device")) return 0;
+        return cuda_ok(cudaMemcpy((char *)dst->ptr + dst_offset,
+                                  (const char *)src->ptr + src_offset,
+                                  (size_t)bytes,
+                                  cudaMemcpyDeviceToDevice),
+                       "tensor copy");
+    }
+    return cuda_ok(cudaMemcpyPeer((char *)dst->ptr + dst_offset,
+                                  dst->device,
+                                  (const char *)src->ptr + src_offset,
+                                  src->device,
+                                  (size_t)bytes),
+                   "tensor peer copy");
 }
 
 extern "C" int ds4_gpu_begin_commands(void) { return 1; }

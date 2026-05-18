@@ -1,0 +1,8 @@
+ds4: native DS4-Flash source layout is recognized, but V100 FP8/MXFP4 execution kernels are not wired into runtime yet; use --inspect or ds4-v100-plan --manifest for this model
+guard	normal_source_layout_rejection	OK
+ds4: --source-layout-oracle requires CPU backend and is not an inspect mode
+guard	non_cpu_oracle_rejection	OK
+ds4: --source-layout-oracle rejects MTP sidecars
+guard	mtp_oracle_rejection	OK
+ds4: source-layout oracle sessions require an explicit diagnostic session unlock
+guard	missing_session_unlock	OK

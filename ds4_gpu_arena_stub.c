@@ -135,6 +135,10 @@ int ds4_gpu_device_count(void) {
     return 0;
 }
 
+int ds4_gpu_set_device(int gpu) {
+    return gpu >= 0;
+}
+
 int ds4_gpu_arena_open(ds4_gpu_arena **out, int gpu, uint64_t bytes) {
     if (!out || gpu < 0) return 1;
     ds4_gpu_arena *a = (ds4_gpu_arena *)calloc(1, sizeof(*a));

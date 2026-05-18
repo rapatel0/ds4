@@ -270,10 +270,6 @@ int ds4_v100_stage_scheduler_open(ds4_v100_stage_scheduler **out,
         return scheduler_errorf(err, errlen, "missing context stage %d", opts->stage_id);
     }
     sched->stage = *stage;
-    if (!sched->stage.owns_token_embedding) {
-        ds4_v100_stage_scheduler_close(sched);
-        return scheduler_error(err, errlen, "decode-token scheduler currently requires token-embedding stage");
-    }
     if (ds4_v100_context_lookup_tensor_binding(sched->ctx,
                                                "token_embd.weight",
                                                &sched->token_embedding,
@@ -293,6 +289,11 @@ int ds4_v100_stage_scheduler_open(ds4_v100_stage_scheduler **out,
     if (upload_stage_weights(sched, err, errlen)) {
         ds4_v100_stage_scheduler_close(sched);
         return 1;
+    }
+    if (!ds4_gpu_set_device(sched->stage.gpu)) {
+        ds4_v100_stage_scheduler_close(sched);
+        return scheduler_errorf(err, errlen, "failed to set scheduler device gpu%d",
+                                sched->stage.gpu);
     }
 
     for (int layer = sched->stage.layer_begin; layer <= sched->stage.layer_end; layer++) {
@@ -323,6 +324,13 @@ int ds4_v100_stage_scheduler_decode_token(ds4_v100_stage_scheduler *sched,
                                           char *err,
                                           size_t errlen) {
     if (!sched) return scheduler_error(err, errlen, "missing scheduler");
+    if (!sched->stage.owns_token_embedding) {
+        return scheduler_error(err, errlen, "decode-token requires token-embedding stage");
+    }
+    if (!ds4_gpu_set_device(sched->stage.gpu)) {
+        return scheduler_errorf(err, errlen, "failed to set scheduler device gpu%d",
+                                sched->stage.gpu);
+    }
     if (sched->token_embedding.n_shape_dims != 2 ||
         sched->token_embedding.shape[0] != DS4_V100_HC_COLS) {
         return scheduler_error(err, errlen, "token embedding shape does not match HC width");
@@ -339,9 +347,39 @@ int ds4_v100_stage_scheduler_decode_token(ds4_v100_stage_scheduler *sched,
                                        DS4_V100_HC_ROWS)) {
         return scheduler_error(err, errlen, "token embedding HC seed failed");
     }
+    sched->cur_hc = sched->hc_a;
+    return ds4_v100_stage_scheduler_decode_hc(sched, token, position, report, err, errlen);
+}
 
-    ds4_gpu_tensor *cur = sched->hc_a;
-    ds4_gpu_tensor *next = sched->hc_b;
+int ds4_v100_stage_scheduler_handoff(ds4_v100_stage_scheduler *dst,
+                                     const ds4_v100_stage_scheduler *src,
+                                     char *err,
+                                     size_t errlen) {
+    if (!dst || !src || !src->cur_hc || !dst->hc_a) {
+        return scheduler_error(err, errlen, "missing scheduler handoff endpoint");
+    }
+    const uint64_t hc_bytes =
+        (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS * sizeof(float);
+    if (!ds4_gpu_tensor_copy(dst->hc_a, 0, src->cur_hc, 0, hc_bytes)) {
+        return scheduler_error(err, errlen, "scheduler HC handoff copy failed");
+    }
+    dst->cur_hc = dst->hc_a;
+    return 0;
+}
+
+int ds4_v100_stage_scheduler_decode_hc(ds4_v100_stage_scheduler *sched,
+                                       uint32_t token,
+                                       uint32_t position,
+                                       ds4_v100_stage_scheduler_report *report,
+                                       char *err,
+                                       size_t errlen) {
+    if (!sched || !sched->cur_hc) return scheduler_error(err, errlen, "missing scheduler HC input");
+    if (!ds4_gpu_set_device(sched->stage.gpu)) {
+        return scheduler_errorf(err, errlen, "failed to set scheduler device gpu%d",
+                                sched->stage.gpu);
+    }
+    ds4_gpu_tensor *cur = sched->cur_hc;
+    ds4_gpu_tensor *next = cur == sched->hc_a ? sched->hc_b : sched->hc_a;
     ds4_v100_layer_execute_report last;
     memset(&last, 0, sizeof(last));
     uint32_t executed = 0;
