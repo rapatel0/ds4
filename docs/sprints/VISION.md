@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-18
 last_updated_by: sprint-execute
-revision: 9
+revision: 10
 ---
 
 # Vision: DS4 V100 Appliance
@@ -49,6 +49,11 @@ it is a narrow DS4 runtime tuned for this hardware.
   exact F16 KV admission by stage/context/slot, MXFP4 parity hardening, and a
   bounded CUDA F8_E4M3_B128 source-format row-decode probe on `sm_70`. Full
   V100 source-layout prefill execution is now the next runtime sprint.
+- Sprint 009 shipped the first bounded V100 prefill/KV execution surface:
+  deterministic F16 KV arena planning/allocation, V100 context allocation for
+  256K and 1M single-slot tiers, guarded source-layout validation on the real
+  model, and a CUDA `sm_70` diagnostic smoke that bridges F8 source rows into
+  raw SWA, compressed KV, ratio-4 indexer KV, and compression-state surfaces.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -154,7 +159,7 @@ it is a narrow DS4 runtime tuned for this hardware.
   over-budget slots, MXFP4 source layout parity is hardened, and a bounded CUDA
   F8_E4M3_B128 row-decode anchor passed on V100 `sm_70`.
 
-### Sprint 009 - V100 Prefill And Compressed KV Execution [planned]
+### Sprint 009 - V100 Prefill And Compressed KV Execution [complete]
 
 - **Goal**: Implement the first layer-owned V100 source-layout prompt prefill
   and compressed KV/indexer state update path, validated against the Sprint 007
@@ -162,16 +167,28 @@ it is a narrow DS4 runtime tuned for this hardware.
 - **Rationale**: This turns the planning/anchor surfaces into usable prompt
   handling while preserving fail-closed normal serving until correctness is
   demonstrated.
+- **Outcome**: `SHIP`. The diagnostic path now allocates derived F16 KV arenas,
+  validates V100 allocation/admission at 256K and 1M single-slot tiers, runs
+  source-layout guards on the real model, and passes a bounded CUDA prefill/KV
+  smoke covering ratio-128 and ratio-4/indexer state updates on `sm_70`.
 
-### Sprint 010 - V100 Appliance Deployment [planned]
+### Sprint 010 - V100 Single-Slot Decode Integration [planned]
+
+- **Goal**: Wire the bounded Sprint 009 KV surfaces into a real layer-owned
+  single-slot V100 prefill/decode slice that consumes projection/compressor
+  outputs and compares a bounded result against the source oracle.
+- **Rationale**: Sprint 009 proved diagnostic KV allocation and row/state
+  updates, but deployment should wait until V100 layer execution reaches
+  selected-token or bounded-logit correctness.
+
+### Sprint 011 - V100 Appliance Deployment [planned]
 
 - **Goal**: Package the runtime as a cluster-deployed CLI/server path with
   startup residency validation, health checks, and guarded operational defaults.
-- **Rationale**: Deployment should wait until source-format decode and prompt
-  prefill are correct enough that failures mean serving issues, not basic model
-  execution gaps.
+- **Rationale**: Deployment should follow a verified single-slot decode path so
+  failures mean serving issues, not basic model execution gaps.
 
-### Sprint 011 - Throughput And Context Optimization [tentative]
+### Sprint 012 - Throughput And Context Optimization [tentative]
 
 - **Goal**: Improve aggregate tokens/sec and context-tier admission through
   slot batching, wavefront scheduling, expert kernel selection, relay overlap,
@@ -179,7 +196,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 - **Rationale**: Optimization should be driven by measured bottlenecks from the
   verified decode and prefill path, not by assumptions from the residency sprint.
 
-### Sprint 012 - MTP And Advanced Throughput [tentative]
+### Sprint 013 - MTP And Advanced Throughput [tentative]
 
 - **Goal**: Add MTP/speculative decoding and evaluate selective tensor-parallel
   exceptions after the base appliance path is stable.
@@ -210,6 +227,9 @@ it is a narrow DS4 runtime tuned for this hardware.
 - See `docs/sprints/SPRINT-007-FOLLOWUPS.md`: MXFP4 parity hardening,
   official-vector automation, source-oracle guard tests, and Sprint 008
   correctness anchors.
+- See `docs/sprints/SPRINT-009-FOLLOWUPS.md`: Sprint 010 integration work for
+  production projection/compressor outputs, source-oracle comparison, explicit
+  KV state subviews, and deployment sequencing.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -232,6 +252,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-18 | Shipped Sprint 007 source-layout oracle, corrected MXFP4 row ordering, and restored F16 KV as the source correctness baseline. | The official vector exposed both a bad interleaved MXFP4 assumption and an unsafe forced FP8 KV round-trip; matching GGML's low-half/high-half layout and the default F16 KV contract produced the expected first token and gives Sprint 008 a real correctness anchor. | Sprint 007-008 |
 | 2026-05-18 | Re-scoped Sprint 008 as oracle automation, F16 KV admission, and one CUDA source-format anchor. | Full V100 source-layout prefill combines too many unproven contracts; making oracle, guard, memory, and source-format device checks executable first reduces risk before runtime KV execution. | Sprint 008-010 |
 | 2026-05-18 | Shipped Sprint 008 source oracle harness, F16 KV admission, source dtype hardening, and CUDA F8 source-format anchor. | The project now has executable correctness, memory-admission, and first device source-format contracts for the Sprint 009 V100 prefill/KV implementation. | Sprint 008-009 |
+| 2026-05-18 | Shipped Sprint 009 bounded V100 prefill/KV execution and inserted a single-slot decode integration sprint before deployment. | KV arena allocation, source-layout guards, and CUDA ratio-class row/state updates now pass on V100 `sm_70`; the next risk is real projection/compressor integration and oracle comparison, not server packaging. | Sprint 009-011 |
 
 ## Open Questions
 

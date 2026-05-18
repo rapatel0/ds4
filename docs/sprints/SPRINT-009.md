@@ -1,8 +1,9 @@
 ---
 sprint: 009
 title: V100 Prefill And Compressed KV Execution
-status: planned
+status: completed
 date: 2026-05-18
+verdict: SHIP
 target_repo: rapatel0/ds4
 architecture: ../architecture/DS4-V100-LAYOUT.md
 intent: drafts/SPRINT-009-INTENT.md
@@ -174,15 +175,15 @@ tolerance for deterministic F32 diagnostic state values.
 - `docs/sprints/VISION.md`
 
 **Tasks:**
-- [ ] Run model-less local build/tests.
-- [ ] Run `tools/ds4-source-oracle-vector --guards-only` against
+- [x] Run model-less local build/tests.
+- [x] Run `tools/ds4-source-oracle-vector --guards-only` against
       `/models/DSv4-Flash-256e-fixed.gguf` on the cluster.
-- [ ] Run the new CUDA prefill/KV smoke on V100 `sm_70`.
-- [ ] Run V100 context admission for at least 256K and 1M single-slot tiers.
-- [ ] Archive command logs under `docs/sprints/drafts/`.
-- [ ] Write the report with verdict, evidence, deviations, and Sprint 010
+- [x] Run the new CUDA prefill/KV smoke on V100 `sm_70`.
+- [x] Run V100 context admission for at least 256K and 1M single-slot tiers.
+- [x] Archive command logs under `docs/sprints/drafts/`.
+- [x] Write the report with verdict, evidence, deviations, and Sprint 010
       handoff.
-- [ ] Update `VISION.md` after the sprint verdict.
+- [x] Update `VISION.md` after the sprint verdict.
 
 ## Files Summary
 

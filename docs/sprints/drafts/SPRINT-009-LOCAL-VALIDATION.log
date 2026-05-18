@@ -1,0 +1,4 @@
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -o tests/v100_context_smoke tests/v100_context_smoke.o ds4_v100_context.o ds4_pack.o -lm -pthread
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -o tools/ds4-v100-context-smoke tools/ds4-v100-context-smoke.o ds4_v100_context.o ds4_pack.o -lm -pthread
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -I. -c -o tests/cuda_v100_prefill_kv_smoke.o tests/cuda_v100_prefill_kv_smoke.c
+v100_context_smoke: ok
