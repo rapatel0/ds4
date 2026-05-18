@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-17
-last_updated_by: sprint-execute
-revision: 3
+last_updated_by: sprint-plan
+revision: 4
 ---
 
 # Vision: DS4 V100 Appliance
@@ -34,6 +34,10 @@ it is a narrow DS4 runtime tuned for this hardware.
 - The main remaining risk is numerical correctness and kernel coverage for the
   mixed BF16/F32/F8_E4M3_B128/MXFP4 source layout on V100, especially attention,
   compressed KV, routing, and routed expert execution.
+- Sprint 006 is now scoped as a sidecar V100 execution-context sprint, not a
+  decode sprint: it must prove topology, descriptor policy, HC relay, memory
+  reserve, and no-math layer skeleton behavior while keeping generation
+  guarded.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -98,13 +102,15 @@ it is a narrow DS4 runtime tuned for this hardware.
 ### Sprint 006 - Multi-GPU Execution Context And Layer Skeleton [planned]
 
 - **Goal**: Introduce the production 8-GPU execution context and a layer-owned
-  execution skeleton with hidden-context relay boundaries and explicit V100
-  execution-format policy.
+  no-math layer skeleton with hidden-context relay boundaries and explicit
+  fail-closed V100 execution-format policy.
 - **Rationale**: Full decode requires streams, handles, scratch, tensor
   descriptors, device ownership, and boundary transfer semantics that are
   shaped by the first resident tensor probe. V100 has no native BF16, FP8, or
-  FP4 tensor-core path, so Sprint 006 must decide where to use FP16 tensor-core
-  execution, FP32 control math, and the existing low-bit/integer kernels.
+  FP4 tensor-core path, so Sprint 006 must encode BF16 as source/probe only,
+  FP8/MXFP4 as packed inputs to later registered kernels, FP16 HMMA with FP32
+  accumulation as the dense production target, and FP32 as control/debug math
+  rather than a broad GEMM fallback.
 
 ### Sprint 007 - Single-Slot Decode Correctness [planned]
 
@@ -157,6 +163,9 @@ it is a narrow DS4 runtime tuned for this hardware.
   stream-aware probe variants, source-layout embedding dtype cleanup, F16
   output, F32 control tensor probe, additional BF16 tensors, FP8/MXFP4 compute
   probes, and default model-less `make test` cleanup.
+- See `docs/sprints/SPRINT-006-DEFERRED.md`: decode, KV population, real
+  FP8/MXFP4/INT kernels, tensor-parallel exceptions, output-head math, MTP,
+  serving/deployment, and host-backed or persistent dequantized runtime paths.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -173,6 +182,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-17 | Created the first DS4 V100 appliance vision after Sprint 004 residency shipped. | The project has moved from feasibility and pack-residency proof to source-format compute, correctness, deployment, and performance sequencing. | Sprint 005+ |
 | 2026-05-17 | Refined Sprint 005 from a generic source-format compute probe to a BF16 resident row-gather probe on `token_embd.weight`. | Planning consensus found BF16 embedding is the smallest useful proof of arena-resident compute and avoids premature FP8/MXFP4, scheduler, or decode work. | Sprint 005-006 |
 | 2026-05-17 | Corrected Sprint 005 language from BF16 compute to BF16 gather/expand and shipped the probe. | V100 has no native BF16 tensor-core execution; the useful proof is resident addressing and exact dtype expansion, while production compute must target FP16 or low-bit/integer kernels. | Sprint 005-006 |
+| 2026-05-17 | Scoped Sprint 006 to sidecar V100 context, fail-closed execution policy, HC relay, memory reserve, and no-math layer skeleton. | The next risk is not another dtype probe; it is proving the appliance runtime topology without silently promoting BF16/FP8/FP4 to unsupported native V100 compute or defaulting the model to FP32 GEMMs. | Sprint 006-007 |
 
 ## Open Questions
 
