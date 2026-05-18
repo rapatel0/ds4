@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
-last_updated: 2026-05-17
-last_updated_by: sprint-execute
-revision: 5
+last_updated: 2026-05-18
+last_updated_by: sprint-plan
+revision: 6
 ---
 
 # Vision: DS4 V100 Appliance
@@ -42,6 +42,10 @@ it is a narrow DS4 runtime tuned for this hardware.
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation
   remains guarded.
+- Sprint 007 is now planned as a guarded CPU-only source-layout oracle sprint:
+  exact source-format helpers first, then a narrow diagnostic engine unlock,
+  then one short official first-token comparison on the cluster. This preserves
+  the guard while establishing a reference for later V100 production kernels.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -119,11 +123,13 @@ it is a narrow DS4 runtime tuned for this hardware.
   skeleton walk, production 8x V100 topology check, CUDA resource ownership, and
   HC relay smoke shipped. Generation remains guarded.
 
-### Sprint 007 - Single-Slot Decode Correctness [planned]
+### Sprint 007 - Source-Layout Single-Slot Decode Oracle [planned]
 
-- **Goal**: Run a guarded one-slot, small-context decode path and compare logits
-  or generated tokens against a trusted reference.
-- **Rationale**: A correctness gate must come before prefill, long context,
+- **Goal**: Build a guarded CPU-only source-layout oracle that proves exact
+  BF16/F32/I32/F8_E4M3_B128/MXFP4 semantics and matches at least one short
+  official first token before production V100 kernels are trusted.
+- **Rationale**: Source dtype and V100 runtime dtype must stay separate; a
+  fail-closed correctness oracle must come before prefill, long context,
   multi-slot scheduling, MTP, or server deployment.
 
 ### Sprint 008 - Prefill, KV, And Compressed Attention [planned]
@@ -173,6 +179,10 @@ it is a narrow DS4 runtime tuned for this hardware.
 - See `docs/sprints/SPRINT-006-DEFERRED.md`: decode, KV population, real
   FP8/MXFP4/INT kernels, tensor-parallel exceptions, output-head math, MTP,
   serving/deployment, and host-backed or persistent dequantized runtime paths.
+- See `docs/sprints/SPRINT-007-DEFERRED.md`: production V100 FP8/MXFP4 kernels,
+  device-side oracle reads, prefill/KV, multi-slot scheduling, MTP, public
+  CLI/server exposure, tensor-parallel exceptions, and full-logit oracle
+  capture.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -191,6 +201,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-17 | Corrected Sprint 005 language from BF16 compute to BF16 gather/expand and shipped the probe. | V100 has no native BF16 tensor-core execution; the useful proof is resident addressing and exact dtype expansion, while production compute must target FP16 or low-bit/integer kernels. | Sprint 005-006 |
 | 2026-05-17 | Scoped Sprint 006 to sidecar V100 context, fail-closed execution policy, HC relay, memory reserve, and no-math layer skeleton. | The next risk is not another dtype probe; it is proving the appliance runtime topology without silently promoting BF16/FP8/FP4 to unsupported native V100 compute or defaulting the model to FP32 GEMMs. | Sprint 006-007 |
 | 2026-05-17 | Shipped Sprint 006 and moved the next milestone to single-slot decode correctness. | The 8-GPU context, descriptor policy, peer topology, memory reserve, and HC relay contract are now verified; the next unknown is numerical correctness through actual attention, MoE, KV, and output-head math. | Sprint 007+ |
+| 2026-05-18 | Refined Sprint 007 into a guarded source-layout oracle sprint. | Planning consensus found that exact FP8/MXFP4/BF16 source semantics and a narrow CPU-only diagnostic unlock are the right next gate before production V100 kernels, prefill, or deployment. | Sprint 007-008 |
 
 ## Open Questions
 
