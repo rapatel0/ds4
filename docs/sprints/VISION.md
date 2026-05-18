@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-17
-last_updated_by: sprint-plan
-revision: 4
+last_updated_by: sprint-execute
+revision: 5
 ---
 
 # Vision: DS4 V100 Appliance
@@ -38,6 +38,10 @@ it is a narrow DS4 runtime tuned for this hardware.
   decode sprint: it must prove topology, descriptor policy, HC relay, memory
   reserve, and no-math layer skeleton behavior while keeping generation
   guarded.
+- Sprint 006 has shipped that context/skeleton contract. The project now has a
+  verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
+  no-math layer walk over the real pack index, while source-layout generation
+  remains guarded.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -99,7 +103,7 @@ it is a narrow DS4 runtime tuned for this hardware.
   provider `token_embd.weight` probes passed on the 8x V100 pod, and source
   model generation remains guarded.
 
-### Sprint 006 - Multi-GPU Execution Context And Layer Skeleton [planned]
+### Sprint 006 - Multi-GPU Execution Context And Layer Skeleton [complete]
 
 - **Goal**: Introduce the production 8-GPU execution context and a layer-owned
   no-math layer skeleton with hidden-context relay boundaries and explicit
@@ -111,6 +115,9 @@ it is a narrow DS4 runtime tuned for this hardware.
   FP8/MXFP4 as packed inputs to later registered kernels, FP16 HMMA with FP32
   accumulation as the dense production target, and FP32 as control/debug math
   rather than a broad GEMM fallback.
+- **Outcome**: `SHIP`. The sidecar context, descriptor policy, real pack
+  skeleton walk, production 8x V100 topology check, CUDA resource ownership, and
+  HC relay smoke shipped. Generation remains guarded.
 
 ### Sprint 007 - Single-Slot Decode Correctness [planned]
 
@@ -183,6 +190,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-17 | Refined Sprint 005 from a generic source-format compute probe to a BF16 resident row-gather probe on `token_embd.weight`. | Planning consensus found BF16 embedding is the smallest useful proof of arena-resident compute and avoids premature FP8/MXFP4, scheduler, or decode work. | Sprint 005-006 |
 | 2026-05-17 | Corrected Sprint 005 language from BF16 compute to BF16 gather/expand and shipped the probe. | V100 has no native BF16 tensor-core execution; the useful proof is resident addressing and exact dtype expansion, while production compute must target FP16 or low-bit/integer kernels. | Sprint 005-006 |
 | 2026-05-17 | Scoped Sprint 006 to sidecar V100 context, fail-closed execution policy, HC relay, memory reserve, and no-math layer skeleton. | The next risk is not another dtype probe; it is proving the appliance runtime topology without silently promoting BF16/FP8/FP4 to unsupported native V100 compute or defaulting the model to FP32 GEMMs. | Sprint 006-007 |
+| 2026-05-17 | Shipped Sprint 006 and moved the next milestone to single-slot decode correctness. | The 8-GPU context, descriptor policy, peer topology, memory reserve, and HC relay contract are now verified; the next unknown is numerical correctness through actual attention, MoE, KV, and output-head math. | Sprint 007+ |
 
 ## Open Questions
 

@@ -1,7 +1,7 @@
 ---
 sprint: 006
 title: Multi-GPU Execution Context And Layer Skeleton
-status: planned
+status: shipped
 date: 2026-05-17
 target_repo: rapatel0/ds4
 architecture: ../architecture/DS4-V100-LAYOUT.md
