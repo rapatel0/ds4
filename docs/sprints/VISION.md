@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-18
 last_updated_by: sprint-execute
-revision: 10
+revision: 11
 ---
 
 # Vision: DS4 V100 Appliance
@@ -54,6 +54,12 @@ it is a narrow DS4 runtime tuned for this hardware.
   256K and 1M single-slot tiers, guarded source-layout validation on the real
   model, and a CUDA `sm_70` diagnostic smoke that bridges F8 source rows into
   raw SWA, compressed KV, ratio-4 indexer KV, and compression-state surfaces.
+- Sprint 010 shipped the stage-owned KV integration gate: deterministic
+  per-layer KV/state subviews inside each GPU's `kv_arena`, V100 diagnostic
+  writes through those subviews for ratio-4 and ratio-128 layers, real
+  compressor recurrence smokes for attention and indexer-shaped paths, CPU
+  references, and real-model guard validation. It did not ship dense
+  projection, MoE, output-head logits, selected-token decode, or serving.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -172,7 +178,7 @@ it is a narrow DS4 runtime tuned for this hardware.
   source-layout guards on the real model, and passes a bounded CUDA prefill/KV
   smoke covering ratio-128 and ratio-4/indexer state updates on `sm_70`.
 
-### Sprint 010 - V100 Single-Slot Decode Integration [planned]
+### Sprint 010 - V100 Single-Slot Decode Integration [complete]
 
 - **Goal**: Wire the bounded Sprint 009 KV surfaces into a real layer-owned
   single-slot V100 prefill/decode slice that consumes projection/compressor
@@ -180,15 +186,30 @@ it is a narrow DS4 runtime tuned for this hardware.
 - **Rationale**: Sprint 009 proved diagnostic KV allocation and row/state
   updates, but deployment should wait until V100 layer execution reaches
   selected-token or bounded-logit correctness.
+- **Outcome**: `SHIP`. Stage-owned KV subviews and updates now pass on V100,
+  and real compressor recurrence is validated against CPU references for
+  ratio-128, ratio-4 attention, and ratio-4 indexer-shaped paths. Full
+  source-format dense projection, MoE, logits, selected-token decode, and
+  serving remain deferred.
 
-### Sprint 011 - V100 Appliance Deployment [planned]
+### Sprint 011 - V100 Source Layer And Logits Gate [planned]
+
+- **Goal**: Produce a bounded source-layout V100 logits or selected-token
+  comparison for a single-slot prompt using real source-format projection,
+  attention, router, expert/shared-expert, and output-head paths.
+- **Rationale**: Sprint 010 proved KV ownership and compressor recurrence, but
+  deployment should wait for dense, MoE, and output-head correctness against
+  the guarded source oracle.
+
+### Sprint 012 - V100 Appliance Deployment [planned]
 
 - **Goal**: Package the runtime as a cluster-deployed CLI/server path with
-  startup residency validation, health checks, and guarded operational defaults.
-- **Rationale**: Deployment should follow a verified single-slot decode path so
-  failures mean serving issues, not basic model execution gaps.
+  startup residency validation, health checks, guarded operational defaults,
+  and source-layout generation still controlled by explicit readiness gates.
+- **Rationale**: Deployment should follow a verified logits-producing V100
+  path so failures mean serving issues, not basic model execution gaps.
 
-### Sprint 012 - Throughput And Context Optimization [tentative]
+### Sprint 013 - Throughput And Context Optimization [tentative]
 
 - **Goal**: Improve aggregate tokens/sec and context-tier admission through
   slot batching, wavefront scheduling, expert kernel selection, relay overlap,
@@ -196,7 +217,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 - **Rationale**: Optimization should be driven by measured bottlenecks from the
   verified decode and prefill path, not by assumptions from the residency sprint.
 
-### Sprint 013 - MTP And Advanced Throughput [tentative]
+### Sprint 014 - MTP And Advanced Throughput [tentative]
 
 - **Goal**: Add MTP/speculative decoding and evaluate selective tensor-parallel
   exceptions after the base appliance path is stable.
@@ -230,6 +251,9 @@ it is a narrow DS4 runtime tuned for this hardware.
 - See `docs/sprints/SPRINT-009-FOLLOWUPS.md`: Sprint 010 integration work for
   production projection/compressor outputs, source-oracle comparison, explicit
   KV state subviews, and deployment sequencing.
+- See `docs/sprints/SPRINT-010-FOLLOWUPS.md`: Sprint 011 blockers for real
+  source-format projection, attention/layer output, router/expert execution,
+  bounded logits/top-k comparison, and deployment re-sequencing.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -253,6 +277,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-18 | Re-scoped Sprint 008 as oracle automation, F16 KV admission, and one CUDA source-format anchor. | Full V100 source-layout prefill combines too many unproven contracts; making oracle, guard, memory, and source-format device checks executable first reduces risk before runtime KV execution. | Sprint 008-010 |
 | 2026-05-18 | Shipped Sprint 008 source oracle harness, F16 KV admission, source dtype hardening, and CUDA F8 source-format anchor. | The project now has executable correctness, memory-admission, and first device source-format contracts for the Sprint 009 V100 prefill/KV implementation. | Sprint 008-009 |
 | 2026-05-18 | Shipped Sprint 009 bounded V100 prefill/KV execution and inserted a single-slot decode integration sprint before deployment. | KV arena allocation, source-layout guards, and CUDA ratio-class row/state updates now pass on V100 `sm_70`; the next risk is real projection/compressor integration and oracle comparison, not server packaging. | Sprint 009-011 |
+| 2026-05-18 | Shipped Sprint 010 stage-owned KV views/updates and real compressor recurrence smokes, then moved deployment behind a logits-producing V100 source-layout gate. | The project now trusts per-layer KV/state ownership and compressor recurrence on V100, but serving still lacks real source-format dense projection, MoE, output-head logits, and selected-token correctness. | Sprint 010-012 |
 
 ## Open Questions
 

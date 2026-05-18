@@ -8,10 +8,11 @@ requiring them, stop and re-scope before continuing.
 **What:** Expose a normal CLI/server path with health checks and operational
 defaults.
 
-**Why deferred:** Deployment should follow a verified single-slot V100
-correctness slice. Sprint 010 is the integration gate before deployment.
+**Why deferred:** Deployment should follow a verified logits-producing V100
+source-layout slice. Sprint 010 proved KV ownership and compressor recurrence,
+not dense, MoE, output-head, or selected-token correctness.
 
-**Target sprint:** Sprint 011.
+**Target sprint:** Sprint 012 after the Sprint 011 logits gate.
 
 ## Full 43-Layer Logits-Producing Decode
 
@@ -22,7 +23,7 @@ token generation on V100.
 prefill/decode slice first. Full logits will require broader dense, attention,
 router, expert, and output-head coverage.
 
-**Target sprint:** Sprint 011+ after Sprint 010 source comparison.
+**Target sprint:** Sprint 011+ after the Sprint 010 KV/compressor gate.
 
 ## Production Routed Expert Kernels
 
@@ -41,7 +42,7 @@ aggregate tokens/sec optimization.
 
 **Why deferred:** Throughput should be driven by a correct baseline decode path.
 
-**Target sprint:** Sprint 012+.
+**Target sprint:** Sprint 013+.
 
 ## MTP And Tensor Parallelism
 
@@ -51,14 +52,14 @@ vocab-parallel output head or expert TP.
 **Why deferred:** These can mask correctness bugs in the baseline layer-owned
 runtime.
 
-**Target sprint:** Sprint 013+.
+**Target sprint:** Sprint 014+.
 
 ## Summary
 
 | Item | Target Sprint | Blocker |
 |---|---|---|
-| Public appliance deployment | Sprint 011 | Needs Sprint 010 single-slot correctness gate |
-| Full logits-producing decode | Sprint 011+ | Needs bounded source-referenced V100 slice |
+| Public appliance deployment | Sprint 012 | Needs logits-producing V100 source-layout gate |
+| Full logits-producing decode | Sprint 011+ | Needs dense/MoE/output-head source-layout execution |
 | Production routed expert kernels | Sprint 011+ | Needs trusted layer attention/KV path |
-| Throughput scheduling | Sprint 012+ | Needs correct baseline decode |
-| MTP/tensor parallelism | Sprint 013+ | Needs stable baseline and bottleneck data |
+| Throughput scheduling | Sprint 013+ | Needs correct baseline decode |
+| MTP/tensor parallelism | Sprint 014+ | Needs stable baseline and bottleneck data |

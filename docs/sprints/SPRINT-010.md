@@ -1,8 +1,9 @@
 ---
 sprint: 010
 title: V100 Single-Slot Decode Integration
-status: active
+status: completed
 date: 2026-05-18
+verdict: SHIP
 target_repo: rapatel0/ds4
 architecture: ../architecture/DS4-V100-LAYOUT.md
 intent: drafts/SPRINT-010-INTENT.md
@@ -180,13 +181,13 @@ flag.
 - `docs/sprints/VISION.md`
 
 **Tasks:**
-- [ ] Add a bounded source-reference mode if the existing oracle cannot expose
+- [x] Add a bounded source-reference mode if the existing oracle cannot expose
       the required intermediate rows/state.
-- [ ] Run model-less local validation and `git diff --check`.
-- [ ] Run source-layout `--guards-only` on the real model.
-- [ ] Run the integrated CUDA smoke on V100 `sm_70`.
-- [ ] Archive logs under `docs/sprints/drafts/`.
-- [ ] Write report/follow-ups and update `VISION.md` with the sprint verdict.
+- [x] Run model-less local validation and `git diff --check`.
+- [x] Run source-layout `--guards-only` on the real model.
+- [x] Run the integrated CUDA smoke on V100 `sm_70`.
+- [x] Archive logs under `docs/sprints/drafts/`.
+- [x] Write report/follow-ups and update `VISION.md` with the sprint verdict.
 
 ## Files Summary
 
