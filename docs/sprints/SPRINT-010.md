@@ -141,17 +141,16 @@ flag.
 ### Phase 2: Stage-Owned Diagnostic KV Update
 
 **Files:**
-- `ds4_gpu.h`
-- `ds4_cuda.cu`
+- `ds4_v100_context.h`
 - `ds4_v100_context_cuda.cu`
-- `tests/cuda_v100_prefill_kv_smoke.c`
+- `tests/cuda_v100_context_smoke.c`
 
 **Tasks:**
-- [ ] Add a wrapper that writes Sprint 009 raw/compressed/indexer rows through
+- [x] Add a wrapper that writes Sprint 009 raw/compressed/indexer rows through
       stage-owned arena subviews instead of standalone tensors.
-- [ ] Preserve explicit slot, raw-row, compressed-row, ratio, and bounds
+- [x] Preserve explicit slot, raw-row, compressed-row, ratio, and bounds
       validation.
-- [ ] Add a V100 smoke proving the stage-owned path for one ratio-128 and one
+- [x] Add a V100 smoke proving the stage-owned path for one ratio-128 and one
       ratio-4 layer.
 
 ### Phase 3: Real Compressor/Indexer Recurrence
@@ -195,8 +194,9 @@ flag.
 |---|---|---|
 | `ds4_v100_context.[ch]` | Modify | Expose named KV/state subviews |
 | `ds4_v100_context_cuda.cu` | Modify | Surface stage-owned KV arena subviews to diagnostics |
-| `ds4_gpu.h`, `ds4_cuda.cu` | Modify | Stage-owned update wrapper and real recurrence integration |
-| `tests/cuda_v100_prefill_kv_smoke.c` | Modify | Cover stage-owned arena and real compressor/indexer recurrence |
+| `ds4_gpu.h`, `ds4_cuda.cu` | Modify | Real recurrence integration |
+| `tests/cuda_v100_context_smoke.c` | Modify | Cover stage-owned arena update |
+| `tests/cuda_v100_prefill_kv_smoke.c` | Modify | Cover real compressor/indexer recurrence |
 | `tools/ds4-source-oracle-vector.c` | Modify if needed | Bounded source-reference output |
 | `docs/sprints/drafts/SPRINT-010-*.log` | Create | Validation evidence |
 | `docs/sprints/SPRINT-010-REPORT.md` | Create | Sprint verdict |

@@ -1,0 +1,4 @@
+make: `tests/v100_context_smoke' is up to date.
+make: `tools/ds4-v100-context-smoke' is up to date.
+make: `tests/cuda_v100_context_smoke.o' is up to date.
+v100_context_smoke: ok

@@ -230,6 +230,14 @@ typedef struct {
     ds4_v100_layer_kv_view view;
 } ds4_v100_cuda_layer_kv_view;
 
+typedef struct {
+    uint32_t slot;
+    uint32_t raw_row;
+    uint32_t comp_row;
+    const float *attn_row_f32;
+    const float *indexer_row_f32;
+} ds4_v100_cuda_prefill_kv_update;
+
 typedef enum {
     DS4_V100_RELAY_F16 = 0,
     DS4_V100_RELAY_F32_DEBUG = 1,
@@ -248,6 +256,19 @@ void ds4_v100_cuda_context_close(ds4_v100_cuda_context *ctx);
 int ds4_v100_cuda_context_layer_kv_view(ds4_v100_cuda_context *ctx,
                                         int layer_id,
                                         ds4_v100_cuda_layer_kv_view *out,
+                                        char *err,
+                                        size_t errlen);
+int ds4_v100_cuda_context_prefill_kv_update_f16(
+        ds4_v100_cuda_context                    *ctx,
+        int                                      layer_id,
+        const ds4_v100_cuda_prefill_kv_update   *update,
+        char                                    *err,
+        size_t                                   errlen);
+int ds4_v100_cuda_context_read_kv_arena(ds4_v100_cuda_context *ctx,
+                                        int stage_id,
+                                        uint64_t offset,
+                                        void *dst,
+                                        uint64_t bytes,
                                         char *err,
                                         size_t errlen);
 int ds4_v100_cuda_context_relay_smoke(ds4_v100_cuda_context *ctx,

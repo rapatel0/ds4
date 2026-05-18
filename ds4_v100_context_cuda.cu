@@ -271,6 +271,246 @@ int ds4_v100_cuda_context_layer_kv_view(ds4_v100_cuda_context *ctx,
     return 0;
 }
 
+static uint64_t max_u64(uint64_t a, uint64_t b) {
+    return a > b ? a : b;
+}
+
+__global__ static void v100_context_prefill_kv_update_kernel(
+        unsigned char *arena,
+        ds4_v100_layer_kv_view view,
+        uint32_t ratio,
+        uint32_t slot,
+        uint32_t slots,
+        uint32_t raw_row,
+        uint32_t comp_row,
+        uint32_t comp_rows,
+        const float *attn_row,
+        const float *indexer_row) {
+    const uint64_t tid = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (tid < DS4_V100_HEAD_DIM) {
+        const __half v = __float2half_rn(attn_row[tid]);
+        __half *raw = (__half *)(arena + view.raw_swa_offset);
+        __half *comp = (__half *)(arena + view.compressed_attn_offset);
+        const uint64_t raw_idx =
+            ((uint64_t)slot * DS4_V100_SWA_ROWS + raw_row) *
+            DS4_V100_HEAD_DIM + tid;
+        const uint64_t comp_idx =
+            ((uint64_t)slot * comp_rows + comp_row) * DS4_V100_HEAD_DIM + tid;
+        raw[raw_idx] = v;
+        comp[comp_idx] = v;
+    }
+
+    if (ratio == 4u && indexer_row && tid < DS4_V100_INDEXER_HEAD_DIM) {
+        __half *indexer = (__half *)(arena + view.indexer_kv_offset);
+        const uint64_t index_idx =
+            ((uint64_t)slot * comp_rows + comp_row) *
+            DS4_V100_INDEXER_HEAD_DIM + tid;
+        indexer[index_idx] = __float2half_rn(indexer_row[tid]);
+    }
+
+    const uint64_t attn_kv_values = view.attn_state_kv_bytes / sizeof(float);
+    const uint64_t attn_score_values = view.attn_state_score_bytes / sizeof(float);
+    if (tid < attn_kv_values) {
+        const uint32_t lane = (uint32_t)(tid % DS4_V100_HEAD_DIM);
+        const uint32_t row = (uint32_t)(tid / DS4_V100_HEAD_DIM);
+        float *state = (float *)(arena + view.attn_state_kv_offset);
+        state[tid] = attn_row[lane] + (float)row * 0.125f + (float)ratio * 0.001f;
+    }
+    if (tid < attn_score_values) {
+        const uint32_t lane = (uint32_t)(tid % DS4_V100_HEAD_DIM);
+        const uint32_t row = (uint32_t)(tid / DS4_V100_HEAD_DIM);
+        float *state = (float *)(arena + view.attn_state_score_offset);
+        state[tid] = attn_row[lane] - (float)row * 0.03125f - (float)ratio * 0.002f;
+    }
+
+    if (ratio == 4u && indexer_row) {
+        const uint64_t idx_kv_values = view.indexer_state_kv_bytes / sizeof(float);
+        const uint64_t idx_score_values = view.indexer_state_score_bytes / sizeof(float);
+        if (tid < idx_kv_values) {
+            const uint32_t lane = (uint32_t)(tid % DS4_V100_INDEXER_HEAD_DIM);
+            const uint32_t row = (uint32_t)(tid / DS4_V100_INDEXER_HEAD_DIM);
+            float *state = (float *)(arena + view.indexer_state_kv_offset);
+            state[tid] = indexer_row[lane] + (float)row * 0.0625f +
+                         (float)ratio * 0.003f;
+        }
+        if (tid < idx_score_values) {
+            const uint32_t lane = (uint32_t)(tid % DS4_V100_INDEXER_HEAD_DIM);
+            const uint32_t row = (uint32_t)(tid / DS4_V100_INDEXER_HEAD_DIM);
+            float *state = (float *)(arena + view.indexer_state_score_offset);
+            state[tid] = indexer_row[lane] - (float)row * 0.015625f -
+                         (float)ratio * 0.004f;
+        }
+    }
+
+    (void)slots;
+}
+
+static int infer_layer_slots_and_comp_rows(const ds4_v100_layer_kv_view *view,
+                                           uint64_t *out_slots,
+                                           uint64_t *out_comp_rows) {
+    const uint64_t raw_per_slot =
+        (uint64_t)DS4_V100_SWA_ROWS * DS4_V100_HEAD_DIM * sizeof(__half);
+    if (!view || raw_per_slot == 0 ||
+        view->raw_swa_bytes == 0 ||
+        view->raw_swa_bytes % raw_per_slot != 0) {
+        return 1;
+    }
+    const uint64_t slots = view->raw_swa_bytes / raw_per_slot;
+    if (slots == 0) return 1;
+
+    const uint64_t comp_per_row = (uint64_t)DS4_V100_HEAD_DIM * sizeof(__half);
+    if (view->compressed_attn_bytes == 0 ||
+        view->compressed_attn_bytes % (slots * comp_per_row) != 0) {
+        return 1;
+    }
+    const uint64_t comp_rows = view->compressed_attn_bytes / (slots * comp_per_row);
+    if (comp_rows == 0) return 1;
+    *out_slots = slots;
+    *out_comp_rows = comp_rows;
+    return 0;
+}
+
+int ds4_v100_cuda_context_prefill_kv_update_f16(
+        ds4_v100_cuda_context                    *ctx,
+        int                                      layer_id,
+        const ds4_v100_cuda_prefill_kv_update   *update,
+        char                                    *err,
+        size_t                                   errlen) {
+    if (!ctx || !update || !update->attn_row_f32) {
+        return cuda_v100_error(err, errlen, "missing prefill KV update input");
+    }
+
+    const ds4_v100_layer_info *layer = ds4_v100_context_layer(ctx->host, layer_id);
+    if (!layer) return cuda_v100_error(err, errlen, "invalid layer id %d", layer_id);
+    if (layer->layer_class != DS4_V100_LAYER_RATIO_4 &&
+        layer->layer_class != DS4_V100_LAYER_RATIO_128) {
+        return cuda_v100_error(err, errlen, "layer %d has no compressed KV path", layer_id);
+    }
+    if (layer->stage_id < 0 || layer->stage_id >= ctx->n_stages) {
+        return cuda_v100_error(err, errlen, "layer %d has invalid stage %d",
+                               layer_id, layer->stage_id);
+    }
+    ds4_v100_cuda_stage *stage = &ctx->stages[layer->stage_id];
+    if (!stage->kv_arena || stage->kv_arena_bytes == 0) {
+        return cuda_v100_error(err, errlen, "stage %d has no allocated KV arena",
+                               layer->stage_id);
+    }
+
+    const ds4_v100_layer_kv_view *view = &layer->kv_view;
+    uint64_t slots = 0;
+    uint64_t comp_rows = 0;
+    if (infer_layer_slots_and_comp_rows(view, &slots, &comp_rows)) {
+        return cuda_v100_error(err, errlen, "layer %d has invalid KV view geometry",
+                               layer_id);
+    }
+    if (slots > UINT32_MAX || comp_rows > UINT32_MAX) {
+        return cuda_v100_error(err, errlen, "layer %d KV view geometry exceeds diagnostic limits",
+                               layer_id);
+    }
+    if (update->slot >= slots || update->raw_row >= DS4_V100_SWA_ROWS ||
+        update->comp_row >= comp_rows) {
+        return cuda_v100_error(err, errlen, "KV update row or slot is out of bounds");
+    }
+
+    const uint32_t ratio =
+        layer->layer_class == DS4_V100_LAYER_RATIO_4 ? 4u : 128u;
+    if (ratio == 4u) {
+        if (!update->indexer_row_f32 || view->indexer_kv_bytes == 0 ||
+            view->indexer_state_kv_bytes == 0 ||
+            view->indexer_state_score_bytes == 0) {
+            return cuda_v100_error(err, errlen, "ratio-4 KV update requires indexer inputs");
+        }
+        const uint64_t index_per_row =
+            (uint64_t)DS4_V100_INDEXER_HEAD_DIM * sizeof(__half);
+        if (view->indexer_kv_bytes % (slots * index_per_row) != 0 ||
+            view->indexer_kv_bytes / (slots * index_per_row) < comp_rows) {
+            return cuda_v100_error(err, errlen, "ratio-4 indexer KV view is too small");
+        }
+    }
+
+    float *dev_attn = NULL;
+    float *dev_indexer = NULL;
+    int ok = 1;
+    if (cuda_v100_ok(cudaSetDevice(stage->gpu), "cudaSetDevice prefill KV",
+                     err, errlen)) {
+        return 1;
+    }
+    const uint64_t attn_bytes = (uint64_t)DS4_V100_HEAD_DIM * sizeof(float);
+    if (cuda_v100_ok(cudaMalloc(&dev_attn, (size_t)attn_bytes),
+                     "cudaMalloc prefill KV attn row", err, errlen) ||
+        cuda_v100_ok(cudaMemcpy(dev_attn, update->attn_row_f32, (size_t)attn_bytes,
+                                cudaMemcpyHostToDevice),
+                     "prefill KV attn row upload", err, errlen)) {
+        ok = 0;
+    }
+    if (ok && ratio == 4u) {
+        const uint64_t indexer_bytes =
+            (uint64_t)DS4_V100_INDEXER_HEAD_DIM * sizeof(float);
+        if (cuda_v100_ok(cudaMalloc(&dev_indexer, (size_t)indexer_bytes),
+                         "cudaMalloc prefill KV indexer row", err, errlen) ||
+            cuda_v100_ok(cudaMemcpy(dev_indexer, update->indexer_row_f32,
+                                    (size_t)indexer_bytes, cudaMemcpyHostToDevice),
+                         "prefill KV indexer row upload", err, errlen)) {
+            ok = 0;
+        }
+    }
+
+    if (ok) {
+        uint64_t n = DS4_V100_HEAD_DIM;
+        n = max_u64(n, view->attn_state_kv_bytes / sizeof(float));
+        n = max_u64(n, view->attn_state_score_bytes / sizeof(float));
+        if (ratio == 4u) {
+            n = max_u64(n, DS4_V100_INDEXER_HEAD_DIM);
+            n = max_u64(n, view->indexer_state_kv_bytes / sizeof(float));
+            n = max_u64(n, view->indexer_state_score_bytes / sizeof(float));
+        }
+        v100_context_prefill_kv_update_kernel<<<(unsigned int)((n + 255u) / 256u), 256>>>(
+            (unsigned char *)stage->kv_arena,
+            *view,
+            ratio,
+            update->slot,
+            (uint32_t)slots,
+            update->raw_row,
+            update->comp_row,
+            (uint32_t)comp_rows,
+            dev_attn,
+            dev_indexer);
+        ok = !cuda_v100_ok(cudaGetLastError(), "prefill KV update launch", err, errlen) &&
+             !cuda_v100_ok(cudaDeviceSynchronize(), "prefill KV update sync", err, errlen);
+    }
+
+    if (dev_indexer) (void)cudaFree(dev_indexer);
+    if (dev_attn) (void)cudaFree(dev_attn);
+    return ok ? 0 : 1;
+}
+
+int ds4_v100_cuda_context_read_kv_arena(ds4_v100_cuda_context *ctx,
+                                        int stage_id,
+                                        uint64_t offset,
+                                        void *dst,
+                                        uint64_t bytes,
+                                        char *err,
+                                        size_t errlen) {
+    if (!ctx || !dst) return cuda_v100_error(err, errlen, "missing KV arena read output");
+    if (stage_id < 0 || stage_id >= ctx->n_stages) {
+        return cuda_v100_error(err, errlen, "invalid stage id %d", stage_id);
+    }
+    ds4_v100_cuda_stage *stage = &ctx->stages[stage_id];
+    if (!stage->kv_arena || offset > stage->kv_arena_bytes ||
+        bytes > stage->kv_arena_bytes - offset) {
+        return cuda_v100_error(err, errlen, "KV arena read range is out of bounds");
+    }
+    if (cuda_v100_ok(cudaSetDevice(stage->gpu), "cudaSetDevice KV read",
+                     err, errlen) ||
+        cuda_v100_ok(cudaMemcpy(dst, (unsigned char *)stage->kv_arena + offset,
+                                (size_t)bytes, cudaMemcpyDeviceToHost),
+                     "KV arena readback", err, errlen)) {
+        return 1;
+    }
+    return 0;
+}
+
 static uint64_t relay_bytes(ds4_v100_relay_dtype dtype, uint64_t active_slots) {
     const uint64_t elem = dtype == DS4_V100_RELAY_F16 ? 2ull : 4ull;
     return active_slots * DS4_V100_HC_ROWS * DS4_V100_HC_COLS * elem;
