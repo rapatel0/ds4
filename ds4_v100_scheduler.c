@@ -50,6 +50,7 @@ struct ds4_v100_stage_scheduler {
     uint32_t attn_comp_cap;
     uint32_t index_comp_cap;
     uint32_t indexer_top_k;
+    bool fp8_kv_cache;
 };
 
 static int scheduler_error(char *err, size_t errlen, const char *msg) {
@@ -60,6 +61,36 @@ static int scheduler_error(char *err, size_t errlen, const char *msg) {
 static int scheduler_errorf(char *err, size_t errlen, const char *fmt, int value) {
     if (err && errlen) snprintf(err, errlen, fmt, value);
     return 1;
+}
+
+typedef struct {
+    const ds4_v100_stage_scheduler *sched;
+    ds4_v100_stage_scheduler_checkpoint_fn checkpoint_fn;
+    void *checkpoint_user;
+    uint32_t token;
+    uint32_t position;
+} scheduler_layer_checkpoint_user;
+
+static int scheduler_layer_checkpoint(
+    const ds4_v100_layer_execute_checkpoint *layer_cp,
+    void *user,
+    char *err,
+    size_t errlen) {
+    scheduler_layer_checkpoint_user *u = (scheduler_layer_checkpoint_user *)user;
+    if (!u || !u->sched || !u->checkpoint_fn || !layer_cp) {
+        return scheduler_error(err, errlen, "missing scheduler layer checkpoint input");
+    }
+    ds4_v100_stage_scheduler_checkpoint cp = {
+        .stage_id = u->sched->stage.stage_id,
+        .gpu = u->sched->stage.gpu,
+        .layer = layer_cp->layer,
+        .kind = layer_cp->kind,
+        .position = u->position,
+        .token = u->token,
+        .hc = layer_cp->hc,
+        .hc_bytes = layer_cp->hc_bytes,
+    };
+    return u->checkpoint_fn(&cp, u->checkpoint_user, err, errlen);
 }
 
 void ds4_v100_stage_scheduler_options_init(ds4_v100_stage_scheduler_options *opts) {
@@ -258,6 +289,7 @@ int ds4_v100_stage_scheduler_open(ds4_v100_stage_scheduler **out,
     sched->attn_comp_cap = opts->attn_comp_cap ? opts->attn_comp_cap : 1u;
     sched->index_comp_cap = opts->index_comp_cap ? opts->index_comp_cap : 1u;
     sched->indexer_top_k = opts->indexer_top_k ? opts->indexer_top_k : 1u;
+    sched->fp8_kv_cache = opts->fp8_kv_cache;
 
     ds4_v100_context_options ctx_opts;
     ds4_v100_context_options_init(&ctx_opts);
@@ -385,6 +417,65 @@ int ds4_v100_stage_scheduler_decode_token(ds4_v100_stage_scheduler *sched,
     return ds4_v100_stage_scheduler_decode_hc(sched, token, position, report, err, errlen);
 }
 
+int ds4_v100_stage_scheduler_decode_token_checkpoints(
+    ds4_v100_stage_scheduler *sched,
+    uint32_t token,
+    uint32_t position,
+    ds4_v100_stage_scheduler_report *report,
+    ds4_v100_stage_scheduler_checkpoint_fn checkpoint_fn,
+    void *checkpoint_user,
+    char *err,
+    size_t errlen) {
+    if (!sched) return scheduler_error(err, errlen, "missing scheduler");
+    if (!sched->stage.owns_token_embedding) {
+        return scheduler_error(err, errlen, "decode-token requires token-embedding stage");
+    }
+    if (!ds4_gpu_set_device(sched->stage.gpu)) {
+        return scheduler_errorf(err, errlen, "failed to set scheduler device gpu%d",
+                                sched->stage.gpu);
+    }
+    if (sched->token_embedding.n_shape_dims != 2 ||
+        sched->token_embedding.shape[0] != DS4_V100_HC_COLS) {
+        return scheduler_error(err, errlen, "token embedding shape does not match HC width");
+    }
+    const uint32_t n_vocab = (uint32_t)sched->token_embedding.shape[1];
+    if (token >= n_vocab) return scheduler_error(err, errlen, "token outside embedding vocab");
+    if (!ds4_gpu_embed_token_hc_tensor(sched->hc_a,
+                                       sched->model_map,
+                                       sched->model_size,
+                                       sched->token_embedding.source_offset,
+                                       n_vocab,
+                                       token,
+                                       DS4_V100_HC_COLS,
+                                       DS4_V100_HC_ROWS)) {
+        return scheduler_error(err, errlen, "token embedding HC seed failed");
+    }
+    sched->cur_hc = sched->hc_a;
+    if (checkpoint_fn) {
+        const uint64_t hc_bytes =
+            (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS * sizeof(float);
+        ds4_v100_stage_scheduler_checkpoint cp = {
+            .stage_id = sched->stage.stage_id,
+            .gpu = sched->stage.gpu,
+            .layer = -1,
+            .kind = DS4_V100_HC_CHECKPOINT_SEED,
+            .position = position,
+            .token = token,
+            .hc = sched->cur_hc,
+            .hc_bytes = hc_bytes,
+        };
+        if (checkpoint_fn(&cp, checkpoint_user, err, errlen)) return 1;
+    }
+    return ds4_v100_stage_scheduler_decode_hc_checkpoints(sched,
+                                                          token,
+                                                          position,
+                                                          report,
+                                                          checkpoint_fn,
+                                                          checkpoint_user,
+                                                          err,
+                                                          errlen);
+}
+
 int ds4_v100_stage_scheduler_handoff(ds4_v100_stage_scheduler *dst,
                                      const ds4_v100_stage_scheduler *src,
                                      char *err,
@@ -407,6 +498,25 @@ int ds4_v100_stage_scheduler_decode_hc(ds4_v100_stage_scheduler *sched,
                                        ds4_v100_stage_scheduler_report *report,
                                        char *err,
                                        size_t errlen) {
+    return ds4_v100_stage_scheduler_decode_hc_checkpoints(sched,
+                                                          token,
+                                                          position,
+                                                          report,
+                                                          NULL,
+                                                          NULL,
+                                                          err,
+                                                          errlen);
+}
+
+int ds4_v100_stage_scheduler_decode_hc_checkpoints(
+    ds4_v100_stage_scheduler *sched,
+    uint32_t token,
+    uint32_t position,
+    ds4_v100_stage_scheduler_report *report,
+    ds4_v100_stage_scheduler_checkpoint_fn checkpoint_fn,
+    void *checkpoint_user,
+    char *err,
+    size_t errlen) {
     if (!sched || !sched->cur_hc) return scheduler_error(err, errlen, "missing scheduler HC input");
     if (!ds4_gpu_set_device(sched->stage.gpu)) {
         return scheduler_errorf(err, errlen, "failed to set scheduler device gpu%d",
@@ -418,6 +528,13 @@ int ds4_v100_stage_scheduler_decode_hc(ds4_v100_stage_scheduler *sched,
     memset(&last, 0, sizeof(last));
     uint32_t executed = 0;
     for (int layer = sched->stage.layer_begin; layer <= sched->stage.layer_end; layer++) {
+        scheduler_layer_checkpoint_user layer_checkpoint_user = {
+            .sched = sched,
+            .checkpoint_fn = checkpoint_fn,
+            .checkpoint_user = checkpoint_user,
+            .token = token,
+            .position = position,
+        };
         ds4_v100_layer_execute_config cfg = {
             .model_map = sched->model_map,
             .model_size = sched->model_size,
@@ -425,6 +542,10 @@ int ds4_v100_stage_scheduler_decode_hc(ds4_v100_stage_scheduler *sched,
             .router_token = token,
             .position = position,
             .decode_cache = &sched->caches[layer].cache,
+            .fp8_kv_cache = sched->fp8_kv_cache,
+            .checkpoint_layer = layer,
+            .checkpoint_fn = checkpoint_fn ? scheduler_layer_checkpoint : NULL,
+            .checkpoint_user = &layer_checkpoint_user,
         };
         memset(&last, 0, sizeof(last));
         if (ds4_v100_layer_execute_hc_decode(&sched->states[layer],
@@ -440,6 +561,22 @@ int ds4_v100_stage_scheduler_decode_hc(ds4_v100_stage_scheduler *sched,
         cur = next;
         next = tmp;
         executed++;
+        if (checkpoint_fn) {
+            const uint64_t hc_bytes =
+                (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS * sizeof(float);
+            ds4_v100_stage_scheduler_checkpoint cp = {
+                .stage_id = sched->stage.stage_id,
+                .gpu = sched->stage.gpu,
+                .layer = layer,
+                .kind = DS4_V100_HC_CHECKPOINT_LAYER_FINAL,
+                .position = position,
+                .token = token,
+                .hc = cur,
+                .hc_bytes = hc_bytes,
+                .layer_report = last,
+            };
+            if (checkpoint_fn(&cp, checkpoint_user, err, errlen)) return 1;
+        }
     }
     sched->cur_hc = cur;
     if (report) {

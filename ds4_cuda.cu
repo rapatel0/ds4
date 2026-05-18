@@ -1371,6 +1371,7 @@ extern "C" int ds4_gpu_set_device(int gpu) {
 }
 
 __global__ static void fill_f32_kernel(float *x, uint64_t n, float v);
+__global__ static void f32_f16_round_kernel(float *x, uint64_t n);
 
 extern "C" ds4_gpu_tensor *ds4_gpu_tensor_alloc(uint64_t bytes) {
     if (bytes == 0) bytes = 1;
@@ -1479,6 +1480,14 @@ extern "C" int ds4_gpu_tensor_fill_f32(ds4_gpu_tensor *tensor, float value, uint
     if (!cuda_ok(cudaSetDevice(tensor->device), "tensor fill set device")) return 0;
     fill_f32_kernel<<<(count + 255u) / 256u, 256>>>((float *)tensor->ptr, count, value);
     return cuda_ok(cudaGetLastError(), "tensor fill f32 launch");
+}
+
+extern "C" int ds4_gpu_f16_round_tensor(ds4_gpu_tensor *tensor, uint64_t count) {
+    if (!tensor || count > tensor->bytes / sizeof(float)) return 0;
+    if (count == 0) return 1;
+    if (!cuda_ok(cudaSetDevice(tensor->device), "tensor f16 round set device")) return 0;
+    f32_f16_round_kernel<<<(count + 255u) / 256u, 256>>>((float *)tensor->ptr, count);
+    return cuda_ok(cudaGetLastError(), "tensor f16 round launch");
 }
 
 extern "C" int ds4_gpu_tensor_write(ds4_gpu_tensor *tensor, uint64_t offset, const void *data, uint64_t bytes) {
@@ -2506,13 +2515,13 @@ __global__ static void embed_token_hc_kernel(float *out, const unsigned short *w
     uint32_t n = n_embd * n_hc;
     if (i >= n) return;
     uint32_t e = i % n_embd;
-    out[i] = __half2float(reinterpret_cast<const __half *>(w)[(uint64_t)token * n_embd + e]);
+    out[i] = arena_bf16_to_f32(w[(uint64_t)token * n_embd + e]);
 }
 
 __global__ static void embed_tokens_hc_kernel(
         float *out,
         const int32_t *tokens,
-        const __half *w,
+        const unsigned short *w,
         uint32_t n_vocab,
         uint32_t n_tokens,
         uint32_t n_embd,
@@ -2526,7 +2535,7 @@ __global__ static void embed_tokens_hc_kernel(
     int32_t tok_i = tokens[t];
     uint32_t tok = tok_i < 0 ? 0u : (uint32_t)tok_i;
     if (tok >= n_vocab) tok = 0;
-    out[gid] = __half2float(w[(uint64_t)tok * n_embd + d]);
+    out[gid] = arena_bf16_to_f32(w[(uint64_t)tok * n_embd + d]);
 }
 
 __global__ static void matmul_f16_kernel(
@@ -2690,6 +2699,11 @@ __global__ static void repeat_hc_kernel(float *out, const float *row, uint32_t n
 __global__ static void f32_to_f16_kernel(__half *out, const float *x, uint64_t n) {
     uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) out[i] = __float2half(x[i]);
+}
+
+__global__ static void f32_f16_round_kernel(float *x, uint64_t n) {
+    uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) x[i] = __half2float(__float2half_rn(x[i]));
 }
 
 __device__ static float warp_sum_f32(float v) {
@@ -6381,7 +6395,7 @@ extern "C" int ds4_gpu_embed_tokens_hc_tensor(
     embed_tokens_hc_kernel<<<(n + 255) / 256, 256>>>(
         (float *)out_hc->ptr,
         (const int32_t *)tokens_t->ptr,
-        (const __half *)wptr,
+        (const unsigned short *)wptr,
         n_vocab, n_tokens, n_embd, n_hc);
     return cuda_ok(cudaGetLastError(), "embed tokens launch");
 }

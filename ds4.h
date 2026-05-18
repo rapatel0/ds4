@@ -97,6 +97,13 @@ typedef struct {
     uint64_t cap;
 } ds4_session_snapshot;
 
+enum {
+    DS4_HC_CHECKPOINT_ROWS = 4,
+    DS4_HC_CHECKPOINT_COLS = 4096,
+    DS4_HC_CHECKPOINT_VALUES = DS4_HC_CHECKPOINT_ROWS * DS4_HC_CHECKPOINT_COLS,
+    DS4_HC_CHECKPOINT_AFTER_ATTN_BASE = 1000,
+};
+
 int ds4_engine_open(ds4_engine **out, const ds4_engine_options *opt);
 void ds4_engine_close(ds4_engine *e);
 void ds4_engine_summary(ds4_engine *e);
@@ -129,6 +136,26 @@ int ds4_engine_first_token_test(ds4_engine *e, const ds4_tokens *prompt);
 int ds4_engine_metal_graph_test(ds4_engine *e, const ds4_tokens *prompt);
 int ds4_engine_metal_graph_full_test(ds4_engine *e, const ds4_tokens *prompt);
 int ds4_engine_metal_graph_prompt_test(ds4_engine *e, const ds4_tokens *prompt, int ctx_size);
+int ds4_engine_cpu_hc_checkpoints(ds4_engine *e,
+                                  const ds4_tokens *prompt,
+                                  const int *layers,
+                                  int n_layers,
+                                  int ctx_size,
+                                  float *out_hc,
+                                  uint64_t out_values,
+                                  char *err,
+                                  size_t errlen);
+
+int ds4_engine_cpu_route_checkpoints(ds4_engine *e,
+                                     const ds4_tokens *prompt,
+                                     const int *layers,
+                                     int n_layers,
+                                     int ctx_size,
+                                     int32_t *out_selected,
+                                     float *out_weights,
+                                     uint64_t out_routes,
+                                     char *err,
+                                     size_t errlen);
 
 void ds4_tokens_push(ds4_tokens *tv, int token);
 void ds4_tokens_free(ds4_tokens *tv);

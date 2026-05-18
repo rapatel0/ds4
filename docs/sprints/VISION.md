@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-18
 last_updated_by: sprint-execute
-revision: 37
+revision: 38
 ---
 
 # Vision: DS4 V100 Appliance
@@ -162,6 +162,12 @@ it is a narrow DS4 runtime tuned for this hardware.
   output-head top-5 on gpu7, while the prompt replay top-k remains dominated
   by punctuation/newline-like tokens. The next critical gap is finding the
   first divergent layer or stage in the 43-layer scheduler body.
+- Sprint 027 shipped the selected-token correctness fix and checkpoint
+  diagnostics. The V100 scheduler now matches the official short-prompt
+  expected token bytes `3136`; checkpoint replay proves the seed, early layers,
+  and layer-4 after-attention match the CPU source-layout oracle, while
+  layer-4 final HC still shows FFN numeric drift. The current readiness
+  blockers are now public serving, MTP, and throughput benchmarking.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -515,6 +521,18 @@ it is a narrow DS4 runtime tuned for this hardware.
   top-k diagnostic records the remaining oracle mismatch. The next blocker is
   stage/layer HC divergence localization inside the 43-layer body.
 
+### Sprint 027 - V100 Selected-Token Correctness And HC Checkpoints [complete]
+
+- **Goal**: Localize scheduler-body divergence and make the official
+  selected-token oracle pass on V100.
+- **Rationale**: Output-head parity passed in Sprint 026, so the next useful
+  implementation was checkpoint visibility through the actual 43-layer body
+  rather than more output-head work.
+- **Outcome**: `SHIP`. The scheduler now decodes native BF16 token embeddings
+  correctly, defaults KV/cache mutation to the F16 source-layout contract, and
+  passes the selected-token gate for expected bytes `3136`. The gate remains
+  `ready=false` only for public serving, MTP, and throughput.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -579,6 +597,10 @@ it is a narrow DS4 runtime tuned for this hardware.
 - See `docs/sprints/SPRINT-026-FOLLOWUPS.md`: stage/layer HC divergence
   checkpoints, per-layer execution reports, full-gate build guards, parallel
   resident uploads, and continued deferral of serving/MTP/throughput.
+- See `docs/sprints/SPRINT-027-FOLLOWUPS.md`: public one-slot serving,
+  throughput counters, layer-4 FFN numeric drift, explicit FP8 KV validation,
+  and continued deferral of MTP/multi-slot scheduling until the single-slot
+  baseline is usable.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -618,6 +640,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-18 | Shipped Sprint 024 full 8-stage scheduling. | The runtime now executes all 43 layers across the 8x V100 body and removes `full_43_layer_scheduler` from gate readiness; the next blocker is output-head selected-token comparison against the source oracle. | Sprint 025+ |
 | 2026-05-18 | Extended Sprint 025 with scheduler-owned output-head selected-token execution. | The output-head path now runs and produces finite logits/top-1 on V100, but official-vector comparison fails (`3136` expected, `0a0a` selected), so the next blocker is divergence localization rather than more scheduling structure. | Sprint 026+ |
 | 2026-05-18 | Shipped Sprint 026 output-head divergence localization. | Deterministic CPU-vs-V100 output-head parity passes on gpu7, so the selected-token mismatch is now scoped to the 43-layer scheduler body; the next sprint should checkpoint HC after layer/stage boundaries. | Sprint 027+ |
+| 2026-05-18 | Shipped Sprint 027 selected-token correctness and HC checkpoint diagnostics. | BF16 embedding decode and F16 KV/cache semantics now match the CPU source-layout oracle closely enough for the official V100 selected-token gate to pass; the next milestone moves from correctness blocking to public serving and measurement. | Sprint 028+ |
 
 ## Open Questions
 

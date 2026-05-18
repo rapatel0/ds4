@@ -112,6 +112,7 @@ if [ -n "$pack_index" ]; then
     targets+=(tests/cuda_v100_full_scheduler_smoke)
     targets+=(tests/cuda_v100_output_head_parity_smoke)
     targets+=(tests/cuda_v100_selected_token_smoke)
+    targets+=(tests/cuda_v100_scheduler_checkpoint_parity_smoke)
 fi
 
 if [ -n "$log_dir" ]; then
@@ -129,6 +130,7 @@ fi
 
 failures=0
 full_scheduler_ready=0
+selected_token_ready=0
 
 run_gate() {
     local name="$1"
@@ -205,8 +207,11 @@ if [ -n "$pack_index" ]; then
             if run_gate "full_scheduler" ./tests/cuda_v100_full_scheduler_smoke --index "$pack_index" --model "$model" --token 16 --position 16; then
                 full_scheduler_ready=1
             fi
+            run_gate "scheduler_checkpoint_parity" ./tests/cuda_v100_scheduler_checkpoint_parity_smoke --index "$pack_index" --model "$model" --layers -1,0,1,2,3,a4 --ctx 4096 --prompt-tokens 1 || true
             run_gate "output_head_parity" ./tests/cuda_v100_output_head_parity_smoke --index "$pack_index" --model "$model" || true
-            run_gate "scheduler_output_head" ./tests/cuda_v100_selected_token_smoke --index "$pack_index" --model "$model" --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt || true
+            if run_gate "scheduler_output_head" ./tests/cuda_v100_selected_token_smoke --index "$pack_index" --model "$model" --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt --expected-token-hex 3136; then
+                selected_token_ready=1
+            fi
         else
             echo "gate	descriptor_bound_attention	SKIP	no_model"
             echo "gate	descriptor_bound_ffn	SKIP	no_model"
@@ -215,6 +220,7 @@ if [ -n "$pack_index" ]; then
             echo "gate	stage_scheduler	SKIP	no_model"
             echo "gate	two_stage_scheduler	SKIP	no_model"
             echo "gate	full_scheduler	SKIP	no_model"
+            echo "gate	scheduler_checkpoint_parity	SKIP	no_model"
             echo "gate	output_head_parity	SKIP	no_model"
             echo "gate	scheduler_output_head	SKIP	no_model"
         fi
@@ -230,6 +236,7 @@ else
     echo "gate	stage_scheduler	SKIP	no_pack_index"
     echo "gate	two_stage_scheduler	SKIP	no_pack_index"
     echo "gate	full_scheduler	SKIP	no_pack_index"
+    echo "gate	scheduler_checkpoint_parity	SKIP	no_pack_index"
     echo "gate	output_head_parity	SKIP	no_pack_index"
     echo "gate	scheduler_output_head	SKIP	no_pack_index"
 fi
@@ -251,7 +258,9 @@ add_missing() {
 if [ "$full_scheduler_ready" -eq 0 ]; then
     add_missing "full_43_layer_scheduler"
 fi
-add_missing "real_model_selected_token"
+if [ "$selected_token_ready" -eq 0 ]; then
+    add_missing "real_model_selected_token"
+fi
 add_missing "public_serving"
 add_missing "mtp"
 add_missing "throughput_benchmark"

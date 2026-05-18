@@ -14804,6 +14804,283 @@ struct ds4_engine {
     bool mtp_ready;
 };
 
+int ds4_engine_cpu_hc_checkpoints(ds4_engine *e,
+                                  const ds4_tokens *prompt,
+                                  const int *layers,
+                                  int n_layers,
+                                  int ctx_size,
+                                  float *out_hc,
+                                  uint64_t out_values,
+                                  char *err,
+                                  size_t errlen) {
+    const uint64_t hc_dim = (uint64_t)DS4_N_HC * DS4_N_EMBD;
+    if (!e || !prompt || !layers || n_layers <= 0 || !out_hc) {
+        if (err && errlen) snprintf(err, errlen, "missing CPU HC checkpoint input");
+        return 1;
+    }
+    if (e->backend != DS4_BACKEND_CPU || !e->source_layout_oracle) {
+        if (err && errlen) snprintf(err, errlen, "CPU HC checkpoints require source-layout oracle CPU engine");
+        return 1;
+    }
+    if (!e->weights.v100_source_layout) {
+        if (err && errlen) snprintf(err, errlen, "CPU HC checkpoints require native DS4 source layout");
+        return 1;
+    }
+    if (prompt->len <= 0 || ctx_size <= 0 || prompt->len > ctx_size) {
+        if (err && errlen) snprintf(err, errlen, "prompt exceeds checkpoint context");
+        return 1;
+    }
+    if (out_values < (uint64_t)n_layers * hc_dim) {
+        if (err && errlen) snprintf(err, errlen, "CPU HC checkpoint output buffer is too small");
+        return 1;
+    }
+    for (int i = 0; i < n_layers; i++) {
+        const int layer = layers[i] >= DS4_HC_CHECKPOINT_AFTER_ATTN_BASE
+            ? layers[i] - DS4_HC_CHECKPOINT_AFTER_ATTN_BASE
+            : layers[i];
+        if (layer < -1 || layer >= (int)DS4_N_LAYER) {
+            if (err && errlen) snprintf(err, errlen, "bad checkpoint layer %d", layers[i]);
+            return 1;
+        }
+    }
+    int max_layer = -1;
+    for (int i = 0; i < n_layers; i++) {
+        const int layer = layers[i] >= DS4_HC_CHECKPOINT_AFTER_ATTN_BASE
+            ? layers[i] - DS4_HC_CHECKPOINT_AFTER_ATTN_BASE
+            : layers[i];
+        if (layer > max_layer) max_layer = layer;
+    }
+
+    ds4_kv_cache cache;
+    kv_cache_init(&cache, (uint32_t)ctx_size, 0);
+    ds4_cpu_decode_scratch scratch;
+    cpu_decode_scratch_init(&scratch, (uint32_t)ctx_size);
+    uint8_t *seen = xcalloc((size_t)n_layers, sizeof(seen[0]));
+
+    for (int pos = 0; pos < prompt->len; pos++) {
+        if (prompt->v[pos] < 0) {
+            if (err && errlen) snprintf(err, errlen, "negative prompt token at %d", pos);
+            free(seen);
+            cpu_decode_scratch_free(&scratch);
+            kv_cache_free(&cache);
+            return 1;
+        }
+
+        float *cur = scratch.cur;
+        float *next = scratch.next;
+        const int token = prompt->v[pos];
+        embed_token_f16(&e->model, &e->weights, token, scratch.plain);
+        hc_from_plain_embedding(cur, scratch.plain, DS4_N_EMBD, DS4_N_HC);
+        if (pos == prompt->len - 1) {
+            for (int j = 0; j < n_layers; j++) {
+                if (layers[j] == -1) {
+                    memcpy(out_hc + (uint64_t)j * hc_dim,
+                           cur,
+                           (size_t)hc_dim * sizeof(float));
+                    seen[j] = 1;
+                }
+            }
+        }
+
+        for (int il = 0; il <= max_layer; il++) {
+            layer_forward_raw_swa_one(next,
+                                      &e->model,
+                                      &e->weights.layer[il],
+                                      &cache.layer[il],
+                                      cur,
+                                      (uint32_t)il,
+                                      (uint32_t)pos,
+                                      token,
+                                      e->directional_steering_dirs,
+                                      e->directional_steering_attn_scale,
+                                      e->directional_steering_ffn_scale,
+                                      &scratch);
+            if (pos == prompt->len - 1) {
+                for (int j = 0; j < n_layers; j++) {
+                    if (layers[j] == DS4_HC_CHECKPOINT_AFTER_ATTN_BASE + il) {
+                        memcpy(out_hc + (uint64_t)j * hc_dim,
+                               scratch.after_attn_hc,
+                               (size_t)hc_dim * sizeof(float));
+                        seen[j] = 1;
+                    }
+                    if (layers[j] == (int)il) {
+                        memcpy(out_hc + (uint64_t)j * hc_dim,
+                               next,
+                               (size_t)hc_dim * sizeof(float));
+                        seen[j] = 1;
+                    }
+                }
+            }
+            float *tmp = cur;
+            cur = next;
+            next = tmp;
+        }
+    }
+
+    int rc = 0;
+    for (int i = 0; i < n_layers; i++) {
+        if (!seen[i]) {
+            if (err && errlen) snprintf(err, errlen, "missing CPU HC checkpoint for layer %d", layers[i]);
+            rc = 1;
+            break;
+        }
+    }
+    free(seen);
+    cpu_decode_scratch_free(&scratch);
+    kv_cache_free(&cache);
+    return rc;
+}
+
+int ds4_engine_cpu_route_checkpoints(ds4_engine *e,
+                                     const ds4_tokens *prompt,
+                                     const int *layers,
+                                     int n_layers,
+                                     int ctx_size,
+                                     int32_t *out_selected,
+                                     float *out_weights,
+                                     uint64_t out_routes,
+                                     char *err,
+                                     size_t errlen) {
+    if (!e || !prompt || !layers || n_layers <= 0 || !out_selected || !out_weights) {
+        if (err && errlen) snprintf(err, errlen, "missing CPU route checkpoint input");
+        return 1;
+    }
+    if (e->backend != DS4_BACKEND_CPU || !e->source_layout_oracle) {
+        if (err && errlen) snprintf(err, errlen, "CPU route checkpoints require source-layout oracle CPU engine");
+        return 1;
+    }
+    if (!e->weights.v100_source_layout) {
+        if (err && errlen) snprintf(err, errlen, "CPU route checkpoints require native DS4 source layout");
+        return 1;
+    }
+    if (prompt->len <= 0 || ctx_size <= 0 || prompt->len > ctx_size) {
+        if (err && errlen) snprintf(err, errlen, "prompt exceeds route checkpoint context");
+        return 1;
+    }
+    if (out_routes < (uint64_t)n_layers * DS4_N_EXPERT_USED) {
+        if (err && errlen) snprintf(err, errlen, "CPU route checkpoint output buffer is too small");
+        return 1;
+    }
+
+    int max_layer = -1;
+    for (int i = 0; i < n_layers; i++) {
+        const int layer = layers[i] >= DS4_HC_CHECKPOINT_AFTER_ATTN_BASE
+            ? layers[i] - DS4_HC_CHECKPOINT_AFTER_ATTN_BASE
+            : layers[i];
+        if (layer < -1 || layer >= (int)DS4_N_LAYER) {
+            if (err && errlen) snprintf(err, errlen, "bad route checkpoint layer %d", layers[i]);
+            return 1;
+        }
+        if (layer > max_layer) max_layer = layer;
+        for (int r = 0; r < DS4_N_EXPERT_USED; r++) {
+            out_selected[(uint64_t)i * DS4_N_EXPERT_USED + r] = -1;
+            out_weights[(uint64_t)i * DS4_N_EXPERT_USED + r] = 0.0f;
+        }
+    }
+
+    ds4_kv_cache cache;
+    kv_cache_init(&cache, (uint32_t)ctx_size, 0);
+    ds4_cpu_decode_scratch scratch;
+    cpu_decode_scratch_init(&scratch, (uint32_t)ctx_size);
+    uint8_t *seen = xcalloc((size_t)n_layers, sizeof(seen[0]));
+
+    for (int pos = 0; pos < prompt->len; pos++) {
+        if (prompt->v[pos] < 0) {
+            if (err && errlen) snprintf(err, errlen, "negative prompt token at %d", pos);
+            free(seen);
+            cpu_decode_scratch_free(&scratch);
+            kv_cache_free(&cache);
+            return 1;
+        }
+
+        float *cur = scratch.cur;
+        float *next = scratch.next;
+        const int token = prompt->v[pos];
+        embed_token_f16(&e->model, &e->weights, token, scratch.plain);
+        hc_from_plain_embedding(cur, scratch.plain, DS4_N_EMBD, DS4_N_HC);
+
+        if (pos == prompt->len - 1) {
+            for (int j = 0; j < n_layers; j++) {
+                if (layers[j] == -1) seen[j] = 1;
+            }
+        }
+
+        for (int il = 0; il <= max_layer; il++) {
+            ds4_layer_weights *layer = &e->weights.layer[il];
+            layer_forward_raw_swa_one(next,
+                                      &e->model,
+                                      layer,
+                                      &cache.layer[il],
+                                      cur,
+                                      (uint32_t)il,
+                                      (uint32_t)pos,
+                                      token,
+                                      e->directional_steering_dirs,
+                                      e->directional_steering_attn_scale,
+                                      e->directional_steering_ffn_scale,
+                                      &scratch);
+            if (pos == prompt->len - 1) {
+                for (int j = 0; j < n_layers; j++) {
+                    const int layer_spec = layers[j] >= DS4_HC_CHECKPOINT_AFTER_ATTN_BASE
+                        ? layers[j] - DS4_HC_CHECKPOINT_AFTER_ATTN_BASE
+                        : layers[j];
+                    if (layer_spec != il) continue;
+
+                    float post[DS4_N_HC];
+                    float comb[DS4_N_HC * DS4_N_HC];
+                    hc_pre_from_state_one_scratch(&e->model,
+                                                  layer->hc_ffn_fn,
+                                                  layer->hc_ffn_scale,
+                                                  layer->hc_ffn_base,
+                                                  scratch.after_attn_hc,
+                                                  scratch.ffn_cur,
+                                                  post,
+                                                  comb,
+                                                  scratch.hc_flat,
+                                                  false);
+                    (void)post;
+                    (void)comb;
+                    const float *ffn_norm = tensor_data(&e->model, layer->ffn_norm);
+                    rms_norm_weight(scratch.ffn_norm,
+                                    scratch.ffn_cur,
+                                    ffn_norm,
+                                    DS4_N_EMBD,
+                                    DS4_RMS_EPS);
+                    int selected[DS4_N_EXPERT_USED];
+                    float weights[DS4_N_EXPERT_USED];
+                    if (layer->ffn_gate_tid2eid) {
+                        layer_hash_selected_experts(selected, &e->model, layer, token);
+                        layer_hash_router_weights_one(weights, &e->model, layer, scratch.ffn_norm, selected);
+                    } else {
+                        layer_topk_selected_experts(selected, weights, &e->model, layer, scratch.ffn_norm);
+                    }
+                    for (int r = 0; r < DS4_N_EXPERT_USED; r++) {
+                        out_selected[(uint64_t)j * DS4_N_EXPERT_USED + r] = selected[r];
+                        out_weights[(uint64_t)j * DS4_N_EXPERT_USED + r] = weights[r];
+                    }
+                    seen[j] = 1;
+                }
+            }
+            float *tmp = cur;
+            cur = next;
+            next = tmp;
+        }
+    }
+
+    int rc = 0;
+    for (int i = 0; i < n_layers; i++) {
+        if (!seen[i]) {
+            if (err && errlen) snprintf(err, errlen, "missing CPU route checkpoint for layer %d", layers[i]);
+            rc = 1;
+            break;
+        }
+    }
+    free(seen);
+    cpu_decode_scratch_free(&scratch);
+    kv_cache_free(&cache);
+    return rc;
+}
+
 static char *tensor_shape_string(const ds4_tensor *t) {
     char tmp[128];
     size_t pos = 0;

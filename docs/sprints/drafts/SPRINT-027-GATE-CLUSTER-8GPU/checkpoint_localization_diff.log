@@ -1,0 +1,11 @@
+ds4: CUDA loading model tensors into device cache
+checkpoint	layer=-1	kind=seed	stage=0	max_abs=0	rms_abs=0	cpu_rms=0.170893461	gpu_rms=0.170893461	route0=-1/0:-1/0	PASS
+checkpoint	layer=0	kind=layer_final	stage=0	max_abs=7.62939453e-06	rms_abs=6.87230568e-07	cpu_rms=4.18105412	gpu_rms=4.18105459	route0=254/0.04698295:254/0.04698294	PASS
+checkpoint	layer=1	kind=layer_final	stage=0	max_abs=9.53674316e-06	rms_abs=9.69932557e-07	cpu_rms=7.80838871	gpu_rms=7.80838871	route0=163/0.02366659:163/0.0236666	PASS
+checkpoint	layer=2	kind=layer_final	stage=0	max_abs=1.14440918e-05	rms_abs=1.39165149e-06	cpu_rms=9.6516037	gpu_rms=9.6516037	route0=108/0.1105103:108/0.1105103	PASS
+checkpoint	layer=3	kind=layer_final	stage=0	max_abs=1.90734863e-05	rms_abs=1.53522683e-06	cpu_rms=9.71580124	gpu_rms=9.71580124	route0=124/0.3020107:124/0.3020107	PASS
+checkpoint	layer=4	kind=after_attn	stage=0	max_abs=1.90734863e-05	rms_abs=1.78624578e-06	cpu_rms=9.68622875	gpu_rms=9.68622971	route0=64/1.290131:0/0	PASS
+checkpoint	layer=4	kind=layer_final	stage=0	max_abs=0.771083832	rms_abs=0.0734053701	cpu_rms=14.5682583	gpu_rms=14.5127439	route0=64/1.290131:64/1.290131	DIFF
+checkpoint	layer=5	kind=layer_final	stage=0	max_abs=9.52476501	rms_abs=0.874522209	cpu_rms=18.8440628	gpu_rms=18.2393532	route0=35/1.394117:35/1.394158	DIFF
+cuda_v100_scheduler_checkpoint_parity_smoke: prompt_tokens=1 checkpoints=8 stages=1 first_divergent_layer=4 first_divergent_kind=layer_final limits=max_abs:0.01,rms:0.001 FAIL
+cuda_v100_scheduler_checkpoint_parity_smoke: prompt_tokens_limited=1 full_prompt_tokens=18

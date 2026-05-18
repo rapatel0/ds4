@@ -282,12 +282,22 @@ static int prepare_decode_cache_attention(
     const uint32_t raw_row = cfg->position % raw_cap;
     const uint32_t raw_start = (cfg->position + raw_cap + 1u - n_raw) % raw_cap;
 
-    if (!ds4_gpu_kv_fp8_store_raw_tensor(kv,
-                                         cache->raw_kv,
-                                         raw_cap,
-                                         raw_row,
-                                         DS4_V100_HEAD_DIM,
-                                         DS4_V100_N_ROT)) {
+    int raw_ok = 0;
+    if (cfg->fp8_kv_cache) {
+        raw_ok = ds4_gpu_kv_fp8_store_raw_tensor(kv,
+                                                 cache->raw_kv,
+                                                 raw_cap,
+                                                 raw_row,
+                                                 DS4_V100_HEAD_DIM,
+                                                 DS4_V100_N_ROT);
+    } else {
+        raw_ok = ds4_gpu_store_raw_kv_tensor(cache->raw_kv,
+                                             kv,
+                                             raw_cap,
+                                             raw_row,
+                                             DS4_V100_HEAD_DIM);
+    }
+    if (!raw_ok) {
         return exec_error(err, errlen, "decode cache raw KV update failed");
     }
     inputs->raw_kv = cache->raw_kv;
@@ -366,10 +376,14 @@ static int prepare_decode_cache_attention(
             exec_error(err, errlen, "failed to view emitted attention compressed row");
             goto done;
         }
-        const int ok = ds4_gpu_dsv4_fp8_kv_quantize_tensor(row, 1, DS4_V100_HEAD_DIM, DS4_V100_N_ROT);
+        int ok = 1;
+        if (cfg->fp8_kv_cache) {
+            ok = ds4_gpu_dsv4_fp8_kv_quantize_tensor(row, 1, DS4_V100_HEAD_DIM, DS4_V100_N_ROT);
+        }
+        if (ok) ok = ds4_gpu_f16_round_tensor(row, DS4_V100_HEAD_DIM);
         ds4_gpu_tensor_free(row);
         if (!ok) {
-            exec_error(err, errlen, "attention compressed row FP8 round-trip failed");
+            exec_error(err, errlen, "attention compressed row KV round-trip failed");
             goto done;
         }
         cache->n_attn_comp++;
@@ -442,7 +456,19 @@ static int prepare_decode_cache_attention(
         }
         ds4_gpu_tensor_free(index_sc_cur);
         ds4_gpu_tensor_free(index_kv_cur);
-        if (emit) cache->n_index_comp++;
+        if (emit) {
+            ds4_gpu_tensor *row = ds4_gpu_tensor_view(
+                    cache->index_comp_kv,
+                    (uint64_t)cache->n_index_comp * DS4_V100_INDEXER_HEAD_DIM * sizeof(float),
+                    (uint64_t)DS4_V100_INDEXER_HEAD_DIM * sizeof(float));
+            const int ok = row && ds4_gpu_f16_round_tensor(row, DS4_V100_INDEXER_HEAD_DIM);
+            ds4_gpu_tensor_free(row);
+            if (!ok) {
+                exec_error(err, errlen, "indexer compressed row F16 round-trip failed");
+                goto done;
+            }
+            cache->n_index_comp++;
+        }
 
         const uint32_t top_k = cache->indexer_top_k ? cache->indexer_top_k : DS4_V100_INDEXER_TOP_K;
         if (cache->n_index_comp > top_k) {
@@ -1006,6 +1032,16 @@ int ds4_v100_layer_execute_hc_decode(
                                         DS4_V100_N_HC)) {
         if (err && err[0] == '\0') exec_error(err, errlen, "HC layer execution sequence failed");
         goto done;
+    }
+
+    if (cfg->checkpoint_fn) {
+        ds4_v100_layer_execute_checkpoint cp = {
+            .layer = cfg->checkpoint_layer,
+            .kind = DS4_V100_HC_CHECKPOINT_AFTER_ATTN,
+            .hc = after_attn_hc,
+            .hc_bytes = hc_bytes,
+        };
+        if (cfg->checkpoint_fn(&cp, cfg->checkpoint_user, err, errlen)) goto done;
     }
 
     rc = 0;

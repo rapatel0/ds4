@@ -45,6 +45,25 @@ typedef struct {
     uint32_t indexer_top_k;
 } ds4_v100_layer_decode_cache;
 
+enum {
+    DS4_V100_HC_CHECKPOINT_LAYER_FINAL = 0,
+    DS4_V100_HC_CHECKPOINT_AFTER_ATTN = 1,
+    DS4_V100_HC_CHECKPOINT_SEED = 2,
+};
+
+typedef struct {
+    int layer;
+    int kind;
+    const ds4_gpu_tensor *hc;
+    uint64_t hc_bytes;
+} ds4_v100_layer_execute_checkpoint;
+
+typedef int (*ds4_v100_layer_execute_checkpoint_fn)(
+    const ds4_v100_layer_execute_checkpoint *checkpoint,
+    void *user,
+    char *err,
+    size_t errlen);
+
 typedef struct {
     const void *model_map;
     uint64_t model_size;
@@ -64,6 +83,11 @@ typedef struct {
     bool use_compressed_mask;
 
     ds4_v100_layer_decode_cache *decode_cache;
+    bool fp8_kv_cache;
+
+    int checkpoint_layer;
+    ds4_v100_layer_execute_checkpoint_fn checkpoint_fn;
+    void *checkpoint_user;
 } ds4_v100_layer_execute_config;
 
 typedef struct {

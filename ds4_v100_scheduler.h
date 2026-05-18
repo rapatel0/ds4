@@ -4,6 +4,7 @@
 #include "ds4_v100_context.h"
 #include "ds4_v100_layer_execute.h"
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -24,6 +25,7 @@ typedef struct {
     uint32_t index_comp_cap;
     uint32_t indexer_top_k;
     uint64_t kv_ctx_tokens;
+    bool fp8_kv_cache;
 } ds4_v100_stage_scheduler_options;
 
 typedef struct {
@@ -39,6 +41,24 @@ typedef struct {
     uint64_t uploaded_bytes;
     ds4_v100_layer_execute_report last_layer_report;
 } ds4_v100_stage_scheduler_report;
+
+typedef struct {
+    int stage_id;
+    int gpu;
+    int layer;
+    int kind;
+    uint32_t position;
+    uint32_t token;
+    const ds4_gpu_tensor *hc;
+    uint64_t hc_bytes;
+    ds4_v100_layer_execute_report layer_report;
+} ds4_v100_stage_scheduler_checkpoint;
+
+typedef int (*ds4_v100_stage_scheduler_checkpoint_fn)(
+    const ds4_v100_stage_scheduler_checkpoint *checkpoint,
+    void *user,
+    char *err,
+    size_t errlen);
 
 void ds4_v100_stage_scheduler_options_init(ds4_v100_stage_scheduler_options *opts);
 
@@ -56,6 +76,16 @@ int ds4_v100_stage_scheduler_decode_token(ds4_v100_stage_scheduler *sched,
                                           char *err,
                                           size_t errlen);
 
+int ds4_v100_stage_scheduler_decode_token_checkpoints(
+    ds4_v100_stage_scheduler *sched,
+    uint32_t token,
+    uint32_t position,
+    ds4_v100_stage_scheduler_report *report,
+    ds4_v100_stage_scheduler_checkpoint_fn checkpoint_fn,
+    void *checkpoint_user,
+    char *err,
+    size_t errlen);
+
 int ds4_v100_stage_scheduler_handoff(ds4_v100_stage_scheduler *dst,
                                      const ds4_v100_stage_scheduler *src,
                                      char *err,
@@ -67,6 +97,16 @@ int ds4_v100_stage_scheduler_decode_hc(ds4_v100_stage_scheduler *sched,
                                        ds4_v100_stage_scheduler_report *report,
                                        char *err,
                                        size_t errlen);
+
+int ds4_v100_stage_scheduler_decode_hc_checkpoints(
+    ds4_v100_stage_scheduler *sched,
+    uint32_t token,
+    uint32_t position,
+    ds4_v100_stage_scheduler_report *report,
+    ds4_v100_stage_scheduler_checkpoint_fn checkpoint_fn,
+    void *checkpoint_user,
+    char *err,
+    size_t errlen);
 
 int ds4_v100_stage_scheduler_read_hc(const ds4_v100_stage_scheduler *sched,
                                      void *dst,
