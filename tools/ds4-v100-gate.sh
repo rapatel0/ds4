@@ -8,6 +8,8 @@ build=0
 skip_model=0
 log_dir=""
 cuda_arch="${CUDA_ARCH:-sm_70}"
+pack_index=""
+descriptor_layer="2"
 
 usage() {
     cat <<'USAGE'
@@ -20,6 +22,9 @@ Options:
   --build           Build required targets before running the gate
   --cuda-arch ARCH  CUDA arch to pass to make when --build is used (default sm_70)
   --log-dir DIR     Write each command's output to DIR
+  --pack-index FILE Validate real pack-index layer descriptors
+  --descriptor-layer N
+                    Layer to validate when --pack-index is supplied (default 2)
   --skip-model      Skip real-model source guard check
   --help            Show this help
 USAGE
@@ -56,6 +61,16 @@ while [ "$#" -gt 0 ]; do
             log_dir="$2"
             shift 2
             ;;
+        --pack-index)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --pack-index requires a value" >&2; exit 2; }
+            pack_index="$2"
+            shift 2
+            ;;
+        --descriptor-layer)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --descriptor-layer requires a value" >&2; exit 2; }
+            descriptor_layer="$2"
+            shift 2
+            ;;
         --skip-model)
             skip_model=1
             shift
@@ -84,6 +99,10 @@ targets=(
     tests/cuda_v100_bounded_logits_smoke
     tests/cuda_v100_mxfp4_moe_smoke
 )
+
+if [ -n "$pack_index" ]; then
+    targets+=(tools/ds4-v100-layer-descriptor-gate)
+fi
 
 if [ -n "$log_dir" ]; then
     mkdir -p "$log_dir" || exit 2
@@ -157,6 +176,16 @@ run_gate "hc_relay" ./tests/cuda_hc_relay_smoke || true
 run_gate "projection_attention" ./tests/cuda_v100_projection_attention_smoke || true
 run_gate "bounded_logits" ./tests/cuda_v100_bounded_logits_smoke || true
 run_gate "mxfp4_moe" ./tests/cuda_v100_mxfp4_moe_smoke || true
+if [ -n "$pack_index" ]; then
+    if [ ! -f "$pack_index" ]; then
+        echo "gate	layer_descriptors	FAIL	missing_pack_index=$pack_index"
+        failures=$((failures + 1))
+    else
+        run_gate "layer_descriptors" ./tools/ds4-v100-layer-descriptor-gate --index "$pack_index" --layer "$descriptor_layer" --gpus 8 || true
+    fi
+else
+    echo "gate	layer_descriptors	SKIP	no_pack_index"
+fi
 
 if [ "$failures" -ne 0 ]; then
     echo "gate	summary	FAIL	failures=$failures ready=false"

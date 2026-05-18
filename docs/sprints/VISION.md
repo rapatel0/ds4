@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-18
-last_updated_by: sprint-plan
-revision: 18
+last_updated_by: sprint-execute
+revision: 19
 ---
 
 # Vision: DS4 V100 Appliance
@@ -77,6 +77,12 @@ it is a narrow DS4 runtime tuned for this hardware.
   output-head logits, and selected-token comparison on V100. It still reports
   `ready=false` because the path is synthetic and not yet bound to real
   pack-index layer descriptors or the full layer scheduler.
+- Sprint 014 shipped the real pack-index layer descriptor gate. The appliance
+  gate now validates layer-2 attention, compressor/indexer, router,
+  routed/shared expert, HC control, and output-head descriptors from the real
+  pack index on the 8x V100 pod. It still reports `ready=false` because
+  descriptors are not yet materialized as runtime bindings and no real
+  descriptor-bound layer compute has shipped.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -250,7 +256,7 @@ it is a narrow DS4 runtime tuned for this hardware.
   output-head selected-token smoke pass on V100. The remaining readiness gap is
   real pack-index layer integration and shared-expert/full scheduler wiring.
 
-### Sprint 014 - V100 Real Pack-Index Layer Descriptor Gate [planned]
+### Sprint 014 - V100 Real Pack-Index Layer Descriptor Gate [complete]
 
 - **Goal**: Add a fail-closed descriptor gate that validates the real pack-index
   rows needed by a source-layout layer, including attention, compressor/indexer,
@@ -258,14 +264,18 @@ it is a narrow DS4 runtime tuned for this hardware.
 - **Rationale**: Sprint 013 proves synthetic MoE composition. Deployment should
   wait until the same kernel surfaces consume real model descriptors. A strict
   descriptor contract is the next integration step before real layer compute.
+- **Outcome**: `SHIP`. The descriptor gate validates 35 real layer-2/global
+  descriptors, fails closed on missing required rows, and is wired into the
+  V100 appliance gate behind `--pack-index`.
 
-### Sprint 015 - V100 Descriptor-Bound Layer Compute [tentative]
+### Sprint 015 - V100 Descriptor-Bound Layer Compute [planned]
 
-- **Goal**: Consume validated pack-index descriptors in a real layer or short
+- **Goal**: Materialize validated pack-index descriptors into runtime bindings
+  and consume real resident shard bytes in a descriptor-bound layer or short
   selected-token compute path.
 - **Rationale**: Descriptor validation is necessary but not sufficient; the
   next readiness jump is executing real model bytes through the bounded kernel
-  surfaces.
+  surfaces, including the shared expert path.
 
 ## Parking Lot
 
@@ -301,6 +311,9 @@ it is a narrow DS4 runtime tuned for this hardware.
   layer output, router/shared/routed expert correctness, output-head or
   selected-token comparison, production F8 projection kernels, and deployment
   re-sequencing.
+- See `docs/sprints/SPRINT-014-FOLLOWUPS.md`: runtime descriptor table,
+  descriptor-bound layer compute, layer-class descriptor coverage, shared
+  expert execution, and readiness-policy cleanup.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -327,11 +340,13 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-18 | Shipped Sprint 010 stage-owned KV views/updates and real compressor recurrence smokes, then moved deployment behind a logits-producing V100 source-layout gate. | The project now trusts per-layer KV/state ownership and compressor recurrence on V100, but serving still lacks real source-format dense projection, MoE, output-head logits, and selected-token correctness. | Sprint 010-012 |
 | 2026-05-18 | Split Sprint 011 into a source projection and attention-slice gate before the full logits gate. | Planning showed the next concrete risk is source FP8/BF16 projection on V100; full logits remain too broad until projection and bounded attention/compressor slices are trusted. | Sprint 011-013 |
 | 2026-05-18 | Shipped Sprint 011 source projection and attention/compressor slice, keeping deployment behind Sprint 012's logits gate. | V100 now has device-resident source-F8 projection diagnostics, BF16/F32 policy checks, projection-fed ratio-4/ratio-128 attention/compressor smokes, and device-row KV writes, but still lacks MoE, output head, and selected-token correctness. | Sprint 012-013 |
+| 2026-05-18 | Shipped Sprint 014 real pack-index descriptor validation and moved Sprint 015 to descriptor-bound layer compute. | The appliance gate now proves the real layer-2 descriptor contract on the V100 pod, so the next risk is converting those descriptors into runtime bindings that launch compute on real resident shard bytes. | Sprint 015+ |
 
 ## Open Questions
 
-1. What exact bounded source-oracle fixture should Sprint 012 use for the first
-   logits or selected-token V100 comparison?
+1. Which descriptor-bound layer slice should Sprint 015 execute first: a
+   layer-2 FFN/shared+routed expert slice, a fuller attention+FFN layer, or a
+   short selected-token path that reaches output logits?
 2. What reference should define correctness tolerances for mixed
    BF16/F32/F8_E4M3_B128/MXFP4 execution on V100 after MoE is included?
 3. What minimum serving milestone counts as "usable" before optimization:

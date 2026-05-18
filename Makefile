@@ -157,6 +157,9 @@ tools/ds4-v100-residency-smoke.o: tools/ds4-v100-residency-smoke.c ds4_pack.h ds
 tools/ds4-v100-context-smoke.o: tools/ds4-v100-context-smoke.c ds4_v100_context.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-context-smoke.c
 
+tools/ds4-v100-layer-descriptor-gate.o: tools/ds4-v100-layer-descriptor-gate.c ds4_pack.h
+	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-layer-descriptor-gate.c
+
 tools/ds4-source-oracle-vector.o: tools/ds4-source-oracle-vector.c ds4.h
 	$(CC) $(CFLAGS) -I. -DDS4_NO_GPU -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-source-oracle-vector.c
 
@@ -169,6 +172,9 @@ tools/ds4-v100-residency-smoke: tools/ds4-v100-residency-smoke.o ds4_pack.o ds4_
 endif
 
 tools/ds4-v100-context-smoke: tools/ds4-v100-context-smoke.o $(V100_CONTEXT_OBJS)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+tools/ds4-v100-layer-descriptor-gate: tools/ds4-v100-layer-descriptor-gate.o ds4_pack.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
 tools/ds4-source-oracle-vector: tools/ds4-source-oracle-vector.o $(CPU_CORE_OBJS)
@@ -327,4 +333,4 @@ test: ds4_test
 	./ds4_test
 
 clean:
-	rm -f ds4 ds4-server ds4-bench ds4-eval ds4_cpu ds4_native ds4_server_test ds4_test *.o tests/*.o tests/cuda_long_context_smoke tests/cuda_bf16_probe tests/cuda_v100_context_smoke tests/cuda_source_dtypes_smoke tests/cuda_v100_prefill_kv_smoke tests/cuda_v100_compressor_bridge_smoke tests/cuda_v100_projection_attention_smoke tests/cuda_v100_bounded_logits_smoke tests/cuda_v100_mxfp4_moe_smoke tests/cuda_hc_relay_smoke tests/pack_index_smoke tests/gpu_arena_smoke tests/bf16_probe_smoke tests/v100_context_smoke tests/source_dtypes_smoke tools/*.o tools/ds4-v100-plan tools/ds4-v100-pack tools/ds4-v100-residency-smoke tools/ds4-v100-context-smoke tools/ds4-source-oracle-vector
+	rm -f ds4 ds4-server ds4-bench ds4-eval ds4_cpu ds4_native ds4_server_test ds4_test *.o tests/*.o tests/cuda_long_context_smoke tests/cuda_bf16_probe tests/cuda_v100_context_smoke tests/cuda_source_dtypes_smoke tests/cuda_v100_prefill_kv_smoke tests/cuda_v100_compressor_bridge_smoke tests/cuda_v100_projection_attention_smoke tests/cuda_v100_bounded_logits_smoke tests/cuda_v100_mxfp4_moe_smoke tests/cuda_hc_relay_smoke tests/pack_index_smoke tests/gpu_arena_smoke tests/bf16_probe_smoke tests/v100_context_smoke tests/source_dtypes_smoke tools/*.o tools/ds4-v100-plan tools/ds4-v100-pack tools/ds4-v100-residency-smoke tools/ds4-v100-context-smoke tools/ds4-v100-layer-descriptor-gate tools/ds4-source-oracle-vector

@@ -1,12 +1,13 @@
 ---
 sprint: 014
 title: V100 Real Pack-Index Layer Descriptor Gate
-status: planned
+status: completed
 date: 2026-05-18
 target_repo: rapatel0/ds4
 architecture: ../architecture/DS4-V100-LAYOUT.md
 intent: drafts/SPRINT-014-INTENT.md
 deferred: SPRINT-014-DEFERRED.md
+verdict: SHIP
 ---
 
 # SPRINT-014: V100 Real Pack-Index Layer Descriptor Gate
@@ -50,11 +51,11 @@ produce a strict descriptor contract that later compute code can consume.
 - `Makefile`
 
 **Tasks:**
-- [ ] Parse a `pack-index.tsv` using `ds4_pack_open`.
-- [ ] Validate required descriptors for layer 2.
-- [ ] Check source dtype, runtime layout, kernel family, layer id, owning GPU,
+- [x] Parse a `pack-index.tsv` using `ds4_pack_open`.
+- [x] Validate required descriptors for layer 2.
+- [x] Check source dtype, runtime layout, kernel family, layer id, owning GPU,
       shard file, shard offset, and byte length.
-- [ ] Print stable descriptor and summary rows.
+- [x] Print stable descriptor and summary rows.
 
 ### Phase 2: Negative Coverage
 
@@ -63,8 +64,8 @@ produce a strict descriptor contract that later compute code can consume.
 - sprint logs
 
 **Tasks:**
-- [ ] Run against the committed real pack-index fixture.
-- [ ] Run against an intentionally incomplete synthetic index and verify
+- [x] Run against the committed real pack-index fixture.
+- [x] Run against an intentionally incomplete synthetic index and verify
       fail-closed behavior.
 
 ### Phase 3: Appliance Gate Integration
@@ -73,9 +74,9 @@ produce a strict descriptor contract that later compute code can consume.
 - `tools/ds4-v100-gate.sh`
 
 **Tasks:**
-- [ ] Add `--pack-index FILE`.
-- [ ] Build/run the descriptor gate when `--pack-index` is supplied.
-- [ ] Preserve current gate behavior when no pack index is supplied.
+- [x] Add `--pack-index FILE`.
+- [x] Build/run the descriptor gate when `--pack-index` is supplied.
+- [x] Preserve current gate behavior when no pack index is supplied.
 
 ### Phase 4: Validation And Closeout
 
@@ -86,10 +87,10 @@ produce a strict descriptor contract that later compute code can consume.
 - `docs/sprints/VISION.md`
 
 **Tasks:**
-- [ ] Run local validation and `git diff --check`.
-- [ ] Run cluster validation with `--pack-index`.
-- [ ] Archive logs.
-- [ ] Write report/follow-ups and update vision.
+- [x] Run local validation and `git diff --check`.
+- [x] Run cluster validation with `--pack-index`.
+- [x] Archive logs.
+- [x] Write report/follow-ups and update vision.
 
 ## Definition Of Done
 
