@@ -1,0 +1,9 @@
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -I. -c -o tests/v100_context_smoke.o tests/v100_context_smoke.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -I. -c -o ds4_v100_context.o ds4_v100_context.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -o tests/v100_context_smoke tests/v100_context_smoke.o ds4_v100_context.o ds4_pack.o -lm -pthread
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -o tests/source_dtypes_smoke tests/source_dtypes_smoke.o ds4_source_formats.o -lm -pthread
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -I. -D_FILE_OFFSET_BITS=64 -c -o tools/ds4-v100-context-smoke.o tools/ds4-v100-context-smoke.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -o tools/ds4-v100-context-smoke tools/ds4-v100-context-smoke.o ds4_v100_context.o ds4_pack.o -lm -pthread
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -I. -c -o tests/cuda_v100_projection_attention_smoke.o tests/cuda_v100_projection_attention_smoke.c
+v100_context_smoke: ok
+source_dtypes_smoke: ok

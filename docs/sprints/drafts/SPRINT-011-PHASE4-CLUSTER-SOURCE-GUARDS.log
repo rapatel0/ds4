@@ -1,0 +1,11 @@
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -DDS4_NO_GPU -D_FILE_OFFSET_BITS=64 -c -o tools/ds4-source-oracle-vector.o tools/ds4-source-oracle-vector.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -DDS4_NO_GPU -c -o ds4_cpu.o ds4.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -o tools/ds4-source-oracle-vector tools/ds4-source-oracle-vector.o ds4_cpu.o ds4_pack.o ds4_source_formats.o -lm -pthread
+ds4: native DS4-Flash source layout is recognized, but V100 FP8/MXFP4 execution kernels are not wired into runtime yet; use --inspect or ds4-v100-plan --manifest for this model
+guard	normal_source_layout_rejection	OK
+ds4: --source-layout-oracle requires CPU backend and is not an inspect mode
+guard	non_cpu_oracle_rejection	OK
+ds4: --source-layout-oracle rejects MTP sidecars
+guard	mtp_oracle_rejection	OK
+ds4: source-layout oracle sessions require an explicit diagnostic session unlock
+guard	missing_session_unlock	OK

@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-18
-last_updated_by: sprint-plan
-revision: 12
+last_updated_by: vision
+revision: 13
 ---
 
 # Vision: DS4 V100 Appliance
@@ -60,6 +60,12 @@ it is a narrow DS4 runtime tuned for this hardware.
   compressor recurrence smokes for attention and indexer-shaped paths, CPU
   references, and real-model guard validation. It did not ship dense
   projection, MoE, output-head logits, selected-token decode, or serving.
+- Sprint 011 shipped the bounded source projection/attention gate: device
+  source-F8 projection diagnostics from resident arenas, executable BF16/F32
+  V100 policy checks, projection-fed ratio-128 and ratio-4
+  attention/compressor smokes, and device-resident writes into stage-owned KV
+  views. It did not ship full layer output, MoE, output-head logits,
+  selected-token decode, or serving.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -192,7 +198,7 @@ it is a narrow DS4 runtime tuned for this hardware.
   source-format dense projection, MoE, logits, selected-token decode, and
   serving remain deferred.
 
-### Sprint 011 - V100 Source Projection And Attention Slice [planned]
+### Sprint 011 - V100 Source Projection And Attention Slice [complete]
 
 - **Goal**: Prove bounded source F8/BF16 projection boundaries and feed
   projection-equivalent device tensors through ratio-4 and ratio-128
@@ -200,14 +206,22 @@ it is a narrow DS4 runtime tuned for this hardware.
 - **Rationale**: Sprint 010 proved KV ownership and compressor recurrence, but
   the next untrusted surface is source-format projection math. Full logits
   should wait until this path is correct.
+- **Outcome**: `SHIP`. Source-F8 projection diagnostics now run from
+  device-resident arenas into device tensors, BF16/F32 policy is executable,
+  ratio-128 and ratio-4 attention/compressor slices compare against CPU/source
+  references, and stage-owned KV writes can consume device-resident projection
+  rows.
 
 ### Sprint 012 - V100 Source Layer And Logits Gate [planned]
 
 - **Goal**: Produce a bounded source-layout V100 logits or selected-token
-  comparison for a single-slot prompt using real source-format projection,
-  attention, router, expert/shared-expert, and output-head paths.
-- **Rationale**: Deployment should wait for dense, MoE, and output-head
-  correctness against the guarded source oracle.
+  comparison for a single-slot prompt using the source projection/attention
+  slice plus attention output, residual/HC movement, router, shared-expert,
+  routed expert, and output-head paths.
+- **Rationale**: Deployment should wait for a coherent logits-producing V100
+  path. Sprint 011 proves projection-fed attention/compressor slices, but MoE,
+  output head, and selected-token correctness remain the critical deployment
+  blockers.
 
 ### Sprint 013 - V100 Appliance Deployment [planned]
 
@@ -262,6 +276,11 @@ it is a narrow DS4 runtime tuned for this hardware.
 - See `docs/sprints/SPRINT-010-FOLLOWUPS.md`: Sprint 011 blockers for real
   source-format projection, attention/layer output, router/expert execution,
   bounded logits/top-k comparison, and deployment re-sequencing.
+- See `docs/sprints/SPRINT-011-DEFERRED.md` and
+  `docs/sprints/SPRINT-011-FOLLOWUPS.md`: Sprint 012 blockers for coherent
+  layer output, router/shared/routed expert correctness, output-head or
+  selected-token comparison, production F8 projection kernels, and deployment
+  re-sequencing.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -287,15 +306,18 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-18 | Shipped Sprint 009 bounded V100 prefill/KV execution and inserted a single-slot decode integration sprint before deployment. | KV arena allocation, source-layout guards, and CUDA ratio-class row/state updates now pass on V100 `sm_70`; the next risk is real projection/compressor integration and oracle comparison, not server packaging. | Sprint 009-011 |
 | 2026-05-18 | Shipped Sprint 010 stage-owned KV views/updates and real compressor recurrence smokes, then moved deployment behind a logits-producing V100 source-layout gate. | The project now trusts per-layer KV/state ownership and compressor recurrence on V100, but serving still lacks real source-format dense projection, MoE, output-head logits, and selected-token correctness. | Sprint 010-012 |
 | 2026-05-18 | Split Sprint 011 into a source projection and attention-slice gate before the full logits gate. | Planning showed the next concrete risk is source FP8/BF16 projection on V100; full logits remain too broad until projection and bounded attention/compressor slices are trusted. | Sprint 011-013 |
+| 2026-05-18 | Shipped Sprint 011 source projection and attention/compressor slice, keeping deployment behind Sprint 012's logits gate. | V100 now has device-resident source-F8 projection diagnostics, BF16/F32 policy checks, projection-fed ratio-4/ratio-128 attention/compressor smokes, and device-row KV writes, but still lacks MoE, output head, and selected-token correctness. | Sprint 012-013 |
 
 ## Open Questions
 
-1. What reference should define correctness tolerances for mixed
-   BF16/F32/F8_E4M3_B128/MXFP4 execution on V100?
-2. What minimum serving milestone counts as "usable" before optimization:
+1. What exact bounded source-oracle fixture should Sprint 012 use for the first
+   logits or selected-token V100 comparison?
+2. What reference should define correctness tolerances for mixed
+   BF16/F32/F8_E4M3_B128/MXFP4 execution on V100 after MoE is included?
+3. What minimum serving milestone counts as "usable" before optimization:
    one-slot small context, 256K context, or a deployed endpoint with narrower
    context limits?
-3. How long should MTP and multi-slot throughput stay deferred after base
+4. How long should MTP and multi-slot throughput stay deferred after base
    decode works?
-4. Should the persistent `/srv/dev/ds4-sprint004` pack become the seed
+5. Should the persistent `/srv/dev/ds4-sprint004` pack become the seed
    deployment artifact, or should a formal pack release format come first?

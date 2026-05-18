@@ -1,12 +1,13 @@
 ---
 sprint: 011
 title: V100 Source Projection And Attention Slice
-status: planned
+status: completed
 date: 2026-05-18
 target_repo: rapatel0/ds4
 architecture: ../architecture/DS4-V100-LAYOUT.md
 intent: drafts/SPRINT-011-INTENT.md
 deferred: SPRINT-011-DEFERRED.md
+verdict: SHIP
 ---
 
 # SPRINT-011: V100 Source Projection And Attention Slice
@@ -117,11 +118,11 @@ model GEMMs.
 - `docs/sprints/VISION.md`
 
 **Tasks:**
-- [ ] Run local model-less validation and `git diff --check`.
-- [ ] Run source-layout `--guards-only` on the real model.
-- [ ] Run Sprint 010 regression smokes on V100 `sm_70`.
-- [ ] Run new Sprint 011 CUDA smokes on V100 `sm_70`.
-- [ ] Archive logs, write report/follow-ups, and update the vision.
+- [x] Run local model-less validation and `git diff --check`.
+- [x] Run source-layout `--guards-only` on the real model.
+- [x] Run Sprint 010 regression smokes on V100 `sm_70`.
+- [x] Run new Sprint 011 CUDA smokes on V100 `sm_70`.
+- [x] Archive logs, write report/follow-ups, and update the vision.
 
 ## Definition Of Done
 
