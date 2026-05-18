@@ -2,6 +2,7 @@
 set -u
 
 model="/models/DSv4-Flash-256e-fixed.gguf"
+mtp_model=""
 ctx="1048576"
 slots="1"
 build=0
@@ -17,6 +18,7 @@ usage: tools/ds4-v100-gate.sh [options]
 
 Options:
   --model FILE      Source-layout GGUF model path
+  --mtp-model FILE  DeepSeek-V4 Flash MTP sidecar GGUF path
   --ctx N           KV context tier for the V100 context smoke (default 1048576)
   --slots N         KV slots for the V100 context smoke (default 1)
   --build           Build required targets before running the gate
@@ -35,6 +37,11 @@ while [ "$#" -gt 0 ]; do
         --model)
             [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --model requires a value" >&2; exit 2; }
             model="$2"
+            shift 2
+            ;;
+        --mtp-model)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --mtp-model requires a value" >&2; exit 2; }
+            mtp_model="$2"
             shift 2
             ;;
         --ctx)
@@ -100,6 +107,10 @@ targets=(
     tests/cuda_v100_mxfp4_moe_smoke
 )
 
+if [ -n "$mtp_model" ]; then
+    targets+=(tools/ds4-v100-mtp-sidecar-gate)
+fi
+
 if [ -n "$pack_index" ]; then
     targets+=(tools/ds4-v100-layer-descriptor-gate)
     targets+=(tests/v100_layer_binding_smoke)
@@ -134,6 +145,7 @@ full_scheduler_ready=0
 selected_token_ready=0
 public_serving_ready=0
 throughput_ready=0
+mtp_sidecar_ready=0
 
 run_gate() {
     local name="$1"
@@ -181,6 +193,19 @@ if [ "$skip_model" -eq 0 ]; then
     fi
 else
     echo "gate	source_guards	SKIP	--skip-model"
+fi
+
+if [ -n "$mtp_model" ]; then
+    if [ ! -f "$mtp_model" ]; then
+        echo "gate	mtp_sidecar	FAIL	missing_mtp_model=$mtp_model"
+        failures=$((failures + 1))
+    else
+        if run_gate "mtp_sidecar" ./tools/ds4-v100-mtp-sidecar-gate --mtp-model "$mtp_model"; then
+            mtp_sidecar_ready=1
+        fi
+    fi
+else
+    echo "gate	mtp_sidecar	SKIP	no_mtp_model"
 fi
 
 run_gate "source_dtypes" ./tests/cuda_source_dtypes_smoke || true
@@ -290,7 +315,15 @@ fi
 if [ "$public_serving_ready" -eq 0 ]; then
     add_missing "public_serving"
 fi
-add_missing "mtp"
+if [ -n "$mtp_model" ]; then
+    if [ "$mtp_sidecar_ready" -eq 0 ]; then
+        add_missing "mtp_sidecar"
+    else
+        add_missing "mtp_runtime"
+    fi
+else
+    add_missing "mtp"
+fi
 if [ "$throughput_ready" -eq 0 ]; then
     add_missing "throughput_benchmark"
 fi

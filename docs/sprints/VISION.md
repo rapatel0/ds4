@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-18
 last_updated_by: sprint-execute
-revision: 40
+revision: 41
 ---
 
 # Vision: DS4 V100 Appliance
@@ -178,6 +178,10 @@ it is a narrow DS4 runtime tuned for this hardware.
   loopback requests, `tools/ds4-v100-replay --serve` returns the expected token
   bytes `3136`, and the full gate now reports readiness with only `mtp`
   missing.
+- Sprint 030 shipped MTP sidecar readiness. The appliance gate now validates
+  the real `deepseek4_mtp_support` companion GGUF, reports its exact
+  F32/Q8_0/Q4_K tensor contract, keeps selected-token and HTTP readiness green,
+  and narrows the remaining blocker from generic `mtp` to `mtp_runtime`.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -567,6 +571,18 @@ it is a narrow DS4 runtime tuned for this hardware.
   expected bytes `3136`, and the full V100 gate now reports
   `missing=mtp`.
 
+### Sprint 030 - V100 MTP Sidecar Readiness Gate [complete]
+
+- **Goal**: Validate the actual DeepSeek-V4 Flash MTP sidecar format in the
+  appliance gate without prematurely enabling speculative decode.
+- **Rationale**: Prior work showed MTP loading is feasible, but the risky part
+  is Q4_K/Q8_0 MTP forward parity and draft/verify state. The gate needed to
+  distinguish a valid sidecar from the missing runtime path.
+- **Outcome**: `SHIP`. `tools/ds4-v100-mtp-sidecar-gate` validates the
+  `deepseek4_mtp_support` GGUF, reports 32 tensors and 3.807600108 GB of
+  described sidecar tensor bytes, and the full V100 gate now reports
+  `missing=mtp_runtime`.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -641,6 +657,10 @@ it is a narrow DS4 runtime tuned for this hardware.
 - See `docs/sprints/SPRINT-029-FOLLOWUPS.md`: MTP implementation/validation,
   parallel resident stage open/upload, longer resident decode baselines,
   serving API hardening, and continued multi-slot deferral.
+- See `docs/sprints/SPRINT-030-FOLLOWUPS.md`: K=1 MTP runtime parity, keeping
+  Q4_K MTP separate from the MXFP4 path, MTP memory planner updates, parallel
+  upload, longer decode baselines, and continued speculative-serving/multi-slot
+  deferral.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -683,6 +703,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-18 | Shipped Sprint 027 selected-token correctness and HC checkpoint diagnostics. | BF16 embedding decode and F16 KV/cache semantics now match the CPU source-layout oracle closely enough for the official V100 selected-token gate to pass; the next milestone moves from correctness blocking to public serving and measurement. | Sprint 028+ |
 | 2026-05-18 | Shipped Sprint 028 V100 replay runtime and timing tool. | The working scheduler path is now callable outside a smoke test and emits machine-readable token/timing/memory evidence; the next milestone is keeping that runtime resident behind an HTTP or process-serving surface. | Sprint 029+ |
 | 2026-05-18 | Shipped Sprint 029 resident HTTP appliance smoke. | The one-slot selected-token path is now served through a resident loopback process and `public_serving` is no longer a gate blocker; the next milestone is MTP correctness and then performance work such as parallel upload and longer resident decode baselines. | Sprint 030+ |
+| 2026-05-18 | Shipped Sprint 030 MTP sidecar readiness gate. | The appliance now validates the real MTP companion GGUF and keeps baseline serving green; the remaining blocker is no longer sidecar format uncertainty but the concrete V100 MTP runtime forward/verify path. | Sprint 031+ |
 
 ## Open Questions
 

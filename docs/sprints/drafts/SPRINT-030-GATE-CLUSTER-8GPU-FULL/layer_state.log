@@ -1,0 +1,1 @@
+v100_layer_state_smoke: layer=2 stage=0 gpu=0 class=ratio_4 router=hash hidden=4096 q=32768 kv=512 ratio=4 comp=1024 index_q=8192 mid=2048 experts=256 ffn_span=11784434944 attn_span=8329207040 ok

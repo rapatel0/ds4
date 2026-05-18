@@ -157,6 +157,8 @@ int ds4_engine_cpu_route_checkpoints(ds4_engine *e,
                                      char *err,
                                      size_t errlen);
 
+int ds4_mtp_sidecar_report(const char *mtp_path, FILE *report, char *err, size_t errlen);
+
 void ds4_tokens_push(ds4_tokens *tv, int token);
 void ds4_tokens_free(ds4_tokens *tv);
 void ds4_tokens_copy(ds4_tokens *dst, const ds4_tokens *src);
