@@ -95,6 +95,8 @@ static void test_f8_row(void) {
     float dst[DS4_SRC_F8_E4M3_B128_BLOCK_ELEMS * 2];
     char err[128] = {0};
     check(ds4_src_f8_e4m3_b128_row_bytes(256) == sizeof(row), "f8 row bytes");
+    check(ds4_src_f8_e4m3_b128_validate_row_span(256, sizeof(row), err, sizeof(err)) == 0,
+          "f8 row span");
     check(ds4_src_f8_e4m3_b128_row_to_f32(dst, row, 256, err, sizeof(err)) == 0,
           "f8 row decode");
     expect_close(dst[0], 1.0f, "f8 block0 one");
@@ -115,6 +117,33 @@ static void test_f8_row(void) {
     check(ds4_src_f8_e4m3_b128_row_to_f32(dst, row, 129, err, sizeof(err)) != 0,
           "f8 accepted misaligned row");
     check(err[0] != '\0', "f8 error message");
+    err[0] = '\0';
+    check(ds4_src_f8_e4m3_b128_validate_row_span(256, sizeof(row) - 1,
+                                                 err, sizeof(err)) != 0,
+          "f8 accepted undersized span");
+    check(err[0] != '\0', "f8 span error message");
+}
+
+static void test_mxfp4_block_ordering(void) {
+    uint8_t row[DS4_SRC_MXFP4_BLOCK_BYTES];
+    memset(row, 0, sizeof(row));
+    row[0] = 127;
+    for (uint8_t i = 0; i < DS4_SRC_MXFP4_BLOCK_ELEMS / 2; i++) {
+        row[1 + i] = (uint8_t)(((15u - i) << 4) | i);
+    }
+
+    float dst[DS4_SRC_MXFP4_BLOCK_ELEMS];
+    char err[128] = {0};
+    check(ds4_src_mxfp4_row_to_f32(dst, row, 32, err, sizeof(err)) == 0,
+          "mxfp4 block ordering decode");
+    for (uint8_t i = 0; i < DS4_SRC_MXFP4_BLOCK_ELEMS / 2; i++) {
+        expect_close(dst[i],
+                     ds4_src_mxfp4_nibble_to_f32(i),
+                     "mxfp4 low-half ggml ordering");
+        expect_close(dst[i + DS4_SRC_MXFP4_BLOCK_ELEMS / 2],
+                     ds4_src_mxfp4_nibble_to_f32(15u - i),
+                     "mxfp4 high-half ggml ordering");
+    }
 }
 
 static void test_mxfp4_row(void) {
@@ -130,6 +159,8 @@ static void test_mxfp4_row(void) {
     float dst[DS4_SRC_MXFP4_BLOCK_ELEMS * 2];
     char err[128] = {0};
     check(ds4_src_mxfp4_row_bytes(64) == sizeof(row), "mxfp4 row bytes");
+    check(ds4_src_mxfp4_validate_row_span(64, sizeof(row), err, sizeof(err)) == 0,
+          "mxfp4 row span");
     check(ds4_src_mxfp4_row_to_f32(dst, row, 64, err, sizeof(err)) == 0,
           "mxfp4 row decode");
     expect_close(dst[0], 0.5f, "mxfp4 low nibble first half");
@@ -152,6 +183,11 @@ static void test_mxfp4_row(void) {
     check(ds4_src_mxfp4_row_to_f32(dst, row, 33, err, sizeof(err)) != 0,
           "mxfp4 accepted misaligned row");
     check(err[0] != '\0', "mxfp4 error message");
+    err[0] = '\0';
+    check(ds4_src_mxfp4_validate_row_span(64, sizeof(row) - 1,
+                                          err, sizeof(err)) != 0,
+          "mxfp4 accepted undersized span");
+    check(err[0] != '\0', "mxfp4 span error message");
 }
 
 static void test_i32_row(void) {
@@ -171,6 +207,7 @@ int main(void) {
     test_scalar_formats();
     test_bf16_row();
     test_f8_row();
+    test_mxfp4_block_ordering();
     test_mxfp4_row();
     test_i32_row();
 

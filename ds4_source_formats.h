@@ -30,5 +30,13 @@ int ds4_src_i32_row_to_u32(uint32_t *dst, const int32_t *src, uint64_t n,
 
 uint64_t ds4_src_f8_e4m3_b128_row_bytes(uint64_t ncols);
 uint64_t ds4_src_mxfp4_row_bytes(uint64_t ncols);
+int ds4_src_f8_e4m3_b128_validate_row_span(uint64_t ncols,
+                                           uint64_t span_bytes,
+                                           char *err,
+                                           size_t err_size);
+int ds4_src_mxfp4_validate_row_span(uint64_t ncols,
+                                    uint64_t span_bytes,
+                                    char *err,
+                                    size_t err_size);
 
 #endif

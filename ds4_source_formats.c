@@ -46,15 +46,80 @@ float ds4_src_mxfp4_nibble_to_f32(uint8_t q) {
     return fp4_table[q & 0x0f];
 }
 
+static uint64_t packed_row_bytes(uint64_t ncols,
+                                 uint64_t block_elems,
+                                 uint64_t block_bytes) {
+    if (ncols == 0 || ncols % block_elems) return 0;
+    const uint64_t nblocks = ncols / block_elems;
+    if (nblocks > UINT64_MAX / block_bytes) return 0;
+    return nblocks * block_bytes;
+}
+
+static int validate_packed_row_span(const char *name,
+                                    uint64_t ncols,
+                                    uint64_t span_bytes,
+                                    uint64_t block_elems,
+                                    uint64_t block_bytes,
+                                    char *err,
+                                    size_t err_size) {
+    if (ncols == 0 || ncols % block_elems) {
+        char msg[96];
+        snprintf(msg, sizeof(msg), "%s row length is not a nonzero multiple of block size", name);
+        set_err(err, err_size, msg);
+        return -1;
+    }
+    const uint64_t need = packed_row_bytes(ncols, block_elems, block_bytes);
+    if (need == 0) {
+        char msg[96];
+        snprintf(msg, sizeof(msg), "%s row byte count overflow", name);
+        set_err(err, err_size, msg);
+        return -1;
+    }
+    if (span_bytes < need) {
+        char msg[96];
+        snprintf(msg, sizeof(msg), "undersized %s row span", name);
+        set_err(err, err_size, msg);
+        return -1;
+    }
+    return 0;
+}
+
 uint64_t ds4_src_f8_e4m3_b128_row_bytes(uint64_t ncols) {
-    if (ncols % DS4_SRC_F8_E4M3_B128_BLOCK_ELEMS) return 0;
-    return (ncols / DS4_SRC_F8_E4M3_B128_BLOCK_ELEMS) *
-           DS4_SRC_F8_E4M3_B128_BLOCK_BYTES;
+    return packed_row_bytes(ncols,
+                            DS4_SRC_F8_E4M3_B128_BLOCK_ELEMS,
+                            DS4_SRC_F8_E4M3_B128_BLOCK_BYTES);
 }
 
 uint64_t ds4_src_mxfp4_row_bytes(uint64_t ncols) {
-    if (ncols % DS4_SRC_MXFP4_BLOCK_ELEMS) return 0;
-    return (ncols / DS4_SRC_MXFP4_BLOCK_ELEMS) * DS4_SRC_MXFP4_BLOCK_BYTES;
+    return packed_row_bytes(ncols,
+                            DS4_SRC_MXFP4_BLOCK_ELEMS,
+                            DS4_SRC_MXFP4_BLOCK_BYTES);
+}
+
+int ds4_src_f8_e4m3_b128_validate_row_span(uint64_t ncols,
+                                           uint64_t span_bytes,
+                                           char *err,
+                                           size_t err_size) {
+    return validate_packed_row_span("f8",
+                                    ncols,
+                                    span_bytes,
+                                    DS4_SRC_F8_E4M3_B128_BLOCK_ELEMS,
+                                    DS4_SRC_F8_E4M3_B128_BLOCK_BYTES,
+                                    err,
+                                    err_size);
+}
+
+int ds4_src_mxfp4_validate_row_span(uint64_t ncols,
+                                    uint64_t span_bytes,
+                                    char *err,
+                                    size_t err_size) {
+    return validate_packed_row_span("mxfp4",
+                                    ncols,
+                                    span_bytes,
+                                    DS4_SRC_MXFP4_BLOCK_ELEMS,
+                                    DS4_SRC_MXFP4_BLOCK_BYTES,
+                                    err,
+                                    err_size);
 }
 
 int ds4_src_bf16_row_to_f32(float *dst, const uint16_t *src, uint64_t n) {

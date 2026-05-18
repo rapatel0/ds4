@@ -201,11 +201,11 @@ normal source-model generation.
 - `tests/source_dtypes_smoke.c`
 
 **Tasks:**
-- [ ] Add direct MXFP4 regression coverage for GGML `block_mxfp4`
+- [x] Add direct MXFP4 regression coverage for GGML `block_mxfp4`
       low-half/high-half nibble ordering.
-- [ ] Add malformed span/bounds tests for any source-format helper used by the
+- [x] Add malformed span/bounds tests for any source-format helper used by the
       CUDA anchor.
-- [ ] Keep helper semantics shared by CPU oracle and diagnostic device anchors.
+- [x] Keep helper semantics shared by CPU oracle and diagnostic device anchors.
 
 ### Phase 4: CUDA Source-Format Anchor
 
