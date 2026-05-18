@@ -13,6 +13,7 @@ OBJCFLAGS ?= -O3 -ffast-math $(NATIVE_CPU_FLAG) -Wall -Wextra -fobjc-arc
 LDLIBS ?= -lm -pthread
 METAL_SRCS := $(wildcard metal/*.metal)
 PACK_OBJS = ds4_pack.o
+V100_CONTEXT_OBJS = ds4_v100_context.o $(PACK_OBJS)
 
 ifeq ($(UNAME_S),Darwin)
 METAL_LDLIBS := $(LDLIBS) -framework Foundation -framework Metal
@@ -119,6 +120,9 @@ ds4.o: ds4.c ds4.h ds4_gpu.h ds4_pack.h
 ds4_pack.o: ds4_pack.c ds4_pack.h
 	$(CC) $(CFLAGS) -c -o $@ ds4_pack.c
 
+ds4_v100_context.o: ds4_v100_context.c ds4_v100_context.h ds4_pack.h
+	$(CC) $(CFLAGS) -I. -c -o $@ ds4_v100_context.c
+
 ds4_cli.o: ds4_cli.c ds4.h linenoise.h
 	$(CC) $(CFLAGS) -c -o $@ ds4_cli.c
 
@@ -170,6 +174,12 @@ tests/bf16_probe_smoke.o: tests/bf16_probe_smoke.c ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -c -o $@ tests/bf16_probe_smoke.c
 
 tests/bf16_probe_smoke: tests/bf16_probe_smoke.o ds4_gpu_arena_stub.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+tests/v100_context_smoke.o: tests/v100_context_smoke.c ds4_v100_context.h
+	$(CC) $(CFLAGS) -I. -c -o $@ tests/v100_context_smoke.c
+
+tests/v100_context_smoke: tests/v100_context_smoke.o $(V100_CONTEXT_OBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
 tests/cuda_long_context_smoke.o: tests/cuda_long_context_smoke.c ds4_gpu.h
@@ -228,4 +238,4 @@ test: ds4_test
 	./ds4_test
 
 clean:
-	rm -f ds4 ds4-server ds4-bench ds4-eval ds4_cpu ds4_native ds4_server_test ds4_test *.o tests/*.o tests/cuda_long_context_smoke tests/cuda_bf16_probe tests/pack_index_smoke tests/gpu_arena_smoke tests/bf16_probe_smoke tools/*.o tools/ds4-v100-plan tools/ds4-v100-pack tools/ds4-v100-residency-smoke
+	rm -f ds4 ds4-server ds4-bench ds4-eval ds4_cpu ds4_native ds4_server_test ds4_test *.o tests/*.o tests/cuda_long_context_smoke tests/cuda_bf16_probe tests/pack_index_smoke tests/gpu_arena_smoke tests/bf16_probe_smoke tests/v100_context_smoke tools/*.o tools/ds4-v100-plan tools/ds4-v100-pack tools/ds4-v100-residency-smoke
