@@ -35,10 +35,9 @@ tools/ds4-source-oracle-vector \
   --only short_reasoning_plain
 ```
 
-Use `--dry-parse` for a model-less fixture sanity check. Use `--guard-checks`
-on the cluster when you want the same command to also prove normal
-source-layout serving, non-CPU oracle use, MTP sidecars, and sessions without
-the diagnostic unlock still fail closed.
+Use `--dry-parse` for a model-less fixture sanity check. Use `--guards-only`
+on the cluster to prove normal source-layout serving, non-CPU oracle use, MTP
+sidecars, and sessions without the diagnostic unlock still fail closed.
 
 `official.vec` is intentionally trivial to parse from C: each case points to a
 prompt file and each expected token is hex-encoded by bytes. The official JSON

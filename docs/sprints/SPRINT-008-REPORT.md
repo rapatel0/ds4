@@ -80,6 +80,11 @@ Local validation:
   - Final dry parse and `source_dtypes_smoke: ok`.
 - `docs/sprints/drafts/SPRINT-008-FINAL-DIFF-CHECK.log`
   - Empty output from `git diff --check`.
+- `docs/sprints/drafts/SPRINT-008-GUARDS-ONLY-LOCAL.log`
+  - Builds `tools/ds4-source-oracle-vector` and dry-parses the short vector
+    after adding `--guards-only`.
+- `docs/sprints/drafts/SPRINT-008-GUARDS-ONLY-DIFF-CHECK.log`
+  - Empty output from `git diff --check`.
 
 Cluster validation:
 
@@ -109,6 +114,9 @@ Cluster validation:
 - `docs/sprints/drafts/SPRINT-008-CUDA-SOURCE.log`
   - Builds `tests/cuda_source_dtypes_smoke` with `CUDA_ARCH=sm_70`.
   - `cuda_source_dtypes_smoke: ok`.
+- `docs/sprints/drafts/SPRINT-008-GUARDS-ONLY-CLUSTER.log`
+  - Builds `tools/ds4-source-oracle-vector` and verifies
+    `--guards-only` against `/models/DSv4-Flash-256e-fixed.gguf`.
 
 ## Deviations
 

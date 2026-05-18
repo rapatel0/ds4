@@ -26,6 +26,7 @@ typedef struct {
     bool all_cases;
     bool dry_parse;
     bool guard_checks;
+    bool guards_only;
 } oracle_config;
 
 static void usage(FILE *fp) {
@@ -39,6 +40,7 @@ static void usage(FILE *fp) {
             "  --all               Run all vector cases\n"
             "  --threads N         CPU worker threads\n"
             "  --guard-checks      Also run source-layout guard checks\n"
+            "  --guards-only       Run source-layout guard checks without vectors\n"
             "  --dry-parse         Parse vectors without opening a model\n"
             "  --help              Show this help\n");
 }
@@ -306,6 +308,7 @@ static int expect_open_failure(const char *name, const ds4_engine_options *opt) 
         return 1;
     }
     printf("guard\t%s\tOK\n", name);
+    fflush(stdout);
     return 0;
 }
 
@@ -351,6 +354,7 @@ static int run_guard_checks(const oracle_config *cfg) {
             failures++;
         } else {
             printf("guard\tmissing_session_unlock\tOK\n");
+            fflush(stdout);
         }
         ds4_engine_close(engine);
     }
@@ -387,6 +391,9 @@ int main(int argc, char **argv) {
             cfg.dry_parse = true;
         } else if (!strcmp(arg, "--guard-checks")) {
             cfg.guard_checks = true;
+        } else if (!strcmp(arg, "--guards-only")) {
+            cfg.guard_checks = true;
+            cfg.guards_only = true;
         } else {
             fprintf(stderr, "ds4-source-oracle-vector: unknown or incomplete option: %s\n", arg);
             usage(stderr);
@@ -421,6 +428,7 @@ int main(int argc, char **argv) {
     int rc = 0;
     if (cfg.guard_checks) {
         rc |= run_guard_checks(&cfg);
+        if (cfg.guards_only) return rc ? 1 : 0;
     }
 
     ds4_engine_options opt;
