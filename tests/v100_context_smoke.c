@@ -154,6 +154,12 @@ static void test_pack_binding(void) {
                  "stage 0 relay f16 bytes");
     require_true(s0->relay_f32_debug_bytes == 2ull * 2ull * 4ull * 4096ull * 4ull,
                  "stage 0 relay f32 bytes");
+    const ds4_v100_layer_info *l0 = ds4_v100_context_layer(ctx, 0);
+    require_true(l0 && l0->stage_id == 0, "layer 0 info");
+    require_true(l0->has_f32_control, "layer 0 f32 control family");
+    require_true(l0->has_fp8_dense, "layer 0 fp8 dense family");
+    require_true(l0->has_mxfp4_expert, "layer 0 mxfp4 family");
+    require_true(l0->has_hc_control, "layer 0 hc family");
     ds4_v100_context_close(ctx);
 
     unlink(path);

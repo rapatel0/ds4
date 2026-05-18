@@ -22,8 +22,14 @@ struct ds4_v100_context {
     uint64_t cap_descs;
     uint64_t exec_counts[DS4_V100_EXEC_COUNT];
     bool has_token_embedding;
-    bool layer_seen[DS4_V100_N_LAYERS];
+    ds4_v100_layer_info layers[DS4_V100_N_LAYERS];
 };
+
+typedef struct {
+    ds4_v100_context *ctx;
+    char *err;
+    size_t errlen;
+} ds4_v100_bind_state;
 
 static int v100_error(char *err, size_t errlen, const char *fmt, ...) {
     if (err && errlen) {
@@ -234,6 +240,10 @@ static void init_stage_map(ds4_v100_context *ctx) {
             s->mtp_reserve_bytes = ctx->opts.mtp_reserve_bytes;
         }
     }
+    for (int layer = 0; layer < DS4_V100_N_LAYERS; layer++) {
+        ctx->layers[layer].layer_id = layer;
+        ctx->layers[layer].stage_id = ds4_v100_stage_for_layer(layer);
+    }
 }
 
 static uint64_t checked_stage_used(const ds4_v100_stage_info *s) {
@@ -356,31 +366,66 @@ static int append_desc(ds4_v100_context *ctx, const ds4_pack_entry *entry,
 }
 
 static int bind_pack_entry(const ds4_pack_entry *e, void *ud) {
-    ds4_v100_context *ctx = (ds4_v100_context *)ud;
-    char *err = NULL;
-    size_t errlen = 0;
-    (void)err;
-    (void)errlen;
+    ds4_v100_bind_state *state = (ds4_v100_bind_state *)ud;
+    ds4_v100_context *ctx = state->ctx;
     int max_gpu = ctx->opts.expected_gpus > 0 ? ctx->opts.expected_gpus : DS4_V100_EXPECTED_GPUS;
-    if (e->owning_gpu < 0 || e->owning_gpu >= max_gpu) return 1;
-    if (e->layer_id >= DS4_V100_N_LAYERS) return 1;
-    if (e->layer_id >= 0 && ds4_v100_stage_for_layer(e->layer_id) != e->owning_gpu) return 1;
+    if (e->owning_gpu < 0 || e->owning_gpu >= max_gpu) {
+        return v100_error(state->err, state->errlen, "%s has invalid owning GPU %d",
+                          e->semantic_tensor_id, e->owning_gpu);
+    }
+    if (e->layer_id >= DS4_V100_N_LAYERS) {
+        return v100_error(state->err, state->errlen, "%s has invalid layer id %d",
+                          e->semantic_tensor_id, e->layer_id);
+    }
+    if (e->layer_id >= 0 && ds4_v100_stage_for_layer(e->layer_id) != e->owning_gpu) {
+        return v100_error(state->err, state->errlen,
+                          "%s owner gpu %d does not match layer %d stage %d",
+                          e->semantic_tensor_id, e->owning_gpu, e->layer_id,
+                          ds4_v100_stage_for_layer(e->layer_id));
+    }
 
     uint64_t expected = 0;
-    if (expected_bytes_for_entry(e, &expected) || expected != e->byte_length) return 1;
+    if (expected_bytes_for_entry(e, &expected)) {
+        return v100_error(state->err, state->errlen,
+                          "%s has unsupported source shape/dtype %s %s",
+                          e->semantic_tensor_id, e->source_dtype, e->source_shape);
+    }
+    if (expected != e->byte_length) {
+        return v100_error(state->err, state->errlen,
+                          "%s byte length mismatch: expected %" PRIu64 " got %" PRIu64,
+                          e->semantic_tensor_id, expected, e->byte_length);
+    }
 
     ds4_v100_policy policy;
     if (ds4_v100_classify_or_die(e->source_dtype, e->runtime_layout,
-                                 e->kernel_family, &policy, NULL, 0)) {
+                                 e->kernel_family, &policy, state->err, state->errlen)) {
         return 1;
     }
     ds4_v100_stage_info *stage = &ctx->stages[e->owning_gpu];
     uint64_t arena_bytes = ds4_pack_arena_bytes(ctx->pack, e->owning_gpu);
-    if (e->shard_offset > arena_bytes || e->byte_length > arena_bytes - e->shard_offset) return 1;
+    if (e->shard_offset > arena_bytes || e->byte_length > arena_bytes - e->shard_offset) {
+        return v100_error(state->err, state->errlen,
+                          "%s arena span overflows gpu%d arena",
+                          e->semantic_tensor_id, e->owning_gpu);
+    }
     stage->tensor_count++;
-    if (e->layer_id >= 0) ctx->layer_seen[e->layer_id] = true;
+    if (e->layer_id >= 0) {
+        ds4_v100_layer_info *li = &ctx->layers[e->layer_id];
+        li->tensor_count++;
+        switch (policy.family) {
+        case DS4_V100_FAMILY_F32_CONTROL: li->has_f32_control = true; break;
+        case DS4_V100_FAMILY_FP8_DENSE: li->has_fp8_dense = true; break;
+        case DS4_V100_FAMILY_MXFP4_EXPERT: li->has_mxfp4_expert = true; break;
+        case DS4_V100_FAMILY_HC_CONTROL: li->has_hc_control = true; break;
+        case DS4_V100_FAMILY_BF16_GLOBAL:
+        case DS4_V100_FAMILY_KV_CACHE:
+        case DS4_V100_FAMILY_UNKNOWN:
+        default:
+            break;
+        }
+    }
     if (!strcmp(e->semantic_tensor_id, "token_embd.weight")) ctx->has_token_embedding = true;
-    return append_desc(ctx, e, &policy, NULL, 0);
+    return append_desc(ctx, e, &policy, state->err, state->errlen);
 }
 
 static int bind_pack(ds4_v100_context *ctx, char *err, size_t errlen) {
@@ -389,11 +434,8 @@ static int bind_pack(ds4_v100_context *ctx, char *err, size_t errlen) {
     for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
         ctx->stages[i].arena_bytes = ds4_pack_arena_bytes(ctx->pack, i);
     }
-    int rc = ds4_pack_for_each(ctx->pack, bind_pack_entry, ctx);
-    if (rc) {
-        return v100_error(err, errlen, "V100 descriptor binding failed");
-    }
-    return 0;
+    ds4_v100_bind_state state = { ctx, err, errlen };
+    return ds4_pack_for_each(ctx->pack, bind_pack_entry, &state);
 }
 
 static int validate_memory_budget(ds4_v100_context *ctx, char *err, size_t errlen) {
@@ -456,6 +498,12 @@ const ds4_v100_stage_info *ds4_v100_context_stage(const ds4_v100_context *ctx,
                                                   int stage_id) {
     if (!ctx || stage_id < 0 || stage_id >= ctx->opts.expected_gpus) return NULL;
     return &ctx->stages[stage_id];
+}
+
+const ds4_v100_layer_info *ds4_v100_context_layer(const ds4_v100_context *ctx,
+                                                  int layer_id) {
+    if (!ctx || layer_id < 0 || layer_id >= DS4_V100_N_LAYERS) return NULL;
+    return &ctx->layers[layer_id];
 }
 
 uint64_t ds4_v100_context_tensor_count(const ds4_v100_context *ctx) {

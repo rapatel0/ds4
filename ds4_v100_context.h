@@ -89,6 +89,16 @@ typedef struct {
 } ds4_v100_stage_info;
 
 typedef struct {
+    int layer_id;
+    int stage_id;
+    uint64_t tensor_count;
+    bool has_f32_control;
+    bool has_fp8_dense;
+    bool has_mxfp4_expert;
+    bool has_hc_control;
+} ds4_v100_layer_info;
+
+typedef struct {
     const char *pack_index_path;
     int expected_gpus;
     ds4_v100_init_mode mode;
@@ -131,6 +141,8 @@ void ds4_v100_context_close(ds4_v100_context *ctx);
 int ds4_v100_context_stage_count(const ds4_v100_context *ctx);
 const ds4_v100_stage_info *ds4_v100_context_stage(const ds4_v100_context *ctx,
                                                   int stage_id);
+const ds4_v100_layer_info *ds4_v100_context_layer(const ds4_v100_context *ctx,
+                                                  int layer_id);
 uint64_t ds4_v100_context_tensor_count(const ds4_v100_context *ctx);
 uint64_t ds4_v100_context_exec_count(const ds4_v100_context *ctx,
                                      ds4_v100_exec_kind kind);
