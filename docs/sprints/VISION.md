@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-18
 last_updated_by: sprint-execute
-revision: 34
+revision: 35
 ---
 
 # Vision: DS4 V100 Appliance
@@ -145,6 +145,12 @@ it is a narrow DS4 runtime tuned for this hardware.
   control tensors are device-local instead of being reused across GPUs. The
   next critical gap is extending the stage chain through gpu7, then attaching
   output-head selected-token validation.
+- Sprint 024 shipped the full 8-stage scheduler chain. The V100 pod now
+  executes all 43 layers across gpu0-gpu7 with resident arenas and peer HC
+  handoffs, producing a finite nonzero final HC state on gpu7. The full gate no
+  longer lists `full_43_layer_scheduler`; the next critical gap is collapsing
+  final HC through the output head and comparing a selected token against the
+  source oracle.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -462,6 +468,18 @@ it is a narrow DS4 runtime tuned for this hardware.
   remains `ready=false` pending full 43-layer scheduling, selected-token
   decode, serving, MTP, and throughput.
 
+### Sprint 024 - Full 8-Stage Scheduler Chain [complete]
+
+- **Goal**: Generalize the scheduler handoff from two stages to the full
+  8-GPU, 43-layer model body.
+- **Rationale**: Output-head correctness is not meaningful until final HC is
+  produced by the real layer-sharded body, not a partial stage fixture.
+- **Outcome**: `SHIP`. The full scheduler smoke opens all eight resident stage
+  arenas, executes layers 0-42, handoffs HC across every stage boundary, and
+  verifies finite nonzero final HC on gpu7. The V100 gate now removes
+  `full_43_layer_scheduler` from readiness when this check passes and remains
+  `ready=false` pending selected-token decode, serving, MTP, and throughput.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -517,6 +535,9 @@ it is a narrow DS4 runtime tuned for this hardware.
 - See `docs/sprints/SPRINT-021-FOLLOWUPS.md`: full 43-layer single-slot
   scheduler, production indexer-threshold stress, reusable scratch/timing
   counters, HC CPU reference, serving, MTP, and multi-slot throughput.
+- See `docs/sprints/SPRINT-024-FOLLOWUPS.md`: output-head selected-token gate,
+  full-chain failure-local reports, per-stage upload/memory timing, relay
+  optimization, MTP, and throughput.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -553,6 +574,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-18 | Shipped Sprint 021 executor-owned compressor/indexer decode rows and indexed ratio-4 attention. | The representative layer now owns raw/compressed/indexer cache mutation from real descriptors on V100; the next blocker is wiring all 43 layers into a single-slot selected-token scheduler. | Sprint 022+ |
 | 2026-05-18 | Shipped Sprint 022 bias-router execution and a resident stage-0 scheduler. | The runtime now walks layers 0-5 from resident gpu0 pack bytes and validates both router families on V100; the next blocker is cross-GPU HC relay through all stages and output-head selected-token comparison. | Sprint 023+ |
 | 2026-05-18 | Shipped Sprint 023 cross-GPU two-stage scheduling. | The runtime now executes layers 0-11 across gpu0 and gpu1 with a peer HC handoff and device-local CUDA model caches; the next blocker is generalizing the stage chain through gpu7. | Sprint 024+ |
+| 2026-05-18 | Shipped Sprint 024 full 8-stage scheduling. | The runtime now executes all 43 layers across the 8x V100 body and removes `full_43_layer_scheduler` from gate readiness; the next blocker is output-head selected-token comparison against the source oracle. | Sprint 025+ |
 
 ## Open Questions
 

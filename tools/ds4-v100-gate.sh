@@ -109,6 +109,7 @@ if [ -n "$pack_index" ]; then
     targets+=(tests/cuda_v100_integrated_layer_smoke)
     targets+=(tests/cuda_v100_stage_scheduler_smoke)
     targets+=(tests/cuda_v100_two_stage_scheduler_smoke)
+    targets+=(tests/cuda_v100_full_scheduler_smoke)
 fi
 
 if [ -n "$log_dir" ]; then
@@ -125,6 +126,7 @@ if [ "$build" -eq 1 ]; then
 fi
 
 failures=0
+full_scheduler_ready=0
 
 run_gate() {
     local name="$1"
@@ -198,6 +200,9 @@ if [ -n "$pack_index" ]; then
             run_gate "integrated_layer_bias" ./tests/cuda_v100_integrated_layer_smoke --index "$pack_index" --model "$model" --layer 3 --router-token 16 --position 16 || true
             run_gate "stage_scheduler" ./tests/cuda_v100_stage_scheduler_smoke --index "$pack_index" --model "$model" --stage 0 --token 16 --position 16 || true
             run_gate "two_stage_scheduler" ./tests/cuda_v100_two_stage_scheduler_smoke --index "$pack_index" --model "$model" --token 16 --position 16 || true
+            if run_gate "full_scheduler" ./tests/cuda_v100_full_scheduler_smoke --index "$pack_index" --model "$model" --token 16 --position 16; then
+                full_scheduler_ready=1
+            fi
         else
             echo "gate	descriptor_bound_attention	SKIP	no_model"
             echo "gate	descriptor_bound_ffn	SKIP	no_model"
@@ -205,6 +210,7 @@ if [ -n "$pack_index" ]; then
             echo "gate	integrated_layer_bias	SKIP	no_model"
             echo "gate	stage_scheduler	SKIP	no_model"
             echo "gate	two_stage_scheduler	SKIP	no_model"
+            echo "gate	full_scheduler	SKIP	no_model"
         fi
     fi
 else
@@ -217,6 +223,7 @@ else
     echo "gate	integrated_layer_bias	SKIP	no_pack_index"
     echo "gate	stage_scheduler	SKIP	no_pack_index"
     echo "gate	two_stage_scheduler	SKIP	no_pack_index"
+    echo "gate	full_scheduler	SKIP	no_pack_index"
 fi
 
 if [ "$failures" -ne 0 ]; then
@@ -224,7 +231,22 @@ if [ "$failures" -ne 0 ]; then
     exit 1
 fi
 
-missing="full_43_layer_scheduler,real_model_selected_token,public_serving,mtp,throughput_benchmark"
+missing=""
+add_missing() {
+    if [ -z "$missing" ]; then
+        missing="$1"
+    else
+        missing="$missing,$1"
+    fi
+}
+
+if [ "$full_scheduler_ready" -eq 0 ]; then
+    add_missing "full_43_layer_scheduler"
+fi
+add_missing "real_model_selected_token"
+add_missing "public_serving"
+add_missing "mtp"
+add_missing "throughput_benchmark"
 echo "gate	readiness	NOT_READY	missing=$missing"
 echo "gate	summary	PASS	failures=0 ready=false"
 exit 0

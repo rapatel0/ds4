@@ -1,0 +1,24 @@
+gate	build	PASS
+gate	nvidia_smi	PASS	command=nvidia-smi -L
+gate	source_guards	PASS	command=./tools/ds4-source-oracle-vector --model /models/DSv4-Flash-256e-fixed.gguf --guards-only
+gate	source_dtypes	PASS	command=./tests/cuda_source_dtypes_smoke
+gate	bf16_probe	PASS	command=./tests/cuda_bf16_probe
+gate	context_kv	PASS	command=./tests/cuda_v100_context_smoke --production --kv-ctx 1048576 --kv-slots 1
+gate	compressor_bridge	PASS	command=./tests/cuda_v100_compressor_bridge_smoke
+gate	prefill_kv	PASS	command=./tests/cuda_v100_prefill_kv_smoke
+gate	hc_relay	PASS	command=./tests/cuda_hc_relay_smoke
+gate	projection_attention	PASS	command=./tests/cuda_v100_projection_attention_smoke
+gate	bounded_logits	PASS	command=./tests/cuda_v100_bounded_logits_smoke
+gate	mxfp4_moe	PASS	command=./tests/cuda_v100_mxfp4_moe_smoke
+gate	layer_descriptors	PASS	command=./tools/ds4-v100-layer-descriptor-gate --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --layer 2 --gpus 8
+gate	layer_bindings	PASS	command=./tests/v100_layer_binding_smoke --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --layer 2
+gate	layer_state	PASS	command=./tests/v100_layer_state_smoke --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --layer 2
+gate	descriptor_bound_attention	PASS	command=./tests/cuda_v100_descriptor_bound_attention_smoke --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --model /models/DSv4-Flash-256e-fixed.gguf --layer 2
+gate	descriptor_bound_ffn	PASS	command=./tests/cuda_v100_descriptor_bound_ffn_smoke --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --model /models/DSv4-Flash-256e-fixed.gguf --layer 2 --router-token 16
+gate	integrated_layer	PASS	command=./tests/cuda_v100_integrated_layer_smoke --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --model /models/DSv4-Flash-256e-fixed.gguf --layer 2 --router-token 16 --position 16
+gate	integrated_layer_bias	PASS	command=./tests/cuda_v100_integrated_layer_smoke --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --model /models/DSv4-Flash-256e-fixed.gguf --layer 3 --router-token 16 --position 16
+gate	stage_scheduler	PASS	command=./tests/cuda_v100_stage_scheduler_smoke --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --model /models/DSv4-Flash-256e-fixed.gguf --stage 0 --token 16 --position 16
+gate	two_stage_scheduler	PASS	command=./tests/cuda_v100_two_stage_scheduler_smoke --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --model /models/DSv4-Flash-256e-fixed.gguf --token 16 --position 16
+gate	full_scheduler	PASS	command=./tests/cuda_v100_full_scheduler_smoke --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --model /models/DSv4-Flash-256e-fixed.gguf --token 16 --position 16
+gate	readiness	NOT_READY	missing=real_model_selected_token,public_serving,mtp,throughput_benchmark
+gate	summary	PASS	failures=0 ready=false
