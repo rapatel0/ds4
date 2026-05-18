@@ -5,6 +5,7 @@ verdict.
 
 ## Executor-Owned Compressor And Indexer Rows
 
+- **Status:** Completed in Sprint 021.
 - **What:** Move attention compressor, ratio-4 indexer compressor, indexer
   scoring, and compressed-row visibility into `ds4_v100_layer_execute`.
 - **Why:** Sprint 020 binds the real descriptors but the integrated executor
@@ -15,6 +16,8 @@ verdict.
 
 ## Indexed Compressed Attention Path
 
+- **Status:** Completed in Sprint 021 for the representative layer-2 path;
+  production `top_k=512` stress remains tracked in Sprint 021 follow-ups.
 - **What:** Use `ds4_gpu_attention_indexed_mixed_batch_heads_tensor` for
   ratio-4 decode once `n_comp > 512`, with top-k indices from the indexer.
 - **Why:** Long-context ratio-4 attention should not scan all compressed rows

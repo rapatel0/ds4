@@ -18,9 +18,32 @@ extern "C" {
 #define DS4_V100_N_HC 4u
 #define DS4_V100_HC_MIX 24u
 #define DS4_V100_HC_SINKHORN_ITERS 20u
+#define DS4_V100_INDEXER_HEAD 64u
+#define DS4_V100_INDEXER_TOP_K 512u
 #define DS4_V100_OUT_GROUPS 8u
 #define DS4_V100_OUT_GROUP_DIM 4096u
 #define DS4_V100_OUT_GROUP_RANK 1024u
+
+typedef struct {
+    ds4_gpu_tensor *raw_kv;
+    uint32_t raw_cap;
+    uint32_t raw_window;
+
+    ds4_gpu_tensor *attn_state_kv;
+    ds4_gpu_tensor *attn_state_score;
+    ds4_gpu_tensor *attn_comp_kv;
+    uint32_t attn_comp_cap;
+    uint32_t n_attn_comp;
+
+    ds4_gpu_tensor *index_state_kv;
+    ds4_gpu_tensor *index_state_score;
+    ds4_gpu_tensor *index_comp_kv;
+    uint32_t index_comp_cap;
+    uint32_t n_index_comp;
+
+    ds4_gpu_tensor *indexer_topk;
+    uint32_t indexer_top_k;
+} ds4_v100_layer_decode_cache;
 
 typedef struct {
     const void *model_map;
@@ -39,6 +62,8 @@ typedef struct {
     uint32_t n_compressed;
     const ds4_gpu_tensor *compressed_mask;
     bool use_compressed_mask;
+
+    ds4_v100_layer_decode_cache *decode_cache;
 } ds4_v100_layer_execute_config;
 
 typedef struct {

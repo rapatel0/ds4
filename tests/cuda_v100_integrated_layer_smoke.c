@@ -703,6 +703,28 @@ int main(int argc, char **argv) {
             check(upload_matrix(arena, &model, fixed[i], &scratch, &scratch_bytes) == 0,
                   "upload fixed matrix");
         }
+        if (state.has_attention_compressor) {
+            const bound_matrix *compressor[] = {
+                &state.attn_compressor_kv,
+                &state.attn_compressor_gate,
+            };
+            for (uint32_t i = 0; i < sizeof(compressor) / sizeof(compressor[0]); i++) {
+                check(upload_matrix(arena, &model, compressor[i], &scratch, &scratch_bytes) == 0,
+                      "upload attention compressor matrix");
+            }
+        }
+        if (state.has_indexer) {
+            const bound_matrix *indexer[] = {
+                &state.indexer_attn_q_b,
+                &state.indexer_proj,
+                &state.indexer_compressor_kv,
+                &state.indexer_compressor_gate,
+            };
+            for (uint32_t i = 0; i < sizeof(indexer) / sizeof(indexer[0]); i++) {
+                check(upload_matrix(arena, &model, indexer[i], &scratch, &scratch_bytes) == 0,
+                      "upload indexer matrix");
+            }
+        }
         for (uint32_t route = 0; route < 6; route++) {
             const bound_matrix *routed[] = {&gate_routes[route], &up_routes[route], &down_routes[route]};
             for (uint32_t i = 0; i < sizeof(routed) / sizeof(routed[0]); i++) {
@@ -719,14 +741,55 @@ int main(int argc, char **argv) {
     ds4_gpu_tensor *next_t = ds4_gpu_tensor_alloc((uint64_t)hidden * sizeof(float));
     ds4_gpu_tensor *hidden_hc_t = ds4_gpu_tensor_alloc((uint64_t)DS4_V100_N_HC * hidden * sizeof(float));
     ds4_gpu_tensor *next_hc_t = ds4_gpu_tensor_alloc((uint64_t)DS4_V100_N_HC * hidden * sizeof(float));
-    check(hidden_t && raw_t && comp_t && mask_t && next_t && hidden_hc_t && next_hc_t,
+    const uint32_t cache_raw_cap = 128u;
+    const uint32_t cache_comp_cap = 4u;
+    const uint32_t cache_ratio = state.compress_ratio;
+    const uint32_t cache_coff = cache_ratio == 4u ? 2u : 1u;
+    const uint32_t attn_state_rows = cache_ratio ? cache_coff * cache_ratio : 0u;
+    const uint32_t attn_state_width = cache_coff * DS4_V100_HEAD_DIM;
+    const uint32_t index_state_rows = state.has_indexer ? 2u * cache_ratio : 0u;
+    const uint32_t index_state_width = 2u * DS4_V100_INDEXER_HEAD_DIM;
+    const uint32_t cache_index_top_k = 1u;
+    ds4_gpu_tensor *cache_raw_t = ds4_gpu_tensor_alloc((uint64_t)cache_raw_cap * kv_width * sizeof(float));
+    ds4_gpu_tensor *cache_attn_state_kv_t = cache_ratio
+        ? ds4_gpu_tensor_alloc((uint64_t)attn_state_rows * attn_state_width * sizeof(float))
+        : NULL;
+    ds4_gpu_tensor *cache_attn_state_score_t = cache_ratio
+        ? ds4_gpu_tensor_alloc((uint64_t)attn_state_rows * attn_state_width * sizeof(float))
+        : NULL;
+    ds4_gpu_tensor *cache_attn_comp_t = cache_ratio
+        ? ds4_gpu_tensor_alloc((uint64_t)cache_comp_cap * kv_width * sizeof(float))
+        : NULL;
+    ds4_gpu_tensor *cache_index_state_kv_t = state.has_indexer
+        ? ds4_gpu_tensor_alloc((uint64_t)index_state_rows * index_state_width * sizeof(float))
+        : NULL;
+    ds4_gpu_tensor *cache_index_state_score_t = state.has_indexer
+        ? ds4_gpu_tensor_alloc((uint64_t)index_state_rows * index_state_width * sizeof(float))
+        : NULL;
+    ds4_gpu_tensor *cache_index_comp_t = state.has_indexer
+        ? ds4_gpu_tensor_alloc((uint64_t)cache_comp_cap * DS4_V100_INDEXER_HEAD_DIM * sizeof(float))
+        : NULL;
+    ds4_gpu_tensor *cache_index_topk_t = state.has_indexer
+        ? ds4_gpu_tensor_alloc((uint64_t)cache_index_top_k * sizeof(uint32_t))
+        : NULL;
+    check(hidden_t && raw_t && comp_t && mask_t && next_t && hidden_hc_t && next_hc_t && cache_raw_t,
           "device tensor allocation");
+    if (cache_ratio) {
+        check(cache_attn_state_kv_t && cache_attn_state_score_t && cache_attn_comp_t,
+              "attention decode-cache tensor allocation");
+    }
+    if (state.has_indexer) {
+        check(cache_index_state_kv_t && cache_index_state_score_t && cache_index_comp_t &&
+                  cache_index_topk_t,
+              "indexer decode-cache tensor allocation");
+    }
 
     ds4_v100_layer_execute_report report;
     memset(&report, 0, sizeof(report));
     ds4_v100_layer_execute_report hc_report;
     memset(&hc_report, 0, sizeof(hc_report));
     int hc_executed = 0;
+    int cache_executed = 0;
     if (!failures) {
         check(ds4_gpu_tensor_write(hidden_t, 0, hidden_x, (uint64_t)hidden * sizeof(float)),
               "hidden upload");
@@ -814,14 +877,120 @@ int main(int argc, char **argv) {
                   "HC selected expert range");
         }
         hc_executed = failures == hc_failures_before;
+
+        if (state.compress_ratio == 4u && state.has_attention_compressor && state.has_indexer) {
+            const int cache_failures_before = failures;
+            check(ds4_gpu_tensor_write(hidden_t, 0, hidden_x, (uint64_t)hidden * sizeof(float)),
+                  "cache hidden reset");
+            check(ds4_gpu_tensor_fill_f32(cache_raw_t, 0.0f, (uint64_t)cache_raw_cap * kv_width),
+                  "raw cache zero");
+            check(ds4_gpu_tensor_fill_f32(cache_attn_state_kv_t,
+                                          0.0f,
+                                          (uint64_t)attn_state_rows * attn_state_width),
+                  "attention state KV zero");
+            check(ds4_gpu_tensor_fill_f32(cache_attn_state_score_t,
+                                          -1.0e30f,
+                                          (uint64_t)attn_state_rows * attn_state_width),
+                  "attention state score init");
+            check(ds4_gpu_tensor_fill_f32(cache_attn_comp_t,
+                                          0.0f,
+                                          (uint64_t)cache_comp_cap * kv_width),
+                  "attention compressed cache zero");
+            check(ds4_gpu_tensor_fill_f32(cache_index_state_kv_t,
+                                          0.0f,
+                                          (uint64_t)index_state_rows * index_state_width),
+                  "indexer state KV zero");
+            check(ds4_gpu_tensor_fill_f32(cache_index_state_score_t,
+                                          -1.0e30f,
+                                          (uint64_t)index_state_rows * index_state_width),
+                  "indexer state score init");
+            check(ds4_gpu_tensor_fill_f32(cache_index_comp_t,
+                                          0.0f,
+                                          (uint64_t)cache_comp_cap * DS4_V100_INDEXER_HEAD_DIM),
+                  "indexer compressed cache zero");
+
+            ds4_v100_layer_decode_cache decode_cache = {
+                .raw_kv = cache_raw_t,
+                .raw_cap = cache_raw_cap,
+                .raw_window = 128u,
+                .attn_state_kv = cache_attn_state_kv_t,
+                .attn_state_score = cache_attn_state_score_t,
+                .attn_comp_kv = cache_attn_comp_t,
+                .attn_comp_cap = cache_comp_cap,
+                .n_attn_comp = 0,
+                .index_state_kv = cache_index_state_kv_t,
+                .index_state_score = cache_index_state_score_t,
+                .index_comp_kv = cache_index_comp_t,
+                .index_comp_cap = cache_comp_cap,
+                .n_index_comp = 0,
+                .indexer_topk = cache_index_topk_t,
+                .indexer_top_k = cache_index_top_k,
+            };
+            for (uint32_t pos = 0; pos < 8u && !failures; pos++) {
+                ds4_v100_layer_execute_config cache_cfg = {
+                    .model_map = model.ptr,
+                    .model_size = model.size,
+                    .arena = arena,
+                    .router_token = (uint32_t)router_token,
+                    .position = pos,
+                    .decode_cache = &decode_cache,
+                };
+                ds4_v100_layer_execute_report cache_report;
+                memset(&cache_report, 0, sizeof(cache_report));
+                err[0] = '\0';
+                check(ds4_v100_layer_execute_decode(&state,
+                                                    &cache_cfg,
+                                                    hidden_t,
+                                                    next_t,
+                                                    &cache_report,
+                                                    err,
+                                                    sizeof(err)) == 0,
+                      err[0] ? err : "decode-cache layer execute");
+                check(cache_report.routes == state.routes_per_token,
+                      "decode-cache route count");
+                check(ds4_gpu_tensor_copy(hidden_t,
+                                          0,
+                                          next_t,
+                                          0,
+                                          (uint64_t)hidden * sizeof(float)),
+                      "decode-cache next hidden copy");
+            }
+            check(decode_cache.n_attn_comp == 2u, "decode-cache attention compressed count");
+            check(decode_cache.n_index_comp == 2u, "decode-cache indexer compressed count");
+            check(ds4_gpu_tensor_read(cache_attn_comp_t,
+                                      0,
+                                      comp_kv,
+                                      2u * (uint64_t)kv_width * sizeof(float)),
+                  "decode-cache attention compressed read");
+            expect_finite_nonzero_vector(comp_kv,
+                                         2u * kv_width,
+                                         "decode-cache attention compressed rows");
+            check(ds4_gpu_tensor_read(cache_index_comp_t,
+                                      0,
+                                      comp_kv,
+                                      2u * (uint64_t)DS4_V100_INDEXER_HEAD_DIM * sizeof(float)),
+                  "decode-cache indexer compressed read");
+            expect_finite_nonzero_vector(comp_kv,
+                                         2u * DS4_V100_INDEXER_HEAD_DIM,
+                                         "decode-cache indexer compressed rows");
+            uint32_t topk_host = UINT32_MAX;
+            check(ds4_gpu_tensor_read(cache_index_topk_t,
+                                      0,
+                                      &topk_host,
+                                      sizeof(topk_host)),
+                  "decode-cache top-k read");
+            check(topk_host < decode_cache.n_index_comp, "decode-cache top-k range");
+            cache_executed = failures == cache_failures_before;
+        }
     }
 
-    printf("cuda_v100_integrated_layer_smoke: layer=%d token=%d pos=%d expert0=%d hc=%s gpu=%d arena_bytes=%" PRIu64 " hidden=%u raw=%u comp=%u %s\n",
+    printf("cuda_v100_integrated_layer_smoke: layer=%d token=%d pos=%d expert0=%d hc=%s cache=%s gpu=%d arena_bytes=%" PRIu64 " hidden=%u raw=%u comp=%u %s\n",
            layer,
            router_token,
            position,
            selected[0],
            hc_executed ? "ok" : "skip",
+           cache_executed ? "ok" : "skip",
            state.owning_gpu,
            arena_bytes,
            hidden,
@@ -829,6 +998,14 @@ int main(int argc, char **argv) {
            n_comp,
            failures ? "FAIL" : "ok");
 
+    ds4_gpu_tensor_free(cache_index_topk_t);
+    ds4_gpu_tensor_free(cache_index_comp_t);
+    ds4_gpu_tensor_free(cache_index_state_score_t);
+    ds4_gpu_tensor_free(cache_index_state_kv_t);
+    ds4_gpu_tensor_free(cache_attn_comp_t);
+    ds4_gpu_tensor_free(cache_attn_state_score_t);
+    ds4_gpu_tensor_free(cache_attn_state_kv_t);
+    ds4_gpu_tensor_free(cache_raw_t);
     ds4_gpu_tensor_free(next_hc_t);
     ds4_gpu_tensor_free(hidden_hc_t);
     ds4_gpu_tensor_free(next_t);

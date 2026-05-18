@@ -87,6 +87,24 @@ static int rope_tail_layer_tensor(ds4_gpu_tensor *x,
                                     1.0f);
 }
 
+typedef struct {
+    const ds4_gpu_tensor *raw_kv;
+    uint32_t n_raw;
+    uint32_t raw_cap;
+    uint32_t raw_start;
+    const ds4_gpu_tensor *compressed_kv;
+    uint32_t n_compressed;
+    const ds4_gpu_tensor *compressed_mask;
+    uint32_t use_compressed_mask;
+    const ds4_gpu_tensor *indexed_topk;
+    uint32_t indexed_top_k;
+    bool use_indexed_attention;
+} ds4_v100_attention_inputs;
+
+static float compressed_attn_factor(void) {
+    return 1.0f / (1.0f + 0.1f * logf(16.0f));
+}
+
 static int grouped_attention_output(const ds4_v100_layer_state *state,
                                     const ds4_v100_layer_execute_config *cfg,
                                     const ds4_gpu_tensor *heads,
@@ -148,6 +166,62 @@ static int grouped_attention_output(const ds4_v100_layer_state *state,
     return 0;
 }
 
+static int validate_decode_cache(const ds4_v100_layer_state *state,
+                                 const ds4_v100_layer_decode_cache *cache,
+                                 char *err,
+                                 size_t errlen) {
+    if (!cache) return 0;
+    if (!cache->raw_kv || cache->raw_cap == 0) {
+        return exec_error(err, errlen, "decode cache requires raw KV storage");
+    }
+    if (ds4_gpu_tensor_bytes(cache->raw_kv) <
+        (uint64_t)cache->raw_cap * DS4_V100_HEAD_DIM * sizeof(float)) {
+        return exec_error(err, errlen, "decode cache raw KV tensor is too small");
+    }
+    if (state->compress_ratio == 0) return 0;
+    const uint32_t coff = state->compress_ratio == 4u ? 2u : 1u;
+    const uint32_t comp_width = coff * DS4_V100_HEAD_DIM;
+    const uint32_t comp_state_rows = coff * state->compress_ratio;
+    if (!state->has_attention_compressor ||
+        !cache->attn_state_kv || !cache->attn_state_score || !cache->attn_comp_kv ||
+        cache->attn_comp_cap == 0 ||
+        ds4_gpu_tensor_bytes(cache->attn_state_kv) <
+            (uint64_t)comp_state_rows * comp_width * sizeof(float) ||
+        ds4_gpu_tensor_bytes(cache->attn_state_score) <
+            (uint64_t)comp_state_rows * comp_width * sizeof(float) ||
+        ds4_gpu_tensor_bytes(cache->attn_comp_kv) <
+            (uint64_t)cache->attn_comp_cap * DS4_V100_HEAD_DIM * sizeof(float)) {
+        return exec_error(err, errlen, "decode cache attention compressor tensors are invalid");
+    }
+    if (cache->n_attn_comp > cache->attn_comp_cap) {
+        return exec_error(err, errlen, "decode cache attention compressed count exceeds capacity");
+    }
+    if (state->compress_ratio == 4u) {
+        const uint32_t index_width = 2u * DS4_V100_INDEXER_HEAD_DIM;
+        const uint32_t index_state_rows = 2u * state->compress_ratio;
+        const uint32_t top_k = cache->indexer_top_k ? cache->indexer_top_k : DS4_V100_INDEXER_TOP_K;
+        if (!state->has_indexer ||
+            !cache->index_state_kv || !cache->index_state_score || !cache->index_comp_kv ||
+            !cache->indexer_topk ||
+            cache->index_comp_cap == 0 ||
+            top_k == 0 ||
+            top_k > DS4_V100_INDEXER_TOP_K ||
+            ds4_gpu_tensor_bytes(cache->index_state_kv) <
+                (uint64_t)index_state_rows * index_width * sizeof(float) ||
+            ds4_gpu_tensor_bytes(cache->index_state_score) <
+                (uint64_t)index_state_rows * index_width * sizeof(float) ||
+            ds4_gpu_tensor_bytes(cache->index_comp_kv) <
+                (uint64_t)cache->index_comp_cap * DS4_V100_INDEXER_HEAD_DIM * sizeof(float) ||
+            ds4_gpu_tensor_bytes(cache->indexer_topk) < (uint64_t)top_k * sizeof(uint32_t)) {
+            return exec_error(err, errlen, "decode cache ratio-4 indexer tensors are invalid");
+        }
+        if (cache->n_index_comp > cache->index_comp_cap) {
+            return exec_error(err, errlen, "decode cache indexer compressed count exceeds capacity");
+        }
+    }
+    return 0;
+}
+
 static int validate_execute_common(const ds4_v100_layer_state *state,
                                    const ds4_v100_layer_execute_config *cfg,
                                    char *err,
@@ -183,7 +257,256 @@ static int validate_execute_common(const ds4_v100_layer_state *state,
              (uint64_t)cfg->n_compressed * sizeof(float))) {
         return exec_error(err, errlen, "compressed mask tensor is too small");
     }
+    if (validate_decode_cache(state, cfg->decode_cache, err, errlen)) {
+        return 1;
+    }
     return 0;
+}
+
+static int prepare_decode_cache_attention(
+        const ds4_v100_layer_state          *state,
+        const ds4_v100_layer_execute_config *cfg,
+        const ds4_gpu_tensor                *attn_norm,
+        const ds4_gpu_tensor                *q_a_norm,
+        ds4_gpu_tensor                      *kv,
+        ds4_v100_attention_inputs           *inputs,
+        char                                *err,
+        size_t                               errlen) {
+    ds4_v100_layer_decode_cache *cache = cfg->decode_cache;
+    if (!cache) return 0;
+
+    const uint32_t raw_window = cache->raw_window ? cache->raw_window : 128u;
+    const uint32_t raw_cap = cache->raw_cap;
+    uint32_t n_raw = cfg->position + 1u < raw_window ? cfg->position + 1u : raw_window;
+    if (n_raw > raw_cap) n_raw = raw_cap;
+    const uint32_t raw_row = cfg->position % raw_cap;
+    const uint32_t raw_start = (cfg->position + raw_cap + 1u - n_raw) % raw_cap;
+
+    if (!ds4_gpu_kv_fp8_store_raw_tensor(kv,
+                                         cache->raw_kv,
+                                         raw_cap,
+                                         raw_row,
+                                         DS4_V100_HEAD_DIM,
+                                         DS4_V100_N_ROT)) {
+        return exec_error(err, errlen, "decode cache raw KV update failed");
+    }
+    inputs->raw_kv = cache->raw_kv;
+    inputs->n_raw = n_raw;
+    inputs->raw_cap = raw_cap;
+    inputs->raw_start = raw_start;
+
+    if (state->compress_ratio == 0u) return 0;
+
+    const uint32_t ratio = state->compress_ratio;
+    const uint32_t coff = ratio == 4u ? 2u : 1u;
+    const uint32_t comp_width = coff * DS4_V100_HEAD_DIM;
+    const bool emit = ((cfg->position + 1u) % ratio) == 0u;
+    if (emit && cache->n_attn_comp >= cache->attn_comp_cap) {
+        return exec_error(err, errlen, "decode cache attention compressed capacity exceeded");
+    }
+
+    ds4_gpu_bf16_matrix_view comp_kv_v;
+    ds4_gpu_bf16_matrix_view comp_sc_v;
+    if (ds4_v100_bound_matrix_bf16_view(&state->attn_compressor_kv,
+                                        &comp_kv_v,
+                                        err,
+                                        errlen) ||
+        ds4_v100_bound_matrix_bf16_view(&state->attn_compressor_gate,
+                                        &comp_sc_v,
+                                        err,
+                                        errlen)) {
+        return 1;
+    }
+
+    ds4_gpu_tensor *comp_kv_cur = ds4_gpu_tensor_alloc((uint64_t)comp_width * sizeof(float));
+    ds4_gpu_tensor *comp_sc_cur = ds4_gpu_tensor_alloc((uint64_t)comp_width * sizeof(float));
+    int rc = 1;
+    if (!comp_kv_cur || !comp_sc_cur) {
+        exec_error(err, errlen, "failed to allocate attention compressor scratch");
+        goto done;
+    }
+    if (ds4_gpu_arena_bf16_matmul_f32(cfg->arena, &comp_kv_v, attn_norm, comp_kv_cur) != 0 ||
+        ds4_gpu_arena_bf16_matmul_f32(cfg->arena, &comp_sc_v, attn_norm, comp_sc_cur) != 0) {
+        exec_error(err, errlen, "attention compressor projection failed");
+        goto done;
+    }
+    if (!ds4_gpu_compressor_update_tensor(comp_kv_cur,
+                                          comp_sc_cur,
+                                          cache->attn_state_kv,
+                                          cache->attn_state_score,
+                                          cache->attn_comp_kv,
+                                          cfg->model_map,
+                                          cfg->model_size,
+                                          state->attn_compressor_ape.binding.source_offset,
+                                          0,
+                                          state->attn_compressor_norm.source_offset,
+                                          0,
+                                          DS4_V100_HEAD_DIM,
+                                          ratio,
+                                          cfg->position,
+                                          cache->n_attn_comp,
+                                          DS4_V100_N_ROT,
+                                          65536u,
+                                          160000.0f,
+                                          1.0f / 16.0f,
+                                          1.0f,
+                                          compressed_attn_factor(),
+                                          32.0f,
+                                          1.0f,
+                                          DS4_V100_RMS_EPS)) {
+        exec_error(err, errlen, "attention compressor update failed");
+        goto done;
+    }
+    if (emit) {
+        ds4_gpu_tensor *row = ds4_gpu_tensor_view(
+                cache->attn_comp_kv,
+                (uint64_t)cache->n_attn_comp * DS4_V100_HEAD_DIM * sizeof(float),
+                (uint64_t)DS4_V100_HEAD_DIM * sizeof(float));
+        if (!row) {
+            exec_error(err, errlen, "failed to view emitted attention compressed row");
+            goto done;
+        }
+        const int ok = ds4_gpu_dsv4_fp8_kv_quantize_tensor(row, 1, DS4_V100_HEAD_DIM, DS4_V100_N_ROT);
+        ds4_gpu_tensor_free(row);
+        if (!ok) {
+            exec_error(err, errlen, "attention compressed row FP8 round-trip failed");
+            goto done;
+        }
+        cache->n_attn_comp++;
+    }
+
+    inputs->compressed_kv = cache->attn_comp_kv;
+    inputs->n_compressed = cache->n_attn_comp;
+    inputs->compressed_mask = NULL;
+    inputs->use_compressed_mask = 0;
+
+    if (ratio == 4u) {
+        const uint32_t index_width = 2u * DS4_V100_INDEXER_HEAD_DIM;
+        if (emit && cache->n_index_comp >= cache->index_comp_cap) {
+            exec_error(err, errlen, "decode cache indexer compressed capacity exceeded");
+            goto done;
+        }
+        ds4_gpu_bf16_matrix_view index_kv_v;
+        ds4_gpu_bf16_matrix_view index_sc_v;
+        if (ds4_v100_bound_matrix_bf16_view(&state->indexer_compressor_kv,
+                                            &index_kv_v,
+                                            err,
+                                            errlen) ||
+            ds4_v100_bound_matrix_bf16_view(&state->indexer_compressor_gate,
+                                            &index_sc_v,
+                                            err,
+                                            errlen)) {
+            goto done;
+        }
+        ds4_gpu_tensor *index_kv_cur = ds4_gpu_tensor_alloc((uint64_t)index_width * sizeof(float));
+        ds4_gpu_tensor *index_sc_cur = ds4_gpu_tensor_alloc((uint64_t)index_width * sizeof(float));
+        if (!index_kv_cur || !index_sc_cur) {
+            ds4_gpu_tensor_free(index_sc_cur);
+            ds4_gpu_tensor_free(index_kv_cur);
+            exec_error(err, errlen, "failed to allocate indexer compressor scratch");
+            goto done;
+        }
+        const int projected =
+            ds4_gpu_arena_bf16_matmul_f32(cfg->arena, &index_kv_v, attn_norm, index_kv_cur) == 0 &&
+            ds4_gpu_arena_bf16_matmul_f32(cfg->arena, &index_sc_v, attn_norm, index_sc_cur) == 0;
+        if (!projected ||
+            !ds4_gpu_compressor_update_tensor(index_kv_cur,
+                                              index_sc_cur,
+                                              cache->index_state_kv,
+                                              cache->index_state_score,
+                                              cache->index_comp_kv,
+                                              cfg->model_map,
+                                              cfg->model_size,
+                                              state->indexer_compressor_ape.binding.source_offset,
+                                              0,
+                                              state->indexer_compressor_norm.source_offset,
+                                              0,
+                                              DS4_V100_INDEXER_HEAD_DIM,
+                                              ratio,
+                                              cfg->position,
+                                              cache->n_index_comp,
+                                              DS4_V100_N_ROT,
+                                              65536u,
+                                              160000.0f,
+                                              1.0f / 16.0f,
+                                              1.0f,
+                                              compressed_attn_factor(),
+                                              32.0f,
+                                              1.0f,
+                                              DS4_V100_RMS_EPS)) {
+            ds4_gpu_tensor_free(index_sc_cur);
+            ds4_gpu_tensor_free(index_kv_cur);
+            exec_error(err, errlen, projected ? "indexer compressor update failed" :
+                       "indexer compressor projection failed");
+            goto done;
+        }
+        ds4_gpu_tensor_free(index_sc_cur);
+        ds4_gpu_tensor_free(index_kv_cur);
+        if (emit) cache->n_index_comp++;
+
+        const uint32_t top_k = cache->indexer_top_k ? cache->indexer_top_k : DS4_V100_INDEXER_TOP_K;
+        if (cache->n_index_comp > top_k) {
+            ds4_gpu_source_row_view index_q_v;
+            ds4_gpu_bf16_matrix_view index_w_v;
+            if (source_view(&state->indexer_attn_q_b, &index_q_v, err, errlen) ||
+                ds4_v100_bound_matrix_bf16_view(&state->indexer_proj, &index_w_v, err, errlen)) {
+                goto done;
+            }
+            ds4_gpu_tensor *indexer_q = ds4_gpu_tensor_alloc(
+                    (uint64_t)DS4_V100_INDEXER_HEAD * DS4_V100_INDEXER_HEAD_DIM * sizeof(float));
+            ds4_gpu_tensor *indexer_w = ds4_gpu_tensor_alloc(
+                    (uint64_t)DS4_V100_INDEXER_HEAD * sizeof(float));
+            ds4_gpu_tensor *scores = ds4_gpu_tensor_alloc(
+                    (uint64_t)cache->n_index_comp * sizeof(float));
+            if (!indexer_q || !indexer_w || !scores) {
+                ds4_gpu_tensor_free(scores);
+                ds4_gpu_tensor_free(indexer_w);
+                ds4_gpu_tensor_free(indexer_q);
+                exec_error(err, errlen, "failed to allocate indexer top-k scratch");
+                goto done;
+            }
+            const float scale = 1.0f / sqrtf((float)(DS4_V100_INDEXER_HEAD * DS4_V100_INDEXER_HEAD_DIM));
+            const int ok =
+                ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena, &index_q_v, q_a_norm, indexer_q) == 0 &&
+                rope_tail_layer_tensor(indexer_q,
+                                       DS4_V100_INDEXER_HEAD,
+                                       DS4_V100_INDEXER_HEAD_DIM,
+                                       cfg->position,
+                                       state,
+                                       false) &&
+                ds4_gpu_arena_bf16_matmul_f32(cfg->arena, &index_w_v, attn_norm, indexer_w) == 0 &&
+                ds4_gpu_indexer_score_one_tensor(scores,
+                                                 indexer_q,
+                                                 indexer_w,
+                                                 cache->index_comp_kv,
+                                                 cache->n_index_comp,
+                                                 DS4_V100_INDEXER_HEAD,
+                                                 DS4_V100_INDEXER_HEAD_DIM,
+                                                 scale) &&
+                ds4_gpu_indexer_topk_tensor(cache->indexer_topk,
+                                            scores,
+                                            cache->n_index_comp,
+                                            1,
+                                            top_k);
+            ds4_gpu_tensor_free(scores);
+            ds4_gpu_tensor_free(indexer_w);
+            ds4_gpu_tensor_free(indexer_q);
+            if (!ok) {
+                exec_error(err, errlen, "indexer top-k sequence failed");
+                goto done;
+            }
+            inputs->indexed_topk = cache->indexer_topk;
+            inputs->indexed_top_k = top_k;
+            inputs->use_indexed_attention = true;
+        }
+    }
+
+    rc = 0;
+
+done:
+    ds4_gpu_tensor_free(comp_sc_cur);
+    ds4_gpu_tensor_free(comp_kv_cur);
+    return rc;
 }
 
 static int execute_attention_output(const ds4_v100_layer_state *state,
@@ -272,22 +595,70 @@ static int execute_attention_output(const ds4_v100_layer_state *state,
         goto done;
     }
 
-    const ds4_gpu_tensor *raw_kv = cfg->raw_kv ? cfg->raw_kv : kv;
-    if (!ds4_gpu_attention_decode_heads_tensor(heads,
-                                               cfg->model_map,
-                                               cfg->model_size,
-                                               state->attn_sinks.source_offset,
-                                               q,
-                                               raw_kv,
-                                               n_raw,
-                                               raw_cap,
-                                               raw_start,
-                                               cfg->compressed_kv,
-                                               cfg->n_compressed,
-                                               cfg->compressed_mask,
-                                               cfg->use_compressed_mask ? 1u : 0u,
-                                               DS4_V100_N_HEAD,
-                                               DS4_V100_HEAD_DIM)) {
+    ds4_v100_attention_inputs attn_inputs = {
+        .raw_kv = cfg->raw_kv ? cfg->raw_kv : kv,
+        .n_raw = n_raw,
+        .raw_cap = raw_cap,
+        .raw_start = raw_start,
+        .compressed_kv = cfg->compressed_kv,
+        .n_compressed = cfg->n_compressed,
+        .compressed_mask = cfg->compressed_mask,
+        .use_compressed_mask = cfg->use_compressed_mask ? 1u : 0u,
+        .indexed_topk = NULL,
+        .indexed_top_k = 0,
+        .use_indexed_attention = false,
+    };
+    if (prepare_decode_cache_attention(state,
+                                       cfg,
+                                       attn_norm,
+                                       q_a_norm,
+                                       kv,
+                                       &attn_inputs,
+                                       err,
+                                       errlen)) {
+        goto done;
+    }
+
+    int attention_ok = 0;
+    if (attn_inputs.use_indexed_attention) {
+        attention_ok = ds4_gpu_attention_indexed_mixed_batch_heads_tensor(
+                heads,
+                cfg->model_map,
+                cfg->model_size,
+                state->attn_sinks.source_offset,
+                q,
+                attn_inputs.raw_kv,
+                attn_inputs.compressed_kv,
+                attn_inputs.indexed_topk,
+                1,
+                cfg->position,
+                attn_inputs.n_raw,
+                attn_inputs.raw_cap,
+                attn_inputs.raw_start,
+                attn_inputs.n_compressed,
+                attn_inputs.indexed_top_k,
+                cfg->decode_cache && cfg->decode_cache->raw_window ? cfg->decode_cache->raw_window : 128u,
+                state->compress_ratio,
+                DS4_V100_N_HEAD,
+                DS4_V100_HEAD_DIM);
+    } else {
+        attention_ok = ds4_gpu_attention_decode_heads_tensor(heads,
+                                                             cfg->model_map,
+                                                             cfg->model_size,
+                                                             state->attn_sinks.source_offset,
+                                                             q,
+                                                             attn_inputs.raw_kv,
+                                                             attn_inputs.n_raw,
+                                                             attn_inputs.raw_cap,
+                                                             attn_inputs.raw_start,
+                                                             attn_inputs.compressed_kv,
+                                                             attn_inputs.n_compressed,
+                                                             attn_inputs.compressed_mask,
+                                                             attn_inputs.use_compressed_mask,
+                                                             DS4_V100_N_HEAD,
+                                                             DS4_V100_HEAD_DIM);
+    }
+    if (!attention_ok) {
         exec_error(err, errlen, "attention softmax failed");
         goto done;
     }

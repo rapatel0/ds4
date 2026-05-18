@@ -1,12 +1,14 @@
 ---
 sprint: 021
 title: Executor-Owned Compressor/Indexer Decode Rows
-status: planned
+status: completed
 date: 2026-05-18
 target_repo: rapatel0/ds4
 architecture: ../architecture/DS4-V100-LAYOUT.md
 intent: drafts/SPRINT-021-INTENT.md
-verdict: pending
+report: SPRINT-021-REPORT.md
+followups: SPRINT-021-FOLLOWUPS.md
+verdict: SHIP
 ---
 
 # SPRINT-021: Executor-Owned Compressor/Indexer Decode Rows
@@ -58,10 +60,10 @@ raw plus compressed attention.
 - `ds4_v100_layer_execute.c`
 
 **Tasks:**
-- [ ] Add a mutable decode-cache struct for raw KV, attention compressed KV,
+- [x] Add a mutable decode-cache struct for raw KV, attention compressed KV,
       indexer compressed KV, compressor recurrence state, and top-k scratch.
-- [ ] Keep the existing explicit compressed-KV config path for compatibility.
-- [ ] Validate tensor sizes and ratio-class requirements before execution.
+- [x] Keep the existing explicit compressed-KV config path for compatibility.
+- [x] Validate tensor sizes and ratio-class requirements before execution.
 
 ### Phase 2: Attention Compressor Emission
 
@@ -70,12 +72,12 @@ raw plus compressed attention.
 - `tests/cuda_v100_integrated_layer_smoke.c`
 
 **Tasks:**
-- [ ] Create BF16 views for `attn_compressor_kv` and
+- [x] Create BF16 views for `attn_compressor_kv` and
       `attn_compressor_gate`.
-- [ ] Project current KV/score rows from `attn_norm`.
-- [ ] Call `ds4_gpu_compressor_update_tensor` and quantize emitted attention
+- [x] Project current KV/score rows from `attn_norm`.
+- [x] Call `ds4_gpu_compressor_update_tensor` and quantize emitted attention
       compressed rows.
-- [ ] Increment the mutable compressed-row count only on ratio boundaries.
+- [x] Increment the mutable compressed-row count only on ratio boundaries.
 
 ### Phase 3: Ratio-4 Indexer
 
@@ -84,11 +86,13 @@ raw plus compressed attention.
 - `tests/cuda_v100_integrated_layer_smoke.c`
 
 **Tasks:**
-- [ ] Generate ratio-4 indexer compressed rows from `attn_norm`.
-- [ ] Project `indexer_q` from `q_a_norm` and `indexer_weights` from
+- [x] Generate ratio-4 indexer compressed rows from `attn_norm`.
+- [x] Project `indexer_q` from `q_a_norm` and `indexer_weights` from
       `attn_norm`.
-- [ ] Run score/top-k when `n_index_comp > 512`.
-- [ ] Use `ds4_gpu_attention_indexed_mixed_batch_heads_tensor` for indexed
+- [x] Run score/top-k when `n_index_comp > indexer_top_k`; production default
+      remains 512 and the smoke forces `indexer_top_k=1` to exercise the path
+      in eight decode steps.
+- [x] Use `ds4_gpu_attention_indexed_mixed_batch_heads_tensor` for indexed
       compressed attention.
 
 ### Phase 4: Gate
@@ -99,10 +103,24 @@ raw plus compressed attention.
 - `docs/sprints/VISION.md`
 
 **Tasks:**
-- [ ] Run local compile and descriptor smokes.
-- [ ] Run one-card V100 integrated smoke.
-- [ ] Run full 8-GPU V100 gate.
-- [ ] Commit code, reports, and logs.
+- [x] Run local compile and descriptor smokes.
+- [x] Run one-card V100 integrated smoke.
+- [x] Run full 8-GPU V100 gate.
+- [x] Commit code, reports, and logs.
+
+## Outcome
+
+`SHIP`.
+
+The executor now has a mutable decode-cache contract and layer 2 can generate
+raw KV, attention compressed rows, ratio-4 indexer compressed rows, indexer
+top-k visibility, and indexed compressed attention from real descriptors on a
+V100. The existing explicit compressed-KV fixture path and HC entrypoint still
+pass.
+
+The full V100 gate passes with `ready=false` because full 43-layer scheduling,
+real selected-token decode, public serving, MTP, and throughput benchmarking
+remain intentionally outside this sprint.
 
 ## Definition Of Done
 
