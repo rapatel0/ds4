@@ -1,0 +1,7 @@
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -c -o ds4_cli.o ds4_cli.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -c -o linenoise.o linenoise.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -c -o ds4.o ds4.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -fobjc-arc -c -o ds4_metal.o ds4_metal.m
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -c -o ds4_pack.o ds4_pack.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -c -o ds4_source_formats.o ds4_source_formats.c
+cc -O3 -ffast-math -mcpu=native -Wall -Wextra -std=c99 -o ds4 ds4_cli.o linenoise.o ds4.o ds4_metal.o ds4_pack.o ds4_source_formats.o -lm -pthread -framework Foundation -framework Metal
