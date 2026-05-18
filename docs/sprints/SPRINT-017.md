@@ -1,12 +1,13 @@
 ---
 sprint: 017
 title: V100 Scheduler-Owned Layer State Gate
-status: planned
+status: completed
 date: 2026-05-18
 target_repo: rapatel0/ds4
 architecture: ../architecture/DS4-V100-LAYOUT.md
 intent: drafts/SPRINT-017-INTENT.md
 deferred: SPRINT-017-DEFERRED.md
+verdict: SHIP
 ---
 
 # SPRINT-017: V100 Scheduler-Owned Layer State Gate
@@ -50,12 +51,12 @@ without another test-local rewrite.
 - `Makefile`
 
 **Tasks:**
-- [ ] Add public bound-matrix/source-row-view helpers.
-- [ ] Add `ds4_v100_layer_state` with layer id, stage id, owner GPU, layer
+- [x] Add public bound-matrix/source-row-view helpers.
+- [x] Add `ds4_v100_layer_state` with layer id, stage id, owner GPU, layer
       class, router kind, FFN descriptor bindings, and KV view snapshot.
-- [ ] Validate router/FFN dimensions and expected source dtypes/layouts.
-- [ ] Add route-expert helper for selected MXFP4 gate/up/down views.
-- [ ] Add FFN arena-span helper for production/smoke arena sizing.
+- [x] Validate router/FFN dimensions and expected source dtypes/layouts.
+- [x] Add route-expert helper for selected MXFP4 gate/up/down views.
+- [x] Add FFN arena-span helper for production/smoke arena sizing.
 
 ### Phase 2: Local State Smoke
 
@@ -64,10 +65,10 @@ without another test-local rewrite.
 - `Makefile`
 
 **Tasks:**
-- [ ] Open the real pack index.
-- [ ] Build layer-2 state.
-- [ ] Validate hash router dimensions and selected expert route views.
-- [ ] Validate FFN arena span stays inside the owning stage arena.
+- [x] Open the real pack index.
+- [x] Build layer-2 state.
+- [x] Validate hash router dimensions and selected expert route views.
+- [x] Validate FFN arena span stays inside the owning stage arena.
 
 ### Phase 3: Descriptor FFN Refactor
 
@@ -76,9 +77,9 @@ without another test-local rewrite.
 - `Makefile`
 
 **Tasks:**
-- [ ] Replace local bound-matrix construction with layer-state helpers.
-- [ ] Keep CPU and GPU router-selected FFN comparisons unchanged in behavior.
-- [ ] Keep source-model byte reads and arena uploads source-faithful.
+- [x] Replace local bound-matrix construction with layer-state helpers.
+- [x] Keep CPU and GPU router-selected FFN comparisons unchanged in behavior.
+- [x] Keep source-model byte reads and arena uploads source-faithful.
 
 ### Phase 4: Gate, Validation, Closeout
 
@@ -90,11 +91,11 @@ without another test-local rewrite.
 - `docs/sprints/VISION.md`
 
 **Tasks:**
-- [ ] Add `layer_state` to the appliance gate when `--pack-index` is supplied.
-- [ ] Run local validation.
-- [ ] Run cluster state smoke, router FFN smoke, and full appliance gate.
-- [ ] Archive logs.
-- [ ] Update sprint docs and vision.
+- [x] Add `layer_state` to the appliance gate when `--pack-index` is supplied.
+- [x] Run local validation.
+- [x] Run cluster state smoke, router FFN smoke, and full appliance gate.
+- [x] Archive logs.
+- [x] Update sprint docs and vision.
 
 ## Definition Of Done
 

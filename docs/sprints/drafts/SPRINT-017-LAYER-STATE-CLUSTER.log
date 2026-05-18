@@ -1,0 +1,1 @@
+v100_layer_state_smoke: layer=2 stage=0 gpu=0 class=ratio_4 router=hash hidden=4096 mid=2048 experts=256 span=11784434944 ok

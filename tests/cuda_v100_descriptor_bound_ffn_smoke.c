@@ -1,6 +1,6 @@
 #include "ds4_gpu.h"
 #include "ds4_source_formats.h"
-#include "ds4_v100_context.h"
+#include "ds4_v100_layer_state.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -23,14 +23,7 @@ typedef struct {
     int fd;
 } model_map;
 
-typedef struct {
-    ds4_v100_tensor_binding binding;
-    uint32_t rows;
-    uint32_t cols;
-    uint64_t row_bytes;
-    uint64_t bytes;
-    uint64_t rel;
-} bound_matrix;
+typedef ds4_v100_bound_matrix bound_matrix;
 
 static void check(int cond, const char *msg) {
     if (!cond) {
@@ -117,60 +110,6 @@ static void fill_hidden(float *hidden, uint32_t n) {
     }
 }
 
-static int require_binding(ds4_v100_context *ctx,
-                           int layer,
-                           const char *suffix,
-                           ds4_v100_tensor_binding *out,
-                           char *err,
-                           size_t errlen) {
-    if (ds4_v100_context_require_layer_tensor_binding(ctx, layer, suffix, out, err, errlen)) {
-        fprintf(stderr, "cuda_v100_descriptor_bound_ffn_smoke: %s\n", err);
-        return 1;
-    }
-    return 0;
-}
-
-static int make_expert_matrix(const ds4_v100_tensor_binding *b,
-                              uint32_t expert,
-                              bound_matrix *out) {
-    if (!b || !out || b->n_shape_dims != 3 || expert >= b->shape[2]) return 1;
-    memset(out, 0, sizeof(*out));
-    out->binding = *b;
-    out->cols = (uint32_t)b->shape[0];
-    out->rows = (uint32_t)b->shape[1];
-    out->row_bytes = ds4_src_mxfp4_row_bytes(out->cols);
-    out->bytes = (uint64_t)out->rows * out->row_bytes;
-    out->rel = (uint64_t)expert * out->bytes;
-    if (out->rel > b->byte_length || out->bytes > b->byte_length - out->rel) return 1;
-    return 0;
-}
-
-static int make_shared_matrix(const ds4_v100_tensor_binding *b, bound_matrix *out) {
-    if (!b || !out || b->n_shape_dims != 2) return 1;
-    memset(out, 0, sizeof(*out));
-    out->binding = *b;
-    out->cols = (uint32_t)b->shape[0];
-    out->rows = (uint32_t)b->shape[1];
-    out->row_bytes = ds4_src_f8_e4m3_b128_row_bytes(out->cols);
-    out->bytes = (uint64_t)out->rows * out->row_bytes;
-    out->rel = 0;
-    if (out->bytes != b->byte_length) return 1;
-    return 0;
-}
-
-static int make_f32_matrix(const ds4_v100_tensor_binding *b, bound_matrix *out) {
-    if (!b || !out || b->n_shape_dims != 2) return 1;
-    memset(out, 0, sizeof(*out));
-    out->binding = *b;
-    out->cols = (uint32_t)b->shape[0];
-    out->rows = (uint32_t)b->shape[1];
-    out->row_bytes = (uint64_t)out->cols * sizeof(float);
-    out->bytes = (uint64_t)out->rows * out->row_bytes;
-    out->rel = 0;
-    if (out->bytes != b->byte_length) return 1;
-    return 0;
-}
-
 static const uint8_t *matrix_host_ptr(const model_map *model, const bound_matrix *m) {
     const ds4_v100_tensor_binding *b = &m->binding;
     if (b->source_offset + m->rel > model->size ||
@@ -181,7 +120,7 @@ static const uint8_t *matrix_host_ptr(const model_map *model, const bound_matrix
 }
 
 static uint64_t matrix_arena_offset(const bound_matrix *m) {
-    return m->binding.shard_offset + m->rel;
+    return ds4_v100_bound_matrix_arena_offset(m);
 }
 
 static int upload_matrix(ds4_gpu_arena *arena,
@@ -300,12 +239,13 @@ static void cpu_swiglu(float *out,
 
 static ds4_gpu_source_row_view source_view(const bound_matrix *m) {
     ds4_gpu_source_row_view v;
-    memset(&v, 0, sizeof(v));
-    v.arena_offset = matrix_arena_offset(m);
-    v.byte_length = m->bytes;
-    v.rows = m->rows;
-    v.cols = m->cols;
-    v.row_stride_bytes = (uint32_t)m->row_bytes;
+    char err[128];
+    err[0] = '\0';
+    if (ds4_v100_bound_matrix_source_view(m, &v, err, sizeof(err))) {
+        fprintf(stderr, "cuda_v100_descriptor_bound_ffn_smoke: %s\n", err);
+        failures++;
+        memset(&v, 0, sizeof(v));
+    }
     return v;
 }
 
@@ -387,22 +327,16 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    ds4_v100_tensor_binding gate_b;
-    ds4_v100_tensor_binding up_b;
-    ds4_v100_tensor_binding down_b;
-    ds4_v100_tensor_binding shared_gate_b;
-    ds4_v100_tensor_binding shared_up_b;
-    ds4_v100_tensor_binding shared_down_b;
-    ds4_v100_tensor_binding router_b;
-    ds4_v100_tensor_binding hash_b;
-    if (require_binding(ctx, layer, "ffn_gate_exps.weight", &gate_b, err, sizeof(err)) ||
-        require_binding(ctx, layer, "ffn_up_exps.weight", &up_b, err, sizeof(err)) ||
-        require_binding(ctx, layer, "ffn_down_exps.weight", &down_b, err, sizeof(err)) ||
-        require_binding(ctx, layer, "ffn_gate_shexp.weight", &shared_gate_b, err, sizeof(err)) ||
-        require_binding(ctx, layer, "ffn_up_shexp.weight", &shared_up_b, err, sizeof(err)) ||
-        require_binding(ctx, layer, "ffn_down_shexp.weight", &shared_down_b, err, sizeof(err)) ||
-        require_binding(ctx, layer, "ffn_gate_inp.weight", &router_b, err, sizeof(err)) ||
-        require_binding(ctx, layer, "ffn_gate_tid2eid", &hash_b, err, sizeof(err))) {
+    ds4_v100_layer_state layer_state;
+    if (ds4_v100_layer_state_init(&layer_state, ctx, layer, err, sizeof(err))) {
+        fprintf(stderr, "cuda_v100_descriptor_bound_ffn_smoke: %s\n", err);
+        ds4_v100_context_close(ctx);
+        unmap_model_file(&model);
+        return 1;
+    }
+    if (layer_state.router_kind != DS4_V100_ROUTER_HASH || !layer_state.has_hash_router) {
+        fprintf(stderr, "cuda_v100_descriptor_bound_ffn_smoke: layer %d is not a hash-router layer\n",
+                layer);
         ds4_v100_context_close(ctx);
         unmap_model_file(&model);
         return 1;
@@ -411,14 +345,11 @@ int main(int argc, char **argv) {
     bound_matrix gate_routes[6];
     bound_matrix up_routes[6];
     bound_matrix down_routes[6];
-    bound_matrix shared_gate;
-    bound_matrix shared_up;
-    bound_matrix shared_down;
-    bound_matrix router;
-    check(make_f32_matrix(&router_b, &router) == 0, "router matrix");
-    check(make_shared_matrix(&shared_gate_b, &shared_gate) == 0, "shared gate matrix");
-    check(make_shared_matrix(&shared_up_b, &shared_up) == 0, "shared up matrix");
-    check(make_shared_matrix(&shared_down_b, &shared_down) == 0, "shared down matrix");
+    bound_matrix shared_gate = layer_state.shared_gate;
+    bound_matrix shared_up = layer_state.shared_up;
+    bound_matrix shared_down = layer_state.shared_down;
+    bound_matrix router = layer_state.router;
+    const ds4_v100_tensor_binding *hash_b = &layer_state.router_hash;
     check(router.cols == shared_gate.cols && router.rows == 256, "router dimensions");
     check(shared_gate.cols == shared_up.cols, "shared gate/up hidden dims");
     check(shared_down.cols == shared_gate.rows, "shared down mid dim");
@@ -451,7 +382,7 @@ int main(int argc, char **argv) {
     if (!failures) {
         fill_hidden(hidden_x, hidden);
         cpu_f32_matmul(&router, &model, hidden_x, cpu_logits);
-        cpu_hash_router_select(&hash_b,
+        cpu_hash_router_select(hash_b,
                                &model,
                                cpu_logits,
                                (uint32_t)router_token,
@@ -461,9 +392,16 @@ int main(int argc, char **argv) {
         for (uint32_t route = 0; route < 6; route++) {
             uint32_t expert = (uint32_t)cpu_selected[route];
             check(expert < 256, "router selected invalid expert");
-            check(make_expert_matrix(&gate_b, expert, &gate_routes[route]) == 0, "gate route matrix");
-            check(make_expert_matrix(&up_b, expert, &up_routes[route]) == 0, "up route matrix");
-            check(make_expert_matrix(&down_b, expert, &down_routes[route]) == 0, "down route matrix");
+            ds4_v100_route_matrices route_views;
+            check(ds4_v100_layer_state_route_matrices(&layer_state,
+                                                      expert,
+                                                      &route_views,
+                                                      err,
+                                                      sizeof(err)) == 0,
+                  "route matrices");
+            gate_routes[route] = route_views.gate;
+            up_routes[route] = route_views.up;
+            down_routes[route] = route_views.down;
             check(gate_routes[route].cols == hidden && gate_routes[route].rows == mid,
                   "route gate dimensions");
             check(down_routes[route].rows == hidden && down_routes[route].cols == mid,
@@ -472,24 +410,20 @@ int main(int argc, char **argv) {
     }
 
     uint64_t arena_bytes = 0;
-    const bound_matrix *fixed[] = { &router, &shared_gate, &shared_up, &shared_down };
-    for (uint32_t i = 0; i < sizeof(fixed) / sizeof(fixed[0]); i++) {
-        uint64_t end = matrix_arena_offset(fixed[i]) + fixed[i]->bytes;
-        if (end > arena_bytes) arena_bytes = end;
-    }
-    for (uint32_t route = 0; route < 6 && !failures; route++) {
-        const bound_matrix *routed[] = { &gate_routes[route], &up_routes[route], &down_routes[route] };
-        for (uint32_t i = 0; i < sizeof(routed) / sizeof(routed[0]); i++) {
-            uint64_t end = matrix_arena_offset(routed[i]) + routed[i]->bytes;
-            if (end > arena_bytes) arena_bytes = end;
-        }
-    }
+    check(ds4_v100_layer_state_ffn_arena_span(&layer_state,
+                                              cpu_selected,
+                                              6,
+                                              &arena_bytes,
+                                              err,
+                                              sizeof(err)) == 0,
+          "ffn arena span");
 
     ds4_gpu_arena *arena = NULL;
-    check(ds4_gpu_arena_open(&arena, gate_b.owning_gpu, arena_bytes) == 0, "arena open");
+    check(ds4_gpu_arena_open(&arena, layer_state.owning_gpu, arena_bytes) == 0, "arena open");
     check(arena && ds4_gpu_arena_is_device_memory(arena), "arena is device memory");
     unsigned char *scratch = NULL;
     uint64_t scratch_bytes = 0;
+    const bound_matrix *fixed[] = { &router, &shared_gate, &shared_up, &shared_down };
     if (arena && !failures) {
         for (uint32_t i = 0; i < sizeof(fixed) / sizeof(fixed[0]); i++) {
             check(upload_matrix(arena, &model, fixed[i], &scratch, &scratch_bytes) == 0,
@@ -560,8 +494,8 @@ int main(int argc, char **argv) {
                                            model.ptr,
                                            model.size,
                                            0,
-                                           hash_b.source_offset,
-                                           (uint32_t)hash_b.shape[1],
+                                           hash_b->source_offset,
+                                           (uint32_t)hash_b->shape[1],
                                            (uint32_t)router_token,
                                            0,
                                            0,
@@ -631,7 +565,7 @@ int main(int argc, char **argv) {
            layer,
            router_token,
            cpu_selected[0],
-           gate_b.owning_gpu,
+           layer_state.owning_gpu,
            arena_bytes,
            hidden,
            mid,

@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-18
-last_updated_by: sprint-plan
-revision: 24
+last_updated_by: sprint-execute
+revision: 25
 ---
 
 # Vision: DS4 V100 Appliance
@@ -98,6 +98,13 @@ it is a narrow DS4 runtime tuned for this hardware.
   references. The gate still reports `ready=false` because scheduler-owned full
   layer execution, attention/residual/norm integration, real-model selected
   token decode, serving, MTP, and throughput remain incomplete.
+- Sprint 017 shipped the scheduler-owned layer-state surface for the
+  descriptor-bound router/FFN slice. The state binds real layer descriptors
+  once, validates dimensions and router kind, carries layer/stage/KV metadata,
+  exposes source row views, constructs selected routed expert matrices, and
+  sizes the FFN arena span. The gate now includes `layer_state` and still
+  reports `ready=false` because full layer output, real selected-token decode,
+  serving, MTP, and throughput remain incomplete.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -308,7 +315,7 @@ it is a narrow DS4 runtime tuned for this hardware.
   hash-router table, executes all six selected routed experts plus the shared
   expert, and passes the full V100 appliance gate.
 
-### Sprint 017 - V100 Scheduler-Owned Layer State Gate [planned]
+### Sprint 017 - V100 Scheduler-Owned Layer State Gate [complete]
 
 - **Goal**: Introduce a reusable scheduler-owned layer execution state that
   binds real descriptors once and owns the router/FFN scratch needed by later
@@ -316,11 +323,24 @@ it is a narrow DS4 runtime tuned for this hardware.
 - **Rationale**: Sprint 016 still proves router-selected FFN as a standalone
   smoke. The next readiness gap is making descriptor-bound execution a runtime
   surface the appliance scheduler can call instead of a test-local composition.
-- **Plan**: Factor descriptor-bound layer bindings and source row views into a
-  reusable layer state carrying layer/stage/KV metadata, router kind, FFN
-  bindings, route matrix views, and arena-span helpers. Then run the existing
-  router-selected FFN gate through that state and add a `layer_state` appliance
-  gate check.
+- **Outcome**: `SHIP`. `ds4_v100_layer_state` now owns descriptor-bound
+  router/FFN metadata, route matrix construction, source row views, and FFN
+  arena-span sizing. The descriptor-bound FFN smoke uses it, and the V100
+  appliance gate includes and passes `layer_state`.
+
+### Sprint 018 - V100 Descriptor-Bound Attention And Layer Output Slice [planned]
+
+- **Goal**: Extend the scheduler-owned layer state from router/FFN ownership to
+  a bounded descriptor-bound attention/residual/norm slice that can produce a
+  coherent next hidden state for one representative layer.
+- **Rationale**: Serving is still blocked by the lack of full layer output.
+  Sprint 017 created the state surface; Sprint 018 should make that state
+  execute enough attention/control work to retire the `attention_residual_norm`
+  readiness gap or expose a concrete blocker.
+- **Plan**: Bind attention/control descriptors through the layer state, reuse
+  existing source-F8 projection and compressor/KV kernels, add bounded residual
+  and RMSNorm/HC composition helpers, and gate a one-layer output comparison
+  against CPU/source-format references.
 
 ## Parking Lot
 
@@ -365,6 +385,9 @@ it is a narrow DS4 runtime tuned for this hardware.
 - See `docs/sprints/SPRINT-016-FOLLOWUPS.md`: scheduler-owned layer state,
   attention/residual/norm integration, real-model selected-token gate,
   production arena reuse, and representative router coverage.
+- See `docs/sprints/SPRINT-017-FOLLOWUPS.md`: descriptor-bound attention,
+  residual/norm/HC layer slice, real-model selected-token gate, production
+  arena reuse, and bias-router coverage.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -394,12 +417,13 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-18 | Shipped Sprint 014 real pack-index descriptor validation and moved Sprint 015 to descriptor-bound layer compute. | The appliance gate now proves the real layer-2 descriptor contract on the V100 pod, so the next risk is converting those descriptors into runtime bindings that launch compute on real resident shard bytes. | Sprint 015+ |
 | 2026-05-18 | Shipped Sprint 015 descriptor-bound FFN compute from real source bytes and moved Sprint 016 to scheduler-owned layer slicing. | The appliance now proves real pack offsets can feed routed MXFP4 and shared F8 FFN compute on V100; the next blocker is real router/layer state and attention/residual/norm integration. | Sprint 016+ |
 | 2026-05-18 | Shipped Sprint 016 descriptor-bound real router FFN compute and moved Sprint 017 to scheduler-owned layer state. | The appliance now proves real layer-2 router logits, hash-router selected experts, all six routed MXFP4 experts, and shared F8 FFN compute on V100; the next blocker is moving this out of a standalone smoke into a scheduler-owned runtime layer surface. | Sprint 017+ |
+| 2026-05-18 | Shipped Sprint 017 scheduler-owned layer state and moved Sprint 018 to descriptor-bound attention/layer output. | Router/FFN descriptor ownership is now a reusable runtime surface instead of test-local glue; the next blocker is producing a coherent hidden state through attention, residual, norm, and HC composition. | Sprint 018+ |
 
 ## Open Questions
 
-1. What is the smallest Sprint 017 scheduler-owned layer surface that
-   meaningfully advances serving: refactored router+FFN state, attention+KV
-   plus FFN, or a narrow path that also reaches output logits?
+1. What is the smallest Sprint 018 layer-output slice that meaningfully
+   advances serving: attention/residual/norm only, attention plus FFN output, or
+   a narrow path that also reaches output logits?
 2. What reference should define correctness tolerances for mixed
    BF16/F32/F8_E4M3_B128/MXFP4 execution on V100 after MoE is included?
 3. What minimum serving milestone counts as "usable" before optimization:

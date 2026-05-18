@@ -103,6 +103,7 @@ targets=(
 if [ -n "$pack_index" ]; then
     targets+=(tools/ds4-v100-layer-descriptor-gate)
     targets+=(tests/v100_layer_binding_smoke)
+    targets+=(tests/v100_layer_state_smoke)
     targets+=(tests/cuda_v100_descriptor_bound_ffn_smoke)
 fi
 
@@ -185,6 +186,7 @@ if [ -n "$pack_index" ]; then
     else
         run_gate "layer_descriptors" ./tools/ds4-v100-layer-descriptor-gate --index "$pack_index" --layer "$descriptor_layer" --gpus 8 || true
         run_gate "layer_bindings" ./tests/v100_layer_binding_smoke --index "$pack_index" --layer "$descriptor_layer" || true
+        run_gate "layer_state" ./tests/v100_layer_state_smoke --index "$pack_index" --layer "$descriptor_layer" || true
         if [ "$skip_model" -eq 0 ] && [ -f "$model" ]; then
             run_gate "descriptor_bound_ffn" ./tests/cuda_v100_descriptor_bound_ffn_smoke --index "$pack_index" --model "$model" --layer "$descriptor_layer" --router-token 16 || true
         else
@@ -194,6 +196,7 @@ if [ -n "$pack_index" ]; then
 else
     echo "gate	layer_descriptors	SKIP	no_pack_index"
     echo "gate	layer_bindings	SKIP	no_pack_index"
+    echo "gate	layer_state	SKIP	no_pack_index"
     echo "gate	descriptor_bound_ffn	SKIP	no_pack_index"
 fi
 
