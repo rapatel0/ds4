@@ -1,0 +1,8 @@
+make: 'tests/cuda_v100_compressor_bridge_smoke' is up to date.
+ds4: CUDA copying 0.00 GiB model to device memory
+ds4: CUDA model copy complete in 0.102s
+ds4: CUDA copying 0.00 GiB model to device memory
+ds4: CUDA model copy complete in 0.000s
+cuda_v100_compressor_bridge_smoke: ok
+ds4: CUDA copying 0.00 GiB model to device memory
+ds4: CUDA model copy complete in 0.000s

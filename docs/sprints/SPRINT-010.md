@@ -158,15 +158,15 @@ flag.
 **Files:**
 - `ds4_gpu.h`
 - `ds4_cuda.cu`
-- `tests/cuda_v100_prefill_kv_smoke.c`
+- `tests/cuda_v100_compressor_bridge_smoke.c`
 - optional CPU helper files
 
 **Tasks:**
-- [ ] Replace the Sprint 009 synthetic F32 state formula with existing DS4
+- [x] Replace the Sprint 009 synthetic F32 state formula with existing DS4
       compressor/indexer recurrence kernels where possible.
-- [ ] Feed bounded device tensors that represent actual compressor inputs.
-- [ ] Cover both ratio-128 and ratio-4/indexer state paths.
-- [ ] Compare CUDA state/KV rows against a CPU helper or source-oracle
+- [x] Feed bounded device tensors that represent actual compressor inputs.
+- [x] Cover both ratio-128 and ratio-4/indexer state paths.
+- [x] Compare CUDA state/KV rows against a CPU helper or source-oracle
       reference with documented tolerance.
 
 ### Phase 4: Source Reference And Guard Validation
@@ -194,9 +194,9 @@ flag.
 |---|---|---|
 | `ds4_v100_context.[ch]` | Modify | Expose named KV/state subviews |
 | `ds4_v100_context_cuda.cu` | Modify | Surface stage-owned KV arena subviews to diagnostics |
-| `ds4_gpu.h`, `ds4_cuda.cu` | Modify | Real recurrence integration |
+| `ds4_gpu.h`, `ds4_cuda.cu` | Use | Existing real recurrence APIs |
 | `tests/cuda_v100_context_smoke.c` | Modify | Cover stage-owned arena update |
-| `tests/cuda_v100_prefill_kv_smoke.c` | Modify | Cover real compressor/indexer recurrence |
+| `tests/cuda_v100_compressor_bridge_smoke.c` | Create | Cover real compressor/indexer recurrence |
 | `tools/ds4-source-oracle-vector.c` | Modify if needed | Bounded source-reference output |
 | `docs/sprints/drafts/SPRINT-010-*.log` | Create | Validation evidence |
 | `docs/sprints/SPRINT-010-REPORT.md` | Create | Sprint verdict |
