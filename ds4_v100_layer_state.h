@@ -46,6 +46,11 @@ typedef struct {
     uint32_t q_width;
     uint32_t kv_latent_width;
     uint32_t attention_output_rank;
+    uint32_t compress_ratio;
+    uint32_t compressor_width;
+    uint32_t indexer_q_width;
+    uint32_t indexer_proj_width;
+    uint32_t indexer_compressor_width;
     uint32_t intermediate_size;
     uint32_t routed_experts;
     uint32_t routes_per_token;
@@ -67,6 +72,18 @@ typedef struct {
     ds4_v100_tensor_binding attn_q_a_norm;
     ds4_v100_tensor_binding attn_kv_a_norm;
     ds4_v100_tensor_binding attn_sinks;
+    ds4_v100_bound_matrix attn_compressor_ape;
+    ds4_v100_bound_matrix attn_compressor_kv;
+    ds4_v100_bound_matrix attn_compressor_gate;
+    ds4_v100_tensor_binding attn_compressor_norm;
+    bool has_attention_compressor;
+    ds4_v100_bound_matrix indexer_attn_q_b;
+    ds4_v100_bound_matrix indexer_proj;
+    ds4_v100_bound_matrix indexer_compressor_ape;
+    ds4_v100_bound_matrix indexer_compressor_kv;
+    ds4_v100_bound_matrix indexer_compressor_gate;
+    ds4_v100_tensor_binding indexer_compressor_norm;
+    bool has_indexer;
     ds4_v100_tensor_binding hc_attn_fn;
     ds4_v100_tensor_binding hc_attn_base;
     ds4_v100_tensor_binding hc_attn_scale;
@@ -116,6 +133,11 @@ int ds4_v100_bound_matrix_source_view(const ds4_v100_bound_matrix *matrix,
                                       ds4_gpu_source_row_view *out,
                                       char *err,
                                       size_t errlen);
+
+int ds4_v100_bound_matrix_bf16_view(const ds4_v100_bound_matrix *matrix,
+                                    ds4_gpu_bf16_matrix_view *out,
+                                    char *err,
+                                    size_t errlen);
 
 #ifdef __cplusplus
 }

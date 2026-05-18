@@ -148,6 +148,176 @@ static int grouped_attention_output(const ds4_v100_layer_state *state,
     return 0;
 }
 
+static int validate_execute_common(const ds4_v100_layer_state *state,
+                                   const ds4_v100_layer_execute_config *cfg,
+                                   char *err,
+                                   size_t errlen) {
+    if (!state || !cfg) {
+        return exec_error(err, errlen, "missing layer executor argument");
+    }
+    if (!cfg->arena || !cfg->model_map || cfg->model_size == 0) {
+        return exec_error(err, errlen, "missing layer executor arena or model map");
+    }
+    if (state->q_width != DS4_V100_N_HEAD * DS4_V100_HEAD_DIM ||
+        state->hidden_size != DS4_V100_OUT_GROUP_DIM ||
+        state->routes_per_token == 0 ||
+        state->routes_per_token > 6) {
+        return exec_error(err, errlen, "unsupported DS4 V100 layer dimensions");
+    }
+    const uint32_t kv_width = state->kv_latent_width;
+    const uint32_t n_raw = cfg->n_raw ? cfg->n_raw : 1u;
+    const uint32_t raw_cap = cfg->raw_cap ? cfg->raw_cap : n_raw;
+    if (cfg->raw_kv &&
+        ds4_gpu_tensor_bytes(cfg->raw_kv) < (uint64_t)raw_cap * kv_width * sizeof(float)) {
+        return exec_error(err, errlen, "raw KV tensor is too small");
+    }
+    if (cfg->n_compressed &&
+        (!cfg->compressed_kv ||
+         ds4_gpu_tensor_bytes(cfg->compressed_kv) <
+             (uint64_t)cfg->n_compressed * kv_width * sizeof(float))) {
+        return exec_error(err, errlen, "compressed KV tensor is too small");
+    }
+    if (cfg->use_compressed_mask &&
+        (!cfg->compressed_mask ||
+         ds4_gpu_tensor_bytes(cfg->compressed_mask) <
+             (uint64_t)cfg->n_compressed * sizeof(float))) {
+        return exec_error(err, errlen, "compressed mask tensor is too small");
+    }
+    return 0;
+}
+
+static int execute_attention_output(const ds4_v100_layer_state *state,
+                                    const ds4_v100_layer_execute_config *cfg,
+                                    const ds4_gpu_tensor *hidden,
+                                    ds4_gpu_tensor *attn_out,
+                                    char *err,
+                                    size_t errlen) {
+    const uint32_t hidden_n = state->hidden_size;
+    const uint32_t q_rank = state->q_lora_rank;
+    const uint32_t q_width = state->q_width;
+    const uint32_t kv_width = state->kv_latent_width;
+    const uint32_t out_rank = state->attention_output_rank;
+    const uint32_t n_raw = cfg->n_raw ? cfg->n_raw : 1u;
+    const uint32_t raw_cap = cfg->raw_cap ? cfg->raw_cap : n_raw;
+    const uint32_t raw_start = cfg->raw_start;
+
+    if (!hidden || !attn_out ||
+        ds4_gpu_tensor_bytes(hidden) < (uint64_t)hidden_n * sizeof(float) ||
+        ds4_gpu_tensor_bytes(attn_out) < (uint64_t)hidden_n * sizeof(float)) {
+        return exec_error(err, errlen, "attention body tensors are too small");
+    }
+
+    ds4_gpu_source_row_view q_a_v;
+    ds4_gpu_source_row_view q_b_v;
+    ds4_gpu_source_row_view kv_v;
+    if (source_view(&state->attn_q_a, &q_a_v, err, errlen) ||
+        source_view(&state->attn_q_b, &q_b_v, err, errlen) ||
+        source_view(&state->attn_kv_latent, &kv_v, err, errlen)) {
+        return 1;
+    }
+
+    ds4_gpu_tensor *attn_norm = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
+    ds4_gpu_tensor *q_a = ds4_gpu_tensor_alloc((uint64_t)q_rank * sizeof(float));
+    ds4_gpu_tensor *q_a_norm = ds4_gpu_tensor_alloc((uint64_t)q_rank * sizeof(float));
+    ds4_gpu_tensor *q = ds4_gpu_tensor_alloc((uint64_t)q_width * sizeof(float));
+    ds4_gpu_tensor *kv_raw = ds4_gpu_tensor_alloc((uint64_t)kv_width * sizeof(float));
+    ds4_gpu_tensor *kv = ds4_gpu_tensor_alloc((uint64_t)kv_width * sizeof(float));
+    ds4_gpu_tensor *heads = ds4_gpu_tensor_alloc((uint64_t)q_width * sizeof(float));
+    ds4_gpu_tensor *low = ds4_gpu_tensor_alloc((uint64_t)out_rank * sizeof(float));
+
+    int rc = 1;
+    if (!attn_norm || !q_a || !q_a_norm || !q || !kv_raw || !kv || !heads || !low) {
+        exec_error(err, errlen, "failed to allocate attention body tensors");
+        goto done;
+    }
+
+    if (!ds4_gpu_rms_norm_weight_tensor(attn_norm,
+                                        hidden,
+                                        cfg->model_map,
+                                        cfg->model_size,
+                                        state->attn_norm.source_offset,
+                                        hidden_n,
+                                        DS4_V100_RMS_EPS) ||
+        ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena, &q_a_v, attn_norm, q_a) != 0 ||
+        !ds4_gpu_rms_norm_weight_tensor(q_a_norm,
+                                        q_a,
+                                        cfg->model_map,
+                                        cfg->model_size,
+                                        state->attn_q_a_norm.source_offset,
+                                        q_rank,
+                                        DS4_V100_RMS_EPS) ||
+        ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena, &q_b_v, q_a_norm, q) != 0 ||
+        !ds4_gpu_head_rms_norm_tensor(q, 1, DS4_V100_N_HEAD, DS4_V100_HEAD_DIM, DS4_V100_RMS_EPS) ||
+        !rope_tail_layer_tensor(q,
+                                DS4_V100_N_HEAD,
+                                DS4_V100_HEAD_DIM,
+                                cfg->position,
+                                state,
+                                false) ||
+        ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena, &kv_v, attn_norm, kv_raw) != 0 ||
+        !ds4_gpu_rms_norm_weight_tensor(kv,
+                                        kv_raw,
+                                        cfg->model_map,
+                                        cfg->model_size,
+                                        state->attn_kv_a_norm.source_offset,
+                                        kv_width,
+                                        DS4_V100_RMS_EPS) ||
+        !rope_tail_layer_tensor(kv,
+                                1,
+                                DS4_V100_HEAD_DIM,
+                                cfg->position,
+                                state,
+                                false)) {
+        exec_error(err, errlen, "attention projection sequence failed");
+        goto done;
+    }
+
+    const ds4_gpu_tensor *raw_kv = cfg->raw_kv ? cfg->raw_kv : kv;
+    if (!ds4_gpu_attention_decode_heads_tensor(heads,
+                                               cfg->model_map,
+                                               cfg->model_size,
+                                               state->attn_sinks.source_offset,
+                                               q,
+                                               raw_kv,
+                                               n_raw,
+                                               raw_cap,
+                                               raw_start,
+                                               cfg->compressed_kv,
+                                               cfg->n_compressed,
+                                               cfg->compressed_mask,
+                                               cfg->use_compressed_mask ? 1u : 0u,
+                                               DS4_V100_N_HEAD,
+                                               DS4_V100_HEAD_DIM)) {
+        exec_error(err, errlen, "attention softmax failed");
+        goto done;
+    }
+    if (!rope_tail_layer_tensor(heads,
+                                DS4_V100_N_HEAD,
+                                DS4_V100_HEAD_DIM,
+                                cfg->position,
+                                state,
+                                true)) {
+        exec_error(err, errlen, "attention inverse rope failed");
+        goto done;
+    }
+
+    if (grouped_attention_output(state, cfg, heads, low, attn_out, err, errlen)) {
+        goto done;
+    }
+    rc = 0;
+
+done:
+    ds4_gpu_tensor_free(low);
+    ds4_gpu_tensor_free(heads);
+    ds4_gpu_tensor_free(kv);
+    ds4_gpu_tensor_free(kv_raw);
+    ds4_gpu_tensor_free(q);
+    ds4_gpu_tensor_free(q_a_norm);
+    ds4_gpu_tensor_free(q_a);
+    ds4_gpu_tensor_free(attn_norm);
+    return rc;
+}
+
 static int execute_ffn_delta(const ds4_v100_layer_state *state,
                              const ds4_v100_layer_execute_config *cfg,
                              const ds4_gpu_tensor *ffn_input,
@@ -309,149 +479,26 @@ int ds4_v100_layer_execute_decode(
         ds4_v100_layer_execute_report       *report,
         char                                *err,
         size_t                               errlen) {
-    if (!state || !cfg || !hidden || !next_hidden) {
-        return exec_error(err, errlen, "missing layer executor argument");
-    }
-    if (!cfg->arena || !cfg->model_map || cfg->model_size == 0) {
-        return exec_error(err, errlen, "missing layer executor arena or model map");
-    }
-    if (state->q_width != DS4_V100_N_HEAD * DS4_V100_HEAD_DIM ||
-        state->hidden_size != DS4_V100_OUT_GROUP_DIM ||
-        state->routes_per_token == 0 ||
-        state->routes_per_token > 6) {
-        return exec_error(err, errlen, "unsupported DS4 V100 layer dimensions");
-    }
-
+    if (!hidden || !next_hidden) return exec_error(err, errlen, "missing hidden tensor");
+    if (validate_execute_common(state, cfg, err, errlen)) return 1;
     const uint32_t hidden_n = state->hidden_size;
-    const uint32_t q_rank = state->q_lora_rank;
-    const uint32_t q_width = state->q_width;
-    const uint32_t kv_width = state->kv_latent_width;
-    const uint32_t out_rank = state->attention_output_rank;
-    const uint32_t n_raw = cfg->n_raw ? cfg->n_raw : 1u;
-    const uint32_t raw_cap = cfg->raw_cap ? cfg->raw_cap : n_raw;
-    const uint32_t raw_start = cfg->raw_start;
-
     if (ds4_gpu_tensor_bytes(hidden) < (uint64_t)hidden_n * sizeof(float) ||
         ds4_gpu_tensor_bytes(next_hidden) < (uint64_t)hidden_n * sizeof(float)) {
         return exec_error(err, errlen, "hidden tensor is too small");
     }
-    if (cfg->raw_kv &&
-        ds4_gpu_tensor_bytes(cfg->raw_kv) < (uint64_t)raw_cap * kv_width * sizeof(float)) {
-        return exec_error(err, errlen, "raw KV tensor is too small");
-    }
-    if (cfg->n_compressed &&
-        (!cfg->compressed_kv ||
-         ds4_gpu_tensor_bytes(cfg->compressed_kv) <
-             (uint64_t)cfg->n_compressed * kv_width * sizeof(float))) {
-        return exec_error(err, errlen, "compressed KV tensor is too small");
-    }
-    if (cfg->use_compressed_mask &&
-        (!cfg->compressed_mask ||
-         ds4_gpu_tensor_bytes(cfg->compressed_mask) <
-             (uint64_t)cfg->n_compressed * sizeof(float))) {
-        return exec_error(err, errlen, "compressed mask tensor is too small");
-    }
 
-    ds4_gpu_source_row_view q_a_v;
-    ds4_gpu_source_row_view q_b_v;
-    ds4_gpu_source_row_view kv_v;
-    if (source_view(&state->attn_q_a, &q_a_v, err, errlen) ||
-        source_view(&state->attn_q_b, &q_b_v, err, errlen) ||
-        source_view(&state->attn_kv_latent, &kv_v, err, errlen)) {
-        return 1;
-    }
-
-    ds4_gpu_tensor *attn_norm = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
-    ds4_gpu_tensor *q_a = ds4_gpu_tensor_alloc((uint64_t)q_rank * sizeof(float));
-    ds4_gpu_tensor *q_a_norm = ds4_gpu_tensor_alloc((uint64_t)q_rank * sizeof(float));
-    ds4_gpu_tensor *q = ds4_gpu_tensor_alloc((uint64_t)q_width * sizeof(float));
-    ds4_gpu_tensor *kv_raw = ds4_gpu_tensor_alloc((uint64_t)kv_width * sizeof(float));
-    ds4_gpu_tensor *kv = ds4_gpu_tensor_alloc((uint64_t)kv_width * sizeof(float));
-    ds4_gpu_tensor *heads = ds4_gpu_tensor_alloc((uint64_t)q_width * sizeof(float));
-    ds4_gpu_tensor *low = ds4_gpu_tensor_alloc((uint64_t)out_rank * sizeof(float));
     ds4_gpu_tensor *attn_out = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
     ds4_gpu_tensor *residual = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
     ds4_gpu_tensor *ffn_norm = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
     ds4_gpu_tensor *ffn_delta = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
 
     int rc = 1;
-    if (!attn_norm || !q_a || !q_a_norm || !q || !kv_raw || !kv || !heads || !low ||
-        !attn_out || !residual || !ffn_norm || !ffn_delta) {
+    if (!attn_out || !residual || !ffn_norm || !ffn_delta) {
         exec_error(err, errlen, "failed to allocate layer executor tensors");
         goto done;
     }
 
-    if (!ds4_gpu_rms_norm_weight_tensor(attn_norm,
-                                        hidden,
-                                        cfg->model_map,
-                                        cfg->model_size,
-                                        state->attn_norm.source_offset,
-                                        hidden_n,
-                                        DS4_V100_RMS_EPS) ||
-        ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena, &q_a_v, attn_norm, q_a) != 0 ||
-        !ds4_gpu_rms_norm_weight_tensor(q_a_norm,
-                                        q_a,
-                                        cfg->model_map,
-                                        cfg->model_size,
-                                        state->attn_q_a_norm.source_offset,
-                                        q_rank,
-                                        DS4_V100_RMS_EPS) ||
-        ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena, &q_b_v, q_a_norm, q) != 0 ||
-        !ds4_gpu_head_rms_norm_tensor(q, 1, DS4_V100_N_HEAD, DS4_V100_HEAD_DIM, DS4_V100_RMS_EPS) ||
-        !rope_tail_layer_tensor(q,
-                                DS4_V100_N_HEAD,
-                                DS4_V100_HEAD_DIM,
-                                cfg->position,
-                                state,
-                                false) ||
-        ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena, &kv_v, attn_norm, kv_raw) != 0 ||
-        !ds4_gpu_rms_norm_weight_tensor(kv,
-                                        kv_raw,
-                                        cfg->model_map,
-                                        cfg->model_size,
-                                        state->attn_kv_a_norm.source_offset,
-                                        kv_width,
-                                        DS4_V100_RMS_EPS) ||
-        !rope_tail_layer_tensor(kv,
-                                1,
-                                DS4_V100_HEAD_DIM,
-                                cfg->position,
-                                state,
-                                false)) {
-        exec_error(err, errlen, "attention projection sequence failed");
-        goto done;
-    }
-
-    const ds4_gpu_tensor *raw_kv = cfg->raw_kv ? cfg->raw_kv : kv;
-    if (!ds4_gpu_attention_decode_heads_tensor(heads,
-                                               cfg->model_map,
-                                               cfg->model_size,
-                                               state->attn_sinks.source_offset,
-                                               q,
-                                               raw_kv,
-                                               n_raw,
-                                               raw_cap,
-                                               raw_start,
-                                               cfg->compressed_kv,
-                                               cfg->n_compressed,
-                                               cfg->compressed_mask,
-                                               cfg->use_compressed_mask ? 1u : 0u,
-                                               DS4_V100_N_HEAD,
-                                               DS4_V100_HEAD_DIM)) {
-        exec_error(err, errlen, "attention softmax failed");
-        goto done;
-    }
-    if (!rope_tail_layer_tensor(heads,
-                                DS4_V100_N_HEAD,
-                                DS4_V100_HEAD_DIM,
-                                cfg->position,
-                                state,
-                                true)) {
-        exec_error(err, errlen, "attention inverse rope failed");
-        goto done;
-    }
-
-    if (grouped_attention_output(state, cfg, heads, low, attn_out, err, errlen) ||
+    if (execute_attention_output(state, cfg, hidden, attn_out, err, errlen) ||
         !ds4_gpu_add_tensor(residual, hidden, attn_out, hidden_n) ||
         !ds4_gpu_rms_norm_weight_tensor(ffn_norm,
                                         residual,
@@ -473,13 +520,133 @@ done:
     ds4_gpu_tensor_free(ffn_norm);
     ds4_gpu_tensor_free(residual);
     ds4_gpu_tensor_free(attn_out);
-    ds4_gpu_tensor_free(low);
-    ds4_gpu_tensor_free(heads);
-    ds4_gpu_tensor_free(kv);
-    ds4_gpu_tensor_free(kv_raw);
-    ds4_gpu_tensor_free(q);
-    ds4_gpu_tensor_free(q_a_norm);
-    ds4_gpu_tensor_free(q_a);
-    ds4_gpu_tensor_free(attn_norm);
+    return rc;
+}
+
+int ds4_v100_layer_execute_hc_decode(
+        const ds4_v100_layer_state          *state,
+        const ds4_v100_layer_execute_config *cfg,
+        const ds4_gpu_tensor                *hidden_hc,
+        ds4_gpu_tensor                      *next_hidden_hc,
+        ds4_v100_layer_execute_report       *report,
+        char                                *err,
+        size_t                               errlen) {
+    if (!hidden_hc || !next_hidden_hc) return exec_error(err, errlen, "missing HC tensor");
+    if (validate_execute_common(state, cfg, err, errlen)) return 1;
+    const uint32_t hidden_n = state->hidden_size;
+    const uint64_t hc_values = (uint64_t)DS4_V100_N_HC * hidden_n;
+    const uint64_t hc_bytes = hc_values * sizeof(float);
+    if (hidden_n != DS4_V100_OUT_GROUP_DIM ||
+        ds4_gpu_tensor_bytes(hidden_hc) < hc_bytes ||
+        ds4_gpu_tensor_bytes(next_hidden_hc) < hc_bytes) {
+        return exec_error(err, errlen, "HC tensor is too small");
+    }
+    if (state->hc_attn_fn.n_shape_dims != 2 ||
+        state->hc_ffn_fn.n_shape_dims != 2 ||
+        state->hc_attn_fn.shape[0] != hc_values ||
+        state->hc_ffn_fn.shape[0] != hc_values ||
+        state->hc_attn_fn.shape[1] != DS4_V100_HC_MIX ||
+        state->hc_ffn_fn.shape[1] != DS4_V100_HC_MIX) {
+        return exec_error(err, errlen, "HC control dimensions do not match DS4");
+    }
+
+    ds4_gpu_tensor *hc_norm = ds4_gpu_tensor_alloc(hc_bytes);
+    ds4_gpu_tensor *hc_mix = ds4_gpu_tensor_alloc(DS4_V100_HC_MIX * sizeof(float));
+    ds4_gpu_tensor *attn_split = ds4_gpu_tensor_alloc(DS4_V100_HC_MIX * sizeof(float));
+    ds4_gpu_tensor *ffn_split = ds4_gpu_tensor_alloc(DS4_V100_HC_MIX * sizeof(float));
+    ds4_gpu_tensor *attn_cur = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
+    ds4_gpu_tensor *attn_out = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
+    ds4_gpu_tensor *after_attn_hc = ds4_gpu_tensor_alloc(hc_bytes);
+    ds4_gpu_tensor *ffn_cur = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
+    ds4_gpu_tensor *ffn_norm = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
+    ds4_gpu_tensor *ffn_delta = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
+
+    int rc = 1;
+    if (!hc_norm || !hc_mix || !attn_split || !ffn_split || !attn_cur ||
+        !attn_out || !after_attn_hc || !ffn_cur || !ffn_norm || !ffn_delta) {
+        exec_error(err, errlen, "failed to allocate HC layer executor tensors");
+        goto done;
+    }
+
+    if (!ds4_gpu_rms_norm_plain_tensor(hc_norm, hidden_hc, (uint32_t)hc_values, DS4_V100_RMS_EPS) ||
+        !ds4_gpu_matmul_f32_tensor(hc_mix,
+                                   cfg->model_map,
+                                   cfg->model_size,
+                                   state->hc_attn_fn.source_offset,
+                                   hc_values,
+                                   DS4_V100_HC_MIX,
+                                   hc_norm,
+                                   1) ||
+        !ds4_gpu_hc_split_weighted_sum_tensor(attn_cur,
+                                              attn_split,
+                                              hc_mix,
+                                              hidden_hc,
+                                              cfg->model_map,
+                                              cfg->model_size,
+                                              state->hc_attn_scale.source_offset,
+                                              state->hc_attn_base.source_offset,
+                                              hidden_n,
+                                              DS4_V100_N_HC,
+                                              DS4_V100_HC_SINKHORN_ITERS,
+                                              DS4_V100_RMS_EPS) ||
+        execute_attention_output(state, cfg, attn_cur, attn_out, err, errlen) ||
+        !ds4_gpu_hc_expand_split_tensor(after_attn_hc,
+                                        attn_out,
+                                        hidden_hc,
+                                        attn_split,
+                                        hidden_n,
+                                        DS4_V100_N_HC) ||
+        !ds4_gpu_rms_norm_plain_tensor(hc_norm, after_attn_hc, (uint32_t)hc_values, DS4_V100_RMS_EPS) ||
+        !ds4_gpu_matmul_f32_tensor(hc_mix,
+                                   cfg->model_map,
+                                   cfg->model_size,
+                                   state->hc_ffn_fn.source_offset,
+                                   hc_values,
+                                   DS4_V100_HC_MIX,
+                                   hc_norm,
+                                   1) ||
+        !ds4_gpu_hc_split_weighted_sum_tensor(ffn_cur,
+                                              ffn_split,
+                                              hc_mix,
+                                              after_attn_hc,
+                                              cfg->model_map,
+                                              cfg->model_size,
+                                              state->hc_ffn_scale.source_offset,
+                                              state->hc_ffn_base.source_offset,
+                                              hidden_n,
+                                              DS4_V100_N_HC,
+                                              DS4_V100_HC_SINKHORN_ITERS,
+                                              DS4_V100_RMS_EPS) ||
+        !ds4_gpu_rms_norm_weight_tensor(ffn_norm,
+                                        ffn_cur,
+                                        cfg->model_map,
+                                        cfg->model_size,
+                                        state->ffn_norm.source_offset,
+                                        hidden_n,
+                                        DS4_V100_RMS_EPS) ||
+        execute_ffn_delta(state, cfg, ffn_norm, ffn_delta, report, err, errlen) ||
+        !ds4_gpu_hc_expand_split_tensor(next_hidden_hc,
+                                        ffn_delta,
+                                        after_attn_hc,
+                                        ffn_split,
+                                        hidden_n,
+                                        DS4_V100_N_HC)) {
+        if (err && err[0] == '\0') exec_error(err, errlen, "HC layer execution sequence failed");
+        goto done;
+    }
+
+    rc = 0;
+
+done:
+    ds4_gpu_tensor_free(ffn_delta);
+    ds4_gpu_tensor_free(ffn_norm);
+    ds4_gpu_tensor_free(ffn_cur);
+    ds4_gpu_tensor_free(after_attn_hc);
+    ds4_gpu_tensor_free(attn_out);
+    ds4_gpu_tensor_free(attn_cur);
+    ds4_gpu_tensor_free(ffn_split);
+    ds4_gpu_tensor_free(attn_split);
+    ds4_gpu_tensor_free(hc_mix);
+    ds4_gpu_tensor_free(hc_norm);
     return rc;
 }

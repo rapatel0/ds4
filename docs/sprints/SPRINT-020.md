@@ -1,13 +1,13 @@
 ---
 sprint: 020
 title: V100 Compressor/Indexer And HC Scheduler Bridge
-status: planned
+status: extended
 date: 2026-05-18
 target_repo: rapatel0/ds4
 architecture: ../architecture/DS4-V100-LAYOUT.md
 intent: drafts/SPRINT-020-INTENT.md
 deferred: SPRINT-020-DEFERRED.md
-verdict: pending
+verdict: EXTEND
 ---
 
 # SPRINT-020: V100 Compressor/Indexer And HC Scheduler Bridge
@@ -22,6 +22,15 @@ The sprint still targets one representative ratio-4 layer first. The point is
 to replace test-provided compressed KV with real descriptor-bound
 compressor/indexer work and to prove `[4 x 4096]` HC state can flow through the
 layer surface.
+
+## Result
+
+`EXTEND`.
+
+Sprint 020 shipped compressor/indexer descriptor binding and an executable
+DS4 HC-state layer entrypoint on V100. The remaining half of the original
+contract, executor-owned compressor/indexer row generation and indexed
+compressed attention, is carried into Sprint 021.
 
 ## Outcome Contract
 
@@ -61,13 +70,13 @@ layer surface.
 - `tests/v100_layer_state_smoke.c`
 
 **Tasks:**
-- [ ] Bind `attn_compressor_kv`, `attn_compressor_gate`,
+- [x] Bind `attn_compressor_kv`, `attn_compressor_gate`,
       `attn_compressor_ape`, and `attn_compressor_norm`.
-- [ ] Bind ratio-4 `indexer_attn_q_b`, `indexer_proj`,
+- [x] Bind ratio-4 `indexer_attn_q_b`, `indexer_proj`,
       `indexer_compressor_kv`, `indexer_compressor_gate`,
       `indexer_compressor_ape`, and `indexer_compressor_norm`.
-- [ ] Validate ratio-4 dimensions from the source layout.
-- [ ] Add arena-span coverage for compressor/indexer matrices.
+- [x] Validate ratio-4 dimensions from the source layout.
+- [x] Add arena-span coverage for compressor/indexer matrices.
 
 ### Phase 2: Executor-Owned Compressed Rows
 
@@ -94,10 +103,12 @@ layer surface.
 - `tests/cuda_v100_hc_layer_smoke.c` or extended integrated smoke
 
 **Tasks:**
-- [ ] Add an HC entrypoint that accepts `[4 x 4096]` input state.
-- [ ] Use HC attention controls to produce the attention hidden vector and
+- [x] Add an HC entrypoint that accepts `[4 x 4096]` input state.
+- [x] Use HC attention controls to produce the attention hidden vector and
       retain split state for post expansion.
-- [ ] Use HC FFN controls around the FFN hidden-vector body.
+- [x] Use HC FFN controls around the FFN hidden-vector body.
+- [x] Validate HC output is finite/nonzero and route-selected on V100 in the
+      integrated layer smoke.
 - [ ] Compare HC output against CPU references for a bounded layer-2 fixture.
 
 ### Phase 4: Gate And Hardware Evidence
@@ -111,23 +122,23 @@ layer surface.
 - `docs/sprints/VISION.md`
 
 **Tasks:**
-- [ ] Add Sprint 020 smoke target(s) to the build.
-- [ ] Add Sprint 020 smoke target(s) to the appliance gate.
-- [ ] Run one-card V100 iteration with `CUDA_VISIBLE_DEVICES=0`.
-- [ ] Run full V100 gate.
-- [ ] Update readiness reasons honestly.
-- [ ] Commit report, follow-ups, logs, and vision update.
+- [x] Reuse the integrated layer smoke as the Sprint 020 HC gate.
+- [x] Run one-card V100 iteration with `CUDA_VISIBLE_DEVICES=0`.
+- [x] Run full V100 gate.
+- [x] Keep readiness at `ready=false` for selected-token, serving, MTP, and
+      throughput.
+- [x] Commit report, follow-ups, logs, and vision update.
 
 ## Definition Of Done
 
-- Compressor and indexer descriptors are in `ds4_v100_layer_state`.
-- The executor can produce compressed attention/indexer rows from real source
-  bytes for layer 2.
-- The executor no longer needs test-provided compressed KV for the Sprint 020
-  layer-2 path.
-- An HC-state layer smoke passes on V100.
+- Compressor and indexer descriptors are in `ds4_v100_layer_state`. Done.
+- An HC-state layer smoke passes on V100. Done.
 - Full appliance gate passes and remains `ready=false` for selected-token,
-  serving, MTP, and throughput.
+  serving, MTP, and throughput. Done.
+- The executor can produce compressed attention/indexer rows from real source
+  bytes for layer 2. Carried to Sprint 021.
+- The executor no longer needs test-provided compressed KV for the Sprint 020
+  layer-2 path. Carried to Sprint 021.
 
 ## Risks
 
@@ -139,4 +150,3 @@ layer surface.
   allocated naively.
 - A layer-2 ratio-4 proof still does not cover SWA-only layers 0-1 or
   ratio-128 odd layers.
-

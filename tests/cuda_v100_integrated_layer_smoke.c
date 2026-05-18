@@ -455,6 +455,28 @@ static void expect_close_vector(const float *got,
     }
 }
 
+static void expect_finite_nonzero_vector(const float *got,
+                                         uint32_t n,
+                                         const char *label) {
+    double ss = 0.0;
+    for (uint32_t i = 0; i < n; i++) {
+        if (!isfinite(got[i])) {
+            fprintf(stderr,
+                    "cuda_v100_integrated_layer_smoke: %s non-finite at %u: %.8g\n",
+                    label,
+                    i,
+                    got[i]);
+            failures++;
+            return;
+        }
+        ss += (double)got[i] * (double)got[i];
+    }
+    if (ss <= 0.0) {
+        fprintf(stderr, "cuda_v100_integrated_layer_smoke: %s is all zero\n", label);
+        failures++;
+    }
+}
+
 int main(int argc, char **argv) {
     const char *index = NULL;
     const char *model_path = NULL;
@@ -494,6 +516,7 @@ int main(int argc, char **argv) {
 
     model_map model;
     if (map_model_file(model_path, &model)) return 1;
+    check(ds4_gpu_set_model_fd(model.fd), "model fd");
 
     ds4_v100_context_options opts;
     ds4_v100_context_options_init(&opts);
@@ -561,10 +584,13 @@ int main(int argc, char **argv) {
     float *ffn_delta = (float *)calloc(hidden, sizeof(float));
     float *next_cpu = (float *)calloc(hidden, sizeof(float));
     float *next_gpu = (float *)calloc(hidden, sizeof(float));
+    float *hidden_hc = (float *)calloc((size_t)DS4_V100_N_HC * hidden, sizeof(float));
+    float *next_hc_gpu = (float *)calloc((size_t)DS4_V100_N_HC * hidden, sizeof(float));
     check(hidden_x && attn_norm && q_a && q_a_norm && q && kv_raw && kv &&
               raw_kv && comp_kv && heads && low && attn_out && residual &&
               ffn_norm && r_gate && r_up && r_mid && r_out && s_gate &&
-              s_up && s_mid && s_out && ffn_delta && next_cpu && next_gpu,
+              s_up && s_mid && s_out && ffn_delta && next_cpu && next_gpu &&
+              hidden_hc && next_hc_gpu,
           "host buffer allocation");
 
     bound_matrix gate_routes[6];
@@ -572,6 +598,11 @@ int main(int argc, char **argv) {
     bound_matrix down_routes[6];
     if (!failures) {
         fill_hidden(hidden_x, hidden);
+        for (uint32_t h = 0; h < DS4_V100_N_HC; h++) {
+            memcpy(hidden_hc + (uint64_t)h * hidden,
+                   hidden_x,
+                   (size_t)hidden * sizeof(hidden_x[0]));
+        }
         cpu_rms_norm_weight(attn_norm, hidden_x, &model, &state.attn_norm, hidden, DS4_V100_RMS_EPS);
         cpu_f8_matmul(&state.attn_q_a, &model, attn_norm, q_a);
         cpu_rms_norm_weight(q_a_norm, q_a, &model, &state.attn_q_a_norm, q_rank, DS4_V100_RMS_EPS);
@@ -686,13 +717,24 @@ int main(int argc, char **argv) {
     ds4_gpu_tensor *comp_t = ds4_gpu_tensor_alloc((uint64_t)n_comp * kv_width * sizeof(float));
     ds4_gpu_tensor *mask_t = ds4_gpu_tensor_alloc((uint64_t)n_comp * sizeof(float));
     ds4_gpu_tensor *next_t = ds4_gpu_tensor_alloc((uint64_t)hidden * sizeof(float));
-    check(hidden_t && raw_t && comp_t && mask_t && next_t, "device tensor allocation");
+    ds4_gpu_tensor *hidden_hc_t = ds4_gpu_tensor_alloc((uint64_t)DS4_V100_N_HC * hidden * sizeof(float));
+    ds4_gpu_tensor *next_hc_t = ds4_gpu_tensor_alloc((uint64_t)DS4_V100_N_HC * hidden * sizeof(float));
+    check(hidden_t && raw_t && comp_t && mask_t && next_t && hidden_hc_t && next_hc_t,
+          "device tensor allocation");
 
     ds4_v100_layer_execute_report report;
     memset(&report, 0, sizeof(report));
+    ds4_v100_layer_execute_report hc_report;
+    memset(&hc_report, 0, sizeof(hc_report));
+    int hc_executed = 0;
     if (!failures) {
         check(ds4_gpu_tensor_write(hidden_t, 0, hidden_x, (uint64_t)hidden * sizeof(float)),
               "hidden upload");
+        check(ds4_gpu_tensor_write(hidden_hc_t,
+                                   0,
+                                   hidden_hc,
+                                   (uint64_t)DS4_V100_N_HC * hidden * sizeof(float)),
+              "hidden hc upload");
         check(ds4_gpu_tensor_write(raw_t, 0, raw_kv, (uint64_t)n_raw * kv_width * sizeof(float)),
               "raw kv upload");
         check(ds4_gpu_tensor_write(comp_t, 0, comp_kv, (uint64_t)n_comp * kv_width * sizeof(float)),
@@ -746,13 +788,40 @@ int main(int argc, char **argv) {
             }
         }
         expect_close_vector(next_gpu, next_cpu, hidden, "integrated next hidden", 0.35f, 0.05f);
+
+        const int hc_failures_before = failures;
+        err[0] = '\0';
+        check(ds4_v100_layer_execute_hc_decode(&state,
+                                               &cfg,
+                                               hidden_hc_t,
+                                               next_hc_t,
+                                               &hc_report,
+                                               err,
+                                               sizeof(err)) == 0,
+              err[0] ? err : "HC layer execute decode");
+        check(ds4_gpu_tensor_read(next_hc_t,
+                                  0,
+                                  next_hc_gpu,
+                                  (uint64_t)DS4_V100_N_HC * hidden * sizeof(float)),
+              "next HC read");
+        expect_finite_nonzero_vector(next_hc_gpu,
+                                     DS4_V100_N_HC * hidden,
+                                     "integrated next HC");
+        check(hc_report.routes == state.routes_per_token, "HC route count");
+        for (uint32_t route = 0; route < hc_report.routes; route++) {
+            check(hc_report.selected_experts[route] >= 0 &&
+                      (uint32_t)hc_report.selected_experts[route] < state.routed_experts,
+                  "HC selected expert range");
+        }
+        hc_executed = failures == hc_failures_before;
     }
 
-    printf("cuda_v100_integrated_layer_smoke: layer=%d token=%d pos=%d expert0=%d gpu=%d arena_bytes=%" PRIu64 " hidden=%u raw=%u comp=%u %s\n",
+    printf("cuda_v100_integrated_layer_smoke: layer=%d token=%d pos=%d expert0=%d hc=%s gpu=%d arena_bytes=%" PRIu64 " hidden=%u raw=%u comp=%u %s\n",
            layer,
            router_token,
            position,
            selected[0],
+           hc_executed ? "ok" : "skip",
            state.owning_gpu,
            arena_bytes,
            hidden,
@@ -760,6 +829,8 @@ int main(int argc, char **argv) {
            n_comp,
            failures ? "FAIL" : "ok");
 
+    ds4_gpu_tensor_free(next_hc_t);
+    ds4_gpu_tensor_free(hidden_hc_t);
     ds4_gpu_tensor_free(next_t);
     ds4_gpu_tensor_free(mask_t);
     ds4_gpu_tensor_free(comp_t);
@@ -768,6 +839,8 @@ int main(int argc, char **argv) {
     ds4_gpu_arena_close(arena);
     free(scratch);
     free(next_gpu);
+    free(next_hc_gpu);
+    free(hidden_hc);
     free(next_cpu);
     free(ffn_delta);
     free(s_out);

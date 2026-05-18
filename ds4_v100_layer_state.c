@@ -103,6 +103,32 @@ static int make_f8_matrix(const ds4_v100_tensor_binding *b,
     return 0;
 }
 
+static int make_bf16_matrix(const ds4_v100_tensor_binding *b,
+                            ds4_v100_bound_matrix *out,
+                            const char *label,
+                            char *err,
+                            size_t errlen) {
+    if (!b || !out || b->n_shape_dims != 2 || !dtype_is(b, "bf16")) {
+        return state_error(err, errlen, "%s must be a 2D bf16 tensor", label);
+    }
+    ds4_v100_tensor_binding binding = *b;
+    memset(out, 0, sizeof(*out));
+    out->binding = binding;
+    out->cols = (uint32_t)binding.shape[0];
+    out->rows = (uint32_t)binding.shape[1];
+    out->planes = 1;
+    out->row_bytes = (uint64_t)out->cols * sizeof(uint16_t);
+    out->bytes = (uint64_t)out->rows * out->row_bytes;
+    if (out->bytes != binding.byte_length) {
+        return state_error(err, errlen,
+                           "%s byte length mismatch: expected %" PRIu64 " got %" PRIu64,
+                           label,
+                           out->bytes,
+                           binding.byte_length);
+    }
+    return 0;
+}
+
 static int make_mxfp4_expert_matrix(const ds4_v100_tensor_binding *b,
                                     uint32_t expert,
                                     ds4_v100_bound_matrix *out,
@@ -245,6 +271,66 @@ int ds4_v100_layer_state_init(ds4_v100_layer_state *out,
         return 1;
     }
 
+    out->compress_ratio = out->layer_class == DS4_V100_LAYER_RATIO_4 ? 4u :
+                          out->layer_class == DS4_V100_LAYER_RATIO_128 ? 128u : 0u;
+    out->compressor_width = out->compress_ratio == 4u ? 2u * DS4_V100_HEAD_DIM :
+                            out->compress_ratio == 128u ? DS4_V100_HEAD_DIM : 0u;
+    out->indexer_q_width = out->compress_ratio == 4u ? 64u * DS4_V100_INDEXER_HEAD_DIM : 0u;
+    out->indexer_proj_width = out->compress_ratio == 4u ? 64u : 0u;
+    out->indexer_compressor_width = out->compress_ratio == 4u ? 2u * DS4_V100_INDEXER_HEAD_DIM : 0u;
+
+    if (out->compress_ratio != 0) {
+        ds4_v100_tensor_binding comp_ape;
+        ds4_v100_tensor_binding comp_kv;
+        ds4_v100_tensor_binding comp_gate;
+        if (bind_required(ctx, layer_id, "attn_compress_ape", &comp_ape, err, errlen) ||
+            bind_required(ctx, layer_id, "attn_compress_kv.weight", &comp_kv, err, errlen) ||
+            bind_required(ctx, layer_id, "attn_compress_gate.weight", &comp_gate, err, errlen) ||
+            bind_required(ctx, layer_id, "attn_compress_norm.weight", &out->attn_compressor_norm, err, errlen) ||
+            make_f32_matrix(&comp_ape, &out->attn_compressor_ape, "attn_compress_ape", err, errlen) ||
+            make_bf16_matrix(&comp_kv, &out->attn_compressor_kv, "attn_compress_kv.weight", err, errlen) ||
+            make_bf16_matrix(&comp_gate, &out->attn_compressor_gate, "attn_compress_gate.weight", err, errlen)) {
+            return 1;
+        }
+        out->has_attention_compressor = true;
+        if (check_same_owner(out, &out->attn_compressor_ape.binding, "attn_compress_ape", err, errlen) ||
+            check_same_owner(out, &out->attn_compressor_kv.binding, "attn_compress_kv.weight", err, errlen) ||
+            check_same_owner(out, &out->attn_compressor_gate.binding, "attn_compress_gate.weight", err, errlen) ||
+            check_same_owner(out, &out->attn_compressor_norm, "attn_compress_norm.weight", err, errlen)) {
+            return 1;
+        }
+    }
+
+    if (out->compress_ratio == 4u) {
+        ds4_v100_tensor_binding index_q_b;
+        ds4_v100_tensor_binding index_proj;
+        ds4_v100_tensor_binding index_ape;
+        ds4_v100_tensor_binding index_kv;
+        ds4_v100_tensor_binding index_gate;
+        if (bind_required(ctx, layer_id, "indexer.attn_q_b.weight", &index_q_b, err, errlen) ||
+            bind_required(ctx, layer_id, "indexer.proj.weight", &index_proj, err, errlen) ||
+            bind_required(ctx, layer_id, "indexer.compress_ape", &index_ape, err, errlen) ||
+            bind_required(ctx, layer_id, "indexer.compress_kv.weight", &index_kv, err, errlen) ||
+            bind_required(ctx, layer_id, "indexer.compress_gate.weight", &index_gate, err, errlen) ||
+            bind_required(ctx, layer_id, "indexer.compress_norm.weight", &out->indexer_compressor_norm, err, errlen) ||
+            make_f8_matrix(&index_q_b, &out->indexer_attn_q_b, "indexer.attn_q_b.weight", err, errlen) ||
+            make_bf16_matrix(&index_proj, &out->indexer_proj, "indexer.proj.weight", err, errlen) ||
+            make_f32_matrix(&index_ape, &out->indexer_compressor_ape, "indexer.compress_ape", err, errlen) ||
+            make_bf16_matrix(&index_kv, &out->indexer_compressor_kv, "indexer.compress_kv.weight", err, errlen) ||
+            make_bf16_matrix(&index_gate, &out->indexer_compressor_gate, "indexer.compress_gate.weight", err, errlen)) {
+            return 1;
+        }
+        out->has_indexer = true;
+        if (check_same_owner(out, &out->indexer_attn_q_b.binding, "indexer.attn_q_b.weight", err, errlen) ||
+            check_same_owner(out, &out->indexer_proj.binding, "indexer.proj.weight", err, errlen) ||
+            check_same_owner(out, &out->indexer_compressor_ape.binding, "indexer.compress_ape", err, errlen) ||
+            check_same_owner(out, &out->indexer_compressor_kv.binding, "indexer.compress_kv.weight", err, errlen) ||
+            check_same_owner(out, &out->indexer_compressor_gate.binding, "indexer.compress_gate.weight", err, errlen) ||
+            check_same_owner(out, &out->indexer_compressor_norm, "indexer.compress_norm.weight", err, errlen)) {
+            return 1;
+        }
+    }
+
     const ds4_v100_tensor_binding *owned[] = {
         &out->routed_gate_binding,
         &out->routed_up_binding,
@@ -331,6 +417,36 @@ int ds4_v100_layer_state_init(ds4_v100_layer_state *out,
         out->attn_kv_a_norm.n_shape_dims != 1 || out->attn_kv_a_norm.shape[0] != out->kv_latent_width ||
         out->attn_sinks.n_shape_dims != 1 || out->attn_sinks.shape[0] != 64) {
         return state_error(err, errlen, "attention control dimensions do not match DS4 layer state");
+    }
+    if (out->has_attention_compressor) {
+        if (out->attn_compressor_ape.rows != out->compress_ratio ||
+            out->attn_compressor_ape.cols != out->compressor_width ||
+            out->attn_compressor_kv.rows != out->compressor_width ||
+            out->attn_compressor_kv.cols != out->hidden_size ||
+            out->attn_compressor_gate.rows != out->compressor_width ||
+            out->attn_compressor_gate.cols != out->hidden_size ||
+            !dtype_is(&out->attn_compressor_norm, "f32") ||
+            out->attn_compressor_norm.n_shape_dims != 1 ||
+            out->attn_compressor_norm.shape[0] != DS4_V100_HEAD_DIM) {
+            return state_error(err, errlen, "attention compressor dimensions do not match DS4 layer state");
+        }
+    }
+    if (out->has_indexer) {
+        if (out->indexer_attn_q_b.rows != out->indexer_q_width ||
+            out->indexer_attn_q_b.cols != out->q_lora_rank ||
+            out->indexer_proj.rows != out->indexer_proj_width ||
+            out->indexer_proj.cols != out->hidden_size ||
+            out->indexer_compressor_ape.rows != out->compress_ratio ||
+            out->indexer_compressor_ape.cols != out->indexer_compressor_width ||
+            out->indexer_compressor_kv.rows != out->indexer_compressor_width ||
+            out->indexer_compressor_kv.cols != out->hidden_size ||
+            out->indexer_compressor_gate.rows != out->indexer_compressor_width ||
+            out->indexer_compressor_gate.cols != out->hidden_size ||
+            !dtype_is(&out->indexer_compressor_norm, "f32") ||
+            out->indexer_compressor_norm.n_shape_dims != 1 ||
+            out->indexer_compressor_norm.shape[0] != DS4_V100_INDEXER_HEAD_DIM) {
+            return state_error(err, errlen, "indexer dimensions do not match DS4 layer state");
+        }
     }
     out->routed_experts = (uint32_t)out->routed_gate_binding.shape[2];
     if (out->routed_up_binding.shape[2] != out->routed_experts ||
@@ -442,6 +558,20 @@ int ds4_v100_layer_state_attention_arena_span(const ds4_v100_layer_state *state,
         grow_span_for_matrix(&state->attn_output_b, &span)) {
         return state_error(err, errlen, "attention arena span overflow");
     }
+    if (state->has_attention_compressor &&
+        (grow_span_for_matrix(&state->attn_compressor_ape, &span) ||
+         grow_span_for_matrix(&state->attn_compressor_kv, &span) ||
+         grow_span_for_matrix(&state->attn_compressor_gate, &span))) {
+        return state_error(err, errlen, "attention compressor arena span overflow");
+    }
+    if (state->has_indexer &&
+        (grow_span_for_matrix(&state->indexer_attn_q_b, &span) ||
+         grow_span_for_matrix(&state->indexer_proj, &span) ||
+         grow_span_for_matrix(&state->indexer_compressor_ape, &span) ||
+         grow_span_for_matrix(&state->indexer_compressor_kv, &span) ||
+         grow_span_for_matrix(&state->indexer_compressor_gate, &span))) {
+        return state_error(err, errlen, "indexer arena span overflow");
+    }
     *out_bytes = span;
     return 0;
 }
@@ -460,5 +590,25 @@ int ds4_v100_bound_matrix_source_view(const ds4_v100_bound_matrix *matrix,
     out->rows = matrix->rows;
     out->cols = matrix->cols;
     out->row_stride_bytes = (uint32_t)matrix->row_bytes;
+    return 0;
+}
+
+int ds4_v100_bound_matrix_bf16_view(const ds4_v100_bound_matrix *matrix,
+                                    ds4_gpu_bf16_matrix_view *out,
+                                    char *err,
+                                    size_t errlen) {
+    if (!matrix || !out) return state_error(err, errlen, "missing bf16 matrix view output");
+    if (!dtype_is(&matrix->binding, "bf16")) {
+        return state_error(err, errlen, "matrix is not bf16");
+    }
+    if (matrix->rows == 0 || matrix->cols == 0 || matrix->row_bytes == 0 || matrix->bytes == 0) {
+        return state_error(err, errlen, "invalid bf16 matrix dimensions");
+    }
+    memset(out, 0, sizeof(*out));
+    out->arena_offset = ds4_v100_bound_matrix_arena_offset(matrix);
+    out->byte_length = matrix->bytes;
+    out->rows = matrix->rows;
+    out->cols = matrix->cols;
+    out->row_stride_elements = matrix->cols;
     return 0;
 }

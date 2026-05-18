@@ -82,6 +82,26 @@ int main(int argc, char **argv) {
     check(state.q_width == 32768, "q width");
     check(state.kv_latent_width == 512, "kv latent width");
     check(state.attention_output_rank == 8192, "attention output rank");
+    check(state.compress_ratio == (state.layer_class == DS4_V100_LAYER_RATIO_4 ? 4u :
+                                   state.layer_class == DS4_V100_LAYER_RATIO_128 ? 128u : 0u),
+          "compression ratio");
+    if (state.compress_ratio != 0) {
+        check(state.has_attention_compressor, "attention compressor present");
+        check(state.attn_compressor_kv.cols == state.hidden_size, "compressor kv input dim");
+        check(state.attn_compressor_kv.rows == state.compressor_width, "compressor kv output dim");
+        check(state.attn_compressor_gate.rows == state.compressor_width, "compressor gate output dim");
+        check(state.attn_compressor_ape.rows == state.compress_ratio, "compressor ape rows");
+        check(state.attn_compressor_ape.cols == state.compressor_width, "compressor ape cols");
+    }
+    if (state.compress_ratio == 4) {
+        check(state.has_indexer, "ratio-4 indexer present");
+        check(state.indexer_attn_q_b.cols == state.q_lora_rank, "indexer q input dim");
+        check(state.indexer_attn_q_b.rows == state.indexer_q_width, "indexer q output dim");
+        check(state.indexer_proj.cols == state.hidden_size, "indexer proj input dim");
+        check(state.indexer_proj.rows == state.indexer_proj_width, "indexer proj output dim");
+        check(state.indexer_compressor_kv.cols == state.hidden_size, "indexer compressor kv input dim");
+        check(state.indexer_compressor_kv.rows == state.indexer_compressor_width, "indexer compressor kv output dim");
+    }
     check(state.intermediate_size == 2048, "intermediate size");
     check(state.routed_experts == 256, "routed expert count");
     check(state.routes_per_token == 6, "routes per token");
@@ -131,7 +151,7 @@ int main(int argc, char **argv) {
           "attention arena span");
     check(stage && attn_span <= stage->arena_bytes, "attention arena span fits owning stage arena");
 
-    printf("v100_layer_state_smoke: layer=%d stage=%d gpu=%d class=%s router=%s hidden=%u q=%u kv=%u mid=%u experts=%u ffn_span=%" PRIu64 " attn_span=%" PRIu64 " %s\n",
+    printf("v100_layer_state_smoke: layer=%d stage=%d gpu=%d class=%s router=%s hidden=%u q=%u kv=%u ratio=%u comp=%u index_q=%u mid=%u experts=%u ffn_span=%" PRIu64 " attn_span=%" PRIu64 " %s\n",
            state.layer_id,
            state.stage_id,
            state.owning_gpu,
@@ -140,6 +160,9 @@ int main(int argc, char **argv) {
            state.hidden_size,
            state.q_width,
            state.kv_latent_width,
+           state.compress_ratio,
+           state.compressor_width,
+           state.indexer_q_width,
            state.intermediate_size,
            state.routed_experts,
            span,

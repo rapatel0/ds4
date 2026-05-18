@@ -15,6 +15,9 @@ extern "C" {
 #define DS4_V100_RMS_EPS 1.0e-6f
 #define DS4_V100_N_HEAD 64u
 #define DS4_V100_N_ROT 64u
+#define DS4_V100_N_HC 4u
+#define DS4_V100_HC_MIX 24u
+#define DS4_V100_HC_SINKHORN_ITERS 20u
 #define DS4_V100_OUT_GROUPS 8u
 #define DS4_V100_OUT_GROUP_DIM 4096u
 #define DS4_V100_OUT_GROUP_RANK 1024u
@@ -49,6 +52,15 @@ int ds4_v100_layer_execute_decode(
         const ds4_v100_layer_execute_config *cfg,
         const ds4_gpu_tensor                *hidden,
         ds4_gpu_tensor                      *next_hidden,
+        ds4_v100_layer_execute_report       *report,
+        char                                *err,
+        size_t                               errlen);
+
+int ds4_v100_layer_execute_hc_decode(
+        const ds4_v100_layer_state          *state,
+        const ds4_v100_layer_execute_config *cfg,
+        const ds4_gpu_tensor                *hidden_hc,
+        ds4_gpu_tensor                      *next_hidden_hc,
         ds4_v100_layer_execute_report       *report,
         char                                *err,
         size_t                               errlen);

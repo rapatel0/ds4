@@ -1,0 +1,1 @@
+cuda_v100_descriptor_bound_attention_smoke: layer=2 gpu=0 arena_bytes=8329207040 hidden=4096 q=32768 kv=512 out_rank=8192 ok

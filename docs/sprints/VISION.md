@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-18
-last_updated_by: sprint-plan
-revision: 30
+last_updated_by: sprint-execute
+revision: 31
 ---
 
 # Vision: DS4 V100 Appliance
@@ -120,6 +120,12 @@ it is a narrow DS4 runtime tuned for this hardware.
   reports `ready=false` because full HC pre/post scheduling, real compressor/
   indexer descriptor binding, full 43-layer selected-token decode, serving,
   MTP, and throughput remain incomplete.
+- Sprint 020 extended the runtime layer bridge with real compressor/indexer
+  descriptor ownership and an executable DS4 HC-state layer entrypoint. The
+  V100 pod now validates layer-2 `[4 x 4096]` HC attention pre/post and FFN
+  pre/post around the hidden-vector body, and the full 8-GPU gate passes with
+  `ready=false`. The remaining critical gap is executor-owned compressed-row
+  generation and indexed ratio-4 compressed attention.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -375,7 +381,7 @@ it is a narrow DS4 runtime tuned for this hardware.
   compressor/indexer descriptor binding and HC pre/post scheduling remain the
   next blockers.
 
-### Sprint 020 - V100 Compressor/Indexer And HC Scheduler Bridge [planned]
+### Sprint 020 - V100 Compressor/Indexer And HC Scheduler Bridge [extended]
 
 - **Goal**: Bind real compressor/indexer descriptors into layer state, execute
   compressed row generation/selection inside the layer executor, and wrap the
@@ -384,10 +390,25 @@ it is a narrow DS4 runtime tuned for this hardware.
   appliance still needs real compressed-KV production, ratio-4 indexer
   visibility, and HC state handling before a full 43-layer selected-token path
   is credible.
-- **Plan**: Extend `ds4_v100_layer_state` for compressor/indexer tensors, add
-  executor-owned compressed row update/selection for layer 2, validate HC
-  pre/post output against CPU references, and keep the V100 gate honest with
-  `ready=false` until selected-token decode exists.
+- **Outcome**: `EXTEND`. `ds4_v100_layer_state` now binds real
+  compressor/indexer descriptors and the executor has an HC-state entrypoint
+  that runs DS4 attention and FFN HC pre/post around the hidden-vector body.
+  The full 8-GPU V100 appliance gate passes with `ready=false`. Executor-owned
+  compressed-row generation and indexed ratio-4 compressed attention move to
+  Sprint 021.
+
+### Sprint 021 - Executor-Owned Compressor/Indexer Decode Rows [planned]
+
+- **Goal**: Move attention compressor rows, ratio-4 indexer compressor rows,
+  indexer scoring/top-k, and indexed compressed attention into the executor
+  instead of passing test-built compressed KV rows.
+- **Rationale**: Sprint 020 proved the descriptors and HC layer surface. The
+  next correctness blocker is making compressed KV production part of the real
+  scheduler-owned layer path.
+- **Plan**: Add executor config/state for attention and indexer compressor
+  caches, project BF16 compressor KV/score rows from `attn_norm`, update
+  recurrence state, emit compressed rows, run indexer top-k when `n_comp > 512`,
+  and validate layer-2 output on V100.
 
 ## Parking Lot
 
@@ -473,12 +494,13 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-18 | Shipped Sprint 017 scheduler-owned layer state and moved Sprint 018 to descriptor-bound attention/layer output. | Router/FFN descriptor ownership is now a reusable runtime surface instead of test-local glue; the next blocker is producing a coherent hidden state through attention, residual, norm, and HC composition. | Sprint 018+ |
 | 2026-05-18 | Shipped Sprint 018 descriptor-bound attention projection/residual/norm and moved Sprint 019 to full attention/layer output. | Real source-byte q/kv/output projection, residual add, and FFN pre-norm now pass on V100 through layer state; the next blocker is semantic attention softmax over raw/compressed KV and a coherent next hidden state. | Sprint 019+ |
 | 2026-05-18 | Shipped Sprint 019 integrated hidden-vector layer executor and moved Sprint 020 to compressor/indexer plus HC scheduling. | Layer 2 now produces a bounded next-hidden vector through semantic raw/compressed attention inputs and real router-selected FFN on V100; the remaining blocker is generating those compressed rows from real descriptors and running the true HC-state layer scheduler. | Sprint 020+ |
+| 2026-05-18 | Extended Sprint 020 with compressor/indexer descriptor binding and a V100 HC-state layer entrypoint. | The runtime now has the true `[4 x 4096]` HC layer surface and real compressor/indexer descriptor ownership, but still needs executor-owned compressed-row generation before selected-token decode. | Sprint 021+ |
 
 ## Open Questions
 
-1. What is the smallest Sprint 019 layer-output slice that meaningfully
-   advances serving: full attention output only, attention plus FFN output, or a
-   narrow path that also reaches output logits?
+1. What is the smallest Sprint 021 compressor/indexer slice that should count
+   as enough evidence: one emitted compressed row at a ratio boundary, a
+   long-context top-k indexer path, or both in the integrated HC layer smoke?
 2. What reference should define correctness tolerances for mixed
    BF16/F32/F8_E4M3_B128/MXFP4 execution on V100 after MoE is included?
 3. What minimum serving milestone counts as "usable" before optimization:
