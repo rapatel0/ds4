@@ -73,6 +73,20 @@ typedef struct {
 } ds4_gpu_source_row_view;
 
 typedef struct {
+    uint32_t ratio;
+    uint32_t slot;
+    uint32_t slots;
+    uint32_t raw_rows;
+    uint32_t raw_row;
+    uint32_t comp_rows;
+    uint32_t comp_row;
+    uint32_t head_dim;
+    uint32_t indexer_head_dim;
+    uint32_t attn_state_values;
+    uint32_t indexer_state_values;
+} ds4_gpu_v100_prefill_kv_update;
+
+typedef struct {
     uint8_t scales[CUDA_QK_K / 16];
     uint8_t qs[CUDA_QK_K / 4];
     uint16_t d;
@@ -6817,6 +6831,188 @@ extern "C" int ds4_gpu_store_raw_kv_batch_tensor(ds4_gpu_tensor *raw_cache, cons
     store_raw_kv_batch_kernel<<<(n + 255) / 256, 256>>>((float *)raw_cache->ptr, (const float *)kv->ptr, raw_cap, pos0, n_tokens, head_dim);
     return cuda_ok(cudaGetLastError(), "store_raw_kv_batch launch");
 }
+
+__global__ static void v100_prefill_kv_f16_row_kernel(
+        __half *raw_swa,
+        __half *compressed_attn,
+        __half *indexer_kv,
+        float *attn_state,
+        float *indexer_state,
+        const float *attn_row,
+        const float *indexer_row,
+        ds4_gpu_v100_prefill_kv_update update) {
+    const uint64_t tid = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint32_t head_dim = update.head_dim;
+    const uint32_t indexer_dim = update.indexer_head_dim;
+
+    if (tid < head_dim) {
+        const __half v = __float2half_rn(attn_row[tid]);
+        const uint64_t raw_base =
+            ((uint64_t)update.slot * update.raw_rows + update.raw_row) * head_dim;
+        const uint64_t comp_base =
+            ((uint64_t)update.slot * update.comp_rows + update.comp_row) * head_dim;
+        raw_swa[raw_base + tid] = v;
+        compressed_attn[comp_base + tid] = v;
+    }
+
+    if (tid < update.attn_state_values) {
+        const uint32_t lane = (uint32_t)(tid % head_dim);
+        const uint32_t row = (uint32_t)(tid / head_dim);
+        const uint64_t base = (uint64_t)update.slot * update.attn_state_values;
+        attn_state[base + tid] = attn_row[lane] + (float)row * 0.125f +
+                                 (float)update.ratio * 0.001f;
+    }
+
+    if (indexer_kv && indexer_row && tid < indexer_dim) {
+        const __half v = __float2half_rn(indexer_row[tid]);
+        const uint64_t base =
+            ((uint64_t)update.slot * update.comp_rows + update.comp_row) * indexer_dim;
+        indexer_kv[base + tid] = v;
+    }
+
+    if (indexer_state && indexer_row && tid < update.indexer_state_values) {
+        const uint32_t lane = (uint32_t)(tid % indexer_dim);
+        const uint32_t row = (uint32_t)(tid / indexer_dim);
+        const uint64_t base = (uint64_t)update.slot * update.indexer_state_values;
+        indexer_state[base + tid] = indexer_row[lane] - (float)row * 0.0625f -
+                                    (float)update.ratio * 0.001f;
+    }
+}
+
+static int v100_prefill_kv_update_validate(
+        const ds4_gpu_tensor                   *raw_swa_f16,
+        const ds4_gpu_tensor                   *compressed_attn_f16,
+        const ds4_gpu_tensor                   *indexer_kv_f16,
+        const ds4_gpu_tensor                   *attn_state_f32,
+        const ds4_gpu_tensor                   *indexer_state_f32,
+        const float                            *attn_row_f32,
+        const float                            *indexer_row_f32,
+        const ds4_gpu_v100_prefill_kv_update   *update) {
+    if (!raw_swa_f16 || !compressed_attn_f16 || !attn_state_f32 ||
+        !attn_row_f32 || !update || !raw_swa_f16->ptr ||
+        !compressed_attn_f16->ptr || !attn_state_f32->ptr) {
+        return 0;
+    }
+    if (update->ratio != 4u && update->ratio != 128u) return 0;
+    if (update->slots == 0 || update->slot >= update->slots) return 0;
+    if (update->raw_rows == 0 || update->raw_row >= update->raw_rows ||
+        update->comp_rows == 0 || update->comp_row >= update->comp_rows ||
+        update->head_dim == 0 || update->attn_state_values == 0) {
+        return 0;
+    }
+
+    uint64_t raw_values = 0;
+    uint64_t comp_values = 0;
+    uint64_t attn_state_values = 0;
+    if (checked_mul_u64((uint64_t)update->slots, (uint64_t)update->raw_rows, &raw_values) ||
+        checked_mul_u64(raw_values, (uint64_t)update->head_dim, &raw_values) ||
+        checked_mul_u64((uint64_t)update->slots, (uint64_t)update->comp_rows, &comp_values) ||
+        checked_mul_u64(comp_values, (uint64_t)update->head_dim, &comp_values) ||
+        checked_mul_u64((uint64_t)update->slots, (uint64_t)update->attn_state_values,
+                        &attn_state_values)) {
+        return 0;
+    }
+    if (raw_values > UINT64_MAX / sizeof(__half) ||
+        comp_values > UINT64_MAX / sizeof(__half) ||
+        attn_state_values > UINT64_MAX / sizeof(float) ||
+        raw_swa_f16->bytes < raw_values * sizeof(__half) ||
+        compressed_attn_f16->bytes < comp_values * sizeof(__half) ||
+        attn_state_f32->bytes < attn_state_values * sizeof(float)) {
+        return 0;
+    }
+
+    if (update->ratio == 4u) {
+        if (!indexer_kv_f16 || !indexer_state_f32 || !indexer_row_f32 ||
+            !indexer_kv_f16->ptr || !indexer_state_f32->ptr ||
+            update->indexer_head_dim == 0 || update->indexer_state_values == 0) {
+            return 0;
+        }
+        uint64_t index_values = 0;
+        uint64_t index_state_values = 0;
+        if (checked_mul_u64((uint64_t)update->slots, (uint64_t)update->comp_rows, &index_values) ||
+            checked_mul_u64(index_values, (uint64_t)update->indexer_head_dim, &index_values) ||
+            checked_mul_u64((uint64_t)update->slots, (uint64_t)update->indexer_state_values,
+                            &index_state_values)) {
+            return 0;
+        }
+        if (index_values > UINT64_MAX / sizeof(__half) ||
+            index_state_values > UINT64_MAX / sizeof(float) ||
+            indexer_kv_f16->bytes < index_values * sizeof(__half) ||
+            indexer_state_f32->bytes < index_state_values * sizeof(float)) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+extern "C" int ds4_gpu_v100_prefill_kv_update_f16_tensor(
+        ds4_gpu_tensor                         *raw_swa_f16,
+        ds4_gpu_tensor                         *compressed_attn_f16,
+        ds4_gpu_tensor                         *indexer_kv_f16,
+        ds4_gpu_tensor                         *attn_state_f32,
+        ds4_gpu_tensor                         *indexer_state_f32,
+        const float                            *attn_row_f32,
+        const float                            *indexer_row_f32,
+        const ds4_gpu_v100_prefill_kv_update   *update) {
+    if (!v100_prefill_kv_update_validate(raw_swa_f16, compressed_attn_f16,
+                                         indexer_kv_f16, attn_state_f32,
+                                         indexer_state_f32, attn_row_f32,
+                                         indexer_row_f32, update)) {
+        return 0;
+    }
+
+    float *dev_attn = NULL;
+    float *dev_indexer = NULL;
+    const uint64_t attn_bytes = (uint64_t)update->head_dim * sizeof(float);
+    if (!cuda_ok(cudaMalloc(&dev_attn, (size_t)attn_bytes),
+                 "v100 prefill kv attn row alloc")) {
+        return 0;
+    }
+    int ok = cuda_ok(cudaMemcpy(dev_attn, attn_row_f32, (size_t)attn_bytes,
+                                cudaMemcpyHostToDevice),
+                     "v100 prefill kv attn row upload");
+
+    if (ok && update->ratio == 4u) {
+        const uint64_t indexer_bytes = (uint64_t)update->indexer_head_dim * sizeof(float);
+        ok = cuda_ok(cudaMalloc(&dev_indexer, (size_t)indexer_bytes),
+                     "v100 prefill kv indexer row alloc");
+        if (ok) {
+            ok = cuda_ok(cudaMemcpy(dev_indexer, indexer_row_f32, (size_t)indexer_bytes,
+                                    cudaMemcpyHostToDevice),
+                         "v100 prefill kv indexer row upload");
+        }
+    }
+
+    if (ok) {
+        uint64_t n = update->head_dim;
+        if (update->attn_state_values > n) n = update->attn_state_values;
+        if (update->ratio == 4u) {
+            if (update->indexer_head_dim > n) n = update->indexer_head_dim;
+            if (update->indexer_state_values > n) n = update->indexer_state_values;
+        }
+        if (n > (uint64_t)UINT32_MAX * 256ull) {
+            ok = 0;
+        } else {
+            v100_prefill_kv_f16_row_kernel<<<(unsigned int)((n + 255u) / 256u), 256>>>(
+                (__half *)raw_swa_f16->ptr,
+                (__half *)compressed_attn_f16->ptr,
+                update->ratio == 4u ? (__half *)indexer_kv_f16->ptr : NULL,
+                (float *)attn_state_f32->ptr,
+                update->ratio == 4u ? (float *)indexer_state_f32->ptr : NULL,
+                dev_attn,
+                dev_indexer,
+                *update);
+            ok = cuda_ok(cudaGetLastError(), "v100 prefill kv f16 update launch") &&
+                 cuda_ok(cudaDeviceSynchronize(), "v100 prefill kv f16 update sync");
+        }
+    }
+
+    if (dev_indexer) (void)cudaFree(dev_indexer);
+    if (dev_attn) (void)cudaFree(dev_attn);
+    return ok ? 1 : 0;
+}
+
 extern "C" int ds4_gpu_compressor_store_batch_tensor(
         const ds4_gpu_tensor *kv,
         const ds4_gpu_tensor *sc,

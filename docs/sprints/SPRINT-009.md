@@ -138,12 +138,12 @@ not normal `ds4` generation flags.
 - `Makefile`
 
 **Tasks:**
-- [ ] Add a diagnostic CUDA API that appends a bounded F16 KV row to raw SWA.
-- [ ] Add a bounded compressed KV update for a ratio-128 layer.
-- [ ] Add a bounded compressed KV plus indexer KV/state update for a ratio-4
+- [x] Add a diagnostic CUDA API that appends a bounded F16 KV row to raw SWA.
+- [x] Add a bounded compressed KV update for a ratio-128 layer.
+- [x] Add a bounded compressed KV plus indexer KV/state update for a ratio-4
       layer.
-- [ ] Compare the resulting rows/state against CPU or source-helper references.
-- [ ] Reject invalid layer class, row bounds, slot bounds, and undersized
+- [x] Compare the resulting rows/state against CPU or source-helper references.
+- [x] Reject invalid layer class, row bounds, slot bounds, and undersized
       buffers.
 
 ### Phase 3: Source-Format Prefill Input Bridge
@@ -155,10 +155,15 @@ not normal `ds4` generation flags.
 - `tests/cuda_v100_prefill_kv_smoke.c`
 
 **Tasks:**
-- [ ] Feed at least one F8_E4M3_B128 source-format input tile through the
+- [x] Feed at least one F8_E4M3_B128 source-format input tile through the
       Sprint 008 row-decode pattern.
-- [ ] Keep dequantization bounded to output/scratch tiles only.
-- [ ] Document any precision or tolerance used for CUDA-vs-CPU comparisons.
+- [x] Keep dequantization bounded to output/scratch tiles only.
+- [x] Document any precision or tolerance used for CUDA-vs-CPU comparisons.
+
+**Precision note:** `tests/cuda_v100_prefill_kv_smoke.c` compares F8 source
+decode bit-exactly against `ds4_source_formats`, verifies F16 KV rows by exact
+half bits after host-side F32-to-F16 rounding, and uses `1e-5` absolute
+tolerance for deterministic F32 diagnostic state values.
 
 ### Phase 4: Guard And Cluster Validation
 

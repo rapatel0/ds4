@@ -355,6 +355,34 @@ int ds4_gpu_store_raw_kv_batch_tensor(
         uint32_t                n_tokens,
         uint32_t                head_dim);
 
+typedef struct {
+    uint32_t ratio;
+    uint32_t slot;
+    uint32_t slots;
+    uint32_t raw_rows;
+    uint32_t raw_row;
+    uint32_t comp_rows;
+    uint32_t comp_row;
+    uint32_t head_dim;
+    uint32_t indexer_head_dim;
+    uint32_t attn_state_values;
+    uint32_t indexer_state_values;
+} ds4_gpu_v100_prefill_kv_update;
+
+/* Diagnostic V100 F16 KV update primitive. The source rows are host F32
+ * scratch tiles, typically produced by a bounded source-format decode probe.
+ * Production prefill should replace this with fused projection/compressor
+ * kernels once correctness is established. */
+int ds4_gpu_v100_prefill_kv_update_f16_tensor(
+        ds4_gpu_tensor                         *raw_swa_f16,
+        ds4_gpu_tensor                         *compressed_attn_f16,
+        ds4_gpu_tensor                         *indexer_kv_f16,
+        ds4_gpu_tensor                         *attn_state_f32,
+        ds4_gpu_tensor                         *indexer_state_f32,
+        const float                            *attn_row_f32,
+        const float                            *indexer_row_f32,
+        const ds4_gpu_v100_prefill_kv_update   *update);
+
 /* =========================================================================
  * KV Compression and Attention.
  * =========================================================================
