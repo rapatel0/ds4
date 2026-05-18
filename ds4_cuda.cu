@@ -1774,6 +1774,31 @@ __global__ static void arena_bf16_matmul_kernel(
     if (threadIdx.x == 0) out[r] = partial[0];
 }
 
+__global__ static void arena_f32_matmul_kernel(
+        float *out,
+        const float *base,
+        const float *x,
+        uint32_t rows,
+        uint32_t cols,
+        uint32_t row_stride_bytes) {
+    const uint32_t r = blockIdx.x;
+    if (r >= rows) return;
+    const float *row = (const float *)((const char *)base + (uint64_t)r * row_stride_bytes);
+    float acc = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        acc += row[c] * x[c];
+    }
+
+    __shared__ float partial[256];
+    partial[threadIdx.x] = acc;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) partial[threadIdx.x] += partial[threadIdx.x + stride];
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) out[r] = partial[0];
+}
+
 __device__ static float arena_e8m0_to_f32(uint8_t e) {
     return __uint_as_float(e == 0 ? 0x00400000u : ((uint32_t)e << 23));
 }
@@ -2194,6 +2219,58 @@ extern "C" int ds4_gpu_arena_bf16_matmul_f32(
         view->cols,
         view->row_stride_elements);
     return cuda_ok(cudaGetLastError(), "bf16 source matmul launch") ? 0 : 1;
+}
+
+static int cuda_f32_matmul_view_ok(const ds4_gpu_arena *arena,
+                                   const ds4_gpu_source_row_view *view,
+                                   const ds4_gpu_tensor *x_f32,
+                                   const ds4_gpu_tensor *out_f32) {
+    if (!arena || !view || !x_f32 || !out_f32 || !arena->valid ||
+        !arena->ptr || !x_f32->ptr || !out_f32->ptr) {
+        return 0;
+    }
+    if (view->rows == 0 || view->cols == 0 || view->row_stride_bytes == 0) return 0;
+    if ((view->arena_offset & 3ull) != 0 ||
+        (view->byte_length & 3ull) != 0 ||
+        (view->row_stride_bytes & 3u) != 0) {
+        return 0;
+    }
+    if (!cuda_arena_range_ok(arena, view->arena_offset, view->byte_length)) return 0;
+    const uint64_t row_bytes = (uint64_t)view->cols * sizeof(float);
+    if ((uint64_t)view->row_stride_bytes < row_bytes) return 0;
+    uint64_t last_start = 0;
+    if (checked_mul_u64((uint64_t)view->rows - 1u,
+                        (uint64_t)view->row_stride_bytes,
+                        &last_start)) {
+        return 0;
+    }
+    if (last_start > view->byte_length || row_bytes > view->byte_length - last_start) {
+        return 0;
+    }
+    uint64_t x_bytes = 0;
+    uint64_t out_bytes = 0;
+    if (checked_mul_u64((uint64_t)view->cols, sizeof(float), &x_bytes)) return 0;
+    if (checked_mul_u64((uint64_t)view->rows, sizeof(float), &out_bytes)) return 0;
+    if (x_f32->bytes < x_bytes || out_f32->bytes < out_bytes) return 0;
+    return 1;
+}
+
+extern "C" int ds4_gpu_arena_f32_matmul_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *view,
+        const ds4_gpu_tensor          *x_f32,
+        ds4_gpu_tensor                *out_f32) {
+    if (!cuda_f32_matmul_view_ok(arena, view, x_f32, out_f32)) return 1;
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "f32 source matmul set device")) return 1;
+    const float *base = (const float *)((const char *)arena->ptr + view->arena_offset);
+    arena_f32_matmul_kernel<<<view->rows, 256>>>(
+        (float *)out_f32->ptr,
+        base,
+        (const float *)x_f32->ptr,
+        view->rows,
+        view->cols,
+        view->row_stride_bytes);
+    return cuda_ok(cudaGetLastError(), "f32 source matmul launch") ? 0 : 1;
 }
 
 extern "C" int ds4_gpu_arena_f8_e4m3_b128_row_decode_f32(

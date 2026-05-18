@@ -186,7 +186,7 @@ if [ -n "$pack_index" ]; then
         run_gate "layer_descriptors" ./tools/ds4-v100-layer-descriptor-gate --index "$pack_index" --layer "$descriptor_layer" --gpus 8 || true
         run_gate "layer_bindings" ./tests/v100_layer_binding_smoke --index "$pack_index" --layer "$descriptor_layer" || true
         if [ "$skip_model" -eq 0 ] && [ -f "$model" ]; then
-            run_gate "descriptor_bound_ffn" ./tests/cuda_v100_descriptor_bound_ffn_smoke --index "$pack_index" --model "$model" --layer "$descriptor_layer" --expert 0 || true
+            run_gate "descriptor_bound_ffn" ./tests/cuda_v100_descriptor_bound_ffn_smoke --index "$pack_index" --model "$model" --layer "$descriptor_layer" --router-token 16 || true
         else
             echo "gate	descriptor_bound_ffn	SKIP	no_model"
         fi
@@ -202,7 +202,7 @@ if [ "$failures" -ne 0 ]; then
     exit 1
 fi
 
-missing="full_layer_scheduler,real_router_selected_experts,attention_residual_norm,real_model_selected_token,public_serving,mtp,throughput_benchmark"
+missing="full_layer_scheduler,attention_residual_norm,real_model_selected_token,public_serving,mtp,throughput_benchmark"
 echo "gate	readiness	NOT_READY	missing=$missing"
 echo "gate	summary	PASS	failures=0 ready=false"
 exit 0

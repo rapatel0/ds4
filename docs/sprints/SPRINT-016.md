@@ -1,12 +1,13 @@
 ---
 sprint: 016
 title: V100 Descriptor-Bound Router FFN Gate
-status: planned
+status: completed
 date: 2026-05-18
 target_repo: rapatel0/ds4
 architecture: ../architecture/DS4-V100-LAYOUT.md
 intent: drafts/SPRINT-016-INTENT.md
 deferred: SPRINT-016-DEFERRED.md
+verdict: SHIP
 ---
 
 # SPRINT-016: V100 Descriptor-Bound Router FFN Gate
@@ -49,11 +50,11 @@ scheduler-owned layer slice.
 - `ds4_gpu_arena_stub.c`
 
 **Tasks:**
-- [ ] Add `ds4_gpu_arena_f32_matmul_f32`.
-- [ ] Validate arena range, row count, column count, stride, input size, and
+- [x] Add `ds4_gpu_arena_f32_matmul_f32`.
+- [x] Validate arena range, row count, column count, stride, input size, and
       output size.
-- [ ] Implement CUDA row-reduction kernel for V100 diagnostics.
-- [ ] Fail closed in the non-CUDA stub.
+- [x] Implement CUDA row-reduction kernel for V100 diagnostics.
+- [x] Fail closed in the non-CUDA stub.
 
 ### Phase 2: Router CPU/GPU Reference Path
 
@@ -61,10 +62,10 @@ scheduler-owned layer slice.
 - `tests/cuda_v100_descriptor_bound_ffn_smoke.c`
 
 **Tasks:**
-- [ ] Bind and load `ffn_gate_inp.weight`.
-- [ ] Bind and read `ffn_gate_tid2eid`.
-- [ ] Compute CPU router logits and hash-router selected experts/weights.
-- [ ] Compute GPU router logits with source-F32 arena matmul and select
+- [x] Bind and load `ffn_gate_inp.weight`.
+- [x] Bind and read `ffn_gate_tid2eid`.
+- [x] Compute CPU router logits and hash-router selected experts/weights.
+- [x] Compute GPU router logits with source-F32 arena matmul and select
       experts/weights with `ds4_gpu_router_select_tensor`.
 
 ### Phase 3: Router-Selected FFN Composition
@@ -73,10 +74,10 @@ scheduler-owned layer slice.
 - `tests/cuda_v100_descriptor_bound_ffn_smoke.c`
 
 **Tasks:**
-- [ ] Upload selected routed expert spans for all six routed experts.
-- [ ] Execute routed gate/up/down for all selected experts with router weights.
-- [ ] Preserve shared F8 expert computation.
-- [ ] Compare summed CPU/GPU FFN output.
+- [x] Upload selected routed expert spans for all six routed experts.
+- [x] Execute routed gate/up/down for all selected experts with router weights.
+- [x] Preserve shared F8 expert computation.
+- [x] Compare summed CPU/GPU FFN output.
 
 ### Phase 4: Gate, Validation, Closeout
 
@@ -88,10 +89,10 @@ scheduler-owned layer slice.
 - `docs/sprints/VISION.md`
 
 **Tasks:**
-- [ ] Run local validation.
-- [ ] Run cluster smoke and full appliance gate.
-- [ ] Archive logs.
-- [ ] Update sprint docs and vision.
+- [x] Run local validation.
+- [x] Run cluster smoke and full appliance gate.
+- [x] Archive logs.
+- [x] Update sprint docs and vision.
 
 ## Definition Of Done
 

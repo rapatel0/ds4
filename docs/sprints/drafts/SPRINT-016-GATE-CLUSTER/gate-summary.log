@@ -1,0 +1,45 @@
+gate	build	CUDA_ARCH=sm_70 targets=tools/ds4-source-oracle-vector tests/cuda_source_dtypes_smoke tests/cuda_bf16_probe tests/cuda_v100_context_smoke tests/cuda_v100_compressor_bridge_smoke tests/cuda_v100_prefill_kv_smoke tests/cuda_hc_relay_smoke tests/cuda_v100_projection_attention_smoke tests/cuda_v100_bounded_logits_smoke tests/cuda_v100_mxfp4_moe_smoke tools/ds4-v100-layer-descriptor-gate tests/v100_layer_binding_smoke tests/cuda_v100_descriptor_bound_ffn_smoke
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -DDS4_NO_GPU -D_FILE_OFFSET_BITS=64 -c -o tools/ds4-source-oracle-vector.o tools/ds4-source-oracle-vector.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -DDS4_NO_GPU -c -o ds4_cpu.o ds4.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -o tools/ds4-source-oracle-vector tools/ds4-source-oracle-vector.o ds4_cpu.o ds4_pack.o ds4_source_formats.o -lm -pthread
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -c -o tests/cuda_source_dtypes_smoke.o tests/cuda_source_dtypes_smoke.c
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -o tests/cuda_source_dtypes_smoke tests/cuda_source_dtypes_smoke.o ds4_cuda.o ds4_source_formats.o -lm -Xcompiler -pthread -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/local/cuda/lib64 -lcudart -lcublas
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -c -o tests/cuda_bf16_probe.o tests/cuda_bf16_probe.c
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -o tests/cuda_bf16_probe tests/cuda_bf16_probe.o ds4_cuda.o -lm -Xcompiler -pthread -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/local/cuda/lib64 -lcudart -lcublas
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -c -o tests/cuda_v100_context_smoke.o tests/cuda_v100_context_smoke.c
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -I. -c -o ds4_v100_context_cuda.o ds4_v100_context_cuda.cu
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -o tests/cuda_v100_context_smoke tests/cuda_v100_context_smoke.o ds4_v100_context.o ds4_v100_context_cuda.o ds4_pack.o -lm -Xcompiler -pthread -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/local/cuda/lib64 -lcudart -lcublas
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -c -o tests/cuda_v100_compressor_bridge_smoke.o tests/cuda_v100_compressor_bridge_smoke.c
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -o tests/cuda_v100_compressor_bridge_smoke tests/cuda_v100_compressor_bridge_smoke.o ds4_cuda.o -lm -Xcompiler -pthread -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/local/cuda/lib64 -lcudart -lcublas
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -c -o tests/cuda_v100_prefill_kv_smoke.o tests/cuda_v100_prefill_kv_smoke.c
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -o tests/cuda_v100_prefill_kv_smoke tests/cuda_v100_prefill_kv_smoke.o ds4_cuda.o ds4_source_formats.o -lm -Xcompiler -pthread -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/local/cuda/lib64 -lcudart -lcublas
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -c -o tests/cuda_hc_relay_smoke.o tests/cuda_hc_relay_smoke.c
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -o tests/cuda_hc_relay_smoke tests/cuda_hc_relay_smoke.o ds4_v100_context.o ds4_v100_context_cuda.o ds4_pack.o -lm -Xcompiler -pthread -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/local/cuda/lib64 -lcudart -lcublas
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -c -o tests/cuda_v100_projection_attention_smoke.o tests/cuda_v100_projection_attention_smoke.c
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -o tests/cuda_v100_projection_attention_smoke tests/cuda_v100_projection_attention_smoke.o ds4_cuda.o ds4_source_formats.o ds4_v100_context.o ds4_v100_context_cuda.o ds4_pack.o -lm -Xcompiler -pthread -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/local/cuda/lib64 -lcudart -lcublas
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -c -o tests/cuda_v100_bounded_logits_smoke.o tests/cuda_v100_bounded_logits_smoke.c
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -o tests/cuda_v100_bounded_logits_smoke tests/cuda_v100_bounded_logits_smoke.o ds4_cuda.o -lm -Xcompiler -pthread -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/local/cuda/lib64 -lcudart -lcublas
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -c -o tests/cuda_v100_mxfp4_moe_smoke.o tests/cuda_v100_mxfp4_moe_smoke.c
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -o tests/cuda_v100_mxfp4_moe_smoke tests/cuda_v100_mxfp4_moe_smoke.o ds4_cuda.o ds4_source_formats.o -lm -Xcompiler -pthread -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/local/cuda/lib64 -lcudart -lcublas
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -D_FILE_OFFSET_BITS=64 -c -o tools/ds4-v100-layer-descriptor-gate.o tools/ds4-v100-layer-descriptor-gate.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -o tools/ds4-v100-layer-descriptor-gate tools/ds4-v100-layer-descriptor-gate.o ds4_pack.o -lm -pthread
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -c -o tests/v100_layer_binding_smoke.o tests/v100_layer_binding_smoke.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -o tests/v100_layer_binding_smoke tests/v100_layer_binding_smoke.o ds4_v100_context.o ds4_pack.o ds4_source_formats.o -lm -pthread
+make: 'tests/cuda_v100_descriptor_bound_ffn_smoke' is up to date.
+gate	build	PASS
+gate	nvidia_smi	PASS	command=nvidia-smi -L
+gate	source_guards	PASS	command=./tools/ds4-source-oracle-vector --model /models/DSv4-Flash-256e-fixed.gguf --guards-only
+gate	source_dtypes	PASS	command=./tests/cuda_source_dtypes_smoke
+gate	bf16_probe	PASS	command=./tests/cuda_bf16_probe
+gate	context_kv	PASS	command=./tests/cuda_v100_context_smoke --production --kv-ctx 1048576 --kv-slots 1
+gate	compressor_bridge	PASS	command=./tests/cuda_v100_compressor_bridge_smoke
+gate	prefill_kv	PASS	command=./tests/cuda_v100_prefill_kv_smoke
+gate	hc_relay	PASS	command=./tests/cuda_hc_relay_smoke
+gate	projection_attention	PASS	command=./tests/cuda_v100_projection_attention_smoke
+gate	bounded_logits	PASS	command=./tests/cuda_v100_bounded_logits_smoke
+gate	mxfp4_moe	PASS	command=./tests/cuda_v100_mxfp4_moe_smoke
+gate	layer_descriptors	PASS	command=./tools/ds4-v100-layer-descriptor-gate --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --layer 2 --gpus 8
+gate	layer_bindings	PASS	command=./tests/v100_layer_binding_smoke --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --layer 2
+gate	descriptor_bound_ffn	PASS	command=./tests/cuda_v100_descriptor_bound_ffn_smoke --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --model /models/DSv4-Flash-256e-fixed.gguf --layer 2 --router-token 16
+gate	readiness	NOT_READY	missing=full_layer_scheduler,attention_residual_norm,real_model_selected_token,public_serving,mtp,throughput_benchmark
+gate	summary	PASS	failures=0 ready=false

@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-18
-last_updated_by: sprint-plan
-revision: 22
+last_updated_by: sprint-execute
+revision: 23
 ---
 
 # Vision: DS4 V100 Appliance
@@ -90,6 +90,14 @@ it is a narrow DS4 runtime tuned for this hardware.
   `ready=false` because real router scheduling, full attention/residual/norm
   layer execution, selected-token decode, serving, MTP, and throughput remain
   incomplete.
+- Sprint 016 shipped descriptor-bound real router scheduling for the layer-2
+  FFN slice. The V100 pod now computes router logits from real
+  `ffn_gate_inp.weight` bytes, selects experts through the real
+  `ffn_gate_tid2eid` hash table, executes all six selected MXFP4 routed experts
+  plus the shared F8 expert, and compares the result against CPU source-format
+  references. The gate still reports `ready=false` because scheduler-owned full
+  layer execution, attention/residual/norm integration, real-model selected
+  token decode, serving, MTP, and throughput remain incomplete.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -288,16 +296,29 @@ it is a narrow DS4 runtime tuned for this hardware.
   smoke executes real routed MXFP4 plus shared F8 bytes from the source GGUF at
   real pack offsets.
 
-### Sprint 016 - V100 Descriptor-Bound Router FFN Gate [planned]
+### Sprint 016 - V100 Descriptor-Bound Router FFN Gate [complete]
 
 - **Goal**: Upgrade descriptor-bound FFN compute from fixed expert to
   model-selected routed experts using real `ffn_gate_inp.weight` and
   `ffn_gate_tid2eid` descriptors.
 - **Rationale**: Sprint 015 proves real-byte FFN compute, but serving requires
   real router scheduling before a coherent layer state machine can be trusted.
-- **Plan**: Add source-F32 arena matmul, compute router logits from real
-  descriptor-bound bytes, select hash-routed experts, and execute all selected
-  routed experts plus the shared expert in the V100 smoke.
+- **Outcome**: `SHIP`. Source-F32 arena matmul landed, the descriptor-bound FFN
+  smoke computes router logits from real bytes, selects experts through the real
+  hash-router table, executes all six selected routed experts plus the shared
+  expert, and passes the full V100 appliance gate.
+
+### Sprint 017 - V100 Scheduler-Owned Layer State Gate [planned]
+
+- **Goal**: Introduce a reusable scheduler-owned layer execution state that
+  binds real descriptors once and owns the router/FFN scratch needed by later
+  attention, residual, norm, and selected-token integration.
+- **Rationale**: Sprint 016 still proves router-selected FFN as a standalone
+  smoke. The next readiness gap is making descriptor-bound execution a runtime
+  surface the appliance scheduler can call instead of a test-local composition.
+- **Plan**: Factor descriptor-bound layer bindings and source row views into a
+  reusable layer state, run the router-selected FFN through that state, and wire
+  the state gate into the appliance readiness script.
 
 ## Parking Lot
 
@@ -339,6 +360,9 @@ it is a narrow DS4 runtime tuned for this hardware.
 - See `docs/sprints/SPRINT-015-FOLLOWUPS.md`: real router scheduling,
   descriptor-bound layer state, attention/residual/norm integration,
   selected-token real-model gate, and production memory reuse.
+- See `docs/sprints/SPRINT-016-FOLLOWUPS.md`: scheduler-owned layer state,
+  attention/residual/norm integration, real-model selected-token gate,
+  production arena reuse, and representative router coverage.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -367,12 +391,13 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-18 | Shipped Sprint 011 source projection and attention/compressor slice, keeping deployment behind Sprint 012's logits gate. | V100 now has device-resident source-F8 projection diagnostics, BF16/F32 policy checks, projection-fed ratio-4/ratio-128 attention/compressor smokes, and device-row KV writes, but still lacks MoE, output head, and selected-token correctness. | Sprint 012-013 |
 | 2026-05-18 | Shipped Sprint 014 real pack-index descriptor validation and moved Sprint 015 to descriptor-bound layer compute. | The appliance gate now proves the real layer-2 descriptor contract on the V100 pod, so the next risk is converting those descriptors into runtime bindings that launch compute on real resident shard bytes. | Sprint 015+ |
 | 2026-05-18 | Shipped Sprint 015 descriptor-bound FFN compute from real source bytes and moved Sprint 016 to scheduler-owned layer slicing. | The appliance now proves real pack offsets can feed routed MXFP4 and shared F8 FFN compute on V100; the next blocker is real router/layer state and attention/residual/norm integration. | Sprint 016+ |
+| 2026-05-18 | Shipped Sprint 016 descriptor-bound real router FFN compute and moved Sprint 017 to scheduler-owned layer state. | The appliance now proves real layer-2 router logits, hash-router selected experts, all six routed MXFP4 experts, and shared F8 FFN compute on V100; the next blocker is moving this out of a standalone smoke into a scheduler-owned runtime layer surface. | Sprint 017+ |
 
 ## Open Questions
 
-1. What is the smallest Sprint 016 layer slice that meaningfully advances
-   serving: real router+FFN, attention+KV plus FFN, or a narrow path that also
-   reaches output logits?
+1. What is the smallest Sprint 017 scheduler-owned layer surface that
+   meaningfully advances serving: refactored router+FFN state, attention+KV
+   plus FFN, or a narrow path that also reaches output logits?
 2. What reference should define correctness tolerances for mixed
    BF16/F32/F8_E4M3_B128/MXFP4 execution on V100 after MoE is included?
 3. What minimum serving milestone counts as "usable" before optimization:
