@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-18
-last_updated_by: vision
-revision: 13
+last_updated_by: sprint-plan
+revision: 14
 ---
 
 # Vision: DS4 V100 Appliance
@@ -212,16 +212,15 @@ it is a narrow DS4 runtime tuned for this hardware.
   references, and stage-owned KV writes can consume device-resident projection
   rows.
 
-### Sprint 012 - V100 Source Layer And Logits Gate [planned]
+### Sprint 012 - V100 Appliance Gate And Bounded Output-Head Logits [planned]
 
-- **Goal**: Produce a bounded source-layout V100 logits or selected-token
-  comparison for a single-slot prompt using the source projection/attention
-  slice plus attention output, residual/HC movement, router, shared-expert,
-  routed expert, and output-head paths.
+- **Goal**: Add a bounded source-BF16 output-head/logits primitive on V100 and
+  a runnable appliance readiness gate that validates real-model guards,
+  existing V100 smokes, and the new logits/top-k smoke.
 - **Rationale**: Deployment should wait for a coherent logits-producing V100
-  path. Sprint 011 proves projection-fed attention/compressor slices, but MoE,
-  output head, and selected-token correctness remain the critical deployment
-  blockers.
+  path. Sprint 011 proves projection-fed attention/compressor slices; Sprint
+  012 fills the output-head/logits surface and makes readiness status explicit
+  without pretending full MoE or serving are complete.
 
 ### Sprint 013 - V100 Appliance Deployment [planned]
 
