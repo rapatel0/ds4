@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-18
-last_updated_by: sprint-execute
-revision: 11
+last_updated_by: sprint-plan
+revision: 12
 ---
 
 # Vision: DS4 V100 Appliance
@@ -192,16 +192,24 @@ it is a narrow DS4 runtime tuned for this hardware.
   source-format dense projection, MoE, logits, selected-token decode, and
   serving remain deferred.
 
-### Sprint 011 - V100 Source Layer And Logits Gate [planned]
+### Sprint 011 - V100 Source Projection And Attention Slice [planned]
+
+- **Goal**: Prove bounded source F8/BF16 projection boundaries and feed
+  projection-equivalent device tensors through ratio-4 and ratio-128
+  attention/compressor slices on V100.
+- **Rationale**: Sprint 010 proved KV ownership and compressor recurrence, but
+  the next untrusted surface is source-format projection math. Full logits
+  should wait until this path is correct.
+
+### Sprint 012 - V100 Source Layer And Logits Gate [planned]
 
 - **Goal**: Produce a bounded source-layout V100 logits or selected-token
   comparison for a single-slot prompt using real source-format projection,
   attention, router, expert/shared-expert, and output-head paths.
-- **Rationale**: Sprint 010 proved KV ownership and compressor recurrence, but
-  deployment should wait for dense, MoE, and output-head correctness against
-  the guarded source oracle.
+- **Rationale**: Deployment should wait for dense, MoE, and output-head
+  correctness against the guarded source oracle.
 
-### Sprint 012 - V100 Appliance Deployment [planned]
+### Sprint 013 - V100 Appliance Deployment [planned]
 
 - **Goal**: Package the runtime as a cluster-deployed CLI/server path with
   startup residency validation, health checks, guarded operational defaults,
@@ -209,7 +217,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 - **Rationale**: Deployment should follow a verified logits-producing V100
   path so failures mean serving issues, not basic model execution gaps.
 
-### Sprint 013 - Throughput And Context Optimization [tentative]
+### Sprint 014 - Throughput And Context Optimization [tentative]
 
 - **Goal**: Improve aggregate tokens/sec and context-tier admission through
   slot batching, wavefront scheduling, expert kernel selection, relay overlap,
@@ -217,7 +225,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 - **Rationale**: Optimization should be driven by measured bottlenecks from the
   verified decode and prefill path, not by assumptions from the residency sprint.
 
-### Sprint 014 - MTP And Advanced Throughput [tentative]
+### Sprint 015 - MTP And Advanced Throughput [tentative]
 
 - **Goal**: Add MTP/speculative decoding and evaluate selective tensor-parallel
   exceptions after the base appliance path is stable.
@@ -278,6 +286,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-18 | Shipped Sprint 008 source oracle harness, F16 KV admission, source dtype hardening, and CUDA F8 source-format anchor. | The project now has executable correctness, memory-admission, and first device source-format contracts for the Sprint 009 V100 prefill/KV implementation. | Sprint 008-009 |
 | 2026-05-18 | Shipped Sprint 009 bounded V100 prefill/KV execution and inserted a single-slot decode integration sprint before deployment. | KV arena allocation, source-layout guards, and CUDA ratio-class row/state updates now pass on V100 `sm_70`; the next risk is real projection/compressor integration and oracle comparison, not server packaging. | Sprint 009-011 |
 | 2026-05-18 | Shipped Sprint 010 stage-owned KV views/updates and real compressor recurrence smokes, then moved deployment behind a logits-producing V100 source-layout gate. | The project now trusts per-layer KV/state ownership and compressor recurrence on V100, but serving still lacks real source-format dense projection, MoE, output-head logits, and selected-token correctness. | Sprint 010-012 |
+| 2026-05-18 | Split Sprint 011 into a source projection and attention-slice gate before the full logits gate. | Planning showed the next concrete risk is source FP8/BF16 projection on V100; full logits remain too broad until projection and bounded attention/compressor slices are trusted. | Sprint 011-013 |
 
 ## Open Questions
 

@@ -22,7 +22,7 @@ before deployment or throughput work.
 - **Why:** Deployment needs a coherent layer output, not isolated KV and
   compressor smokes.
 - **Severity:** Critical.
-- **Suggested sprint:** Sprint 011.
+- **Suggested sprint:** Sprint 011+.
 - **Files:** `ds4_cuda.cu`, `ds4_v100_context_cuda.cu`, future scheduler files.
 
 ## Router, Expert, And Shared-Expert Baseline
@@ -32,7 +32,7 @@ before deployment or throughput work.
 - **Why:** DS4 quality depends on MoE routing and expert math; throughput kernel
   selection should wait until this path is correct.
 - **Severity:** Critical.
-- **Suggested sprint:** Sprint 011+.
+- **Suggested sprint:** Sprint 012+.
 - **Files:** `ds4_cuda.cu`, TurboMind/tc-grid integration surfaces, scheduler
   files.
 
@@ -43,7 +43,7 @@ before deployment or throughput work.
 - **Why:** This is the real deployment gate. KV/compressor correctness is
   necessary but not sufficient for serving.
 - **Severity:** Critical.
-- **Suggested sprint:** Sprint 011.
+- **Suggested sprint:** Sprint 012.
 - **Files:** `tools/ds4-source-oracle-vector.c`, V100 diagnostic test/tool.
 
 ## Deployment Re-Sequencing
@@ -53,7 +53,7 @@ before deployment or throughput work.
 - **Why:** Sprint 010 confirmed deployment is premature without dense,
   attention, MoE, and output-head correctness.
 - **Severity:** Important.
-- **Suggested sprint:** Sprint 012 after Sprint 011 correctness.
+- **Suggested sprint:** Sprint 013 after the logits gate.
 - **Files:** `docs/sprints/VISION.md`, next sprint plans.
 
 ## Summary
@@ -61,7 +61,7 @@ before deployment or throughput work.
 | Item | Severity | Suggested Sprint | Files |
 |---|---|---|---|
 | Full source-format projection path | Critical | Sprint 011 | `ds4_cuda.cu`, `ds4_gpu.h`, scheduler files |
-| Attention and layer output | Critical | Sprint 011 | `ds4_cuda.cu`, context/scheduler files |
-| Router/expert/shared-expert baseline | Critical | Sprint 011+ | `ds4_cuda.cu`, kernel integration surfaces |
-| Bounded logits/top-k comparison | Critical | Sprint 011 | oracle and V100 diagnostic tool |
-| Deployment re-sequencing | Important | Sprint 012 | vision and sprint plans |
+| Attention and layer output | Critical | Sprint 011+ | `ds4_cuda.cu`, context/scheduler files |
+| Router/expert/shared-expert baseline | Critical | Sprint 012+ | `ds4_cuda.cu`, kernel integration surfaces |
+| Bounded logits/top-k comparison | Critical | Sprint 012 | oracle and V100 diagnostic tool |
+| Deployment re-sequencing | Important | Sprint 013 | vision and sprint plans |

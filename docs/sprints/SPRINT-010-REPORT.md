@@ -87,8 +87,7 @@ Cluster validation:
 
 ## Handoff
 
-Sprint 011 should not be public deployment yet. The next gate is a
-logits-producing V100 source-layout slice: real source-format dense projections,
-attention output, router/shared/routed expert path, and output-head/top-k for a
-bounded single-slot prompt, compared against the source oracle before serving
-is exposed.
+Sprint 011 should not be public deployment yet. The next gate is source-format
+projection plus a bounded V100 attention/compressor slice. A later logits gate
+should add router/shared/routed expert execution and output-head/top-k before
+serving is exposed.
