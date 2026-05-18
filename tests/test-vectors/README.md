@@ -25,6 +25,21 @@ The C runner consumes `official.vec` directly:
 ./ds4_test --logprob-vectors
 ```
 
+The source-layout oracle runner verifies the guarded CPU oracle against the
+native DS4-Flash source model without manual JSON inspection:
+
+```sh
+make tools/ds4-source-oracle-vector
+tools/ds4-source-oracle-vector \
+  --model /models/DSv4-Flash-256e-fixed.gguf \
+  --only short_reasoning_plain
+```
+
+Use `--dry-parse` for a model-less fixture sanity check. Use `--guard-checks`
+on the cluster when you want the same command to also prove normal
+source-layout serving, non-CPU oracle use, MTP sidecars, and sessions without
+the diagnostic unlock still fail closed.
+
 `official.vec` is intentionally trivial to parse from C: each case points to a
 prompt file and each expected token is hex-encoded by bytes. The official JSON
 files remain in the tree so the compact fixture can be audited against the raw

@@ -165,15 +165,15 @@ normal source-model generation.
 - `Makefile`
 
 **Tasks:**
-- [ ] Add a source-oracle official-vector test mode that opens the source model
+- [x] Add a source-oracle official-vector test mode that opens the source model
       through CPU oracle settings and diagnostic session unlock.
 - [ ] Verify selected-token equality for `short_reasoning_plain` without
       manual JSON inspection.
-- [ ] Reuse existing official-vector parsing/top-logprob helpers where
+- [x] Reuse existing official-vector parsing/top-logprob helpers where
       practical.
-- [ ] Add or extend guard tests for normal source-layout rejection, non-CPU
+- [x] Add or extend guard tests for normal source-layout rejection, non-CPU
       oracle rejection, MTP rejection, and missing diagnostic-session unlock.
-- [ ] Document the command and source-model path requirement.
+- [x] Document the command and source-model path requirement.
 
 ### Phase 2: V100 F16 KV Admission
 
