@@ -2,7 +2,9 @@
 
 #include "ds4_pack.h"
 
+#include <float.h>
 #include <inttypes.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,6 +31,11 @@ struct ds4_v100_stage_scheduler {
     ds4_gpu_arena *arena;
     ds4_v100_stage_info stage;
     ds4_v100_tensor_binding token_embedding;
+    ds4_v100_tensor_binding hc_head_fn;
+    ds4_v100_tensor_binding hc_head_base;
+    ds4_v100_tensor_binding hc_head_scale;
+    ds4_v100_tensor_binding output_norm;
+    ds4_v100_tensor_binding output_weight;
     ds4_v100_layer_state states[DS4_V100_N_LAYERS];
     scheduler_layer_cache caches[DS4_V100_N_LAYERS];
     ds4_gpu_tensor *hc_a;
@@ -278,6 +285,33 @@ int ds4_v100_stage_scheduler_open(ds4_v100_stage_scheduler **out,
         ds4_v100_stage_scheduler_close(sched);
         return 1;
     }
+    if (ds4_v100_context_lookup_tensor_binding(sched->ctx,
+                                               "hc_head_fn",
+                                               &sched->hc_head_fn,
+                                               err,
+                                               errlen) ||
+        ds4_v100_context_lookup_tensor_binding(sched->ctx,
+                                               "hc_head_base",
+                                               &sched->hc_head_base,
+                                               err,
+                                               errlen) ||
+        ds4_v100_context_lookup_tensor_binding(sched->ctx,
+                                               "hc_head_scale",
+                                               &sched->hc_head_scale,
+                                               err,
+                                               errlen) ||
+        ds4_v100_context_lookup_tensor_binding(sched->ctx,
+                                               "output_norm.weight",
+                                               &sched->output_norm,
+                                               err,
+                                               errlen) ||
+        ds4_v100_context_output_head_binding(sched->ctx,
+                                             &sched->output_weight,
+                                             err,
+                                             errlen)) {
+        ds4_v100_stage_scheduler_close(sched);
+        return 1;
+    }
 
     const uint64_t arena_bytes = ds4_pack_arena_bytes(sched->pack, sched->stage.gpu);
     if (arena_bytes == 0 ||
@@ -433,4 +467,146 @@ int ds4_v100_stage_scheduler_read_hc(const ds4_v100_stage_scheduler *sched,
         (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS * sizeof(float);
     if (bytes > hc_bytes) return 0;
     return ds4_gpu_tensor_read(sched->cur_hc, 0, dst, bytes);
+}
+
+static int output_bf16_view(const ds4_v100_tensor_binding *b,
+                            ds4_gpu_bf16_matrix_view *out,
+                            char *err,
+                            size_t errlen) {
+    if (!b || !out) return scheduler_error(err, errlen, "missing output binding");
+    if (!b->source_dtype || strcmp(b->source_dtype, "bf16") != 0 ||
+        b->n_shape_dims != 2 ||
+        b->shape[0] != DS4_V100_HC_COLS ||
+        b->shape[1] == 0 ||
+        b->byte_length != b->shape[0] * b->shape[1] * sizeof(uint16_t)) {
+        return scheduler_error(err, errlen, "invalid output.weight bf16 binding");
+    }
+    memset(out, 0, sizeof(*out));
+    out->arena_offset = b->shard_offset;
+    out->byte_length = b->byte_length;
+    out->rows = (uint32_t)b->shape[1];
+    out->cols = (uint32_t)b->shape[0];
+    out->row_stride_elements = (uint32_t)b->shape[0];
+    return 0;
+}
+
+int ds4_v100_stage_scheduler_select_token(ds4_v100_stage_scheduler *sched,
+                                          uint32_t *token,
+                                          float *logit,
+                                          char *err,
+                                          size_t errlen) {
+    if (!sched || !sched->cur_hc || !token) {
+        return scheduler_error(err, errlen, "missing scheduler output-head input");
+    }
+    *token = UINT32_MAX;
+    if (logit) *logit = 0.0f;
+    if (!sched->stage.owns_output_head) {
+        return scheduler_error(err, errlen, "select-token requires output-head stage");
+    }
+    if (!ds4_gpu_set_device(sched->stage.gpu)) {
+        return scheduler_errorf(err, errlen, "failed to set scheduler device gpu%d",
+                                sched->stage.gpu);
+    }
+
+    const uint64_t hc_values = (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS;
+    if (sched->hc_head_fn.n_shape_dims != 2 ||
+        sched->hc_head_fn.shape[0] != hc_values ||
+        sched->hc_head_fn.shape[1] != DS4_V100_HC_ROWS ||
+        sched->hc_head_base.n_shape_dims != 1 ||
+        sched->hc_head_base.shape[0] != DS4_V100_HC_ROWS ||
+        sched->hc_head_scale.n_shape_dims != 1 ||
+        sched->hc_head_scale.shape[0] != 1 ||
+        sched->output_norm.n_shape_dims != 1 ||
+        sched->output_norm.shape[0] != DS4_V100_HC_COLS ||
+        sched->output_weight.owning_gpu != sched->stage.gpu) {
+        return scheduler_error(err, errlen, "invalid output-head descriptor shapes");
+    }
+
+    ds4_gpu_bf16_matrix_view output_v;
+    if (output_bf16_view(&sched->output_weight, &output_v, err, errlen)) return 1;
+    const uint32_t n_vocab = output_v.rows;
+    const uint64_t logits_bytes = (uint64_t)n_vocab * sizeof(float);
+
+    ds4_gpu_tensor *hc_norm = ds4_gpu_tensor_alloc(hc_values * sizeof(float));
+    ds4_gpu_tensor *head_pre = ds4_gpu_tensor_alloc(DS4_V100_HC_ROWS * sizeof(float));
+    ds4_gpu_tensor *head_weights = ds4_gpu_tensor_alloc(DS4_V100_HC_ROWS * sizeof(float));
+    ds4_gpu_tensor *output_embd = ds4_gpu_tensor_alloc(DS4_V100_HC_COLS * sizeof(float));
+    ds4_gpu_tensor *output_norm = ds4_gpu_tensor_alloc(DS4_V100_HC_COLS * sizeof(float));
+    ds4_gpu_tensor *logits = ds4_gpu_tensor_alloc(logits_bytes);
+    float *host_logits = (float *)malloc((size_t)logits_bytes);
+    int rc = 1;
+
+    if (!hc_norm || !head_pre || !head_weights || !output_embd ||
+        !output_norm || !logits || !host_logits) {
+        scheduler_error(err, errlen, "failed to allocate output-head tensors");
+        goto done;
+    }
+
+    if (!ds4_gpu_rms_norm_plain_tensor(hc_norm,
+                                       sched->cur_hc,
+                                       (uint32_t)hc_values,
+                                       1.0e-6f) ||
+        !ds4_gpu_matmul_f32_tensor(head_pre,
+                                   sched->model_map,
+                                   sched->model_size,
+                                   sched->hc_head_fn.source_offset,
+                                   hc_values,
+                                   DS4_V100_HC_ROWS,
+                                   hc_norm,
+                                   1) ||
+        !ds4_gpu_output_hc_weights_tensor(head_weights,
+                                          head_pre,
+                                          sched->model_map,
+                                          sched->model_size,
+                                          sched->hc_head_scale.source_offset,
+                                          sched->hc_head_base.source_offset,
+                                          DS4_V100_HC_ROWS,
+                                          1.0e-6f) ||
+        !ds4_gpu_hc_weighted_sum_tensor(output_embd,
+                                        sched->cur_hc,
+                                        head_weights,
+                                        DS4_V100_HC_COLS,
+                                        DS4_V100_HC_ROWS) ||
+        !ds4_gpu_rms_norm_weight_tensor(output_norm,
+                                        output_embd,
+                                        sched->model_map,
+                                        sched->model_size,
+                                        sched->output_norm.source_offset,
+                                        DS4_V100_HC_COLS,
+                                        1.0e-6f) ||
+        ds4_gpu_arena_bf16_matmul_f32(sched->arena,
+                                      &output_v,
+                                      output_norm,
+                                      logits) != 0 ||
+        !ds4_gpu_tensor_read(logits, 0, host_logits, logits_bytes)) {
+        scheduler_error(err, errlen, "output-head selected-token sequence failed");
+        goto done;
+    }
+
+    uint32_t best = UINT32_MAX;
+    float best_v = -FLT_MAX;
+    for (uint32_t i = 0; i < n_vocab; i++) {
+        const float v = host_logits[i];
+        if (!isfinite(v)) {
+            scheduler_error(err, errlen, "output-head logits contained non-finite values");
+            goto done;
+        }
+        if (best == UINT32_MAX || v > best_v) {
+            best = i;
+            best_v = v;
+        }
+    }
+    *token = best;
+    if (logit) *logit = best_v;
+    rc = 0;
+
+done:
+    free(host_logits);
+    ds4_gpu_tensor_free(logits);
+    ds4_gpu_tensor_free(output_norm);
+    ds4_gpu_tensor_free(output_embd);
+    ds4_gpu_tensor_free(head_weights);
+    ds4_gpu_tensor_free(head_pre);
+    ds4_gpu_tensor_free(hc_norm);
+    return rc;
 }

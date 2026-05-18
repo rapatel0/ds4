@@ -72,6 +72,12 @@ int ds4_v100_stage_scheduler_read_hc(const ds4_v100_stage_scheduler *sched,
                                      void *dst,
                                      uint64_t bytes);
 
+int ds4_v100_stage_scheduler_select_token(ds4_v100_stage_scheduler *sched,
+                                          uint32_t *token,
+                                          float *logit,
+                                          char *err,
+                                          size_t errlen);
+
 #ifdef __cplusplus
 }
 #endif

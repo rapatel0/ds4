@@ -110,6 +110,7 @@ if [ -n "$pack_index" ]; then
     targets+=(tests/cuda_v100_stage_scheduler_smoke)
     targets+=(tests/cuda_v100_two_stage_scheduler_smoke)
     targets+=(tests/cuda_v100_full_scheduler_smoke)
+    targets+=(tests/cuda_v100_selected_token_smoke)
 fi
 
 if [ -n "$log_dir" ]; then
@@ -203,6 +204,7 @@ if [ -n "$pack_index" ]; then
             if run_gate "full_scheduler" ./tests/cuda_v100_full_scheduler_smoke --index "$pack_index" --model "$model" --token 16 --position 16; then
                 full_scheduler_ready=1
             fi
+            run_gate "scheduler_output_head" ./tests/cuda_v100_selected_token_smoke --index "$pack_index" --model "$model" --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt || true
         else
             echo "gate	descriptor_bound_attention	SKIP	no_model"
             echo "gate	descriptor_bound_ffn	SKIP	no_model"
@@ -211,6 +213,7 @@ if [ -n "$pack_index" ]; then
             echo "gate	stage_scheduler	SKIP	no_model"
             echo "gate	two_stage_scheduler	SKIP	no_model"
             echo "gate	full_scheduler	SKIP	no_model"
+            echo "gate	scheduler_output_head	SKIP	no_model"
         fi
     fi
 else
@@ -224,6 +227,7 @@ else
     echo "gate	stage_scheduler	SKIP	no_pack_index"
     echo "gate	two_stage_scheduler	SKIP	no_pack_index"
     echo "gate	full_scheduler	SKIP	no_pack_index"
+    echo "gate	scheduler_output_head	SKIP	no_pack_index"
 fi
 
 if [ "$failures" -ne 0 ]; then

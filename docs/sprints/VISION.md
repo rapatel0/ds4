@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-18
 last_updated_by: sprint-execute
-revision: 35
+revision: 36
 ---
 
 # Vision: DS4 V100 Appliance
@@ -151,6 +151,12 @@ it is a narrow DS4 runtime tuned for this hardware.
   longer lists `full_43_layer_scheduler`; the next critical gap is collapsing
   final HC through the output head and comparing a selected token against the
   source oracle.
+- Sprint 025 extended the scheduler with gpu7 output-head selected-token
+  execution. The V100 pod can now replay the short official prompt through all
+  43 layers, run HC-head collapse, output norm, BF16 output projection, and
+  select top-1. The explicit oracle check fails today: expected token bytes
+  `3136`, got `0a0a` at token id 271. The next critical gap is localizing the
+  numerical divergence across the 43-layer body.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -480,6 +486,18 @@ it is a narrow DS4 runtime tuned for this hardware.
   `full_43_layer_scheduler` from readiness when this check passes and remains
   `ready=false` pending selected-token decode, serving, MTP, and throughput.
 
+### Sprint 025 - Scheduler Output-Head Selected Token Surface [complete]
+
+- **Goal**: Attach gpu7 output-head selected-token execution to the resident
+  scheduler.
+- **Rationale**: Full-body traversal is necessary but not sufficient; the
+  appliance needs final HC collapse, output normalization, vocab projection,
+  and a top-1 token surface before selected-token correctness can be debugged.
+- **Outcome**: `EXTEND`. The output-head path runs on V100 and produces a
+  finite selected token after replaying the `short_reasoning_plain` prompt, but
+  the selected token does not match the official/source oracle. Readiness still
+  blocks on `real_model_selected_token`.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -538,6 +556,9 @@ it is a narrow DS4 runtime tuned for this hardware.
 - See `docs/sprints/SPRINT-024-FOLLOWUPS.md`: output-head selected-token gate,
   full-chain failure-local reports, per-stage upload/memory timing, relay
   optimization, MTP, and throughput.
+- See `docs/sprints/SPRINT-025-FOLLOWUPS.md`: selected-token divergence
+  localization, top-k diagnostics, output-head CPU parity, prompt replay
+  counters, and failure-preserving logs.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -575,6 +596,7 @@ it is a narrow DS4 runtime tuned for this hardware.
 | 2026-05-18 | Shipped Sprint 022 bias-router execution and a resident stage-0 scheduler. | The runtime now walks layers 0-5 from resident gpu0 pack bytes and validates both router families on V100; the next blocker is cross-GPU HC relay through all stages and output-head selected-token comparison. | Sprint 023+ |
 | 2026-05-18 | Shipped Sprint 023 cross-GPU two-stage scheduling. | The runtime now executes layers 0-11 across gpu0 and gpu1 with a peer HC handoff and device-local CUDA model caches; the next blocker is generalizing the stage chain through gpu7. | Sprint 024+ |
 | 2026-05-18 | Shipped Sprint 024 full 8-stage scheduling. | The runtime now executes all 43 layers across the 8x V100 body and removes `full_43_layer_scheduler` from gate readiness; the next blocker is output-head selected-token comparison against the source oracle. | Sprint 025+ |
+| 2026-05-18 | Extended Sprint 025 with scheduler-owned output-head selected-token execution. | The output-head path now runs and produces finite logits/top-1 on V100, but official-vector comparison fails (`3136` expected, `0a0a` selected), so the next blocker is divergence localization rather than more scheduling structure. | Sprint 026+ |
 
 ## Open Questions
 

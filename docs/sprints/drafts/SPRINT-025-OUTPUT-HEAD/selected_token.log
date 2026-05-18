@@ -1,0 +1,1 @@
+cuda_v100_selected_token_smoke: prompt_tokens=18 selected=271 logit=20.014683 expected=none ok
