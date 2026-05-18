@@ -220,6 +220,33 @@ ds4_v100_kv_budget ds4_v100_kv_budget_for_layer(int layer_id,
     return b;
 }
 
+static void kv_state_split_for_layer(int layer_id,
+                                     uint64_t *attn_kv,
+                                     uint64_t *attn_score,
+                                     uint64_t *indexer_kv,
+                                     uint64_t *indexer_score) {
+    if (attn_kv) *attn_kv = 0;
+    if (attn_score) *attn_score = 0;
+    if (indexer_kv) *indexer_kv = 0;
+    if (indexer_score) *indexer_score = 0;
+
+    const ds4_v100_layer_class layer_class = ds4_v100_layer_class_for_layer(layer_id);
+    if (layer_class == DS4_V100_LAYER_RATIO_4) {
+        const uint64_t attn =
+            (2ull * DS4_V100_HEAD_DIM) * (2ull * 4ull) * sizeof(float);
+        const uint64_t idx =
+            (2ull * DS4_V100_INDEXER_HEAD_DIM) * (2ull * 4ull) * sizeof(float);
+        if (attn_kv) *attn_kv = attn;
+        if (attn_score) *attn_score = attn;
+        if (indexer_kv) *indexer_kv = idx;
+        if (indexer_score) *indexer_score = idx;
+    } else if (layer_class == DS4_V100_LAYER_RATIO_128) {
+        const uint64_t attn = (uint64_t)DS4_V100_HEAD_DIM * 128ull * sizeof(float);
+        if (attn_kv) *attn_kv = attn;
+        if (attn_score) *attn_score = attn;
+    }
+}
+
 int ds4_v100_classify_or_die(const char *source_dtype,
                              const char *runtime_layout,
                              const char *kernel_family,
@@ -373,6 +400,70 @@ static void apply_derived_kv_plan(ds4_v100_context *ctx) {
 
         arena->total_bytes = off;
         stage->planned_kv_bytes = arena->total_bytes;
+    }
+    uint64_t raw_cursor[DS4_V100_EXPECTED_GPUS] = {0};
+    uint64_t comp_cursor[DS4_V100_EXPECTED_GPUS] = {0};
+    uint64_t index_cursor[DS4_V100_EXPECTED_GPUS] = {0};
+    uint64_t state_cursor[DS4_V100_EXPECTED_GPUS] = {0};
+
+    for (int layer = 0; layer < DS4_V100_N_LAYERS; layer++) {
+        ds4_v100_layer_info *li = &ctx->layers[layer];
+        ds4_v100_stage_info *stage = &ctx->stages[li->stage_id];
+        ds4_v100_layer_kv_view *view = &li->kv_view;
+        memset(view, 0, sizeof(*view));
+
+        view->raw_swa_offset = sat_add_u64(stage->kv_arena.raw_swa_offset,
+                                           raw_cursor[li->stage_id]);
+        view->raw_swa_bytes = li->kv_budget.raw_swa_bytes;
+        raw_cursor[li->stage_id] =
+            sat_add_u64(raw_cursor[li->stage_id], view->raw_swa_bytes);
+
+        view->compressed_attn_offset =
+            sat_add_u64(stage->kv_arena.compressed_attn_offset,
+                        comp_cursor[li->stage_id]);
+        view->compressed_attn_bytes = li->kv_budget.compressed_attn_bytes;
+        comp_cursor[li->stage_id] =
+            sat_add_u64(comp_cursor[li->stage_id], view->compressed_attn_bytes);
+
+        view->indexer_kv_offset =
+            sat_add_u64(stage->kv_arena.indexer_kv_offset,
+                        index_cursor[li->stage_id]);
+        view->indexer_kv_bytes = li->kv_budget.indexer_kv_bytes;
+        index_cursor[li->stage_id] =
+            sat_add_u64(index_cursor[li->stage_id], view->indexer_kv_bytes);
+
+        uint64_t attn_kv = 0;
+        uint64_t attn_score = 0;
+        uint64_t idx_kv = 0;
+        uint64_t idx_score = 0;
+        kv_state_split_for_layer(layer, &attn_kv, &attn_score, &idx_kv, &idx_score);
+        const uint64_t state_base = stage->kv_arena.compression_state_offset;
+
+        view->attn_state_kv_offset =
+            sat_add_u64(state_base, state_cursor[li->stage_id]);
+        view->attn_state_kv_bytes = attn_kv;
+        state_cursor[li->stage_id] =
+            sat_add_u64(state_cursor[li->stage_id], view->attn_state_kv_bytes);
+
+        view->attn_state_score_offset =
+            sat_add_u64(state_base, state_cursor[li->stage_id]);
+        view->attn_state_score_bytes = attn_score;
+        state_cursor[li->stage_id] =
+            sat_add_u64(state_cursor[li->stage_id], view->attn_state_score_bytes);
+
+        view->indexer_state_kv_offset =
+            sat_add_u64(state_base, state_cursor[li->stage_id]);
+        view->indexer_state_kv_bytes = idx_kv;
+        state_cursor[li->stage_id] =
+            sat_add_u64(state_cursor[li->stage_id], view->indexer_state_kv_bytes);
+
+        view->indexer_state_score_offset =
+            sat_add_u64(state_base, state_cursor[li->stage_id]);
+        view->indexer_state_score_bytes = idx_score;
+        state_cursor[li->stage_id] =
+            sat_add_u64(state_cursor[li->stage_id], view->indexer_state_score_bytes);
+
+        view->total_bytes = li->kv_budget.total_bytes;
     }
 }
 
@@ -740,5 +831,20 @@ void ds4_v100_context_print_report(const ds4_v100_context *ctx, FILE *fp) {
                 s->kv_arena.indexer_kv_bytes, s->kv_arena.compression_state_offset,
                 s->kv_arena.compression_state_bytes, s->planned_kv_bytes,
                 s->reserve_bytes, s->device_total_bytes);
+    }
+    fprintf(fp, "layer_kv_view\tlayer\tstage\tclass\traw_swa_offset\traw_swa_bytes\tcompressed_attn_offset\tcompressed_attn_bytes\tindexer_kv_offset\tindexer_kv_bytes\tattn_state_kv_offset\tattn_state_kv_bytes\tattn_state_score_offset\tattn_state_score_bytes\tindexer_state_kv_offset\tindexer_state_kv_bytes\tindexer_state_score_offset\tindexer_state_score_bytes\ttotal_bytes\n");
+    for (int layer = 0; layer < DS4_V100_N_LAYERS; layer++) {
+        const ds4_v100_layer_info *li = &ctx->layers[layer];
+        const ds4_v100_layer_kv_view *v = &li->kv_view;
+        fprintf(fp, "layer_kv_view\t%d\t%d\t%s\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\n",
+                layer, li->stage_id, ds4_v100_layer_class_name(li->layer_class),
+                v->raw_swa_offset, v->raw_swa_bytes,
+                v->compressed_attn_offset, v->compressed_attn_bytes,
+                v->indexer_kv_offset, v->indexer_kv_bytes,
+                v->attn_state_kv_offset, v->attn_state_kv_bytes,
+                v->attn_state_score_offset, v->attn_state_score_bytes,
+                v->indexer_state_kv_offset, v->indexer_state_kv_bytes,
+                v->indexer_state_score_offset, v->indexer_state_score_bytes,
+                v->total_bytes);
     }
 }

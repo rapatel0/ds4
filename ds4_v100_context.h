@@ -85,6 +85,24 @@ typedef struct {
 } ds4_v100_kv_arena_plan;
 
 typedef struct {
+    uint64_t raw_swa_offset;
+    uint64_t raw_swa_bytes;
+    uint64_t compressed_attn_offset;
+    uint64_t compressed_attn_bytes;
+    uint64_t indexer_kv_offset;
+    uint64_t indexer_kv_bytes;
+    uint64_t attn_state_kv_offset;
+    uint64_t attn_state_kv_bytes;
+    uint64_t attn_state_score_offset;
+    uint64_t attn_state_score_bytes;
+    uint64_t indexer_state_kv_offset;
+    uint64_t indexer_state_kv_bytes;
+    uint64_t indexer_state_score_offset;
+    uint64_t indexer_state_score_bytes;
+    uint64_t total_bytes;
+} ds4_v100_layer_kv_view;
+
+typedef struct {
     ds4_v100_source_dtype source_dtype;
     ds4_v100_tensor_family family;
     ds4_v100_exec_kind exec_kind;
@@ -131,6 +149,7 @@ typedef struct {
     int stage_id;
     ds4_v100_layer_class layer_class;
     ds4_v100_kv_budget kv_budget;
+    ds4_v100_layer_kv_view kv_view;
     uint64_t tensor_count;
     bool has_f32_control;
     bool has_fp8_dense;
@@ -202,6 +221,15 @@ void ds4_v100_context_print_report(const ds4_v100_context *ctx, FILE *fp);
 
 typedef struct ds4_v100_cuda_context ds4_v100_cuda_context;
 
+typedef struct {
+    int layer_id;
+    int stage_id;
+    int gpu;
+    void *kv_arena_base;
+    uint64_t kv_arena_bytes;
+    ds4_v100_layer_kv_view view;
+} ds4_v100_cuda_layer_kv_view;
+
 typedef enum {
     DS4_V100_RELAY_F16 = 0,
     DS4_V100_RELAY_F32_DEBUG = 1,
@@ -217,6 +245,11 @@ int ds4_v100_cuda_context_open(ds4_v100_cuda_context **out,
                                char *err,
                                size_t errlen);
 void ds4_v100_cuda_context_close(ds4_v100_cuda_context *ctx);
+int ds4_v100_cuda_context_layer_kv_view(ds4_v100_cuda_context *ctx,
+                                        int layer_id,
+                                        ds4_v100_cuda_layer_kv_view *out,
+                                        char *err,
+                                        size_t errlen);
 int ds4_v100_cuda_context_relay_smoke(ds4_v100_cuda_context *ctx,
                                       int src_stage,
                                       int dst_stage,

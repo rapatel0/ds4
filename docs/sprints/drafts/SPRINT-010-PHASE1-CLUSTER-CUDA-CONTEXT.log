@@ -1,0 +1,25 @@
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -c -o tests/cuda_v100_context_smoke.o tests/cuda_v100_context_smoke.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -c -o ds4_v100_context.o ds4_v100_context.c
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -I. -c -o ds4_v100_context_cuda.o ds4_v100_context_cuda.cu
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -c -o ds4_pack.o ds4_pack.c
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -o tests/cuda_v100_context_smoke tests/cuda_v100_context_smoke.o ds4_v100_context.o ds4_v100_context_cuda.o ds4_pack.o -lm -Xcompiler -pthread -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/local/cuda/lib64 -lcudart -lcublas
+kv_view	layer	2	stage	0	gpu	0	arena_bytes	689864704	view_total	335757312	raw_offset	262144	comp_offset	786432	state_offset	688652288
+cuda_v100_context_smoke: devices=8 stages=8 production=1
+device	0	cc	7.0	mem	34072559616	pci	0000:1A:00.0
+device	1	cc	7.0	mem	34072559616	pci	0000:1B:00.0
+device	2	cc	7.0	mem	34072559616	pci	0000:3D:00.0
+device	3	cc	7.0	mem	34072559616	pci	0000:3E:00.0
+device	4	cc	7.0	mem	34072559616	pci	0000:88:00.0
+device	5	cc	7.0	mem	34072559616	pci	0000:89:00.0
+device	6	cc	7.0	mem	34072559616	pci	0000:B2:00.0
+device	7	cc	7.0	mem	34072559616	pci	0000:B3:00.0
+p2p_from\to	0	1	2	3	4	5	6	7
+0	1	1	1	1	1	1	1	1
+1	1	1	1	1	1	1	1	1
+2	1	1	1	1	1	1	1	1
+3	1	1	1	1	1	1	1	1
+4	1	1	1	1	1	1	1	1
+5	1	1	1	1	1	1	1	1
+6	1	1	1	1	1	1	1	1
+7	1	1	1	1	1	1	1	1
+cuda_v100_context_smoke: ok

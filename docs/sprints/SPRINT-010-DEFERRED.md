@@ -1,62 +1,64 @@
 # SPRINT-010 Deferred Items
 
-These items are intentionally outside Sprint 010. If they become required for
-the sprint to pass, stop and re-scope.
+These items are intentionally outside Sprint 010. If implementation starts
+requiring them, stop and re-scope before continuing.
 
-## Full Selected-Token V100 Decode
+## Public Appliance Deployment
 
-**What:** Execute all 43 layers through output logits and selected-token
-generation on V100.
+**What:** Expose a normal CLI/server path with health checks and operational
+defaults.
 
-**Why deferred:** Sprint 010 is a bridge from existing device compressor outputs
-into the F16 KV contract. Full decode needs broader dense, routed expert,
-router, output-head, and scheduler integration.
+**Why deferred:** Deployment should follow a verified single-slot V100
+correctness slice. Sprint 010 is the integration gate before deployment.
 
-**Target sprint:** Sprint 011+ after the compressor/KV bridge passes.
+**Target sprint:** Sprint 011.
 
-## Normal Source-Layout Serving Unlock
+## Full 43-Layer Logits-Producing Decode
 
-**What:** Expose native source-layout generation through normal CLI/server
-paths.
+**What:** Execute all transformer layers through output logits and selected
+token generation on V100.
 
-**Why deferred:** Serving must remain fail-closed until V100 selected-token or
-bounded-logit correctness is verified.
+**Why deferred:** Sprint 010 should prove a bounded source-referenced
+prefill/decode slice first. Full logits will require broader dense, attention,
+router, expert, and output-head coverage.
 
-**Target sprint:** Deployment sprint after decode correctness.
+**Target sprint:** Sprint 011+ after Sprint 010 source comparison.
 
-## Production FP8/MXFP4 GEMMs
+## Production Routed Expert Kernels
 
-**What:** Implement broad production FP8 dense or MXFP4 expert GEMM kernels.
+**What:** Wire production MXFP4/INT expert kernels into full MoE execution.
 
-**Why deferred:** Sprint 010 can use bounded synthetic compressor fixtures, but
-full production kernels should be gated by the source-oracle comparison path.
+**Why deferred:** Sprint 010 focuses on KV, compressor, indexer, and bounded
+source comparison. Expert execution can be integrated once the layer slice has a
+trusted attention/KV path.
 
-**Target sprint:** After single-slot correctness gates.
+**Target sprint:** Sprint 011+.
 
-## Deployment And Health Checks
+## Throughput Scheduling
 
-**What:** Package the appliance as a deployed CLI/server with health checks and
-operator defaults.
+**What:** Add multi-slot batching, wavefront scheduling, overlap, benchmarks, or
+aggregate tokens/sec optimization.
 
-**Why deferred:** Deployment should follow a verified decode path.
+**Why deferred:** Throughput should be driven by a correct baseline decode path.
 
-**Target sprint:** Sprint 011+ depending on Sprint 010 outcome.
+**Target sprint:** Sprint 012+.
 
-## MTP, Tensor Parallelism, And Throughput
+## MTP And Tensor Parallelism
 
-**What:** Add MTP/speculative decoding, tensor-parallel exceptions, multi-slot
-scheduling, wavefront execution, or throughput benchmarks.
+**What:** Wire MTP/speculative decoding or tensor-parallel exceptions such as
+vocab-parallel output head or expert TP.
 
-**Why deferred:** These can hide baseline correctness bugs.
+**Why deferred:** These can mask correctness bugs in the baseline layer-owned
+runtime.
 
-**Target sprint:** Later throughput sprints.
+**Target sprint:** Sprint 013+.
 
 ## Summary
 
 | Item | Target Sprint | Blocker |
 |---|---|---|
-| Full selected-token V100 decode | Sprint 011+ | Needs compressor/KV bridge |
-| Normal source serving unlock | Deployment sprint | Needs V100 correctness gate |
-| Production FP8/MXFP4 GEMMs | Future | Needs oracle comparison path |
-| Deployment and health checks | Sprint 011+ | Needs decode correctness |
-| MTP/tensor parallelism/throughput | Later | Needs stable baseline |
+| Public appliance deployment | Sprint 011 | Needs Sprint 010 single-slot correctness gate |
+| Full logits-producing decode | Sprint 011+ | Needs bounded source-referenced V100 slice |
+| Production routed expert kernels | Sprint 011+ | Needs trusted layer attention/KV path |
+| Throughput scheduling | Sprint 012+ | Needs correct baseline decode |
+| MTP/tensor parallelism | Sprint 013+ | Needs stable baseline and bottleneck data |

@@ -241,6 +241,36 @@ void ds4_v100_cuda_context_close(ds4_v100_cuda_context *ctx) {
     free(ctx);
 }
 
+int ds4_v100_cuda_context_layer_kv_view(ds4_v100_cuda_context *ctx,
+                                        int layer_id,
+                                        ds4_v100_cuda_layer_kv_view *out,
+                                        char *err,
+                                        size_t errlen) {
+    if (!ctx || !out) return cuda_v100_error(err, errlen, "missing CUDA KV view output");
+    const ds4_v100_layer_info *layer = ds4_v100_context_layer(ctx->host, layer_id);
+    if (!layer) return cuda_v100_error(err, errlen, "invalid layer id %d", layer_id);
+    if (layer->stage_id < 0 || layer->stage_id >= ctx->n_stages) {
+        return cuda_v100_error(err, errlen, "layer %d has invalid stage %d",
+                               layer_id, layer->stage_id);
+    }
+    ds4_v100_cuda_stage *stage = &ctx->stages[layer->stage_id];
+    if (!stage->kv_arena || stage->kv_arena_bytes == 0) {
+        return cuda_v100_error(err, errlen, "stage %d has no allocated KV arena",
+                               layer->stage_id);
+    }
+    if (layer->kv_view.total_bytes == 0) {
+        return cuda_v100_error(err, errlen, "layer %d has no derived KV view", layer_id);
+    }
+    memset(out, 0, sizeof(*out));
+    out->layer_id = layer_id;
+    out->stage_id = layer->stage_id;
+    out->gpu = stage->gpu;
+    out->kv_arena_base = stage->kv_arena;
+    out->kv_arena_bytes = stage->kv_arena_bytes;
+    out->view = layer->kv_view;
+    return 0;
+}
+
 static uint64_t relay_bytes(ds4_v100_relay_dtype dtype, uint64_t active_slots) {
     const uint64_t elem = dtype == DS4_V100_RELAY_F16 ? 2ull : 4ull;
     return active_slots * DS4_V100_HC_ROWS * DS4_V100_HC_COLS * elem;

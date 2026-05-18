@@ -1,7 +1,7 @@
 ---
 sprint: 010
-title: V100 KV State Views And Compressor Bridge
-status: planned
+title: V100 Single-Slot Decode Integration
+status: active
 date: 2026-05-18
 target_repo: rapatel0/ds4
 architecture: ../architecture/DS4-V100-LAYOUT.md
@@ -9,206 +9,230 @@ intent: drafts/SPRINT-010-INTENT.md
 deferred: SPRINT-010-DEFERRED.md
 ---
 
-# SPRINT-010: V100 KV State Views And Compressor Bridge
+# SPRINT-010: V100 Single-Slot Decode Integration
 
 ## Overview
 
-Sprint 009 proved that the V100 runtime can allocate derived F16 KV arenas and
-update bounded raw/compressed/indexer rows on `sm_70`. The remaining gap before
-deployment is that those writes are still diagnostic host-F32 inputs, not real
-device-side layer outputs.
+Sprint 009 proved bounded V100 F16 KV allocation and row/state update surfaces.
+Sprint 010 connects those surfaces to a real single-slot layer-owned
+prefill/decode integration gate. The sprint should still avoid public serving
+and full 43-layer logits. Its job is to replace smoke-only standalone tensors
+and synthetic state values with stage-owned KV arena views, actual
+projection/compressor input tensors, real compressor/indexer recurrence, and a
+bounded CPU/source reference comparison.
 
-Sprint 010 narrows the next integration step: add explicit per-layer KV subviews
-inside each stage arena, then bridge existing device F32 compressor/raw outputs
-into the F16 KV cache contract without host round trips. This is still not a
-public serving sprint and normal source-layout generation remains guarded.
+Normal source-layout generation remains fail-closed.
 
 ## Outcome Contract
 
-- `SHIP`: per-layer KV subviews are deterministic and tested; a CUDA diagnostic
-  bridge stores device F32 raw/compressor outputs into F16 raw SWA, compressed
-  attention KV, and ratio-4 indexer KV; V100 `sm_70` tests pass for ratio-4 and
-  ratio-128; source-layout guards still pass.
-- `EXTEND`: subviews and either ratio-4 or ratio-128 bridge ship, with a
-  diagnosed blocker for the other ratio class.
-- `STOP`: implementation requires normal serving unlock, full 43-layer logits,
-  broad production FP8/MXFP4 GEMMs, persistent dequantized source weights,
-  MTP/speculative decode, tensor parallelism, or throughput scheduling.
+- `SHIP`: a diagnostic single-slot V100 slice writes raw SWA, compressed
+  attention KV, indexer KV, and split KV/score state through the stage-owned
+  `kv_arena`, uses the real compressor/indexer recurrence for at least one
+  ratio-4 layer and one ratio-128 layer, compares bounded outputs against a
+  CPU/source reference, passes on V100 `sm_70`, and preserves all source-layout
+  guards.
+- `EXTEND`: stage-owned arena views and one ratio class ship, but the second
+  ratio class or oracle comparison is blocked by a diagnosed projection,
+  compressor, or source-reference mismatch.
+- `STOP`: implementation requires normal source-layout serving unlock, full
+  logits-producing decode, routed expert production kernels, host/SSD/offload
+  as the success path, MTP/speculative decode, tensor parallelism, or throughput
+  scheduling.
 
 ## Non-Goals
 
-- No normal source-layout generation unlock.
-- No public server/API deployment.
-- No full selected-token V100 decode.
-- No MTP.
-- No multi-slot scheduling or throughput benchmark.
+- No public CLI/server deployment.
+- No normal source-layout serving unlock.
+- No full 43-layer selected-token generation.
+- No MTP or speculative decoding.
+- No multi-slot batching, wavefront scheduling, or performance benchmarking.
 - No tensor-parallel exceptions.
-- No persistent dequantized source-weight buffers.
+- No persistent dequantized copies of large source weights.
+- No F8 KV baseline; F16 KV remains the correctness baseline.
 
 ## Planning Inputs
 
 | File | Role |
 |---|---|
-| `docs/sprints/VISION.md` | Sprint 010 sequencing and deployment gate |
-| `docs/architecture/DS4-V100-LAYOUT.md` | Topology, dtype, and scheduling contract |
-| `docs/sprints/SPRINT-009-REPORT.md` | KV arena and bounded smoke outcome |
-| `docs/sprints/SPRINT-009-FOLLOWUPS.md` | Runtime integration and subview follow-ups |
-| `ds4_v100_context.[ch]` | Stage/layer topology and KV arena budget |
-| `ds4_v100_context_cuda.cu` | V100 CUDA context and stage allocation |
-| `ds4_gpu.h`, `ds4_cuda.cu` | CUDA tensor and compressor primitives |
-| `tools/ds4-source-oracle-vector.c` | Source-layout guard validation |
+| `docs/sprints/VISION.md` | Sprint 010 sequencing and Sprint 011 deployment deferral |
+| `docs/architecture/DS4-V100-LAYOUT.md` | Topology, dtype, memory, and scheduling contract |
+| `docs/sprints/SPRINT-009-REPORT.md` | Shipped KV arena and diagnostic update evidence |
+| `docs/sprints/SPRINT-009-FOLLOWUPS.md` | Runtime integration, oracle comparison, and state-view follow-ups |
+| `ds4_v100_context.[ch]` | Stage map, KV arena plan, and context report |
+| `ds4_v100_context_cuda.cu` | CUDA stage ownership and allocated KV arena |
+| `ds4_gpu.h`, `ds4_cuda.cu` | Source-format, compressor, indexer, attention, and KV CUDA APIs |
+| `tools/ds4-source-oracle-vector.c` | Source-layout oracle and guard validation |
+| `tests/cuda_v100_prefill_kv_smoke.c` | Sprint 009 bounded KV smoke |
 
 ## Use Cases
 
-1. **Subview inspection**: a developer can inspect each layer's raw SWA,
-   compressed attention, indexer KV, and state offsets inside its owning stage
-   arena.
-2. **Device-to-F16 KV bridge**: a CUDA diagnostic can take device F32 rows from
-   compressor/raw outputs and store F16 cache rows without a host round trip.
-3. **Ratio-class coverage**: the bridge covers ratio-128 attention compression
-   and ratio-4 attention plus indexer compression.
-4. **Guard continuity**: source-layout serving remains fail-closed while guard
-   validation stays automated.
+1. **Stage-owned KV writes**: a diagnostic path can address raw SWA,
+   compressed KV, indexer KV, and state subviews inside the owning GPU's
+   `kv_arena`.
+2. **Real recurrence proof**: ratio-128 and ratio-4 CUDA smokes use the actual
+   compressor/indexer recurrence instead of synthetic state formulas.
+3. **Oracle comparison**: a bounded CPU/source reference can validate the V100
+   slice without unlocking normal serving.
+4. **Deployment gate clarity**: Sprint 011 can start from a real single-slot
+   correctness surface instead of isolated allocation/update smokes.
 
 ## Architecture
 
+The sprint extends the Sprint 009 diagnostic path:
+
 ```text
-stage KV arena
-  |
-  +-- layer N raw SWA F16 view
-  +-- layer N compressed attention F16 view
-  +-- layer N ratio-4 indexer F16 view
-  +-- layer N attn state KV/score F32 views
-  +-- layer N indexer state KV/score F32 views
-        ^
-        |
-device F32 raw/compressor output rows
-        |
-        v
-bounded F32 -> F16 KV bridge
+ds4_v100_context_open(ctx, slots)
+    |
+    +--> per-stage kv_arena plan
+    |
+    v
+stage-owned CUDA kv_arena
+    |
+    +--> named subviews:
+         raw_swa
+         compressed_attn_kv
+         indexer_kv
+         attn_comp_kv_state
+         attn_comp_score_state
+         indexer_comp_kv_state
+         indexer_comp_score_state
+    |
+    v
+single-slot V100 diagnostic slice
+    |
+    +--> bounded source/projection input tensors
+    +--> real compressor/indexer recurrence
+    +--> CPU/source reference comparison
 ```
 
-The bridge is a diagnostic integration point, not the final fused production
-kernel. It should make the data movement contract explicit before full layer
-scheduler integration.
+The integration should remain a diagnostic test/tool surface, not a serving
+flag.
 
 ## Implementation
 
-### Phase 1: Per-Layer KV Subviews
+### Phase 1: KV Arena Subviews
 
 **Files:**
 - `ds4_v100_context.h`
 - `ds4_v100_context.c`
+- `ds4_v100_context_cuda.cu`
 - `tests/v100_context_smoke.c`
-- `tools/ds4-v100-context-smoke.c`
 
 **Tasks:**
-- [ ] Add per-layer KV view metadata for raw SWA, compressed attention,
-      indexer KV, attn state KV/score, and indexer state KV/score.
-- [ ] Derive layer views deterministically inside each stage arena.
-- [ ] Keep stage totals identical to the Sprint 009 arena totals.
-- [ ] Print layer view offsets/sizes in the context report.
-- [ ] Reject invalid layer ids, ratio classes, or overflowing view spans.
+- [x] Split `compression_state` into deterministic subviews for attention
+      KV state, attention score state, indexer KV state, and indexer score
+      state.
+- [x] Add host-side helpers or descriptors for per-stage subview offsets and
+      byte lengths.
+- [x] Add CUDA-side accessors for stage-owned `kv_arena` subviews.
+- [x] Keep reserve accounting unchanged and fail closed on overbudget plans.
+- [x] Extend local context smoke assertions and report output.
 
-### Phase 2: Device F32 To F16 KV Bridge
+### Phase 2: Stage-Owned Diagnostic KV Update
+
+**Files:**
+- `ds4_gpu.h`
+- `ds4_cuda.cu`
+- `ds4_v100_context_cuda.cu`
+- `tests/cuda_v100_prefill_kv_smoke.c`
+
+**Tasks:**
+- [ ] Add a wrapper that writes Sprint 009 raw/compressed/indexer rows through
+      stage-owned arena subviews instead of standalone tensors.
+- [ ] Preserve explicit slot, raw-row, compressed-row, ratio, and bounds
+      validation.
+- [ ] Add a V100 smoke proving the stage-owned path for one ratio-128 and one
+      ratio-4 layer.
+
+### Phase 3: Real Compressor/Indexer Recurrence
 
 **Files:**
 - `ds4_gpu.h`
 - `ds4_cuda.cu`
 - `tests/cuda_v100_prefill_kv_smoke.c`
+- optional CPU helper files
 
 **Tasks:**
-- [ ] Add a diagnostic CUDA API that stores device F32 rows into F16 raw SWA
-      and compressed attention KV views.
-- [ ] Add ratio-4 indexer KV storage from device F32 rows.
-- [ ] Preserve the Sprint 009 host-F32 diagnostic API as a test helper.
-- [ ] Reject invalid slots, rows, dimensions, undersized tensors, and missing
-      ratio-4 indexer inputs.
-- [ ] Compare F16 row outputs against CPU F32-to-F16 references.
+- [ ] Replace the Sprint 009 synthetic F32 state formula with existing DS4
+      compressor/indexer recurrence kernels where possible.
+- [ ] Feed bounded device tensors that represent actual compressor inputs.
+- [ ] Cover both ratio-128 and ratio-4/indexer state paths.
+- [ ] Compare CUDA state/KV rows against a CPU helper or source-oracle
+      reference with documented tolerance.
 
-### Phase 3: Compressor Bridge Smoke
-
-**Files:**
-- `tests/cuda_v100_compressor_kv_bridge_smoke.c`
-- `Makefile`
-- `ds4_cuda.cu`
-
-**Tasks:**
-- [ ] Use existing CUDA compressor kernels with synthetic F32 APE/norm tensors
-      to produce device F32 compressed rows for ratio-128.
-- [ ] Use the ratio-4 path to produce attention and indexer compressed rows.
-- [ ] Store those rows through the F16 KV bridge.
-- [ ] Compare compressor/state outputs against a CPU reference for the bounded
-      synthetic fixture.
-- [ ] Run on V100 `sm_70`.
-
-### Phase 4: Guards, Reports, And Vision
+### Phase 4: Source Reference And Guard Validation
 
 **Files:**
+- `tools/ds4-source-oracle-vector.c`
+- `ds4_source_formats.[ch]`
 - `docs/sprints/drafts/SPRINT-010-*.log`
 - `docs/sprints/SPRINT-010-REPORT.md`
 - `docs/sprints/SPRINT-010-FOLLOWUPS.md`
 - `docs/sprints/VISION.md`
 
 **Tasks:**
-- [ ] Run local model-less validation.
-- [ ] Run `git diff --check`.
-- [ ] Run `tools/ds4-source-oracle-vector --guards-only` against the real model
-      on the cluster.
-- [ ] Run the new CUDA compressor/KV bridge smoke on V100 `sm_70`.
+- [ ] Add a bounded source-reference mode if the existing oracle cannot expose
+      the required intermediate rows/state.
+- [ ] Run model-less local validation and `git diff --check`.
+- [ ] Run source-layout `--guards-only` on the real model.
+- [ ] Run the integrated CUDA smoke on V100 `sm_70`.
 - [ ] Archive logs under `docs/sprints/drafts/`.
-- [ ] Write report/follow-ups and update `VISION.md`.
+- [ ] Write report/follow-ups and update `VISION.md` with the sprint verdict.
 
 ## Files Summary
 
 | File | Action | Purpose |
 |---|---|---|
-| `ds4_v100_context.[ch]` | Modify | Per-layer KV subviews inside stage arenas |
-| `ds4_v100_context_cuda.cu` | Modify if needed | Carry view metadata into CUDA context |
-| `ds4_gpu.h`, `ds4_cuda.cu` | Modify | Device F32-to-F16 KV bridge |
-| `tests/v100_context_smoke.c` | Modify | Subview math and bounds regression |
-| `tests/cuda_v100_prefill_kv_smoke.c` | Modify | Device-row bridge regression |
-| `tests/cuda_v100_compressor_kv_bridge_smoke.c` | Create | Existing compressor to F16 KV bridge smoke |
-| `Makefile` | Modify | Build new CUDA smoke |
-| `docs/sprints/drafts/SPRINT-010-*.log` | Create | Evidence |
-| `docs/sprints/SPRINT-010-REPORT.md` | Create | Verdict |
-| `docs/sprints/SPRINT-010-FOLLOWUPS.md` | Create | Handoff |
-| `docs/sprints/VISION.md` | Modify | Reflect outcome |
+| `ds4_v100_context.[ch]` | Modify | Expose named KV/state subviews |
+| `ds4_v100_context_cuda.cu` | Modify | Surface stage-owned KV arena subviews to diagnostics |
+| `ds4_gpu.h`, `ds4_cuda.cu` | Modify | Stage-owned update wrapper and real recurrence integration |
+| `tests/cuda_v100_prefill_kv_smoke.c` | Modify | Cover stage-owned arena and real compressor/indexer recurrence |
+| `tools/ds4-source-oracle-vector.c` | Modify if needed | Bounded source-reference output |
+| `docs/sprints/drafts/SPRINT-010-*.log` | Create | Validation evidence |
+| `docs/sprints/SPRINT-010-REPORT.md` | Create | Sprint verdict |
+| `docs/sprints/SPRINT-010-FOLLOWUPS.md` | Create | Handoff items |
+| `docs/sprints/VISION.md` | Modify | Reflect Sprint 010 outcome |
 
 ## Definition Of Done
 
-- Per-layer KV subviews are deterministic, reported, and tested.
-- Stage arena totals remain unchanged from Sprint 009 for the same `ctx/slots`.
-- Device F32-to-F16 KV bridge passes local compile and V100 `sm_70` tests.
-- Compressor bridge smoke covers ratio-4 and ratio-128 paths.
+- Stage-local `kv_arena` reports and exposes deterministic named subviews for
+  raw SWA, compressed attention KV, indexer KV, and split KV/score state.
+- A V100 diagnostic path writes through the stage-owned arena subviews.
+- The CUDA smoke covers ratio-128 and ratio-4/indexer real recurrence paths.
+- Bounded CUDA outputs compare against a CPU/source reference.
 - Source-layout guards pass on the real model.
+- Local model-less validation and `git diff --check` pass.
 - Normal source-layout generation remains guarded.
-- Sprint report, follow-ups, logs, and vision update are committed.
+- Sprint report, follow-ups, and logs are committed.
 
 ## Risks
 
-- Existing CUDA compressor kernels use F32 cache tensors; bridging to F16 KV may
-  expose precision or layout assumptions.
-- Ratio-4 compressor replay/state behavior is more complex than ratio-128 and
-  may need a narrower `EXTEND` outcome.
-- A full oracle comparison may still require a later selected-token sprint.
+- Existing compressor/indexer kernels may not expose exactly the intermediate
+  surfaces needed for a narrow source-oracle comparison.
+- Actual projection/compressor inputs may reveal missing bounded FP8 dense
+  projection coverage.
+- State subview offsets can be easy to get wrong because Sprint 009 budgeted
+  combined state bytes while production recurrence consumes KV and score state
+  separately.
 
 ## Security
 
-- Do not commit model weights, large generated artifacts, or secrets.
-- Keep source-layout guard bypasses diagnostic-only.
-- Preserve fail-closed behavior for normal source-layout serving.
+- Do not commit model weights, generated secrets, or `logs/security/*`.
+- Keep all new source-reference and V100 execution paths diagnostic-only.
+- Preserve fail-closed normal source-layout generation.
 
 ## Dependencies
 
-- V100 cluster access.
-- `/models/DSv4-Flash-256e-fixed.gguf` for guard validation.
-- Sprint 009 `SHIP` commits.
+- Access to the 8x V100-SXM2-32GB cluster for `sm_70` validation.
+- `/models/DSv4-Flash-256e-fixed.gguf` for guard/source-reference validation.
+- Sprint 009 KV arena and diagnostic prefill/KV update commits.
 
 ## Open Questions
 
-1. Should the first bridge store only F16 rows or also expose F8 KV as an
-   experimental option behind a guard?
-2. Should the subview report be stage-first or layer-first for downstream
-   scheduler consumption?
-3. What source-oracle comparison becomes the deployment gate after this bridge?
+1. Does the first source-reference comparison come from extending the oracle or
+   from a standalone CPU helper for compressor/indexer state?
+2. Should Sprint 010 require a real bounded FP8 dense projection, or is a
+   source-decoded projection-equivalent tensor acceptable for the first real
+   recurrence proof?
+3. Which stage should host the first integrated smoke: gpu0 layers 2/3 for
+   simplicity, or a nonzero stage to prove arena ownership away from embedding?

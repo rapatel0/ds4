@@ -285,11 +285,13 @@ static void test_kv_stage_admission(void) {
     const uint64_t raw = 128ull * 512ull * 2ull;
     const uint64_t ratio4_comp = (ctx_tokens / 4ull) * 512ull * 2ull;
     const uint64_t ratio4_indexer = (ctx_tokens / 4ull) * 128ull * 2ull;
+    const uint64_t ratio4_attn_state = (2ull * 512ull) * (2ull * 4ull) * 4ull;
+    const uint64_t ratio4_index_state = (2ull * 128ull) * (2ull * 4ull) * 4ull;
     const uint64_t ratio4_state =
-        2ull * (2ull * 512ull) * (2ull * 4ull) * 4ull +
-        2ull * (2ull * 128ull) * (2ull * 4ull) * 4ull;
+        2ull * ratio4_attn_state + 2ull * ratio4_index_state;
     const uint64_t ratio128_comp = (ctx_tokens / 128ull) * 512ull * 2ull;
-    const uint64_t ratio128_state = 2ull * 512ull * 128ull * 4ull;
+    const uint64_t ratio128_attn_state = 512ull * 128ull * 4ull;
+    const uint64_t ratio128_state = 2ull * ratio128_attn_state;
 
     ds4_v100_context_options opts;
     ds4_v100_context_options_init(&opts);
@@ -323,6 +325,53 @@ static void test_kv_stage_admission(void) {
                  2ull * ratio4_state + 2ull * ratio128_state,
                  "stage0 compression state bytes");
     require_kv_arena_plan(s0, "stage0");
+
+    const ds4_v100_layer_info *l0 = ds4_v100_context_layer(ctx, 0);
+    const ds4_v100_layer_info *l2 = ds4_v100_context_layer(ctx, 2);
+    const ds4_v100_layer_info *l3 = ds4_v100_context_layer(ctx, 3);
+    require_true(l0 && l2 && l3, "layer kv views exist");
+    require_true(l0->kv_view.raw_swa_offset == 0, "layer0 raw view offset");
+    require_true(l0->kv_view.raw_swa_bytes == raw, "layer0 raw view bytes");
+    require_true(l2->kv_view.raw_swa_offset == 2ull * raw, "layer2 raw view offset");
+    require_true(l2->kv_view.compressed_attn_offset ==
+                 s0->kv_arena.compressed_attn_offset,
+                 "layer2 compressed view offset");
+    require_true(l2->kv_view.compressed_attn_bytes == ratio4_comp,
+                 "layer2 compressed view bytes");
+    require_true(l2->kv_view.indexer_kv_offset == s0->kv_arena.indexer_kv_offset,
+                 "layer2 indexer view offset");
+    require_true(l2->kv_view.indexer_kv_bytes == ratio4_indexer,
+                 "layer2 indexer view bytes");
+    require_true(l2->kv_view.attn_state_kv_offset ==
+                 s0->kv_arena.compression_state_offset,
+                 "layer2 attn state kv offset");
+    require_true(l2->kv_view.attn_state_kv_bytes == ratio4_attn_state,
+                 "layer2 attn state kv bytes");
+    require_true(l2->kv_view.attn_state_score_offset ==
+                 s0->kv_arena.compression_state_offset + ratio4_attn_state,
+                 "layer2 attn state score offset");
+    require_true(l2->kv_view.indexer_state_kv_offset ==
+                 s0->kv_arena.compression_state_offset + 2ull * ratio4_attn_state,
+                 "layer2 indexer state kv offset");
+    require_true(l2->kv_view.indexer_state_kv_bytes == ratio4_index_state,
+                 "layer2 indexer state kv bytes");
+    require_true(l2->kv_view.indexer_state_score_offset ==
+                 s0->kv_arena.compression_state_offset + 2ull * ratio4_attn_state +
+                 ratio4_index_state,
+                 "layer2 indexer state score offset");
+    require_true(l2->kv_view.total_bytes == l2->kv_budget.total_bytes,
+                 "layer2 view total");
+    require_true(l3->kv_view.compressed_attn_offset ==
+                 s0->kv_arena.compressed_attn_offset + ratio4_comp,
+                 "layer3 compressed view offset");
+    require_true(l3->kv_view.attn_state_kv_offset ==
+                 s0->kv_arena.compression_state_offset + ratio4_state,
+                 "layer3 attn state kv offset");
+    require_true(l3->kv_view.attn_state_kv_bytes == ratio128_attn_state,
+                 "layer3 attn state kv bytes");
+    require_true(l3->kv_view.indexer_kv_bytes == 0 &&
+                 l3->kv_view.indexer_state_kv_bytes == 0,
+                 "layer3 has no indexer views");
 
     const ds4_v100_stage_info *s1 = ds4_v100_context_stage(ctx, 1);
     require_true(s1 != NULL, "stage 1 kv info");

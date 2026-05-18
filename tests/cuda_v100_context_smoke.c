@@ -84,6 +84,23 @@ int main(int argc, char **argv) {
         fprintf(stderr, "cuda_v100_context_smoke: %s\n", err);
         return 1;
     }
+    if (kv_ctx) {
+        ds4_v100_cuda_layer_kv_view view;
+        if (ds4_v100_cuda_context_layer_kv_view(ctx, 2, &view, err, sizeof(err))) {
+            fprintf(stderr, "cuda_v100_context_smoke: %s\n", err);
+            ds4_v100_cuda_context_close(ctx);
+            return 1;
+        }
+        printf("kv_view\tlayer\t%d\tstage\t%d\tgpu\t%d\tarena_bytes\t%llu\tview_total\t%llu\traw_offset\t%llu\tcomp_offset\t%llu\tstate_offset\t%llu\n",
+               view.layer_id,
+               view.stage_id,
+               view.gpu,
+               (unsigned long long)view.kv_arena_bytes,
+               (unsigned long long)view.view.total_bytes,
+               (unsigned long long)view.view.raw_swa_offset,
+               (unsigned long long)view.view.compressed_attn_offset,
+               (unsigned long long)view.view.attn_state_kv_offset);
+    }
     printf("cuda_v100_context_smoke: devices=%d stages=%d production=%d\n", n, stages, production);
     for (int i = 0; i < n; i++) {
         printf("device\t%d\tcc\t%d.%d\tmem\t%llu\tpci\t%s\n",
