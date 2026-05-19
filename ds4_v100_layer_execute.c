@@ -730,6 +730,10 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
 
     const uint32_t hidden = state->hidden_size;
     const uint32_t mid = state->intermediate_size;
+    const uint32_t routes = state->routes_per_token;
+    if (routes == 0 || routes > 6u) {
+        return exec_error(err, errlen, "unsupported route count %u", routes);
+    }
     ds4_gpu_source_row_view router_v;
     ds4_gpu_source_row_view shared_gate_v;
     ds4_gpu_source_row_view shared_up_v;
@@ -745,9 +749,8 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
     ds4_gpu_tensor *probs_t = ds4_gpu_tensor_alloc(256u * sizeof(float));
     ds4_gpu_tensor *selected_t = ds4_gpu_tensor_alloc(6u * sizeof(int32_t));
     ds4_gpu_tensor *weights_t = ds4_gpu_tensor_alloc(6u * sizeof(float));
-    ds4_gpu_tensor *mid_t = ds4_gpu_tensor_alloc((uint64_t)mid * sizeof(float));
+    ds4_gpu_tensor *routed_mid_t = ds4_gpu_tensor_alloc((uint64_t)routes * mid * sizeof(float));
     ds4_gpu_tensor *accum_a = ds4_gpu_tensor_alloc((uint64_t)hidden * sizeof(float));
-    ds4_gpu_tensor *accum_b = ds4_gpu_tensor_alloc((uint64_t)hidden * sizeof(float));
     ds4_gpu_tensor *shared_gate_t = ds4_gpu_tensor_alloc((uint64_t)mid * sizeof(float));
     ds4_gpu_tensor *shared_up_t = ds4_gpu_tensor_alloc((uint64_t)mid * sizeof(float));
     ds4_gpu_tensor *shared_mid_t = ds4_gpu_tensor_alloc((uint64_t)mid * sizeof(float));
@@ -757,7 +760,7 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
     int32_t selected[6] = {0};
     float weights[6] = {0};
     if (!router_t || !probs_t || !selected_t || !weights_t ||
-        !mid_t || !accum_a || !accum_b ||
+        !routed_mid_t || !accum_a ||
         !shared_gate_t || !shared_up_t || !shared_mid_t || !shared_t) {
         exec_error(err, errlen, "failed to allocate FFN executor tensors");
         goto done;
@@ -789,53 +792,50 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
         exec_error(err, errlen, "router readback failed");
         goto done;
     }
-    for (uint32_t route = 0; route < state->routes_per_token; route++) {
+    for (uint32_t route = 0; route < routes; route++) {
         if (selected[route] < 0 || (uint32_t)selected[route] >= state->routed_experts) {
             exec_error(err, errlen, "router selected invalid expert %d", selected[route]);
             goto done;
         }
     }
 
-    if (!ds4_gpu_tensor_fill_f32(accum_a, 0.0f, hidden)) {
-        exec_error(err, errlen, "route accumulator fill failed");
+    ds4_v100_route_matrices route0;
+    if (ds4_v100_layer_state_route_matrices(state, 0, &route0, err, errlen)) {
         goto done;
     }
-    ds4_gpu_tensor *accum = accum_a;
-    ds4_gpu_tensor *next = accum_b;
-    for (uint32_t route = 0; route < state->routes_per_token; route++) {
-        ds4_v100_route_matrices route_mats;
-        ds4_gpu_source_row_view gate_v;
-        ds4_gpu_source_row_view up_v;
-        ds4_gpu_source_row_view down_v;
-        if (ds4_v100_layer_state_route_matrices(state,
-                                                (uint32_t)selected[route],
-                                                &route_mats,
-                                                err,
-                                                errlen) ||
-            source_view(&route_mats.gate, &gate_v, err, errlen) ||
-            source_view(&route_mats.up, &up_v, err, errlen) ||
-            source_view(&route_mats.down, &down_v, err, errlen)) {
-            goto done;
-        }
-        if (ds4_gpu_arena_mxfp4_pair_swiglu_f32(cfg->arena,
-                                                &gate_v,
-                                                &up_v,
-                                                ffn_input,
-                                                mid_t,
-                                                10.0f,
-                                                weights[route]) != 0 ||
-            ds4_gpu_arena_mxfp4_matmul_add_f32(cfg->arena,
-                                                &down_v,
-                                                mid_t,
-                                                accum,
-                                                next) != 0) {
-            exec_error(err, errlen, "routed FFN route %u failed", route);
-            goto done;
-        }
-        ds4_gpu_tensor *tmp = accum;
-        accum = next;
-        next = tmp;
+    if (route0.gate.bytes != route0.up.bytes ||
+        route0.gate.row_bytes != route0.up.row_bytes ||
+        route0.gate.rows != route0.up.rows ||
+        route0.gate.cols != route0.up.cols) {
+        exec_error(err, errlen, "routed gate/up MXFP4 layouts differ");
+        goto done;
     }
+    if (ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_f32(
+            cfg->arena,
+            state->routed_gate_binding.shard_offset,
+            state->routed_gate_binding.byte_length,
+            state->routed_up_binding.shard_offset,
+            state->routed_up_binding.byte_length,
+            state->routed_down_binding.shard_offset,
+            state->routed_down_binding.byte_length,
+            route0.gate.bytes,
+            (uint32_t)route0.gate.row_bytes,
+            route0.down.bytes,
+            (uint32_t)route0.down.row_bytes,
+            hidden,
+            mid,
+            state->routed_experts,
+            selected_t,
+            weights_t,
+            routes,
+            ffn_input,
+            routed_mid_t,
+            accum_a) != 0) {
+        exec_error(err, errlen, "grouped routed FFN failed");
+        goto done;
+    }
+
+    ds4_gpu_tensor *accum = accum_a;
 
     if (ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena, &shared_gate_v, ffn_input, shared_gate_t) != 0 ||
         ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena, &shared_up_v, ffn_input, shared_up_t) != 0 ||
@@ -848,8 +848,8 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
 
     if (report) {
         memset(report, 0, sizeof(*report));
-        report->routes = state->routes_per_token;
-        for (uint32_t i = 0; i < state->routes_per_token && i < 6u; i++) {
+        report->routes = routes;
+        for (uint32_t i = 0; i < routes && i < 6u; i++) {
             report->selected_experts[i] = selected[i];
             report->route_weights[i] = weights[i];
         }
@@ -861,9 +861,8 @@ done:
     ds4_gpu_tensor_free(shared_mid_t);
     ds4_gpu_tensor_free(shared_up_t);
     ds4_gpu_tensor_free(shared_gate_t);
-    ds4_gpu_tensor_free(accum_b);
     ds4_gpu_tensor_free(accum_a);
-    ds4_gpu_tensor_free(mid_t);
+    ds4_gpu_tensor_free(routed_mid_t);
     ds4_gpu_tensor_free(weights_t);
     ds4_gpu_tensor_free(selected_t);
     ds4_gpu_tensor_free(probs_t);

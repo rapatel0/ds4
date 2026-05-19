@@ -109,9 +109,9 @@ Kernel names below are kernel families, not final C symbol names.
 | 10 | HC attention post | uses HC attention control state | F32 | F32 small tensors | included in step 1 | DS4 HC post kernel | FP16 HC |
 | 11 | FFN RMSNorm | `ffn_norm [4096]` | F32 | F32 | 0.016 MiB | DS4 RMSNorm kernel | FP16 FFN input |
 | 12 | router | `ffn_gate_inp [4096 x 256]`, optional bias `[256]`, hash `tid2eid [6 x 129280]` on layers 0-2 | F32; I32 hash metadata | F32/I32 | about 4.0 MiB; hash table adds about 3.0 MiB on layers 0-2 | small dense + top-k/router kernel | expert ids/weights |
-| 13 | routed gate/up experts | two tensors `[4096 x 2048 x 256]` | MXFP4 / FP4 expert source expected | source MXFP4 grouped pack first | about 2176 MiB MXFP4; about 4096 MiB INT8 candidate | Sprint 054 fused MXFP4 gate+up+SwiGLU route kernel; future grouped low-bit kernel | FP16 expert mid |
-| 14 | SwiGLU | routed mid `[active_routes x 2048]` | activation only | FP16/FP32 internal | scratch only | fused into routed gate/up for MXFP4 path | FP16 expert mid |
-| 15 | routed down experts | `[2048 x 4096 x 256]` | MXFP4 / FP4 expert source expected | same expert pack | about 1088 MiB MXFP4; about 2048 MiB INT8 candidate | Sprint 055 fused MXFP4 down+accum route kernel; future grouped expert down kernel | FP16 routed output |
+| 13 | routed gate/up experts | two tensors `[4096 x 2048 x 256]` | MXFP4 / FP4 expert source expected | source MXFP4 grouped pack first | about 2176 MiB MXFP4; about 4096 MiB INT8 candidate | Sprint 056 grouped selected-route MXFP4 gate+up+SwiGLU kernel | FP16/FP32 expert mid scratch |
+| 14 | SwiGLU | routed mid `[active_routes x 2048]` | activation only | FP16/FP32 internal | scratch only | fused into grouped routed gate/up for MXFP4 path | FP16/FP32 expert mid scratch |
+| 15 | routed down experts | `[2048 x 4096 x 256]` | MXFP4 / FP4 expert source expected | same expert pack | about 1088 MiB MXFP4; about 2048 MiB INT8 candidate | Sprint 056 grouped selected-route MXFP4 down-sum kernel | FP16/FP32 routed output |
 | 16 | shared expert | gate/up `[4096 x 2048]`, down `[2048 x 4096]` | F8_E4M3_B128 | source FP8 dense pack first | about 24.2 MiB | safe dense/shared-expert kernel | FP16 shared output |
 | 17 | HC FFN pre/post + combine | `hc_ffn_fn [16384 x 24]`, base `[24]`, scale `[3]` | F32 | F32 small tensors | about 1.50 MiB | combine + DS4 HC post kernel | FP16 next HC |
 
