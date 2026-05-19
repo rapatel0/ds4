@@ -1,8 +1,9 @@
-# DS4 V100 Base Appliance Runbook
+# DS4 V100 Appliance Runbook
 
-This runbook covers the current Level 2 target: a one-slot, non-MTP DS4 V100
-base appliance for operator-driven short generation on the 8x 32 GiB V100 host.
-It is a correctness and usability surface, not the final throughput service.
+This runbook covers the current production deployment package for the DS4 V100
+appliance on the 8x 32 GiB V100 host. The served endpoint is the verified
+one-slot base model path. Native MTP correctness is gated separately, but
+speculative MTP serving is not exposed yet.
 
 ## Scope
 
@@ -12,18 +13,20 @@ Supported today:
 - 8x V100 layer-sharded resident runtime.
 - One active slot.
 - Sequential loopback HTTP requests.
-- `/health`, `/status`, `/v100/status`.
+- `/health`, `/status`, `/v100/status`, `/metrics`.
 - `POST /v100/selected-token`.
 - Up to 64 generated tokens per request.
+- Operator launcher, env file, systemd template, Kubernetes template, and
+  deployment smoke.
 
 Not supported today:
 
-- MTP forward/speculative decoding.
+- MTP speculative serving in the HTTP process.
 - Multi-slot scheduling.
 - Concurrent HTTP requests.
 - Streaming responses.
 - OpenAI-compatible API.
-- Production supervision, auth, or external network exposure.
+- External unauthenticated exposure.
 
 ## Build
 
@@ -36,10 +39,14 @@ CUDA_ARCH=sm_70 make tools/ds4-v100-replay
 For the full readiness gate:
 
 ```bash
-CUDA_ARCH=sm_70 make \
-  tools/ds4-v100-replay \
-  tools/ds4-v100-mtp-sidecar-gate \
-  tools/ds4-v100-mtp-residency-smoke
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+./tools/ds4-v100-gate.sh --build \
+  --model /models/DSv4-Flash-256e-fixed.gguf \
+  --mtp-model /models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf \
+  --pack-index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv \
+  --ctx 1048576 \
+  --slots 1 \
+  --log-dir docs/sprints/drafts/SPRINT-043-GATE-CLUSTER-8GPU
 ```
 
 ## Required Files
@@ -52,31 +59,103 @@ The current cluster convention is:
 docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv
 ```
 
-The base appliance only needs the source model and pack index. The MTP model is
-used by the full gate to keep Level 3 readiness reporting honest.
+The served base appliance needs the source model and pack index. The MTP model
+is still part of the deployment config so the same host config can be used by
+the full readiness gate and by future speculative serving work.
 
-## Start The Base Appliance
+## Config
+
+Start from:
+
+```text
+deploy/v100/ds4-v100-appliance.env.example
+```
+
+Important fields:
+
+```text
+DS4_V100_MODEL=/models/DSv4-Flash-256e-fixed.gguf
+DS4_V100_MTP_MODEL=/models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf
+DS4_V100_PACK_INDEX=docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv
+DS4_V100_CTX=1048576
+DS4_V100_SLOTS=1
+DS4_V100_HOST=127.0.0.1
+DS4_V100_PORT=18080
+DS4_V100_CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+DS4_V100_REQUIRE_GPUS=8
+DS4_V100_RESERVE_MIB=4096
+DS4_V100_SERVE_MODE=base
+DS4_V100_MTP_SERVING=off
+```
+
+Validate a config without starting the service:
+
+```bash
+./tools/ds4-v100-run-appliance.sh \
+  --env deploy/v100/ds4-v100-appliance.env.example \
+  --check \
+  --allow-missing
+```
+
+On the V100 host, omit `--allow-missing`; the launcher must see model files,
+eight visible GPUs, and at least the configured reserve before it starts.
+
+## Start
+
+Interactive start:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-./tools/ds4-v100-replay \
-  --serve \
-  --model /models/DSv4-Flash-256e-fixed.gguf \
-  --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv \
-  --ctx 1048576 \
-  --tokens 2 \
-  --host 127.0.0.1 \
-  --port 18080
+./tools/ds4-v100-run-appliance.sh \
+  --env deploy/v100/ds4-v100-appliance.env.example
 ```
 
-Use `--max-requests N` for bounded smoke runs. Leave it unset for an operator
-session.
+The launcher prints the resolved command to
+`$DS4_V100_LOG_DIR/command.txt`, writes the resolved startup config to
+`$DS4_V100_LOG_DIR/startup.env`, and then execs:
 
-## Probe Health And Status
+```bash
+./tools/ds4-v100-replay --serve ...
+```
+
+Use `DS4_V100_MAX_REQUESTS=N` for bounded smoke runs. Use `0` for a supervised
+operator session.
+
+## Supervision
+
+Systemd template:
+
+```text
+deploy/v100/ds4-v100-appliance.service
+```
+
+Expected install shape:
+
+```bash
+sudo mkdir -p /etc/ds4-v100
+sudo cp deploy/v100/ds4-v100-appliance.env.example /etc/ds4-v100/appliance.env
+sudo cp deploy/v100/ds4-v100-appliance.service /etc/systemd/system/ds4-v100-appliance.service
+sudo systemctl daemon-reload
+sudo systemctl start ds4-v100-appliance
+```
+
+Kubernetes template:
+
+```text
+deploy/v100/ds4-v100-appliance.k8s.yaml
+```
+
+The template follows the existing `llm` namespace and `gpu-01` convention, uses
+eight `nvidia.com/gpu` devices, mounts `/models` read-only, and runs the same
+launcher contract from `/workspace/ds4`. Adjust the workspace hostPath/image
+before applying it to a persistent production node.
+
+## Probe
 
 ```bash
 curl -sf http://127.0.0.1:18080/health
 curl -sf http://127.0.0.1:18080/v100/status
+curl -sf http://127.0.0.1:18080/metrics
 ```
 
 Expected status shape:
@@ -87,8 +166,24 @@ Expected status shape:
   "status": "ok",
   "mode": "base_one_slot",
   "readiness_level": 2,
-  "mtp_enabled": false
+  "mtp_enabled": false,
+  "limits": {
+    "slots": 1,
+    "concurrent_requests": 1,
+    "sequential_requests": true,
+    "streaming": false,
+    "external_exposure": false,
+    "speculative_serving": false
+  }
 }
+```
+
+Expected metrics include:
+
+```text
+ds4_v100_readiness_level 2
+ds4_v100_ctx_tokens 1048576
+ds4_v100_mtp_enabled 0
 ```
 
 ## Generate
@@ -103,52 +198,53 @@ curl -sf \
 The response includes prompt token count, generated token count, selected token
 bytes, stage timings, and memory/upload counters from the resident replay path.
 
-## Smoke Test
+## Deployment Gate
 
-Run the Level 2 HTTP smoke:
+Run the production deployment smoke:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-./tools/ds4-v100-appliance-smoke.sh \
+./tools/ds4-v100-production-deployment-gate.sh \
   --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv \
   --model /models/DSv4-Flash-256e-fixed.gguf \
+  --mtp-model /models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf \
   --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt \
+  --ctx 1048576 \
   --tokens 2 \
-  --requests 2 \
+  --requests 1 \
   --expected-token-hex 3136 \
   --host 127.0.0.1 \
-  --port 18080 \
-  --log-dir docs/sprints/drafts/SPRINT-032-APPLIANCE-LONG
+  --port 18082 \
+  --log-dir docs/sprints/drafts/SPRINT-043-PRODUCTION-DEPLOYMENT
 ```
 
-The smoke must prove:
+The smoke proves:
 
-- `/health` returns OK.
-- `/v100/status` returns `service=ds4-v100-replay` and `readiness_level=2`.
-- Two sequential requests pass from one resident process.
-- Each request returns the requested generated-token count.
-- The official fixture still produces first-token bytes `3136`.
-- Multi-token requests report nonzero continuation decode time.
+- launcher config validation passes;
+- GPU reserve checks run before upload;
+- `/health`, `/v100/status`, and `/metrics` respond;
+- status reports the base one-slot limits and `mtp_enabled=false`;
+- the official fixture still produces first-token bytes `3136`;
+- `served_requests` advances in the running service.
 
-## Full Gate
+## Rollback
 
-```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-./tools/ds4-v100-gate.sh --build \
-  --model /models/DSv4-Flash-256e-fixed.gguf \
-  --mtp-model /models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf \
-  --pack-index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv \
-  --ctx 1048576 \
-  --slots 1 \
-  --log-dir docs/sprints/drafts/SPRINT-032-GATE-CLUSTER-8GPU-FULL
-```
-
-For Level 2, a successful full gate should have zero failures and no
-`base_appliance_usability` readiness blocker. Overall readiness may still be
-`ready=false` while Level 3 reports `missing=mtp_forward`.
+Rollback is the default mode: keep `DS4_V100_SERVE_MODE=base` and
+`DS4_V100_MTP_SERVING=off`. If a future speculative serving package regresses,
+restart the same service with those settings. No model files or pack index need
+to change.
 
 ## Stop
 
-If the server is running interactively, stop it with `Ctrl-C`. For bounded
-smoke runs, `--max-requests` exits the server after the health/status probes and
-generation requests are served.
+For interactive runs, stop with `Ctrl-C`. For systemd:
+
+```bash
+sudo systemctl stop ds4-v100-appliance
+```
+
+For the Kubernetes template:
+
+```bash
+kubectl -n llm rollout restart deployment/ds4-v100-appliance
+kubectl -n llm delete deployment ds4-v100-appliance
+```

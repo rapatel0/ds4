@@ -1,0 +1,2 @@
+ds4-v100-production-deployment-gate: request=1 prompt_tokens=18 generated_tokens=2 first_token=926 first_hex=3136 ok
+ds4-v100-production-deployment-gate: launcher=ok health=ok status=ok metrics=ok requests=1 prompt_tokens=18 generated_tokens=2 first_token=926 first_hex=3136 ok

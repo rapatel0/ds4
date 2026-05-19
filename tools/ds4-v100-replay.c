@@ -48,7 +48,7 @@ static void usage(FILE *fp) {
             "  --expected-token-hex HEX  require first generated token bytes\n"
             "  --json                    emit JSON\n"
             "  --serve                   run a minimal HTTP endpoint\n"
-            "                            GET /health, GET /v100/status,\n"
+            "                            GET /health, GET /v100/status, GET /metrics,\n"
             "                            POST /v100/selected-token\n"
             "  --host ADDR               server bind address, default 127.0.0.1\n"
             "  --port N                  server port, default 8000\n"
@@ -509,8 +509,33 @@ static void write_status_json(FILE *fp, const replay_cli_options *opt, uint32_t 
     fprintf(fp, "\",\"ctx_tokens\":%" PRIu64 ",", opt->ctx);
     fprintf(fp, "\"default_tokens\":%" PRIu32 ",", opt->tokens);
     fprintf(fp, "\"max_tokens\":%u,", DS4_V100_REPLAY_MAX_TOKENS);
+    fprintf(fp,
+            "\"limits\":{\"slots\":1,\"concurrent_requests\":1,"
+            "\"sequential_requests\":true,\"streaming\":false,"
+            "\"external_exposure\":false,\"speculative_serving\":false},");
     fprintf(fp, "\"served_requests\":%" PRIu32, served);
     fprintf(fp, "}\n");
+}
+
+static void write_metrics_text(FILE *fp, const replay_cli_options *opt, uint32_t served) {
+    fprintf(fp, "# HELP ds4_v100_readiness_level Deployment readiness level exposed by the replay service.\n");
+    fprintf(fp, "# TYPE ds4_v100_readiness_level gauge\n");
+    fprintf(fp, "ds4_v100_readiness_level 2\n");
+    fprintf(fp, "# HELP ds4_v100_served_requests HTTP requests accepted by this process.\n");
+    fprintf(fp, "# TYPE ds4_v100_served_requests counter\n");
+    fprintf(fp, "ds4_v100_served_requests %" PRIu32 "\n", served);
+    fprintf(fp, "# HELP ds4_v100_ctx_tokens Configured KV context tokens per slot.\n");
+    fprintf(fp, "# TYPE ds4_v100_ctx_tokens gauge\n");
+    fprintf(fp, "ds4_v100_ctx_tokens %" PRIu64 "\n", opt->ctx);
+    fprintf(fp, "# HELP ds4_v100_default_tokens Default generated tokens per request.\n");
+    fprintf(fp, "# TYPE ds4_v100_default_tokens gauge\n");
+    fprintf(fp, "ds4_v100_default_tokens %" PRIu32 "\n", opt->tokens);
+    fprintf(fp, "# HELP ds4_v100_max_tokens Maximum generated tokens accepted by the appliance endpoint.\n");
+    fprintf(fp, "# TYPE ds4_v100_max_tokens gauge\n");
+    fprintf(fp, "ds4_v100_max_tokens %u\n", DS4_V100_REPLAY_MAX_TOKENS);
+    fprintf(fp, "# HELP ds4_v100_mtp_enabled Whether speculative MTP serving is enabled.\n");
+    fprintf(fp, "# TYPE ds4_v100_mtp_enabled gauge\n");
+    fprintf(fp, "ds4_v100_mtp_enabled 0\n");
 }
 
 static int handle_http_request(int fd,
@@ -543,6 +568,16 @@ static int handle_http_request(int fd,
         FILE *fp = fdopen(dup(fd), "w");
         if (fp) {
             write_status_json(fp, opt, served);
+            fclose(fp);
+        }
+        free(req);
+        return 0;
+    }
+    if (!strcmp(method, "GET") && !strcmp(path, "/metrics")) {
+        dprintf(fd, "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/plain; version=0.0.4\r\n\r\n");
+        FILE *fp = fdopen(dup(fd), "w");
+        if (fp) {
+            write_metrics_text(fp, opt, served);
             fclose(fp);
         }
         free(req);

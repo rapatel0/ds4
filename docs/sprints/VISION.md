@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-19
 last_updated_by: vision
-revision: 54
+revision: 55
 ---
 
 # Vision: DS4 V100 Appliance
@@ -32,9 +32,9 @@ it is a narrow DS4 runtime tuned for this hardware.
   target FP16 tensor cores or the selected low-bit/integer kernels.
 - The tightest observed residency case still leaves more than the planned 3 GiB
   reserve on a 32 GB V100. Weight VRAM fit is no longer the primary blocker.
-- The main remaining risk is production numerical correctness and kernel
-  coverage for the mixed BF16/F32/F8_E4M3_B128/MXFP4 source layout on V100,
-  especially attention, compressed KV, routing, and routed expert execution.
+- The main remaining risk is no longer VRAM fit or first-token correctness; it
+  is throughput, startup/upload latency, multi-slot/context operating envelope,
+  and production speculative MTP serving.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation
@@ -258,6 +258,11 @@ it is a narrow DS4 runtime tuned for this hardware.
   `1` exactly after committed token `926` at position `18`. Forced reject
   rollback still restores exactly, and the full gate now passes with
   `missing=production_deployment`.
+- Sprint 043 shipped the production deployment package. The appliance now has
+  an operator launcher, env config, systemd and Kubernetes templates,
+  `/metrics`, richer status limits, a production deployment smoke, and runbook
+  coverage. The full 8-GPU gate passes with `production_deployment PASS` and
+  now reports `missing=throughput_optimization`.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -274,15 +279,15 @@ mean "nothing works"; it should say which rung has not been proven yet.
 | 1 | Single-prompt base correctness | The base model path can run one known prompt through all 43 layers and select the expected first token. | Full 8-stage scheduler, output-head parity, selected-token hex `3136`, one-shot replay. | Complete through Sprints 024-028. |
 | 2 | Minimal usable base appliance | A human/operator can start the base model service and use it for short non-MTP one-slot generation with documented limits. | Longer prompt/decode smoke, repeat HTTP requests, failure logs, run command, health check, 1-slot timing report. | Complete through Sprint 032, with explicit limits: one slot, sequential loopback HTTP, no MTP, no streaming, no production supervisor. |
 | 3 | MTP-assisted correctness | The resident MTP sidecar can produce a K=1 draft token that matches a trusted oracle and does not corrupt target-model state. | MTP sidecar residency, Q8_0/Q4_K kernel parity, MTP forward logits/top-k, draft/verify/rollback tests. | Complete through Sprint 042. The focused and full 8-GPU gates produce a native prompt-token draft from committed token `926` and post-commit target HC, match target top-1 token `1` exactly, and preserve exact rollback/replay parity. |
-| 4 | Throughput appliance | The service has measured aggregate tok/s and a clear slot/context operating envelope. | Startup/upload timings, decode timings, slot admission, 1/2/4/8-slot benchmarks, context-tier benchmarks. | Not complete. Existing timings are diagnostic, not a throughput claim. |
-| 5 | Production deployment | The appliance can be left running on the cluster with operational confidence. | Supervised service, config files, restart behavior, health/metrics endpoint, deployment/runbook, known rollback path. | Current gate blocker: `missing=production_deployment`. HTTP loopback smokes pass, but there is no supervised deployment package/runbook yet. |
+| 4 | Production deployment | The appliance can be left running on the cluster with operational confidence. | Supervised service, config files, restart behavior, health/metrics endpoint, deployment/runbook, known rollback path. | Complete through Sprint 043 for the base one-slot service. The full gate includes `production_deployment PASS` with launcher, config, `/metrics`, supervisor templates, runbook, and rollback mode. |
+| 5 | Throughput optimization | The service has measured aggregate tok/s and a clear slot/context operating envelope. | Startup/upload timings, decode timings, slot admission, 1/2/4/8-slot benchmarks, context-tier benchmarks, and the first targeted optimization. | Current gate blocker: `missing=throughput_optimization`. Existing timings are useful diagnostics, not a throughput claim. |
 
 MTP is not required for the first minimally usable base appliance. It is
 required for the intended performance path if speculative decoding proves
-correct and beneficial on V100. With Level 3 complete, "ready to use" means
-the checked base appliance plus native one-token MTP verify is correctness
-proven in gate form. It does not yet mean throughput-optimized or
-production-deployed serving.
+correct and beneficial on V100. With Level 4 complete, "ready to use" means
+the checked base appliance plus native one-token MTP verify can be launched and
+supervised as a loopback cluster service. It does not yet mean
+throughput-optimized, multi-slot, streaming, or externally exposed serving.
 
 ## Sprint Sequence
 
@@ -855,7 +860,7 @@ production-deployed serving.
   `restore_delta=0`, and `replay_delta=0`. The full gate passes with
   `failures=0 ready=false missing=production_deployment`.
 
-### Sprint 043 - Production Deployment Package [planned]
+### Sprint 043 - Production Deployment Package [complete]
 
 - **Goal**: Turn the verified one-slot V100 appliance into a cluster service
   that can be started, supervised, observed, and rolled back by an operator.
@@ -863,6 +868,23 @@ production-deployed serving.
   behavior, and timing diagnostics, but it still runs as smoke-test processes.
   The remaining readiness blocker is deployment packaging rather than model
   execution correctness.
+- **Outcome**: `SHIP`. The appliance now has
+  `tools/ds4-v100-run-appliance.sh`, an env example, systemd and Kubernetes
+  deployment templates, `/metrics`, richer status limits, a production
+  deployment gate, and updated operator runbook. On the 8x V100 cluster, the
+  focused deployment smoke and full gate both pass; the full gate now reports
+  `failures=0 ready=false missing=throughput_optimization`.
+
+### Sprint 044 - Throughput Optimization And Operating Envelope [planned]
+
+- **Goal**: Convert the current timing diagnostics into a credible throughput
+  and operating-envelope baseline, then implement the first targeted
+  optimization that improves startup or decode throughput without weakening
+  correctness.
+- **Rationale**: Sprint 043 makes the service deployable, but fresh-process
+  startup still spends roughly 4.8-5.8 minutes opening/uploading the resident
+  stages, and the current one-slot decode timings are diagnostic rather than a
+  slot/context throughput claim.
 - **Outcome**: Planned next sprint.
 
 ## Parking Lot
@@ -979,6 +1001,12 @@ production-deployed serving.
 - See `docs/sprints/SPRINT-041-FOLLOWUPS.md`: native prompt-token MTP verify,
   production snapshot boundary extraction, ratio-128 compressor rollback
   stress, and cleanup of verify/rollback tool naming.
+- See `docs/sprints/SPRINT-042-FOLLOWUPS.md`: production MTP state object,
+  positive-accept fixture set, and output-head arena reuse. The P0 production
+  deployment package is complete through Sprint 043.
+- See `docs/sprints/SPRINT-043-FOLLOWUPS.md`: throughput optimization and
+  operating envelope, production MTP serving object, request surface hardening,
+  and deployment manifest hardening.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -1035,14 +1063,17 @@ production-deployed serving.
 | 2026-05-19 | Shipped Sprint 040 resident one-token MTP forward composition. | The MTP sidecar now runs deterministic prefix, attention, FFN, output HC collapse, output norm, base BF16 vocabulary projection, and top-k as one continuous gpu7 path; the remaining blocker is native prompt-token draft verify/rollback and state safety. | Sprint 041+ |
 | 2026-05-19 | Shipped Sprint 041 MTP rollback state safety. | The base target scheduler can now snapshot/restore mutable HC/KV/compressor/indexer state around a rejected speculative token while the real MTP sidecar remains resident; the remaining blocker is a real prompt-token MTP draft verified by exact target token equality. | Sprint 042+ |
 | 2026-05-19 | Shipped Sprint 042 native prompt-token MTP verify. | The real MTP sidecar now drafts from committed-token embedding plus gpu7 post-commit target HC and matches target top-1 exactly on the fixture, so the remaining gate blocker is production deployment packaging. | Sprint 043+ |
+| 2026-05-19 | Shipped Sprint 043 production deployment package. | The appliance now has a launcher, explicit config, supervisor templates, metrics/status probes, runbook, rollback mode, and a full-gate production deployment smoke; the remaining blocker is no longer deployment packaging but throughput optimization and operating-envelope measurement. | Sprint 044+ |
 
 ## Open Questions
 
 1. What reference should define correctness tolerances for mixed
    BF16/F32/F8_E4M3_B128/MXFP4 execution on V100 after MoE is included?
-2. What production serving milestone should follow the loopback smoke:
-   OpenAI-compatible API, process supervision, or a narrower internal endpoint?
-3. Should throughput optimization wait until production deployment packaging
-   exists, or should slot/context benchmarks run immediately after Sprint 043?
+2. What production serving milestone should follow the loopback service:
+   OpenAI-compatible API, authenticated proxy, streaming, or a narrower
+   internal endpoint?
+3. Which first throughput optimization should Sprint 044 prioritize:
+   parallel stage upload, longer resident decode baselines, or multi-slot
+   admission?
 4. Should the persistent `/srv/dev/ds4-sprint004` pack become the seed
    deployment artifact, or should a formal pack release format come first?

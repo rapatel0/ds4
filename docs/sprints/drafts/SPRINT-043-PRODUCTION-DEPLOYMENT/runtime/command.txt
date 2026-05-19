@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=0\,1\,2\,3\,4\,5\,6\,7 ./tools/ds4-v100-replay --serve --model /models/DSv4-Flash-256e-fixed.gguf --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --ctx 1048576 --tokens 2 --host 127.0.0.1 --port 18082 --max-requests 5

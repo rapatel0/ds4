@@ -157,6 +157,7 @@ selected_token_ready=0
 public_serving_ready=0
 base_usability_ready=0
 throughput_ready=0
+production_deployment_ready=0
 mtp_sidecar_ready=0
 mtp_residency_ready=0
 mtp_prefix_ready=0
@@ -410,6 +411,28 @@ if [ -n "$pack_index" ]; then
             if run_gate "v100_appliance_http_long" ./tools/ds4-v100-appliance-smoke.sh "${appliance_long_args[@]}"; then
                 base_usability_ready=1
             fi
+            production_args=(
+                --index "$pack_index"
+                --model "$model"
+                --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt
+                --ctx "$ctx"
+                --tokens 2
+                --requests 1
+                --expected-token-hex 3136
+                --host 127.0.0.1
+                --port 18082
+                --reserve-mib 4096
+                --require-gpus 8
+            )
+            if [ -n "$mtp_model" ]; then
+                production_args+=(--mtp-model "$mtp_model")
+            fi
+            if [ -n "$log_dir" ]; then
+                production_args+=(--log-dir "$log_dir/production_deployment")
+            fi
+            if run_gate "production_deployment" ./tools/ds4-v100-production-deployment-gate.sh "${production_args[@]}"; then
+                production_deployment_ready=1
+            fi
         else
             echo "gate	descriptor_bound_attention	SKIP	no_model"
             echo "gate	descriptor_bound_ffn	SKIP	no_model"
@@ -425,6 +448,7 @@ if [ -n "$pack_index" ]; then
             echo "gate	v100_replay_tool	SKIP	no_model"
             echo "gate	v100_appliance_http	SKIP	no_model"
             echo "gate	v100_appliance_http_long	SKIP	no_model"
+            echo "gate	production_deployment	SKIP	no_model"
         fi
     fi
 else
@@ -445,6 +469,7 @@ else
     echo "gate	v100_replay_tool	SKIP	no_pack_index"
     echo "gate	v100_appliance_http	SKIP	no_pack_index"
     echo "gate	v100_appliance_http_long	SKIP	no_pack_index"
+    echo "gate	production_deployment	SKIP	no_pack_index"
 fi
 
 if [ "$failures" -ne 0 ]; then
@@ -501,8 +526,11 @@ fi
 if [ "$throughput_ready" -eq 0 ]; then
     add_missing "throughput_benchmark"
 fi
-if [ -z "$missing" ]; then
+if [ "$production_deployment_ready" -eq 0 ]; then
     add_missing "production_deployment"
+fi
+if [ -z "$missing" ]; then
+    add_missing "throughput_optimization"
 fi
 echo "gate	readiness	NOT_READY	missing=$missing"
 echo "gate	summary	PASS	failures=0 ready=false"

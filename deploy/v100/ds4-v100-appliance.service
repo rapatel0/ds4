@@ -1,0 +1,23 @@
+[Unit]
+Description=DS4 V100 appliance
+After=network-online.target nvidia-persistenced.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/ds4
+EnvironmentFile=/etc/ds4-v100/appliance.env
+ExecStart=/opt/ds4/tools/ds4-v100-run-appliance.sh
+Restart=on-failure
+RestartSec=15
+TimeoutStartSec=900
+KillSignal=SIGINT
+LimitNOFILE=1048576
+
+# Keep the default endpoint private. Put an authenticated proxy in front of it
+# before binding outside loopback.
+PrivateTmp=false
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

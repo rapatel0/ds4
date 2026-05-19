@@ -212,7 +212,11 @@ if ! grep -q '"status":"ok"' "$health_json"; then
 fi
 http_get "/v100/status" "$status_http" "$status_json"
 if ! grep -q '"service":"ds4-v100-replay"' "$status_json" ||
-   ! grep -q '"readiness_level":2' "$status_json"; then
+   ! grep -q '"mode":"base_one_slot"' "$status_json" ||
+   ! grep -q '"readiness_level":2' "$status_json" ||
+   ! grep -q '"mtp_enabled":false' "$status_json" ||
+   ! grep -q '"slots":1' "$status_json" ||
+   ! grep -q '"streaming":false' "$status_json"; then
     echo "ds4-v100-appliance-smoke: bad /v100/status response" >&2
     cat "$status_json" >&2
     exit 1
