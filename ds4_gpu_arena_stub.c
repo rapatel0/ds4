@@ -420,3 +420,35 @@ int ds4_gpu_arena_hc_split_weighted_sum_tensor(
     (void)eps;
     return 1;
 }
+
+int ds4_gpu_arena_attention_decode_heads_tensor(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *sinks,
+        ds4_gpu_tensor                *heads,
+        const ds4_gpu_tensor          *q,
+        const ds4_gpu_tensor          *raw_kv,
+        uint32_t                       n_raw,
+        uint32_t                       raw_cap,
+        uint32_t                       raw_start,
+        const ds4_gpu_tensor          *comp_kv,
+        uint32_t                       n_comp,
+        const ds4_gpu_tensor          *comp_mask,
+        uint32_t                       use_mask,
+        uint32_t                       n_head,
+        uint32_t                       head_dim) {
+    (void)arena;
+    (void)sinks;
+    (void)heads;
+    (void)q;
+    (void)raw_kv;
+    (void)n_raw;
+    (void)raw_cap;
+    (void)raw_start;
+    (void)comp_kv;
+    (void)n_comp;
+    (void)comp_mask;
+    (void)use_mask;
+    (void)n_head;
+    (void)head_dim;
+    return 1;
+}

@@ -8042,6 +8042,88 @@ extern "C" int ds4_gpu_attention_decode_heads_tensor(
                                                  0, 0, n_head, head_dim);
     return cuda_ok(cudaGetLastError(), "attention decode launch");
 }
+
+extern "C" int ds4_gpu_arena_attention_decode_heads_tensor(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *sinks,
+        ds4_gpu_tensor                *heads,
+        const ds4_gpu_tensor          *q,
+        const ds4_gpu_tensor          *raw_kv,
+        uint32_t                       n_raw,
+        uint32_t                       raw_cap,
+        uint32_t                       raw_start,
+        const ds4_gpu_tensor          *comp_kv,
+        uint32_t                       n_comp,
+        const ds4_gpu_tensor          *comp_mask,
+        uint32_t                       use_mask,
+        uint32_t                       n_head,
+        uint32_t                       head_dim) {
+    if (!arena || !sinks || !heads || !q || !raw_kv ||
+        !arena->valid || !arena->ptr || !heads->ptr || !q->ptr || !raw_kv->ptr ||
+        n_raw == 0 || raw_cap < n_raw || raw_start >= raw_cap ||
+        (n_comp != 0 && (!comp_kv || !comp_kv->ptr)) ||
+        (use_mask && (!comp_mask || !comp_mask->ptr)) ||
+        sinks->rows != 1u || sinks->cols != n_head ||
+        (sinks->arena_offset & 3ull) != 0 ||
+        (sinks->row_stride_bytes & 3u) != 0 ||
+        sinks->row_stride_bytes < n_head * sizeof(float) ||
+        sinks->byte_length < (uint64_t)n_head * sizeof(float) ||
+        !cuda_arena_range_ok(arena, sinks->arena_offset, sinks->byte_length) ||
+        heads->device != arena->gpu ||
+        q->device != arena->gpu ||
+        raw_kv->device != arena->gpu ||
+        (n_comp && comp_kv->device != arena->gpu) ||
+        (use_mask && comp_mask->device != arena->gpu) ||
+        heads->bytes < (uint64_t)n_head * head_dim * sizeof(float) ||
+        q->bytes < (uint64_t)n_head * head_dim * sizeof(float) ||
+        raw_kv->bytes < (uint64_t)raw_cap * head_dim * sizeof(float) ||
+        (n_comp && comp_kv->bytes < (uint64_t)n_comp * head_dim * sizeof(float)) ||
+        (use_mask && comp_mask->bytes < (uint64_t)n_comp * sizeof(float))) {
+        return 1;
+    }
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "arena attention decode set device")) return 1;
+
+    const float *sinks_ptr =
+        (const float *)((const char *)arena->ptr + sinks->arena_offset);
+    if (!cuda_attention_score_buffer_fits(n_comp)) {
+        if (!use_mask && head_dim == 512u &&
+            getenv("DS4_CUDA_NO_WINDOW_ATTENTION") == NULL) {
+            dim3 online_grid(1, (n_head + 7u) / 8u, 1);
+            attention_decode_mixed_heads8_online_kernel<<<online_grid, 256>>>(
+                    (float *)heads->ptr,
+                    sinks_ptr,
+                    (const float *)q->ptr,
+                    (const float *)raw_kv->ptr,
+                    n_comp ? (const float *)comp_kv->ptr : (const float *)raw_kv->ptr,
+                    1,
+                    0,
+                    n_raw,
+                    raw_cap,
+                    raw_start,
+                    n_comp,
+                    0,
+                    0,
+                    n_head,
+                    head_dim);
+            return cuda_ok(cudaGetLastError(), "arena attention decode online launch") ? 0 : 1;
+        }
+        fprintf(stderr, "ds4: CUDA arena attention score buffer too small for %u compressed rows\n", n_comp);
+        return 1;
+    }
+    dim3 grid(1, n_head, 1);
+    attention_decode_mixed_kernel<<<grid, 256>>>(
+            (float *)heads->ptr,
+            sinks_ptr,
+            (const float *)q->ptr,
+            (const float *)raw_kv->ptr,
+            n_comp ? (const float *)comp_kv->ptr : (const float *)raw_kv->ptr,
+            use_mask ? (const float *)comp_mask->ptr : NULL,
+            use_mask,
+            1, 0, n_raw, raw_cap, raw_start, n_comp,
+            0, 0, n_head, head_dim);
+    return cuda_ok(cudaGetLastError(), "arena attention decode launch") ? 0 : 1;
+}
+
 extern "C" int ds4_gpu_attention_prefill_raw_heads_tensor(ds4_gpu_tensor *heads, const void *model_map, uint64_t model_size, uint64_t sinks_offset, const ds4_gpu_tensor *q, const ds4_gpu_tensor *raw_kv, uint32_t n_tokens, uint32_t window, uint32_t n_head, uint32_t head_dim) {
     if (!heads || !q || !raw_kv || !model_map || sinks_offset > model_size ||
         model_size - sinks_offset < (uint64_t)n_head * sizeof(float) ||
