@@ -1,9 +1,10 @@
 # DS4 V100 Appliance Runbook
 
 This runbook covers the current production deployment package for the DS4 V100
-appliance on the 8x 32 GiB V100 host. The served endpoint is the verified
-one-slot base model path. Native MTP correctness is gated separately, but
-speculative MTP serving is not exposed yet.
+appliance on the 8x 32 GiB V100 host. The default served endpoint is the
+verified one-slot base model path. An explicit MTP verify mode can also expose
+the gated one-token MTP draft/verify diagnostics in the same resident HTTP
+process.
 
 ## Scope
 
@@ -16,12 +17,13 @@ Supported today:
 - `/health`, `/status`, `/v100/status`, `/metrics`.
 - `POST /v100/selected-token`.
 - Up to 64 generated tokens per request.
+- Optional MTP verify diagnostics with `DS4_V100_MTP_SERVING=verify`.
 - Operator launcher, env file, systemd template, Kubernetes template, and
   deployment smoke.
 
 Not supported today:
 
-- MTP speculative serving in the HTTP process.
+- Multi-token MTP draft commit without recomputing the base target token.
 - Multi-slot scheduling.
 - Concurrent HTTP requests.
 - Streaming responses.
@@ -46,7 +48,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   --pack-index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv \
   --ctx 1048576 \
   --slots 1 \
-  --log-dir docs/sprints/drafts/SPRINT-044-GATE-CLUSTER-8GPU
+  --log-dir docs/sprints/drafts/SPRINT-045-GATE-CLUSTER-8GPU
 ```
 
 ## Required Files
@@ -60,8 +62,7 @@ docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv
 ```
 
 The served base appliance needs the source model and pack index. The MTP model
-is still part of the deployment config so the same host config can be used by
-the full readiness gate and by future speculative serving work.
+is required when `DS4_V100_MTP_SERVING=verify` and by the full readiness gate.
 
 ## Config
 
@@ -86,6 +87,8 @@ DS4_V100_REQUIRE_GPUS=8
 DS4_V100_RESERVE_MIB=4096
 DS4_V100_SERVE_MODE=base
 DS4_V100_MTP_SERVING=off
+DS4_V100_MTP_TOP_K=5
+DS4_V100_MTP_GPU=7
 ```
 
 Validate a config without starting the service:
@@ -186,6 +189,42 @@ ds4_v100_ctx_tokens 1048576
 ds4_v100_mtp_enabled 0
 ```
 
+With MTP verify mode enabled:
+
+```text
+DS4_V100_MTP_SERVING=verify
+DS4_V100_MTP_TOP_K=5
+DS4_V100_MTP_GPU=7
+```
+
+Expected status changes:
+
+```json
+{
+  "mode": "mtp_verify_one_slot",
+  "readiness_level": 3,
+  "mtp_enabled": true,
+  "limits": {
+    "speculative_serving": true
+  },
+  "mtp": {
+    "serving_mode": "verify",
+    "top_k": 5,
+    "gpu": 7
+  }
+}
+```
+
+Expected MTP metrics include:
+
+```text
+ds4_v100_mtp_enabled 1
+ds4_v100_mtp_requests_total 1
+ds4_v100_mtp_drafts_total 1
+ds4_v100_mtp_accepted_total 1
+ds4_v100_mtp_rejected_total 0
+```
+
 ## Generate
 
 ```bash
@@ -197,6 +236,33 @@ curl -sf \
 
 The response includes prompt token count, generated token count, selected token
 bytes, stage timings, and memory/upload counters from the resident replay path.
+When MTP verify mode is enabled, the response also includes an `mtp` object with
+committed token, target token, draft token, top-k candidates, accept/reject
+status, and draft timing.
+
+## MTP Verify Serving Smoke
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+./tools/ds4-v100-mtp-serving-smoke.sh \
+  --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv \
+  --model /models/DSv4-Flash-256e-fixed.gguf \
+  --mtp-model /models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf \
+  --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt \
+  --ctx 1048576 \
+  --tokens 2 \
+  --requests 1 \
+  --expected-token-hex 3136 \
+  --host 127.0.0.1 \
+  --port 18083 \
+  --log-dir docs/sprints/drafts/SPRINT-045-MTP-SERVING
+```
+
+Expected result:
+
+```text
+first_hex=3136 mtp_accepted=1 ok
+```
 
 ## Startup Throughput Benchmark
 
@@ -238,7 +304,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   --expected-token-hex 3136 \
   --host 127.0.0.1 \
   --port 18082 \
-  --log-dir docs/sprints/drafts/SPRINT-043-PRODUCTION-DEPLOYMENT
+  --log-dir docs/sprints/drafts/SPRINT-045-PRODUCTION-DEPLOYMENT
 ```
 
 The smoke proves:
@@ -253,9 +319,8 @@ The smoke proves:
 ## Rollback
 
 Rollback is the default mode: keep `DS4_V100_SERVE_MODE=base` and
-`DS4_V100_MTP_SERVING=off`. If a future speculative serving package regresses,
-restart the same service with those settings. No model files or pack index need
-to change.
+`DS4_V100_MTP_SERVING=off`. If MTP verify mode regresses, restart the same
+service with those settings. No model files or pack index need to change.
 
 ## Stop
 

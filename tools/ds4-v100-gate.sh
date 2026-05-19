@@ -169,6 +169,7 @@ mtp_logits_ready=0
 mtp_forward_ready=0
 mtp_rollback_ready=0
 mtp_verify_ready=0
+mtp_speculative_serving_ready=0
 
 run_gate() {
     local name="$1"
@@ -342,6 +343,7 @@ else
     echo "gate	mtp_forward	SKIP	no_mtp_model"
     echo "gate	mtp_rollback	SKIP	no_mtp_model"
     echo "gate	mtp_verify	SKIP	no_mtp_model"
+    echo "gate	mtp_speculative_serving	SKIP	no_mtp_model"
 fi
 
 run_gate "source_dtypes" ./tests/cuda_source_dtypes_smoke || true
@@ -449,6 +451,29 @@ if [ -n "$pack_index" ]; then
             if run_gate "production_deployment" ./tools/ds4-v100-production-deployment-gate.sh "${production_args[@]}"; then
                 production_deployment_ready=1
             fi
+            if [ -n "$mtp_model" ]; then
+                mtp_serving_args=(
+                    --index "$pack_index"
+                    --model "$model"
+                    --mtp-model "$mtp_model"
+                    --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt
+                    --ctx "$ctx"
+                    --tokens 2
+                    --requests 1
+                    --expected-token-hex 3136
+                    --host 127.0.0.1
+                    --port 18083
+                    --top-k 5
+                    --mtp-gpu 7
+                    --reserve-mib 4096
+                )
+                if [ -n "$log_dir" ]; then
+                    mtp_serving_args+=(--log-dir "$log_dir/mtp_speculative_serving")
+                fi
+                if run_gate "mtp_speculative_serving" ./tools/ds4-v100-mtp-serving-smoke.sh "${mtp_serving_args[@]}"; then
+                    mtp_speculative_serving_ready=1
+                fi
+            fi
         else
             echo "gate	descriptor_bound_attention	SKIP	no_model"
             echo "gate	descriptor_bound_ffn	SKIP	no_model"
@@ -466,6 +491,7 @@ if [ -n "$pack_index" ]; then
             echo "gate	v100_appliance_http	SKIP	no_model"
             echo "gate	v100_appliance_http_long	SKIP	no_model"
             echo "gate	production_deployment	SKIP	no_model"
+            echo "gate	mtp_speculative_serving	SKIP	no_model"
         fi
     fi
 else
@@ -488,6 +514,7 @@ else
     echo "gate	v100_appliance_http	SKIP	no_pack_index"
     echo "gate	v100_appliance_http_long	SKIP	no_pack_index"
     echo "gate	production_deployment	SKIP	no_pack_index"
+    echo "gate	mtp_speculative_serving	SKIP	no_pack_index"
 fi
 
 if [ "$failures" -ne 0 ]; then
@@ -537,6 +564,8 @@ if [ -n "$mtp_model" ]; then
         add_missing "mtp_rollback"
     elif [ "$mtp_verify_ready" -eq 0 ]; then
         add_missing "mtp_verify"
+    elif [ "$mtp_speculative_serving_ready" -eq 0 ]; then
+        add_missing "mtp_speculative_serving"
     fi
 else
     add_missing "mtp"
@@ -551,7 +580,7 @@ if [ "$throughput_optimization_ready" -eq 0 ]; then
     add_missing "throughput_optimization"
 fi
 if [ -z "$missing" ]; then
-    add_missing "mtp_speculative_serving"
+    add_missing "aggregate_slot_context_envelope"
 fi
 echo "gate	readiness	NOT_READY	missing=$missing"
 echo "gate	summary	PASS	failures=0 ready=false"

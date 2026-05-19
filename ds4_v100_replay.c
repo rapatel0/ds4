@@ -85,6 +85,14 @@ void ds4_v100_replay_open_counters(const ds4_v100_replay *rt,
     }
 }
 
+const void *ds4_v100_replay_model_map(const ds4_v100_replay *rt) {
+    return rt ? rt->model_map : NULL;
+}
+
+uint64_t ds4_v100_replay_model_size(const ds4_v100_replay *rt) {
+    return rt ? rt->model_size : 0;
+}
+
 void ds4_v100_replay_close(ds4_v100_replay *rt) {
     if (!rt) return;
     for (int i = DS4_V100_EXPECTED_GPUS - 1; i >= 0; i--) {
@@ -448,6 +456,39 @@ int ds4_v100_replay_generate(ds4_v100_replay *rt,
     c->total_ms = replay_now_ms() - total0;
     rt->used = true;
     if (out_count) *out_count = n_out;
+    return 0;
+}
+
+int ds4_v100_replay_read_token_embedding_f32(ds4_v100_replay *rt,
+                                             uint32_t token,
+                                             float *dst,
+                                             uint64_t dst_values,
+                                             char *err,
+                                             size_t errlen) {
+    if (!rt || !rt->scheds[0] || !dst) {
+        return replay_error(err, errlen, "missing V100 replay embedding read input");
+    }
+    return ds4_v100_stage_scheduler_read_token_embedding_f32(rt->scheds[0],
+                                                             token,
+                                                             dst,
+                                                             dst_values,
+                                                             err,
+                                                             errlen);
+}
+
+int ds4_v100_replay_read_output_hc(ds4_v100_replay *rt,
+                                   float *dst,
+                                   uint64_t bytes,
+                                   char *err,
+                                   size_t errlen) {
+    if (!rt || !rt->scheds[DS4_V100_EXPECTED_GPUS - 1] || !dst) {
+        return replay_error(err, errlen, "missing V100 replay HC read input");
+    }
+    if (!ds4_v100_stage_scheduler_read_hc(rt->scheds[DS4_V100_EXPECTED_GPUS - 1],
+                                          dst,
+                                          bytes)) {
+        return replay_error(err, errlen, "V100 replay HC read failed");
+    }
     return 0;
 }
 

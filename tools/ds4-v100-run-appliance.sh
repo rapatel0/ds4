@@ -83,6 +83,8 @@ fi
 : "${DS4_V100_LOG_DIR:=logs/v100-appliance}"
 : "${DS4_V100_SERVE_MODE:=base}"
 : "${DS4_V100_MTP_SERVING:=off}"
+: "${DS4_V100_MTP_TOP_K:=5}"
+: "${DS4_V100_MTP_GPU:=7}"
 
 is_uint() {
     case "${1:-}" in
@@ -182,9 +184,11 @@ case "$DS4_V100_SERVE_MODE" in
     base) ;;
     *) fail "only DS4_V100_SERVE_MODE=base is supported by this deployment package" ;;
 esac
+mtp_serving_enabled=0
 case "$DS4_V100_MTP_SERVING" in
     off|false|0) ;;
-    *) fail "MTP speculative serving is not exposed yet; set DS4_V100_MTP_SERVING=off" ;;
+    verify) mtp_serving_enabled=1 ;;
+    *) fail "DS4_V100_MTP_SERVING must be off or verify" ;;
 esac
 
 is_uint "$DS4_V100_CTX" || fail "DS4_V100_CTX must be a positive integer"
@@ -194,11 +198,14 @@ is_uint "$DS4_V100_PORT" || fail "DS4_V100_PORT must be a positive integer"
 is_uint "$DS4_V100_REQUIRE_GPUS" || fail "DS4_V100_REQUIRE_GPUS must be an integer"
 is_uint "$DS4_V100_RESERVE_MIB" || fail "DS4_V100_RESERVE_MIB must be an integer"
 is_uint "$DS4_V100_MAX_REQUESTS" || fail "DS4_V100_MAX_REQUESTS must be an integer"
+is_uint "$DS4_V100_MTP_TOP_K" || fail "DS4_V100_MTP_TOP_K must be an integer"
+is_uint "$DS4_V100_MTP_GPU" || fail "DS4_V100_MTP_GPU must be an integer"
 
 [ "$DS4_V100_SLOTS" -eq 1 ] || fail "only DS4_V100_SLOTS=1 is supported"
 [ "$DS4_V100_CTX" -ge 1 ] || fail "DS4_V100_CTX must be positive"
 [ "$DS4_V100_TOKENS" -ge 1 ] || fail "DS4_V100_TOKENS must be positive"
 [ "$DS4_V100_TOKENS" -le 64 ] || fail "DS4_V100_TOKENS must be <= 64"
+[ "$DS4_V100_MTP_TOP_K" -ge 2 ] && [ "$DS4_V100_MTP_TOP_K" -le 16 ] || fail "DS4_V100_MTP_TOP_K must be between 2 and 16"
 [ "$DS4_V100_PORT" -ge 1 ] && [ "$DS4_V100_PORT" -le 65535 ] || fail "DS4_V100_PORT out of range"
 [ -n "$DS4_V100_HOST" ] || fail "DS4_V100_HOST must not be empty"
 case "$DS4_V100_HOST" in
@@ -209,7 +216,10 @@ esac
 require_exec "$DS4_V100_BIN"
 require_file "model" "$DS4_V100_MODEL"
 require_file "pack index" "$DS4_V100_PACK_INDEX"
-if [ -n "$DS4_V100_MTP_MODEL" ]; then
+if [ "$mtp_serving_enabled" -eq 1 ] && [ -z "$DS4_V100_MTP_MODEL" ]; then
+    fail "DS4_V100_MTP_MODEL is required when DS4_V100_MTP_SERVING=verify"
+fi
+if [ "$mtp_serving_enabled" -eq 1 ] || [ -n "$DS4_V100_MTP_MODEL" ]; then
     require_file "MTP model" "$DS4_V100_MTP_MODEL"
 fi
 check_gpu_reserve
@@ -227,6 +237,15 @@ cmd=(
 if [ "$DS4_V100_MAX_REQUESTS" -gt 0 ]; then
     cmd+=(--max-requests "$DS4_V100_MAX_REQUESTS")
 fi
+if [ "$mtp_serving_enabled" -eq 1 ]; then
+    cmd+=(
+        --mtp-model "$DS4_V100_MTP_MODEL"
+        --mtp-serving verify
+        --mtp-top-k "$DS4_V100_MTP_TOP_K"
+        --mtp-gpu "$DS4_V100_MTP_GPU"
+        --mtp-reserve-mib "$DS4_V100_RESERVE_MIB"
+    )
+fi
 
 print_resolved() {
     printf 'CUDA_VISIBLE_DEVICES=%q ' "$DS4_V100_CUDA_VISIBLE_DEVICES"
@@ -235,7 +254,7 @@ print_resolved() {
 }
 
 if [ "$mode" = "check" ]; then
-    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS tokens=$DS4_V100_TOKENS"
+    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS tokens=$DS4_V100_TOKENS"
     exit 0
 fi
 if [ "$mode" = "print" ]; then
@@ -258,6 +277,8 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_RESERVE_MIB=$DS4_V100_RESERVE_MIB"
     echo "DS4_V100_SERVE_MODE=$DS4_V100_SERVE_MODE"
     echo "DS4_V100_MTP_SERVING=$DS4_V100_MTP_SERVING"
+    echo "DS4_V100_MTP_TOP_K=$DS4_V100_MTP_TOP_K"
+    echo "DS4_V100_MTP_GPU=$DS4_V100_MTP_GPU"
 } >"$DS4_V100_LOG_DIR/startup.env"
 print_resolved >"$DS4_V100_LOG_DIR/command.txt"
 

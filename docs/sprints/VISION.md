@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-19
 last_updated_by: vision
-revision: 56
+revision: 57
 ---
 
 # Vision: DS4 V100 Appliance
@@ -33,8 +33,9 @@ it is a narrow DS4 runtime tuned for this hardware.
 - The tightest observed residency case still leaves more than the planned 3 GiB
   reserve on a 32 GB V100. Weight VRAM fit is no longer the primary blocker.
 - The main remaining risk is no longer VRAM fit, first-token correctness, base
-  deployment, or cold startup/upload. It is production speculative MTP serving,
-  multi-slot scheduling, and aggregate context/throughput operating envelope.
+  deployment, cold startup/upload, or served one-token MTP verify. It is
+  multi-slot scheduling and the aggregate context/throughput operating
+  envelope.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation
@@ -269,6 +270,11 @@ it is a narrow DS4 runtime tuned for this hardware.
   `63032.135 ms` (`5.457375x`), the full gate's optimization benchmark
   improved from `227418.984 ms` to `59449.323 ms` (`3.825426x`), and the full
   gate now reports `missing=mtp_speculative_serving`.
+- Sprint 045 shipped production MTP verify serving. The resident HTTP appliance
+  now supports explicit `DS4_V100_MTP_SERVING=verify`, reports
+  `mode=mtp_verify_one_slot`, returns MTP draft/verify diagnostics, exposes MTP
+  counters in `/metrics`, and passes the full gate with
+  `missing=aggregate_slot_context_envelope`.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -284,18 +290,18 @@ mean "nothing works"; it should say which rung has not been proven yet.
 | 0 | Fit and residency | The source model can be mapped, packed, and held in 8x V100 VRAM with reserve. | Pack inventory, per-GPU memory plan, resident upload smoke, source-layout guards. | Complete through Sprints 001-006. |
 | 1 | Single-prompt base correctness | The base model path can run one known prompt through all 43 layers and select the expected first token. | Full 8-stage scheduler, output-head parity, selected-token hex `3136`, one-shot replay. | Complete through Sprints 024-028. |
 | 2 | Minimal usable base appliance | A human/operator can start the base model service and use it for short non-MTP one-slot generation with documented limits. | Longer prompt/decode smoke, repeat HTTP requests, failure logs, run command, health check, 1-slot timing report. | Complete through Sprint 032, with explicit limits: one slot, sequential loopback HTTP, no MTP, no streaming, no production supervisor. |
-| 3 | MTP-assisted correctness | The resident MTP sidecar can produce a K=1 draft token that matches a trusted oracle and does not corrupt target-model state. | MTP sidecar residency, Q8_0/Q4_K kernel parity, MTP forward logits/top-k, draft/verify/rollback tests. | Complete through Sprint 042. The focused and full 8-GPU gates produce a native prompt-token draft from committed token `926` and post-commit target HC, match target top-1 token `1` exactly, and preserve exact rollback/replay parity. |
+| 3 | MTP-assisted correctness | The resident MTP sidecar can produce a K=1 draft token that matches a trusted oracle and does not corrupt target-model state. | MTP sidecar residency, Q8_0/Q4_K kernel parity, MTP forward logits/top-k, draft/verify/rollback tests, served verify diagnostics. | Complete through Sprint 045. The focused and full 8-GPU gates produce a native prompt-token draft from committed token `926` and post-commit target HC, match target top-1 token `1` exactly, expose the same verify path through HTTP as `mtp_verify_one_slot`, and keep rollback/off mode available. |
 | 4 | Production deployment | The appliance can be left running on the cluster with operational confidence. | Supervised service, config files, restart behavior, health/metrics endpoint, deployment/runbook, known rollback path. | Complete through Sprint 043 for the base one-slot service. The full gate includes `production_deployment PASS` with launcher, config, `/metrics`, supervisor templates, runbook, and rollback mode. |
 | 5 | Startup and one-slot throughput optimization | Fresh-process startup/upload is measured and improved, and the one-slot decode path has gate-owned timing evidence. | Serial-vs-parallel startup benchmark, default replay timing, first-token correctness, full-gate `throughput_optimization PASS`. | Complete through Sprint 044. Focused timing improved cold open from `343989.990 ms` to `63032.135 ms`; full-gate timing improved from `227418.984 ms` to `59449.323 ms`; first token remains `3136`. |
-| 6 | Aggregate slot/context operating envelope | The appliance can admit and schedule multiple slots/context tiers and report aggregate tok/s. | 1/2/4/8-slot admission, context-tier benchmarks, active microbatch scheduling, queueing or rejection semantics, and MTP-aware throughput comparison. | Planned after MTP speculative serving. Not yet implemented and not claimed by Sprint 044. |
+| 6 | Aggregate slot/context operating envelope | The appliance can admit and schedule multiple slots/context tiers and report aggregate tok/s. | 1/2/4/8-slot admission, context-tier benchmarks, active microbatch scheduling, queueing or rejection semantics, and MTP-aware throughput comparison. | Next readiness blocker after Sprint 045. Not yet implemented and not claimed by the current gate. |
 
 MTP is not required for the first minimally usable base appliance. It is
 required for the intended performance path if speculative decoding proves
-correct and beneficial on V100. With Level 5 complete, "ready to use" means
-the checked base appliance plus native one-token MTP verify can be launched,
-supervised, and cold-started in roughly one minute as a loopback cluster
-service. It does not yet mean MTP speculative serving, multi-slot batching,
-streaming, or externally exposed serving.
+correct and beneficial on V100. With Sprint 045 complete, "ready to use" means
+the checked base appliance can run either the default base one-slot service or
+the explicit one-token MTP verify service as a loopback cluster process. It
+does not yet mean multi-slot batching, true draft commit without target
+recompute, streaming, or externally exposed serving.
 
 ## Sprint Sequence
 
@@ -902,7 +908,7 @@ streaming, or externally exposed serving.
   (`5.457375x`), and the full gate passed with
   `failures=0 ready=false missing=mtp_speculative_serving`.
 
-### Sprint 045 - Production MTP Speculative Serving [planned]
+### Sprint 045 - Production MTP Speculative Serving [complete]
 
 - **Goal**: Expose the gated one-token native MTP verify path through the
   resident HTTP appliance as a bounded speculative serving mode.
@@ -910,6 +916,23 @@ streaming, or externally exposed serving.
   and startup optimization. The remaining readiness blocker is that the served
   process still reports `mtp_enabled=false` and does not draft/verify/rollback
   inside the request loop.
+- **Outcome**: `SHIP`. The resident HTTP appliance now supports
+  `--mtp-serving verify` and launcher `DS4_V100_MTP_SERVING=verify`, opens the
+  real gpu7 MTP sidecar and base output head, returns an `mtp` diagnostics
+  object, and exposes MTP request/draft/accepted/rejected/skipped counters.
+  Focused and full-gate smokes verify prompt token `926`, target token `1`, MTP
+  draft token `1`, first token bytes `3136`, and `mtp_accepted=1`. The full
+  gate now passes `mtp_speculative_serving` and reports
+  `missing=aggregate_slot_context_envelope`.
+
+### Sprint 046 - Aggregate Slot/Context Envelope [planned]
+
+- **Goal**: Define and validate the practical slot/context operating envelope
+  for the DS4 V100 appliance.
+- **Rationale**: The current service is still one-slot and sequential. The next
+  readiness blocker is no longer correctness, deployment, startup, or served
+  MTP verify; it is whether the appliance can admit useful slot/context modes
+  and report aggregate tok/s without overfilling 32 GiB V100 VRAM.
 - **Outcome**: Planned next sprint.
 
 ## Parking Lot
@@ -1035,6 +1058,8 @@ streaming, or externally exposed serving.
 - See `docs/sprints/SPRINT-044-FOLLOWUPS.md`: MTP speculative serving,
   multi-slot aggregate throughput, persistent startup strategy, and broader
   benchmark coverage.
+- See `docs/sprints/SPRINT-045-FOLLOWUPS.md`: aggregate slot/context envelope,
+  true MTP commit path, MTP service hardening, and startup/upload refinement.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -1093,6 +1118,7 @@ streaming, or externally exposed serving.
 | 2026-05-19 | Shipped Sprint 042 native prompt-token MTP verify. | The real MTP sidecar now drafts from committed-token embedding plus gpu7 post-commit target HC and matches target top-1 exactly on the fixture, so the remaining gate blocker is production deployment packaging. | Sprint 043+ |
 | 2026-05-19 | Shipped Sprint 043 production deployment package. | The appliance now has a launcher, explicit config, supervisor templates, metrics/status probes, runbook, rollback mode, and a full-gate production deployment smoke; the remaining blocker is no longer deployment packaging but throughput optimization and operating-envelope measurement. | Sprint 044+ |
 | 2026-05-19 | Shipped Sprint 044 throughput optimization. | Parallel stage open/upload cut cold replay startup to about one minute while preserving selected-token correctness; the remaining blocker is now exposing the already-gated MTP verify path as production speculative serving. | Sprint 045+ |
+| 2026-05-19 | Shipped Sprint 045 production MTP verify serving. | The resident HTTP appliance now exposes explicit MTP verify diagnostics and metrics while preserving base rollback mode; the gate now advances to the aggregate slot/context envelope. | Sprint 046+ |
 
 ## Open Questions
 
@@ -1101,8 +1127,7 @@ streaming, or externally exposed serving.
 2. What production serving milestone should follow the loopback service:
    OpenAI-compatible API, authenticated proxy, streaming, or a narrower
    internal endpoint?
-3. What accept policy should Sprint 045 use for the first served MTP mode:
-   strict top-1 equality only, top-k assisted verification, or a diagnostic
-   mode that records drafts without accepting them by default?
+3. When should the MTP path graduate from diagnostic exact-verify mode to true
+   draft commit without recomputing the base target token?
 4. Should the persistent `/srv/dev/ds4-sprint004` pack become the seed
    deployment artifact, or should a formal pack release format come first?

@@ -61,6 +61,10 @@ int ds4_v100_replay_open(ds4_v100_replay **out,
 void ds4_v100_replay_open_counters(const ds4_v100_replay *rt,
                                    ds4_v100_replay_counters *out);
 
+const void *ds4_v100_replay_model_map(const ds4_v100_replay *rt);
+
+uint64_t ds4_v100_replay_model_size(const ds4_v100_replay *rt);
+
 void ds4_v100_replay_close(ds4_v100_replay *rt);
 
 int ds4_v100_replay_reset(ds4_v100_replay *rt, char *err, size_t errlen);
@@ -80,6 +84,19 @@ int ds4_v100_replay_generate(ds4_v100_replay *rt,
                              ds4_v100_replay_counters *counters,
                              char *err,
                              size_t errlen);
+
+int ds4_v100_replay_read_token_embedding_f32(ds4_v100_replay *rt,
+                                             uint32_t token,
+                                             float *dst,
+                                             uint64_t dst_values,
+                                             char *err,
+                                             size_t errlen);
+
+int ds4_v100_replay_read_output_hc(ds4_v100_replay *rt,
+                                   float *dst,
+                                   uint64_t bytes,
+                                   char *err,
+                                   size_t errlen);
 
 void ds4_v100_replay_output_free(ds4_v100_replay_output *out);
 

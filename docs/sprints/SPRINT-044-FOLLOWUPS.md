@@ -1,6 +1,6 @@
 # Sprint 044 Follow-Ups
 
-## P0: MTP Speculative Serving
+## P0: MTP Speculative Serving (resolved by Sprint 045)
 
 The full gate now passes with `missing=mtp_speculative_serving`. Next sprint
 should expose the already-gated native MTP verify path through the resident

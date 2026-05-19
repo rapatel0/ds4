@@ -1,4 +1,7 @@
 #include "ds4_v100_replay.h"
+#include "ds4_v100_context.h"
+#include "ds4_v100_mtp.h"
+#include "ds4-v100-mtp-forward-common.h"
 
 #include <errno.h>
 #include <arpa/inet.h>
@@ -10,6 +13,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -17,8 +21,14 @@ enum {
     DS4_V100_REPLAY_MAX_TOKENS = 64,
 };
 
+typedef enum {
+    REPLAY_MTP_SERVING_OFF = 0,
+    REPLAY_MTP_SERVING_VERIFY = 1,
+} replay_mtp_serving_mode;
+
 typedef struct {
     const char *model_path;
+    const char *mtp_model_path;
     const char *index_path;
     const char *prompt;
     const char *prompt_file;
@@ -28,12 +38,58 @@ typedef struct {
     uint64_t ctx;
     uint32_t tokens;
     uint32_t max_requests;
+    uint32_t mtp_top_k;
+    int mtp_gpu;
+    int mtp_reserve_mib;
     int port;
+    replay_mtp_serving_mode mtp_serving;
     bool json;
     bool serve;
     bool open_only;
     bool serial_open;
 } replay_cli_options;
+
+typedef struct {
+    bool enabled;
+    bool attempted;
+    bool accepted;
+    bool skipped;
+    uint32_t committed_token;
+    uint32_t committed_pos;
+    uint32_t target_token;
+    uint32_t draft_token;
+    uint32_t top_k;
+    uint32_t raw_row;
+    uint32_t n_raw;
+    uint32_t output_vocab;
+    uint32_t draft_tokens[DS4_V100_MTP_FORWARD_MAX_TOPK];
+    float draft_logits[DS4_V100_MTP_FORWARD_MAX_TOPK];
+    float target_logit;
+    float draft_logit;
+    double draft_ms;
+    uint64_t sidecar_uploaded_bytes;
+    uint64_t sidecar_arena_bytes;
+    uint64_t output_weight_bytes;
+    uint64_t free_after_output_upload_bytes;
+    char reason[96];
+} replay_mtp_result;
+
+typedef struct {
+    bool enabled;
+    uint32_t top_k;
+    int gpu;
+    int reserve_mib;
+    uint64_t requests;
+    uint64_t drafts;
+    uint64_t accepted;
+    uint64_t rejected;
+    uint64_t skipped;
+    ds4_v100_mtp_sidecar *sidecar;
+    ds4_v100_mtp_forward *forward;
+    uint64_t sidecar_uploaded_bytes;
+    uint64_t sidecar_arena_bytes;
+    uint64_t output_weight_bytes;
+} replay_mtp_service;
 
 static void usage(FILE *fp) {
     fprintf(fp,
@@ -41,6 +97,7 @@ static void usage(FILE *fp) {
             "\n"
             "Options:\n"
             "  --model FILE              source-layout GGUF model\n"
+            "  --mtp-model FILE          DeepSeek-V4 Flash MTP sidecar GGUF\n"
             "  --index FILE              V100 pack-index.tsv\n"
             "  --prompt TEXT             prompt text\n"
             "  --prompt-file FILE        prompt file\n"
@@ -51,6 +108,10 @@ static void usage(FILE *fp) {
             "  --json                    emit JSON\n"
             "  --open-only               open resident stages, print timing, and exit\n"
             "  --serial-open             open resident stages serially for benchmarking\n"
+            "  --mtp-serving MODE        off or verify, default off\n"
+            "  --mtp-top-k N             MTP draft top-k to report, default 5\n"
+            "  --mtp-gpu N               MTP sidecar GPU, default 7\n"
+            "  --mtp-reserve-mib N       MTP free-memory reserve, default 4096\n"
             "  --serve                   run a minimal HTTP endpoint\n"
             "                            GET /health, GET /v100/status, GET /metrics,\n"
             "                            POST /v100/selected-token\n"
@@ -78,6 +139,16 @@ static uint64_t parse_u64_arg(const char *s, const char *arg) {
     return (uint64_t)v;
 }
 
+static uint64_t parse_u64_arg_allow_zero(const char *s, const char *arg) {
+    char *end = NULL;
+    unsigned long long v = strtoull(s, &end, 10);
+    if (!s || !*s || !end || *end) {
+        fprintf(stderr, "ds4-v100-replay: invalid %s: %s\n", arg, s ? s : "(null)");
+        exit(2);
+    }
+    return (uint64_t)v;
+}
+
 static replay_cli_options parse_options(int argc, char **argv) {
     replay_cli_options opt;
     memset(&opt, 0, sizeof(opt));
@@ -86,6 +157,9 @@ static replay_cli_options parse_options(int argc, char **argv) {
     opt.system = "";
     opt.host = "127.0.0.1";
     opt.port = 8000;
+    opt.mtp_top_k = 5;
+    opt.mtp_gpu = 7;
+    opt.mtp_reserve_mib = 4096;
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
         if (!strcmp(arg, "--help") || !strcmp(arg, "-h")) {
@@ -93,6 +167,8 @@ static replay_cli_options parse_options(int argc, char **argv) {
             exit(0);
         } else if (!strcmp(arg, "--model")) {
             opt.model_path = need_arg(&i, argc, argv, arg);
+        } else if (!strcmp(arg, "--mtp-model")) {
+            opt.mtp_model_path = need_arg(&i, argc, argv, arg);
         } else if (!strcmp(arg, "--index")) {
             opt.index_path = need_arg(&i, argc, argv, arg);
         } else if (!strcmp(arg, "--prompt")) {
@@ -120,6 +196,39 @@ static replay_cli_options parse_options(int argc, char **argv) {
             opt.open_only = true;
         } else if (!strcmp(arg, "--serial-open")) {
             opt.serial_open = true;
+        } else if (!strcmp(arg, "--mtp-serving")) {
+            const char *v = need_arg(&i, argc, argv, arg);
+            if (!strcmp(v, "off") || !strcmp(v, "false") || !strcmp(v, "0")) {
+                opt.mtp_serving = REPLAY_MTP_SERVING_OFF;
+            } else if (!strcmp(v, "verify")) {
+                opt.mtp_serving = REPLAY_MTP_SERVING_VERIFY;
+            } else {
+                fprintf(stderr, "ds4-v100-replay: --mtp-serving must be off or verify\n");
+                exit(2);
+            }
+        } else if (!strcmp(arg, "--mtp-top-k")) {
+            uint64_t v = parse_u64_arg(need_arg(&i, argc, argv, arg), arg);
+            if (v < 2 || v > DS4_V100_MTP_FORWARD_MAX_TOPK) {
+                fprintf(stderr,
+                        "ds4-v100-replay: --mtp-top-k must be in [2,%d]\n",
+                        DS4_V100_MTP_FORWARD_MAX_TOPK);
+                exit(2);
+            }
+            opt.mtp_top_k = (uint32_t)v;
+        } else if (!strcmp(arg, "--mtp-gpu")) {
+            uint64_t v = parse_u64_arg_allow_zero(need_arg(&i, argc, argv, arg), arg);
+            if (v > INT32_MAX) {
+                fprintf(stderr, "ds4-v100-replay: invalid --mtp-gpu\n");
+                exit(2);
+            }
+            opt.mtp_gpu = (int)v;
+        } else if (!strcmp(arg, "--mtp-reserve-mib")) {
+            uint64_t v = parse_u64_arg_allow_zero(need_arg(&i, argc, argv, arg), arg);
+            if (v > INT32_MAX) {
+                fprintf(stderr, "ds4-v100-replay: invalid --mtp-reserve-mib\n");
+                exit(2);
+            }
+            opt.mtp_reserve_mib = (int)v;
         } else if (!strcmp(arg, "--serve")) {
             opt.serve = true;
         } else if (!strcmp(arg, "--host")) {
@@ -151,6 +260,14 @@ static replay_cli_options parse_options(int argc, char **argv) {
     }
     if (opt.open_only && opt.serve) {
         fprintf(stderr, "ds4-v100-replay: use --open-only or --serve, not both\n");
+        exit(2);
+    }
+    if (opt.open_only && opt.mtp_serving != REPLAY_MTP_SERVING_OFF) {
+        fprintf(stderr, "ds4-v100-replay: use --open-only or --mtp-serving, not both\n");
+        exit(2);
+    }
+    if (opt.mtp_serving != REPLAY_MTP_SERVING_OFF && (!opt.mtp_model_path || !opt.mtp_model_path[0])) {
+        fprintf(stderr, "ds4-v100-replay: --mtp-serving requires --mtp-model\n");
         exit(2);
     }
     if (opt.prompt && opt.prompt_file) {
@@ -247,10 +364,233 @@ static void json_escape(FILE *fp, const char *s, size_t n) {
     }
 }
 
+static double now_ms(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (double)tv.tv_sec * 1000.0 + (double)tv.tv_usec / 1000.0;
+}
+
+static void mtp_result_init(replay_mtp_result *r) {
+    if (!r) return;
+    memset(r, 0, sizeof(*r));
+    r->committed_token = UINT32_MAX;
+    r->target_token = UINT32_MAX;
+    r->draft_token = UINT32_MAX;
+    for (uint32_t i = 0; i < DS4_V100_MTP_FORWARD_MAX_TOPK; i++) {
+        r->draft_tokens[i] = UINT32_MAX;
+    }
+}
+
+static void replay_mtp_service_close(replay_mtp_service *svc) {
+    if (!svc) return;
+    ds4_v100_mtp_forward_close(svc->forward);
+    ds4_v100_mtp_sidecar_close(svc->sidecar);
+    free(svc);
+}
+
+static int replay_mtp_service_open(replay_mtp_service **out,
+                                   const replay_cli_options *opt,
+                                   ds4_v100_replay *rt,
+                                   char *err,
+                                   size_t errlen) {
+    if (out) *out = NULL;
+    if (!out || !opt || !rt) return 1;
+    if (opt->mtp_serving == REPLAY_MTP_SERVING_OFF) return 0;
+
+    replay_mtp_service *svc = (replay_mtp_service *)calloc(1, sizeof(*svc));
+    if (!svc) {
+        snprintf(err, errlen, "failed to allocate MTP service");
+        return 1;
+    }
+    svc->enabled = true;
+    svc->top_k = opt->mtp_top_k;
+    svc->gpu = opt->mtp_gpu;
+    svc->reserve_mib = opt->mtp_reserve_mib;
+
+    ds4_v100_mtp_sidecar_options mtp_opts;
+    ds4_v100_mtp_sidecar_options_init(&mtp_opts);
+    mtp_opts.mtp_path = opt->mtp_model_path;
+    mtp_opts.gpu = opt->mtp_gpu;
+    mtp_opts.require_device_arena = true;
+    if (ds4_v100_mtp_sidecar_open(&svc->sidecar, &mtp_opts, NULL, err, errlen) != 0) {
+        replay_mtp_service_close(svc);
+        return 1;
+    }
+    ds4_gpu_arena *arena = ds4_v100_mtp_sidecar_arena(svc->sidecar);
+    svc->sidecar_uploaded_bytes = ds4_v100_mtp_sidecar_uploaded_bytes(svc->sidecar);
+    svc->sidecar_arena_bytes = ds4_gpu_arena_bytes(arena);
+    const uint64_t reserve_bytes = (uint64_t)opt->mtp_reserve_mib * 1024ull * 1024ull;
+    const uint64_t free_after_upload = ds4_gpu_arena_free_after_upload_bytes(arena);
+    if (free_after_upload < reserve_bytes) {
+        snprintf(err,
+                 errlen,
+                 "MTP sidecar free_after_upload %" PRIu64 " below reserve %" PRIu64,
+                 free_after_upload,
+                 reserve_bytes);
+        replay_mtp_service_close(svc);
+        return 1;
+    }
+
+    ds4_v100_context *ctx = NULL;
+    ds4_v100_context_options ctx_opts;
+    ds4_v100_context_options_init(&ctx_opts);
+    ctx_opts.pack_index_path = opt->index_path;
+    if (ds4_v100_context_open(&ctx, &ctx_opts, err, errlen) != 0) {
+        replay_mtp_service_close(svc);
+        return 1;
+    }
+    ds4_v100_tensor_binding output_weight;
+    int rc = ds4_v100_context_output_head_binding(ctx, &output_weight, err, errlen);
+    if (rc != 0) {
+        ds4_v100_context_close(ctx);
+        replay_mtp_service_close(svc);
+        return 1;
+    }
+    svc->output_weight_bytes = output_weight.byte_length;
+    if (ds4_v100_mtp_forward_open(&svc->forward,
+                                  svc->sidecar,
+                                  ds4_v100_replay_model_map(rt),
+                                  ds4_v100_replay_model_size(rt),
+                                  &output_weight,
+                                  opt->mtp_gpu,
+                                  err,
+                                  errlen) != 0) {
+        ds4_v100_context_close(ctx);
+        replay_mtp_service_close(svc);
+        return 1;
+    }
+    ds4_v100_context_close(ctx);
+    *out = svc;
+    return 0;
+}
+
+static int replay_mtp_service_run(replay_mtp_service *svc,
+                                  ds4_v100_replay *rt,
+                                  const ds4_v100_replay_output *outputs,
+                                  uint32_t n_outputs,
+                                  const ds4_v100_replay_counters *counters,
+                                  replay_mtp_result *result,
+                                  char *err,
+                                  size_t errlen) {
+    mtp_result_init(result);
+    if (!svc || !svc->enabled || !result) return 0;
+    result->enabled = true;
+    result->top_k = svc->top_k;
+    result->sidecar_uploaded_bytes = svc->sidecar_uploaded_bytes;
+    result->sidecar_arena_bytes = svc->sidecar_arena_bytes;
+    result->output_weight_bytes = svc->output_weight_bytes;
+    svc->requests++;
+    if (!rt || !outputs || !counters || n_outputs < 2) {
+        result->skipped = true;
+        snprintf(result->reason, sizeof(result->reason), "need_at_least_two_tokens");
+        svc->skipped++;
+        return 0;
+    }
+    const uint32_t committed_idx = n_outputs - 2u;
+    const uint32_t target_idx = n_outputs - 1u;
+    result->committed_token = outputs[committed_idx].token;
+    result->committed_pos = counters->prompt_tokens + committed_idx;
+    result->target_token = outputs[target_idx].token;
+    result->target_logit = outputs[target_idx].logit;
+
+    float embed[DS4_V100_MTP_FORWARD_N_EMBD];
+    float hc[DS4_V100_MTP_FORWARD_HC_VALUES];
+    if (ds4_v100_replay_read_token_embedding_f32(rt,
+                                                 result->committed_token,
+                                                 embed,
+                                                 DS4_V100_MTP_FORWARD_N_EMBD,
+                                                 err,
+                                                 errlen) != 0 ||
+        ds4_v100_replay_read_output_hc(rt,
+                                       hc,
+                                       sizeof(hc),
+                                       err,
+                                       errlen) != 0) {
+        return 1;
+    }
+    ds4_v100_mtp_forward_report report;
+    memset(&report, 0, sizeof(report));
+    result->attempted = true;
+    const double t0 = now_ms();
+    if (ds4_v100_mtp_forward_run_host(svc->forward,
+                                      embed,
+                                      hc,
+                                      result->committed_pos,
+                                      svc->top_k,
+                                      result->draft_tokens,
+                                      result->draft_logits,
+                                      &report,
+                                      err,
+                                      errlen) != 0) {
+        return 1;
+    }
+    result->draft_ms = now_ms() - t0;
+    result->draft_token = result->draft_tokens[0];
+    result->draft_logit = result->draft_logits[0];
+    result->raw_row = report.raw_row;
+    result->n_raw = report.n_raw;
+    result->output_vocab = report.output_vocab;
+    result->output_weight_bytes = report.output_weight_bytes;
+    result->free_after_output_upload_bytes = report.free_after_output_upload_bytes;
+    if (result->free_after_output_upload_bytes) {
+        const uint64_t reserve_bytes = (uint64_t)svc->reserve_mib * 1024ull * 1024ull;
+        if (result->free_after_output_upload_bytes < reserve_bytes) {
+            snprintf(err,
+                     errlen,
+                     "MTP output free_after_upload %" PRIu64 " below reserve %" PRIu64,
+                     result->free_after_output_upload_bytes,
+                     reserve_bytes);
+            return 1;
+        }
+    }
+    result->accepted = result->draft_token == result->target_token;
+    svc->drafts++;
+    if (result->accepted) svc->accepted++;
+    else svc->rejected++;
+    return 0;
+}
+
+static void print_mtp_json(FILE *fp, const replay_mtp_result *mtp) {
+    if (!mtp) return;
+    fprintf(fp, ",\"mtp\":{");
+    fprintf(fp, "\"enabled\":%s,", mtp->enabled ? "true" : "false");
+    fprintf(fp, "\"attempted\":%s,", mtp->attempted ? "true" : "false");
+    fprintf(fp, "\"skipped\":%s,", mtp->skipped ? "true" : "false");
+    fprintf(fp, "\"accepted\":%s,", mtp->accepted ? "true" : "false");
+    fprintf(fp, "\"committed_token\":%" PRIu32 ",", mtp->committed_token);
+    fprintf(fp, "\"committed_pos\":%" PRIu32 ",", mtp->committed_pos);
+    fprintf(fp, "\"target_token\":%" PRIu32 ",", mtp->target_token);
+    fprintf(fp, "\"draft_token\":%" PRIu32 ",", mtp->draft_token);
+    fprintf(fp, "\"target_logit\":%.9g,", mtp->target_logit);
+    fprintf(fp, "\"draft_logit\":%.9g,", mtp->draft_logit);
+    fprintf(fp, "\"top_k\":%" PRIu32 ",", mtp->top_k);
+    fprintf(fp, "\"draft_ms\":%.3f,", mtp->draft_ms);
+    fprintf(fp, "\"raw_row\":%" PRIu32 ",", mtp->raw_row);
+    fprintf(fp, "\"n_raw\":%" PRIu32 ",", mtp->n_raw);
+    fprintf(fp, "\"output_vocab\":%" PRIu32 ",", mtp->output_vocab);
+    fprintf(fp, "\"sidecar_uploaded_bytes\":%" PRIu64 ",", mtp->sidecar_uploaded_bytes);
+    fprintf(fp, "\"sidecar_arena_bytes\":%" PRIu64 ",", mtp->sidecar_arena_bytes);
+    fprintf(fp, "\"output_weight_bytes\":%" PRIu64 ",", mtp->output_weight_bytes);
+    fprintf(fp, "\"free_after_output_upload_bytes\":%" PRIu64 ",", mtp->free_after_output_upload_bytes);
+    fprintf(fp, "\"reason\":\"");
+    json_escape(fp, mtp->reason, strlen(mtp->reason));
+    fprintf(fp, "\",\"draft_topk\":[");
+    const uint32_t n_top = mtp->attempted ? mtp->top_k : 0;
+    for (uint32_t i = 0; i < n_top && i < DS4_V100_MTP_FORWARD_MAX_TOPK; i++) {
+        if (i) fprintf(fp, ",");
+        fprintf(fp,
+                "{\"id\":%" PRIu32 ",\"logit\":%.9g}",
+                mtp->draft_tokens[i],
+                mtp->draft_logits[i]);
+    }
+    fprintf(fp, "]}");
+}
+
 static void print_json_fp(FILE *fp,
                           const ds4_v100_replay_output *outputs,
                           uint32_t n_outputs,
-                          const ds4_v100_replay_counters *c) {
+                          const ds4_v100_replay_counters *c,
+                          const replay_mtp_result *mtp) {
     fprintf(fp, "{");
     fprintf(fp, "\"prompt_tokens\":%" PRIu32 ",", c->prompt_tokens);
     fprintf(fp, "\"generated_tokens\":%" PRIu32 ",", n_outputs);
@@ -308,13 +648,9 @@ static void print_json_fp(FILE *fp,
         if (i) fprintf(fp, ",");
         fprintf(fp, "%" PRIu64, c->arena_bytes[i]);
     }
-    fprintf(fp, "]}}\n");
-}
-
-static void print_json(const ds4_v100_replay_output *outputs,
-                       uint32_t n_outputs,
-                       const ds4_v100_replay_counters *c) {
-    print_json_fp(stdout, outputs, n_outputs, c);
+    fprintf(fp, "]}");
+    print_mtp_json(fp, mtp);
+    fprintf(fp, "}\n");
 }
 
 static void print_open_json(const ds4_v100_replay_counters *c, bool serial_open) {
@@ -519,13 +855,19 @@ static void http_ok_json_begin(int fd) {
             "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\n\r\n");
 }
 
-static void write_status_json(FILE *fp, const replay_cli_options *opt, uint32_t served) {
+static void write_status_json(FILE *fp,
+                              const replay_cli_options *opt,
+                              const replay_mtp_service *mtp,
+                              uint32_t served) {
+    const bool mtp_enabled = mtp && mtp->enabled;
     fprintf(fp, "{");
     fprintf(fp, "\"service\":\"ds4-v100-replay\",");
     fprintf(fp, "\"status\":\"ok\",");
-    fprintf(fp, "\"mode\":\"base_one_slot\",");
-    fprintf(fp, "\"readiness_level\":2,");
-    fprintf(fp, "\"mtp_enabled\":false,");
+    fprintf(fp,
+            "\"mode\":\"%s\",",
+            mtp_enabled ? "mtp_verify_one_slot" : "base_one_slot");
+    fprintf(fp, "\"readiness_level\":%d,", mtp_enabled ? 3 : 2);
+    fprintf(fp, "\"mtp_enabled\":%s,", mtp_enabled ? "true" : "false");
     fprintf(fp, "\"model_path\":\"");
     json_escape(fp, opt->model_path ? opt->model_path : "", strlen(opt->model_path ? opt->model_path : ""));
     fprintf(fp, "\",\"pack_index_path\":\"");
@@ -536,15 +878,36 @@ static void write_status_json(FILE *fp, const replay_cli_options *opt, uint32_t 
     fprintf(fp,
             "\"limits\":{\"slots\":1,\"concurrent_requests\":1,"
             "\"sequential_requests\":true,\"streaming\":false,"
-            "\"external_exposure\":false,\"speculative_serving\":false},");
+            "\"external_exposure\":false,\"speculative_serving\":%s},",
+            mtp_enabled ? "true" : "false");
     fprintf(fp, "\"served_requests\":%" PRIu32, served);
+    if (mtp_enabled) {
+        fprintf(fp, ",\"mtp\":{");
+        fprintf(fp, "\"serving_mode\":\"verify\",");
+        fprintf(fp, "\"top_k\":%" PRIu32 ",", mtp->top_k);
+        fprintf(fp, "\"gpu\":%d,", mtp->gpu);
+        fprintf(fp, "\"reserve_mib\":%d,", mtp->reserve_mib);
+        fprintf(fp, "\"sidecar_uploaded_bytes\":%" PRIu64 ",", mtp->sidecar_uploaded_bytes);
+        fprintf(fp, "\"sidecar_arena_bytes\":%" PRIu64 ",", mtp->sidecar_arena_bytes);
+        fprintf(fp, "\"output_weight_bytes\":%" PRIu64 ",", mtp->output_weight_bytes);
+        fprintf(fp, "\"requests\":%" PRIu64 ",", mtp->requests);
+        fprintf(fp, "\"drafts\":%" PRIu64 ",", mtp->drafts);
+        fprintf(fp, "\"accepted\":%" PRIu64 ",", mtp->accepted);
+        fprintf(fp, "\"rejected\":%" PRIu64 ",", mtp->rejected);
+        fprintf(fp, "\"skipped\":%" PRIu64, mtp->skipped);
+        fprintf(fp, "}");
+    }
     fprintf(fp, "}\n");
 }
 
-static void write_metrics_text(FILE *fp, const replay_cli_options *opt, uint32_t served) {
+static void write_metrics_text(FILE *fp,
+                               const replay_cli_options *opt,
+                               const replay_mtp_service *mtp,
+                               uint32_t served) {
+    const bool mtp_enabled = mtp && mtp->enabled;
     fprintf(fp, "# HELP ds4_v100_readiness_level Deployment readiness level exposed by the replay service.\n");
     fprintf(fp, "# TYPE ds4_v100_readiness_level gauge\n");
-    fprintf(fp, "ds4_v100_readiness_level 2\n");
+    fprintf(fp, "ds4_v100_readiness_level %d\n", mtp_enabled ? 3 : 2);
     fprintf(fp, "# HELP ds4_v100_served_requests HTTP requests accepted by this process.\n");
     fprintf(fp, "# TYPE ds4_v100_served_requests counter\n");
     fprintf(fp, "ds4_v100_served_requests %" PRIu32 "\n", served);
@@ -559,12 +922,28 @@ static void write_metrics_text(FILE *fp, const replay_cli_options *opt, uint32_t
     fprintf(fp, "ds4_v100_max_tokens %u\n", DS4_V100_REPLAY_MAX_TOKENS);
     fprintf(fp, "# HELP ds4_v100_mtp_enabled Whether speculative MTP serving is enabled.\n");
     fprintf(fp, "# TYPE ds4_v100_mtp_enabled gauge\n");
-    fprintf(fp, "ds4_v100_mtp_enabled 0\n");
+    fprintf(fp, "ds4_v100_mtp_enabled %d\n", mtp_enabled ? 1 : 0);
+    fprintf(fp, "# HELP ds4_v100_mtp_requests_total Requests evaluated by the MTP verify service.\n");
+    fprintf(fp, "# TYPE ds4_v100_mtp_requests_total counter\n");
+    fprintf(fp, "ds4_v100_mtp_requests_total %" PRIu64 "\n", mtp_enabled ? mtp->requests : 0);
+    fprintf(fp, "# HELP ds4_v100_mtp_drafts_total MTP draft attempts completed.\n");
+    fprintf(fp, "# TYPE ds4_v100_mtp_drafts_total counter\n");
+    fprintf(fp, "ds4_v100_mtp_drafts_total %" PRIu64 "\n", mtp_enabled ? mtp->drafts : 0);
+    fprintf(fp, "# HELP ds4_v100_mtp_accepted_total MTP drafts matching the base target token.\n");
+    fprintf(fp, "# TYPE ds4_v100_mtp_accepted_total counter\n");
+    fprintf(fp, "ds4_v100_mtp_accepted_total %" PRIu64 "\n", mtp_enabled ? mtp->accepted : 0);
+    fprintf(fp, "# HELP ds4_v100_mtp_rejected_total MTP drafts rejected by exact target-token comparison.\n");
+    fprintf(fp, "# TYPE ds4_v100_mtp_rejected_total counter\n");
+    fprintf(fp, "ds4_v100_mtp_rejected_total %" PRIu64 "\n", mtp_enabled ? mtp->rejected : 0);
+    fprintf(fp, "# HELP ds4_v100_mtp_skipped_total Requests where MTP verify was skipped.\n");
+    fprintf(fp, "# TYPE ds4_v100_mtp_skipped_total counter\n");
+    fprintf(fp, "ds4_v100_mtp_skipped_total %" PRIu64 "\n", mtp_enabled ? mtp->skipped : 0);
 }
 
 static int handle_http_request(int fd,
                                ds4_v100_replay *rt,
                                const replay_cli_options *opt,
+                               replay_mtp_service *mtp,
                                uint32_t served) {
     size_t req_len = 0;
     char *req = read_http_request(fd, &req_len);
@@ -591,7 +970,7 @@ static int handle_http_request(int fd,
         http_ok_json_begin(fd);
         FILE *fp = fdopen(dup(fd), "w");
         if (fp) {
-            write_status_json(fp, opt, served);
+            write_status_json(fp, opt, mtp, served);
             fclose(fp);
         }
         free(req);
@@ -601,7 +980,7 @@ static int handle_http_request(int fd,
         dprintf(fd, "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/plain; version=0.0.4\r\n\r\n");
         FILE *fp = fdopen(dup(fd), "w");
         if (fp) {
-            write_metrics_text(fp, opt, served);
+            write_metrics_text(fp, opt, mtp, served);
             fclose(fp);
         }
         free(req);
@@ -658,13 +1037,32 @@ static int handle_http_request(int fd,
                                       &counters,
                                       err,
                                       sizeof(err));
+    replay_mtp_result mtp_result;
+    const replay_mtp_result *mtp_json = NULL;
     if (rc) {
         http_error(fd, 500, err[0] ? err : "generation_failed");
     } else {
+        if (mtp && mtp->enabled) {
+            if (replay_mtp_service_run(mtp,
+                                       rt,
+                                       outputs,
+                                       n_outputs,
+                                       &counters,
+                                       &mtp_result,
+                                       err,
+                                       sizeof(err)) != 0) {
+                http_error(fd, 500, err[0] ? err : "mtp_verify_failed");
+                rc = 1;
+            } else {
+                mtp_json = &mtp_result;
+            }
+        }
+    }
+    if (!rc) {
         http_ok_json_begin(fd);
         FILE *fp = fdopen(dup(fd), "w");
         if (fp) {
-            print_json_fp(fp, outputs, n_outputs, &counters);
+            print_json_fp(fp, outputs, n_outputs, &counters, mtp_json);
             fclose(fp);
         }
     }
@@ -675,7 +1073,9 @@ static int handle_http_request(int fd,
     return rc;
 }
 
-static int run_server(const replay_cli_options *opt, ds4_v100_replay *rt) {
+static int run_server(const replay_cli_options *opt,
+                      ds4_v100_replay *rt,
+                      replay_mtp_service *mtp) {
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd < 0) {
         perror("ds4-v100-replay: socket");
@@ -711,7 +1111,7 @@ static int run_server(const replay_cli_options *opt, ds4_v100_replay *rt) {
             close(listen_fd);
             return 1;
         }
-        (void)handle_http_request(fd, rt, opt, served);
+        (void)handle_http_request(fd, rt, opt, mtp, served);
         close(fd);
         served++;
     }
@@ -770,8 +1170,18 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    replay_mtp_service *mtp = NULL;
+    if (replay_mtp_service_open(&mtp, &opt, rt, err, sizeof(err)) != 0) {
+        fprintf(stderr, "ds4-v100-replay: %s\n", err[0] ? err : "MTP service open failed");
+        ds4_v100_replay_close(rt);
+        free(expected);
+        free(prompt_owned);
+        return 1;
+    }
+
     if (opt.serve) {
-        int rc = run_server(&opt, rt);
+        int rc = run_server(&opt, rt, mtp);
+        replay_mtp_service_close(mtp);
         ds4_v100_replay_close(rt);
         free(expected);
         return rc;
@@ -785,6 +1195,8 @@ int main(int argc, char **argv) {
     memset(&counters, 0, sizeof(counters));
     uint32_t n_outputs = 0;
     int rc = 0;
+    replay_mtp_result mtp_result;
+    const replay_mtp_result *mtp_json = NULL;
     if (ds4_v100_replay_generate(rt,
                                  &prompt,
                                  opt.tokens,
@@ -815,10 +1227,25 @@ int main(int argc, char **argv) {
             rc = 1;
         }
     }
+    if (rc == 0 && mtp && mtp->enabled) {
+        if (replay_mtp_service_run(mtp,
+                                   rt,
+                                   outputs,
+                                   n_outputs,
+                                   &counters,
+                                   &mtp_result,
+                                   err,
+                                   sizeof(err)) != 0) {
+            fprintf(stderr, "ds4-v100-replay: %s\n", err[0] ? err : "MTP verify failed");
+            rc = 1;
+        } else {
+            mtp_json = &mtp_result;
+        }
+    }
 
     if (rc == 0) {
         if (opt.json) {
-            print_json(outputs, n_outputs, &counters);
+            print_json_fp(stdout, outputs, n_outputs, &counters, mtp_json);
         } else {
             printf("ds4-v100-replay: prompt_tokens=%" PRIu32
                    " generated=%" PRIu32
@@ -839,11 +1266,22 @@ int main(int argc, char **argv) {
                    counters.continuation_decode_ms,
                    counters.output_head_ms,
                    counters.total_ms);
+            if (mtp_json) {
+                printf("ds4-v100-replay: mtp_attempted=%s mtp_accepted=%s committed=%" PRIu32
+                       " target=%" PRIu32 " draft=%" PRIu32 " draft_ms=%.3f\n",
+                       mtp_json->attempted ? "true" : "false",
+                       mtp_json->accepted ? "true" : "false",
+                       mtp_json->committed_token,
+                       mtp_json->target_token,
+                       mtp_json->draft_token,
+                       mtp_json->draft_ms);
+            }
         }
     }
 
     for (uint32_t i = 0; i < n_outputs; i++) ds4_v100_replay_output_free(&outputs[i]);
     ds4_tokens_free(&prompt);
+    replay_mtp_service_close(mtp);
     ds4_v100_replay_close(rt);
     free(expected);
     free(prompt_owned);
