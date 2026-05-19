@@ -12251,6 +12251,58 @@ extern "C" int ds4_gpu_output_hc_weights_tensor(
             eps);
     return cuda_ok(cudaGetLastError(), "output hc weights launch");
 }
+
+extern "C" int ds4_gpu_arena_output_hc_weights_tensor(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *scale,
+        const ds4_gpu_source_row_view *base,
+        ds4_gpu_tensor                *out,
+        const ds4_gpu_tensor          *pre,
+        uint32_t                       n_hc,
+        float                          eps) {
+    if (!arena || !scale || !base || !out || !pre || !arena->valid ||
+        !arena->ptr || !out->ptr || !pre->ptr || n_hc == 0) {
+        return 1;
+    }
+    const uint64_t row_bytes = (uint64_t)n_hc * sizeof(float);
+    if (row_bytes == 0 ||
+        out->bytes < row_bytes ||
+        out->bytes % row_bytes != 0 ||
+        pre->bytes < out->bytes ||
+        out->device != arena->gpu ||
+        pre->device != arena->gpu ||
+        scale->rows != 1 ||
+        scale->cols != 1 ||
+        base->rows != 1 ||
+        base->cols != n_hc ||
+        scale->row_stride_bytes < sizeof(float) ||
+        base->row_stride_bytes < row_bytes ||
+        (scale->arena_offset % sizeof(float)) != 0 ||
+        (base->arena_offset % sizeof(float)) != 0 ||
+        !cuda_arena_range_ok(arena, scale->arena_offset, sizeof(float)) ||
+        !cuda_arena_range_ok(arena, base->arena_offset, row_bytes)) {
+        return 1;
+    }
+    const uint64_t n_tokens = out->bytes / row_bytes;
+    if (n_tokens > UINT32_MAX) return 1;
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "arena output hc weights set device")) {
+        return 1;
+    }
+    const float *scale_ptr =
+        (const float *)((const char *)arena->ptr + scale->arena_offset);
+    const float *base_ptr =
+        (const float *)((const char *)arena->ptr + base->arena_offset);
+    const uint64_t n = n_tokens * n_hc;
+    output_hc_weights_kernel<<<(n + 255) / 256, 256>>>(
+            (float *)out->ptr,
+            (const float *)pre->ptr,
+            scale_ptr,
+            base_ptr,
+            n_hc,
+            (uint32_t)n_tokens,
+            eps);
+    return cuda_ok(cudaGetLastError(), "arena output hc weights launch") ? 0 : 1;
+}
 extern "C" int ds4_gpu_hc_expand_tensor(ds4_gpu_tensor *out_hc, const ds4_gpu_tensor *block_out, const ds4_gpu_tensor *residual_hc, const ds4_gpu_tensor *post, const ds4_gpu_tensor *comb, uint32_t n_embd, uint32_t n_hc) {
     if (!out_hc || !block_out || !residual_hc || !post || !comb || n_embd == 0 || n_hc == 0) return 0;
     uint32_t n_tokens = (uint32_t)(out_hc->bytes / ((uint64_t)n_hc * n_embd * sizeof(float)));

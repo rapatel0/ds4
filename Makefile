@@ -201,6 +201,9 @@ tools/ds4-v100-mtp-ffn-smoke.o: tools/ds4-v100-mtp-ffn-smoke.c ds4_v100_mtp.h ds
 tools/ds4-v100-mtp-attn-smoke.o: tools/ds4-v100-mtp-attn-smoke.c ds4_v100_mtp.h ds4.h ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-mtp-attn-smoke.c
 
+tools/ds4-v100-mtp-logits-smoke.o: tools/ds4-v100-mtp-logits-smoke.c ds4_v100_mtp.h ds4_v100_context.h ds4_source_formats.h ds4.h ds4_gpu.h
+	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-mtp-logits-smoke.c
+
 tools/ds4-v100-replay.o: tools/ds4-v100-replay.c ds4_v100_replay.h ds4.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-replay.c
 
@@ -221,6 +224,9 @@ tools/ds4-v100-mtp-ffn-smoke:
 tools/ds4-v100-mtp-attn-smoke:
 	@echo "tools/ds4-v100-mtp-attn-smoke requires a CUDA build"
 	@exit 2
+tools/ds4-v100-mtp-logits-smoke:
+	@echo "tools/ds4-v100-mtp-logits-smoke requires a CUDA build"
+	@exit 2
 tools/ds4-v100-replay:
 	@echo "tools/ds4-v100-replay requires a CUDA build"
 	@exit 2
@@ -236,6 +242,8 @@ tools/ds4-v100-mtp-q4k-smoke: tools/ds4-v100-mtp-q4k-smoke.o $(V100_MTP_OBJS) $(
 tools/ds4-v100-mtp-ffn-smoke: tools/ds4-v100-mtp-ffn-smoke.o $(V100_MTP_OBJS) $(CPU_CORE_OBJS) ds4_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tools/ds4-v100-mtp-attn-smoke: tools/ds4-v100-mtp-attn-smoke.o $(V100_MTP_OBJS) $(CPU_CORE_OBJS) ds4_cuda.o
+	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
+tools/ds4-v100-mtp-logits-smoke: tools/ds4-v100-mtp-logits-smoke.o $(V100_MTP_OBJS) ds4_v100_context.o $(CPU_CORE_OBJS) ds4_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tools/ds4-v100-replay: tools/ds4-v100-replay.o ds4_cpu.o ds4_cuda.o $(V100_REPLAY_OBJS)
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)

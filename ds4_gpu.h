@@ -184,6 +184,14 @@ int ds4_gpu_arena_hc_split_weighted_sum_tensor(
         uint32_t                       n_hc,
         uint32_t                       sinkhorn_iters,
         float                          eps);
+int ds4_gpu_arena_output_hc_weights_tensor(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *scale,
+        const ds4_gpu_source_row_view *base,
+        ds4_gpu_tensor                *out,
+        const ds4_gpu_tensor          *pre,
+        uint32_t                       n_hc,
+        float                          eps);
 
 /* =========================================================================
  * Embeddings and Indexer Helpers.

@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-19
 last_updated_by: vision
-revision: 50
+revision: 51
 ---
 
 # Vision: DS4 V100 Appliance
@@ -228,6 +228,13 @@ it is a narrow DS4 runtime tuned for this hardware.
   `heads max_abs=2.14576721e-06`, `attn_out max_abs=0.258209229`, and
   `next_hc max_abs=0.19461441`. The full V100 gate still passes with
   `missing=mtp_forward`.
+- Sprint 039 shipped resident MTP logits/top-k parity. The gpu7 sidecar arena
+  now runs MTP-specific HC-head collapse from `mtp.0.hc_head_*`, applies
+  `mtp.0.norm.weight`, projects through the base BF16 `output.weight`, and
+  selects top-k draft candidates. The focused V100 smoke matches CPU top-5
+  tokens exactly with `top1=65615` and `max_abs=9.53674316e-07`; the full gate
+  now includes `mtp_logits PASS` and still correctly reports
+  `missing=mtp_forward`.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -243,7 +250,7 @@ mean "nothing works"; it should say which rung has not been proven yet.
 | 0 | Fit and residency | The source model can be mapped, packed, and held in 8x V100 VRAM with reserve. | Pack inventory, per-GPU memory plan, resident upload smoke, source-layout guards. | Complete through Sprints 001-006. |
 | 1 | Single-prompt base correctness | The base model path can run one known prompt through all 43 layers and select the expected first token. | Full 8-stage scheduler, output-head parity, selected-token hex `3136`, one-shot replay. | Complete through Sprints 024-028. |
 | 2 | Minimal usable base appliance | A human/operator can start the base model service and use it for short non-MTP one-slot generation with documented limits. | Longer prompt/decode smoke, repeat HTTP requests, failure logs, run command, health check, 1-slot timing report. | Complete through Sprint 032, with explicit limits: one slot, sequential loopback HTTP, no MTP, no streaming, no production supervisor. |
-| 3 | MTP-assisted correctness | The resident MTP sidecar can produce a K=1 draft token that matches a trusted oracle and does not corrupt target-model state. | MTP sidecar residency, Q8_0/Q4_K kernel parity, MTP forward logits/top-k, draft/verify/rollback tests. | Partially complete. Sprint 031 shipped residency; Sprint 033 shipped resident Q8_0 projection parity; Sprint 034 shipped resident F32 norm plus prefix HC composition; Sprint 035 shipped resident Q4_K routed expert execution; Sprint 036 shipped resident HC-wrapped FFN block parity through `next_hc`; Sprint 037 shipped resident raw/SWA attention and MTP raw-cache wrap parity; Sprint 038 shipped integrated resident MTP attention projection/output through expanded HC. The current gate remains stopped at `missing=mtp_forward`. |
+| 3 | MTP-assisted correctness | The resident MTP sidecar can produce a K=1 draft token that matches a trusted oracle and does not corrupt target-model state. | MTP sidecar residency, Q8_0/Q4_K kernel parity, MTP forward logits/top-k, draft/verify/rollback tests. | Partially complete. Sprint 031 shipped residency; Sprint 033 shipped resident Q8_0 projection parity; Sprint 034 shipped resident F32 norm plus prefix HC composition; Sprint 035 shipped resident Q4_K routed expert execution; Sprint 036 shipped resident HC-wrapped FFN block parity through `next_hc`; Sprint 037 shipped resident raw/SWA attention and MTP raw-cache wrap parity; Sprint 038 shipped integrated resident MTP attention projection/output through expanded HC; Sprint 039 shipped MTP output norm/logits/top-k parity. The current gate remains stopped at `missing=mtp_forward` because full one-token MTP composition and draft verify/rollback are not complete. |
 | 4 | Throughput appliance | The service has measured aggregate tok/s and a clear slot/context operating envelope. | Startup/upload timings, decode timings, slot admission, 1/2/4/8-slot benchmarks, context-tier benchmarks. | Not complete. Existing timings are diagnostic, not a throughput claim. |
 | 5 | Production deployment | The appliance can be left running on the cluster with operational confidence. | Supervised service, config files, restart behavior, health/metrics endpoint, deployment/runbook, known rollback path. | Not complete. Current HTTP path is a loopback smoke, not deployment packaging. |
 
@@ -766,6 +773,21 @@ MTP-assisted, or production-deployed serving.
   `next_hc max_abs=0.19461441`. The full gate includes the stronger
   `mtp_attn` proof and still correctly reports `missing=mtp_forward`.
 
+### Sprint 039 - V100 Resident MTP Logits and Top-K Parity [complete]
+
+- **Goal**: Prove the resident MTP sidecar can collapse an MTP HC state through
+  its own output head controls, apply MTP output norm, project through the base
+  model vocabulary head, and select top-k draft candidates.
+- **Rationale**: Sprint 038 proved integrated MTP attention and Sprint 036
+  proved the FFN slice, but `missing=mtp_forward` could not advance without a
+  trusted logits/top-k proof for the final draft-candidate surface.
+- **Outcome**: `SHIP`. `tools/ds4-v100-mtp-logits-smoke` uploads the MTP
+  sidecar plus the base BF16 `output.weight`, runs the resident MTP logits path
+  on gpu7, and compares against a CPU sidecar/base-model oracle. The focused
+  V100 smoke passes with exact top-5 token parity, `top1=65615`, and
+  `max_abs=9.53674316e-07`. The full gate now includes `mtp_logits PASS` and
+  still correctly reports `missing=mtp_forward`.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -871,6 +893,9 @@ MTP-assisted, or production-deployed serving.
 - See `docs/sprints/SPRINT-038-FOLLOWUPS.md`: MTP logits/top-k parity, full
   one-token resident MTP block composition, draft verify/rollback semantics,
   and sharper grouped-output tolerance calibration.
+- See `docs/sprints/SPRINT-039-FOLLOWUPS.md`: full one-token resident MTP block
+  composition, draft verify/rollback semantics, reusable output-head runtime
+  binding, and MTP candidate margin diagnostics.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -923,6 +948,7 @@ MTP-assisted, or production-deployed serving.
 | 2026-05-19 | Shipped Sprint 036 resident MTP FFN slice. | The MTP sidecar now runs HC FFN control, bias router, routed Q4_K experts, shared Q8_0 experts, routed+shared accumulation, and HC expansion through `next_hc` from gpu7 resident bytes; the remaining blocker is MTP raw/SWA attention, logits/top-k, and draft verify/rollback. | Sprint 037+ |
 | 2026-05-19 | Shipped Sprint 037 resident MTP raw attention. | The MTP sidecar now feeds resident attention sinks into the V100 attention decoder and validates production raw KV store plus 128-row MTP cache wrap semantics; the remaining blocker is integrated MTP attention projection/output, logits/top-k, and draft verify/rollback. | Sprint 038+ |
 | 2026-05-19 | Shipped Sprint 038 resident MTP integrated attention slice. | The MTP sidecar now composes HC attention control, Q/KV projections, raw attention, grouped output projection, and HC expansion from real gpu7 resident bytes; the remaining blocker is MTP logits/top-k and draft verify/rollback. | Sprint 039+ |
+| 2026-05-19 | Shipped Sprint 039 resident MTP logits/top-k parity. | The MTP sidecar now produces deterministic draft logits/top-k candidates through the MTP output head and base BF16 vocabulary head with exact top-5 CPU/GPU parity; the remaining blocker is full one-token MTP forward composition plus draft verify/rollback. | Sprint 040+ |
 
 ## Open Questions
 
