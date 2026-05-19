@@ -11,6 +11,14 @@ log_dir=""
 cuda_arch="${CUDA_ARCH:-sm_70}"
 pack_index=""
 descriptor_layer="2"
+aggregate_profile="fast"
+aggregate_ctx_tiers=""
+aggregate_slot_tiers=""
+aggregate_queue_policies=""
+aggregate_requests=""
+aggregate_tokens=""
+aggregate_host="127.0.0.1"
+aggregate_port_base="18120"
 
 usage() {
     cat <<'USAGE'
@@ -27,6 +35,22 @@ Options:
   --pack-index FILE Validate real pack-index layer descriptors
   --descriptor-layer N
                     Layer to validate when --pack-index is supplied (default 2)
+  --aggregate-profile MODE
+                    Throughput matrix profile: fast or full (default fast)
+  --aggregate-ctx-tiers LIST
+                    Override aggregate context tiers CSV
+  --aggregate-slot-tiers LIST
+                    Override aggregate slot tiers CSV
+  --aggregate-queue-policies LIST
+                    Override aggregate queue policies CSV
+  --aggregate-requests N
+                    Override aggregate requests per case
+  --aggregate-tokens N
+                    Override aggregate generated tokens per request
+  --aggregate-host ADDR
+                    Host for aggregate throughput runs (default 127.0.0.1)
+  --aggregate-port-base N
+                    Base port for aggregate throughput runs (default 18120)
   --skip-model      Skip real-model source guard check
   --help            Show this help
 USAGE
@@ -78,6 +102,46 @@ while [ "$#" -gt 0 ]; do
             descriptor_layer="$2"
             shift 2
             ;;
+        --aggregate-profile)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --aggregate-profile requires a value" >&2; exit 2; }
+            aggregate_profile="$2"
+            shift 2
+            ;;
+        --aggregate-ctx-tiers)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --aggregate-ctx-tiers requires a value" >&2; exit 2; }
+            aggregate_ctx_tiers="$2"
+            shift 2
+            ;;
+        --aggregate-slot-tiers)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --aggregate-slot-tiers requires a value" >&2; exit 2; }
+            aggregate_slot_tiers="$2"
+            shift 2
+            ;;
+        --aggregate-queue-policies)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --aggregate-queue-policies requires a value" >&2; exit 2; }
+            aggregate_queue_policies="$2"
+            shift 2
+            ;;
+        --aggregate-requests)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --aggregate-requests requires a value" >&2; exit 2; }
+            aggregate_requests="$2"
+            shift 2
+            ;;
+        --aggregate-tokens)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --aggregate-tokens requires a value" >&2; exit 2; }
+            aggregate_tokens="$2"
+            shift 2
+            ;;
+        --aggregate-host)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --aggregate-host requires a value" >&2; exit 2; }
+            aggregate_host="$2"
+            shift 2
+            ;;
+        --aggregate-port-base)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --aggregate-port-base requires a value" >&2; exit 2; }
+            aggregate_port_base="$2"
+            shift 2
+            ;;
         --skip-model)
             skip_model=1
             shift
@@ -93,6 +157,46 @@ while [ "$#" -gt 0 ]; do
             ;;
     esac
 done
+
+case "$aggregate_profile" in
+    fast)
+        [ -n "$aggregate_ctx_tiers" ] || aggregate_ctx_tiers="262144,1048576"
+        [ -n "$aggregate_slot_tiers" ] || aggregate_slot_tiers="2"
+        [ -n "$aggregate_queue_policies" ] || aggregate_queue_policies="sequential"
+        [ -n "$aggregate_requests" ] || aggregate_requests="8"
+        [ -n "$aggregate_tokens" ] || aggregate_tokens="1"
+        ;;
+    full)
+        [ -n "$aggregate_ctx_tiers" ] || aggregate_ctx_tiers="131072,262144,524288,1048576"
+        [ -n "$aggregate_slot_tiers" ] || aggregate_slot_tiers="1,2,4,8"
+        [ -n "$aggregate_queue_policies" ] || aggregate_queue_policies="sequential,reject-busy"
+        [ -n "$aggregate_requests" ] || aggregate_requests="4"
+        [ -n "$aggregate_tokens" ] || aggregate_tokens="1"
+        ;;
+    *)
+        echo "ds4-v100-gate: --aggregate-profile must be fast or full" >&2
+        exit 2
+        ;;
+esac
+
+case "$aggregate_requests" in
+    ''|0|*[!0-9]*)
+        echo "ds4-v100-gate: --aggregate-requests must be a positive integer" >&2
+        exit 2
+        ;;
+esac
+case "$aggregate_tokens" in
+    ''|0|*[!0-9]*)
+        echo "ds4-v100-gate: --aggregate-tokens must be a positive integer" >&2
+        exit 2
+        ;;
+esac
+case "$aggregate_port_base" in
+    ''|0|*[!0-9]*)
+        echo "ds4-v100-gate: --aggregate-port-base must be a positive integer" >&2
+        exit 2
+        ;;
+esac
 
 targets=(
     tools/ds4-source-oracle-vector
@@ -122,6 +226,7 @@ if [ -n "$mtp_model" ]; then
 fi
 
 if [ -n "$pack_index" ]; then
+    targets+=(tools/ds4-v100-plan)
     targets+=(tools/ds4-v100-layer-descriptor-gate)
     targets+=(tests/v100_layer_binding_smoke)
     targets+=(tests/v100_layer_state_smoke)
@@ -151,6 +256,8 @@ if [ "$build" -eq 1 ]; then
     echo "gate	build	PASS"
 fi
 
+echo "gate	aggregate_profile	profile=$aggregate_profile ctx_tiers=$aggregate_ctx_tiers slot_tiers=$aggregate_slot_tiers queue_policies=$aggregate_queue_policies requests=$aggregate_requests tokens=$aggregate_tokens host=$aggregate_host port_base=$aggregate_port_base"
+
 failures=0
 full_scheduler_ready=0
 selected_token_ready=0
@@ -159,6 +266,9 @@ base_usability_ready=0
 throughput_ready=0
 throughput_optimization_ready=0
 production_deployment_ready=0
+slot_context_admission_ready=0
+active_microbatch_scheduler_ready=0
+aggregate_slot_context_throughput_ready=0
 mtp_sidecar_ready=0
 mtp_residency_ready=0
 mtp_prefix_ready=0
@@ -373,6 +483,9 @@ if [ -n "$pack_index" ]; then
             if run_gate "full_scheduler" ./tests/cuda_v100_full_scheduler_smoke --index "$pack_index" --model "$model" --token 16 --position 16; then
                 full_scheduler_ready=1
             fi
+            if run_gate "active_microbatch_scheduler" ./tests/cuda_v100_full_scheduler_smoke --index "$pack_index" --model "$model" --token 16 --position 16 --slots 2; then
+                active_microbatch_scheduler_ready=1
+            fi
             run_gate "scheduler_checkpoint_parity" ./tests/cuda_v100_scheduler_checkpoint_parity_smoke --index "$pack_index" --model "$model" --layers -1,0,1,2,3,a4 --ctx 4096 --prompt-tokens 1 || true
             run_gate "scheduler_snapshot" ./tests/cuda_v100_scheduler_snapshot_smoke --index "$pack_index" --model "$model" --ctx 4096 --steps 8 || true
             run_gate "output_head_parity" ./tests/cuda_v100_output_head_parity_smoke --index "$pack_index" --model "$model" || true
@@ -433,6 +546,7 @@ if [ -n "$pack_index" ]; then
                 --index "$pack_index"
                 --model "$model"
                 --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt
+                --slots "$slots"
                 --ctx "$ctx"
                 --tokens 2
                 --requests 1
@@ -450,6 +564,39 @@ if [ -n "$pack_index" ]; then
             fi
             if run_gate "production_deployment" ./tools/ds4-v100-production-deployment-gate.sh "${production_args[@]}"; then
                 production_deployment_ready=1
+            fi
+            slot_context_args=(
+                --pack-index "$pack_index"
+                --model "$model"
+                --plan-slots 8
+                --smoke-slots "$slots"
+                --smoke-ctx "$ctx"
+                --requests 2
+            )
+            if [ -n "$log_dir" ]; then
+                slot_context_args+=(--log-dir "$log_dir/slot_context_envelope")
+            fi
+            if run_gate "slot_context_admission" bash ./tools/ds4-v100-slot-context-envelope.sh "${slot_context_args[@]}"; then
+                slot_context_admission_ready=1
+            fi
+            aggregate_throughput_args=(
+                --pack-index "$pack_index"
+                --model "$model"
+                --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt
+                --expected-token-hex 3136
+                --ctx-tiers "$aggregate_ctx_tiers"
+                --slot-tiers "$aggregate_slot_tiers"
+                --queue-policies "$aggregate_queue_policies"
+                --requests "$aggregate_requests"
+                --tokens "$aggregate_tokens"
+                --host "$aggregate_host"
+                --port-base "$aggregate_port_base"
+            )
+            if [ -n "$log_dir" ]; then
+                aggregate_throughput_args+=(--log-dir "$log_dir/aggregate_slot_context_throughput")
+            fi
+            if run_gate "aggregate_slot_context_throughput" bash ./tools/ds4-v100-aggregate-throughput.sh "${aggregate_throughput_args[@]}"; then
+                aggregate_slot_context_throughput_ready=1
             fi
             if [ -n "$mtp_model" ]; then
                 mtp_serving_args=(
@@ -482,6 +629,7 @@ if [ -n "$pack_index" ]; then
             echo "gate	stage_scheduler	SKIP	no_model"
             echo "gate	two_stage_scheduler	SKIP	no_model"
             echo "gate	full_scheduler	SKIP	no_model"
+            echo "gate	active_microbatch_scheduler	SKIP	no_model"
             echo "gate	scheduler_checkpoint_parity	SKIP	no_model"
             echo "gate	scheduler_snapshot	SKIP	no_model"
             echo "gate	output_head_parity	SKIP	no_model"
@@ -491,6 +639,8 @@ if [ -n "$pack_index" ]; then
             echo "gate	v100_appliance_http	SKIP	no_model"
             echo "gate	v100_appliance_http_long	SKIP	no_model"
             echo "gate	production_deployment	SKIP	no_model"
+            echo "gate	slot_context_admission	SKIP	no_model"
+            echo "gate	aggregate_slot_context_throughput	SKIP	no_model"
             echo "gate	mtp_speculative_serving	SKIP	no_model"
         fi
     fi
@@ -505,6 +655,7 @@ else
     echo "gate	stage_scheduler	SKIP	no_pack_index"
     echo "gate	two_stage_scheduler	SKIP	no_pack_index"
     echo "gate	full_scheduler	SKIP	no_pack_index"
+    echo "gate	active_microbatch_scheduler	SKIP	no_pack_index"
     echo "gate	scheduler_checkpoint_parity	SKIP	no_pack_index"
     echo "gate	scheduler_snapshot	SKIP	no_pack_index"
     echo "gate	output_head_parity	SKIP	no_pack_index"
@@ -514,6 +665,8 @@ else
     echo "gate	v100_appliance_http	SKIP	no_pack_index"
     echo "gate	v100_appliance_http_long	SKIP	no_pack_index"
     echo "gate	production_deployment	SKIP	no_pack_index"
+    echo "gate	slot_context_admission	SKIP	no_pack_index"
+    echo "gate	aggregate_slot_context_throughput	SKIP	no_pack_index"
     echo "gate	mtp_speculative_serving	SKIP	no_pack_index"
 fi
 
@@ -579,9 +732,22 @@ fi
 if [ "$throughput_optimization_ready" -eq 0 ]; then
     add_missing "throughput_optimization"
 fi
-if [ -z "$missing" ]; then
-    add_missing "aggregate_slot_context_envelope"
+if [ "$slot_context_admission_ready" -eq 0 ]; then
+    add_missing "slot_context_admission"
 fi
-echo "gate	readiness	NOT_READY	missing=$missing"
-echo "gate	summary	PASS	failures=0 ready=false"
+if [ "$active_microbatch_scheduler_ready" -eq 0 ]; then
+    add_missing "active_microbatch_scheduler"
+fi
+if [ "$aggregate_slot_context_throughput_ready" -eq 0 ]; then
+    add_missing "aggregate_slot_context_throughput"
+fi
+
+if [ -n "$missing" ]; then
+    echo "gate	readiness	NOT_READY	missing=$missing"
+    echo "gate	summary	PASS	failures=0 ready=false"
+    exit 0
+fi
+
+echo "gate	readiness	READY	missing="
+echo "gate	summary	PASS	failures=0 ready=true"
 exit 0

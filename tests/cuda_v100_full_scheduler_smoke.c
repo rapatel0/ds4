@@ -31,7 +31,7 @@ static void check(int cond, const char *msg) {
 static void usage(FILE *fp) {
     fprintf(fp,
             "usage: tests/cuda_v100_full_scheduler_smoke --index FILE --model FILE "
-            "[--token N] [--position N] [--stages N]\n");
+            "[--token N] [--position N] [--stages N] [--slots N]\n");
 }
 
 static int parse_int_arg(const char *s, const char *name, int max_v) {
@@ -109,6 +109,7 @@ int main(int argc, char **argv) {
     int token = 16;
     int position = 16;
     int stages = DS4_V100_EXPECTED_GPUS;
+    int slots = 1;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--index") && i + 1 < argc) {
@@ -121,6 +122,8 @@ int main(int argc, char **argv) {
             position = parse_int_arg(argv[++i], "--position", 2000000);
         } else if (!strcmp(argv[i], "--stages") && i + 1 < argc) {
             stages = parse_int_arg(argv[++i], "--stages", DS4_V100_EXPECTED_GPUS);
+        } else if (!strcmp(argv[i], "--slots") && i + 1 < argc) {
+            slots = parse_int_arg(argv[++i], "--slots", DS4_V100_SCHED_MAX_SLOTS);
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             usage(stdout);
             return 0;
@@ -154,12 +157,14 @@ int main(int argc, char **argv) {
     uint32_t layers_executed = 0;
     uint64_t uploaded_bytes = 0;
     uint64_t uploaded_tensors = 0;
+    const uint32_t n_slots = (uint32_t)slots;
 
     ds4_v100_stage_scheduler_options opts;
     ds4_v100_stage_scheduler_options_init(&opts);
     opts.pack_index_path = index;
     opts.model_map = model.ptr;
     opts.model_size = model.size;
+    opts.kv_active_slots = (uint64_t)slots;
 
     char err[512] = {0};
     for (int i = 0; i < stages; i++) {
@@ -174,27 +179,70 @@ int main(int argc, char **argv) {
         }
     }
 
+    ds4_v100_stage_scheduler_report batch_reports[DS4_V100_SCHED_MAX_SLOTS];
+    uint32_t batch_tokens[DS4_V100_SCHED_MAX_SLOTS];
+    uint32_t batch_positions[DS4_V100_SCHED_MAX_SLOTS];
+    for (uint32_t i = 0; i < n_slots; i++) {
+        batch_tokens[i] = (uint32_t)token;
+        batch_positions[i] = (uint32_t)position;
+    }
+
     err[0] = '\0';
-    check(ds4_v100_stage_scheduler_decode_token(scheds[0],
-                                                (uint32_t)token,
-                                                (uint32_t)position,
-                                                &reports[0],
-                                                err,
-                                                sizeof(err)) == 0,
-          err[0] ? err : "stage 0 decode");
+    memset(batch_reports, 0, sizeof(batch_reports));
+    if (n_slots == 1) {
+        check(ds4_v100_stage_scheduler_decode_token(scheds[0],
+                                                    (uint32_t)token,
+                                                    (uint32_t)position,
+                                                    &reports[0],
+                                                    err,
+                                                    sizeof(err)) == 0,
+              err[0] ? err : "stage 0 decode");
+    } else {
+        check(ds4_v100_stage_scheduler_decode_token_batch(scheds[0],
+                                                          batch_tokens,
+                                                          batch_positions,
+                                                          n_slots,
+                                                          batch_reports,
+                                                          err,
+                                                          sizeof(err)) == 0,
+              err[0] ? err : "stage 0 decode batch");
+        reports[0] = batch_reports[0];
+    }
 
     for (int i = 1; i < stages && failures == 0; i++) {
         err[0] = '\0';
-        check(ds4_v100_stage_scheduler_handoff(scheds[i], scheds[i - 1], err, sizeof(err)) == 0,
-              err[0] ? err : "stage handoff");
+        if (n_slots == 1) {
+            check(ds4_v100_stage_scheduler_handoff(scheds[i], scheds[i - 1], err, sizeof(err)) == 0,
+                  err[0] ? err : "stage handoff");
+        } else {
+            check(ds4_v100_stage_scheduler_handoff_batch(scheds[i],
+                                                         scheds[i - 1],
+                                                         n_slots,
+                                                         err,
+                                                         sizeof(err)) == 0,
+                  err[0] ? err : "stage handoff batch");
+        }
         err[0] = '\0';
-        check(ds4_v100_stage_scheduler_decode_hc(scheds[i],
-                                                 (uint32_t)token,
-                                                 (uint32_t)position,
-                                                 &reports[i],
-                                                 err,
-                                                 sizeof(err)) == 0,
-              err[0] ? err : "stage decode");
+        if (n_slots == 1) {
+            check(ds4_v100_stage_scheduler_decode_hc(scheds[i],
+                                                     (uint32_t)token,
+                                                     (uint32_t)position,
+                                                     &reports[i],
+                                                     err,
+                                                     sizeof(err)) == 0,
+                  err[0] ? err : "stage decode");
+        } else {
+            memset(batch_reports, 0, sizeof(batch_reports));
+            check(ds4_v100_stage_scheduler_decode_hc_batch(scheds[i],
+                                                           batch_tokens,
+                                                           batch_positions,
+                                                           n_slots,
+                                                           batch_reports,
+                                                           err,
+                                                           sizeof(err)) == 0,
+                  err[0] ? err : "stage decode batch");
+            reports[i] = batch_reports[0];
+        }
     }
 
     for (int i = 0; i < stages; i++) {
@@ -227,12 +275,13 @@ int main(int argc, char **argv) {
     free(hc);
 
 cleanup:
-    printf("cuda_v100_full_scheduler_smoke: stages=%d token=%d pos=%d layers=%" PRIu32
+    printf("cuda_v100_full_scheduler_smoke: stages=%d token=%d pos=%d slots=%u layers=%" PRIu32
            " last=%d-%d gpu=%d uploaded_tensors=%" PRIu64 " uploaded_bytes=%" PRIu64
            " expert_last=%d %s\n",
            stages,
            token,
            position,
+           n_slots,
            layers_executed,
            reports[stages - 1].first_layer,
            reports[stages - 1].last_layer,

@@ -73,6 +73,8 @@ fi
 : "${DS4_V100_PACK_INDEX:=docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv}"
 : "${DS4_V100_CTX:=1048576}"
 : "${DS4_V100_SLOTS:=1}"
+: "${DS4_V100_ACTIVE_MICROBATCH:=1}"
+: "${DS4_V100_QUEUE_POLICY:=reject-busy}"
 : "${DS4_V100_TOKENS:=2}"
 : "${DS4_V100_HOST:=127.0.0.1}"
 : "${DS4_V100_PORT:=18080}"
@@ -193,6 +195,7 @@ esac
 
 is_uint "$DS4_V100_CTX" || fail "DS4_V100_CTX must be a positive integer"
 is_uint "$DS4_V100_SLOTS" || fail "DS4_V100_SLOTS must be a positive integer"
+is_uint "$DS4_V100_ACTIVE_MICROBATCH" || fail "DS4_V100_ACTIVE_MICROBATCH must be a positive integer"
 is_uint "$DS4_V100_TOKENS" || fail "DS4_V100_TOKENS must be a positive integer"
 is_uint "$DS4_V100_PORT" || fail "DS4_V100_PORT must be a positive integer"
 is_uint "$DS4_V100_REQUIRE_GPUS" || fail "DS4_V100_REQUIRE_GPUS must be an integer"
@@ -201,8 +204,10 @@ is_uint "$DS4_V100_MAX_REQUESTS" || fail "DS4_V100_MAX_REQUESTS must be an integ
 is_uint "$DS4_V100_MTP_TOP_K" || fail "DS4_V100_MTP_TOP_K must be an integer"
 is_uint "$DS4_V100_MTP_GPU" || fail "DS4_V100_MTP_GPU must be an integer"
 
-[ "$DS4_V100_SLOTS" -eq 1 ] || fail "only DS4_V100_SLOTS=1 is supported"
 [ "$DS4_V100_CTX" -ge 1 ] || fail "DS4_V100_CTX must be positive"
+[ "$DS4_V100_SLOTS" -ge 1 ] && [ "$DS4_V100_SLOTS" -le 8 ] || fail "DS4_V100_SLOTS must be between 1 and 8"
+[ "$DS4_V100_ACTIVE_MICROBATCH" -ge 1 ] || fail "DS4_V100_ACTIVE_MICROBATCH must be positive"
+[ "$DS4_V100_ACTIVE_MICROBATCH" -le "$DS4_V100_SLOTS" ] || fail "DS4_V100_ACTIVE_MICROBATCH must be in [1,DS4_V100_SLOTS]"
 [ "$DS4_V100_TOKENS" -ge 1 ] || fail "DS4_V100_TOKENS must be positive"
 [ "$DS4_V100_TOKENS" -le 64 ] || fail "DS4_V100_TOKENS must be <= 64"
 [ "$DS4_V100_MTP_TOP_K" -ge 2 ] && [ "$DS4_V100_MTP_TOP_K" -le 16 ] || fail "DS4_V100_MTP_TOP_K must be between 2 and 16"
@@ -211,6 +216,10 @@ is_uint "$DS4_V100_MTP_GPU" || fail "DS4_V100_MTP_GPU must be an integer"
 case "$DS4_V100_HOST" in
     127.*|localhost) ;;
     *) fail "default deployment must bind loopback only; got DS4_V100_HOST=$DS4_V100_HOST" ;;
+esac
+case "$DS4_V100_QUEUE_POLICY" in
+    reject-busy|sequential) ;;
+    *) fail "DS4_V100_QUEUE_POLICY must be reject-busy or sequential" ;;
 esac
 
 require_exec "$DS4_V100_BIN"
@@ -230,6 +239,9 @@ cmd=(
     --model "$DS4_V100_MODEL"
     --index "$DS4_V100_PACK_INDEX"
     --ctx "$DS4_V100_CTX"
+    --slots "$DS4_V100_SLOTS"
+    --active-microbatch "$DS4_V100_ACTIVE_MICROBATCH"
+    --queue-policy "$DS4_V100_QUEUE_POLICY"
     --tokens "$DS4_V100_TOKENS"
     --host "$DS4_V100_HOST"
     --port "$DS4_V100_PORT"
@@ -269,6 +281,8 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_PACK_INDEX=$DS4_V100_PACK_INDEX"
     echo "DS4_V100_CTX=$DS4_V100_CTX"
     echo "DS4_V100_SLOTS=$DS4_V100_SLOTS"
+    echo "DS4_V100_ACTIVE_MICROBATCH=$DS4_V100_ACTIVE_MICROBATCH"
+    echo "DS4_V100_QUEUE_POLICY=$DS4_V100_QUEUE_POLICY"
     echo "DS4_V100_TOKENS=$DS4_V100_TOKENS"
     echo "DS4_V100_HOST=$DS4_V100_HOST"
     echo "DS4_V100_PORT=$DS4_V100_PORT"

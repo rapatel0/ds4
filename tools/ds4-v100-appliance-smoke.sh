@@ -7,7 +7,11 @@ prompt_file="tests/test-vectors/prompts/short_reasoning_plain.txt"
 expected_hex="3136"
 host="127.0.0.1"
 port="18080"
+ctx="1048576"
 tokens="1"
+slots="1"
+active_microbatch="1"
+queue_policy="reject-busy"
 requests="2"
 log_dir=""
 
@@ -20,10 +24,14 @@ Options:
   --pack-index FILE         V100 pack-index.tsv
   --prompt-file FILE        prompt file
   --expected-token-hex HEX  expected first response token bytes, default 3136
-  --tokens N                generated tokens to request, default 1
-  --requests N              HTTP requests to send after one upload, default 2
-  --host ADDR               bind/probe address, default 127.0.0.1
-  --port N                  bind/probe port, default 18080
+    --ctx N                   KV context tokens, default 1048576
+    --tokens N                generated tokens to request, default 1
+    --slots N                 configured admission slots, default 1
+    --active-microbatch N     active decode requests, default 1
+    --queue-policy MODE       reject-busy or sequential, default reject-busy
+    --requests N              HTTP requests to send after one upload, default 2
+    --host ADDR               bind/probe address, default 127.0.0.1
+    --port N                  bind/probe port, default 18080
   --log-dir DIR             write server/request/response logs
 
 The smoke also probes GET /health and GET /v100/status before generation.
@@ -57,14 +65,34 @@ while [ "$#" -gt 0 ]; do
             tokens="$2"
             shift 2
             ;;
+        --ctx)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-appliance-smoke: --ctx requires a value" >&2; exit 2; }
+            ctx="$2"
+            shift 2
+            ;;
         --requests)
             [ "$#" -ge 2 ] || { echo "ds4-v100-appliance-smoke: --requests requires a value" >&2; exit 2; }
             requests="$2"
             shift 2
             ;;
-        --host)
+    --host)
             [ "$#" -ge 2 ] || { echo "ds4-v100-appliance-smoke: --host requires a value" >&2; exit 2; }
             host="$2"
+            shift 2
+            ;;
+        --slots)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-appliance-smoke: --slots requires a value" >&2; exit 2; }
+            slots="$2"
+            shift 2
+            ;;
+        --active-microbatch)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-appliance-smoke: --active-microbatch requires a value" >&2; exit 2; }
+            active_microbatch="$2"
+            shift 2
+            ;;
+        --queue-policy)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-appliance-smoke: --queue-policy requires a value" >&2; exit 2; }
+            queue_policy="$2"
             shift 2
             ;;
         --port)
@@ -113,6 +141,42 @@ case "$tokens" in
         exit 2
         ;;
 esac
+case "$ctx" in
+    ''|0|*[!0-9]*)
+        echo "ds4-v100-appliance-smoke: --ctx must be a positive integer" >&2
+        exit 2
+        ;;
+esac
+case "$slots" in
+    ''|0|*[!0-9]*)
+        echo "ds4-v100-appliance-smoke: --slots must be a positive integer" >&2
+        exit 2
+        ;;
+esac
+case "$active_microbatch" in
+    ''|0|*[!0-9]*)
+        echo "ds4-v100-appliance-smoke: --active-microbatch must be a positive integer" >&2
+        exit 2
+        ;;
+esac
+
+if [ "$slots" -lt 1 ] || [ "$slots" -gt 8 ]; then
+    echo "ds4-v100-appliance-smoke: --slots must be in [1,8]" >&2
+    exit 2
+fi
+if [ "$active_microbatch" -lt 1 ] || [ "$active_microbatch" -gt 8 ]; then
+    echo "ds4-v100-appliance-smoke: --active-microbatch must be in [1,8]" >&2
+    exit 2
+fi
+if [ "$active_microbatch" -gt "$slots" ]; then
+    echo "ds4-v100-appliance-smoke: --active-microbatch must be <= --slots" >&2
+    exit 2
+fi
+if [ "$queue_policy" != "reject-busy" ] && [ "$queue_policy" != "reject" ] && [ "$queue_policy" != "busy" ] && \
+   [ "$queue_policy" != "sequential" ] && [ "$queue_policy" != "queue" ]; then
+    echo "ds4-v100-appliance-smoke: --queue-policy must be reject-busy or sequential" >&2
+    exit 2
+fi
 
 work_dir="$log_dir"
 if [ -z "$work_dir" ]; then
@@ -142,12 +206,16 @@ trap cleanup EXIT
 
 server_max_requests=$((requests + 2))
 
-./tools/ds4-v100-replay \
+DS4_LOCK_FILE="$work_dir/ds4.lock" ./tools/ds4-v100-replay \
     --serve \
     --model "$model" \
     --index "$pack_index" \
+    --ctx "$ctx" \
     --host "$host" \
     --port "$port" \
+    --slots "$slots" \
+    --active-microbatch "$active_microbatch" \
+    --queue-policy "$queue_policy" \
     --tokens "$tokens" \
     --max-requests "$server_max_requests" \
     >"$server_log" 2>&1 &
@@ -212,10 +280,14 @@ if ! grep -q '"status":"ok"' "$health_json"; then
 fi
 http_get "/v100/status" "$status_http" "$status_json"
 if ! grep -q '"service":"ds4-v100-replay"' "$status_json" ||
-   ! grep -q '"mode":"base_one_slot"' "$status_json" ||
+   ! grep -q '"mode":"base' "$status_json" ||
    ! grep -q '"readiness_level":2' "$status_json" ||
    ! grep -q '"mtp_enabled":false' "$status_json" ||
-   ! grep -q '"slots":1' "$status_json" ||
+   ! grep -q "\"slots\":$slots" "$status_json" ||
+   ! grep -q "\"configured_slots\":$slots" "$status_json" ||
+   ! grep -q "\"active_slots\":$active_microbatch" "$status_json" ||
+   ! grep -q "\"active_microbatch\":$active_microbatch" "$status_json" ||
+   ! grep -q "\"queue_policy\":\"$queue_policy\"" "$status_json" ||
    ! grep -q '"streaming":false' "$status_json"; then
     echo "ds4-v100-appliance-smoke: bad /v100/status response" >&2
     cat "$status_json" >&2

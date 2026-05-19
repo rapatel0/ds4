@@ -10,6 +10,8 @@
 /ds4flash.gguf
 /TODO.md
 /gguf/
+logs/security/
+tests/v100_layer_state_smoke
 *.o
 *.dSYM/
 /misc/

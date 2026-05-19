@@ -1,0 +1,3 @@
+ds4-v100-appliance-smoke: request=1 prompt_tokens=18 generated_tokens=1 first_token=926 first_hex=3136 continuation_ms=0.000 ok
+ds4-v100-appliance-smoke: request=2 prompt_tokens=18 generated_tokens=1 first_token=926 first_hex=3136 continuation_ms=0.000 ok
+ds4-v100-appliance-smoke: health=ok status=ok requests=2 prompt_tokens=18 generated_tokens=1 first_token=926 first_hex=3136 ok

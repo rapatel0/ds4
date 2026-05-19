@@ -1,0 +1,7 @@
+ds4: CUDA copying 0.00 GiB model to device memory
+ds4: CUDA model copy complete in 0.273s
+ds4: CUDA copying 0.00 GiB model to device memory
+ds4: CUDA model copy complete in 0.000s
+ds4: CUDA copying 0.00 GiB model to device memory
+ds4: CUDA model copy complete in 0.000s
+cuda_v100_compressor_bridge_smoke: ok

@@ -9,6 +9,9 @@ expected_hex="3136"
 host="127.0.0.1"
 port="18082"
 ctx="1048576"
+slots="1"
+active_microbatch="1"
+queue_policy="reject-busy"
 tokens="2"
 requests="1"
 reserve_mib="4096"
@@ -27,6 +30,9 @@ Options:
   --prompt-file FILE        prompt file
   --expected-token-hex HEX  expected first response token bytes, default 3136
   --ctx N                   KV context tokens, default 1048576
+  --slots N                 configured admission slots, default 1
+  --active-microbatch N     active decode requests, default 1
+  --queue-policy MODE       reject-busy or sequential, default reject-busy
   --tokens N                generated tokens to request, default 2
   --requests N              generation requests to send, default 1
   --host ADDR               bind/probe address, default 127.0.0.1
@@ -83,6 +89,21 @@ while [ "$#" -gt 0 ]; do
             ctx="$2"
             shift 2
             ;;
+        --slots)
+            [ "$#" -ge 2 ] || fail "--slots requires a value"
+            slots="$2"
+            shift 2
+            ;;
+        --active-microbatch)
+            [ "$#" -ge 2 ] || fail "--active-microbatch requires a value"
+            active_microbatch="$2"
+            shift 2
+            ;;
+        --queue-policy)
+            [ "$#" -ge 2 ] || fail "--queue-policy requires a value"
+            queue_policy="$2"
+            shift 2
+            ;;
         --tokens)
             [ "$#" -ge 2 ] || fail "--tokens requires a value"
             tokens="$2"
@@ -136,7 +157,26 @@ done
 case "$requests" in ''|0|*[!0-9]*) fail "--requests must be a positive integer" ;; esac
 case "$tokens" in ''|0|*[!0-9]*) fail "--tokens must be a positive integer" ;; esac
 case "$ctx" in ''|0|*[!0-9]*) fail "--ctx must be a positive integer" ;; esac
+case "$slots" in ''|0|*[!0-9]*) fail "--slots must be a positive integer" ;; esac
+case "$active_microbatch" in ''|0|*[!0-9]*) fail "--active-microbatch must be a positive integer" ;; esac
 case "$port" in ''|0|*[!0-9]*) fail "--port must be a positive integer" ;; esac
+
+if [ "$slots" -lt 1 ] || [ "$slots" -gt 8 ]; then
+    fail "--slots must be in [1,8]"
+fi
+if [ "$active_microbatch" -lt 1 ] || [ "$active_microbatch" -gt "$slots" ]; then
+    fail "--active-microbatch must be in [1,slots]"
+fi
+case "$queue_policy" in
+    reject-busy|reject|busy)
+        queue_policy="reject-busy"
+        ;;
+    queue)
+        queue_policy="sequential"
+        ;;
+    sequential) ;;
+    *) fail "--queue-policy must be reject-busy or sequential" ;;
+esac
 
 [ -x ./tools/ds4-v100-run-appliance.sh ] || fail "missing executable ./tools/ds4-v100-run-appliance.sh"
 [ -x ./tools/ds4-v100-replay ] || fail "missing executable ./tools/ds4-v100-replay"
@@ -180,7 +220,9 @@ DS4_V100_MODEL=$model
 DS4_V100_MTP_MODEL=$mtp_model
 DS4_V100_PACK_INDEX=$pack_index
 DS4_V100_CTX=$ctx
-DS4_V100_SLOTS=1
+DS4_V100_SLOTS=$slots
+DS4_V100_ACTIVE_MICROBATCH=$active_microbatch
+DS4_V100_QUEUE_POLICY=$queue_policy
 DS4_V100_TOKENS=$tokens
 DS4_V100_HOST=$host
 DS4_V100_PORT=$port
@@ -250,18 +292,29 @@ grep -q '"status":"ok"' "$health_json" || fail "bad /health response"
 
 http_get "/v100/status" "$status_http" "$status_json"
 grep -q '"service":"ds4-v100-replay"' "$status_json" || fail "missing service in status"
-grep -q '"mode":"base_one_slot"' "$status_json" || fail "missing base_one_slot mode in status"
+if [ "$slots" -eq 1 ]; then
+    grep -q '"mode":"base_one_slot"' "$status_json" || fail "expected base_one_slot mode in status"
+else
+    grep -q "\"mode\":\"base_slots_$slots\"" "$status_json" || fail "expected base_slots_$slots mode in status"
+fi
 grep -q '"readiness_level":2' "$status_json" || fail "missing readiness_level=2 in status"
 grep -q '"mtp_enabled":false' "$status_json" || fail "status should report mtp_enabled=false"
 grep -q "\"ctx_tokens\":$ctx" "$status_json" || fail "status ctx_tokens mismatch"
 grep -q '"max_tokens":64' "$status_json" || fail "status max_tokens mismatch"
-grep -q '"slots":1' "$status_json" || fail "status missing slots=1 limit"
+grep -q "\"slots\":$slots" "$status_json" || fail "status missing slots=$slots limit"
+grep -q "\"configured_slots\":$slots" "$status_json" || fail "status missing configured_slots=$slots limit"
+grep -q "\"active_microbatch\":$active_microbatch" "$status_json" || fail "status missing active_microbatch=$active_microbatch"
+grep -q "\"active_slots\":$active_microbatch" "$status_json" || fail "status missing active_slots=$active_microbatch"
+grep -q "\"queue_policy\":\"$queue_policy\"" "$status_json" || fail "status missing queue_policy=$queue_policy"
+grep -q "\"concurrent_requests\":$active_microbatch" "$status_json" || fail "status missing concurrent_requests=$active_microbatch"
 initial_served="$(sed -n 's/.*"served_requests":\([0-9][0-9]*\).*/\1/p' "$status_json" | sed -n '1p')"
 
 http_get "/metrics" "$metrics_http" "$metrics_txt"
 grep -q '^ds4_v100_readiness_level 2$' "$metrics_txt" || fail "metrics missing readiness level"
 grep -q "^ds4_v100_ctx_tokens $ctx$" "$metrics_txt" || fail "metrics ctx_tokens mismatch"
 grep -q '^ds4_v100_mtp_enabled 0$' "$metrics_txt" || fail "metrics should report mtp disabled"
+grep -q "^ds4_v100_configured_slots $slots$" "$metrics_txt" || fail "metrics missing configured_slots=$slots"
+grep -q "^ds4_v100_active_microbatch $active_microbatch$" "$metrics_txt" || fail "metrics missing active_microbatch=$active_microbatch"
 
 awk -v tokens="$tokens" '
 BEGIN {

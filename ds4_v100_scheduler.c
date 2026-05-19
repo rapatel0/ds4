@@ -49,6 +49,7 @@ struct ds4_v100_stage_scheduler_snapshot {
     int gpu;
     int layer_begin;
     int layer_end;
+    uint32_t active_slots;
     int cur_hc_slot;
     scheduler_snapshot_tensor cur_hc;
     scheduler_layer_cache_snapshot layers[DS4_V100_N_LAYERS];
@@ -67,14 +68,15 @@ struct ds4_v100_stage_scheduler {
     ds4_v100_tensor_binding output_norm;
     ds4_v100_tensor_binding output_weight;
     ds4_v100_layer_state states[DS4_V100_N_LAYERS];
-    scheduler_layer_cache caches[DS4_V100_N_LAYERS];
-    ds4_gpu_tensor *hc_a;
-    ds4_gpu_tensor *hc_b;
-    ds4_gpu_tensor *cur_hc;
+    scheduler_layer_cache caches[DS4_V100_N_LAYERS * DS4_V100_SCHED_MAX_SLOTS];
+    ds4_gpu_tensor *hc_a[DS4_V100_SCHED_MAX_SLOTS];
+    ds4_gpu_tensor *hc_b[DS4_V100_SCHED_MAX_SLOTS];
+    ds4_gpu_tensor *cur_hc[DS4_V100_SCHED_MAX_SLOTS];
     uint64_t uploaded_tensors;
     uint64_t uploaded_bytes;
     const void *model_map;
     uint64_t model_size;
+    uint32_t active_slots;
     uint32_t raw_cap;
     uint32_t raw_window;
     uint32_t attn_comp_cap;
@@ -96,6 +98,32 @@ static int scheduler_errorf(char *err, size_t errlen, const char *fmt, int value
 static int scheduler_errorf_u64(char *err, size_t errlen, const char *fmt, uint64_t value) {
     if (err && errlen) snprintf(err, errlen, fmt, value);
     return 1;
+}
+
+static int scheduler_errorf_u32(char *err, size_t errlen, const char *fmt, uint32_t value) {
+    if (err && errlen) snprintf(err, errlen, fmt, value);
+    return 1;
+}
+
+static scheduler_layer_cache *scheduler_cache_slot(ds4_v100_stage_scheduler *sched,
+                                                   int layer,
+                                                   uint32_t slot) {
+    if (!sched || layer < 0 || layer >= DS4_V100_N_LAYERS ||
+        slot >= DS4_V100_SCHED_MAX_SLOTS) {
+        return NULL;
+    }
+    return &sched->caches[(size_t)layer * DS4_V100_SCHED_MAX_SLOTS + slot];
+}
+
+static const scheduler_layer_cache *scheduler_cache_slot_const(
+    const ds4_v100_stage_scheduler *sched,
+    int layer,
+    uint32_t slot) {
+    if (!sched || layer < 0 || layer >= DS4_V100_N_LAYERS ||
+        slot >= DS4_V100_SCHED_MAX_SLOTS) {
+        return NULL;
+    }
+    return &sched->caches[(size_t)layer * DS4_V100_SCHED_MAX_SLOTS + slot];
 }
 
 typedef struct {
@@ -138,6 +166,7 @@ void ds4_v100_stage_scheduler_options_init(ds4_v100_stage_scheduler_options *opt
     opts->index_comp_cap = 4;
     opts->indexer_top_k = 1;
     opts->kv_ctx_tokens = 1048576;
+    opts->kv_active_slots = 1;
 }
 
 static void free_layer_cache(scheduler_layer_cache *lc) {
@@ -155,9 +184,15 @@ static void free_layer_cache(scheduler_layer_cache *lc) {
 
 void ds4_v100_stage_scheduler_close(ds4_v100_stage_scheduler *sched) {
     if (!sched) return;
-    ds4_gpu_tensor_free(sched->hc_b);
-    ds4_gpu_tensor_free(sched->hc_a);
-    for (int i = 0; i < DS4_V100_N_LAYERS; i++) free_layer_cache(&sched->caches[i]);
+    for (uint32_t slot = 0; slot < DS4_V100_SCHED_MAX_SLOTS; slot++) {
+        ds4_gpu_tensor_free(sched->hc_b[slot]);
+        ds4_gpu_tensor_free(sched->hc_a[slot]);
+    }
+    for (int layer = 0; layer < DS4_V100_N_LAYERS; layer++) {
+        for (uint32_t slot = 0; slot < DS4_V100_SCHED_MAX_SLOTS; slot++) {
+            free_layer_cache(scheduler_cache_slot(sched, layer, slot));
+        }
+    }
     ds4_gpu_arena_close(sched->arena);
     ds4_pack_close(sched->pack);
     ds4_v100_context_close(sched->ctx);
@@ -218,10 +253,14 @@ static int upload_stage_weights(ds4_v100_stage_scheduler *sched,
 
 static int alloc_layer_cache(ds4_v100_stage_scheduler *sched,
                              int layer,
+                             uint32_t slot,
                              char *err,
                              size_t errlen) {
     const ds4_v100_layer_state *state = &sched->states[layer];
-    scheduler_layer_cache *lc = &sched->caches[layer];
+    scheduler_layer_cache *lc = scheduler_cache_slot(sched, layer, slot);
+    if (!lc) {
+        return scheduler_errorf(err, errlen, "invalid cache slot %d", (int)slot);
+    }
     const uint32_t kv_width = state->kv_latent_width;
     const uint32_t raw_cap = sched->raw_cap ? sched->raw_cap : DS4_V100_SWA_ROWS;
     lc->raw_kv = ds4_gpu_tensor_alloc((uint64_t)raw_cap * kv_width * sizeof(float));
@@ -303,10 +342,14 @@ static int alloc_layer_cache(ds4_v100_stage_scheduler *sched,
 
 static int reset_layer_cache(ds4_v100_stage_scheduler *sched,
                              int layer,
+                             uint32_t slot,
                              char *err,
                              size_t errlen) {
     const ds4_v100_layer_state *state = &sched->states[layer];
-    scheduler_layer_cache *lc = &sched->caches[layer];
+    scheduler_layer_cache *lc = scheduler_cache_slot(sched, layer, slot);
+    if (!lc) {
+        return scheduler_errorf(err, errlen, "invalid cache slot %d", (int)slot);
+    }
     const uint32_t kv_width = state->kv_latent_width;
     const uint32_t raw_cap = sched->raw_cap ? sched->raw_cap : DS4_V100_SWA_ROWS;
     if (!lc->raw_kv ||
@@ -362,14 +405,19 @@ int ds4_v100_stage_scheduler_reset(ds4_v100_stage_scheduler *sched,
                                 sched->stage.gpu);
     }
     for (int layer = sched->stage.layer_begin; layer <= sched->stage.layer_end; layer++) {
-        if (reset_layer_cache(sched, layer, err, errlen)) return 1;
+        for (uint32_t slot = 0; slot < sched->active_slots; slot++) {
+            if (reset_layer_cache(sched, layer, slot, err, errlen)) return 1;
+        }
     }
     const uint64_t hc_values = (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS;
-    if (!ds4_gpu_tensor_fill_f32(sched->hc_a, 0.0f, hc_values) ||
-        !ds4_gpu_tensor_fill_f32(sched->hc_b, 0.0f, hc_values)) {
-        return scheduler_error(err, errlen, "scheduler HC reset failed");
+    for (uint32_t slot = 0; slot < sched->active_slots; slot++) {
+        if (!ds4_gpu_tensor_fill_f32(sched->hc_a[slot], 0.0f, hc_values) ||
+            !ds4_gpu_tensor_fill_f32(sched->hc_b[slot], 0.0f, hc_values)) {
+            return scheduler_errorf(err, errlen, "scheduler HC reset failed for slot %d",
+                                    (int)slot);
+        }
+        sched->cur_hc[slot] = sched->hc_a[slot];
     }
-    sched->cur_hc = sched->hc_a;
     return 0;
 }
 
@@ -439,8 +487,14 @@ int ds4_v100_stage_scheduler_snapshot_create(
     size_t errlen) {
     if (!out) return scheduler_error(err, errlen, "missing scheduler snapshot output");
     *out = NULL;
-    if (!sched || !sched->cur_hc) {
+    if (!sched || !sched->cur_hc[0]) {
         return scheduler_error(err, errlen, "missing scheduler snapshot input");
+    }
+    if (sched->active_slots != 1) {
+        return scheduler_errorf_u32(err,
+                                    errlen,
+                                    "scheduler snapshot currently requires active_slots=1, got %u",
+                                    sched->active_slots);
     }
     if (!ds4_gpu_set_device(sched->stage.gpu)) {
         return scheduler_errorf(err, errlen, "failed to set scheduler snapshot device gpu%d",
@@ -454,10 +508,11 @@ int ds4_v100_stage_scheduler_snapshot_create(
     snap->gpu = sched->stage.gpu;
     snap->layer_begin = sched->stage.layer_begin;
     snap->layer_end = sched->stage.layer_end;
-    snap->cur_hc_slot = sched->cur_hc == sched->hc_b ? 1 : 0;
+    snap->active_slots = sched->active_slots;
+    snap->cur_hc_slot = sched->cur_hc[0] == sched->hc_b[0] ? 1 : 0;
 
     if (snapshot_tensor_capture(&snap->cur_hc,
-                                sched->cur_hc,
+                                sched->cur_hc[0],
                                 &snap->captured_bytes,
                                 err,
                                 errlen)) {
@@ -466,8 +521,12 @@ int ds4_v100_stage_scheduler_snapshot_create(
     }
 
     for (int layer = sched->stage.layer_begin; layer <= sched->stage.layer_end; layer++) {
-        const scheduler_layer_cache *lc = &sched->caches[layer];
+        const scheduler_layer_cache *lc = scheduler_cache_slot_const(sched, layer, 0);
         scheduler_layer_cache_snapshot *ls = &snap->layers[layer];
+        if (!lc) {
+            ds4_v100_stage_scheduler_snapshot_free(snap);
+            return scheduler_error(err, errlen, "snapshot cache lookup failed");
+        }
         ls->n_attn_comp = lc->cache.n_attn_comp;
         ls->n_index_comp = lc->cache.n_index_comp;
         if (snapshot_tensor_capture(&ls->raw_kv, lc->raw_kv, &snap->captured_bytes, err, errlen) ||
@@ -498,17 +557,21 @@ int ds4_v100_stage_scheduler_snapshot_restore(
         sched->stage.layer_end != snap->layer_end) {
         return scheduler_error(err, errlen, "scheduler snapshot restore stage mismatch");
     }
+    if (sched->active_slots != snap->active_slots || sched->active_slots != 1) {
+        return scheduler_error(err, errlen, "scheduler snapshot restore active-slot mismatch");
+    }
     if (!ds4_gpu_set_device(sched->stage.gpu)) {
         return scheduler_errorf(err, errlen, "failed to set scheduler restore device gpu%d",
                                 sched->stage.gpu);
     }
-    ds4_gpu_tensor *hc = snap->cur_hc_slot ? sched->hc_b : sched->hc_a;
+    ds4_gpu_tensor *hc = snap->cur_hc_slot ? sched->hc_b[0] : sched->hc_a[0];
     if (snapshot_tensor_restore(&snap->cur_hc, hc, err, errlen)) return 1;
-    sched->cur_hc = hc;
+    sched->cur_hc[0] = hc;
 
     for (int layer = sched->stage.layer_begin; layer <= sched->stage.layer_end; layer++) {
-        scheduler_layer_cache *lc = &sched->caches[layer];
+        scheduler_layer_cache *lc = scheduler_cache_slot(sched, layer, 0);
         const scheduler_layer_cache_snapshot *ls = &snap->layers[layer];
+        if (!lc) return scheduler_error(err, errlen, "snapshot restore cache lookup failed");
         lc->cache.n_attn_comp = ls->n_attn_comp;
         lc->cache.n_index_comp = ls->n_index_comp;
         if (snapshot_tensor_restore(&ls->raw_kv, lc->raw_kv, err, errlen) ||
@@ -556,6 +619,14 @@ int ds4_v100_stage_scheduler_open(ds4_v100_stage_scheduler **out,
     ds4_v100_stage_scheduler *sched =
         (ds4_v100_stage_scheduler *)calloc(1, sizeof(*sched));
     if (!sched) return scheduler_error(err, errlen, "failed to allocate scheduler");
+    sched->active_slots = (uint32_t)(opts->kv_active_slots ? opts->kv_active_slots : 1u);
+    if (sched->active_slots == 0 || sched->active_slots > DS4_V100_SCHED_MAX_SLOTS) {
+        ds4_v100_stage_scheduler_close(sched);
+        return scheduler_errorf_u32(err,
+                                    errlen,
+                                    "kv_active_slots must be in [1,%u]",
+                                    DS4_V100_SCHED_MAX_SLOTS);
+    }
     sched->model_map = opts->model_map;
     sched->model_size = opts->model_size;
     sched->raw_cap = opts->raw_cap ? opts->raw_cap : DS4_V100_SWA_ROWS;
@@ -569,7 +640,7 @@ int ds4_v100_stage_scheduler_open(ds4_v100_stage_scheduler **out,
     ds4_v100_context_options_init(&ctx_opts);
     ctx_opts.pack_index_path = opts->pack_index_path;
     ctx_opts.kv_ctx_tokens = opts->kv_ctx_tokens ? opts->kv_ctx_tokens : 1048576;
-    ctx_opts.kv_active_slots = 1;
+    ctx_opts.kv_active_slots = sched->active_slots;
     if (ds4_v100_context_open(&sched->ctx, &ctx_opts, err, errlen) ||
         ds4_pack_open(&sched->pack, opts->pack_index_path, err, errlen)) {
         ds4_v100_stage_scheduler_close(sched);
@@ -637,36 +708,163 @@ int ds4_v100_stage_scheduler_open(ds4_v100_stage_scheduler **out,
     }
 
     for (int layer = sched->stage.layer_begin; layer <= sched->stage.layer_end; layer++) {
-        if (ds4_v100_layer_state_init(&sched->states[layer], sched->ctx, layer, err, errlen) ||
-            alloc_layer_cache(sched, layer, err, errlen)) {
+        if (ds4_v100_layer_state_init(&sched->states[layer], sched->ctx, layer, err, errlen)) {
             ds4_v100_stage_scheduler_close(sched);
             return 1;
+        }
+        for (uint32_t slot = 0; slot < sched->active_slots; slot++) {
+            if (alloc_layer_cache(sched, layer, slot, err, errlen)) {
+                ds4_v100_stage_scheduler_close(sched);
+                return 1;
+            }
         }
     }
 
     const uint64_t hc_bytes =
         (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS * sizeof(float);
-    sched->hc_a = ds4_gpu_tensor_alloc(hc_bytes);
-    sched->hc_b = ds4_gpu_tensor_alloc(hc_bytes);
-    if (!sched->hc_a || !sched->hc_b) {
-        ds4_v100_stage_scheduler_close(sched);
-        return scheduler_error(err, errlen, "failed to allocate scheduler HC tensors");
+    for (uint32_t slot = 0; slot < sched->active_slots; slot++) {
+        sched->hc_a[slot] = ds4_gpu_tensor_alloc(hc_bytes);
+        sched->hc_b[slot] = ds4_gpu_tensor_alloc(hc_bytes);
+        if (!sched->hc_a[slot] || !sched->hc_b[slot]) {
+            ds4_v100_stage_scheduler_close(sched);
+            return scheduler_errorf(err, errlen, "failed to allocate scheduler HC slot %d",
+                                    (int)slot);
+        }
+        sched->cur_hc[slot] = sched->hc_a[slot];
     }
-    sched->cur_hc = sched->hc_a;
     *out = sched;
     return 0;
 }
 
-int ds4_v100_stage_scheduler_decode_token(ds4_v100_stage_scheduler *sched,
-                                          uint32_t token,
-                                          uint32_t position,
-                                          ds4_v100_stage_scheduler_report *report,
-                                          char *err,
-                                          size_t errlen) {
+static int scheduler_validate_batch_args(const ds4_v100_stage_scheduler *sched,
+                                         const uint32_t *tokens,
+                                         const uint32_t *positions,
+                                         uint32_t n_slots,
+                                         char *err,
+                                         size_t errlen) {
+    if (!sched) return scheduler_error(err, errlen, "missing scheduler");
+    if (!tokens || !positions) return scheduler_error(err, errlen, "missing scheduler batch inputs");
+    if (n_slots == 0 || n_slots > sched->active_slots) {
+        return scheduler_errorf_u32(err,
+                                    errlen,
+                                    "batch slots must be in [1,active_slots], got %u",
+                                    n_slots);
+    }
+    if (n_slots > DS4_V100_SCHED_MAX_SLOTS) {
+        return scheduler_errorf_u32(err,
+                                    errlen,
+                                    "batch slots exceed scheduler max: %u",
+                                    n_slots);
+    }
+    return 0;
+}
+
+int ds4_v100_stage_scheduler_decode_hc_batch(
+    ds4_v100_stage_scheduler *sched,
+    const uint32_t *tokens,
+    const uint32_t *positions,
+    uint32_t n_slots,
+    ds4_v100_stage_scheduler_report *reports,
+    char *err,
+    size_t errlen) {
+    if (scheduler_validate_batch_args(sched, tokens, positions, n_slots, err, errlen)) return 1;
+    if (!ds4_gpu_set_device(sched->stage.gpu)) {
+        return scheduler_errorf(err, errlen, "failed to set scheduler device gpu%d",
+                                sched->stage.gpu);
+    }
+
+    ds4_gpu_tensor *cur[DS4_V100_SCHED_MAX_SLOTS];
+    ds4_gpu_tensor *next[DS4_V100_SCHED_MAX_SLOTS];
+    ds4_v100_layer_execute_report last[DS4_V100_SCHED_MAX_SLOTS];
+    memset(last, 0, sizeof(last));
+    for (uint32_t slot = 0; slot < n_slots; slot++) {
+        if (!sched->cur_hc[slot]) {
+            return scheduler_errorf(err, errlen, "missing scheduler HC input for slot %d",
+                                    (int)slot);
+        }
+        cur[slot] = sched->cur_hc[slot];
+        next[slot] = cur[slot] == sched->hc_a[slot] ? sched->hc_b[slot] : sched->hc_a[slot];
+    }
+
+    uint32_t executed = 0;
+    for (int layer = sched->stage.layer_begin; layer <= sched->stage.layer_end; layer++) {
+        for (uint32_t slot = 0; slot < n_slots; slot++) {
+            scheduler_layer_cache *lc = scheduler_cache_slot(sched, layer, slot);
+            if (!lc) {
+                return scheduler_errorf(err, errlen, "missing decode cache for layer %d",
+                                        layer);
+            }
+            ds4_v100_layer_execute_config cfg = {
+                .model_map = sched->model_map,
+                .model_size = sched->model_size,
+                .arena = sched->arena,
+                .router_token = tokens[slot],
+                .position = positions[slot],
+                .decode_cache = &lc->cache,
+                .fp8_kv_cache = sched->fp8_kv_cache,
+            };
+            memset(&last[slot], 0, sizeof(last[slot]));
+            if (ds4_v100_layer_execute_hc_decode(&sched->states[layer],
+                                                 &cfg,
+                                                 cur[slot],
+                                                 next[slot],
+                                                 &last[slot],
+                                                 err,
+                                                 errlen)) {
+                return 1;
+            }
+            ds4_gpu_tensor *tmp = cur[slot];
+            cur[slot] = next[slot];
+            next[slot] = tmp;
+        }
+        executed++;
+    }
+    for (uint32_t slot = 0; slot < n_slots; slot++) {
+        sched->cur_hc[slot] = cur[slot];
+        if (reports) {
+            ds4_v100_stage_scheduler_report *r = &reports[slot];
+            memset(r, 0, sizeof(*r));
+            r->stage_id = sched->stage.stage_id;
+            r->gpu = sched->stage.gpu;
+            r->first_layer = sched->stage.layer_begin;
+            r->last_layer = sched->stage.layer_end;
+            r->layers_executed = executed;
+            r->position = positions[slot];
+            r->token = tokens[slot];
+            r->arena_bytes = ds4_gpu_arena_bytes(sched->arena);
+            r->uploaded_tensors = sched->uploaded_tensors;
+            r->uploaded_bytes = sched->uploaded_bytes;
+            r->last_layer_report = last[slot];
+        }
+    }
+    return 0;
+}
+
+int ds4_v100_stage_scheduler_decode_hc(ds4_v100_stage_scheduler *sched,
+                                       uint32_t token,
+                                       uint32_t position,
+                                       ds4_v100_stage_scheduler_report *report,
+                                       char *err,
+                                       size_t errlen) {
+    const uint32_t tokens[1] = { token };
+    const uint32_t positions[1] = { position };
+    return ds4_v100_stage_scheduler_decode_hc_batch(
+        sched, tokens, positions, 1, report, err, errlen);
+}
+
+int ds4_v100_stage_scheduler_decode_token_batch(
+    ds4_v100_stage_scheduler *sched,
+    const uint32_t *tokens,
+    const uint32_t *positions,
+    uint32_t n_slots,
+    ds4_v100_stage_scheduler_report *reports,
+    char *err,
+    size_t errlen) {
     if (!sched) return scheduler_error(err, errlen, "missing scheduler");
     if (!sched->stage.owns_token_embedding) {
         return scheduler_error(err, errlen, "decode-token requires token-embedding stage");
     }
+    if (scheduler_validate_batch_args(sched, tokens, positions, n_slots, err, errlen)) return 1;
     if (!ds4_gpu_set_device(sched->stage.gpu)) {
         return scheduler_errorf(err, errlen, "failed to set scheduler device gpu%d",
                                 sched->stage.gpu);
@@ -676,19 +874,36 @@ int ds4_v100_stage_scheduler_decode_token(ds4_v100_stage_scheduler *sched,
         return scheduler_error(err, errlen, "token embedding shape does not match HC width");
     }
     const uint32_t n_vocab = (uint32_t)sched->token_embedding.shape[1];
-    if (token >= n_vocab) return scheduler_error(err, errlen, "token outside embedding vocab");
-    if (!ds4_gpu_embed_token_hc_tensor(sched->hc_a,
-                                       sched->model_map,
-                                       sched->model_size,
-                                       sched->token_embedding.source_offset,
-                                       n_vocab,
-                                       token,
-                                       DS4_V100_HC_COLS,
-                                       DS4_V100_HC_ROWS)) {
-        return scheduler_error(err, errlen, "token embedding HC seed failed");
+    for (uint32_t slot = 0; slot < n_slots; slot++) {
+        const uint32_t token = tokens[slot];
+        if (token >= n_vocab) return scheduler_error(err, errlen, "token outside embedding vocab");
+        if (!ds4_gpu_embed_token_hc_tensor(sched->hc_a[slot],
+                                           sched->model_map,
+                                           sched->model_size,
+                                           sched->token_embedding.source_offset,
+                                           n_vocab,
+                                           token,
+                                           DS4_V100_HC_COLS,
+                                           DS4_V100_HC_ROWS)) {
+            return scheduler_errorf(err, errlen, "token embedding HC seed failed for slot %d",
+                                    (int)slot);
+        }
+        sched->cur_hc[slot] = sched->hc_a[slot];
     }
-    sched->cur_hc = sched->hc_a;
-    return ds4_v100_stage_scheduler_decode_hc(sched, token, position, report, err, errlen);
+    return ds4_v100_stage_scheduler_decode_hc_batch(
+        sched, tokens, positions, n_slots, reports, err, errlen);
+}
+
+int ds4_v100_stage_scheduler_decode_token(ds4_v100_stage_scheduler *sched,
+                                          uint32_t token,
+                                          uint32_t position,
+                                          ds4_v100_stage_scheduler_report *report,
+                                          char *err,
+                                          size_t errlen) {
+    const uint32_t tokens[1] = { token };
+    const uint32_t positions[1] = { position };
+    return ds4_v100_stage_scheduler_decode_token_batch(
+        sched, tokens, positions, 1, report, err, errlen);
 }
 
 int ds4_v100_stage_scheduler_decode_token_checkpoints(
@@ -701,6 +916,12 @@ int ds4_v100_stage_scheduler_decode_token_checkpoints(
     char *err,
     size_t errlen) {
     if (!sched) return scheduler_error(err, errlen, "missing scheduler");
+    if (sched->active_slots != 1) {
+        return scheduler_errorf_u32(err,
+                                    errlen,
+                                    "checkpoint decode currently requires active_slots=1, got %u",
+                                    sched->active_slots);
+    }
     if (!sched->stage.owns_token_embedding) {
         return scheduler_error(err, errlen, "decode-token requires token-embedding stage");
     }
@@ -714,7 +935,7 @@ int ds4_v100_stage_scheduler_decode_token_checkpoints(
     }
     const uint32_t n_vocab = (uint32_t)sched->token_embedding.shape[1];
     if (token >= n_vocab) return scheduler_error(err, errlen, "token outside embedding vocab");
-    if (!ds4_gpu_embed_token_hc_tensor(sched->hc_a,
+    if (!ds4_gpu_embed_token_hc_tensor(sched->hc_a[0],
                                        sched->model_map,
                                        sched->model_size,
                                        sched->token_embedding.source_offset,
@@ -724,7 +945,7 @@ int ds4_v100_stage_scheduler_decode_token_checkpoints(
                                        DS4_V100_HC_ROWS)) {
         return scheduler_error(err, errlen, "token embedding HC seed failed");
     }
-    sched->cur_hc = sched->hc_a;
+    sched->cur_hc[0] = sched->hc_a[0];
     if (checkpoint_fn) {
         const uint64_t hc_bytes =
             (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS * sizeof(float);
@@ -735,7 +956,7 @@ int ds4_v100_stage_scheduler_decode_token_checkpoints(
             .kind = DS4_V100_HC_CHECKPOINT_SEED,
             .position = position,
             .token = token,
-            .hc = sched->cur_hc,
+            .hc = sched->cur_hc[0],
             .hc_bytes = hc_bytes,
         };
         if (checkpoint_fn(&cp, checkpoint_user, err, errlen)) return 1;
@@ -750,36 +971,40 @@ int ds4_v100_stage_scheduler_decode_token_checkpoints(
                                                           errlen);
 }
 
+int ds4_v100_stage_scheduler_handoff_batch(ds4_v100_stage_scheduler *dst,
+                                           const ds4_v100_stage_scheduler *src,
+                                           uint32_t n_slots,
+                                           char *err,
+                                           size_t errlen) {
+    if (!dst || !src) {
+        return scheduler_error(err, errlen, "missing scheduler handoff endpoint");
+    }
+    if (n_slots == 0 || n_slots > dst->active_slots || n_slots > src->active_slots) {
+        return scheduler_errorf_u32(err,
+                                    errlen,
+                                    "handoff slots must be in [1,active_slots], got %u",
+                                    n_slots);
+    }
+    const uint64_t hc_bytes =
+        (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS * sizeof(float);
+    for (uint32_t slot = 0; slot < n_slots; slot++) {
+        if (!src->cur_hc[slot] || !dst->hc_a[slot]) {
+            return scheduler_errorf(err, errlen, "missing handoff HC slot %d", (int)slot);
+        }
+        if (!ds4_gpu_tensor_copy(dst->hc_a[slot], 0, src->cur_hc[slot], 0, hc_bytes)) {
+            return scheduler_errorf(err, errlen, "scheduler HC handoff copy failed for slot %d",
+                                    (int)slot);
+        }
+        dst->cur_hc[slot] = dst->hc_a[slot];
+    }
+    return 0;
+}
+
 int ds4_v100_stage_scheduler_handoff(ds4_v100_stage_scheduler *dst,
                                      const ds4_v100_stage_scheduler *src,
                                      char *err,
                                      size_t errlen) {
-    if (!dst || !src || !src->cur_hc || !dst->hc_a) {
-        return scheduler_error(err, errlen, "missing scheduler handoff endpoint");
-    }
-    const uint64_t hc_bytes =
-        (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS * sizeof(float);
-    if (!ds4_gpu_tensor_copy(dst->hc_a, 0, src->cur_hc, 0, hc_bytes)) {
-        return scheduler_error(err, errlen, "scheduler HC handoff copy failed");
-    }
-    dst->cur_hc = dst->hc_a;
-    return 0;
-}
-
-int ds4_v100_stage_scheduler_decode_hc(ds4_v100_stage_scheduler *sched,
-                                       uint32_t token,
-                                       uint32_t position,
-                                       ds4_v100_stage_scheduler_report *report,
-                                       char *err,
-                                       size_t errlen) {
-    return ds4_v100_stage_scheduler_decode_hc_checkpoints(sched,
-                                                          token,
-                                                          position,
-                                                          report,
-                                                          NULL,
-                                                          NULL,
-                                                          err,
-                                                          errlen);
+    return ds4_v100_stage_scheduler_handoff_batch(dst, src, 1, err, errlen);
 }
 
 int ds4_v100_stage_scheduler_decode_hc_checkpoints(
@@ -791,17 +1016,27 @@ int ds4_v100_stage_scheduler_decode_hc_checkpoints(
     void *checkpoint_user,
     char *err,
     size_t errlen) {
-    if (!sched || !sched->cur_hc) return scheduler_error(err, errlen, "missing scheduler HC input");
+    if (!sched || !sched->cur_hc[0]) {
+        return scheduler_error(err, errlen, "missing scheduler HC input");
+    }
+    if (sched->active_slots != 1) {
+        return scheduler_errorf_u32(err,
+                                    errlen,
+                                    "checkpoint decode currently requires active_slots=1, got %u",
+                                    sched->active_slots);
+    }
     if (!ds4_gpu_set_device(sched->stage.gpu)) {
         return scheduler_errorf(err, errlen, "failed to set scheduler device gpu%d",
                                 sched->stage.gpu);
     }
-    ds4_gpu_tensor *cur = sched->cur_hc;
-    ds4_gpu_tensor *next = cur == sched->hc_a ? sched->hc_b : sched->hc_a;
+    ds4_gpu_tensor *cur = sched->cur_hc[0];
+    ds4_gpu_tensor *next = cur == sched->hc_a[0] ? sched->hc_b[0] : sched->hc_a[0];
     ds4_v100_layer_execute_report last;
     memset(&last, 0, sizeof(last));
     uint32_t executed = 0;
     for (int layer = sched->stage.layer_begin; layer <= sched->stage.layer_end; layer++) {
+        scheduler_layer_cache *lc = scheduler_cache_slot(sched, layer, 0);
+        if (!lc) return scheduler_errorf(err, errlen, "missing decode cache for layer %d", layer);
         scheduler_layer_checkpoint_user layer_checkpoint_user = {
             .sched = sched,
             .checkpoint_fn = checkpoint_fn,
@@ -815,7 +1050,7 @@ int ds4_v100_stage_scheduler_decode_hc_checkpoints(
             .arena = sched->arena,
             .router_token = token,
             .position = position,
-            .decode_cache = &sched->caches[layer].cache,
+            .decode_cache = &lc->cache,
             .fp8_kv_cache = sched->fp8_kv_cache,
             .checkpoint_layer = layer,
             .checkpoint_fn = checkpoint_fn ? scheduler_layer_checkpoint : NULL,
@@ -852,7 +1087,7 @@ int ds4_v100_stage_scheduler_decode_hc_checkpoints(
             if (checkpoint_fn(&cp, checkpoint_user, err, errlen)) return 1;
         }
     }
-    sched->cur_hc = cur;
+    sched->cur_hc[0] = cur;
     if (report) {
         memset(report, 0, sizeof(*report));
         report->stage_id = sched->stage.stage_id;
@@ -873,11 +1108,11 @@ int ds4_v100_stage_scheduler_decode_hc_checkpoints(
 int ds4_v100_stage_scheduler_read_hc(const ds4_v100_stage_scheduler *sched,
                                      void *dst,
                                      uint64_t bytes) {
-    if (!sched || !sched->cur_hc || !dst) return 0;
+    if (!sched || !sched->cur_hc[0] || !dst) return 0;
     const uint64_t hc_bytes =
         (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS * sizeof(float);
     if (bytes > hc_bytes) return 0;
-    return ds4_gpu_tensor_read(sched->cur_hc, 0, dst, bytes);
+    return ds4_gpu_tensor_read(sched->cur_hc[0], 0, dst, bytes);
 }
 
 int ds4_v100_stage_scheduler_read_token_embedding_f32(
@@ -919,13 +1154,13 @@ int ds4_v100_stage_scheduler_read_token_embedding_f32(
 int ds4_v100_stage_scheduler_write_hc(ds4_v100_stage_scheduler *sched,
                                       const void *src,
                                       uint64_t bytes) {
-    if (!sched || !sched->hc_a || !src) return 0;
+    if (!sched || !sched->hc_a[0] || !src) return 0;
     const uint64_t hc_bytes =
         (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS * sizeof(float);
     if (bytes != hc_bytes) return 0;
     if (!ds4_gpu_set_device(sched->stage.gpu)) return 0;
-    if (!ds4_gpu_tensor_write(sched->hc_a, 0, src, bytes)) return 0;
-    sched->cur_hc = sched->hc_a;
+    if (!ds4_gpu_tensor_write(sched->hc_a[0], 0, src, bytes)) return 0;
+    sched->cur_hc[0] = sched->hc_a[0];
     return 1;
 }
 
@@ -968,13 +1203,15 @@ static void insert_topk(uint32_t *tokens,
     }
 }
 
-int ds4_v100_stage_scheduler_select_topk(ds4_v100_stage_scheduler *sched,
-                                         uint32_t *tokens,
-                                         float *out_logits,
-                                         uint32_t k,
-                                         char *err,
-                                         size_t errlen) {
-    if (!sched || !sched->cur_hc || !tokens || !out_logits || k == 0) {
+int ds4_v100_stage_scheduler_select_topk_slot(ds4_v100_stage_scheduler *sched,
+                                              uint32_t slot,
+                                              uint32_t *tokens,
+                                              float *out_logits,
+                                              uint32_t k,
+                                              char *err,
+                                              size_t errlen) {
+    if (!sched || slot >= sched->active_slots || !sched->cur_hc[slot] ||
+        !tokens || !out_logits || k == 0) {
         return scheduler_error(err, errlen, "missing scheduler output-head input");
     }
     for (uint32_t i = 0; i < k; i++) {
@@ -1024,7 +1261,7 @@ int ds4_v100_stage_scheduler_select_topk(ds4_v100_stage_scheduler *sched,
     }
 
     if (!ds4_gpu_rms_norm_plain_tensor(hc_norm,
-                                       sched->cur_hc,
+                                       sched->cur_hc[slot],
                                        (uint32_t)hc_values,
                                        1.0e-6f) ||
         !ds4_gpu_matmul_f32_tensor(head_pre,
@@ -1044,7 +1281,7 @@ int ds4_v100_stage_scheduler_select_topk(ds4_v100_stage_scheduler *sched,
                                           DS4_V100_HC_ROWS,
                                           1.0e-6f) ||
         !ds4_gpu_hc_weighted_sum_tensor(output_embd,
-                                        sched->cur_hc,
+                                        sched->cur_hc[slot],
                                         head_weights,
                                         DS4_V100_HC_COLS,
                                         DS4_V100_HC_ROWS) ||
@@ -1085,23 +1322,42 @@ done:
     return rc;
 }
 
-int ds4_v100_stage_scheduler_select_token(ds4_v100_stage_scheduler *sched,
-                                          uint32_t *token,
-                                          float *logit,
-                                          char *err,
-                                          size_t errlen) {
+int ds4_v100_stage_scheduler_select_topk(ds4_v100_stage_scheduler *sched,
+                                         uint32_t *tokens,
+                                         float *out_logits,
+                                         uint32_t k,
+                                         char *err,
+                                         size_t errlen) {
+    return ds4_v100_stage_scheduler_select_topk_slot(sched, 0, tokens, out_logits, k, err, errlen);
+}
+
+int ds4_v100_stage_scheduler_select_token_slot(ds4_v100_stage_scheduler *sched,
+                                               uint32_t slot,
+                                               uint32_t *token,
+                                               float *logit,
+                                               char *err,
+                                               size_t errlen) {
     if (!token) return scheduler_error(err, errlen, "missing selected-token output");
     uint32_t top_token = UINT32_MAX;
     float top_logit = 0.0f;
-    int rc = ds4_v100_stage_scheduler_select_topk(sched,
-                                                  &top_token,
-                                                  &top_logit,
-                                                  1,
-                                                  err,
-                                                  errlen);
+    int rc = ds4_v100_stage_scheduler_select_topk_slot(sched,
+                                                       slot,
+                                                       &top_token,
+                                                       &top_logit,
+                                                       1,
+                                                       err,
+                                                       errlen);
     if (rc == 0) {
         *token = top_token;
         if (logit) *logit = top_logit;
     }
     return rc;
+}
+
+int ds4_v100_stage_scheduler_select_token(ds4_v100_stage_scheduler *sched,
+                                          uint32_t *token,
+                                          float *logit,
+                                          char *err,
+                                          size_t errlen) {
+    return ds4_v100_stage_scheduler_select_token_slot(sched, 0, token, logit, err, errlen);
 }

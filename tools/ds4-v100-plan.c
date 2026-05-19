@@ -165,6 +165,8 @@ typedef struct {
     uint32_t slots;
     uint32_t gpus;
     bool mtp;
+    bool json;
+    uint64_t device_total_bytes;
     double reserve_gib;
     double scratch_gib;
     const char *inventory_path;
@@ -464,13 +466,24 @@ static uint64_t layer_kv_bytes(uint32_t il, uint64_t ctx, uint64_t elem_bytes) {
     return b;
 }
 
-static uint64_t comp_state_bytes_for_gpu(uint32_t gpu, uint32_t gpus, uint64_t ctx, uint32_t slots) {
-    uint32_t local_ratio_layers = 0;
-    for (uint32_t il = 0; il < DS4_N_LAYER; il++) {
-        if (layer_device(il, gpus) == (int)gpu && layer_ratio(il) != 0) local_ratio_layers++;
+static uint64_t layer_comp_state_bytes(uint32_t il) {
+    const int ratio = layer_ratio(il);
+    if (ratio == 4) {
+        return 2ull * (2ull * DS4_N_HEAD_DIM) * (2ull * 4ull) * sizeof(float) +
+               2ull * (2ull * DS4_N_INDEXER_HEAD_DIM) * (2ull * 4ull) * sizeof(float);
     }
-    const double aggregate = (double)GiB * ((double)ctx / 1048576.0) * (double)slots;
-    return (uint64_t)(aggregate * ((double)local_ratio_layers / 41.0));
+    if (ratio == 128) {
+        return 2ull * DS4_N_HEAD_DIM * 128ull * sizeof(float);
+    }
+    return 0;
+}
+
+static uint64_t comp_state_bytes_for_gpu(uint32_t gpu, uint32_t gpus) {
+    uint64_t b = 0;
+    for (uint32_t il = 0; il < DS4_N_LAYER; il++) {
+        if (layer_device(il, gpus) == (int)gpu) b += layer_comp_state_bytes(il);
+    }
+    return b;
 }
 
 static uint64_t relay_bytes(uint32_t slots, bool debug_f32) {
@@ -485,7 +498,7 @@ static uint64_t plan_gpu(gpu_plan *p, uint32_t gpu, const options *opt, uint64_t
         p->weights += layer_weight_bytes(il, false);
         p->kv += checked_mul(layer_kv_bytes(il, ctx, 2), slots);
     }
-    p->comp_state = comp_state_bytes_for_gpu(gpu, opt->gpus, ctx, slots);
+    p->comp_state = comp_state_bytes_for_gpu(gpu, opt->gpus);
     p->scratch = (uint64_t)(opt->scratch_gib * (double)GiB);
     p->relay = relay_bytes(slots, false);
     p->globals = global_bytes_for_gpu(gpu, opt->gpus);
@@ -504,13 +517,13 @@ static uint64_t plan_total_no_reserve(const gpu_plan *p) {
 static uint32_t admitted_slots_for_ctx(const options *opt, uint64_t ctx, uint64_t *worst_total_out) {
     uint32_t admitted = 0;
     uint64_t last_worst = 0;
-    for (uint32_t slots = 1; slots <= 64; slots++) {
+    for (uint32_t slots = 1; slots <= 8; slots++) {
         uint64_t worst = 0;
         bool ok = true;
         for (uint32_t gpu = 0; gpu < opt->gpus; gpu++) {
             gpu_plan p;
             const uint64_t total = plan_gpu(&p, gpu, opt, ctx, slots);
-            if (total > 32ULL * GiB) ok = false;
+            if (total > opt->device_total_bytes) ok = false;
             if (total > worst) worst = total;
         }
         if (!ok) break;
@@ -519,6 +532,138 @@ static uint32_t admitted_slots_for_ctx(const options *opt, uint64_t ctx, uint64_
     }
     if (worst_total_out) *worst_total_out = last_worst;
     return admitted;
+}
+
+static uint64_t planned_headroom_after_reserve(uint64_t device_total_bytes,
+                                               uint64_t no_reserve,
+                                               uint64_t reserve) {
+    if (no_reserve > device_total_bytes || reserve > device_total_bytes - no_reserve) return 0;
+    return device_total_bytes - no_reserve - reserve;
+}
+
+static void compute_plan_worst(const options *opt,
+                               uint64_t ctx,
+                               uint32_t slots,
+                               uint64_t *worst_total,
+                               uint32_t *worst_gpu,
+                               bool *fits) {
+    uint64_t worst = 0;
+    uint32_t gpu_at_worst = 0;
+    bool ok = true;
+    for (uint32_t gpu = 0; gpu < opt->gpus; gpu++) {
+        gpu_plan p;
+        const uint64_t total = plan_gpu(&p, gpu, opt, ctx, slots);
+        if (total > opt->device_total_bytes) ok = false;
+        if (total > worst) {
+            worst = total;
+            gpu_at_worst = gpu;
+        }
+    }
+    if (worst_total) *worst_total = worst;
+    if (worst_gpu) *worst_gpu = gpu_at_worst;
+    if (fits) *fits = ok;
+}
+
+static void print_planner_json(const options *opt) {
+    static const uint64_t tiers[] = { 131072ULL, 262144ULL, 524288ULL, 1048576ULL };
+    static const uint32_t target_slots[] = { 1, 2, 4, 8 };
+
+    uint64_t worst = 0;
+    uint32_t worst_gpu = 0;
+    bool fits = false;
+    compute_plan_worst(opt, opt->ctx, opt->slots, &worst, &worst_gpu, &fits);
+
+    printf("{");
+    printf("\"schema\":\"ds4_v100_planner_envelope.v1\",");
+    printf("\"architecture\":\"docs/architecture/DS4-V100-LAYOUT.md\",");
+    printf("\"source_stance\":\"dense_fp8_routed_mxfp4_bf16_embedding_output_f16_kv_first\",");
+    printf("\"vram_bytes_per_gpu\":%" PRIu64 ",", opt->device_total_bytes);
+    printf("\"configured\":{\"ctx_tokens\":%" PRIu64 ",\"slots\":%u,\"gpus\":%u,"
+           "\"mtp\":%s,\"reserve_gib\":%.3f,\"scratch_gib\":%.3f,"
+           "\"fits\":%s,\"worst_gpu\":%u,\"worst_total_bytes\":%" PRIu64 "},",
+           opt->ctx,
+           opt->slots,
+           opt->gpus,
+           opt->mtp ? "true" : "false",
+           opt->reserve_gib,
+           opt->scratch_gib,
+           fits ? "true" : "false",
+           worst_gpu,
+           worst);
+
+    printf("\"configured_gpus\":[");
+    for (uint32_t gpu = 0; gpu < opt->gpus; gpu++) {
+        gpu_plan p;
+        const uint64_t total = plan_gpu(&p, gpu, opt, opt->ctx, opt->slots);
+        const uint64_t no_reserve = plan_total_no_reserve(&p);
+        const uint64_t headroom =
+            planned_headroom_after_reserve(opt->device_total_bytes, no_reserve, p.reserve);
+        if (gpu) printf(",");
+        printf("{\"gpu\":%u,\"weights_bytes\":%" PRIu64 ",\"kv_bytes\":%" PRIu64
+               ",\"comp_state_bytes\":%" PRIu64 ",\"scratch_bytes\":%" PRIu64
+               ",\"relay_bytes\":%" PRIu64 ",\"globals_bytes\":%" PRIu64
+               ",\"mtp_bytes\":%" PRIu64 ",\"reserve_bytes\":%" PRIu64
+               ",\"planned_total_bytes\":%" PRIu64 ",\"headroom_after_reserve_bytes\":%" PRIu64
+               ",\"fits\":%s}",
+               gpu,
+               p.weights,
+               p.kv,
+               p.comp_state,
+               p.scratch,
+               p.relay,
+               p.globals,
+               p.mtp,
+               p.reserve,
+               total,
+               headroom,
+               total <= opt->device_total_bytes ? "true" : "false");
+    }
+    printf("],");
+
+    printf("\"admission_tiers\":[");
+    for (uint32_t i = 0; i < sizeof(tiers) / sizeof(tiers[0]); i++) {
+        uint64_t tier_worst = 0;
+        const uint32_t admitted = admitted_slots_for_ctx(opt, tiers[i], &tier_worst);
+        if (i) printf(",");
+        printf("{\"ctx_tokens\":%" PRIu64 ",\"max_admitted_slots\":%u,"
+               "\"worst_total_bytes_at_max\":%" PRIu64 "}",
+               tiers[i],
+               admitted,
+               tier_worst);
+    }
+    printf("],");
+
+    printf("\"target_matrix\":[");
+    bool first = true;
+    for (uint32_t i = 0; i < sizeof(tiers) / sizeof(tiers[0]); i++) {
+        uint64_t tier_worst = 0;
+        const uint32_t admitted = admitted_slots_for_ctx(opt, tiers[i], &tier_worst);
+        (void)tier_worst;
+        for (uint32_t j = 0; j < sizeof(target_slots) / sizeof(target_slots[0]); j++) {
+            uint64_t matrix_worst = 0;
+            uint32_t matrix_gpu = 0;
+            bool matrix_fits = false;
+            compute_plan_worst(opt,
+                               tiers[i],
+                               target_slots[j],
+                               &matrix_worst,
+                               &matrix_gpu,
+                               &matrix_fits);
+            if (!first) printf(",");
+            first = false;
+            printf("{\"ctx_tokens\":%" PRIu64 ",\"slots\":%u,\"fits\":%s,"
+                   "\"admitted_by_tier\":%s,\"worst_gpu\":%u,"
+                   "\"worst_total_bytes\":%" PRIu64 "}",
+                   tiers[i],
+                   target_slots[j],
+                   matrix_fits ? "true" : "false",
+                   target_slots[j] <= admitted ? "true" : "false",
+                   matrix_gpu,
+                   matrix_worst);
+        }
+    }
+    printf("]}");
+    printf("\n");
 }
 
 static void print_layer_map(const options *opt) {
@@ -568,9 +713,9 @@ static void print_manifest_schema(void) {
 static void run_planner(const options *opt) {
     printf("DS4 V100 planner\n");
     printf("architecture: docs/architecture/DS4-V100-LAYOUT.md\n");
-    printf("configured: ctx=%" PRIu64 " slots=%u gpus=%u mtp=%s reserve=%.2f GiB scratch=%.2f GiB/GPU\n",
+    printf("configured: ctx=%" PRIu64 " slots=%u gpus=%u mtp=%s device=%.2f GiB reserve=%.2f GiB scratch=%.2f GiB/GPU\n",
            opt->ctx, opt->slots, opt->gpus, opt->mtp ? "on" : "off",
-           opt->reserve_gib, opt->scratch_gib);
+           as_gib(opt->device_total_bytes), opt->reserve_gib, opt->scratch_gib);
     printf("source stance: dense FP8, routed MXFP4, BF16 embedding/output, F16 KV first\n");
 
     print_layer_map(opt);
@@ -583,16 +728,19 @@ static void run_planner(const options *opt) {
     for (uint32_t gpu = 0; gpu < opt->gpus; gpu++) {
         gpu_plan p;
         const uint64_t total = plan_gpu(&p, gpu, opt, opt->ctx, opt->slots);
-        if (total > 32ULL * GiB) fits = false;
+        if (total > opt->device_total_bytes) fits = false;
         if (total > worst) worst = total;
         const uint64_t no_reserve = plan_total_no_reserve(&p);
-        const uint64_t headroom = no_reserve > 32ULL * GiB ? 0 : 32ULL * GiB - no_reserve - p.reserve;
+        const uint64_t headroom =
+            planned_headroom_after_reserve(opt->device_total_bytes, no_reserve, p.reserve);
         printf("| gpu%u | %.2f | %.2f | %.2f | %.2f | %.3f | %.2f | %.2f | %.2f | %.2f | %.2f |\n",
                gpu,
                as_gib(p.weights), as_gib(p.kv), as_gib(p.comp_state),
                as_gib(p.scratch), as_gib(p.relay), as_gib(p.globals),
                as_gib(p.mtp), as_gib(p.reserve), as_gib(total),
-               total <= 32ULL * GiB ? as_gib(headroom) : -as_gib(total - 32ULL * GiB));
+               total <= opt->device_total_bytes
+                   ? as_gib(headroom)
+                   : -as_gib(total - opt->device_total_bytes));
     }
 
     printf("\nAdmission by context tier, F16 KV\n");
@@ -615,7 +763,7 @@ static void run_planner(const options *opt) {
         gpu_plan p;
         const uint64_t total = plan_gpu(&p, gpu, opt, opt->ctx, opt->slots);
         const uint64_t expanded = total - p.weights + int8_weights;
-        if (expanded > 32ULL * GiB) int8_fits = false;
+        if (expanded > opt->device_total_bytes) int8_fits = false;
         if (expanded > int8_worst) int8_worst = expanded;
     }
     printf("\nINT8-expanded routed-expert warning: worst configured GPU would be %.2f GiB; %s.\n",
@@ -627,7 +775,9 @@ static void run_planner(const options *opt) {
     print_manifest_schema();
 
     printf("\nVerdict: %s\n", fits ? "SHIP-ready planner baseline" : "STOP for configured overfill");
-    printf("Worst configured GPU total including reserve: %.2f GiB / 32.00 GiB\n", as_gib(worst));
+    printf("Worst configured GPU total including reserve: %.2f GiB / %.2f GiB\n",
+           as_gib(worst),
+           as_gib(opt->device_total_bytes));
 }
 
 static const char *family_name(tensor_family family) {
@@ -994,8 +1144,10 @@ static void usage(FILE *fp) {
         "  --slots N               Configured slots for plan. Default: 4\n"
         "  --gpus N                Visible GPUs. Default: 8\n"
         "  --mtp on|off            Include rough MTP bytes on final GPU. Default: off\n"
+        "  --device-total-bytes N   Per-GPU memory capacity. Default: 32 GiB\n"
         "  --reserve-gib F         Reserve per GPU after planned allocations. Default: 4.0\n"
         "  --scratch-gib F         Scratch per GPU. Default: 1.0\n"
+        "  --json                  Emit machine-readable slot/context envelope JSON\n"
         "\n"
         "Inventory options:\n"
         "  --inventory FILE        Parse GGUF tensor directory and print dtype/family summary\n"
@@ -1013,6 +1165,7 @@ int main(int argc, char **argv) {
         .slots = 4,
         .gpus = 8,
         .mtp = false,
+        .device_total_bytes = 32ULL * GiB,
         .reserve_gib = 4.0,
         .scratch_gib = 1.0,
     };
@@ -1033,10 +1186,14 @@ int main(int argc, char **argv) {
             if (!strcmp(v, "on")) opt.mtp = true;
             else if (!strcmp(v, "off")) opt.mtp = false;
             else die("--mtp must be on or off");
+        } else if (!strcmp(arg, "--device-total-bytes") && i + 1 < argc) {
+            opt.device_total_bytes = parse_u64_arg(argv[++i], "--device-total-bytes");
         } else if (!strcmp(arg, "--reserve-gib") && i + 1 < argc) {
             opt.reserve_gib = parse_double_arg(argv[++i], "--reserve-gib");
         } else if (!strcmp(arg, "--scratch-gib") && i + 1 < argc) {
             opt.scratch_gib = parse_double_arg(argv[++i], "--scratch-gib");
+        } else if (!strcmp(arg, "--json")) {
+            opt.json = true;
         } else if (!strcmp(arg, "--inventory") && i + 1 < argc) {
             opt.inventory_path = argv[++i];
         } else if (!strcmp(arg, "--inventory-tsv") && i + 1 < argc) {
@@ -1051,12 +1208,20 @@ int main(int argc, char **argv) {
 
     if (opt.gpus == 0 || opt.gpus > 8) die("--gpus must be in 1..8");
     if (opt.slots == 0) die("--slots must be positive");
+    if (opt.device_total_bytes == 0) die("--device-total-bytes must be positive");
     if (opt.reserve_gib < 0.0 || opt.scratch_gib < 0.0) die("reserve/scratch must be non-negative");
     if ((opt.inventory_tsv || opt.manifest_path) && !opt.inventory_path) {
         die("--inventory-tsv and --manifest require --inventory");
     }
+    if (opt.json && opt.inventory_path) {
+        die("--json cannot be combined with --inventory");
+    }
 
-    run_planner(&opt);
+    if (opt.json) {
+        print_planner_json(&opt);
+    } else {
+        run_planner(&opt);
+    }
     if (opt.inventory_path) {
         run_inventory(opt.inventory_path, opt.inventory_tsv, opt.manifest_path, opt.gpus);
     }

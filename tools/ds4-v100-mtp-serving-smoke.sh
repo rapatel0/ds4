@@ -183,7 +183,7 @@ trap cleanup EXIT
 
 server_max_requests=$((requests + 5))
 
-./tools/ds4-v100-replay \
+DS4_LOCK_FILE="$work_dir/ds4.lock" ./tools/ds4-v100-replay \
     --serve \
     --model "$model" \
     --mtp-model "$mtp_model" \

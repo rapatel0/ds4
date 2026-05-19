@@ -1,0 +1,13 @@
+schema\tds4_v100_slot_context_envelope.v1
+model\t/models/DSv4-Flash-256e-fixed.gguf
+pack_index\tdocs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv
+planner_ctx\t1048576
+planner_slots\t8
+smoke_slots\t2
+smoke_ctx\t1048576
+active_microbatch\t1
+queue_policy\treject-busy
+requests\t2
+reject_ctx\t32
+reject_tokens\t64
+status\tPASS

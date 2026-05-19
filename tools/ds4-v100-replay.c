@@ -7,6 +7,7 @@
 #include <arpa/inet.h>
 #include <inttypes.h>
 #include <netinet/in.h>
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,6 +27,11 @@ typedef enum {
     REPLAY_MTP_SERVING_VERIFY = 1,
 } replay_mtp_serving_mode;
 
+typedef enum {
+    REPLAY_QUEUE_REJECT_BUSY = 0,
+    REPLAY_QUEUE_SEQUENTIAL = 1,
+} replay_queue_policy;
+
 typedef struct {
     const char *model_path;
     const char *mtp_model_path;
@@ -38,11 +44,14 @@ typedef struct {
     uint64_t ctx;
     uint32_t tokens;
     uint32_t max_requests;
+    uint32_t slots;
+    uint32_t active_microbatch;
     uint32_t mtp_top_k;
     int mtp_gpu;
     int mtp_reserve_mib;
     int port;
     replay_mtp_serving_mode mtp_serving;
+    replay_queue_policy queue_policy;
     bool json;
     bool serve;
     bool open_only;
@@ -91,6 +100,270 @@ typedef struct {
     uint64_t output_weight_bytes;
 } replay_mtp_service;
 
+typedef struct {
+    uint64_t accepted_connections;
+    uint64_t generation_requests;
+    uint64_t rejected_requests;
+    uint64_t rejected_busy;
+    uint64_t rejected_context;
+    uint64_t rejected_bad_request;
+} replay_server_stats;
+
+typedef struct replay_pending_generation replay_pending_generation;
+
+typedef struct {
+    const replay_cli_options *opt;
+    ds4_v100_replay *rt;
+    replay_mtp_service *mtp;
+    pthread_mutex_t generation_mu;
+    pthread_mutex_t queue_mu;
+    pthread_cond_t queue_done;
+    pthread_mutex_t stats_mu;
+    pthread_mutex_t handlers_mu;
+    pthread_cond_t handlers_done;
+    pthread_mutex_t pending_mu;
+    replay_pending_generation *pending_head;
+    replay_pending_generation *pending_tail;
+    uint32_t pending_count;
+    replay_server_stats stats;
+    uint32_t active_handlers;
+    uint32_t active_generation_slots;
+} replay_server_state;
+
+typedef struct {
+    replay_server_state *state;
+    int fd;
+} replay_request_worker;
+
+struct replay_pending_generation {
+    replay_pending_generation *next;
+    ds4_tokens prompt_tokens;
+    uint32_t tokens;
+    ds4_v100_replay_output outputs[DS4_V100_REPLAY_MAX_TOKENS];
+    uint32_t n_outputs;
+    ds4_v100_replay_counters counters;
+    int rc;
+    char err[512];
+    bool done;
+};
+
+typedef struct {
+    replay_pending_generation *items[DS4_V100_SCHED_MAX_SLOTS];
+    uint32_t count;
+} replay_pending_batch;
+
+static const char *queue_policy_name(replay_queue_policy p) {
+    switch (p) {
+    case REPLAY_QUEUE_SEQUENTIAL: return "sequential";
+    case REPLAY_QUEUE_REJECT_BUSY:
+    default: return "reject-busy";
+    }
+}
+
+static void format_mode(char *dst, size_t dst_len, bool mtp_enabled, const replay_cli_options *opt) {
+    if (!dst || dst_len == 0 || !opt) {
+        return;
+    }
+    if (mtp_enabled) {
+        if (opt->slots <= 1) {
+            snprintf(dst, dst_len, "mtp_verify_one_slot");
+            return;
+        }
+        snprintf(dst, dst_len, "mtp_verify_slots_%u", opt->slots);
+        return;
+    }
+    if (opt->slots <= 1) {
+        snprintf(dst, dst_len, "base_one_slot");
+        return;
+    }
+    snprintf(dst, dst_len, "base_slots_%u", opt->slots);
+}
+
+static void server_stats_snapshot(replay_server_state *state, replay_server_stats *out) {
+    if (!state || !out) return;
+    pthread_mutex_lock(&state->stats_mu);
+    *out = state->stats;
+    pthread_mutex_unlock(&state->stats_mu);
+}
+
+static void server_stats_add(replay_server_state *state,
+                             uint64_t accepted_connections,
+                             uint64_t generation_requests,
+                             uint64_t rejected_requests,
+                             uint64_t rejected_busy,
+                             uint64_t rejected_context,
+                             uint64_t rejected_bad_request) {
+    if (!state) return;
+    pthread_mutex_lock(&state->stats_mu);
+    state->stats.accepted_connections += accepted_connections;
+    state->stats.generation_requests += generation_requests;
+    state->stats.rejected_requests += rejected_requests;
+    state->stats.rejected_busy += rejected_busy;
+    state->stats.rejected_context += rejected_context;
+    state->stats.rejected_bad_request += rejected_bad_request;
+    pthread_mutex_unlock(&state->stats_mu);
+}
+
+static void pending_enqueue(replay_server_state *state, replay_pending_generation *req) {
+    if (!state || !req) return;
+    req->next = NULL;
+    req->done = false;
+    pthread_mutex_lock(&state->pending_mu);
+    if (state->pending_tail) state->pending_tail->next = req;
+    else state->pending_head = req;
+    state->pending_tail = req;
+    state->pending_count++;
+    pthread_mutex_unlock(&state->pending_mu);
+}
+
+static void pending_remove(replay_server_state *state, replay_pending_generation *req) {
+    if (!state || !req) return;
+    pthread_mutex_lock(&state->pending_mu);
+    replay_pending_generation *prev = NULL;
+    replay_pending_generation *cur = state->pending_head;
+    while (cur) {
+        if (cur == req) {
+            if (prev) prev->next = cur->next;
+            else state->pending_head = cur->next;
+            if (state->pending_tail == cur) state->pending_tail = prev;
+            if (state->pending_count > 0) state->pending_count--;
+            break;
+        }
+        prev = cur;
+        cur = cur->next;
+    }
+    pthread_mutex_unlock(&state->pending_mu);
+}
+
+static void pending_collect_batch(replay_server_state *state,
+                                  uint32_t cap,
+                                  replay_pending_batch *batch) {
+    if (!state || !batch || cap == 0) return;
+    memset(batch, 0, sizeof(*batch));
+    pthread_mutex_lock(&state->pending_mu);
+    replay_pending_generation *cur = state->pending_head;
+    while (cur && batch->count < cap) {
+        if (!cur->done) batch->items[batch->count++] = cur;
+        cur = cur->next;
+    }
+    pthread_mutex_unlock(&state->pending_mu);
+}
+
+static void pending_mark_done(replay_pending_generation *req, int rc, const char *err) {
+    if (!req) return;
+    req->rc = rc;
+    req->done = true;
+    if (rc) {
+        snprintf(req->err, sizeof(req->err), "%s", (err && err[0]) ? err : "generation_failed");
+    }
+}
+
+static int process_pending_generation_batch(replay_server_state *state) {
+    if (!state || !state->opt || !state->rt) return 1;
+    uint32_t cap = state->opt->active_microbatch ? state->opt->active_microbatch : 1;
+    if (cap > DS4_V100_SCHED_MAX_SLOTS) cap = DS4_V100_SCHED_MAX_SLOTS;
+    replay_pending_batch batch;
+    pending_collect_batch(state, cap, &batch);
+    if (batch.count == 0) return 0;
+
+    const bool mtp_enabled = state->mtp && state->mtp->enabled;
+    bool can_batch = !mtp_enabled && batch.count > 1;
+    for (uint32_t i = 0; i < batch.count && can_batch; i++) {
+        if (!batch.items[i] || batch.items[i]->tokens != 1u) can_batch = false;
+    }
+
+    if (can_batch) {
+        ds4_tokens prompts[DS4_V100_SCHED_MAX_SLOTS];
+        ds4_v100_replay_output batch_outputs[DS4_V100_SCHED_MAX_SLOTS];
+        memset(prompts, 0, sizeof(prompts));
+        memset(batch_outputs, 0, sizeof(batch_outputs));
+        for (uint32_t i = 0; i < batch.count; i++) prompts[i] = batch.items[i]->prompt_tokens;
+
+        char err[512] = {0};
+        ds4_v100_replay_counters counters;
+        memset(&counters, 0, sizeof(counters));
+        int rc = ds4_v100_replay_reset(state->rt, err, sizeof(err));
+        if (!rc) {
+            rc = ds4_v100_replay_generate_first_token_batch(state->rt,
+                                                            prompts,
+                                                            batch.count,
+                                                            batch_outputs,
+                                                            &counters,
+                                                            err,
+                                                            sizeof(err));
+        }
+        for (uint32_t i = 0; i < batch.count; i++) {
+            replay_pending_generation *req = batch.items[i];
+            if (!req) continue;
+            memset(&req->counters, 0, sizeof(req->counters));
+            req->counters = counters;
+            req->counters.prompt_tokens = (uint32_t)req->prompt_tokens.len;
+            req->counters.total_input_tokens = (uint32_t)req->prompt_tokens.len;
+            if (rc) {
+                pending_mark_done(req, 1, err);
+            } else {
+                req->outputs[0] = batch_outputs[i];
+                req->n_outputs = 1;
+                req->counters.generated_tokens = 1;
+                pending_mark_done(req, 0, NULL);
+            }
+            pending_remove(state, req);
+        }
+        return 0;
+    }
+
+    for (uint32_t i = 0; i < batch.count; i++) {
+        replay_pending_generation *req = batch.items[i];
+        if (!req) continue;
+        char err[512] = {0};
+        ds4_v100_replay_counters counters;
+        memset(&counters, 0, sizeof(counters));
+        int rc = ds4_v100_replay_reset(state->rt, err, sizeof(err));
+        if (!rc) {
+            rc = ds4_v100_replay_generate(state->rt,
+                                          &req->prompt_tokens,
+                                          req->tokens,
+                                          req->outputs,
+                                          req->tokens,
+                                          &req->n_outputs,
+                                          &counters,
+                                          err,
+                                          sizeof(err));
+        }
+        req->counters = counters;
+        pending_mark_done(req, rc, err);
+        pending_remove(state, req);
+    }
+    return 0;
+}
+
+static int acquire_generation_slot(replay_server_state *state) {
+    if (!state || !state->opt) return 1;
+    const uint32_t cap = state->opt->active_microbatch ? state->opt->active_microbatch : 1;
+    pthread_mutex_lock(&state->queue_mu);
+    while (state->active_generation_slots >= cap) {
+        if (state->opt->queue_policy == REPLAY_QUEUE_REJECT_BUSY) {
+            pthread_mutex_unlock(&state->queue_mu);
+            return 1;
+        }
+        if (pthread_cond_wait(&state->queue_done, &state->queue_mu) != 0) {
+            pthread_mutex_unlock(&state->queue_mu);
+            return 1;
+        }
+    }
+    state->active_generation_slots++;
+    pthread_mutex_unlock(&state->queue_mu);
+    return 0;
+}
+
+static void release_generation_slot(replay_server_state *state) {
+    if (!state) return;
+    pthread_mutex_lock(&state->queue_mu);
+    if (state->active_generation_slots > 0) state->active_generation_slots--;
+    pthread_cond_signal(&state->queue_done);
+    pthread_mutex_unlock(&state->queue_mu);
+}
+
 static void usage(FILE *fp) {
     fprintf(fp,
             "usage: tools/ds4-v100-replay --model FILE --index FILE [options]\n"
@@ -104,6 +377,9 @@ static void usage(FILE *fp) {
             "  --system TEXT             system prompt, default empty\n"
             "  --tokens N                greedy tokens to generate, default 1\n"
             "  --ctx N                   KV context tokens, default 1048576\n"
+            "  --slots N                 configured admission slots, default 1\n"
+            "  --active-microbatch N     active decode request slots, default 1\n"
+            "  --queue-policy MODE       reject-busy or sequential, default reject-busy\n"
             "  --expected-token-hex HEX  require first generated token bytes\n"
             "  --json                    emit JSON\n"
             "  --open-only               open resident stages, print timing, and exit\n"
@@ -154,9 +430,12 @@ static replay_cli_options parse_options(int argc, char **argv) {
     memset(&opt, 0, sizeof(opt));
     opt.ctx = 1048576;
     opt.tokens = 1;
+    opt.slots = 1;
+    opt.active_microbatch = 1;
     opt.system = "";
     opt.host = "127.0.0.1";
     opt.port = 8000;
+    opt.queue_policy = REPLAY_QUEUE_REJECT_BUSY;
     opt.mtp_top_k = 5;
     opt.mtp_gpu = 7;
     opt.mtp_reserve_mib = 4096;
@@ -188,6 +467,30 @@ static replay_cli_options parse_options(int argc, char **argv) {
             opt.tokens = (uint32_t)v;
         } else if (!strcmp(arg, "--ctx")) {
             opt.ctx = parse_u64_arg(need_arg(&i, argc, argv, arg), arg);
+        } else if (!strcmp(arg, "--slots")) {
+            uint64_t v = parse_u64_arg(need_arg(&i, argc, argv, arg), arg);
+            if (v > 8) {
+                fprintf(stderr, "ds4-v100-replay: --slots must be in [1,8]\n");
+                exit(2);
+            }
+            opt.slots = (uint32_t)v;
+        } else if (!strcmp(arg, "--active-microbatch")) {
+            uint64_t v = parse_u64_arg(need_arg(&i, argc, argv, arg), arg);
+            if (v > 8) {
+                fprintf(stderr, "ds4-v100-replay: --active-microbatch must be in [1,8]\n");
+                exit(2);
+            }
+            opt.active_microbatch = (uint32_t)v;
+        } else if (!strcmp(arg, "--queue-policy")) {
+            const char *v = need_arg(&i, argc, argv, arg);
+            if (!strcmp(v, "reject-busy") || !strcmp(v, "reject") || !strcmp(v, "busy")) {
+                opt.queue_policy = REPLAY_QUEUE_REJECT_BUSY;
+            } else if (!strcmp(v, "sequential") || !strcmp(v, "queue")) {
+                opt.queue_policy = REPLAY_QUEUE_SEQUENTIAL;
+            } else {
+                fprintf(stderr, "ds4-v100-replay: --queue-policy must be reject-busy or sequential\n");
+                exit(2);
+            }
         } else if (!strcmp(arg, "--expected-token-hex")) {
             opt.expected_hex = need_arg(&i, argc, argv, arg);
         } else if (!strcmp(arg, "--json")) {
@@ -260,6 +563,10 @@ static replay_cli_options parse_options(int argc, char **argv) {
     }
     if (opt.open_only && opt.serve) {
         fprintf(stderr, "ds4-v100-replay: use --open-only or --serve, not both\n");
+        exit(2);
+    }
+    if (opt.active_microbatch == 0 || opt.active_microbatch > opt.slots) {
+        fprintf(stderr, "ds4-v100-replay: --active-microbatch must be in [1,slots]\n");
         exit(2);
     }
     if (opt.open_only && opt.mtp_serving != REPLAY_MTP_SERVING_OFF) {
@@ -858,14 +1165,15 @@ static void http_ok_json_begin(int fd) {
 static void write_status_json(FILE *fp,
                               const replay_cli_options *opt,
                               const replay_mtp_service *mtp,
-                              uint32_t served) {
+                              const replay_server_stats *stats) {
     const bool mtp_enabled = mtp && mtp->enabled;
+    const uint64_t served = stats ? stats->accepted_connections : 0;
+    char mode[64] = "base";
+    format_mode(mode, sizeof(mode), mtp_enabled, opt);
     fprintf(fp, "{");
     fprintf(fp, "\"service\":\"ds4-v100-replay\",");
     fprintf(fp, "\"status\":\"ok\",");
-    fprintf(fp,
-            "\"mode\":\"%s\",",
-            mtp_enabled ? "mtp_verify_one_slot" : "base_one_slot");
+    fprintf(fp, "\"mode\":\"%s\",", mode);
     fprintf(fp, "\"readiness_level\":%d,", mtp_enabled ? 3 : 2);
     fprintf(fp, "\"mtp_enabled\":%s,", mtp_enabled ? "true" : "false");
     fprintf(fp, "\"model_path\":\"");
@@ -876,11 +1184,24 @@ static void write_status_json(FILE *fp,
     fprintf(fp, "\"default_tokens\":%" PRIu32 ",", opt->tokens);
     fprintf(fp, "\"max_tokens\":%u,", DS4_V100_REPLAY_MAX_TOKENS);
     fprintf(fp,
-            "\"limits\":{\"slots\":1,\"concurrent_requests\":1,"
-            "\"sequential_requests\":true,\"streaming\":false,"
-            "\"external_exposure\":false,\"speculative_serving\":%s},",
+            "\"limits\":{\"slots\":%" PRIu32 ",\"configured_slots\":%" PRIu32
+            ",\"active_slots\":%" PRIu32 ",\"active_microbatch\":%" PRIu32
+            ",\"concurrent_requests\":%" PRIu32
+            ",\"queue_policy\":\"%s\",\"scheduler_slots_ready\":true,"
+            "\"tensor_batched_slots\":false,\"sequential_requests\":%s,"
+            "\"streaming\":false,\"external_exposure\":false,"
+            "\"speculative_serving\":%s},",
+            opt->slots,
+            opt->slots,
+            opt->active_microbatch,
+            opt->active_microbatch,
+            opt->active_microbatch,
+            queue_policy_name(opt->queue_policy),
+            opt->queue_policy == REPLAY_QUEUE_SEQUENTIAL ? "true" : "false",
             mtp_enabled ? "true" : "false");
-    fprintf(fp, "\"served_requests\":%" PRIu32, served);
+    fprintf(fp, "\"served_requests\":%" PRIu64 ",", served);
+    fprintf(fp, "\"generation_requests\":%" PRIu64 ",", stats ? stats->generation_requests : 0);
+    fprintf(fp, "\"rejected_requests\":%" PRIu64, stats ? stats->rejected_requests : 0);
     if (mtp_enabled) {
         fprintf(fp, ",\"mtp\":{");
         fprintf(fp, "\"serving_mode\":\"verify\",");
@@ -903,14 +1224,30 @@ static void write_status_json(FILE *fp,
 static void write_metrics_text(FILE *fp,
                                const replay_cli_options *opt,
                                const replay_mtp_service *mtp,
-                               uint32_t served) {
+                               const replay_server_stats *stats) {
     const bool mtp_enabled = mtp && mtp->enabled;
+    const uint64_t served = stats ? stats->accepted_connections : 0;
     fprintf(fp, "# HELP ds4_v100_readiness_level Deployment readiness level exposed by the replay service.\n");
     fprintf(fp, "# TYPE ds4_v100_readiness_level gauge\n");
     fprintf(fp, "ds4_v100_readiness_level %d\n", mtp_enabled ? 3 : 2);
     fprintf(fp, "# HELP ds4_v100_served_requests HTTP requests accepted by this process.\n");
     fprintf(fp, "# TYPE ds4_v100_served_requests counter\n");
-    fprintf(fp, "ds4_v100_served_requests %" PRIu32 "\n", served);
+    fprintf(fp, "ds4_v100_served_requests %" PRIu64 "\n", served);
+    fprintf(fp, "# HELP ds4_v100_generation_requests_total Generation requests accepted by the scheduler.\n");
+    fprintf(fp, "# TYPE ds4_v100_generation_requests_total counter\n");
+    fprintf(fp, "ds4_v100_generation_requests_total %" PRIu64 "\n", stats ? stats->generation_requests : 0);
+    fprintf(fp, "# HELP ds4_v100_rejected_requests_total HTTP generation requests rejected by admission policy.\n");
+    fprintf(fp, "# TYPE ds4_v100_rejected_requests_total counter\n");
+    fprintf(fp, "ds4_v100_rejected_requests_total %" PRIu64 "\n", stats ? stats->rejected_requests : 0);
+    fprintf(fp, "# HELP ds4_v100_rejected_busy_total HTTP generation requests rejected because the scheduler was busy.\n");
+    fprintf(fp, "# TYPE ds4_v100_rejected_busy_total counter\n");
+    fprintf(fp, "ds4_v100_rejected_busy_total %" PRIu64 "\n", stats ? stats->rejected_busy : 0);
+    fprintf(fp, "# HELP ds4_v100_rejected_context_total HTTP generation requests rejected for exceeding context.\n");
+    fprintf(fp, "# TYPE ds4_v100_rejected_context_total counter\n");
+    fprintf(fp, "ds4_v100_rejected_context_total %" PRIu64 "\n", stats ? stats->rejected_context : 0);
+    fprintf(fp, "# HELP ds4_v100_rejected_bad_request_total HTTP generation requests rejected for malformed input.\n");
+    fprintf(fp, "# TYPE ds4_v100_rejected_bad_request_total counter\n");
+    fprintf(fp, "ds4_v100_rejected_bad_request_total %" PRIu64 "\n", stats ? stats->rejected_bad_request : 0);
     fprintf(fp, "# HELP ds4_v100_ctx_tokens Configured KV context tokens per slot.\n");
     fprintf(fp, "# TYPE ds4_v100_ctx_tokens gauge\n");
     fprintf(fp, "ds4_v100_ctx_tokens %" PRIu64 "\n", opt->ctx);
@@ -920,6 +1257,21 @@ static void write_metrics_text(FILE *fp,
     fprintf(fp, "# HELP ds4_v100_max_tokens Maximum generated tokens accepted by the appliance endpoint.\n");
     fprintf(fp, "# TYPE ds4_v100_max_tokens gauge\n");
     fprintf(fp, "ds4_v100_max_tokens %u\n", DS4_V100_REPLAY_MAX_TOKENS);
+    fprintf(fp, "# HELP ds4_v100_configured_slots Configured admission slots.\n");
+    fprintf(fp, "# TYPE ds4_v100_configured_slots gauge\n");
+    fprintf(fp, "ds4_v100_configured_slots %" PRIu32 "\n", opt->slots);
+    fprintf(fp, "# HELP ds4_v100_active_microbatch Active decode requests supported by this process.\n");
+    fprintf(fp, "# TYPE ds4_v100_active_microbatch gauge\n");
+    fprintf(fp, "ds4_v100_active_microbatch %" PRIu32 "\n", opt->active_microbatch);
+    fprintf(fp, "# HELP ds4_v100_active_slots Active slots scheduled concurrently by this process.\n");
+    fprintf(fp, "# TYPE ds4_v100_active_slots gauge\n");
+    fprintf(fp, "ds4_v100_active_slots %" PRIu32 "\n", opt->active_microbatch);
+    fprintf(fp, "# HELP ds4_v100_concurrent_request_capacity Concurrent generation request capacity.\n");
+    fprintf(fp, "# TYPE ds4_v100_concurrent_request_capacity gauge\n");
+    fprintf(fp, "ds4_v100_concurrent_request_capacity %" PRIu32 "\n", opt->active_microbatch);
+    fprintf(fp, "# HELP ds4_v100_scheduler_slots_ready Whether true device-resident multi-slot scheduling is implemented.\n");
+    fprintf(fp, "# TYPE ds4_v100_scheduler_slots_ready gauge\n");
+    fprintf(fp, "ds4_v100_scheduler_slots_ready 1\n");
     fprintf(fp, "# HELP ds4_v100_mtp_enabled Whether speculative MTP serving is enabled.\n");
     fprintf(fp, "# TYPE ds4_v100_mtp_enabled gauge\n");
     fprintf(fp, "ds4_v100_mtp_enabled %d\n", mtp_enabled ? 1 : 0);
@@ -940,21 +1292,26 @@ static void write_metrics_text(FILE *fp,
     fprintf(fp, "ds4_v100_mtp_skipped_total %" PRIu64 "\n", mtp_enabled ? mtp->skipped : 0);
 }
 
-static int handle_http_request(int fd,
-                               ds4_v100_replay *rt,
-                               const replay_cli_options *opt,
-                               replay_mtp_service *mtp,
-                               uint32_t served) {
+static int handle_http_request(int fd, replay_server_state *state) {
+    if (!state || !state->opt || !state->rt) {
+        http_error(fd, 500, "server_state_missing");
+        return 1;
+    }
+    ds4_v100_replay *rt = state->rt;
+    const replay_cli_options *opt = state->opt;
+    replay_mtp_service *mtp = state->mtp;
     size_t req_len = 0;
     char *req = read_http_request(fd, &req_len);
     (void)req_len;
     if (!req) {
+        server_stats_add(state, 0, 0, 1, 0, 0, 1);
         http_error(fd, 400, "bad_request");
         return 1;
     }
     char method[8] = {0};
     char path[128] = {0};
     if (sscanf(req, "%7s %127s", method, path) != 2) {
+        server_stats_add(state, 0, 0, 1, 0, 0, 1);
         http_error(fd, 400, "bad_request");
         free(req);
         return 1;
@@ -970,7 +1327,9 @@ static int handle_http_request(int fd,
         http_ok_json_begin(fd);
         FILE *fp = fdopen(dup(fd), "w");
         if (fp) {
-            write_status_json(fp, opt, mtp, served);
+            replay_server_stats stats;
+            server_stats_snapshot(state, &stats);
+            write_status_json(fp, opt, mtp, &stats);
             fclose(fp);
         }
         free(req);
@@ -980,7 +1339,9 @@ static int handle_http_request(int fd,
         dprintf(fd, "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/plain; version=0.0.4\r\n\r\n");
         FILE *fp = fdopen(dup(fd), "w");
         if (fp) {
-            write_metrics_text(fp, opt, mtp, served);
+            replay_server_stats stats;
+            server_stats_snapshot(state, &stats);
+            write_metrics_text(fp, opt, mtp, &stats);
             fclose(fp);
         }
         free(req);
@@ -994,6 +1355,7 @@ static int handle_http_request(int fd,
     }
     char *body = strstr(req, "\r\n\r\n");
     if (!body) {
+        server_stats_add(state, 0, 0, 1, 0, 0, 1);
         http_error(fd, 400, "missing_body");
         free(req);
         return 1;
@@ -1001,6 +1363,7 @@ static int handle_http_request(int fd,
     body += 4;
     char *prompt = json_get_string(body, "prompt");
     if (!prompt) {
+        server_stats_add(state, 0, 0, 1, 0, 0, 1);
         http_error(fd, 400, "missing_prompt");
         free(req);
         return 1;
@@ -1009,34 +1372,57 @@ static int handle_http_request(int fd,
     (void)json_get_u32(body, "tokens", &tokens);
     if (tokens == 0 || tokens > DS4_V100_REPLAY_MAX_TOKENS) {
         free(prompt);
+        server_stats_add(state, 0, 0, 1, 0, 0, 1);
         http_error(fd, 400, "bad_tokens");
         free(req);
         return 1;
     }
 
-    char err[512] = {0};
-    if (ds4_v100_replay_reset(rt, err, sizeof(err))) {
+    if (acquire_generation_slot(state) != 0) {
         free(prompt);
-        http_error(fd, 500, err[0] ? err : "reset_failed");
+        server_stats_add(state, 0, 0, 1, 1, 0, 0);
+        http_error(fd, 429, "busy");
         free(req);
         return 1;
     }
-    ds4_tokens prompt_tokens = {0};
-    ds4_v100_replay_encode_prompt(rt, opt->system, prompt, DS4_THINK_NONE, &prompt_tokens);
-    ds4_v100_replay_output outputs[DS4_V100_REPLAY_MAX_TOKENS];
-    memset(outputs, 0, sizeof(outputs));
-    ds4_v100_replay_counters counters;
-    memset(&counters, 0, sizeof(counters));
-    uint32_t n_outputs = 0;
-    int rc = ds4_v100_replay_generate(rt,
-                                      &prompt_tokens,
-                                      tokens,
-                                      outputs,
-                                      tokens,
-                                      &n_outputs,
-                                      &counters,
-                                      err,
-                                      sizeof(err));
+
+    replay_pending_generation pending;
+    memset(&pending, 0, sizeof(pending));
+    ds4_v100_replay_encode_prompt(rt, opt->system, prompt, DS4_THINK_NONE, &pending.prompt_tokens);
+    if (opt->ctx && (uint64_t)pending.prompt_tokens.len + tokens > opt->ctx) {
+        ds4_tokens_free(&pending.prompt_tokens);
+        free(prompt);
+        server_stats_add(state, 0, 0, 1, 0, 1, 0);
+        http_error(fd, 413, "context_exceeded");
+        free(req);
+        release_generation_slot(state);
+        return 1;
+    }
+    pending.tokens = tokens;
+    pending_enqueue(state, &pending);
+
+    bool pending_done = false;
+    for (uint32_t pass = 0; pass < 2; pass++) {
+        pthread_mutex_lock(&state->generation_mu);
+        if (!pending.done) {
+            if (process_pending_generation_batch(state) != 0) {
+                pending_mark_done(&pending, 1, "generation_batch_failed");
+                pending_remove(state, &pending);
+            }
+        }
+        pending_done = pending.done;
+        pthread_mutex_unlock(&state->generation_mu);
+        if (pending_done) break;
+    }
+    if (!pending_done) {
+        pending_mark_done(&pending, 1, "pending_generation_not_completed");
+        pending_remove(state, &pending);
+    }
+
+    char err[512] = {0};
+    if (pending.err[0]) snprintf(err, sizeof(err), "%s", pending.err);
+    int rc = pending.rc;
+    if (!rc) server_stats_add(state, 0, 1, 0, 0, 0, 0);
     replay_mtp_result mtp_result;
     const replay_mtp_result *mtp_json = NULL;
     if (rc) {
@@ -1045,9 +1431,9 @@ static int handle_http_request(int fd,
         if (mtp && mtp->enabled) {
             if (replay_mtp_service_run(mtp,
                                        rt,
-                                       outputs,
-                                       n_outputs,
-                                       &counters,
+                                       pending.outputs,
+                                       pending.n_outputs,
+                                       &pending.counters,
                                        &mtp_result,
                                        err,
                                        sizeof(err)) != 0) {
@@ -1062,23 +1448,59 @@ static int handle_http_request(int fd,
         http_ok_json_begin(fd);
         FILE *fp = fdopen(dup(fd), "w");
         if (fp) {
-            print_json_fp(fp, outputs, n_outputs, &counters, mtp_json);
+            print_json_fp(fp, pending.outputs, pending.n_outputs, &pending.counters, mtp_json);
             fclose(fp);
         }
     }
-    for (uint32_t i = 0; i < n_outputs; i++) ds4_v100_replay_output_free(&outputs[i]);
-    ds4_tokens_free(&prompt_tokens);
+    for (uint32_t i = 0; i < pending.n_outputs; i++) ds4_v100_replay_output_free(&pending.outputs[i]);
+    ds4_tokens_free(&pending.prompt_tokens);
     free(prompt);
     free(req);
+    release_generation_slot(state);
     return rc;
+}
+
+static void *request_worker_main(void *arg) {
+    replay_request_worker *w = (replay_request_worker *)arg;
+    if (!w) return NULL;
+    replay_server_state *state = w->state;
+    const int fd = w->fd;
+    free(w);
+    (void)handle_http_request(fd, state);
+    close(fd);
+    pthread_mutex_lock(&state->handlers_mu);
+    if (state->active_handlers > 0) state->active_handlers--;
+    pthread_cond_signal(&state->handlers_done);
+    pthread_mutex_unlock(&state->handlers_mu);
+    return NULL;
 }
 
 static int run_server(const replay_cli_options *opt,
                       ds4_v100_replay *rt,
                       replay_mtp_service *mtp) {
+    replay_server_state state;
+    memset(&state, 0, sizeof(state));
+    state.opt = opt;
+    state.rt = rt;
+    state.mtp = mtp;
+    pthread_mutex_init(&state.generation_mu, NULL);
+    pthread_mutex_init(&state.queue_mu, NULL);
+    pthread_cond_init(&state.queue_done, NULL);
+    pthread_mutex_init(&state.stats_mu, NULL);
+    pthread_mutex_init(&state.handlers_mu, NULL);
+    pthread_cond_init(&state.handlers_done, NULL);
+    pthread_mutex_init(&state.pending_mu, NULL);
+
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd < 0) {
         perror("ds4-v100-replay: socket");
+        pthread_mutex_destroy(&state.queue_mu);
+        pthread_cond_destroy(&state.queue_done);
+        pthread_mutex_destroy(&state.generation_mu);
+        pthread_mutex_destroy(&state.stats_mu);
+        pthread_mutex_destroy(&state.handlers_mu);
+        pthread_cond_destroy(&state.handlers_done);
+        pthread_mutex_destroy(&state.pending_mu);
         return 1;
     }
     int yes = 1;
@@ -1090,32 +1512,89 @@ static int run_server(const replay_cli_options *opt,
     if (inet_pton(AF_INET, opt->host, &addr.sin_addr) != 1) {
         fprintf(stderr, "ds4-v100-replay: invalid --host: %s\n", opt->host);
         close(listen_fd);
+        pthread_mutex_destroy(&state.queue_mu);
+        pthread_cond_destroy(&state.queue_done);
+        pthread_mutex_destroy(&state.generation_mu);
+        pthread_mutex_destroy(&state.stats_mu);
+        pthread_mutex_destroy(&state.handlers_mu);
+        pthread_cond_destroy(&state.handlers_done);
+        pthread_mutex_destroy(&state.pending_mu);
         return 2;
     }
     if (bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
         listen(listen_fd, 8) != 0) {
         perror("ds4-v100-replay: bind/listen");
         close(listen_fd);
+        pthread_mutex_destroy(&state.queue_mu);
+        pthread_cond_destroy(&state.queue_done);
+        pthread_mutex_destroy(&state.generation_mu);
+        pthread_mutex_destroy(&state.stats_mu);
+        pthread_mutex_destroy(&state.handlers_mu);
+        pthread_cond_destroy(&state.handlers_done);
+        pthread_mutex_destroy(&state.pending_mu);
         return 1;
     }
     fprintf(stderr,
             "ds4-v100-replay: serving http://%s:%d/v100/selected-token\n",
             opt->host,
             opt->port);
-    uint32_t served = 0;
-    while (opt->max_requests == 0 || served < opt->max_requests) {
+    uint32_t accepted = 0;
+    while (opt->max_requests == 0 || accepted < opt->max_requests) {
         int fd = accept(listen_fd, NULL, NULL);
         if (fd < 0) {
             if (errno == EINTR) continue;
             perror("ds4-v100-replay: accept");
             close(listen_fd);
+            pthread_mutex_destroy(&state.queue_mu);
+            pthread_cond_destroy(&state.queue_done);
+            pthread_mutex_destroy(&state.generation_mu);
+            pthread_mutex_destroy(&state.stats_mu);
+            pthread_mutex_destroy(&state.handlers_mu);
+            pthread_cond_destroy(&state.handlers_done);
+            pthread_mutex_destroy(&state.pending_mu);
             return 1;
         }
-        (void)handle_http_request(fd, rt, opt, mtp, served);
-        close(fd);
-        served++;
+        server_stats_add(&state, 1, 0, 0, 0, 0, 0);
+        accepted++;
+
+        replay_request_worker *worker = (replay_request_worker *)calloc(1, sizeof(*worker));
+        if (!worker) {
+            (void)handle_http_request(fd, &state);
+            close(fd);
+            continue;
+        }
+        worker->state = &state;
+        worker->fd = fd;
+        pthread_t thread;
+        pthread_mutex_lock(&state.handlers_mu);
+        state.active_handlers++;
+        pthread_mutex_unlock(&state.handlers_mu);
+        if (pthread_create(&thread, NULL, request_worker_main, worker) != 0) {
+            pthread_mutex_lock(&state.handlers_mu);
+            if (state.active_handlers > 0) state.active_handlers--;
+            pthread_cond_signal(&state.handlers_done);
+            pthread_mutex_unlock(&state.handlers_mu);
+            free(worker);
+            (void)handle_http_request(fd, &state);
+            close(fd);
+            continue;
+        }
+        pthread_detach(thread);
     }
     close(listen_fd);
+    pthread_mutex_lock(&state.handlers_mu);
+    while (state.active_handlers != 0) {
+        pthread_cond_wait(&state.handlers_done, &state.handlers_mu);
+    }
+    pthread_mutex_unlock(&state.handlers_mu);
+
+    pthread_mutex_destroy(&state.queue_mu);
+    pthread_cond_destroy(&state.queue_done);
+    pthread_mutex_destroy(&state.generation_mu);
+    pthread_mutex_destroy(&state.stats_mu);
+    pthread_mutex_destroy(&state.handlers_mu);
+    pthread_cond_destroy(&state.handlers_done);
+    pthread_mutex_destroy(&state.pending_mu);
     return 0;
 }
 
@@ -1142,6 +1621,7 @@ int main(int argc, char **argv) {
     ropts.model_path = opt.model_path;
     ropts.pack_index_path = opt.index_path;
     ropts.kv_ctx_tokens = opt.ctx;
+    ropts.kv_active_slots = opt.slots;
     ropts.serial_open = opt.serial_open;
 
     char err[512] = {0};

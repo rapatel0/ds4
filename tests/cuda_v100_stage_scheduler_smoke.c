@@ -30,7 +30,7 @@ static void check(int cond, const char *msg) {
 
 static void usage(FILE *fp) {
     fprintf(fp,
-            "usage: tests/cuda_v100_stage_scheduler_smoke --index FILE --model FILE [--stage N] [--token N] [--position N]\n");
+            "usage: tests/cuda_v100_stage_scheduler_smoke --index FILE --model FILE [--stage N] [--token N] [--position N] [--slots N]\n");
 }
 
 static int parse_int_arg(const char *s, const char *name, int max_v) {
@@ -108,6 +108,7 @@ int main(int argc, char **argv) {
     int stage = 0;
     int token = 16;
     int position = 16;
+    int slots = 1;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--index") && i + 1 < argc) {
@@ -120,6 +121,8 @@ int main(int argc, char **argv) {
             token = parse_int_arg(argv[++i], "--token", 200000);
         } else if (!strcmp(argv[i], "--position") && i + 1 < argc) {
             position = parse_int_arg(argv[++i], "--position", 2000000);
+        } else if (!strcmp(argv[i], "--slots") && i + 1 < argc) {
+            slots = parse_int_arg(argv[++i], "--slots", DS4_V100_SCHED_MAX_SLOTS);
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             usage(stdout);
             return 0;
@@ -149,6 +152,7 @@ int main(int argc, char **argv) {
     opts.model_map = model.ptr;
     opts.model_size = model.size;
     opts.stage_id = stage;
+    opts.kv_active_slots = (uint64_t)slots;
 
     char err[512] = {0};
     ds4_v100_stage_scheduler *sched = NULL;
@@ -158,16 +162,34 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    ds4_v100_stage_scheduler_report report;
-    memset(&report, 0, sizeof(report));
+    ds4_v100_stage_scheduler_report reports[DS4_V100_SCHED_MAX_SLOTS];
+    memset(reports, 0, sizeof(reports));
+    const uint32_t n_slots = (uint32_t)slots;
+    uint32_t batch_tokens[DS4_V100_SCHED_MAX_SLOTS];
+    uint32_t batch_positions[DS4_V100_SCHED_MAX_SLOTS];
+    for (uint32_t i = 0; i < n_slots; i++) {
+        batch_tokens[i] = (uint32_t)token;
+        batch_positions[i] = (uint32_t)position;
+    }
     err[0] = '\0';
-    check(ds4_v100_stage_scheduler_decode_token(sched,
-                                                (uint32_t)token,
-                                                (uint32_t)position,
-                                                &report,
-                                                err,
-                                                sizeof(err)) == 0,
-          err[0] ? err : "stage scheduler decode token");
+    if (n_slots == 1) {
+        check(ds4_v100_stage_scheduler_decode_token(sched,
+                                                    (uint32_t)token,
+                                                    (uint32_t)position,
+                                                    &reports[0],
+                                                    err,
+                                                    sizeof(err)) == 0,
+              err[0] ? err : "stage scheduler decode token");
+    } else {
+        check(ds4_v100_stage_scheduler_decode_token_batch(sched,
+                                                          batch_tokens,
+                                                          batch_positions,
+                                                          n_slots,
+                                                          reports,
+                                                          err,
+                                                          sizeof(err)) == 0,
+              err[0] ? err : "stage scheduler decode token batch");
+    }
 
     const uint64_t hc_values = (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS;
     float *hc = (float *)calloc((size_t)hc_values, sizeof(float));
@@ -179,21 +201,24 @@ int main(int argc, char **argv) {
               "stage scheduler HC read");
         expect_finite_nonzero(hc, hc_values, "stage scheduler HC");
     }
-    check(report.layers_executed > 0, "stage executed at least one layer");
-    check(report.last_layer_report.routes == 6, "last layer reported six routes");
+    for (uint32_t i = 0; i < n_slots; i++) {
+        check(reports[i].layers_executed > 0, "stage executed at least one layer");
+        check(reports[i].last_layer_report.routes == 6, "last layer reported six routes");
+    }
 
-    printf("cuda_v100_stage_scheduler_smoke: stage=%d gpu=%d layers=%d-%d executed=%u token=%d pos=%d arena_bytes=%" PRIu64 " uploaded_tensors=%" PRIu64 " uploaded_bytes=%" PRIu64 " expert0=%d %s\n",
-           report.stage_id,
-           report.gpu,
-           report.first_layer,
-           report.last_layer,
-           report.layers_executed,
+    printf("cuda_v100_stage_scheduler_smoke: stage=%d gpu=%d layers=%d-%d executed=%u token=%d pos=%d slots=%u arena_bytes=%" PRIu64 " uploaded_tensors=%" PRIu64 " uploaded_bytes=%" PRIu64 " expert0=%d %s\n",
+           reports[0].stage_id,
+           reports[0].gpu,
+           reports[0].first_layer,
+           reports[0].last_layer,
+           reports[0].layers_executed,
            token,
            position,
-           report.arena_bytes,
-           report.uploaded_tensors,
-           report.uploaded_bytes,
-           report.last_layer_report.selected_experts[0],
+           n_slots,
+           reports[0].arena_bytes,
+           reports[0].uploaded_tensors,
+           reports[0].uploaded_bytes,
+           reports[0].last_layer_report.selected_experts[0],
            failures ? "FAIL" : "ok");
 
     free(hc);

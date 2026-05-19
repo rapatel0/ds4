@@ -15,6 +15,10 @@ extern "C" {
 typedef struct ds4_v100_stage_scheduler ds4_v100_stage_scheduler;
 typedef struct ds4_v100_stage_scheduler_snapshot ds4_v100_stage_scheduler_snapshot;
 
+enum {
+    DS4_V100_SCHED_MAX_SLOTS = 8,
+};
+
 typedef struct {
     const char *pack_index_path;
     const void *model_map;
@@ -26,6 +30,7 @@ typedef struct {
     uint32_t index_comp_cap;
     uint32_t indexer_top_k;
     uint64_t kv_ctx_tokens;
+    uint64_t kv_active_slots;
     bool fp8_kv_cache;
 } ds4_v100_stage_scheduler_options;
 
@@ -99,6 +104,15 @@ int ds4_v100_stage_scheduler_decode_token(ds4_v100_stage_scheduler *sched,
                                           char *err,
                                           size_t errlen);
 
+int ds4_v100_stage_scheduler_decode_token_batch(
+    ds4_v100_stage_scheduler *sched,
+    const uint32_t *tokens,
+    const uint32_t *positions,
+    uint32_t n_slots,
+    ds4_v100_stage_scheduler_report *reports,
+    char *err,
+    size_t errlen);
+
 int ds4_v100_stage_scheduler_decode_token_checkpoints(
     ds4_v100_stage_scheduler *sched,
     uint32_t token,
@@ -114,12 +128,27 @@ int ds4_v100_stage_scheduler_handoff(ds4_v100_stage_scheduler *dst,
                                      char *err,
                                      size_t errlen);
 
+int ds4_v100_stage_scheduler_handoff_batch(ds4_v100_stage_scheduler *dst,
+                                           const ds4_v100_stage_scheduler *src,
+                                           uint32_t n_slots,
+                                           char *err,
+                                           size_t errlen);
+
 int ds4_v100_stage_scheduler_decode_hc(ds4_v100_stage_scheduler *sched,
                                        uint32_t token,
                                        uint32_t position,
                                        ds4_v100_stage_scheduler_report *report,
                                        char *err,
                                        size_t errlen);
+
+int ds4_v100_stage_scheduler_decode_hc_batch(
+    ds4_v100_stage_scheduler *sched,
+    const uint32_t *tokens,
+    const uint32_t *positions,
+    uint32_t n_slots,
+    ds4_v100_stage_scheduler_report *reports,
+    char *err,
+    size_t errlen);
 
 int ds4_v100_stage_scheduler_decode_hc_checkpoints(
     ds4_v100_stage_scheduler *sched,
@@ -154,11 +183,26 @@ int ds4_v100_stage_scheduler_select_topk(ds4_v100_stage_scheduler *sched,
                                          char *err,
                                          size_t errlen);
 
+int ds4_v100_stage_scheduler_select_topk_slot(ds4_v100_stage_scheduler *sched,
+                                              uint32_t slot,
+                                              uint32_t *tokens,
+                                              float *logits,
+                                              uint32_t k,
+                                              char *err,
+                                              size_t errlen);
+
 int ds4_v100_stage_scheduler_select_token(ds4_v100_stage_scheduler *sched,
                                           uint32_t *token,
                                           float *logit,
                                           char *err,
                                           size_t errlen);
+
+int ds4_v100_stage_scheduler_select_token_slot(ds4_v100_stage_scheduler *sched,
+                                               uint32_t slot,
+                                               uint32_t *token,
+                                               float *logit,
+                                               char *err,
+                                               size_t errlen);
 
 #ifdef __cplusplus
 }

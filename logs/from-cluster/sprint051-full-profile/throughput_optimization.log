@@ -1,0 +1,20 @@
+schema	ds4_v100_throughput_optimization.v1
+model	/models/DSv4-Flash-256e-fixed.gguf
+pack_index	docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv
+ctx	1048576
+tokens	2
+serial_open_ms	340319.732
+serial_open_stage_ms	[24188.675,48492.503,47490.572,42719.561,55502.141,50074.584,45204.809,26620.645]
+parallel_open_ms	61280.339
+parallel_open_stage_ms	[61248.700,55837.006,60414.031,43255.622,44432.008,10295.973,10661.098,7689.451]
+speedup	5.553490
+min_speedup	1.05
+replay_open_ms	55592.653
+prompt_replay_ms	3799.258
+continuation_decode_ms	144.671
+continuation_tokens_per_second	6.912252
+generated_tokens_per_second	0.506108
+first_token_hex	3136
+expected_token_hex	3136
+verdict	PASS
+ds4-v100-throughput-bench: serial_open_ms=340319.732 parallel_open_ms=61280.339 speedup=5.553490 continuation_tps=6.912252 first_hex=3136 PASS

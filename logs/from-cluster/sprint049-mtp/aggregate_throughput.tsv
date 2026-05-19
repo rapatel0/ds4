@@ -1,0 +1,9 @@
+schema	ds4_v100_aggregate_throughput.v1
+model	/models/DSv4-Flash-256e-fixed.gguf
+pack_index	docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv
+expected_token_hex	3136
+requests_per_case	4
+
+ctx	slots	policy	mode	status_200	status_other	errors	token_match	token_mismatch	mtp_attempted	mtp_accepted	latency_avg_ms	latency_p50_ms	latency_p95_ms	latency_p99_ms	elapsed_s	aggregate_tokens_per_second
+1048576	2	sequential	off	4	0	0	4	0	0	0	5375.428	6046.421	6724.824	6724.917	12.093958	0.661487
+1048576	2	sequential	verify	4	0	0	4	0	4	4	5149.150	5812.510	6313.708	6313.921	11.628535	0.687963

@@ -1,0 +1,21 @@
+kv_view	layer	2	stage	0	gpu	0	arena_bytes	1378516992	view_total	671432704	raw_offset	524288	comp_offset	1572864	state_offset	1377304576
+kv_update	layers	2,3	status	ok
+cuda_v100_context_smoke: devices=8 stages=8 production=1
+device	0	cc	7.0	mem	34072559616	pci	0000:1A:00.0
+device	1	cc	7.0	mem	34072559616	pci	0000:1B:00.0
+device	2	cc	7.0	mem	34072559616	pci	0000:3D:00.0
+device	3	cc	7.0	mem	34072559616	pci	0000:3E:00.0
+device	4	cc	7.0	mem	34072559616	pci	0000:88:00.0
+device	5	cc	7.0	mem	34072559616	pci	0000:89:00.0
+device	6	cc	7.0	mem	34072559616	pci	0000:B2:00.0
+device	7	cc	7.0	mem	34072559616	pci	0000:B3:00.0
+p2p_from\to	0	1	2	3	4	5	6	7
+0	1	1	1	1	1	1	1	1
+1	1	1	1	1	1	1	1	1
+2	1	1	1	1	1	1	1	1
+3	1	1	1	1	1	1	1	1
+4	1	1	1	1	1	1	1	1
+5	1	1	1	1	1	1	1	1
+6	1	1	1	1	1	1	1	1
+7	1	1	1	1	1	1	1	1
+cuda_v100_context_smoke: ok

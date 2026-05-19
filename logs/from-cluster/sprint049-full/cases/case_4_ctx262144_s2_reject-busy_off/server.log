@@ -1,0 +1,2 @@
+ds4-v100-replay: serving http://127.0.0.1:18163/v100/selected-token
+ds4: CUDA loading model tensors into device cache

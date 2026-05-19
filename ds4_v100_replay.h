@@ -21,6 +21,7 @@ typedef struct {
     uint32_t attn_comp_cap;
     uint32_t index_comp_cap;
     uint32_t indexer_top_k;
+    uint64_t kv_active_slots;
     bool fp8_kv_cache;
     bool serial_open;
 } ds4_v100_replay_options;
@@ -84,6 +85,15 @@ int ds4_v100_replay_generate(ds4_v100_replay *rt,
                              ds4_v100_replay_counters *counters,
                              char *err,
                              size_t errlen);
+
+int ds4_v100_replay_generate_first_token_batch(
+    ds4_v100_replay *rt,
+    const ds4_tokens *prompts,
+    uint32_t n_prompts,
+    ds4_v100_replay_output *outputs,
+    ds4_v100_replay_counters *counters,
+    char *err,
+    size_t errlen);
 
 int ds4_v100_replay_read_token_embedding_f32(ds4_v100_replay *rt,
                                              uint32_t token,

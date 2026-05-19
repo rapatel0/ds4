@@ -1,0 +1,2 @@
+ds4-v100-mtp-serving-smoke: request=1 prompt_tokens=18 generated_tokens=2 first_token=926 first_hex=3136 mtp_draft_ms=5.172 accepted=true ok
+ds4-v100-mtp-serving-smoke: health=ok status=ok metrics=ok requests=1 prompt_tokens=18 generated_tokens=2 first_token=926 first_hex=3136 mtp_accepted=1 ok
