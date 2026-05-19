@@ -1,0 +1,5 @@
+HTTP/1.1 200 OK
+Connection: close
+Content-Type: application/json
+
+{"prompt_tokens":18,"generated_tokens":2,"total_input_tokens":19,"tokens":[{"id":926,"logit":35.250885,"text":"16","text_hex":"3136"},{"id":1,"logit":39.3052406,"text":"<｜end▁of▁sentence｜>","text_hex":"3cefbd9c656e64e296816f66e2968173656e74656e6365efbd9c3e"}],"timing_ms":{"open_total":236983.424,"prompt_replay":2618.431,"continuation_decode":144.388,"output_head":5.680,"token_text":0.013,"total":2768.525,"prompt_tokens_per_second":6.874347,"continuation_tokens_per_second":6.925786,"generated_tokens_per_second":0.722406,"stage_decode":[367.754,369.155,369.851,369.763,369.173,307.996,389.729,215.679],"handoff":[0.559,0.556,0.502,0.457,0.496,0.540,0.609],"open_stage":[25360.615,35359.594,41470.499,40598.752,35997.477,19361.460,21570.579,17243.963]},"memory":{"uploaded_tensors":1328,"uploaded_bytes":156142862684,"arena_bytes":[22524134668,21494393612,21494393612,21494393612,21494393612,17922654732,17901334540,11817197824]}}

@@ -116,6 +116,7 @@ if [ -n "$mtp_model" ]; then
     targets+=(tools/ds4-v100-mtp-attn-smoke)
     if [ -n "$pack_index" ]; then
         targets+=(tools/ds4-v100-mtp-logits-smoke)
+        targets+=(tools/ds4-v100-mtp-forward-smoke)
     fi
 fi
 
@@ -161,6 +162,7 @@ mtp_q4k_ready=0
 mtp_ffn_ready=0
 mtp_attn_ready=0
 mtp_logits_ready=0
+mtp_forward_ready=0
 
 run_gate() {
     local name="$1"
@@ -285,8 +287,23 @@ if [ -n "$mtp_model" ]; then
             if run_gate "mtp_logits" ./tools/ds4-v100-mtp-logits-smoke "${mtp_logits_args[@]}"; then
                 mtp_logits_ready=1
             fi
+            mtp_forward_args=(
+                --model "$model"
+                --mtp-model "$mtp_model"
+                --pack-index "$pack_index"
+                --gpu 7
+                --require-gpus 8
+                --reserve-mib 4096
+            )
+            if [ -n "$log_dir" ]; then
+                mtp_forward_args+=(--report "$log_dir/mtp_forward.report")
+            fi
+            if run_gate "mtp_forward" ./tools/ds4-v100-mtp-forward-smoke "${mtp_forward_args[@]}"; then
+                mtp_forward_ready=1
+            fi
         else
             echo "gate	mtp_logits	SKIP	no_pack_index"
+            echo "gate	mtp_forward	SKIP	no_pack_index"
         fi
     fi
 else
@@ -297,6 +314,7 @@ else
     echo "gate	mtp_ffn	SKIP	no_mtp_model"
     echo "gate	mtp_attn	SKIP	no_mtp_model"
     echo "gate	mtp_logits	SKIP	no_mtp_model"
+    echo "gate	mtp_forward	SKIP	no_mtp_model"
 fi
 
 run_gate "source_dtypes" ./tests/cuda_source_dtypes_smoke || true
@@ -442,8 +460,10 @@ if [ -n "$mtp_model" ]; then
         add_missing "mtp_attn"
     elif [ "$mtp_logits_ready" -eq 0 ]; then
         add_missing "mtp_logits"
-    else
+    elif [ "$mtp_forward_ready" -eq 0 ]; then
         add_missing "mtp_forward"
+    else
+        add_missing "mtp_verify"
     fi
 else
     add_missing "mtp"

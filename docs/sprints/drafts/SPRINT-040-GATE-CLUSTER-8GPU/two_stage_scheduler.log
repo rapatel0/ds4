@@ -1,0 +1,2 @@
+ds4: CUDA loading model tensors into device cache
+cuda_v100_two_stage_scheduler_smoke: stage0=0-5 gpu0=0 stage1=6-11 gpu1=1 token=16 pos=16 uploaded0=22524130064 uploaded1=21494389008 expert0=35 expert1=18 ok
