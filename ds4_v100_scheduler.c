@@ -787,14 +787,18 @@ int ds4_v100_stage_scheduler_decode_hc_batch(
     }
 
     uint32_t executed = 0;
+    const bool use_layer_batch = getenv("DS4_V100_BATCH_LAYER_FFN") != NULL;
     for (int layer = sched->stage.layer_begin; layer <= sched->stage.layer_end; layer++) {
+        ds4_v100_layer_execute_config cfgs[DS4_V100_SCHED_MAX_SLOTS];
+        const ds4_gpu_tensor *hidden_hc[DS4_V100_SCHED_MAX_SLOTS];
+        ds4_gpu_tensor *next_hc[DS4_V100_SCHED_MAX_SLOTS];
         for (uint32_t slot = 0; slot < n_slots; slot++) {
             scheduler_layer_cache *lc = scheduler_cache_slot(sched, layer, slot);
             if (!lc) {
                 return scheduler_errorf(err, errlen, "missing decode cache for layer %d",
                                         layer);
             }
-            ds4_v100_layer_execute_config cfg = {
+            cfgs[slot] = (ds4_v100_layer_execute_config) {
                 .model_map = sched->model_map,
                 .model_size = sched->model_size,
                 .arena = sched->arena,
@@ -804,15 +808,34 @@ int ds4_v100_stage_scheduler_decode_hc_batch(
                 .fp8_kv_cache = sched->fp8_kv_cache,
             };
             memset(&last[slot], 0, sizeof(last[slot]));
-            if (ds4_v100_layer_execute_hc_decode(&sched->states[layer],
-                                                 &cfg,
-                                                 cur[slot],
-                                                 next[slot],
-                                                 &last[slot],
-                                                 err,
-                                                 errlen)) {
+            hidden_hc[slot] = cur[slot];
+            next_hc[slot] = next[slot];
+        }
+        if (use_layer_batch && n_slots > 1) {
+            if (ds4_v100_layer_execute_hc_decode_batch(&sched->states[layer],
+                                                       cfgs,
+                                                       hidden_hc,
+                                                       next_hc,
+                                                       n_slots,
+                                                       last,
+                                                       err,
+                                                       errlen)) {
                 return 1;
             }
+        } else {
+            for (uint32_t slot = 0; slot < n_slots; slot++) {
+                if (ds4_v100_layer_execute_hc_decode(&sched->states[layer],
+                                                     &cfgs[slot],
+                                                     cur[slot],
+                                                     next[slot],
+                                                     &last[slot],
+                                                     err,
+                                                     errlen)) {
+                    return 1;
+                }
+            }
+        }
+        for (uint32_t slot = 0; slot < n_slots; slot++) {
             ds4_gpu_tensor *tmp = cur[slot];
             cur[slot] = next[slot];
             next[slot] = tmp;

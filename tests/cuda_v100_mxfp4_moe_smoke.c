@@ -215,6 +215,8 @@ int main(void) {
     float mid_fused[MID];
     float next_ref[HIDDEN];
     float next_fused[HIDDEN];
+    float batch_hidden[2 * HIDDEN];
+    float batch_out[2 * HIDDEN];
     float cpu_logits[VOCAB];
     float gpu_logits[VOCAB];
     if (!payload) {
@@ -299,6 +301,11 @@ int main(void) {
     ds4_gpu_tensor *fused_mid_t = ds4_gpu_tensor_alloc(MID * sizeof(float));
     ds4_gpu_tensor *group_mid_t = ds4_gpu_tensor_alloc((uint64_t)ROUTES * MID * sizeof(float));
     ds4_gpu_tensor *group_out_t = ds4_gpu_tensor_alloc(HIDDEN * sizeof(float));
+    ds4_gpu_tensor *batch_hidden_t = ds4_gpu_tensor_alloc(2ull * HIDDEN * sizeof(float));
+    ds4_gpu_tensor *batch_selected_t = ds4_gpu_tensor_alloc(2ull * ROUTES * sizeof(int32_t));
+    ds4_gpu_tensor *batch_weights_t = ds4_gpu_tensor_alloc(2ull * ROUTES * sizeof(float));
+    ds4_gpu_tensor *batch_mid_t = ds4_gpu_tensor_alloc(2ull * ROUTES * MID * sizeof(float));
+    ds4_gpu_tensor *batch_out_t = ds4_gpu_tensor_alloc(2ull * HIDDEN * sizeof(float));
     ds4_gpu_tensor *route_t = ds4_gpu_tensor_alloc(HIDDEN * sizeof(float));
     ds4_gpu_tensor *fused_next_t = ds4_gpu_tensor_alloc(HIDDEN * sizeof(float));
     ds4_gpu_tensor *accum_a = ds4_gpu_tensor_alloc(HIDDEN * sizeof(float));
@@ -309,12 +316,14 @@ int main(void) {
     ds4_gpu_tensor *weights_t = ds4_gpu_tensor_alloc(ROUTES * sizeof(float));
     ds4_gpu_tensor *logits_t = ds4_gpu_tensor_alloc(VOCAB * sizeof(float));
     check(hidden_t && gate_t && up_t && mid_t && fused_mid_t && group_mid_t && group_out_t &&
+              batch_hidden_t && batch_selected_t && batch_weights_t && batch_mid_t && batch_out_t &&
               route_t && fused_next_t &&
               accum_a && accum_b &&
               router_t && probs_t && selected_t && weights_t && logits_t,
           "tensor allocate");
 
     if (hidden_t && gate_t && up_t && mid_t && fused_mid_t && group_mid_t && group_out_t &&
+        batch_hidden_t && batch_selected_t && batch_weights_t && batch_mid_t && batch_out_t &&
         route_t && fused_next_t &&
         accum_a && accum_b &&
         router_t && probs_t && selected_t && weights_t && logits_t) {
@@ -452,6 +461,53 @@ int main(void) {
         for (uint32_t h = 0; h < HIDDEN; h++) {
             expect_close(next_fused[h], next_ref[h], 1e-4f, "grouped routed");
         }
+        for (uint32_t h = 0; h < HIDDEN; h++) {
+            batch_hidden[h] = hidden[h];
+            batch_hidden[HIDDEN + h] = hidden[h];
+        }
+        int32_t batch_selected[2 * ROUTES];
+        float batch_weights[2 * ROUTES];
+        for (uint32_t k = 0; k < ROUTES; k++) {
+            batch_selected[k] = gpu_selected[k];
+            batch_selected[ROUTES + k] = gpu_selected[k];
+            batch_weights[k] = gpu_weights[k];
+            batch_weights[ROUTES + k] = gpu_weights[k];
+        }
+        check(ds4_gpu_tensor_write(batch_hidden_t, 0, batch_hidden, sizeof(batch_hidden)),
+              "batch hidden upload");
+        check(ds4_gpu_tensor_write(batch_selected_t, 0, batch_selected, sizeof(batch_selected)),
+              "batch selected upload");
+        check(ds4_gpu_tensor_write(batch_weights_t, 0, batch_weights, sizeof(batch_weights)),
+              "batch weights upload");
+        check(ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_batch_f32(
+                  arena,
+                  gate_offset,
+                  gate_expert_bytes * EXPERTS,
+                  up_offset,
+                  gate_expert_bytes * EXPERTS,
+                  down_offset,
+                  down_expert_bytes * EXPERTS,
+                  gate_expert_bytes,
+                  (uint32_t)hidden_row_bytes,
+                  down_expert_bytes,
+                  (uint32_t)mid_row_bytes,
+                  HIDDEN,
+                  MID,
+                  EXPERTS,
+                  batch_selected_t,
+                  batch_weights_t,
+                  ROUTES,
+                  batch_hidden_t,
+                  2,
+                  batch_mid_t,
+                  batch_out_t) == 0,
+              "batched grouped routed mxfp4");
+        check(ds4_gpu_tensor_read(batch_out_t, 0, batch_out, sizeof(batch_out)),
+              "batched grouped routed read");
+        for (uint32_t h = 0; h < HIDDEN; h++) {
+            expect_close(batch_out[h], next_ref[h], 1e-4f, "batched grouped routed slot0");
+            expect_close(batch_out[HIDDEN + h], next_ref[h], 1e-4f, "batched grouped routed slot1");
+        }
 
         ds4_gpu_bf16_matrix_view head_view = {
             .arena_offset = head_offset,
@@ -512,6 +568,11 @@ int main(void) {
     ds4_gpu_tensor_free(accum_a);
     ds4_gpu_tensor_free(fused_next_t);
     ds4_gpu_tensor_free(route_t);
+    ds4_gpu_tensor_free(batch_out_t);
+    ds4_gpu_tensor_free(batch_mid_t);
+    ds4_gpu_tensor_free(batch_weights_t);
+    ds4_gpu_tensor_free(batch_selected_t);
+    ds4_gpu_tensor_free(batch_hidden_t);
     ds4_gpu_tensor_free(group_out_t);
     ds4_gpu_tensor_free(group_mid_t);
     ds4_gpu_tensor_free(fused_mid_t);

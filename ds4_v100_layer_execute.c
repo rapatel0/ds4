@@ -5,6 +5,10 @@
 #include <stdio.h>
 #include <string.h>
 
+enum {
+    DS4_V100_LAYER_MAX_BATCH = 8u,
+};
+
 static int exec_error(char *err, size_t errlen, const char *fmt, ...) {
     if (err && errlen) {
         va_list ap;
@@ -870,6 +874,263 @@ done:
     return rc;
 }
 
+static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
+                                   const ds4_v100_layer_execute_config *cfgs,
+                                   const ds4_gpu_tensor *const *ffn_inputs,
+                                   ds4_gpu_tensor *const *ffn_deltas,
+                                   uint32_t n_slots,
+                                   ds4_v100_layer_execute_report *reports,
+                                   char *err,
+                                   size_t errlen) {
+    if (!state || !cfgs || !ffn_inputs || !ffn_deltas ||
+        n_slots == 0 || n_slots > DS4_V100_LAYER_MAX_BATCH) {
+        return exec_error(err, errlen, "invalid FFN batch inputs");
+    }
+    if (n_slots == 1) {
+        return execute_ffn_delta(state,
+                                 &cfgs[0],
+                                 ffn_inputs[0],
+                                 ffn_deltas[0],
+                                 reports ? &reports[0] : NULL,
+                                 err,
+                                 errlen);
+    }
+
+    const bool hash_mode = state->router_kind == DS4_V100_ROUTER_HASH && state->has_hash_router;
+    const bool bias_mode = state->router_kind == DS4_V100_ROUTER_BIAS && state->has_bias_router;
+    if (!hash_mode && !bias_mode) {
+        return exec_error(err, errlen, "layer executor requires hash or bias router metadata");
+    }
+
+    const uint32_t hidden = state->hidden_size;
+    const uint32_t mid = state->intermediate_size;
+    const uint32_t routes = state->routes_per_token;
+    if (routes == 0 || routes > 6u) {
+        return exec_error(err, errlen, "unsupported route count %u", routes);
+    }
+    for (uint32_t slot = 0; slot < n_slots; slot++) {
+        if (!ffn_inputs[slot] || !ffn_deltas[slot] ||
+            ds4_gpu_tensor_bytes(ffn_inputs[slot]) < (uint64_t)hidden * sizeof(float) ||
+            ds4_gpu_tensor_bytes(ffn_deltas[slot]) < (uint64_t)hidden * sizeof(float)) {
+            return exec_error(err, errlen, "FFN batch tensor is too small");
+        }
+        if (cfgs[slot].arena != cfgs[0].arena ||
+            cfgs[slot].model_map != cfgs[0].model_map ||
+            cfgs[slot].model_size != cfgs[0].model_size) {
+            return exec_error(err, errlen, "FFN batch cfgs must share arena/model");
+        }
+    }
+
+    ds4_gpu_source_row_view router_v;
+    ds4_gpu_source_row_view shared_gate_v;
+    ds4_gpu_source_row_view shared_up_v;
+    ds4_gpu_source_row_view shared_down_v;
+    if (source_view(&state->router, &router_v, err, errlen) ||
+        source_view(&state->shared_gate, &shared_gate_v, err, errlen) ||
+        source_view(&state->shared_up, &shared_up_v, err, errlen) ||
+        source_view(&state->shared_down, &shared_down_v, err, errlen)) {
+        return 1;
+    }
+
+    ds4_gpu_tensor *router_t = ds4_gpu_tensor_alloc((uint64_t)n_slots * 256u * sizeof(float));
+    ds4_gpu_tensor *probs_t = ds4_gpu_tensor_alloc((uint64_t)n_slots * 256u * sizeof(float));
+    ds4_gpu_tensor *selected_t =
+        ds4_gpu_tensor_alloc((uint64_t)n_slots * routes * sizeof(int32_t));
+    ds4_gpu_tensor *weights_t =
+        ds4_gpu_tensor_alloc((uint64_t)n_slots * routes * sizeof(float));
+    ds4_gpu_tensor *tokens_t = ds4_gpu_tensor_alloc((uint64_t)n_slots * sizeof(int32_t));
+    ds4_gpu_tensor *input_batch_t =
+        ds4_gpu_tensor_alloc((uint64_t)n_slots * hidden * sizeof(float));
+    ds4_gpu_tensor *routed_mid_t =
+        ds4_gpu_tensor_alloc((uint64_t)n_slots * routes * mid * sizeof(float));
+    ds4_gpu_tensor *routed_out_t =
+        ds4_gpu_tensor_alloc((uint64_t)n_slots * hidden * sizeof(float));
+    ds4_gpu_tensor *shared_gate_t = ds4_gpu_tensor_alloc((uint64_t)mid * sizeof(float));
+    ds4_gpu_tensor *shared_up_t = ds4_gpu_tensor_alloc((uint64_t)mid * sizeof(float));
+    ds4_gpu_tensor *shared_mid_t = ds4_gpu_tensor_alloc((uint64_t)mid * sizeof(float));
+    ds4_gpu_tensor *shared_t = ds4_gpu_tensor_alloc((uint64_t)hidden * sizeof(float));
+
+    int rc = 1;
+    int32_t tokens[DS4_V100_LAYER_MAX_BATCH] = {0};
+    int32_t selected[DS4_V100_LAYER_MAX_BATCH * 6u] = {0};
+    float weights[DS4_V100_LAYER_MAX_BATCH * 6u] = {0};
+    if (!router_t || !probs_t || !selected_t || !weights_t || !tokens_t ||
+        !input_batch_t || !routed_mid_t || !routed_out_t ||
+        !shared_gate_t || !shared_up_t || !shared_mid_t || !shared_t) {
+        exec_error(err, errlen, "failed to allocate FFN batch tensors");
+        goto done;
+    }
+
+    for (uint32_t slot = 0; slot < n_slots; slot++) {
+        tokens[slot] = (int32_t)cfgs[slot].router_token;
+        if (!ds4_gpu_tensor_copy(input_batch_t,
+                                 (uint64_t)slot * hidden * sizeof(float),
+                                 ffn_inputs[slot],
+                                 0,
+                                 (uint64_t)hidden * sizeof(float))) {
+            exec_error(err, errlen, "FFN batch input copy failed");
+            goto done;
+        }
+        ds4_gpu_tensor *router_view =
+            ds4_gpu_tensor_view(router_t,
+                                (uint64_t)slot * 256u * sizeof(float),
+                                256u * sizeof(float));
+        if (!router_view) {
+            exec_error(err, errlen, "FFN batch router view failed");
+            goto done;
+        }
+        const int router_rc =
+            ds4_gpu_arena_f32_matmul_f32(cfgs[slot].arena,
+                                         &router_v,
+                                         ffn_inputs[slot],
+                                         router_view);
+        ds4_gpu_tensor_free(router_view);
+        if (router_rc != 0) {
+            exec_error(err, errlen, "FFN batch router matmul failed");
+            goto done;
+        }
+    }
+    if (!ds4_gpu_tensor_write(tokens_t,
+                              0,
+                              tokens,
+                              (uint64_t)n_slots * sizeof(int32_t))) {
+        exec_error(err, errlen, "FFN batch token upload failed");
+        goto done;
+    }
+    if (!ds4_gpu_router_select_batch_tensor(selected_t,
+                                            weights_t,
+                                            probs_t,
+                                            cfgs[0].model_map,
+                                            cfgs[0].model_size,
+                                            bias_mode ? state->router_bias.source_offset : 0,
+                                            hash_mode ? state->router_hash.source_offset : 0,
+                                            hash_mode ? (uint32_t)state->router_hash.shape[1] : 0,
+                                            0,
+                                            0,
+                                            bias_mode,
+                                            hash_mode,
+                                            router_t,
+                                            tokens_t,
+                                            n_slots)) {
+        exec_error(err, errlen, "FFN batch router select failed");
+        goto done;
+    }
+    if (!ds4_gpu_tensor_read(selected_t,
+                             0,
+                             selected,
+                             (uint64_t)n_slots * routes * sizeof(int32_t)) ||
+        !ds4_gpu_tensor_read(weights_t,
+                             0,
+                             weights,
+                             (uint64_t)n_slots * routes * sizeof(float))) {
+        exec_error(err, errlen, "FFN batch router readback failed");
+        goto done;
+    }
+    for (uint32_t slot = 0; slot < n_slots; slot++) {
+        for (uint32_t route = 0; route < routes; route++) {
+            const int32_t expert = selected[(uint64_t)slot * routes + route];
+            if (expert < 0 || (uint32_t)expert >= state->routed_experts) {
+                exec_error(err, errlen, "FFN batch selected invalid expert %d", expert);
+                goto done;
+            }
+        }
+    }
+
+    ds4_v100_route_matrices route0;
+    if (ds4_v100_layer_state_route_matrices(state, 0, &route0, err, errlen)) {
+        goto done;
+    }
+    if (route0.gate.bytes != route0.up.bytes ||
+        route0.gate.row_bytes != route0.up.row_bytes ||
+        route0.gate.rows != route0.up.rows ||
+        route0.gate.cols != route0.up.cols) {
+        exec_error(err, errlen, "routed gate/up MXFP4 layouts differ");
+        goto done;
+    }
+    if (ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_batch_f32(
+            cfgs[0].arena,
+            state->routed_gate_binding.shard_offset,
+            state->routed_gate_binding.byte_length,
+            state->routed_up_binding.shard_offset,
+            state->routed_up_binding.byte_length,
+            state->routed_down_binding.shard_offset,
+            state->routed_down_binding.byte_length,
+            route0.gate.bytes,
+            (uint32_t)route0.gate.row_bytes,
+            route0.down.bytes,
+            (uint32_t)route0.down.row_bytes,
+            hidden,
+            mid,
+            state->routed_experts,
+            selected_t,
+            weights_t,
+            routes,
+            input_batch_t,
+            n_slots,
+            routed_mid_t,
+            routed_out_t) != 0) {
+        exec_error(err, errlen, "grouped routed FFN batch failed");
+        goto done;
+    }
+
+    for (uint32_t slot = 0; slot < n_slots; slot++) {
+        ds4_gpu_tensor *routed_view =
+            ds4_gpu_tensor_view(routed_out_t,
+                                (uint64_t)slot * hidden * sizeof(float),
+                                (uint64_t)hidden * sizeof(float));
+        if (!routed_view) {
+            exec_error(err, errlen, "FFN batch routed output view failed");
+            goto done;
+        }
+        const int shared_rc =
+            ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfgs[slot].arena,
+                                                  &shared_gate_v,
+                                                  ffn_inputs[slot],
+                                                  shared_gate_t) != 0 ||
+            ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfgs[slot].arena,
+                                                  &shared_up_v,
+                                                  ffn_inputs[slot],
+                                                  shared_up_t) != 0 ||
+            !ds4_gpu_swiglu_tensor(shared_mid_t, shared_gate_t, shared_up_t, mid, 10.0f, 1.0f) ||
+            ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfgs[slot].arena,
+                                                  &shared_down_v,
+                                                  shared_mid_t,
+                                                  shared_t) != 0 ||
+            !ds4_gpu_add_tensor(ffn_deltas[slot], routed_view, shared_t, hidden);
+        ds4_gpu_tensor_free(routed_view);
+        if (shared_rc) {
+            exec_error(err, errlen, "shared FFN batch slot %u failed", slot);
+            goto done;
+        }
+        if (reports) {
+            ds4_v100_layer_execute_report *report = &reports[slot];
+            memset(report, 0, sizeof(*report));
+            report->routes = routes;
+            for (uint32_t i = 0; i < routes && i < 6u; i++) {
+                report->selected_experts[i] = selected[(uint64_t)slot * routes + i];
+                report->route_weights[i] = weights[(uint64_t)slot * routes + i];
+            }
+        }
+    }
+
+    rc = 0;
+
+done:
+    ds4_gpu_tensor_free(shared_t);
+    ds4_gpu_tensor_free(shared_mid_t);
+    ds4_gpu_tensor_free(shared_up_t);
+    ds4_gpu_tensor_free(shared_gate_t);
+    ds4_gpu_tensor_free(routed_out_t);
+    ds4_gpu_tensor_free(routed_mid_t);
+    ds4_gpu_tensor_free(input_batch_t);
+    ds4_gpu_tensor_free(tokens_t);
+    ds4_gpu_tensor_free(weights_t);
+    ds4_gpu_tensor_free(selected_t);
+    ds4_gpu_tensor_free(probs_t);
+    ds4_gpu_tensor_free(router_t);
+    return rc;
+}
+
 int ds4_v100_layer_execute_decode(
         const ds4_v100_layer_state          *state,
         const ds4_v100_layer_execute_config *cfg,
@@ -1057,5 +1318,209 @@ done:
     ds4_gpu_tensor_free(attn_split);
     ds4_gpu_tensor_free(hc_mix);
     ds4_gpu_tensor_free(hc_norm);
+    return rc;
+}
+
+int ds4_v100_layer_execute_hc_decode_batch(
+        const ds4_v100_layer_state           *state,
+        const ds4_v100_layer_execute_config  *cfgs,
+        const ds4_gpu_tensor *const          *hidden_hc,
+        ds4_gpu_tensor *const                *next_hidden_hc,
+        uint32_t                              n_slots,
+        ds4_v100_layer_execute_report        *reports,
+        char                                 *err,
+        size_t                                errlen) {
+    if (!state || !cfgs || !hidden_hc || !next_hidden_hc ||
+        n_slots == 0 || n_slots > DS4_V100_LAYER_MAX_BATCH) {
+        return exec_error(err, errlen, "invalid HC batch inputs");
+    }
+    if (n_slots == 1) {
+        return ds4_v100_layer_execute_hc_decode(state,
+                                                &cfgs[0],
+                                                hidden_hc[0],
+                                                next_hidden_hc[0],
+                                                reports ? &reports[0] : NULL,
+                                                err,
+                                                errlen);
+    }
+    for (uint32_t slot = 0; slot < n_slots; slot++) {
+        if (cfgs[slot].checkpoint_fn) {
+            for (uint32_t i = 0; i < n_slots; i++) {
+                if (ds4_v100_layer_execute_hc_decode(state,
+                                                     &cfgs[i],
+                                                     hidden_hc[i],
+                                                     next_hidden_hc[i],
+                                                     reports ? &reports[i] : NULL,
+                                                     err,
+                                                     errlen)) {
+                    return 1;
+                }
+            }
+            return 0;
+        }
+    }
+
+    const uint32_t hidden_n = state->hidden_size;
+    const uint64_t hc_values = (uint64_t)DS4_V100_N_HC * hidden_n;
+    const uint64_t hc_bytes = hc_values * sizeof(float);
+    if (hidden_n != DS4_V100_OUT_GROUP_DIM ||
+        state->hc_attn_fn.n_shape_dims != 2 ||
+        state->hc_ffn_fn.n_shape_dims != 2 ||
+        state->hc_attn_fn.shape[0] != hc_values ||
+        state->hc_ffn_fn.shape[0] != hc_values ||
+        state->hc_attn_fn.shape[1] != DS4_V100_HC_MIX ||
+        state->hc_ffn_fn.shape[1] != DS4_V100_HC_MIX) {
+        return exec_error(err, errlen, "HC batch control dimensions do not match DS4");
+    }
+
+    ds4_gpu_tensor *hc_norm[DS4_V100_LAYER_MAX_BATCH] = {0};
+    ds4_gpu_tensor *hc_mix[DS4_V100_LAYER_MAX_BATCH] = {0};
+    ds4_gpu_tensor *attn_split[DS4_V100_LAYER_MAX_BATCH] = {0};
+    ds4_gpu_tensor *ffn_split[DS4_V100_LAYER_MAX_BATCH] = {0};
+    ds4_gpu_tensor *attn_cur[DS4_V100_LAYER_MAX_BATCH] = {0};
+    ds4_gpu_tensor *attn_out[DS4_V100_LAYER_MAX_BATCH] = {0};
+    ds4_gpu_tensor *after_attn_hc[DS4_V100_LAYER_MAX_BATCH] = {0};
+    ds4_gpu_tensor *ffn_cur[DS4_V100_LAYER_MAX_BATCH] = {0};
+    ds4_gpu_tensor *ffn_norm[DS4_V100_LAYER_MAX_BATCH] = {0};
+    ds4_gpu_tensor *ffn_delta[DS4_V100_LAYER_MAX_BATCH] = {0};
+
+    int rc = 1;
+    for (uint32_t slot = 0; slot < n_slots; slot++) {
+        if (!hidden_hc[slot] || !next_hidden_hc[slot] ||
+            ds4_gpu_tensor_bytes(hidden_hc[slot]) < hc_bytes ||
+            ds4_gpu_tensor_bytes(next_hidden_hc[slot]) < hc_bytes ||
+            validate_execute_common(state, &cfgs[slot], err, errlen)) {
+            goto done;
+        }
+        if (cfgs[slot].arena != cfgs[0].arena ||
+            cfgs[slot].model_map != cfgs[0].model_map ||
+            cfgs[slot].model_size != cfgs[0].model_size) {
+            exec_error(err, errlen, "HC batch cfgs must share arena/model");
+            goto done;
+        }
+        hc_norm[slot] = ds4_gpu_tensor_alloc(hc_bytes);
+        hc_mix[slot] = ds4_gpu_tensor_alloc(DS4_V100_HC_MIX * sizeof(float));
+        attn_split[slot] = ds4_gpu_tensor_alloc(DS4_V100_HC_MIX * sizeof(float));
+        ffn_split[slot] = ds4_gpu_tensor_alloc(DS4_V100_HC_MIX * sizeof(float));
+        attn_cur[slot] = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
+        attn_out[slot] = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
+        after_attn_hc[slot] = ds4_gpu_tensor_alloc(hc_bytes);
+        ffn_cur[slot] = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
+        ffn_norm[slot] = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
+        ffn_delta[slot] = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
+        if (!hc_norm[slot] || !hc_mix[slot] || !attn_split[slot] || !ffn_split[slot] ||
+            !attn_cur[slot] || !attn_out[slot] || !after_attn_hc[slot] ||
+            !ffn_cur[slot] || !ffn_norm[slot] || !ffn_delta[slot]) {
+            exec_error(err, errlen, "failed to allocate HC batch tensors");
+            goto done;
+        }
+    }
+
+    for (uint32_t slot = 0; slot < n_slots; slot++) {
+        if (!ds4_gpu_rms_norm_plain_tensor(hc_norm[slot],
+                                           hidden_hc[slot],
+                                           (uint32_t)hc_values,
+                                           DS4_V100_RMS_EPS) ||
+            !ds4_gpu_matmul_f32_tensor(hc_mix[slot],
+                                       cfgs[slot].model_map,
+                                       cfgs[slot].model_size,
+                                       state->hc_attn_fn.source_offset,
+                                       hc_values,
+                                       DS4_V100_HC_MIX,
+                                       hc_norm[slot],
+                                       1) ||
+            !ds4_gpu_hc_split_weighted_sum_tensor(attn_cur[slot],
+                                                  attn_split[slot],
+                                                  hc_mix[slot],
+                                                  hidden_hc[slot],
+                                                  cfgs[slot].model_map,
+                                                  cfgs[slot].model_size,
+                                                  state->hc_attn_scale.source_offset,
+                                                  state->hc_attn_base.source_offset,
+                                                  hidden_n,
+                                                  DS4_V100_N_HC,
+                                                  DS4_V100_HC_SINKHORN_ITERS,
+                                                  DS4_V100_RMS_EPS) ||
+            execute_attention_output(state, &cfgs[slot], attn_cur[slot], attn_out[slot], err, errlen) ||
+            !ds4_gpu_hc_expand_split_tensor(after_attn_hc[slot],
+                                            attn_out[slot],
+                                            hidden_hc[slot],
+                                            attn_split[slot],
+                                            hidden_n,
+                                            DS4_V100_N_HC) ||
+            !ds4_gpu_rms_norm_plain_tensor(hc_norm[slot],
+                                           after_attn_hc[slot],
+                                           (uint32_t)hc_values,
+                                           DS4_V100_RMS_EPS) ||
+            !ds4_gpu_matmul_f32_tensor(hc_mix[slot],
+                                       cfgs[slot].model_map,
+                                       cfgs[slot].model_size,
+                                       state->hc_ffn_fn.source_offset,
+                                       hc_values,
+                                       DS4_V100_HC_MIX,
+                                       hc_norm[slot],
+                                       1) ||
+            !ds4_gpu_hc_split_weighted_sum_tensor(ffn_cur[slot],
+                                                  ffn_split[slot],
+                                                  hc_mix[slot],
+                                                  after_attn_hc[slot],
+                                                  cfgs[slot].model_map,
+                                                  cfgs[slot].model_size,
+                                                  state->hc_ffn_scale.source_offset,
+                                                  state->hc_ffn_base.source_offset,
+                                                  hidden_n,
+                                                  DS4_V100_N_HC,
+                                                  DS4_V100_HC_SINKHORN_ITERS,
+                                                  DS4_V100_RMS_EPS) ||
+            !ds4_gpu_rms_norm_weight_tensor(ffn_norm[slot],
+                                            ffn_cur[slot],
+                                            cfgs[slot].model_map,
+                                            cfgs[slot].model_size,
+                                            state->ffn_norm.source_offset,
+                                            hidden_n,
+                                            DS4_V100_RMS_EPS)) {
+            if (err && err[0] == '\0') exec_error(err, errlen, "HC batch pre-FFN sequence failed");
+            goto done;
+        }
+    }
+
+    if (execute_ffn_delta_batch(state,
+                                cfgs,
+                                (const ds4_gpu_tensor *const *)ffn_norm,
+                                ffn_delta,
+                                n_slots,
+                                reports,
+                                err,
+                                errlen)) {
+        goto done;
+    }
+
+    for (uint32_t slot = 0; slot < n_slots; slot++) {
+        if (!ds4_gpu_hc_expand_split_tensor(next_hidden_hc[slot],
+                                            ffn_delta[slot],
+                                            after_attn_hc[slot],
+                                            ffn_split[slot],
+                                            hidden_n,
+                                            DS4_V100_N_HC)) {
+            exec_error(err, errlen, "HC batch final expansion failed");
+            goto done;
+        }
+    }
+
+    rc = 0;
+
+done:
+    for (uint32_t slot = 0; slot < n_slots; slot++) {
+        ds4_gpu_tensor_free(ffn_delta[slot]);
+        ds4_gpu_tensor_free(ffn_norm[slot]);
+        ds4_gpu_tensor_free(ffn_cur[slot]);
+        ds4_gpu_tensor_free(after_attn_hc[slot]);
+        ds4_gpu_tensor_free(attn_out[slot]);
+        ds4_gpu_tensor_free(attn_cur[slot]);
+        ds4_gpu_tensor_free(ffn_split[slot]);
+        ds4_gpu_tensor_free(attn_split[slot]);
+        ds4_gpu_tensor_free(hc_mix[slot]);
+        ds4_gpu_tensor_free(hc_norm[slot]);
+    }
     return rc;
 }

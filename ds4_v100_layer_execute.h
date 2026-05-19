@@ -114,6 +114,16 @@ int ds4_v100_layer_execute_hc_decode(
         char                                *err,
         size_t                               errlen);
 
+int ds4_v100_layer_execute_hc_decode_batch(
+        const ds4_v100_layer_state           *state,
+        const ds4_v100_layer_execute_config  *cfgs,
+        const ds4_gpu_tensor *const          *hidden_hc,
+        ds4_gpu_tensor *const                *next_hidden_hc,
+        uint32_t                              n_slots,
+        ds4_v100_layer_execute_report        *reports,
+        char                                 *err,
+        size_t                                errlen);
+
 #ifdef __cplusplus
 }
 #endif

@@ -2103,8 +2103,9 @@ __global__ static void arena_mxfp4_grouped_pair_swiglu_kernel(
         float clamp) {
     const uint32_t r = blockIdx.x;
     const uint32_t route = blockIdx.y;
+    const uint32_t tok = blockIdx.z;
     if (r >= mid || route >= n_routes) return;
-    const int32_t expert_i = selected[route];
+    const int32_t expert_i = selected[(uint64_t)tok * n_routes + route];
     if (expert_i < 0 || (uint32_t)expert_i >= n_total_experts) return;
     const uint32_t expert = (uint32_t)expert_i;
     const uint8_t *gate_row =
@@ -2128,7 +2129,7 @@ __global__ static void arena_mxfp4_grouped_pair_swiglu_kernel(
             lane < 16u ? (gate_packed & 0x0fu) : ((gate_packed >> 4) & 0x0fu);
         const uint8_t up_q =
             lane < 16u ? (up_packed & 0x0fu) : ((up_packed >> 4) & 0x0fu);
-        const float xv = x[c];
+        const float xv = x[(uint64_t)tok * hidden + c];
         gate_acc += arena_mxfp4_nibble_to_f32(gate_q) *
                     arena_e8m0_to_f32(gate_block[0]) * xv;
         up_acc += arena_mxfp4_nibble_to_f32(up_q) *
@@ -2155,7 +2156,8 @@ __global__ static void arena_mxfp4_grouped_pair_swiglu_kernel(
             u = fminf(fmaxf(u, -clamp), clamp);
         }
         const float s = g / (1.0f + expf(-g));
-        mid_out[(uint64_t)route * mid + r] = s * u * weights[route];
+        const uint64_t mid_index = ((uint64_t)tok * n_routes + route) * mid + r;
+        mid_out[mid_index] = s * u * weights[(uint64_t)tok * n_routes + route];
     }
 }
 
@@ -2171,16 +2173,17 @@ __global__ static void arena_mxfp4_grouped_down_sum_kernel(
         uint64_t down_expert_stride_bytes,
         uint32_t down_row_stride_bytes) {
     const uint32_t r = blockIdx.x;
+    const uint32_t tok = blockIdx.y;
     if (r >= hidden) return;
     float acc = 0.0f;
     for (uint32_t route = 0; route < n_routes; route++) {
-        const int32_t expert_i = selected[route];
+        const int32_t expert_i = selected[(uint64_t)tok * n_routes + route];
         if (expert_i < 0 || (uint32_t)expert_i >= n_total_experts) continue;
         const uint32_t expert = (uint32_t)expert_i;
         const uint8_t *row =
             down_base + (uint64_t)expert * down_expert_stride_bytes +
             (uint64_t)r * down_row_stride_bytes;
-        const float *route_mid = mid_in + (uint64_t)route * mid;
+        const float *route_mid = mid_in + ((uint64_t)tok * n_routes + route) * mid;
         for (uint32_t c = threadIdx.x; c < mid; c += blockDim.x) {
             const uint8_t *block = row + (uint64_t)(c / 32u) * 17ull;
             const uint32_t lane = c % 32u;
@@ -2198,7 +2201,7 @@ __global__ static void arena_mxfp4_grouped_down_sum_kernel(
         if (threadIdx.x < stride) partial[threadIdx.x] += partial[threadIdx.x + stride];
         __syncthreads();
     }
-    if (threadIdx.x == 0) out[r] = partial[0];
+    if (threadIdx.x == 0) out[(uint64_t)tok * hidden + r] = partial[0];
 }
 
 extern "C" int ds4_gpu_arena_open(ds4_gpu_arena **out, int gpu, uint64_t bytes) {
@@ -2772,7 +2775,7 @@ extern "C" int ds4_gpu_arena_mxfp4_matmul_add_f32(
     return cuda_ok(cudaGetLastError(), "mxfp4 matmul add launch") ? 0 : 1;
 }
 
-extern "C" int ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_f32(
+extern "C" int ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_batch_f32(
         const ds4_gpu_arena *arena,
         uint64_t gate_arena_offset,
         uint64_t gate_byte_length,
@@ -2791,12 +2794,14 @@ extern "C" int ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_f32(
         const ds4_gpu_tensor *weights_f32,
         uint32_t n_routes,
         const ds4_gpu_tensor *x_f32,
+        uint32_t n_tokens,
         ds4_gpu_tensor *mid_tmp_f32,
         ds4_gpu_tensor *out_f32) {
     if (!arena || !arena->valid || !arena->ptr || !selected_i32 || !weights_f32 ||
         !x_f32 || !mid_tmp_f32 || !out_f32 || !selected_i32->ptr ||
         !weights_f32->ptr || !x_f32->ptr || !mid_tmp_f32->ptr || !out_f32->ptr ||
-        hidden == 0 || mid == 0 || n_total_experts == 0 || n_routes == 0) {
+        hidden == 0 || mid == 0 || n_total_experts == 0 || n_routes == 0 ||
+        n_tokens == 0) {
         return 1;
     }
     uint64_t gate_row_bytes = 0;
@@ -2825,11 +2830,11 @@ extern "C" int ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_f32(
         !cuda_arena_range_ok(arena, down_arena_offset, down_byte_length)) {
         return 1;
     }
-    if (selected_i32->bytes < (uint64_t)n_routes * sizeof(int32_t) ||
-        weights_f32->bytes < (uint64_t)n_routes * sizeof(float) ||
-        x_f32->bytes < (uint64_t)hidden * sizeof(float) ||
-        mid_tmp_f32->bytes < (uint64_t)n_routes * mid * sizeof(float) ||
-        out_f32->bytes < (uint64_t)hidden * sizeof(float)) {
+    if (selected_i32->bytes < (uint64_t)n_tokens * n_routes * sizeof(int32_t) ||
+        weights_f32->bytes < (uint64_t)n_tokens * n_routes * sizeof(float) ||
+        x_f32->bytes < (uint64_t)n_tokens * hidden * sizeof(float) ||
+        mid_tmp_f32->bytes < (uint64_t)n_tokens * n_routes * mid * sizeof(float) ||
+        out_f32->bytes < (uint64_t)n_tokens * hidden * sizeof(float)) {
         return 1;
     }
     if (!cuda_ok(cudaSetDevice(arena->gpu), "mxfp4 grouped route set device")) return 1;
@@ -2839,7 +2844,7 @@ extern "C" int ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_f32(
         (const uint8_t *)((const char *)arena->ptr + up_arena_offset);
     const uint8_t *down_base =
         (const uint8_t *)((const char *)arena->ptr + down_arena_offset);
-    dim3 mid_grid(mid, n_routes, 1);
+    dim3 mid_grid(mid, n_routes, n_tokens);
     arena_mxfp4_grouped_pair_swiglu_kernel<<<mid_grid, 256>>>(
         (float *)mid_tmp_f32->ptr,
         gate_base,
@@ -2857,7 +2862,8 @@ extern "C" int ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_f32(
         gate_row_stride_bytes,
         10.0f);
     if (!cuda_ok(cudaGetLastError(), "mxfp4 grouped gate/up launch")) return 1;
-    arena_mxfp4_grouped_down_sum_kernel<<<hidden, 256>>>(
+    dim3 down_grid(hidden, n_tokens, 1);
+    arena_mxfp4_grouped_down_sum_kernel<<<down_grid, 256>>>(
         (float *)out_f32->ptr,
         down_base,
         (const int32_t *)selected_i32->ptr,
@@ -2869,6 +2875,51 @@ extern "C" int ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_f32(
         down_expert_stride_bytes,
         down_row_stride_bytes);
     return cuda_ok(cudaGetLastError(), "mxfp4 grouped down sum launch") ? 0 : 1;
+}
+
+extern "C" int ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_f32(
+        const ds4_gpu_arena *arena,
+        uint64_t gate_arena_offset,
+        uint64_t gate_byte_length,
+        uint64_t up_arena_offset,
+        uint64_t up_byte_length,
+        uint64_t down_arena_offset,
+        uint64_t down_byte_length,
+        uint64_t gate_expert_stride_bytes,
+        uint32_t gate_row_stride_bytes,
+        uint64_t down_expert_stride_bytes,
+        uint32_t down_row_stride_bytes,
+        uint32_t hidden,
+        uint32_t mid,
+        uint32_t n_total_experts,
+        const ds4_gpu_tensor *selected_i32,
+        const ds4_gpu_tensor *weights_f32,
+        uint32_t n_routes,
+        const ds4_gpu_tensor *x_f32,
+        ds4_gpu_tensor *mid_tmp_f32,
+        ds4_gpu_tensor *out_f32) {
+    return ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_batch_f32(
+        arena,
+        gate_arena_offset,
+        gate_byte_length,
+        up_arena_offset,
+        up_byte_length,
+        down_arena_offset,
+        down_byte_length,
+        gate_expert_stride_bytes,
+        gate_row_stride_bytes,
+        down_expert_stride_bytes,
+        down_row_stride_bytes,
+        hidden,
+        mid,
+        n_total_experts,
+        selected_i32,
+        weights_f32,
+        n_routes,
+        x_f32,
+        1,
+        mid_tmp_f32,
+        out_f32);
 }
 
 extern "C" void ds4_gpu_set_quality(bool quality) {

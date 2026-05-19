@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-19
 last_updated_by: vision
-revision: 68
+revision: 69
 ---
 
 # Vision: DS4 V100 Appliance
@@ -359,6 +359,14 @@ optimized V100 low-bit expert kernels in the actual hot path.
   the two-slot benchmark still reported `tensor_batched_groups=0`, so the next
   practical-use blocker is deterministic token-step coalescing and true
   batched layer execution across active slots.
+- Sprint 057 shipped deterministic server-side token-step coalescing. The
+  default two-slot sustained benchmark now reports `tensor_batched_groups=2`,
+  `tensor_batched_requests=4`, and `tensor_batched_tokens=64` while preserving
+  token hex `3136`. Generated tok/s is essentially unchanged
+  (`3.662490` at two slots), confirming that request coalescing is now honest
+  but not sufficient. An opt-in batched FFN layer slice was implemented behind
+  `DS4_V100_BATCH_LAYER_FFN`, but it regressed two-slot generated tok/s to
+  `3.630558`, so it remains disabled by default.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -406,6 +414,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 054 fused MXFP4 gate/up/SwiGLU | `3.49` generated tok/s, `3.27` continuation tok/s | Measured | First hot-path fusion is correct and improves 1M sustained two-slot generated tok/s by about `3.4%` over Sprint 053, but utilization remains about `11%`. |
 | Sprint 055 fused MXFP4 down+accum | `3.50` generated tok/s, `3.28` continuation tok/s | Measured | Removes another routed route launch, but improves two-slot generated tok/s by only about `0.5%` over Sprint 054; one-route cleanup is reaching diminishing returns. |
 | Sprint 056 grouped selected MXFP4 routes | `3.68` generated tok/s, `3.45` continuation tok/s | Measured | Groups all selected routes in the single-slot routed FFN path and improves two-slot generated tok/s by about `5.0%` over Sprint 055, but average GPU utilization remains about `11%` and the benchmark did not coalesce token-step groups. |
+| Sprint 057 deterministic token-step coalescing | `3.66` generated tok/s, `3.43` continuation tok/s | Measured | Server-side rendezvous makes the two-slot benchmark reliably enter the batch path (`2` groups / `4` requests / `64` tokens), but throughput is essentially flat; opt-in batched FFN regressed and remains disabled. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -1216,7 +1225,7 @@ GPU utilization with architectural changes, and only then compare against the
   by about `4.17%` at one slot and `4.96%` at two slots over Sprint 055, but
   average GPU utilization remains near `11%`.
 
-### Sprint 057 - Deterministic Token-Step Coalescing And Layer Batching [tentative]
+### Sprint 057 - Deterministic Token-Step Coalescing And Layer Batching [complete]
 
 - **Goal**: Make multi-slot sustained decode deterministically coalesce
   same-step requests and expose active slots to at least one batched layer
@@ -1225,8 +1234,24 @@ GPU utilization with architectural changes, and only then compare against the
   `tensor_batched_groups`, so the system still cannot rely on request-loop
   batching to feed enough work to the kernels. The next meaningful throughput
   step is scheduler shape, not another single-slot route fusion.
+- **Outcome**: `SHIP`, with the batched layer slice off by default. Added a
+  short server-side pending-request rendezvous so two-slot sustained decode
+  reliably enters `ds4_v100_replay_generate_batch`. Added a batched MXFP4 route
+  primitive and `ds4_v100_layer_execute_hc_decode_batch`, but gated scheduler
+  use behind `DS4_V100_BATCH_LAYER_FFN` after the first V100 benchmark
+  regressed. Default two-slot evidence now has `tensor_batched_groups=2`,
+  generated tok/s `3.662490`, and token hex `3136`.
 
-### Sprint 058 - MTP Draft Commit And Throughput Serving [tentative]
+### Sprint 058 - Persistent Grouped MoE Kernel Or Copy-Free Batch Layout [tentative]
+
+- **Goal**: Replace the copy-heavy opt-in batch slice with a persistent grouped
+  MoE kernel or copy-free active-slot layout that raises GPU utilization.
+- **Rationale**: Sprint 057 made request coalescing deterministic, but the
+  first batched FFN slice regressed because it only batched routed FFN after
+  per-slot setup and paid extra copy/view overhead. The next throughput step
+  needs larger expert work per launch without extra per-slot staging.
+
+### Sprint 059 - MTP Draft Commit And Throughput Serving [tentative]
 
 - **Goal**: Graduate MTP from one-token verify diagnostics to a committed draft
   path with rollback safety, then benchmark aggregate decode with MTP enabled.
@@ -1367,6 +1392,9 @@ GPU utilization with architectural changes, and only then compare against the
   `docs/sprints/SPRINT-056-FOLLOWUPS.md`: deterministic token-step coalescing,
   batched layer execution across active slots, and persistent or tensor-core
   friendly MoE kernels.
+- See `docs/sprints/SPRINT-057-FOLLOWUPS.md`: persistent grouped MoE kernels,
+  removing copy overhead from the opt-in batch slice, batch-level timing
+  counter semantics, and a configurable rendezvous window.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -1438,6 +1466,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-19 | Shipped Sprint 054 fused MXFP4 routed gate/up/SwiGLU. | The first main-path source-MXFP4 fusion preserved selected-token correctness and improved sustained generated tok/s by roughly 3%, but utilization stayed near 11%. The next blocker is still launch/occupancy in the routed expert path, especially down projection, route accumulation, and grouping all selected routes. | Sprint 055+ |
 | 2026-05-19 | Shipped Sprint 055 fused MXFP4 routed down accumulation. | Down projection and route accumulation are now fused in the main routed expert path, preserving selected-token correctness and adding a sub-1% sustained speedup. This is a useful diminishing-returns signal: the next sprint needs grouped route execution or layer-executor batch kernels. | Sprint 056+ |
 | 2026-05-19 | Shipped Sprint 056 grouped selected-route MXFP4 execution. | The main routed FFN path now groups all selected routes and improves sustained generated tok/s by about 4-5% over Sprint 055, but GPU utilization remains near 11% and two-slot benchmark coalescing was not deterministic. The next sprint should expose active slots to the layer executor instead of continuing single-slot route fusion. | Sprint 057+ |
+| 2026-05-19 | Shipped Sprint 057 deterministic token-step coalescing. | The default server now reliably forms two-slot token-step batches, but throughput stayed flat and the first batched FFN layer slice regressed when enabled. The next sprint should focus on persistent/copy-free MoE batching rather than queue plumbing. | Sprint 058+ |
 
 ## Open Questions
 

@@ -16,6 +16,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 enum {
@@ -125,6 +126,7 @@ typedef struct {
     pthread_mutex_t handlers_mu;
     pthread_cond_t handlers_done;
     pthread_mutex_t pending_mu;
+    pthread_cond_t pending_cv;
     replay_pending_generation *pending_head;
     replay_pending_generation *pending_tail;
     uint32_t pending_count;
@@ -228,6 +230,33 @@ static void pending_enqueue(replay_server_state *state, replay_pending_generatio
     else state->pending_head = req;
     state->pending_tail = req;
     state->pending_count++;
+    pthread_cond_broadcast(&state->pending_cv);
+    pthread_mutex_unlock(&state->pending_mu);
+}
+
+static void pending_wait_for_microbatch(replay_server_state *state,
+                                        uint32_t cap,
+                                        bool mtp_enabled) {
+    if (!state || cap <= 1 || mtp_enabled) return;
+
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    struct timespec deadline;
+    deadline.tv_sec = tv.tv_sec;
+    deadline.tv_nsec = (long)tv.tv_usec * 1000L + 5000000L;
+    if (deadline.tv_nsec >= 1000000000L) {
+        deadline.tv_sec += deadline.tv_nsec / 1000000000L;
+        deadline.tv_nsec %= 1000000000L;
+    }
+
+    pthread_mutex_lock(&state->pending_mu);
+    while (state->pending_count > 0 && state->pending_count < cap) {
+        const int rc = pthread_cond_timedwait(&state->pending_cv,
+                                              &state->pending_mu,
+                                              &deadline);
+        if (rc == ETIMEDOUT) break;
+        if (rc != 0) break;
+    }
     pthread_mutex_unlock(&state->pending_mu);
 }
 
@@ -277,11 +306,12 @@ static int process_pending_generation_batch(replay_server_state *state) {
     if (!state || !state->opt || !state->rt) return 1;
     uint32_t cap = state->opt->active_microbatch ? state->opt->active_microbatch : 1;
     if (cap > DS4_V100_SCHED_MAX_SLOTS) cap = DS4_V100_SCHED_MAX_SLOTS;
+    const bool mtp_enabled = state->mtp && state->mtp->enabled;
+    pending_wait_for_microbatch(state, cap, mtp_enabled);
     replay_pending_batch batch;
     pending_collect_batch(state, cap, &batch);
     if (batch.count == 0) return 0;
 
-    const bool mtp_enabled = state->mtp && state->mtp->enabled;
     const uint32_t batch_tokens = batch.items[0] ? batch.items[0]->tokens : 0;
     bool can_batch = !mtp_enabled && batch.count > 1 && batch_tokens > 0 &&
                      batch_tokens <= DS4_V100_REPLAY_MAX_TOKENS;
@@ -1549,6 +1579,7 @@ static int run_server(const replay_cli_options *opt,
     pthread_mutex_init(&state.handlers_mu, NULL);
     pthread_cond_init(&state.handlers_done, NULL);
     pthread_mutex_init(&state.pending_mu, NULL);
+    pthread_cond_init(&state.pending_cv, NULL);
 
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd < 0) {
@@ -1560,6 +1591,7 @@ static int run_server(const replay_cli_options *opt,
         pthread_mutex_destroy(&state.handlers_mu);
         pthread_cond_destroy(&state.handlers_done);
         pthread_mutex_destroy(&state.pending_mu);
+        pthread_cond_destroy(&state.pending_cv);
         return 1;
     }
     int yes = 1;
@@ -1578,6 +1610,7 @@ static int run_server(const replay_cli_options *opt,
         pthread_mutex_destroy(&state.handlers_mu);
         pthread_cond_destroy(&state.handlers_done);
         pthread_mutex_destroy(&state.pending_mu);
+        pthread_cond_destroy(&state.pending_cv);
         return 2;
     }
     if (bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
@@ -1591,6 +1624,7 @@ static int run_server(const replay_cli_options *opt,
         pthread_mutex_destroy(&state.handlers_mu);
         pthread_cond_destroy(&state.handlers_done);
         pthread_mutex_destroy(&state.pending_mu);
+        pthread_cond_destroy(&state.pending_cv);
         return 1;
     }
     fprintf(stderr,
@@ -1611,6 +1645,7 @@ static int run_server(const replay_cli_options *opt,
             pthread_mutex_destroy(&state.handlers_mu);
             pthread_cond_destroy(&state.handlers_done);
             pthread_mutex_destroy(&state.pending_mu);
+            pthread_cond_destroy(&state.pending_cv);
             return 1;
         }
         server_stats_add(&state, 1, 0, 0, 0, 0, 0);
@@ -1654,6 +1689,7 @@ static int run_server(const replay_cli_options *opt,
     pthread_mutex_destroy(&state.handlers_mu);
     pthread_cond_destroy(&state.handlers_done);
     pthread_mutex_destroy(&state.pending_mu);
+    pthread_cond_destroy(&state.pending_cv);
     return 0;
 }
 
