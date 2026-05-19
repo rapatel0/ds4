@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-19
 last_updated_by: vision
-revision: 57
+revision: 63
 ---
 
 # Vision: DS4 V100 Appliance
@@ -18,6 +18,12 @@ The sprint sequence should keep format, topology, sharding, and scheduling
 decisions explicit. The project is not trying to become a generic GGUF runner;
 it is a narrow DS4 runtime tuned for this hardware.
 
+With readiness now closed, the next north star is practical serving: keep the
+source-model quality and device-resident appliance contract, but move from a
+correctness-first runtime to a high-utilization decode runtime with sustained
+multi-token benchmarking, continuous batching, MTP draft commit where safe, and
+optimized V100 low-bit expert kernels in the actual hot path.
+
 ## Current State
 
 - Sprints 001-004 proved the memory and pack-residency foundation: the source
@@ -32,10 +38,10 @@ it is a narrow DS4 runtime tuned for this hardware.
   target FP16 tensor cores or the selected low-bit/integer kernels.
 - The tightest observed residency case still leaves more than the planned 3 GiB
   reserve on a 32 GB V100. Weight VRAM fit is no longer the primary blocker.
-- The main remaining risk is no longer VRAM fit, first-token correctness, base
-  deployment, cold startup/upload, or served one-token MTP verify. It is
-  multi-slot scheduling and the aggregate context/throughput operating
-  envelope.
+- The readiness ladder is now closed through Level 6. The main remaining risk
+  is practical-use performance: sustained decode throughput, GPU utilization,
+  multi-token batching, true MTP draft commit, and hot-path low-bit kernel
+  integration.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation
@@ -275,6 +281,40 @@ it is a narrow DS4 runtime tuned for this hardware.
   `mode=mtp_verify_one_slot`, returns MTP draft/verify diagnostics, exposes MTP
   counters in `/metrics`, and passes the full gate with
   `missing=aggregate_slot_context_envelope`.
+- Sprint 046 shipped the slot/context admission contract and envelope gate.
+  Planner-driven 1/2/4/8 slot tiers, context admission rejection behavior, and
+  status/metrics limit reporting are now wired into the full gate as
+  `slot_context_admission`.
+- Sprint 047 shipped the active-microbatch scheduler core primitives.
+  `ds4_v100_stage_scheduler` now owns per-slot KV/HC state and exposes
+  `decode_token_batch`, `decode_hc_batch`, and `handoff_batch`, with
+  multi-slot scheduler smokes and gate rung `active_microbatch_scheduler`.
+- Sprint 048 shipped request-loop active microbatch integration for the base
+  appliance path. `tools/ds4-v100-replay --serve` now batches pending
+  non-MTP one-token requests through the scheduler batch APIs while preserving
+  explicit queue/admission behavior. The remaining gap is cluster throughput
+  and latency evidence across slot/context tiers.
+- Sprint 049 shipped the first cluster-backed aggregate throughput evidence
+  harness. The runtime now has a dedicated concurrent load script and recorded
+  p50/p95/p99 plus aggregate tok/s evidence on `gpu-01` for
+  1/2/4/8-slot coverage at 256K, 1/8-slot extremes at 1M, and a focused
+  MTP on/off comparison.
+- Sprint 050 closed the remaining proof gap and hardened the gate path. The
+  full 8-GPU gate now runs with `failures=0` and reports
+  `gate readiness READY` / `ready=true`.
+- Sprint 051 added explicit aggregate matrix profiles to the gate execution
+  path (`fast` and `full`) plus per-axis CLI overrides, then executed the full
+  32-case matrix on `gpu-01` with all requests/token checks passing and
+  artifacts captured under `logs/from-cluster/sprint051-full-profile`.
+- Practical-use performance is not yet optimized. The current full-profile
+  aggregate gate intentionally uses a one-token request shape and reports only
+  generated tokens over full request latency; it measured `0.320543-0.382304`
+  aggregate tok/s. The focused continuation decode benchmark measured
+  `6.912252` continuation tok/s at `ctx=1048576`, `tokens=2`. Low observed GPU
+  utilization is consistent with the current runtime shape: first-token
+  batching only, `tensor_batched_slots=false`, per-request reset/prompt replay
+  in the served path, no true MTP draft commit, and no persistent grouped
+  expert hot path.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -293,7 +333,7 @@ mean "nothing works"; it should say which rung has not been proven yet.
 | 3 | MTP-assisted correctness | The resident MTP sidecar can produce a K=1 draft token that matches a trusted oracle and does not corrupt target-model state. | MTP sidecar residency, Q8_0/Q4_K kernel parity, MTP forward logits/top-k, draft/verify/rollback tests, served verify diagnostics. | Complete through Sprint 045. The focused and full 8-GPU gates produce a native prompt-token draft from committed token `926` and post-commit target HC, match target top-1 token `1` exactly, expose the same verify path through HTTP as `mtp_verify_one_slot`, and keep rollback/off mode available. |
 | 4 | Production deployment | The appliance can be left running on the cluster with operational confidence. | Supervised service, config files, restart behavior, health/metrics endpoint, deployment/runbook, known rollback path. | Complete through Sprint 043 for the base one-slot service. The full gate includes `production_deployment PASS` with launcher, config, `/metrics`, supervisor templates, runbook, and rollback mode. |
 | 5 | Startup and one-slot throughput optimization | Fresh-process startup/upload is measured and improved, and the one-slot decode path has gate-owned timing evidence. | Serial-vs-parallel startup benchmark, default replay timing, first-token correctness, full-gate `throughput_optimization PASS`. | Complete through Sprint 044. Focused timing improved cold open from `343989.990 ms` to `63032.135 ms`; full-gate timing improved from `227418.984 ms` to `59449.323 ms`; first token remains `3136`. |
-| 6 | Aggregate slot/context operating envelope | The appliance can admit and schedule multiple slots/context tiers and report aggregate tok/s. | 1/2/4/8-slot admission, context-tier benchmarks, active microbatch scheduling, queueing or rejection semantics, and MTP-aware throughput comparison. | Next readiness blocker after Sprint 045. Not yet implemented and not claimed by the current gate. |
+| 6 | Aggregate slot/context operating envelope | The appliance can admit and schedule multiple slots/context tiers and report aggregate tok/s. | 1/2/4/8-slot admission, context-tier benchmarks, active microbatch scheduling, queueing or rejection semantics, and MTP-aware throughput comparison. | Complete through Sprint 051: admission, scheduler batch primitives, request-loop batching, cluster slot/context load evidence (including queue-policy and focused MTP comparison), full gate closure with `ready=true`, and explicit fast/full aggregate gate profiles are proven. |
 
 MTP is not required for the first minimally usable base appliance. It is
 required for the intended performance path if speculative decoding proves
@@ -302,6 +342,32 @@ the checked base appliance can run either the default base one-slot service or
 the explicit one-token MTP verify service as a loopback cluster process. It
 does not yet mean multi-slot batching, true draft commit without target
 recompute, streaming, or externally exposed serving.
+
+## Practical Use Optimization
+
+The back-of-envelope roofline for DeepSeek-V4-Flash on 8x V100 is useful only
+as a ceiling: 13B active parameters imply roughly 26 GFLOP/token, and 8x V100
+has about 1 PFLOP/s FP16 tensor peak. That produces a theoretical compute bound
+near 38k tok/s, but it assumes perfectly batched dense tensor-core GEMMs with no
+routing, no FP4/FP8 unpack/dequant, no KV traffic, no inter-GPU scheduling, and
+no expert imbalance.
+
+The practical target should be staged from current evidence, not from roofline:
+
+| Runtime state | Expected aggregate decode range | Confidence | Qualification |
+|---|---:|---|---|
+| Current Sprint 051 appliance | `~0.3` tok/s aggregate gate, `~7` tok/s continuation microbench | Measured | Correctness-first, one-token gate shape, first-token batching only, low GPU utilization expected. |
+| Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Measures true decode loop after removing one-token benchmark artifacts; still limited by small matmuls and scheduler overhead. |
+| Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
+| Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
+| Hero synthetic benchmark | `~1,000-3,000+` tok/s | Speculative | Requires short context, high concurrency, persistent grouped kernels, MTP commit, and excellent load balance. |
+
+The user-provided `~1k-2k` aggregate tok/s target is a reasonable aspirational
+serving objective for this hardware only after continuous batching and expert
+kernel work land. It should not be treated as the baseline for the current
+runtime. The next sprints should first make the benchmark honest, then raise
+GPU utilization with architectural changes, and only then compare against the
+1k+ tok/s target.
 
 ## Sprint Sequence
 
@@ -925,7 +991,7 @@ recompute, streaming, or externally exposed serving.
   gate now passes `mtp_speculative_serving` and reports
   `missing=aggregate_slot_context_envelope`.
 
-### Sprint 046 - Aggregate Slot/Context Envelope [planned]
+### Sprint 046 - Aggregate Slot/Context Envelope [complete]
 
 - **Goal**: Define and validate the practical slot/context operating envelope
   for the DS4 V100 appliance.
@@ -933,7 +999,134 @@ recompute, streaming, or externally exposed serving.
   readiness blocker is no longer correctness, deployment, startup, or served
   MTP verify; it is whether the appliance can admit useful slot/context modes
   and report aggregate tok/s without overfilling 32 GiB V100 VRAM.
-- **Outcome**: Planned next sprint.
+- **Outcome**: `SHIP`. Admission/queue policy and slot/context envelope tooling
+  are now explicit in the runtime contract and full gate (`slot_context_admission`).
+  Planner tiers, over-context rejection checks, and status/metrics limit fields
+  are implemented. The remaining blocker moved from admission to active
+  microbatch scheduler execution.
+
+### Sprint 047 - Active-Microbatch Scheduler Core [complete]
+
+- **Goal**: Implement scheduler-level multi-slot decode/handoff with per-slot
+  KV/HC state so active microbatch execution has a real device-resident
+  runtime surface.
+- **Rationale**: Sprint 046 proved admission and policy, but execution still
+  used single-slot scheduler state. The next requirement was real slot-strided
+  scheduler ownership and batch decode APIs.
+- **Outcome**: `SHIP`. `ds4_v100_stage_scheduler` now supports up to eight
+  active slots with independent cache slices and HC cursors plus
+  `decode_token_batch`, `decode_hc_batch`, and `handoff_batch` APIs. Scheduler
+  and full-scheduler CUDA smokes now support `--slots N`, and the full gate
+  now includes `active_microbatch_scheduler`. Service status/metrics now expose
+  `scheduler_slots_ready=1` while keeping `tensor_batched_slots=false`.
+
+### Sprint 048 - Request-Loop Active Microbatch Integration [complete]
+
+- **Goal**: Integrate active-microbatch scheduling into the HTTP request loop
+  so concurrent prompts can execute through scheduler batch APIs.
+- **Rationale**: Sprint 047 enabled scheduler-level slot batching, but the
+  service loop still serialized independent requests. Level 6 needed real
+  request-loop integration before throughput benchmarking.
+- **Outcome**: `SHIP`. `tools/ds4-v100-replay --serve` now enqueues pending
+  requests and dispatches batch generation through
+  `ds4_v100_replay_generate_first_token_batch` for non-MTP one-token requests,
+  with fallback behavior preserved for non-batchable requests. Admission and
+  queue policy remain explicit (`reject-busy`/`sequential`). Remaining work is
+  cluster throughput/latency evidence and broader multi-token batching.
+
+### Sprint 049 - Aggregate Throughput Envelope Evidence [complete]
+
+- **Goal**: Convert Level-6 from local/runtime wiring to measured cluster
+  evidence with concurrent load and explicit latency/tok/s metrics.
+- **Rationale**: Sprint 048 completed request-loop integration, but readiness
+  still lacked cluster-backed aggregate throughput and MTP-aware comparison data.
+- **Outcome**: `SHIP`. Added
+  `tools/ds4-v100-aggregate-throughput.sh` and gate rung
+  `aggregate_slot_context_throughput`, and updated gate readiness so it can
+  emit `READY` when no keys are missing. Ran cluster measurements on
+  `llamacpp-build-8gpu` (`gpu-01`) with successful first-token correctness and
+  no request errors across:
+  - `ctx=262144`, `slots=1/2/4/8`, policies `sequential/reject-busy` (base mode);
+  - `ctx=1048576`, `slots=1/8`, policies `sequential/reject-busy` (base mode);
+  - prior `ctx=1048576`, `slots=2/4`, policy `sequential` (base mode);
+  - focused MTP on/off comparison at `ctx=1048576`, `slots=2`, `tokens=2`.
+  Evidence is captured under `logs/from-cluster/sprint049*`.
+
+### Sprint 050 - Readiness Closure And Gate Hardening [complete]
+
+- **Goal**: Close the final proof loop by running the full 8-GPU gate to
+  `ready=true` and harden the gate flow against restart/lock and CLI mismatches.
+- **Rationale**: Sprint 049 added broad throughput evidence, but full closure
+  still depended on a clean all-rungs gate pass with no missing keys.
+- **Outcome**: `SHIP`. Fixed three gate blockers:
+  - added `tools/ds4-v100-plan` to build targets for slot/context admission;
+  - added `--ctx` support to `ds4-v100-appliance-smoke.sh`;
+  - isolated replay lock files per run/case across throughput and serving smokes.
+  Updated gate readiness logic to emit `READY` when no keys are missing.
+  Full cluster gate on `llamacpp-build-8gpu` now reports:
+  `gate readiness READY` and `gate summary PASS failures=0 ready=true`.
+  Artifacts are in `logs/from-cluster/sprint050`.
+
+### Sprint 051 - Gate Aggregate Matrix Profiles [complete]
+
+- **Goal**: Make broader slot/context throughput envelope runs first-class gate
+  operations instead of ad hoc script edits.
+- **Rationale**: Sprint 050 closed readiness and hardened the existing rung,
+  but wide envelope coverage still required manual matrix edits, slowing
+  iteration and increasing operator error risk.
+- **Outcome**: `SHIP`. `tools/ds4-v100-gate.sh` now supports
+  `--aggregate-profile fast|full` with explicit per-axis overrides
+  (`ctx-tiers`, `slot-tiers`, `queue-policies`, `requests`, `tokens`,
+  `host`, `port-base`) and logs the resolved matrix at runtime.
+  `docs/operations/DS4-V100-APPLIANCE.md` now documents both profile defaults
+  and a full-profile cluster invocation pattern. Full-profile gate execution
+  on `llamacpp-build-8gpu` passed all rungs with `ready=true`, and the
+  aggregate rung produced complete 32-case TSV/JSON evidence.
+
+### Sprint 052 - Sustained Decode And Utilization Baseline [planned]
+
+- **Goal**: Replace the one-token aggregate gate as the performance reference
+  with sustained multi-token decode benchmarks, GPU utilization capture, and
+  per-stage/per-kernel timing.
+- **Rationale**: The current tok/s number is dominated by request shape and
+  prompt replay. Before optimizing kernels, the project needs a benchmark that
+  measures steady-state decode under realistic queue depth and records whether
+  GPU utilization, launches, HBM, or synchronization dominate.
+
+### Sprint 053 - Continuous Token-Step Microbatching [planned]
+
+- **Goal**: Extend request-loop batching from first-token-only execution to
+  multi-token token-step execution across active slots.
+- **Rationale**: Moderate and high aggregate throughput require decode to keep
+  multiple sequences resident and advance them together. The current
+  `tensor_batched_slots=false` surface and fallback per-request generation path
+  cannot feed the GPUs enough work.
+
+### Sprint 054 - Hot-Path Kernel Selection And Low-Bit Expert Integration [planned]
+
+- **Goal**: Use Sprint 052 timing to replace the hottest routed/shared FFN and
+  dense projection calls with the best available V100 low-bit kernels, then
+  prove end-to-end speedup without losing selected-token correctness.
+- **Rationale**: The existing MXFP4/Q8/Q4 CUDA paths prove source-format
+  correctness and residency, but practical throughput needs fused unpack/
+  dequant plus tensor-core or integer execution in the main decode hot path, not
+  just standalone smokes.
+
+### Sprint 055 - Routed Expert Batching And Persistent MoE Scheduling [tentative]
+
+- **Goal**: Batch routed experts across active slots and reduce launch overhead
+  with a persistent or grouped-MoE scheduler.
+- **Rationale**: V100 tensor cores need enough effective M to stay busy. The
+  biggest gap between current performance and the 300+ tok/s target is likely
+  expert scatter, small per-expert GEMMs, and per-route launch overhead.
+
+### Sprint 056 - MTP Draft Commit And Throughput Serving [tentative]
+
+- **Goal**: Graduate MTP from one-token verify diagnostics to a committed draft
+  path with rollback safety, then benchmark aggregate decode with MTP enabled.
+- **Rationale**: Served MTP verify is shipped, but it still recomputes the base
+  target token and reports diagnostics. Practical throughput needs accepted
+  drafts to reduce target-model work, with exact rollback boundaries preserved.
 
 ## Parking Lot
 
@@ -1060,6 +1253,10 @@ recompute, streaming, or externally exposed serving.
   benchmark coverage.
 - See `docs/sprints/SPRINT-045-FOLLOWUPS.md`: aggregate slot/context envelope,
   true MTP commit path, MTP service hardening, and startup/upload refinement.
+- See `docs/sprints/SPRINT-047-FOLLOWUPS.md`: request-loop active microbatch
+  integration, slot-tier throughput evidence, and tensor-batched kernel uplift.
+- See `docs/sprints/SPRINT-051-FOLLOWUPS.md`: aggregate throughput regression
+  thresholds and continuation decode coverage.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -1119,6 +1316,13 @@ recompute, streaming, or externally exposed serving.
 | 2026-05-19 | Shipped Sprint 043 production deployment package. | The appliance now has a launcher, explicit config, supervisor templates, metrics/status probes, runbook, rollback mode, and a full-gate production deployment smoke; the remaining blocker is no longer deployment packaging but throughput optimization and operating-envelope measurement. | Sprint 044+ |
 | 2026-05-19 | Shipped Sprint 044 throughput optimization. | Parallel stage open/upload cut cold replay startup to about one minute while preserving selected-token correctness; the remaining blocker is now exposing the already-gated MTP verify path as production speculative serving. | Sprint 045+ |
 | 2026-05-19 | Shipped Sprint 045 production MTP verify serving. | The resident HTTP appliance now exposes explicit MTP verify diagnostics and metrics while preserving base rollback mode; the gate now advances to the aggregate slot/context envelope. | Sprint 046+ |
+| 2026-05-19 | Shipped Sprint 046 slot/context admission envelope. | The runtime now has planner-driven admission tiers, queue/reject policy surfaces, and explicit slot/context gate evidence; the next blocker moved from admission policy to real active microbatch scheduler execution. | Sprint 047+ |
+| 2026-05-19 | Shipped Sprint 047 active-microbatch scheduler core. | Stage schedulers now own per-slot KV/HC state and batch decode/handoff APIs with 2-slot gate evidence; the remaining blocker is request-loop integration for concurrent prompts and throughput evidence at higher slot/context tiers. | Sprint 048+ |
+| 2026-05-19 | Shipped Sprint 048 request-loop active microbatch integration. | The HTTP appliance now batches pending non-MTP one-token requests through scheduler batch APIs while preserving queue/admission semantics; the remaining blocker is cluster throughput and latency evidence across slot/context tiers. | Sprint 049+ |
+| 2026-05-19 | Shipped Sprint 049 aggregate throughput evidence. | The project now has cluster-backed latency/tok/s evidence across 1/2/4/8-slot 256K tiers, 1M extremes, and focused MTP on/off comparison, with a dedicated throughput harness and gate rung; remaining Level-6 work is 128K/512K load evidence, multi-token token-step batching, and full-gate `ready=true` proof. | Sprint 050+ |
+| 2026-05-19 | Shipped Sprint 050 readiness closure. | Gate hardening fixes removed planner-arch mismatch, slot-context CLI mismatch, and lock-file collisions; the full 8-GPU gate now passes all rungs and reports `ready=true`. | Post-vision optimization |
+| 2026-05-19 | Shipped Sprint 051 aggregate profile expansion plus full-profile cluster execution. | The full gate now has explicit `fast` and `full` aggregate throughput profiles with CLI overrides, and the 32-case full-profile matrix was executed on `gpu-01` with `ready=true` and archived artifacts. | Post-vision optimization |
+| 2026-05-19 | Reframed post-readiness work around practical-use optimization. | The current low tok/s and low GPU utilization are explained by one-token benchmark shape, first-token-only batching, per-request reset/prompt replay, diagnostic MTP verify, and non-persistent grouped expert execution; the next roadmap should optimize sustained decode before using 1k+ tok/s as a target. | Sprint 052+ |
 
 ## Open Questions
 
@@ -1131,3 +1335,5 @@ recompute, streaming, or externally exposed serving.
    draft commit without recomputing the base target token?
 4. Should the persistent `/srv/dev/ds4-sprint004` pack become the seed
    deployment artifact, or should a formal pack release format come first?
+5. Which practical-use target matters first: single-user latency, aggregate
+   throughput at 8-32 slots, or synthetic maximum throughput?

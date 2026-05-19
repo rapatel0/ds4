@@ -2,7 +2,7 @@
 
 This runbook covers the current production deployment package for the DS4 V100
 appliance on the 8x 32 GiB V100 host. The default served endpoint is the
-verified one-slot base model path. An explicit MTP verify mode can also expose
+verified base model path with configurable admission slots (default one slot). An explicit MTP verify mode can also expose
 the gated one-token MTP draft/verify diagnostics in the same resident HTTP
 process.
 
@@ -12,8 +12,11 @@ Supported today:
 
 - Source-layout DSv4 Flash base model.
 - 8x V100 layer-sharded resident runtime.
-- One active slot.
-- Sequential loopback HTTP requests.
+- Default one configured slot and one active decode at a time (`active_microbatch=1`).
+- Device-resident stage-scheduler batch primitives for multi-slot decode/handoff
+  (`decode_token_batch`, `decode_hc_batch`, `handoff_batch`) with slot-strided
+  KV and HC state.
+- Sequential/queued loopback HTTP requests (true concurrent generation is not yet implemented).
 - `/health`, `/status`, `/v100/status`, `/metrics`.
 - `POST /v100/selected-token`.
 - Up to 64 generated tokens per request.
@@ -24,8 +27,9 @@ Supported today:
 Not supported today:
 
 - Multi-token MTP draft commit without recomputing the base target token.
-- Multi-slot scheduling.
-- Concurrent HTTP requests.
+- Active request-loop microbatch scheduling across independent concurrent
+  prompts.
+- Concurrent overlapping generation.
 - Streaming responses.
 - OpenAI-compatible API.
 - External unauthenticated exposure.
@@ -49,6 +53,35 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   --ctx 1048576 \
   --slots 1 \
   --log-dir docs/sprints/drafts/SPRINT-045-GATE-CLUSTER-8GPU
+```
+
+Aggregate throughput profile defaults in the gate:
+
+- `--aggregate-profile fast` (default):
+  - `ctx`: `262144,1048576`
+  - `slots`: `2`
+  - `queue-policies`: `sequential`
+  - `requests`: `8`
+  - `tokens`: `1`
+- `--aggregate-profile full`:
+  - `ctx`: `131072,262144,524288,1048576`
+  - `slots`: `1,2,4,8`
+  - `queue-policies`: `sequential,reject-busy`
+  - `requests`: `4`
+  - `tokens`: `1`
+
+For broader envelope runs without editing scripts:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+./tools/ds4-v100-gate.sh \
+  --model /models/DSv4-Flash-256e-fixed.gguf \
+  --mtp-model /models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf \
+  --pack-index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv \
+  --ctx 1048576 \
+  --slots 2 \
+  --aggregate-profile full \
+  --log-dir logs/full-envelope-gate
 ```
 
 ## Required Files
@@ -80,6 +113,8 @@ DS4_V100_MTP_MODEL=/models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf
 DS4_V100_PACK_INDEX=docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv
 DS4_V100_CTX=1048576
 DS4_V100_SLOTS=1
+DS4_V100_ACTIVE_MICROBATCH=1
+DS4_V100_QUEUE_POLICY=reject-busy
 DS4_V100_HOST=127.0.0.1
 DS4_V100_PORT=18080
 DS4_V100_CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
@@ -161,7 +196,7 @@ curl -sf http://127.0.0.1:18080/v100/status
 curl -sf http://127.0.0.1:18080/metrics
 ```
 
-Expected status shape:
+Expected status shape for the default single active request mode (`slots=1`, `active_microbatch=1`):
 
 ```json
 {
@@ -172,7 +207,13 @@ Expected status shape:
   "mtp_enabled": false,
   "limits": {
     "slots": 1,
+    "configured_slots": 1,
+    "active_slots": 1,
+    "active_microbatch": 1,
     "concurrent_requests": 1,
+    "queue_policy": "reject-busy",
+    "scheduler_slots_ready": true,
+    "tensor_batched_slots": false,
     "sequential_requests": true,
     "streaming": false,
     "external_exposure": false,
@@ -181,12 +222,23 @@ Expected status shape:
 }
 ```
 
+For configured slots `N`:
+
+- if `N = 1` then `mode` is `base_one_slot`
+- if `N > 1` then `mode` is `base_slots_<N>`
+
+When `active_microbatch` is `M`, limits report `active_slots`, `active_microbatch`,
+and `concurrent_requests` as `M`.
+
 Expected metrics include:
 
 ```text
 ds4_v100_readiness_level 2
 ds4_v100_ctx_tokens 1048576
 ds4_v100_mtp_enabled 0
+ds4_v100_configured_slots 1
+ds4_v100_active_microbatch 1
+ds4_v100_scheduler_slots_ready 1
 ```
 
 With MTP verify mode enabled:
@@ -299,6 +351,9 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   --mtp-model /models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf \
   --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt \
   --ctx 1048576 \
+  --slots 1 \
+  --active-microbatch 1 \
+  --queue-policy reject-busy \
   --tokens 2 \
   --requests 1 \
   --expected-token-hex 3136 \
@@ -312,7 +367,7 @@ The smoke proves:
 - launcher config validation passes;
 - GPU reserve checks run before upload;
 - `/health`, `/v100/status`, and `/metrics` respond;
-- status reports the base one-slot limits and `mtp_enabled=false`;
+- status reports the configured slot/microbatch limits and `mtp_enabled=false`;
 - the official fixture still produces first-token bytes `3136`;
 - `served_requests` advances in the running service.
 
