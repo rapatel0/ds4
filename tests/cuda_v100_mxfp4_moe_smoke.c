@@ -213,6 +213,8 @@ int main(void) {
     float gpu_hidden[HIDDEN];
     float mid_ref[MID];
     float mid_fused[MID];
+    float next_ref[HIDDEN];
+    float next_fused[HIDDEN];
     float cpu_logits[VOCAB];
     float gpu_logits[VOCAB];
     if (!payload) {
@@ -296,6 +298,7 @@ int main(void) {
     ds4_gpu_tensor *mid_t = ds4_gpu_tensor_alloc(MID * sizeof(float));
     ds4_gpu_tensor *fused_mid_t = ds4_gpu_tensor_alloc(MID * sizeof(float));
     ds4_gpu_tensor *route_t = ds4_gpu_tensor_alloc(HIDDEN * sizeof(float));
+    ds4_gpu_tensor *fused_next_t = ds4_gpu_tensor_alloc(HIDDEN * sizeof(float));
     ds4_gpu_tensor *accum_a = ds4_gpu_tensor_alloc(HIDDEN * sizeof(float));
     ds4_gpu_tensor *accum_b = ds4_gpu_tensor_alloc(HIDDEN * sizeof(float));
     ds4_gpu_tensor *router_t = ds4_gpu_tensor_alloc(256 * sizeof(float));
@@ -303,11 +306,13 @@ int main(void) {
     ds4_gpu_tensor *selected_t = ds4_gpu_tensor_alloc(ROUTES * sizeof(int32_t));
     ds4_gpu_tensor *weights_t = ds4_gpu_tensor_alloc(ROUTES * sizeof(float));
     ds4_gpu_tensor *logits_t = ds4_gpu_tensor_alloc(VOCAB * sizeof(float));
-    check(hidden_t && gate_t && up_t && mid_t && fused_mid_t && route_t && accum_a && accum_b &&
+    check(hidden_t && gate_t && up_t && mid_t && fused_mid_t && route_t && fused_next_t &&
+              accum_a && accum_b &&
               router_t && probs_t && selected_t && weights_t && logits_t,
           "tensor allocate");
 
-    if (hidden_t && gate_t && up_t && mid_t && fused_mid_t && route_t && accum_a && accum_b &&
+    if (hidden_t && gate_t && up_t && mid_t && fused_mid_t && route_t && fused_next_t &&
+        accum_a && accum_b &&
         router_t && probs_t && selected_t && weights_t && logits_t) {
         int dummy_model = 0;
         int32_t gpu_selected[ROUTES];
@@ -396,6 +401,19 @@ int main(void) {
             check(ds4_gpu_arena_mxfp4_matmul_f32(arena, &down_view, fused_mid_t, route_t) == 0,
                   "down mxfp4 matmul");
             check(ds4_gpu_add_tensor(next, accum, route_t, HIDDEN), "route accumulate");
+            check(ds4_gpu_arena_mxfp4_matmul_add_f32(arena,
+                                                      &down_view,
+                                                      fused_mid_t,
+                                                      accum,
+                                                      fused_next_t) == 0,
+                  "fused down accumulate");
+            check(ds4_gpu_tensor_read(next, 0, next_ref, sizeof(next_ref)),
+                  "next ref read");
+            check(ds4_gpu_tensor_read(fused_next_t, 0, next_fused, sizeof(next_fused)),
+                  "next fused read");
+            for (uint32_t h = 0; h < HIDDEN; h++) {
+                expect_close(next_fused[h], next_ref[h], 1e-4f, "fused next");
+            }
             ds4_gpu_tensor *tmp = accum;
             accum = next;
             next = tmp;
@@ -458,6 +476,7 @@ int main(void) {
     ds4_gpu_tensor_free(router_t);
     ds4_gpu_tensor_free(accum_b);
     ds4_gpu_tensor_free(accum_a);
+    ds4_gpu_tensor_free(fused_next_t);
     ds4_gpu_tensor_free(route_t);
     ds4_gpu_tensor_free(fused_mid_t);
     ds4_gpu_tensor_free(mid_t);

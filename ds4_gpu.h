@@ -144,6 +144,12 @@ int ds4_gpu_arena_mxfp4_pair_swiglu_f32(
         ds4_gpu_tensor                *out_f32,
         float                          clamp,
         float                          weight);
+int ds4_gpu_arena_mxfp4_matmul_add_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *view,
+        const ds4_gpu_tensor          *x_f32,
+        const ds4_gpu_tensor          *add_f32,
+        ds4_gpu_tensor                *out_f32);
 int ds4_gpu_arena_q8_0_matmul_f32(
         const ds4_gpu_arena           *arena,
         const ds4_gpu_source_row_view *view,

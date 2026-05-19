@@ -2054,6 +2054,37 @@ __global__ static void arena_mxfp4_pair_swiglu_kernel(
     }
 }
 
+__global__ static void arena_mxfp4_matmul_add_kernel(
+        float *out,
+        const uint8_t *base,
+        const float *x,
+        const float *add,
+        uint32_t rows,
+        uint32_t cols,
+        uint32_t row_stride_bytes) {
+    const uint32_t r = blockIdx.x;
+    if (r >= rows) return;
+    const uint8_t *row = base + (uint64_t)r * row_stride_bytes;
+    float acc = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        const uint8_t *block = row + (uint64_t)(c / 32u) * 17ull;
+        const uint32_t lane = c % 32u;
+        const uint8_t packed = block[1u + (lane % 16u)];
+        const uint8_t q = lane < 16u ? (packed & 0x0fu) : ((packed >> 4) & 0x0fu);
+        const float w = arena_mxfp4_nibble_to_f32(q) * arena_e8m0_to_f32(block[0]);
+        acc += w * x[c];
+    }
+
+    __shared__ float partial[256];
+    partial[threadIdx.x] = acc;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) partial[threadIdx.x] += partial[threadIdx.x + stride];
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) out[r] = add[r] + partial[0];
+}
+
 extern "C" int ds4_gpu_arena_open(ds4_gpu_arena **out, int gpu, uint64_t bytes) {
     if (!out || gpu < 0) return 1;
     *out = NULL;
@@ -2599,6 +2630,30 @@ extern "C" int ds4_gpu_arena_mxfp4_pair_swiglu_f32(
         clamp,
         weight);
     return cuda_ok(cudaGetLastError(), "mxfp4 pair swiglu launch") ? 0 : 1;
+}
+
+extern "C" int ds4_gpu_arena_mxfp4_matmul_add_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *view,
+        const ds4_gpu_tensor          *x_f32,
+        const ds4_gpu_tensor          *add_f32,
+        ds4_gpu_tensor                *out_f32) {
+    if (!cuda_mxfp4_matmul_view_ok(arena, view, x_f32, out_f32) ||
+        !add_f32 || !add_f32->ptr ||
+        add_f32->bytes < (uint64_t)view->rows * sizeof(float)) {
+        return 1;
+    }
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "mxfp4 matmul add set device")) return 1;
+    const uint8_t *base = (const uint8_t *)((const char *)arena->ptr + view->arena_offset);
+    arena_mxfp4_matmul_add_kernel<<<view->rows, 256>>>(
+        (float *)out_f32->ptr,
+        base,
+        (const float *)x_f32->ptr,
+        (const float *)add_f32->ptr,
+        view->rows,
+        view->cols,
+        view->row_stride_bytes);
+    return cuda_ok(cudaGetLastError(), "mxfp4 matmul add launch") ? 0 : 1;
 }
 
 extern "C" void ds4_gpu_set_quality(bool quality) {

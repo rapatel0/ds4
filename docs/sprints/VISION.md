@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-19
 last_updated_by: vision
-revision: 66
+revision: 67
 ---
 
 # Vision: DS4 V100 Appliance
@@ -342,6 +342,14 @@ optimized V100 low-bit expert kernels in the actual hot path.
   `3.371659` to `3.486851`, but average GPU utilization remains about `11%`.
   This validates the fusion direction while showing that larger route/down
   grouping is still required.
+- Sprint 055 shipped the second routed-MXFP4 fusion: down projection and route
+  accumulation now run as one CUDA primitive. Correctness still selects token
+  hex `3136`, and the focused MXFP4 smoke compares fused down+add against the
+  previous separate sequence. Sustained 1M generated tok/s improved from
+  `3.384749` to `3.410425` at one slot and from `3.486851` to `3.503283` at
+  two slots. The gain is now below 1%, so further one-route launch cleanup is
+  not enough; the next jump needs grouped selected-route execution or a real
+  layer-executor batch path.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -387,6 +395,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 052 sustained one-slot baseline | `3.30` generated tok/s, `3.10` continuation tok/s | Measured | Multi-token requests at 1M context prove low utilization remains real: average GPU utilization `10.804%`, max `22.000%`. |
 | Sprint 053 same-length token-step batching | `3.37` generated tok/s, `3.16` continuation tok/s | Measured | Two-slot serving proves the batch branch is used (`1` group / `2` requests / `32` tokens), but only improves aggregate generated tok/s by about `2.4%`; average GPU utilization remains about `11%`. |
 | Sprint 054 fused MXFP4 gate/up/SwiGLU | `3.49` generated tok/s, `3.27` continuation tok/s | Measured | First hot-path fusion is correct and improves 1M sustained two-slot generated tok/s by about `3.4%` over Sprint 053, but utilization remains about `11%`. |
+| Sprint 055 fused MXFP4 down+accum | `3.50` generated tok/s, `3.28` continuation tok/s | Measured | Removes another routed route launch, but improves two-slot generated tok/s by only about `0.5%` over Sprint 054; one-route cleanup is reaching diminishing returns. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -1165,13 +1174,22 @@ GPU utilization with architectural changes, and only then compare against the
   utilization, so Sprint 055 should fuse routed down/accumulation and group
   selected routes.
 
-### Sprint 055 - Routed Expert Batching And Persistent MoE Scheduling [tentative]
+### Sprint 055 - Routed Expert Batching And Persistent MoE Scheduling [complete]
 
 - **Goal**: Batch routed experts across active slots and reduce launch overhead
   with a persistent or grouped-MoE scheduler.
 - **Rationale**: V100 tensor cores need enough effective M to stay busy. The
   biggest gap between current performance and the 300+ tok/s target is likely
   expert scatter, small per-expert GEMMs, and per-route launch overhead.
+- **Outcome**: `SHIP`, with scope narrowed to the next bounded launch reduction.
+  Added `ds4_gpu_arena_mxfp4_matmul_add_f32`, wired routed down+accumulation
+  into the scheduler, extended smoke coverage, proved real replay token hex
+  `3136`, and archived cluster artifacts under
+  `logs/from-cluster/sprint055-mxfp4-down-accum`. The speedup over Sprint 054
+  is small (`3.384749` to `3.410425` generated tok/s at one slot;
+  `3.486851` to `3.503283` at two slots), so Sprint 056 should stop
+  one-route-at-a-time cleanup and group selected routes or batch layer
+  execution across slots.
 
 ### Sprint 056 - MTP Draft Commit And Throughput Serving [tentative]
 
@@ -1379,6 +1397,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-19 | Shipped Sprint 052 sustained decode baseline. | The project now has a sustained multi-token benchmark with GPU utilization sampling and first cluster evidence: 1M context, one slot, 16 tokens/request, 3.304551 generated tok/s, 3.098017 continuation tok/s, and 10.804% average GPU utilization. The next blocker is continuous token-step batching. | Sprint 053+ |
 | 2026-05-19 | Shipped Sprint 053 continuous token-step microbatching. | Same-length non-MTP HTTP batches now advance through the multi-token replay batch API and expose tensor-batch counters. The V100 run proved one two-request / 32-token batch at 1M context, but throughput rose only about 2.4% and GPU utilization stayed near 11%, moving the next blocker to hot-path low-bit kernels and persistent expert scheduling. | Sprint 054+ |
 | 2026-05-19 | Shipped Sprint 054 fused MXFP4 routed gate/up/SwiGLU. | The first main-path source-MXFP4 fusion preserved selected-token correctness and improved sustained generated tok/s by roughly 3%, but utilization stayed near 11%. The next blocker is still launch/occupancy in the routed expert path, especially down projection, route accumulation, and grouping all selected routes. | Sprint 055+ |
+| 2026-05-19 | Shipped Sprint 055 fused MXFP4 routed down accumulation. | Down projection and route accumulation are now fused in the main routed expert path, preserving selected-token correctness and adding a sub-1% sustained speedup. This is a useful diminishing-returns signal: the next sprint needs grouped route execution or layer-executor batch kernels. | Sprint 056+ |
 
 ## Open Questions
 

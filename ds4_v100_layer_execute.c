@@ -746,7 +746,6 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
     ds4_gpu_tensor *selected_t = ds4_gpu_tensor_alloc(6u * sizeof(int32_t));
     ds4_gpu_tensor *weights_t = ds4_gpu_tensor_alloc(6u * sizeof(float));
     ds4_gpu_tensor *mid_t = ds4_gpu_tensor_alloc((uint64_t)mid * sizeof(float));
-    ds4_gpu_tensor *route_t = ds4_gpu_tensor_alloc((uint64_t)hidden * sizeof(float));
     ds4_gpu_tensor *accum_a = ds4_gpu_tensor_alloc((uint64_t)hidden * sizeof(float));
     ds4_gpu_tensor *accum_b = ds4_gpu_tensor_alloc((uint64_t)hidden * sizeof(float));
     ds4_gpu_tensor *shared_gate_t = ds4_gpu_tensor_alloc((uint64_t)mid * sizeof(float));
@@ -758,7 +757,7 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
     int32_t selected[6] = {0};
     float weights[6] = {0};
     if (!router_t || !probs_t || !selected_t || !weights_t ||
-        !mid_t || !route_t || !accum_a || !accum_b ||
+        !mid_t || !accum_a || !accum_b ||
         !shared_gate_t || !shared_up_t || !shared_mid_t || !shared_t) {
         exec_error(err, errlen, "failed to allocate FFN executor tensors");
         goto done;
@@ -825,8 +824,11 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
                                                 mid_t,
                                                 10.0f,
                                                 weights[route]) != 0 ||
-            ds4_gpu_arena_mxfp4_matmul_f32(cfg->arena, &down_v, mid_t, route_t) != 0 ||
-            !ds4_gpu_add_tensor(next, accum, route_t, hidden)) {
+            ds4_gpu_arena_mxfp4_matmul_add_f32(cfg->arena,
+                                                &down_v,
+                                                mid_t,
+                                                accum,
+                                                next) != 0) {
             exec_error(err, errlen, "routed FFN route %u failed", route);
             goto done;
         }
@@ -861,7 +863,6 @@ done:
     ds4_gpu_tensor_free(shared_gate_t);
     ds4_gpu_tensor_free(accum_b);
     ds4_gpu_tensor_free(accum_a);
-    ds4_gpu_tensor_free(route_t);
     ds4_gpu_tensor_free(mid_t);
     ds4_gpu_tensor_free(weights_t);
     ds4_gpu_tensor_free(selected_t);
