@@ -74,6 +74,16 @@ typedef struct {
 } ds4_gpu_source_row_view;
 
 typedef struct {
+    uint64_t arena_offset;
+    uint64_t byte_length;
+    uint32_t experts;
+    uint32_t rows;
+    uint32_t cols;
+    uint32_t row_stride_bytes;
+    uint64_t expert_stride_bytes;
+} ds4_gpu_q4_k_expert_view;
+
+typedef struct {
     uint32_t ratio;
     uint32_t slot;
     uint32_t slots;
@@ -11635,6 +11645,204 @@ extern "C" int ds4_gpu_routed_moe_batch_tensor(ds4_gpu_tensor *out, ds4_gpu_tens
                              down_expert_bytes, down_row_bytes,
                              expert_in_dim, expert_mid_dim, out_dim,
                              selected, weights, n_expert, clamp, x, n_tokens);
+}
+
+static int q4_k_expert_row_bytes(uint32_t cols, uint64_t *out) {
+    if (cols == 0 || cols % CUDA_QK_K) return 1;
+    const uint64_t blocks = (uint64_t)cols / CUDA_QK_K;
+    if (blocks > UINT64_MAX / sizeof(cuda_block_q4_K)) return 1;
+    *out = blocks * sizeof(cuda_block_q4_K);
+    return 0;
+}
+
+static int cuda_q4_k_expert_view_ok(
+        const ds4_gpu_arena *arena,
+        const ds4_gpu_q4_k_expert_view *view,
+        uint32_t cols,
+        uint32_t rows,
+        uint64_t *row_bytes_out,
+        uint64_t *expert_bytes_out) {
+    if (!arena || !view || !arena->valid || !arena->ptr ||
+        view->experts == 0 || view->rows != rows || view->cols != cols ||
+        view->row_stride_bytes == 0 || view->expert_stride_bytes == 0) {
+        return 0;
+    }
+    if (!cuda_arena_range_ok(arena, view->arena_offset, view->byte_length)) return 0;
+
+    uint64_t row_bytes = 0;
+    if (q4_k_expert_row_bytes(cols, &row_bytes)) return 0;
+    if ((uint64_t)view->row_stride_bytes < row_bytes) return 0;
+
+    uint64_t last_row_start = 0;
+    if (checked_mul_u64((uint64_t)rows - 1u,
+                        (uint64_t)view->row_stride_bytes,
+                        &last_row_start)) {
+        return 0;
+    }
+    if (last_row_start > view->expert_stride_bytes ||
+        row_bytes > view->expert_stride_bytes - last_row_start) {
+        return 0;
+    }
+
+    uint64_t min_expert_bytes = 0;
+    if (checked_mul_u64((uint64_t)rows,
+                        (uint64_t)view->row_stride_bytes,
+                        &min_expert_bytes)) {
+        return 0;
+    }
+    if (view->expert_stride_bytes < min_expert_bytes) return 0;
+
+    uint64_t required_bytes = 0;
+    if (checked_mul_u64((uint64_t)view->experts,
+                        view->expert_stride_bytes,
+                        &required_bytes)) {
+        return 0;
+    }
+    if (required_bytes > view->byte_length) return 0;
+
+    if (row_bytes_out) *row_bytes_out = row_bytes;
+    if (expert_bytes_out) *expert_bytes_out = view->expert_stride_bytes;
+    return 1;
+}
+
+extern "C" int ds4_gpu_arena_q4_k_routed_moe_one_f32(
+        const ds4_gpu_arena             *arena,
+        const ds4_gpu_q4_k_expert_view  *gate,
+        const ds4_gpu_q4_k_expert_view  *up,
+        const ds4_gpu_q4_k_expert_view  *down_w,
+        ds4_gpu_tensor                  *out_f32,
+        ds4_gpu_tensor                  *gate_tmp_f32,
+        ds4_gpu_tensor                  *up_tmp_f32,
+        ds4_gpu_tensor                  *mid_tmp_f32,
+        ds4_gpu_tensor                  *down_tmp_f32,
+        const ds4_gpu_tensor            *selected_i32,
+        const ds4_gpu_tensor            *weights_f32,
+        const ds4_gpu_tensor            *x_f32,
+        uint32_t                         n_expert,
+        float                            clamp) {
+    uint64_t gate_row_bytes = 0;
+    uint64_t gate_expert_bytes = 0;
+    uint64_t up_row_bytes = 0;
+    uint64_t up_expert_bytes = 0;
+    uint64_t down_row_bytes = 0;
+    uint64_t down_expert_bytes = 0;
+    if (!arena || !gate || !up || !down_w || !out_f32 || !gate_tmp_f32 ||
+        !up_tmp_f32 || !mid_tmp_f32 || !down_tmp_f32 || !selected_i32 ||
+        !weights_f32 || !x_f32 || n_expert != 6u || gate->experts != 256u ||
+        up->experts != 256u || down_w->experts != 256u) {
+        return 1;
+    }
+    if (!cuda_q4_k_expert_view_ok(arena,
+                                  gate,
+                                  gate->cols,
+                                  gate->rows,
+                                  &gate_row_bytes,
+                                  &gate_expert_bytes) ||
+        !cuda_q4_k_expert_view_ok(arena,
+                                  up,
+                                  gate->cols,
+                                  gate->rows,
+                                  &up_row_bytes,
+                                  &up_expert_bytes) ||
+        !cuda_q4_k_expert_view_ok(arena,
+                                  down_w,
+                                  gate->rows,
+                                  down_w->rows,
+                                  &down_row_bytes,
+                                  &down_expert_bytes)) {
+        return 1;
+    }
+    if (gate->cols == 0 || gate->rows == 0 || down_w->rows == 0 ||
+        gate->cols % CUDA_QK_K != 0 || gate->rows % CUDA_QK_K != 0 ||
+        up_row_bytes != gate_row_bytes || up_expert_bytes != gate_expert_bytes ||
+        down_w->cols != gate->rows) {
+        return 1;
+    }
+
+    ds4_gpu_tensor *tensors[] = {
+        out_f32, gate_tmp_f32, up_tmp_f32, mid_tmp_f32, down_tmp_f32,
+        (ds4_gpu_tensor *)selected_i32, (ds4_gpu_tensor *)weights_f32,
+        (ds4_gpu_tensor *)x_f32,
+    };
+    for (uint32_t i = 0; i < sizeof(tensors) / sizeof(tensors[0]); i++) {
+        if (!tensors[i] || !tensors[i]->ptr || tensors[i]->device != arena->gpu) return 1;
+    }
+
+    const uint32_t expert_in_dim = gate->cols;
+    const uint32_t expert_mid_dim = gate->rows;
+    const uint32_t out_dim = down_w->rows;
+    const uint32_t xq_blocks = expert_in_dim / CUDA_QK_K;
+    const uint32_t midq_blocks = expert_mid_dim / CUDA_QK_K;
+    const uint64_t gate_values = (uint64_t)n_expert * expert_mid_dim;
+    const uint64_t down_values = (uint64_t)n_expert * out_dim;
+    const uint64_t xq_bytes = (uint64_t)xq_blocks * sizeof(cuda_block_q8_K);
+    const uint64_t midq_bytes = (uint64_t)n_expert * midq_blocks * sizeof(cuda_block_q8_K);
+    if (x_f32->bytes < (uint64_t)expert_in_dim * sizeof(float) ||
+        selected_i32->bytes < (uint64_t)n_expert * sizeof(int32_t) ||
+        weights_f32->bytes < (uint64_t)n_expert * sizeof(float) ||
+        out_f32->bytes < (uint64_t)out_dim * sizeof(float) ||
+        gate_tmp_f32->bytes < gate_values * sizeof(float) ||
+        up_tmp_f32->bytes < gate_values * sizeof(float) ||
+        mid_tmp_f32->bytes < gate_values * sizeof(float) ||
+        down_tmp_f32->bytes < down_values * sizeof(float) ||
+        down_tmp_f32->bytes < xq_bytes ||
+        gate_tmp_f32->bytes < midq_bytes) {
+        return 1;
+    }
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "q4_k arena routed moe set device")) return 1;
+
+    const char *gate_w = (const char *)arena->ptr + gate->arena_offset;
+    const char *up_w = (const char *)arena->ptr + up->arena_offset;
+    const char *down_ptr = (const char *)arena->ptr + down_w->arena_offset;
+    cuda_block_q8_K *xq = (cuda_block_q8_K *)down_tmp_f32->ptr;
+    cuda_block_q8_K *midq = (cuda_block_q8_K *)gate_tmp_f32->ptr;
+
+    dim3 xq_grid(xq_blocks, 1, 1);
+    q8_K_quantize_kernel<<<xq_grid, 256>>>(
+            xq,
+            (const float *)x_f32->ptr,
+            expert_in_dim,
+            1);
+    if (!cuda_ok(cudaGetLastError(), "q4_k arena x quantize launch")) return 1;
+
+    dim3 qgrid((expert_mid_dim + 127u) / 128u, n_expert, 1);
+    moe_gate_up_mid_decode_q4K_qwarp32_kernel<<<qgrid, 256>>>(
+            (float *)gate_tmp_f32->ptr,
+            (float *)up_tmp_f32->ptr,
+            (float *)mid_tmp_f32->ptr,
+            gate_w,
+            up_w,
+            xq,
+            (const int32_t *)selected_i32->ptr,
+            (const float *)weights_f32->ptr,
+            gate_expert_bytes,
+            gate_row_bytes,
+            xq_blocks,
+            expert_mid_dim,
+            n_expert,
+            0,
+            clamp);
+    if (!cuda_ok(cudaGetLastError(), "q4_k arena gate/up launch")) return 1;
+
+    dim3 midq_grid(midq_blocks, n_expert, 1);
+    q8_K_quantize_kernel<<<midq_grid, 256>>>(
+            midq,
+            (const float *)mid_tmp_f32->ptr,
+            expert_mid_dim,
+            n_expert);
+    if (!cuda_ok(cudaGetLastError(), "q4_k arena mid quantize launch")) return 1;
+
+    dim3 sgrid((out_dim + 31u) / 32u, 1, 1);
+    moe_down_q4K_sum6_qwarp32_kernel<<<sgrid, 256>>>(
+            (float *)out_f32->ptr,
+            down_ptr,
+            midq,
+            (const int32_t *)selected_i32->ptr,
+            down_expert_bytes,
+            down_row_bytes,
+            midq_blocks,
+            out_dim);
+    return cuda_ok(cudaGetLastError(), "q4_k arena down launch") ? 0 : 1;
 }
 extern "C" int ds4_gpu_hc_split_sinkhorn_tensor(ds4_gpu_tensor *out, const ds4_gpu_tensor *mix, const void *model_map, uint64_t model_size, uint64_t scale_offset, uint64_t base_offset, uint32_t n_hc, uint32_t sinkhorn_iters, float eps) {
     if (!out || !mix || !model_map || n_hc != 4) return 0;

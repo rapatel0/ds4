@@ -1,0 +1,1 @@
+{"service":"ds4-v100-replay","status":"ok","mode":"base_one_slot","readiness_level":2,"mtp_enabled":false,"model_path":"/models/DSv4-Flash-256e-fixed.gguf","pack_index_path":"docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv","ctx_tokens":1048576,"default_tokens":2,"max_tokens":64,"served_requests":1}

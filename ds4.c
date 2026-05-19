@@ -2881,7 +2881,7 @@ static const char *mtp_kernel_family(const char *name, const ds4_tensor *t) {
     if (strstr(name, "ffn_gate_exps") ||
         strstr(name, "ffn_up_exps") ||
         strstr(name, "ffn_down_exps")) {
-        return t->type == DS4_TENSOR_Q4_K ? "v100_q4_k_routed_moe_pending"
+        return t->type == DS4_TENSOR_Q4_K ? "v100_q4_k_routed_moe"
                                            : "v100_routed_quant_pending";
     }
     if (strstr(name, "ffn_gate_shexp") ||

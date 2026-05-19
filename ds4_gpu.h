@@ -71,6 +71,16 @@ typedef struct {
     uint32_t row_stride_bytes;
 } ds4_gpu_source_row_view;
 
+typedef struct {
+    uint64_t arena_offset;
+    uint64_t byte_length;
+    uint32_t experts;
+    uint32_t rows;
+    uint32_t cols;
+    uint32_t row_stride_bytes;
+    uint64_t expert_stride_bytes;
+} ds4_gpu_q4_k_expert_view;
+
 int ds4_gpu_device_count(void);
 int ds4_gpu_arena_open(ds4_gpu_arena **out, int gpu, uint64_t bytes);
 void ds4_gpu_arena_close(ds4_gpu_arena *arena);
@@ -140,6 +150,21 @@ int ds4_gpu_arena_f32_rms_norm_f32(
         uint32_t                       n,
         uint32_t                       rows,
         float                          eps);
+int ds4_gpu_arena_q4_k_routed_moe_one_f32(
+        const ds4_gpu_arena             *arena,
+        const ds4_gpu_q4_k_expert_view  *gate,
+        const ds4_gpu_q4_k_expert_view  *up,
+        const ds4_gpu_q4_k_expert_view  *down_w,
+        ds4_gpu_tensor                  *out_f32,
+        ds4_gpu_tensor                  *gate_tmp_f32,
+        ds4_gpu_tensor                  *up_tmp_f32,
+        ds4_gpu_tensor                  *mid_tmp_f32,
+        ds4_gpu_tensor                  *down_tmp_f32,
+        const ds4_gpu_tensor            *selected_i32,
+        const ds4_gpu_tensor            *weights_f32,
+        const ds4_gpu_tensor            *x_f32,
+        uint32_t                         n_expert,
+        float                            clamp);
 
 /* =========================================================================
  * Embeddings and Indexer Helpers.

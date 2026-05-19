@@ -346,3 +346,35 @@ int ds4_gpu_arena_f32_rms_norm_f32(
     (void)eps;
     return 1;
 }
+
+int ds4_gpu_arena_q4_k_routed_moe_one_f32(
+        const ds4_gpu_arena             *arena,
+        const ds4_gpu_q4_k_expert_view  *gate,
+        const ds4_gpu_q4_k_expert_view  *up,
+        const ds4_gpu_q4_k_expert_view  *down_w,
+        ds4_gpu_tensor                  *out_f32,
+        ds4_gpu_tensor                  *gate_tmp_f32,
+        ds4_gpu_tensor                  *up_tmp_f32,
+        ds4_gpu_tensor                  *mid_tmp_f32,
+        ds4_gpu_tensor                  *down_tmp_f32,
+        const ds4_gpu_tensor            *selected_i32,
+        const ds4_gpu_tensor            *weights_f32,
+        const ds4_gpu_tensor            *x_f32,
+        uint32_t                         n_expert,
+        float                            clamp) {
+    (void)arena;
+    (void)gate;
+    (void)up;
+    (void)down_w;
+    (void)out_f32;
+    (void)gate_tmp_f32;
+    (void)up_tmp_f32;
+    (void)mid_tmp_f32;
+    (void)down_tmp_f32;
+    (void)selected_i32;
+    (void)weights_f32;
+    (void)x_f32;
+    (void)n_expert;
+    (void)clamp;
+    return 1;
+}

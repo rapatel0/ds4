@@ -56,6 +56,13 @@ int ds4_v100_mtp_sidecar_f32_vector_view(
         char *err,
         size_t errlen);
 
+int ds4_v100_mtp_sidecar_q4_k_expert_view(
+        const ds4_v100_mtp_sidecar *sidecar,
+        const char *name,
+        ds4_gpu_q4_k_expert_view *out,
+        char *err,
+        size_t errlen);
+
 ds4_gpu_arena *ds4_v100_mtp_sidecar_arena(ds4_v100_mtp_sidecar *sidecar);
 uint64_t ds4_v100_mtp_sidecar_uploaded_bytes(const ds4_v100_mtp_sidecar *sidecar);
 uint64_t ds4_v100_mtp_sidecar_spot_checks(const ds4_v100_mtp_sidecar *sidecar);
