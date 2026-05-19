@@ -328,3 +328,21 @@ int ds4_gpu_arena_q8_0_matmul_f32(
     (void)n_tok;
     return 1;
 }
+
+int ds4_gpu_arena_f32_rms_norm_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *weight,
+        const ds4_gpu_tensor          *x_f32,
+        ds4_gpu_tensor                *out_f32,
+        uint32_t                       n,
+        uint32_t                       rows,
+        float                          eps) {
+    (void)arena;
+    (void)weight;
+    (void)x_f32;
+    (void)out_f32;
+    (void)n;
+    (void)rows;
+    (void)eps;
+    return 1;
+}

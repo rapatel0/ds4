@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
-last_updated: 2026-05-18
+last_updated: 2026-05-19
 last_updated_by: vision
-revision: 45
+revision: 46
 ---
 
 # Vision: DS4 V100 Appliance
@@ -195,6 +195,12 @@ it is a narrow DS4 runtime tuned for this hardware.
   `mtp.0.e_proj.weight` plus `mtp.0.h_proj.weight` parity against the existing
   Q8_0 CUDA path with `max_abs=0`; readiness remains blocked on full
   `missing=mtp_forward`.
+- Sprint 034 shipped resident MTP prefix composition. The gpu7 sidecar arena
+  now feeds F32 `enorm`/`hnorm` weights and Q8_0 `e_proj`/`h_proj` weights into
+  the native prefix chain, producing `mtp_input_hc` with F32 norms matching CPU
+  within `4.5e-08` and the full CPU-reference prefix chain within the explicit
+  Q8 accumulation tolerance. Readiness remains blocked on full
+  `missing=mtp_forward`.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -210,7 +216,7 @@ mean "nothing works"; it should say which rung has not been proven yet.
 | 0 | Fit and residency | The source model can be mapped, packed, and held in 8x V100 VRAM with reserve. | Pack inventory, per-GPU memory plan, resident upload smoke, source-layout guards. | Complete through Sprints 001-006. |
 | 1 | Single-prompt base correctness | The base model path can run one known prompt through all 43 layers and select the expected first token. | Full 8-stage scheduler, output-head parity, selected-token hex `3136`, one-shot replay. | Complete through Sprints 024-028. |
 | 2 | Minimal usable base appliance | A human/operator can start the base model service and use it for short non-MTP one-slot generation with documented limits. | Longer prompt/decode smoke, repeat HTTP requests, failure logs, run command, health check, 1-slot timing report. | Complete through Sprint 032, with explicit limits: one slot, sequential loopback HTTP, no MTP, no streaming, no production supervisor. |
-| 3 | MTP-assisted correctness | The resident MTP sidecar can produce a K=1 draft token that matches a trusted oracle and does not corrupt target-model state. | MTP sidecar residency, Q8_0/Q4_K kernel parity, MTP forward logits/top-k, draft/verify/rollback tests. | Partially complete. Sprint 031 shipped residency; Sprint 033 shipped resident Q8_0 projection parity for the MTP prefix; the current gate remains stopped at `missing=mtp_forward`. |
+| 3 | MTP-assisted correctness | The resident MTP sidecar can produce a K=1 draft token that matches a trusted oracle and does not corrupt target-model state. | MTP sidecar residency, Q8_0/Q4_K kernel parity, MTP forward logits/top-k, draft/verify/rollback tests. | Partially complete. Sprint 031 shipped residency; Sprint 033 shipped resident Q8_0 projection parity; Sprint 034 shipped resident F32 norm plus prefix HC composition. The current gate remains stopped at `missing=mtp_forward`. |
 | 4 | Throughput appliance | The service has measured aggregate tok/s and a clear slot/context operating envelope. | Startup/upload timings, decode timings, slot admission, 1/2/4/8-slot benchmarks, context-tier benchmarks. | Not complete. Existing timings are diagnostic, not a throughput claim. |
 | 5 | Production deployment | The appliance can be left running on the cluster with operational confidence. | Supervised service, config files, restart behavior, health/metrics endpoint, deployment/runbook, known rollback path. | Not complete. Current HTTP path is a loopback smoke, not deployment packaging. |
 
@@ -656,6 +662,20 @@ MTP-assisted, or production-deployed serving.
   `tools/ds4-v100-mtp-prefix-smoke` validates `e_proj` and `h_proj` with
   `max_abs=0`, and the full V100 gate passes with `missing=mtp_forward`.
 
+### Sprint 034 - V100 Resident MTP Prefix Composition Probe [complete]
+
+- **Goal**: Extend the resident MTP compute proof from standalone Q8_0
+  projection parity to the full native prefix composition chain.
+- **Rationale**: The MTP block consumes `mtp_input_hc`, not isolated projection
+  outputs. The runtime needed resident F32 norm-weight access and HC
+  composition before dense MTP block execution or draft logits could be
+  meaningful.
+- **Outcome**: `SHIP`. `ds4_gpu_arena_f32_rms_norm_f32` and
+  `ds4_v100_mtp_sidecar_f32_vector_view` now support resident F32 prefix norms,
+  `tools/ds4-v100-mtp-prefix-smoke` validates `enorm`, `e_proj`, HC repeat,
+  `hnorm`, `h_proj`, and `mtp_input_hc`, and the full V100 gate passes with
+  `failures=0 ready=false missing=mtp_forward`.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -745,6 +765,9 @@ MTP-assisted, or production-deployed serving.
 - See `docs/sprints/SPRINT-033-FOLLOWUPS.md`: resident MTP F32 prefix norms and
   HC composition, resident Q4_K MTP routed experts, high-offset mmap cache
   hardening, and full MTP logits/top-k plus draft/verify/rollback tests.
+- See `docs/sprints/SPRINT-034-FOLLOWUPS.md`: resident MTP Q4_K routed
+  experts, dense MTP block execution, MTP logits/top-k plus draft rollback, and
+  CUDA model-map cache hardening for sidecar tensor-local copies.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -792,6 +815,7 @@ MTP-assisted, or production-deployed serving.
 | 2026-05-18 | Added the readiness ladder. | The vision now distinguishes base correctness, minimal usability, MTP-assisted correctness, throughput, and production deployment so `ready=false` has an actionable meaning. | Sprint 032+ |
 | 2026-05-18 | Shipped Sprint 032 Level 2 base appliance usability. | The one-slot base service now has health/status, repeated two-token HTTP smoke evidence, an operator runbook, and a full gate with `missing=mtp_forward` only; the next sprint can return to MTP forward without hiding base usability gaps. | Sprint 033+ |
 | 2026-05-18 | Shipped Sprint 033 resident MTP Q8_0 projection parity. | The MTP sidecar now feeds real V100 Q8_0 projection kernels from compact gpu7 resident offsets, proving the first compute step beyond residency; the next blocker is full prefix composition, MTP block execution, logits/top-k, and draft verification. | Sprint 034+ |
+| 2026-05-19 | Shipped Sprint 034 resident MTP prefix composition. | The MTP sidecar now produces resident `mtp_input_hc` from F32 norms, Q8_0 projections, HC repeat, and add; the next blocker is executing the MTP block itself, especially Q4_K routed experts, then logits/top-k and draft rollback. | Sprint 035+ |
 
 ## Open Questions
 

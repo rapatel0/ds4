@@ -6935,6 +6935,63 @@ extern "C" int ds4_gpu_arena_q8_0_matmul_f32(
     return cuda_ok(cudaGetLastError(), "q8 arena launch") ? 0 : 1;
 }
 
+static int cuda_f32_arena_norm_view_ok(const ds4_gpu_arena *arena,
+                                       const ds4_gpu_source_row_view *weight,
+                                       const ds4_gpu_tensor *x_f32,
+                                       const ds4_gpu_tensor *out_f32,
+                                       uint32_t n,
+                                       uint32_t rows) {
+    if (!arena || !weight || !x_f32 || !out_f32 || !arena->valid ||
+        !arena->ptr || !x_f32->ptr || !out_f32->ptr || n == 0 || rows == 0) {
+        return 0;
+    }
+    if (x_f32->device != arena->gpu || out_f32->device != arena->gpu) return 0;
+    if (weight->rows != 1 || weight->cols != n) return 0;
+    if ((weight->arena_offset % sizeof(float)) != 0 ||
+        (weight->row_stride_bytes % sizeof(float)) != 0) {
+        return 0;
+    }
+    if (!cuda_arena_range_ok(arena, weight->arena_offset, weight->byte_length)) return 0;
+
+    uint64_t row_bytes = 0;
+    uint64_t values = 0;
+    uint64_t tensor_bytes = 0;
+    if (checked_mul_u64((uint64_t)n, sizeof(float), &row_bytes) ||
+        weight->row_stride_bytes < row_bytes ||
+        weight->byte_length < row_bytes ||
+        checked_mul_u64((uint64_t)n, (uint64_t)rows, &values) ||
+        checked_mul_u64(values, sizeof(float), &tensor_bytes)) {
+        return 0;
+    }
+    if (x_f32->bytes < tensor_bytes || out_f32->bytes < tensor_bytes) return 0;
+    return 1;
+}
+
+extern "C" int ds4_gpu_arena_f32_rms_norm_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *weight,
+        const ds4_gpu_tensor          *x_f32,
+        ds4_gpu_tensor                *out_f32,
+        uint32_t                       n,
+        uint32_t                       rows,
+        float                          eps) {
+    if (!cuda_f32_arena_norm_view_ok(arena, weight, x_f32, out_f32, n, rows)) {
+        return 1;
+    }
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "f32 arena rms norm set device")) return 1;
+
+    const float *w =
+        (const float *)((const char *)arena->ptr + weight->arena_offset);
+    rms_norm_weight_kernel<<<rows, 256>>>(
+            (float *)out_f32->ptr,
+            (const float *)x_f32->ptr,
+            w,
+            n,
+            rows,
+            eps);
+    return cuda_ok(cudaGetLastError(), "f32 arena rms norm launch") ? 0 : 1;
+}
+
 extern "C" int ds4_gpu_matmul_q8_0_pair_tensor(
         ds4_gpu_tensor *out0,
         ds4_gpu_tensor *out1,

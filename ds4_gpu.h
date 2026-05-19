@@ -132,6 +132,14 @@ int ds4_gpu_arena_q8_0_matmul_f32(
         const ds4_gpu_tensor          *x_f32,
         ds4_gpu_tensor                *out_f32,
         uint64_t                       n_tok);
+int ds4_gpu_arena_f32_rms_norm_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *weight,
+        const ds4_gpu_tensor          *x_f32,
+        ds4_gpu_tensor                *out_f32,
+        uint32_t                       n,
+        uint32_t                       rows,
+        float                          eps);
 
 /* =========================================================================
  * Embeddings and Indexer Helpers.
