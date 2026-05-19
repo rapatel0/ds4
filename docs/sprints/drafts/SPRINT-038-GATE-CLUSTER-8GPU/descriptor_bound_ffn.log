@@ -1,0 +1,1 @@
+cuda_v100_descriptor_bound_ffn_smoke: layer=2 token=16 expert0=84 gpu=0 arena_bytes=11784434944 hidden=4096 mid=2048 max_source_offset=10995046400 ok
