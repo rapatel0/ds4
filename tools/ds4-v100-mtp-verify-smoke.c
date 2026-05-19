@@ -1,5 +1,6 @@
 #include "ds4.h"
 #include "ds4_gpu.h"
+#include "ds4-v100-mtp-forward-common.h"
 #include "ds4_v100_mtp.h"
 #include "ds4_v100_scheduler.h"
 
@@ -420,21 +421,29 @@ int main(int argc, char **argv) {
     model.fd = -1;
     ds4_engine *tok_engine = NULL;
     ds4_tokens prompt = {0};
+    ds4_v100_context *ctx = NULL;
     ds4_v100_mtp_sidecar *sidecar = NULL;
+    ds4_v100_mtp_forward *mtp_forward = NULL;
     ds4_gpu_tensor *mtp_raw = NULL;
     ds4_gpu_tensor *mtp_raw_snapshot = NULL;
     ds4_v100_stage_scheduler *scheds[DS4_V100_EXPECTED_GPUS] = {0};
     ds4_v100_stage_scheduler_snapshot *snaps[DS4_V100_EXPECTED_GPUS] = {0};
+    float *committed_embed = NULL;
+    float *post_commit_hc = NULL;
     uint32_t after_prompt_tokens[MTP_VERIFY_MAX_TOPK];
     uint32_t post_t_tokens[MTP_VERIFY_MAX_TOPK];
+    uint32_t mtp_tokens[MTP_VERIFY_MAX_TOPK];
     uint32_t restored_tokens[MTP_VERIFY_MAX_TOPK];
     uint32_t continued_tokens[MTP_VERIFY_MAX_TOPK];
     uint32_t replay_tokens[MTP_VERIFY_MAX_TOPK];
     float after_prompt_logits[MTP_VERIFY_MAX_TOPK];
     float post_t_logits[MTP_VERIFY_MAX_TOPK];
+    float mtp_logits[MTP_VERIFY_MAX_TOPK];
     float restored_logits[MTP_VERIFY_MAX_TOPK];
     float continued_logits[MTP_VERIFY_MAX_TOPK];
     float replay_logits[MTP_VERIFY_MAX_TOPK];
+    ds4_v100_mtp_forward_report mtp_fwd_report;
+    memset(&mtp_fwd_report, 0, sizeof(mtp_fwd_report));
     double restore_delta = 0.0;
     double replay_delta = 0.0;
     double mtp_raw_restore_max_abs = DBL_MAX;
@@ -491,6 +500,26 @@ int main(int argc, char **argv) {
     }
     fprintf(report, "prompt_tokens\t%d\n", prompt.len);
 
+    ds4_v100_context_options ctx_opts;
+    ds4_v100_context_options_init(&ctx_opts);
+    ctx_opts.pack_index_path = opt.pack_index;
+    if (ds4_v100_context_open(&ctx, &ctx_opts, err, sizeof(err)) != 0) {
+        fprintf(stderr,
+                "ds4-v100-mtp-verify-smoke: context open failed: %s\n",
+                err[0] ? err : "context open");
+        goto done;
+    }
+    ds4_v100_tensor_binding output_weight;
+    if (ds4_v100_context_output_head_binding(ctx,
+                                             &output_weight,
+                                             err,
+                                             sizeof(err)) != 0) {
+        fprintf(stderr,
+                "ds4-v100-mtp-verify-smoke: output binding failed: %s\n",
+                err[0] ? err : "output binding");
+        goto done;
+    }
+
     ds4_v100_mtp_sidecar_options mtp_opts;
     ds4_v100_mtp_sidecar_options_init(&mtp_opts);
     mtp_opts.mtp_path = opt.mtp_model;
@@ -525,6 +554,19 @@ int main(int argc, char **argv) {
                 err[0] ? err : "open scheduler");
         goto done;
     }
+    if (ds4_v100_mtp_forward_open(&mtp_forward,
+                                  sidecar,
+                                  model.ptr,
+                                  model.size,
+                                  &output_weight,
+                                  opt.gpu,
+                                  err,
+                                  sizeof(err)) != 0) {
+        fprintf(stderr,
+                "ds4-v100-mtp-verify-smoke: MTP forward open failed: %s\n",
+                err[0] ? err : "MTP forward open");
+        goto done;
+    }
     if (feed_prompt(scheds, &prompt, err, sizeof(err))) {
         fprintf(stderr,
                 "ds4-v100-mtp-verify-smoke: prompt decode failed: %s\n",
@@ -553,6 +595,92 @@ int main(int argc, char **argv) {
         goto done;
     }
 
+    const uint64_t embed_bytes =
+        (uint64_t)DS4_V100_MTP_FORWARD_N_EMBD * sizeof(float);
+    const uint64_t hc_bytes =
+        (uint64_t)DS4_V100_MTP_FORWARD_HC_VALUES * sizeof(float);
+    committed_embed = (float *)malloc((size_t)embed_bytes);
+    post_commit_hc = (float *)malloc((size_t)hc_bytes);
+    if (!committed_embed || !post_commit_hc) {
+        fprintf(stderr, "ds4-v100-mtp-verify-smoke: MTP input allocation failed\n");
+        goto done;
+    }
+    if (ds4_v100_stage_scheduler_read_token_embedding_f32(scheds[0],
+                                                          committed_token,
+                                                          committed_embed,
+                                                          DS4_V100_MTP_FORWARD_N_EMBD,
+                                                          err,
+                                                          sizeof(err)) != 0) {
+        fprintf(stderr,
+                "ds4-v100-mtp-verify-smoke: committed embedding read failed: %s\n",
+                err[0] ? err : "embedding");
+        goto done;
+    }
+    if (!ds4_v100_stage_scheduler_read_hc(scheds[DS4_V100_EXPECTED_GPUS - 1],
+                                          post_commit_hc,
+                                          hc_bytes)) {
+        fprintf(stderr, "ds4-v100-mtp-verify-smoke: post-commit HC read failed\n");
+        goto done;
+    }
+    if (ds4_v100_mtp_forward_run_host(mtp_forward,
+                                      committed_embed,
+                                      post_commit_hc,
+                                      committed_pos,
+                                      opt.top_k,
+                                      mtp_tokens,
+                                      mtp_logits,
+                                      &mtp_fwd_report,
+                                      err,
+                                      sizeof(err)) != 0) {
+        fprintf(stderr,
+                "ds4-v100-mtp-verify-smoke: native MTP forward failed: %s\n",
+                err[0] ? err : "MTP forward");
+        goto done;
+    }
+    if (mtp_tokens[0] == UINT32_MAX) {
+        fprintf(stderr, "ds4-v100-mtp-verify-smoke: native MTP produced no finite draft\n");
+        goto done;
+    }
+    const uint32_t target_top1 = post_t_tokens[0];
+    const bool mtp_accept = mtp_tokens[0] == target_top1;
+    for (uint32_t i = 0; i < opt.top_k; i++) {
+        fprintf(report,
+                "mtp_verify_topk\trank=%" PRIu32
+                "\ttarget_token=%" PRIu32 "\tmtp_token=%" PRIu32
+                "\ttarget_logit=%.9g\tmtp_logit=%.9g\n",
+                i + 1,
+                post_t_tokens[i],
+                mtp_tokens[i],
+                post_t_logits[i],
+                mtp_logits[i]);
+    }
+    fprintf(report,
+            "mtp_verify_decision\tcommitted_token=%" PRIu32
+            "\tcommitted_pos=%" PRIu32
+            "\ttarget_top1=%" PRIu32 "\tmtp_top1=%" PRIu32
+            "\taccepted=%s\traw_row=%" PRIu32 "\tn_raw=%" PRIu32
+            "\toutput_vocab=%" PRIu32
+            "\toutput_weight_bytes=%" PRIu64
+            "\tfree_after_output_upload_bytes=%" PRIu64 "\n",
+            committed_token,
+            committed_pos,
+            target_top1,
+            mtp_tokens[0],
+            mtp_accept ? "true" : "false",
+            mtp_fwd_report.raw_row,
+            mtp_fwd_report.n_raw,
+            mtp_fwd_report.output_vocab,
+            mtp_fwd_report.output_weight_bytes,
+            mtp_fwd_report.free_after_output_upload_bytes);
+    if (mtp_fwd_report.free_after_output_upload_bytes < reserve_bytes) {
+        fprintf(stderr,
+                "ds4-v100-mtp-verify-smoke: free_after_output_upload %" PRIu64
+                " below reserve %" PRIu64 "\n",
+                mtp_fwd_report.free_after_output_upload_bytes,
+                reserve_bytes);
+        goto done;
+    }
+
     if (create_snapshots(scheds, snaps, &snapshot_bytes, err, sizeof(err))) {
         fprintf(stderr,
                 "ds4-v100-mtp-verify-smoke: target snapshot failed: %s\n",
@@ -578,10 +706,10 @@ int main(int argc, char **argv) {
     mtp_n_raw = 0;
     mtp_n_raw_snapshot = mtp_n_raw;
 
-    const uint32_t target_top1 = post_t_tokens[0];
-    const uint32_t bad_draft = post_t_tokens[1] != target_top1
-        ? post_t_tokens[1]
-        : (target_top1 == 0 ? 1u : target_top1 - 1u);
+    const uint32_t bad_draft = !mtp_accept && mtp_tokens[0] != target_top1
+        ? mtp_tokens[0]
+        : (post_t_tokens[1] != target_top1 ? post_t_tokens[1]
+                                           : (target_top1 == 0 ? 1u : target_top1 - 1u));
     const bool accept = (bad_draft == target_top1);
     if (accept) {
         fprintf(stderr, "ds4-v100-mtp-verify-smoke: reject draft unexpectedly equals target\n");
@@ -695,12 +823,34 @@ int main(int argc, char **argv) {
     const double margin = (double)post_t_logits[0] - (double)post_t_logits[1];
     fprintf(report,
             "mtp_rollback_decision\tcommitted_token=%" PRIu32
-            "\ttarget_top1=%" PRIu32 "\trejected_draft=%" PRIu32
-            "\taccepted=false\tmargin=%.9g\n",
+            "\ttarget_top1=%" PRIu32 "\tmtp_top1=%" PRIu32
+            "\tmtp_accepted=%s\trejected_draft=%" PRIu32
+            "\tforced_reject=%s\tmargin=%.9g\n",
             committed_token,
             target_top1,
+            mtp_tokens[0],
+            mtp_accept ? "true" : "false",
             bad_draft,
+            mtp_accept ? "true" : "false",
             margin);
+    fprintf(report,
+            "mtp_verify_summary\tcommitted_token=%" PRIu32
+            "\tcommitted_pos=%" PRIu32
+            "\ttarget_top1=%" PRIu32 "\tmtp_top1=%" PRIu32
+            "\taccepted=%s\traw_row=%" PRIu32 "\tn_raw=%" PRIu32
+            "\tsnapshot_bytes=%" PRIu64
+            "\trestore_delta=%.9g\treplay_delta=%.9g\t%s\n",
+            committed_token,
+            committed_pos,
+            target_top1,
+            mtp_tokens[0],
+            mtp_accept ? "true" : "false",
+            mtp_fwd_report.raw_row,
+            mtp_fwd_report.n_raw,
+            snapshot_bytes,
+            restore_delta,
+            replay_delta,
+            failures ? "FAIL" : "PASS");
     fprintf(report,
             "mtp_rollback_summary\tsnapshot_bytes=%" PRIu64
             "\tmtp_raw_bytes=%" PRIu64
@@ -714,13 +864,16 @@ int main(int argc, char **argv) {
             continued_tokens[0],
             replay_tokens[0],
             failures ? "FAIL" : "PASS");
-    printf("mtp_rollback_smoke: prompt_tokens=%d committed=%" PRIu32
-           " target_top1=%" PRIu32 " rejected=%" PRIu32
+    printf("mtp_verify_smoke: prompt_tokens=%d committed=%" PRIu32
+           " target_top1=%" PRIu32 " mtp_top1=%" PRIu32
+           " mtp_accepted=%s rejected=%" PRIu32
            " snapshot_bytes=%" PRIu64
            " restore_delta=%.9g replay_delta=%.9g mtp_raw_max_abs=%.9g %s\n",
            prompt.len,
            committed_token,
            target_top1,
+           mtp_tokens[0],
+           mtp_accept ? "true" : "false",
            bad_draft,
            snapshot_bytes,
            restore_delta,
@@ -730,11 +883,15 @@ int main(int argc, char **argv) {
     if (failures == 0) rc = 0;
 
 done:
+    free(post_commit_hc);
+    free(committed_embed);
     free_snapshots(snaps);
     close_schedulers(scheds);
     ds4_gpu_tensor_free(mtp_raw_snapshot);
     ds4_gpu_tensor_free(mtp_raw);
+    ds4_v100_mtp_forward_close(mtp_forward);
     ds4_v100_mtp_sidecar_close(sidecar);
+    ds4_v100_context_close(ctx);
     ds4_tokens_free(&prompt);
     ds4_engine_close(tok_engine);
     unmap_model_file(&model);

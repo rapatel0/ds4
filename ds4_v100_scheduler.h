@@ -135,6 +135,14 @@ int ds4_v100_stage_scheduler_read_hc(const ds4_v100_stage_scheduler *sched,
                                      void *dst,
                                      uint64_t bytes);
 
+int ds4_v100_stage_scheduler_read_token_embedding_f32(
+    const ds4_v100_stage_scheduler *sched,
+    uint32_t token,
+    float *dst,
+    uint64_t dst_values,
+    char *err,
+    size_t errlen);
+
 int ds4_v100_stage_scheduler_write_hc(ds4_v100_stage_scheduler *sched,
                                       const void *src,
                                       uint64_t bytes);

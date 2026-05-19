@@ -1,6 +1,7 @@
 #include "ds4_v100_scheduler.h"
 
 #include "ds4_pack.h"
+#include "ds4_source_formats.h"
 
 #include <float.h>
 #include <inttypes.h>
@@ -877,6 +878,42 @@ int ds4_v100_stage_scheduler_read_hc(const ds4_v100_stage_scheduler *sched,
         (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS * sizeof(float);
     if (bytes > hc_bytes) return 0;
     return ds4_gpu_tensor_read(sched->cur_hc, 0, dst, bytes);
+}
+
+int ds4_v100_stage_scheduler_read_token_embedding_f32(
+    const ds4_v100_stage_scheduler *sched,
+    uint32_t token,
+    float *dst,
+    uint64_t dst_values,
+    char *err,
+    size_t errlen) {
+    if (!sched || !dst) {
+        return scheduler_error(err, errlen, "missing scheduler token embedding input");
+    }
+    const ds4_v100_tensor_binding *b = &sched->token_embedding;
+    if (!b->source_dtype || strcmp(b->source_dtype, "bf16") != 0 ||
+        b->n_shape_dims != 2 ||
+        b->shape[0] != DS4_V100_HC_COLS ||
+        b->shape[1] == 0 ||
+        dst_values != DS4_V100_HC_COLS ||
+        b->byte_length != b->shape[0] * b->shape[1] * sizeof(uint16_t)) {
+        return scheduler_error(err, errlen, "invalid token_embd.weight bf16 binding");
+    }
+    if (token >= b->shape[1]) {
+        return scheduler_error(err, errlen, "token outside embedding vocab");
+    }
+    const uint64_t row_bytes = b->shape[0] * sizeof(uint16_t);
+    const uint64_t row_offset = b->source_offset + (uint64_t)token * row_bytes;
+    if (row_offset > sched->model_size ||
+        row_bytes > sched->model_size - row_offset) {
+        return scheduler_error(err, errlen, "token embedding row outside model map");
+    }
+    const uint16_t *row =
+        (const uint16_t *)((const unsigned char *)sched->model_map + row_offset);
+    if (ds4_src_bf16_row_to_f32(dst, row, DS4_V100_HC_COLS) != 0) {
+        return scheduler_error(err, errlen, "token embedding bf16 decode failed");
+    }
+    return 0;
 }
 
 int ds4_v100_stage_scheduler_write_hc(ds4_v100_stage_scheduler *sched,

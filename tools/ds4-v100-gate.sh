@@ -166,6 +166,7 @@ mtp_attn_ready=0
 mtp_logits_ready=0
 mtp_forward_ready=0
 mtp_rollback_ready=0
+mtp_verify_ready=0
 
 run_gate() {
     local name="$1"
@@ -304,7 +305,7 @@ if [ -n "$mtp_model" ]; then
             if run_gate "mtp_forward" ./tools/ds4-v100-mtp-forward-smoke "${mtp_forward_args[@]}"; then
                 mtp_forward_ready=1
             fi
-            mtp_rollback_args=(
+            mtp_verify_args=(
                 --model "$model"
                 --mtp-model "$mtp_model"
                 --pack-index "$pack_index"
@@ -315,15 +316,17 @@ if [ -n "$mtp_model" ]; then
                 --ctx "$ctx"
             )
             if [ -n "$log_dir" ]; then
-                mtp_rollback_args+=(--report "$log_dir/mtp_rollback.report")
+                mtp_verify_args+=(--report "$log_dir/mtp_verify.report")
             fi
-            if run_gate "mtp_rollback" ./tools/ds4-v100-mtp-verify-smoke "${mtp_rollback_args[@]}"; then
+            if run_gate "mtp_verify" ./tools/ds4-v100-mtp-verify-smoke "${mtp_verify_args[@]}"; then
                 mtp_rollback_ready=1
+                mtp_verify_ready=1
             fi
         else
             echo "gate	mtp_logits	SKIP	no_pack_index"
             echo "gate	mtp_forward	SKIP	no_pack_index"
             echo "gate	mtp_rollback	SKIP	no_pack_index"
+            echo "gate	mtp_verify	SKIP	no_pack_index"
         fi
     fi
 else
@@ -336,6 +339,7 @@ else
     echo "gate	mtp_logits	SKIP	no_mtp_model"
     echo "gate	mtp_forward	SKIP	no_mtp_model"
     echo "gate	mtp_rollback	SKIP	no_mtp_model"
+    echo "gate	mtp_verify	SKIP	no_mtp_model"
 fi
 
 run_gate "source_dtypes" ./tests/cuda_source_dtypes_smoke || true
@@ -488,7 +492,7 @@ if [ -n "$mtp_model" ]; then
         add_missing "mtp_forward"
     elif [ "$mtp_rollback_ready" -eq 0 ]; then
         add_missing "mtp_rollback"
-    else
+    elif [ "$mtp_verify_ready" -eq 0 ]; then
         add_missing "mtp_verify"
     fi
 else

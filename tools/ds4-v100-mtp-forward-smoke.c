@@ -614,6 +614,7 @@ done:
     return rc;
 }
 
+#ifndef DS4_V100_MTP_FORWARD_NO_MAIN
 int main(int argc, char **argv) {
     fwd_options opt = fwd_parse_options(argc, argv);
     FILE *report = stdout;
@@ -1001,3 +1002,4 @@ done:
     if (report && report != stdout) fclose(report);
     return rc;
 }
+#endif

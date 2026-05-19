@@ -207,7 +207,10 @@ tools/ds4-v100-mtp-logits-smoke.o: tools/ds4-v100-mtp-logits-smoke.c ds4_v100_mt
 tools/ds4-v100-mtp-forward-smoke.o: tools/ds4-v100-mtp-forward-smoke.c tools/ds4-v100-mtp-attn-smoke.c tools/ds4-v100-mtp-ffn-smoke.c tools/ds4-v100-mtp-logits-smoke.c ds4_v100_mtp.h ds4_v100_context.h ds4_source_formats.h ds4.h ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-mtp-forward-smoke.c
 
-tools/ds4-v100-mtp-verify-smoke.o: tools/ds4-v100-mtp-verify-smoke.c ds4.h ds4_gpu.h ds4_v100_mtp.h ds4_v100_scheduler.h ds4_v100_layer_execute.h ds4_v100_context.h
+tools/ds4-v100-mtp-forward-common.o: tools/ds4-v100-mtp-forward-common.c tools/ds4-v100-mtp-forward-common.h ds4_v100_mtp.h ds4_v100_context.h ds4.h ds4_gpu.h
+	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-mtp-forward-common.c
+
+tools/ds4-v100-mtp-verify-smoke.o: tools/ds4-v100-mtp-verify-smoke.c tools/ds4-v100-mtp-forward-common.h ds4.h ds4_gpu.h ds4_v100_mtp.h ds4_v100_scheduler.h ds4_v100_layer_execute.h ds4_v100_context.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-mtp-verify-smoke.c
 
 tools/ds4-v100-replay.o: tools/ds4-v100-replay.c ds4_v100_replay.h ds4.h
@@ -259,7 +262,7 @@ tools/ds4-v100-mtp-logits-smoke: tools/ds4-v100-mtp-logits-smoke.o $(V100_MTP_OB
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tools/ds4-v100-mtp-forward-smoke: tools/ds4-v100-mtp-forward-smoke.o $(V100_MTP_OBJS) ds4_v100_context.o $(CPU_CORE_OBJS) ds4_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
-tools/ds4-v100-mtp-verify-smoke: tools/ds4-v100-mtp-verify-smoke.o $(V100_MTP_OBJS) ds4_cpu.o ds4_cuda.o $(V100_SCHEDULER_OBJS)
+tools/ds4-v100-mtp-verify-smoke: tools/ds4-v100-mtp-verify-smoke.o tools/ds4-v100-mtp-forward-common.o $(V100_MTP_OBJS) ds4_cpu.o ds4_cuda.o $(V100_SCHEDULER_OBJS)
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tools/ds4-v100-replay: tools/ds4-v100-replay.o ds4_cpu.o ds4_cuda.o $(V100_REPLAY_OBJS)
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
