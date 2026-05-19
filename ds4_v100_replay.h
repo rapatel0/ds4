@@ -86,6 +86,17 @@ int ds4_v100_replay_generate(ds4_v100_replay *rt,
                              char *err,
                              size_t errlen);
 
+int ds4_v100_replay_generate_batch(ds4_v100_replay *rt,
+                                   const ds4_tokens *prompts,
+                                   uint32_t n_prompts,
+                                   uint32_t max_tokens,
+                                   ds4_v100_replay_output *outputs,
+                                   uint32_t output_stride,
+                                   uint32_t *out_counts,
+                                   ds4_v100_replay_counters *counters,
+                                   char *err,
+                                   size_t errlen);
+
 int ds4_v100_replay_generate_first_token_batch(
     ds4_v100_replay *rt,
     const ds4_tokens *prompts,
