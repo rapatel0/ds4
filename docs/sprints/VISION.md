@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-18
 last_updated_by: vision
-revision: 44
+revision: 45
 ---
 
 # Vision: DS4 V100 Appliance
@@ -190,6 +190,11 @@ it is a narrow DS4 runtime tuned for this hardware.
   non-MTP loopback service now exposes health/status, proves two sequential
   two-token HTTP requests from one resident process, documents operator limits,
   and leaves overall readiness blocked only on `missing=mtp_forward`.
+- Sprint 033 shipped the first resident MTP compute primitive. The gpu7 MTP
+  sidecar arena now feeds Q8_0 projection matmuls directly, and the gate proves
+  `mtp.0.e_proj.weight` plus `mtp.0.h_proj.weight` parity against the existing
+  Q8_0 CUDA path with `max_abs=0`; readiness remains blocked on full
+  `missing=mtp_forward`.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -205,7 +210,7 @@ mean "nothing works"; it should say which rung has not been proven yet.
 | 0 | Fit and residency | The source model can be mapped, packed, and held in 8x V100 VRAM with reserve. | Pack inventory, per-GPU memory plan, resident upload smoke, source-layout guards. | Complete through Sprints 001-006. |
 | 1 | Single-prompt base correctness | The base model path can run one known prompt through all 43 layers and select the expected first token. | Full 8-stage scheduler, output-head parity, selected-token hex `3136`, one-shot replay. | Complete through Sprints 024-028. |
 | 2 | Minimal usable base appliance | A human/operator can start the base model service and use it for short non-MTP one-slot generation with documented limits. | Longer prompt/decode smoke, repeat HTTP requests, failure logs, run command, health check, 1-slot timing report. | Complete through Sprint 032, with explicit limits: one slot, sequential loopback HTTP, no MTP, no streaming, no production supervisor. |
-| 3 | MTP-assisted correctness | The resident MTP sidecar can produce a K=1 draft token that matches a trusted oracle and does not corrupt target-model state. | MTP sidecar residency, Q8_0/Q4_K kernel parity, MTP forward logits/top-k, draft/verify/rollback tests. | Partially complete. Sprint 031 shipped residency; Sprint 032 keeps the current gate stopped at `missing=mtp_forward`. |
+| 3 | MTP-assisted correctness | The resident MTP sidecar can produce a K=1 draft token that matches a trusted oracle and does not corrupt target-model state. | MTP sidecar residency, Q8_0/Q4_K kernel parity, MTP forward logits/top-k, draft/verify/rollback tests. | Partially complete. Sprint 031 shipped residency; Sprint 033 shipped resident Q8_0 projection parity for the MTP prefix; the current gate remains stopped at `missing=mtp_forward`. |
 | 4 | Throughput appliance | The service has measured aggregate tok/s and a clear slot/context operating envelope. | Startup/upload timings, decode timings, slot admission, 1/2/4/8-slot benchmarks, context-tier benchmarks. | Not complete. Existing timings are diagnostic, not a throughput claim. |
 | 5 | Production deployment | The appliance can be left running on the cluster with operational confidence. | Supervised service, config files, restart behavior, health/metrics endpoint, deployment/runbook, known rollback path. | Not complete. Current HTTP path is a loopback smoke, not deployment packaging. |
 
@@ -637,6 +642,20 @@ MTP-assisted, or production-deployed serving.
   full V100 gate passes with `failures=0`, Level 2 no longer appears as a
   readiness blocker, and the remaining blocker is `missing=mtp_forward`.
 
+### Sprint 033 - V100 Resident MTP Q8 Projection Probe [complete]
+
+- **Goal**: Prove the first resident MTP sidecar compute primitive on V100 by
+  running Q8_0 projection matmuls directly from the compact gpu7 arena.
+- **Rationale**: MTP residency alone did not prove that the sidecar's native
+  Q8_0/Q4_K tensor families could execute from `resident_offset` layout. The
+  safest first step was matching the prefix projection tensors against the
+  existing Q8_0 CUDA kernel path before enabling full MTP forward or
+  speculative serving.
+- **Outcome**: `SHIP`. `ds4_gpu_arena_q8_0_matmul_f32` now reuses the V100
+  Q8_0 prequantized DP4A kernels against arena-resident sidecar bytes,
+  `tools/ds4-v100-mtp-prefix-smoke` validates `e_proj` and `h_proj` with
+  `max_abs=0`, and the full V100 gate passes with `missing=mtp_forward`.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -723,6 +742,9 @@ MTP-assisted, or production-deployed serving.
   runtime slice, while base-appliance hardening should focus on clearer status
   counters, startup/upload reduction, longer resident decode baselines, and
   production packaging only after request-state ownership is explicit.
+- See `docs/sprints/SPRINT-033-FOLLOWUPS.md`: resident MTP F32 prefix norms and
+  HC composition, resident Q4_K MTP routed experts, high-offset mmap cache
+  hardening, and full MTP logits/top-k plus draft/verify/rollback tests.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -769,6 +791,7 @@ MTP-assisted, or production-deployed serving.
 | 2026-05-18 | Shipped Sprint 031 MTP resident sidecar bridge. | The appliance now uploads the real 3.807600108 GB MTP sidecar into gpu7 device memory and spot-checks residency; the remaining blocker is the K=1 MTP forward/draft path, not sidecar loading or memory fit. | Sprint 032+ |
 | 2026-05-18 | Added the readiness ladder. | The vision now distinguishes base correctness, minimal usability, MTP-assisted correctness, throughput, and production deployment so `ready=false` has an actionable meaning. | Sprint 032+ |
 | 2026-05-18 | Shipped Sprint 032 Level 2 base appliance usability. | The one-slot base service now has health/status, repeated two-token HTTP smoke evidence, an operator runbook, and a full gate with `missing=mtp_forward` only; the next sprint can return to MTP forward without hiding base usability gaps. | Sprint 033+ |
+| 2026-05-18 | Shipped Sprint 033 resident MTP Q8_0 projection parity. | The MTP sidecar now feeds real V100 Q8_0 projection kernels from compact gpu7 resident offsets, proving the first compute step beyond residency; the next blocker is full prefix composition, MTP block execution, logits/top-k, and draft verification. | Sprint 034+ |
 
 ## Open Questions
 

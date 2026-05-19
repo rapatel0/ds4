@@ -6818,6 +6818,123 @@ extern "C" int ds4_gpu_matmul_q8_0_tensor(ds4_gpu_tensor *out, const void *model
                                            in_dim, out_dim, x, n_tok, "q8_0");
 }
 
+static int cuda_q8_0_arena_matmul_view_ok(const ds4_gpu_arena *arena,
+                                          const ds4_gpu_source_row_view *view,
+                                          const ds4_gpu_tensor *x_f32,
+                                          const ds4_gpu_tensor *out_f32,
+                                          uint64_t n_tok,
+                                          uint64_t *blocks_out) {
+    if (!arena || !view || !x_f32 || !out_f32 || !arena->valid ||
+        !arena->ptr || !x_f32->ptr || !out_f32->ptr || n_tok == 0) {
+        return 0;
+    }
+    if (x_f32->device != arena->gpu || out_f32->device != arena->gpu) return 0;
+    if (view->rows == 0 || view->cols == 0 || view->row_stride_bytes == 0) return 0;
+    if (!cuda_arena_range_ok(arena, view->arena_offset, view->byte_length)) return 0;
+
+    const uint64_t blocks = ((uint64_t)view->cols + 31ull) / 32ull;
+    if (blocks == 0 || blocks > UINT64_MAX / 34ull) return 0;
+    const uint64_t row_bytes = blocks * 34ull;
+    if ((uint64_t)view->row_stride_bytes < row_bytes) return 0;
+
+    uint64_t last_start = 0;
+    if (checked_mul_u64((uint64_t)view->rows - 1u,
+                        (uint64_t)view->row_stride_bytes,
+                        &last_start)) {
+        return 0;
+    }
+    if (last_start > view->byte_length || row_bytes > view->byte_length - last_start) {
+        return 0;
+    }
+
+    uint64_t x_values = 0;
+    uint64_t out_values = 0;
+    uint64_t x_bytes = 0;
+    uint64_t out_bytes = 0;
+    if (checked_mul_u64(n_tok, (uint64_t)view->cols, &x_values) ||
+        checked_mul_u64(n_tok, (uint64_t)view->rows, &out_values) ||
+        checked_mul_u64(x_values, sizeof(float), &x_bytes) ||
+        checked_mul_u64(out_values, sizeof(float), &out_bytes)) {
+        return 0;
+    }
+    if (x_f32->bytes < x_bytes || out_f32->bytes < out_bytes) return 0;
+    if (n_tok > UINT32_MAX || view->rows > UINT32_MAX || blocks > UINT32_MAX) return 0;
+    if (blocks_out) *blocks_out = blocks;
+    return 1;
+}
+
+extern "C" int ds4_gpu_arena_q8_0_matmul_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *view,
+        const ds4_gpu_tensor          *x_f32,
+        ds4_gpu_tensor                *out_f32,
+        uint64_t                       n_tok) {
+    uint64_t blocks = 0;
+    if (!cuda_q8_0_arena_matmul_view_ok(arena, view, x_f32, out_f32, n_tok, &blocks)) {
+        return 1;
+    }
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "q8 arena matmul set device")) return 1;
+
+    const uint64_t xq_bytes = n_tok * blocks * 32u;
+    const uint64_t scale_offset = (xq_bytes + 15u) & ~15ull;
+    const uint64_t tmp_bytes = scale_offset + n_tok * blocks * sizeof(float);
+    void *tmp = cuda_tmp_alloc(tmp_bytes, "q8_0 arena prequant");
+    if (!tmp) return 1;
+    int8_t *xq = (int8_t *)tmp;
+    float *xscale = (float *)((char *)tmp + scale_offset);
+
+    dim3 qgrid((unsigned)blocks, (unsigned)n_tok, 1);
+    quantize_q8_0_f32_kernel<<<qgrid, 32>>>(
+            xq,
+            xscale,
+            (const float *)x_f32->ptr,
+            view->cols,
+            blocks);
+    if (!cuda_ok(cudaGetLastError(), "q8 arena quantize launch")) return 1;
+
+    const unsigned char *wptr =
+        (const unsigned char *)((const char *)arena->ptr + view->arena_offset);
+    const int use_dp4a = cuda_q8_use_dp4a();
+    if (n_tok == 1) {
+        matmul_q8_0_preq_warp8_kernel<<<((unsigned)view->rows + 7u) / 8u, 256>>>(
+                (float *)out_f32->ptr,
+                wptr,
+                xq,
+                xscale,
+                view->cols,
+                view->rows,
+                blocks,
+                use_dp4a);
+        return cuda_ok(cudaGetLastError(), "q8 arena warp launch") ? 0 : 1;
+    }
+    if (getenv("DS4_CUDA_NO_Q8_BATCH_WARP") == NULL && blocks <= 32u) {
+        dim3 bgrid(((unsigned)view->rows + 7u) / 8u, (unsigned)n_tok, 1);
+        matmul_q8_0_preq_batch_warp8_kernel<<<bgrid, 256>>>(
+                (float *)out_f32->ptr,
+                wptr,
+                xq,
+                xscale,
+                view->cols,
+                view->rows,
+                n_tok,
+                blocks,
+                use_dp4a);
+        return cuda_ok(cudaGetLastError(), "q8 arena batch warp launch") ? 0 : 1;
+    }
+    dim3 grid((unsigned)view->rows, (unsigned)n_tok, 1);
+    matmul_q8_0_preq_kernel<<<grid, 256>>>(
+            (float *)out_f32->ptr,
+            wptr,
+            xq,
+            xscale,
+            view->cols,
+            view->rows,
+            n_tok,
+            blocks,
+            use_dp4a);
+    return cuda_ok(cudaGetLastError(), "q8 arena launch") ? 0 : 1;
+}
+
 extern "C" int ds4_gpu_matmul_q8_0_pair_tensor(
         ds4_gpu_tensor *out0,
         ds4_gpu_tensor *out1,

@@ -314,3 +314,17 @@ int ds4_gpu_arena_mxfp4_matmul_f32(
     (void)out_f32;
     return 1;
 }
+
+int ds4_gpu_arena_q8_0_matmul_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *view,
+        const ds4_gpu_tensor          *x_f32,
+        ds4_gpu_tensor                *out_f32,
+        uint64_t                       n_tok) {
+    (void)arena;
+    (void)view;
+    (void)x_f32;
+    (void)out_f32;
+    (void)n_tok;
+    return 1;
+}

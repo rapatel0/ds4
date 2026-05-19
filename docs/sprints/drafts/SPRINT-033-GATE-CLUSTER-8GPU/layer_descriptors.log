@@ -1,0 +1,37 @@
+descriptor_gate_begin	layer=2	ratio=4	gpu=0	index=docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv
+descriptor	PASS	blk.2.attn_sinks	gpu=0	layer=2	dtype=f32	layout=source_f32_control	family=ds4_attention_control	bytes=256	shard=gpu0.weights	offset=8191437312
+descriptor	PASS	blk.2.attn_kv_a_norm.weight	gpu=0	layer=2	dtype=f32	layout=source_f32_control	family=ds4_attention_control	bytes=2048	shard=gpu0.weights	offset=8221410560
+descriptor	PASS	blk.2.attn_q_a_norm.weight	gpu=0	layer=2	dtype=f32	layout=source_f32_control	family=ds4_attention_control	bytes=4096	shard=gpu0.weights	offset=8221412608
+descriptor	PASS	blk.2.attn_kv_latent.weight	gpu=0	layer=2	dtype=f8_e4m3_b128	layout=source_f8_e4m3_b128_blocked	family=v100_fp8_dequant_f16_hmma_pending	bytes=2113536	shard=gpu0.weights	offset=8221416704
+descriptor	PASS	blk.2.attn_output_a.weight	gpu=0	layer=2	dtype=f8_e4m3_b128	layout=source_f8_e4m3_b128_blocked	family=v100_fp8_dequant_f16_hmma_pending	bytes=33816576	shard=gpu0.weights	offset=8223530240
+descriptor	PASS	blk.2.attn_output_b.weight	gpu=0	layer=2	dtype=f8_e4m3_b128	layout=source_f8_e4m3_b128_blocked	family=v100_fp8_dequant_f16_hmma_pending	bytes=33816576	shard=gpu0.weights	offset=8257346816
+descriptor	PASS	blk.2.attn_q_a.weight	gpu=0	layer=2	dtype=f8_e4m3_b128	layout=source_f8_e4m3_b128_blocked	family=v100_fp8_dequant_f16_hmma_pending	bytes=4227072	shard=gpu0.weights	offset=8291163392
+descriptor	PASS	blk.2.attn_q_b.weight	gpu=0	layer=2	dtype=f8_e4m3_b128	layout=source_f8_e4m3_b128_blocked	family=v100_fp8_dequant_f16_hmma_pending	bytes=33816576	shard=gpu0.weights	offset=8295390464
+descriptor	PASS	blk.2.attn_norm.weight	gpu=0	layer=2	dtype=f32	layout=source_f32_control	family=ds4_attention_control	bytes=16384	shard=gpu0.weights	offset=8329207040
+descriptor	PASS	blk.2.ffn_down_exps.weight	gpu=0	layer=2	dtype=mxfp4	layout=source_mxfp4_grouped	family=v100_grouped_mxfp4_pending	bytes=1140850688	shard=gpu0.weights	offset=8329223424
+descriptor	PASS	blk.2.ffn_gate_exps.weight	gpu=0	layer=2	dtype=mxfp4	layout=source_mxfp4_grouped	family=v100_grouped_mxfp4_pending	bytes=1140850688	shard=gpu0.weights	offset=9470074112
+descriptor	PASS	blk.2.ffn_up_exps.weight	gpu=0	layer=2	dtype=mxfp4	layout=source_mxfp4_grouped	family=v100_grouped_mxfp4_pending	bytes=1140850688	shard=gpu0.weights	offset=10610924800
+descriptor	PASS	blk.2.ffn_gate_inp.weight	gpu=0	layer=2	dtype=f32	layout=source_f32	family=ds4_router_f32_i32	bytes=4194304	shard=gpu0.weights	offset=11754878208
+descriptor	PASS	blk.2.ffn_gate_shexp.weight	gpu=0	layer=2	dtype=f8_e4m3_b128	layout=source_f8_e4m3_b128_blocked	family=v100_shared_fp8_dense_pending	bytes=8454144	shard=gpu0.weights	offset=11759072512
+descriptor	PASS	blk.2.ffn_down_shexp.weight	gpu=0	layer=2	dtype=f8_e4m3_b128	layout=source_f8_e4m3_b128_blocked	family=v100_shared_fp8_dense_pending	bytes=8454144	shard=gpu0.weights	offset=11767526656
+descriptor	PASS	blk.2.ffn_up_shexp.weight	gpu=0	layer=2	dtype=f8_e4m3_b128	layout=source_f8_e4m3_b128_blocked	family=v100_shared_fp8_dense_pending	bytes=8454144	shard=gpu0.weights	offset=11775980800
+descriptor	PASS	blk.2.ffn_norm.weight	gpu=0	layer=2	dtype=f32	layout=source_f32	family=ds4_control_f32	bytes=16384	shard=gpu0.weights	offset=11784434944
+descriptor	PASS	blk.2.hc_attn_base	gpu=0	layer=2	dtype=f32	layout=source_f32	family=ds4_hc_control_f32	bytes=96	shard=gpu0.weights	offset=11784451328
+descriptor	PASS	blk.2.hc_attn_fn	gpu=0	layer=2	dtype=f32	layout=source_f32	family=ds4_hc_control_f32	bytes=1572864	shard=gpu0.weights	offset=11784451584
+descriptor	PASS	blk.2.hc_attn_scale	gpu=0	layer=2	dtype=f32	layout=source_f32	family=ds4_hc_control_f32	bytes=12	shard=gpu0.weights	offset=11786024448
+descriptor	PASS	blk.2.hc_ffn_base	gpu=0	layer=2	dtype=f32	layout=source_f32	family=ds4_hc_control_f32	bytes=96	shard=gpu0.weights	offset=11786024704
+descriptor	PASS	blk.2.hc_ffn_fn	gpu=0	layer=2	dtype=f32	layout=source_f32	family=ds4_hc_control_f32	bytes=1572864	shard=gpu0.weights	offset=11786024960
+descriptor	PASS	blk.2.hc_ffn_scale	gpu=0	layer=2	dtype=f32	layout=source_f32	family=ds4_hc_control_f32	bytes=12	shard=gpu0.weights	offset=11787597824
+descriptor	PASS	blk.2.attn_compress_ape	gpu=0	layer=2	dtype=f32	layout=source_f32	family=ds4_compressor_bf16_f32_pending	bytes=16384	shard=gpu0.weights	offset=8191437568
+descriptor	PASS	blk.2.attn_compress_norm.weight	gpu=0	layer=2	dtype=f32	layout=source_f32	family=ds4_compressor_bf16_f32_pending	bytes=2048	shard=gpu0.weights	offset=8191453952
+descriptor	PASS	blk.2.attn_compress_gate.weight	gpu=0	layer=2	dtype=bf16	layout=source_bf16	family=ds4_compressor_bf16_f32_pending	bytes=8388608	shard=gpu0.weights	offset=8191456000
+descriptor	PASS	blk.2.attn_compress_kv.weight	gpu=0	layer=2	dtype=bf16	layout=source_bf16	family=ds4_compressor_bf16_f32_pending	bytes=8388608	shard=gpu0.weights	offset=8199844608
+descriptor	PASS	blk.2.indexer.compress_ape	gpu=0	layer=2	dtype=f32	layout=source_f32	family=ds4_indexer_mixed_pending	bytes=4096	shard=gpu0.weights	offset=8208233216
+descriptor	PASS	blk.2.indexer.compress_norm.weight	gpu=0	layer=2	dtype=f32	layout=source_f32	family=ds4_indexer_mixed_pending	bytes=512	shard=gpu0.weights	offset=8208237312
+descriptor	PASS	blk.2.indexer.compress_gate.weight	gpu=0	layer=2	dtype=bf16	layout=source_bf16	family=ds4_indexer_mixed_pending	bytes=2097152	shard=gpu0.weights	offset=8208237824
+descriptor	PASS	blk.2.indexer.compress_kv.weight	gpu=0	layer=2	dtype=bf16	layout=source_bf16	family=ds4_indexer_mixed_pending	bytes=2097152	shard=gpu0.weights	offset=8210334976
+descriptor	PASS	blk.2.indexer.proj.weight	gpu=0	layer=2	dtype=bf16	layout=source_bf16	family=ds4_indexer_mixed_pending	bytes=524288	shard=gpu0.weights	offset=8212432128
+descriptor	PASS	blk.2.indexer.attn_q_b.weight	gpu=0	layer=2	dtype=f8_e4m3_b128	layout=source_f8_e4m3_b128_blocked	family=ds4_indexer_mixed_pending	bytes=8454144	shard=gpu0.weights	offset=8212956416
+descriptor	PASS	blk.2.ffn_gate_tid2eid	gpu=0	layer=2	dtype=i32	layout=source_i32	family=ds4_router_f32_i32	bytes=3102720	shard=gpu0.weights	offset=11751775488
+descriptor	PASS	output.weight	gpu=7	layer=-1	dtype=bf16	layout=source_bf16	family=v100_bf16_output_pending	bytes=1059061760	shard=gpu7.weights	offset=10758119680
+descriptor_summary	PASS	layer=2	expected=35	failures=0	bytes=4655221720
