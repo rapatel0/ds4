@@ -1994,6 +1994,66 @@ __global__ static void arena_mxfp4_matmul_kernel(
     if (threadIdx.x == 0) out[r] = partial[0];
 }
 
+__global__ static void arena_mxfp4_pair_swiglu_kernel(
+        float *out,
+        const uint8_t *gate_base,
+        const uint8_t *up_base,
+        const float *x,
+        uint32_t rows,
+        uint32_t cols,
+        uint32_t gate_row_stride_bytes,
+        uint32_t up_row_stride_bytes,
+        float clamp,
+        float weight) {
+    const uint32_t r = blockIdx.x;
+    if (r >= rows) return;
+    const uint8_t *gate_row = gate_base + (uint64_t)r * gate_row_stride_bytes;
+    const uint8_t *up_row = up_base + (uint64_t)r * up_row_stride_bytes;
+    float gate_acc = 0.0f;
+    float up_acc = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        const uint32_t block_idx = c / 32u;
+        const uint32_t lane = c % 32u;
+        const uint32_t packed_idx = 1u + (lane % 16u);
+        const uint8_t *gate_block = gate_row + (uint64_t)block_idx * 17ull;
+        const uint8_t *up_block = up_row + (uint64_t)block_idx * 17ull;
+        const uint8_t gate_packed = gate_block[packed_idx];
+        const uint8_t up_packed = up_block[packed_idx];
+        const uint8_t gate_q =
+            lane < 16u ? (gate_packed & 0x0fu) : ((gate_packed >> 4) & 0x0fu);
+        const uint8_t up_q =
+            lane < 16u ? (up_packed & 0x0fu) : ((up_packed >> 4) & 0x0fu);
+        const float xv = x[c];
+        gate_acc += arena_mxfp4_nibble_to_f32(gate_q) *
+                    arena_e8m0_to_f32(gate_block[0]) * xv;
+        up_acc += arena_mxfp4_nibble_to_f32(up_q) *
+                  arena_e8m0_to_f32(up_block[0]) * xv;
+    }
+
+    __shared__ float gate_partial[256];
+    __shared__ float up_partial[256];
+    gate_partial[threadIdx.x] = gate_acc;
+    up_partial[threadIdx.x] = up_acc;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            gate_partial[threadIdx.x] += gate_partial[threadIdx.x + stride];
+            up_partial[threadIdx.x] += up_partial[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        float g = gate_partial[0];
+        float u = up_partial[0];
+        if (clamp > 1.0e-6f) {
+            g = fminf(g, clamp);
+            u = fminf(fmaxf(u, -clamp), clamp);
+        }
+        const float s = g / (1.0f + expf(-g));
+        out[r] = s * u * weight;
+    }
+}
+
 extern "C" int ds4_gpu_arena_open(ds4_gpu_arena **out, int gpu, uint64_t bytes) {
     if (!out || gpu < 0) return 1;
     *out = NULL;
@@ -2507,6 +2567,38 @@ extern "C" int ds4_gpu_arena_mxfp4_matmul_f32(
         view->cols,
         view->row_stride_bytes);
     return cuda_ok(cudaGetLastError(), "mxfp4 source matmul launch") ? 0 : 1;
+}
+
+extern "C" int ds4_gpu_arena_mxfp4_pair_swiglu_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *gate,
+        const ds4_gpu_source_row_view *up,
+        const ds4_gpu_tensor          *x_f32,
+        ds4_gpu_tensor                *out_f32,
+        float                          clamp,
+        float                          weight) {
+    if (!gate || !up || gate->rows != up->rows || gate->cols != up->cols) return 1;
+    if (!cuda_mxfp4_matmul_view_ok(arena, gate, x_f32, out_f32) ||
+        !cuda_mxfp4_matmul_view_ok(arena, up, x_f32, out_f32)) {
+        return 1;
+    }
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "mxfp4 pair swiglu set device")) return 1;
+    const uint8_t *gate_base =
+        (const uint8_t *)((const char *)arena->ptr + gate->arena_offset);
+    const uint8_t *up_base =
+        (const uint8_t *)((const char *)arena->ptr + up->arena_offset);
+    arena_mxfp4_pair_swiglu_kernel<<<gate->rows, 256>>>(
+        (float *)out_f32->ptr,
+        gate_base,
+        up_base,
+        (const float *)x_f32->ptr,
+        gate->rows,
+        gate->cols,
+        gate->row_stride_bytes,
+        up->row_stride_bytes,
+        clamp,
+        weight);
+    return cuda_ok(cudaGetLastError(), "mxfp4 pair swiglu launch") ? 0 : 1;
 }
 
 extern "C" void ds4_gpu_set_quality(bool quality) {

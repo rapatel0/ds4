@@ -211,6 +211,8 @@ int main(void) {
     float cpu_weights[ROUTES];
     float cpu_hidden[HIDDEN];
     float gpu_hidden[HIDDEN];
+    float mid_ref[MID];
+    float mid_fused[MID];
     float cpu_logits[VOCAB];
     float gpu_logits[VOCAB];
     if (!payload) {
@@ -292,6 +294,7 @@ int main(void) {
     ds4_gpu_tensor *gate_t = ds4_gpu_tensor_alloc(MID * sizeof(float));
     ds4_gpu_tensor *up_t = ds4_gpu_tensor_alloc(MID * sizeof(float));
     ds4_gpu_tensor *mid_t = ds4_gpu_tensor_alloc(MID * sizeof(float));
+    ds4_gpu_tensor *fused_mid_t = ds4_gpu_tensor_alloc(MID * sizeof(float));
     ds4_gpu_tensor *route_t = ds4_gpu_tensor_alloc(HIDDEN * sizeof(float));
     ds4_gpu_tensor *accum_a = ds4_gpu_tensor_alloc(HIDDEN * sizeof(float));
     ds4_gpu_tensor *accum_b = ds4_gpu_tensor_alloc(HIDDEN * sizeof(float));
@@ -300,11 +303,11 @@ int main(void) {
     ds4_gpu_tensor *selected_t = ds4_gpu_tensor_alloc(ROUTES * sizeof(int32_t));
     ds4_gpu_tensor *weights_t = ds4_gpu_tensor_alloc(ROUTES * sizeof(float));
     ds4_gpu_tensor *logits_t = ds4_gpu_tensor_alloc(VOCAB * sizeof(float));
-    check(hidden_t && gate_t && up_t && mid_t && route_t && accum_a && accum_b &&
+    check(hidden_t && gate_t && up_t && mid_t && fused_mid_t && route_t && accum_a && accum_b &&
               router_t && probs_t && selected_t && weights_t && logits_t,
           "tensor allocate");
 
-    if (hidden_t && gate_t && up_t && mid_t && route_t && accum_a && accum_b &&
+    if (hidden_t && gate_t && up_t && mid_t && fused_mid_t && route_t && accum_a && accum_b &&
         router_t && probs_t && selected_t && weights_t && logits_t) {
         int dummy_model = 0;
         int32_t gpu_selected[ROUTES];
@@ -375,7 +378,22 @@ int main(void) {
                   "up mxfp4 matmul");
             check(ds4_gpu_swiglu_tensor(mid_t, gate_t, up_t, MID, 10.0f, gpu_weights[k]),
                   "swiglu");
-            check(ds4_gpu_arena_mxfp4_matmul_f32(arena, &down_view, mid_t, route_t) == 0,
+            check(ds4_gpu_arena_mxfp4_pair_swiglu_f32(arena,
+                                                       &gate_view,
+                                                       &up_view,
+                                                       hidden_t,
+                                                       fused_mid_t,
+                                                       10.0f,
+                                                       gpu_weights[k]) == 0,
+                  "fused gate/up swiglu");
+            check(ds4_gpu_tensor_read(mid_t, 0, mid_ref, sizeof(mid_ref)),
+                  "mid ref read");
+            check(ds4_gpu_tensor_read(fused_mid_t, 0, mid_fused, sizeof(mid_fused)),
+                  "mid fused read");
+            for (uint32_t m = 0; m < MID; m++) {
+                expect_close(mid_fused[m], mid_ref[m], 1e-4f, "fused mid");
+            }
+            check(ds4_gpu_arena_mxfp4_matmul_f32(arena, &down_view, fused_mid_t, route_t) == 0,
                   "down mxfp4 matmul");
             check(ds4_gpu_add_tensor(next, accum, route_t, HIDDEN), "route accumulate");
             ds4_gpu_tensor *tmp = accum;
@@ -441,6 +459,7 @@ int main(void) {
     ds4_gpu_tensor_free(accum_b);
     ds4_gpu_tensor_free(accum_a);
     ds4_gpu_tensor_free(route_t);
+    ds4_gpu_tensor_free(fused_mid_t);
     ds4_gpu_tensor_free(mid_t);
     ds4_gpu_tensor_free(up_t);
     ds4_gpu_tensor_free(gate_t);
