@@ -70,6 +70,24 @@ Aggregate throughput profile defaults in the gate:
   - `requests`: `4`
   - `tokens`: `1`
 
+Sustained decode profiles are opt-in and do not change readiness defaults:
+
+- `--sustained-profile off` (default): skip sustained decode.
+- `--sustained-profile smoke`:
+  - `ctx`: `1048576`
+  - `slots`: `1`
+  - `queue-policies`: `sequential`
+  - `requests`: `2`
+  - `tokens`: `4`
+  - `warmup-requests`: `0`
+- `--sustained-profile full`:
+  - `ctx`: `262144,1048576`
+  - `slots`: `1,2,4`
+  - `queue-policies`: `sequential`
+  - `requests`: `8`
+  - `tokens`: `16`
+  - `warmup-requests`: `1`
+
 For broader envelope runs without editing scripts:
 
 ```bash
@@ -338,6 +356,57 @@ The benchmark writes `serial_open.json`, `parallel_open.json`, `replay.json`,
 `throughput_optimization.report`, and `throughput_optimization.json`. The report
 records serial and parallel open totals, per-stage timings, speedup, decode
 timing, first-token bytes, and the verdict.
+
+## Sustained Decode Baseline
+
+Use the sustained decode benchmark when optimizing practical serving. Unlike
+the one-token aggregate gate, this measures multi-token requests and separates
+generated tok/s from continuation tok/s:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+./tools/ds4-v100-sustained-decode-bench.sh \
+  --model /models/DSv4-Flash-256e-fixed.gguf \
+  --pack-index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv \
+  --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt \
+  --ctx-tiers 1048576 \
+  --slot-tiers 1 \
+  --queue-policies sequential \
+  --tokens 16 \
+  --requests 8 \
+  --warmup-requests 1 \
+  --expected-token-hex 3136 \
+  --log-dir logs/sustained-decode-baseline
+```
+
+The benchmark writes `sustained_decode.tsv`, `sustained_decode.json`, per-case
+`result.json`, `server.log`, and `gpu_util.csv` when `nvidia-smi` is available.
+Important fields:
+
+- `aggregate_generated_tokens_per_second`: all generated tokens over timed
+  wall-clock seconds.
+- `aggregate_continuation_tokens_per_second`: tokens after the first generated
+  token over timed wall-clock seconds.
+- `timing_avg.stage_decode_ms`: average per-stage decode timing from replay
+  responses.
+- `timing_avg.handoff_ms`: average inter-stage handoff timing from replay
+  responses.
+- `gpu_utilization`: average/max GPU utilization or an explicit skipped reason.
+
+The same benchmark can be included in a full gate run without changing default
+readiness behavior:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+./tools/ds4-v100-gate.sh \
+  --model /models/DSv4-Flash-256e-fixed.gguf \
+  --mtp-model /models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf \
+  --pack-index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv \
+  --ctx 1048576 \
+  --slots 2 \
+  --sustained-profile smoke \
+  --log-dir logs/sustained-smoke-gate
+```
 
 ## Deployment Gate
 

@@ -19,6 +19,16 @@ aggregate_requests=""
 aggregate_tokens=""
 aggregate_host="127.0.0.1"
 aggregate_port_base="18120"
+sustained_profile="off"
+sustained_ctx_tiers=""
+sustained_slot_tiers=""
+sustained_queue_policies=""
+sustained_requests=""
+sustained_tokens=""
+sustained_warmup_requests=""
+sustained_host="127.0.0.1"
+sustained_port_base="18220"
+sustained_sample_ms="500"
 
 usage() {
     cat <<'USAGE'
@@ -51,6 +61,26 @@ Options:
                     Host for aggregate throughput runs (default 127.0.0.1)
   --aggregate-port-base N
                     Base port for aggregate throughput runs (default 18120)
+  --sustained-profile MODE
+                    Sustained decode profile: off, smoke, or full (default off)
+  --sustained-ctx-tiers LIST
+                    Override sustained decode context tiers CSV
+  --sustained-slot-tiers LIST
+                    Override sustained decode slot tiers CSV
+  --sustained-queue-policies LIST
+                    Override sustained decode queue policies CSV
+  --sustained-requests N
+                    Override sustained decode timed requests per case
+  --sustained-tokens N
+                    Override sustained decode generated tokens per request
+  --sustained-warmup-requests N
+                    Override sustained decode warmup requests per case
+  --sustained-host ADDR
+                    Host for sustained decode runs (default 127.0.0.1)
+  --sustained-port-base N
+                    Base port for sustained decode runs (default 18220)
+  --sustained-sample-ms N
+                    nvidia-smi sample period in ms for sustained runs
   --skip-model      Skip real-model source guard check
   --help            Show this help
 USAGE
@@ -142,6 +172,56 @@ while [ "$#" -gt 0 ]; do
             aggregate_port_base="$2"
             shift 2
             ;;
+        --sustained-profile)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --sustained-profile requires a value" >&2; exit 2; }
+            sustained_profile="$2"
+            shift 2
+            ;;
+        --sustained-ctx-tiers)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --sustained-ctx-tiers requires a value" >&2; exit 2; }
+            sustained_ctx_tiers="$2"
+            shift 2
+            ;;
+        --sustained-slot-tiers)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --sustained-slot-tiers requires a value" >&2; exit 2; }
+            sustained_slot_tiers="$2"
+            shift 2
+            ;;
+        --sustained-queue-policies)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --sustained-queue-policies requires a value" >&2; exit 2; }
+            sustained_queue_policies="$2"
+            shift 2
+            ;;
+        --sustained-requests)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --sustained-requests requires a value" >&2; exit 2; }
+            sustained_requests="$2"
+            shift 2
+            ;;
+        --sustained-tokens)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --sustained-tokens requires a value" >&2; exit 2; }
+            sustained_tokens="$2"
+            shift 2
+            ;;
+        --sustained-warmup-requests)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --sustained-warmup-requests requires a value" >&2; exit 2; }
+            sustained_warmup_requests="$2"
+            shift 2
+            ;;
+        --sustained-host)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --sustained-host requires a value" >&2; exit 2; }
+            sustained_host="$2"
+            shift 2
+            ;;
+        --sustained-port-base)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --sustained-port-base requires a value" >&2; exit 2; }
+            sustained_port_base="$2"
+            shift 2
+            ;;
+        --sustained-sample-ms)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-gate: --sustained-sample-ms requires a value" >&2; exit 2; }
+            sustained_sample_ms="$2"
+            shift 2
+            ;;
         --skip-model)
             skip_model=1
             shift
@@ -197,6 +277,64 @@ case "$aggregate_port_base" in
         exit 2
         ;;
 esac
+
+case "$sustained_profile" in
+    off)
+        ;;
+    smoke)
+        [ -n "$sustained_ctx_tiers" ] || sustained_ctx_tiers="1048576"
+        [ -n "$sustained_slot_tiers" ] || sustained_slot_tiers="1"
+        [ -n "$sustained_queue_policies" ] || sustained_queue_policies="sequential"
+        [ -n "$sustained_requests" ] || sustained_requests="2"
+        [ -n "$sustained_tokens" ] || sustained_tokens="4"
+        [ -n "$sustained_warmup_requests" ] || sustained_warmup_requests="0"
+        ;;
+    full)
+        [ -n "$sustained_ctx_tiers" ] || sustained_ctx_tiers="262144,1048576"
+        [ -n "$sustained_slot_tiers" ] || sustained_slot_tiers="1,2,4"
+        [ -n "$sustained_queue_policies" ] || sustained_queue_policies="sequential"
+        [ -n "$sustained_requests" ] || sustained_requests="8"
+        [ -n "$sustained_tokens" ] || sustained_tokens="16"
+        [ -n "$sustained_warmup_requests" ] || sustained_warmup_requests="1"
+        ;;
+    *)
+        echo "ds4-v100-gate: --sustained-profile must be off, smoke, or full" >&2
+        exit 2
+        ;;
+esac
+
+if [ "$sustained_profile" != "off" ]; then
+    case "$sustained_requests" in
+        ''|0|*[!0-9]*)
+            echo "ds4-v100-gate: --sustained-requests must be a positive integer" >&2
+            exit 2
+            ;;
+    esac
+    case "$sustained_tokens" in
+        ''|0|1|*[!0-9]*)
+            echo "ds4-v100-gate: --sustained-tokens must be an integer >= 2" >&2
+            exit 2
+            ;;
+    esac
+    case "$sustained_warmup_requests" in
+        ''|*[!0-9]*)
+            echo "ds4-v100-gate: --sustained-warmup-requests must be a non-negative integer" >&2
+            exit 2
+            ;;
+    esac
+    case "$sustained_port_base" in
+        ''|0|*[!0-9]*)
+            echo "ds4-v100-gate: --sustained-port-base must be a positive integer" >&2
+            exit 2
+            ;;
+    esac
+    case "$sustained_sample_ms" in
+        ''|0|*[!0-9]*)
+            echo "ds4-v100-gate: --sustained-sample-ms must be a positive integer" >&2
+            exit 2
+            ;;
+    esac
+fi
 
 targets=(
     tools/ds4-source-oracle-vector
@@ -257,6 +395,11 @@ if [ "$build" -eq 1 ]; then
 fi
 
 echo "gate	aggregate_profile	profile=$aggregate_profile ctx_tiers=$aggregate_ctx_tiers slot_tiers=$aggregate_slot_tiers queue_policies=$aggregate_queue_policies requests=$aggregate_requests tokens=$aggregate_tokens host=$aggregate_host port_base=$aggregate_port_base"
+if [ "$sustained_profile" != "off" ]; then
+    echo "gate	sustained_profile	profile=$sustained_profile ctx_tiers=$sustained_ctx_tiers slot_tiers=$sustained_slot_tiers queue_policies=$sustained_queue_policies requests=$sustained_requests tokens=$sustained_tokens warmup_requests=$sustained_warmup_requests host=$sustained_host port_base=$sustained_port_base sample_ms=$sustained_sample_ms"
+else
+    echo "gate	sustained_profile	profile=off"
+fi
 
 failures=0
 full_scheduler_ready=0
@@ -269,6 +412,7 @@ production_deployment_ready=0
 slot_context_admission_ready=0
 active_microbatch_scheduler_ready=0
 aggregate_slot_context_throughput_ready=0
+sustained_decode_ready=0
 mtp_sidecar_ready=0
 mtp_residency_ready=0
 mtp_prefix_ready=0
@@ -598,6 +742,31 @@ if [ -n "$pack_index" ]; then
             if run_gate "aggregate_slot_context_throughput" bash ./tools/ds4-v100-aggregate-throughput.sh "${aggregate_throughput_args[@]}"; then
                 aggregate_slot_context_throughput_ready=1
             fi
+            if [ "$sustained_profile" != "off" ]; then
+                sustained_decode_args=(
+                    --pack-index "$pack_index"
+                    --model "$model"
+                    --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt
+                    --expected-token-hex 3136
+                    --ctx-tiers "$sustained_ctx_tiers"
+                    --slot-tiers "$sustained_slot_tiers"
+                    --queue-policies "$sustained_queue_policies"
+                    --requests "$sustained_requests"
+                    --tokens "$sustained_tokens"
+                    --warmup-requests "$sustained_warmup_requests"
+                    --host "$sustained_host"
+                    --port-base "$sustained_port_base"
+                    --sample-ms "$sustained_sample_ms"
+                )
+                if [ -n "$log_dir" ]; then
+                    sustained_decode_args+=(--log-dir "$log_dir/sustained_decode")
+                fi
+                if run_gate "sustained_decode" bash ./tools/ds4-v100-sustained-decode-bench.sh "${sustained_decode_args[@]}"; then
+                    sustained_decode_ready=1
+                fi
+            else
+                echo "gate	sustained_decode	SKIP	profile=off"
+            fi
             if [ -n "$mtp_model" ]; then
                 mtp_serving_args=(
                     --index "$pack_index"
@@ -641,6 +810,9 @@ if [ -n "$pack_index" ]; then
             echo "gate	production_deployment	SKIP	no_model"
             echo "gate	slot_context_admission	SKIP	no_model"
             echo "gate	aggregate_slot_context_throughput	SKIP	no_model"
+            if [ "$sustained_profile" != "off" ]; then
+                echo "gate	sustained_decode	SKIP	no_model"
+            fi
             echo "gate	mtp_speculative_serving	SKIP	no_model"
         fi
     fi
@@ -667,6 +839,9 @@ else
     echo "gate	production_deployment	SKIP	no_pack_index"
     echo "gate	slot_context_admission	SKIP	no_pack_index"
     echo "gate	aggregate_slot_context_throughput	SKIP	no_pack_index"
+    if [ "$sustained_profile" != "off" ]; then
+        echo "gate	sustained_decode	SKIP	no_pack_index"
+    fi
     echo "gate	mtp_speculative_serving	SKIP	no_pack_index"
 fi
 
@@ -740,6 +915,9 @@ if [ "$active_microbatch_scheduler_ready" -eq 0 ]; then
 fi
 if [ "$aggregate_slot_context_throughput_ready" -eq 0 ]; then
     add_missing "aggregate_slot_context_throughput"
+fi
+if [ "$sustained_profile" != "off" ] && [ "$sustained_decode_ready" -eq 0 ]; then
+    add_missing "sustained_decode"
 fi
 
 if [ -n "$missing" ]; then
