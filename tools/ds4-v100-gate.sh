@@ -157,6 +157,7 @@ selected_token_ready=0
 public_serving_ready=0
 base_usability_ready=0
 throughput_ready=0
+throughput_optimization_ready=0
 production_deployment_ready=0
 mtp_sidecar_ready=0
 mtp_residency_ready=0
@@ -379,6 +380,21 @@ if [ -n "$pack_index" ]; then
             if run_gate "v100_replay_tool" ./tools/ds4-v100-replay --index "$pack_index" --model "$model" --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt --tokens 2 --expected-token-hex 3136 --json; then
                 throughput_ready=1
             fi
+            throughput_optimization_args=(
+                --index "$pack_index"
+                --model "$model"
+                --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt
+                --ctx "$ctx"
+                --tokens 2
+                --expected-token-hex 3136
+                --min-speedup 1.05
+            )
+            if [ -n "$log_dir" ]; then
+                throughput_optimization_args+=(--log-dir "$log_dir/throughput_optimization")
+            fi
+            if run_gate "throughput_optimization" ./tools/ds4-v100-throughput-bench.sh "${throughput_optimization_args[@]}"; then
+                throughput_optimization_ready=1
+            fi
             appliance_args=(
                 --index "$pack_index"
                 --model "$model"
@@ -446,6 +462,7 @@ if [ -n "$pack_index" ]; then
             echo "gate	output_head_parity	SKIP	no_model"
             echo "gate	scheduler_output_head	SKIP	no_model"
             echo "gate	v100_replay_tool	SKIP	no_model"
+            echo "gate	throughput_optimization	SKIP	no_model"
             echo "gate	v100_appliance_http	SKIP	no_model"
             echo "gate	v100_appliance_http_long	SKIP	no_model"
             echo "gate	production_deployment	SKIP	no_model"
@@ -467,6 +484,7 @@ else
     echo "gate	output_head_parity	SKIP	no_pack_index"
     echo "gate	scheduler_output_head	SKIP	no_pack_index"
     echo "gate	v100_replay_tool	SKIP	no_pack_index"
+    echo "gate	throughput_optimization	SKIP	no_pack_index"
     echo "gate	v100_appliance_http	SKIP	no_pack_index"
     echo "gate	v100_appliance_http_long	SKIP	no_pack_index"
     echo "gate	production_deployment	SKIP	no_pack_index"
@@ -529,8 +547,11 @@ fi
 if [ "$production_deployment_ready" -eq 0 ]; then
     add_missing "production_deployment"
 fi
-if [ -z "$missing" ]; then
+if [ "$throughput_optimization_ready" -eq 0 ]; then
     add_missing "throughput_optimization"
+fi
+if [ -z "$missing" ]; then
+    add_missing "mtp_speculative_serving"
 fi
 echo "gate	readiness	NOT_READY	missing=$missing"
 echo "gate	summary	PASS	failures=0 ready=false"

@@ -22,6 +22,7 @@ typedef struct {
     uint32_t index_comp_cap;
     uint32_t indexer_top_k;
     bool fp8_kv_cache;
+    bool serial_open;
 } ds4_v100_replay_options;
 
 typedef struct {
@@ -56,6 +57,9 @@ int ds4_v100_replay_open(ds4_v100_replay **out,
                          const ds4_v100_replay_options *opts,
                          char *err,
                          size_t errlen);
+
+void ds4_v100_replay_open_counters(const ds4_v100_replay *rt,
+                                   ds4_v100_replay_counters *out);
 
 void ds4_v100_replay_close(ds4_v100_replay *rt);
 

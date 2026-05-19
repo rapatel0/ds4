@@ -4,6 +4,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -74,6 +75,16 @@ void ds4_v100_replay_options_init(ds4_v100_replay_options *opts) {
     opts->indexer_top_k = 512;
 }
 
+void ds4_v100_replay_open_counters(const ds4_v100_replay *rt,
+                                   ds4_v100_replay_counters *out) {
+    if (!rt || !out) return;
+    memset(out, 0, sizeof(*out));
+    out->open_total_ms = rt->open_total_ms;
+    for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
+        out->open_ms[i] = rt->open_ms[i];
+    }
+}
+
 void ds4_v100_replay_close(ds4_v100_replay *rt) {
     if (!rt) return;
     for (int i = DS4_V100_EXPECTED_GPUS - 1; i >= 0; i--) {
@@ -91,6 +102,104 @@ int ds4_v100_replay_reset(ds4_v100_replay *rt, char *err, size_t errlen) {
         if (ds4_v100_stage_scheduler_reset(rt->scheds[i], err, errlen)) return 1;
     }
     rt->used = false;
+    return 0;
+}
+
+typedef struct {
+    ds4_v100_stage_scheduler_options opts;
+    ds4_v100_stage_scheduler *sched;
+    double open_ms;
+    int rc;
+    char err[512];
+} replay_open_worker;
+
+static void *replay_open_worker_main(void *arg) {
+    replay_open_worker *w = (replay_open_worker *)arg;
+    if (!w) return NULL;
+    const double t0 = replay_now_ms();
+    w->rc = ds4_v100_stage_scheduler_open(&w->sched,
+                                          &w->opts,
+                                          w->err,
+                                          sizeof(w->err));
+    w->open_ms = replay_now_ms() - t0;
+    return NULL;
+}
+
+static int replay_open_stages_serial(ds4_v100_replay *rt,
+                                     const ds4_v100_stage_scheduler_options *base,
+                                     char *err,
+                                     size_t errlen) {
+    for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
+        ds4_v100_stage_scheduler_options sopts = *base;
+        sopts.stage_id = stage;
+        const double t0 = replay_now_ms();
+        if (ds4_v100_stage_scheduler_open(&rt->scheds[stage], &sopts, err, errlen)) {
+            return 1;
+        }
+        rt->open_ms[stage] = replay_now_ms() - t0;
+    }
+    return 0;
+}
+
+static int replay_open_stages_parallel(ds4_v100_replay *rt,
+                                       const ds4_v100_stage_scheduler_options *base,
+                                       char *err,
+                                       size_t errlen) {
+    replay_open_worker workers[DS4_V100_EXPECTED_GPUS];
+    pthread_t threads[DS4_V100_EXPECTED_GPUS];
+    bool created[DS4_V100_EXPECTED_GPUS];
+    memset(workers, 0, sizeof(workers));
+    memset(threads, 0, sizeof(threads));
+    memset(created, 0, sizeof(created));
+
+    int create_failed = -1;
+    for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
+        workers[stage].opts = *base;
+        workers[stage].opts.stage_id = stage;
+        if (pthread_create(&threads[stage],
+                           NULL,
+                           replay_open_worker_main,
+                           &workers[stage]) != 0) {
+            create_failed = stage;
+            snprintf(workers[stage].err,
+                     sizeof(workers[stage].err),
+                     "failed to create stage-open worker %d",
+                     stage);
+            workers[stage].rc = 1;
+            break;
+        }
+        created[stage] = true;
+    }
+
+    for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
+        if (created[stage]) {
+            (void)pthread_join(threads[stage], NULL);
+        }
+    }
+
+    int first_failed = create_failed;
+    for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
+        if (workers[stage].rc != 0 && first_failed < 0) first_failed = stage;
+    }
+    if (first_failed >= 0) {
+        if (err && errlen) {
+            snprintf(err,
+                     errlen,
+                     "stage %d parallel open failed: %s",
+                     first_failed,
+                     workers[first_failed].err[0] ? workers[first_failed].err : "unknown error");
+        }
+        for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
+            ds4_v100_stage_scheduler_close(workers[stage].sched);
+        }
+        return 1;
+    }
+
+    for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
+        rt->scheds[stage] = workers[stage].sched;
+        rt->open_ms[stage] = workers[stage].open_ms;
+        workers[stage].sched = NULL;
+    }
     return 0;
 }
 
@@ -150,14 +259,15 @@ int ds4_v100_replay_open(ds4_v100_replay **out,
     sopts.index_comp_cap = opts->index_comp_cap;
     sopts.indexer_top_k = opts->indexer_top_k;
     sopts.fp8_kv_cache = opts->fp8_kv_cache;
-    for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
-        sopts.stage_id = stage;
-        const double t0 = replay_now_ms();
-        if (ds4_v100_stage_scheduler_open(&rt->scheds[stage], &sopts, err, errlen)) {
-            ds4_v100_replay_close(rt);
-            return 1;
+    int open_rc = opts->serial_open
+        ? replay_open_stages_serial(rt, &sopts, err, errlen)
+        : replay_open_stages_parallel(rt, &sopts, err, errlen);
+    if (open_rc) {
+        if (!opts->serial_open && err && errlen && err[0] == '\0') {
+            snprintf(err, errlen, "parallel stage open failed");
         }
-        rt->open_ms[stage] = replay_now_ms() - t0;
+        ds4_v100_replay_close(rt);
+        return 1;
     }
     rt->open_total_ms = replay_now_ms() - open0;
     *out = rt;

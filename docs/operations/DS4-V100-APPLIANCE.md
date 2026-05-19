@@ -46,7 +46,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   --pack-index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv \
   --ctx 1048576 \
   --slots 1 \
-  --log-dir docs/sprints/drafts/SPRINT-043-GATE-CLUSTER-8GPU
+  --log-dir docs/sprints/drafts/SPRINT-044-GATE-CLUSTER-8GPU
 ```
 
 ## Required Files
@@ -197,6 +197,29 @@ curl -sf \
 
 The response includes prompt token count, generated token count, selected token
 bytes, stage timings, and memory/upload counters from the resident replay path.
+
+## Startup Throughput Benchmark
+
+The default replay path opens the eight stage schedulers in parallel. Keep the
+serial path available for before/after timing and fallback debugging:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+./tools/ds4-v100-throughput-bench.sh \
+  --model /models/DSv4-Flash-256e-fixed.gguf \
+  --pack-index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv \
+  --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt \
+  --ctx 1048576 \
+  --tokens 2 \
+  --expected-token-hex 3136 \
+  --min-speedup 1.05 \
+  --log-dir docs/sprints/drafts/SPRINT-044-THROUGHPUT
+```
+
+The benchmark writes `serial_open.json`, `parallel_open.json`, `replay.json`,
+`throughput_optimization.report`, and `throughput_optimization.json`. The report
+records serial and parallel open totals, per-stage timings, speedup, decode
+timing, first-token bytes, and the verdict.
 
 ## Deployment Gate
 

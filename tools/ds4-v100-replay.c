@@ -31,6 +31,8 @@ typedef struct {
     int port;
     bool json;
     bool serve;
+    bool open_only;
+    bool serial_open;
 } replay_cli_options;
 
 static void usage(FILE *fp) {
@@ -47,6 +49,8 @@ static void usage(FILE *fp) {
             "  --ctx N                   KV context tokens, default 1048576\n"
             "  --expected-token-hex HEX  require first generated token bytes\n"
             "  --json                    emit JSON\n"
+            "  --open-only               open resident stages, print timing, and exit\n"
+            "  --serial-open             open resident stages serially for benchmarking\n"
             "  --serve                   run a minimal HTTP endpoint\n"
             "                            GET /health, GET /v100/status, GET /metrics,\n"
             "                            POST /v100/selected-token\n"
@@ -112,6 +116,10 @@ static replay_cli_options parse_options(int argc, char **argv) {
             opt.expected_hex = need_arg(&i, argc, argv, arg);
         } else if (!strcmp(arg, "--json")) {
             opt.json = true;
+        } else if (!strcmp(arg, "--open-only")) {
+            opt.open_only = true;
+        } else if (!strcmp(arg, "--serial-open")) {
+            opt.serial_open = true;
         } else if (!strcmp(arg, "--serve")) {
             opt.serve = true;
         } else if (!strcmp(arg, "--host")) {
@@ -136,8 +144,13 @@ static replay_cli_options parse_options(int argc, char **argv) {
             exit(2);
         }
     }
-    if (!opt.model_path || !opt.index_path || (!opt.serve && !opt.prompt && !opt.prompt_file)) {
+    if (!opt.model_path || !opt.index_path ||
+        (!opt.serve && !opt.open_only && !opt.prompt && !opt.prompt_file)) {
         usage(stderr);
+        exit(2);
+    }
+    if (opt.open_only && opt.serve) {
+        fprintf(stderr, "ds4-v100-replay: use --open-only or --serve, not both\n");
         exit(2);
     }
     if (opt.prompt && opt.prompt_file) {
@@ -302,6 +315,17 @@ static void print_json(const ds4_v100_replay_output *outputs,
                        uint32_t n_outputs,
                        const ds4_v100_replay_counters *c) {
     print_json_fp(stdout, outputs, n_outputs, c);
+}
+
+static void print_open_json(const ds4_v100_replay_counters *c, bool serial_open) {
+    printf("{\"open_only\":true,\"open_mode\":\"%s\",\"timing_ms\":{",
+           serial_open ? "serial" : "parallel");
+    printf("\"open_total\":%.3f,\"open_stage\":[", c->open_total_ms);
+    for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
+        if (i) printf(",");
+        printf("%.3f", c->open_ms[i]);
+    }
+    printf("]}}\n");
 }
 
 static int hex4(const char *s, uint32_t *out) {
@@ -699,7 +723,7 @@ int main(int argc, char **argv) {
     replay_cli_options opt = parse_options(argc, argv);
     char *prompt_owned = NULL;
     const char *prompt_text = NULL;
-    if (!opt.serve) {
+    if (!opt.serve && !opt.open_only) {
         prompt_owned = opt.prompt_file ? read_file(opt.prompt_file) : NULL;
         prompt_text = opt.prompt_file ? prompt_owned : opt.prompt;
         if (!prompt_text) return 1;
@@ -718,6 +742,7 @@ int main(int argc, char **argv) {
     ropts.model_path = opt.model_path;
     ropts.pack_index_path = opt.index_path;
     ropts.kv_ctx_tokens = opt.ctx;
+    ropts.serial_open = opt.serial_open;
 
     char err[512] = {0};
     ds4_v100_replay *rt = NULL;
@@ -726,6 +751,23 @@ int main(int argc, char **argv) {
         free(expected);
         free(prompt_owned);
         return 1;
+    }
+
+    if (opt.open_only) {
+        ds4_v100_replay_counters counters;
+        ds4_v100_replay_open_counters(rt, &counters);
+        if (opt.json) {
+            print_open_json(&counters, opt.serial_open);
+        } else {
+            printf("open_mode\t%s\n", opt.serial_open ? "serial" : "parallel");
+            printf("open_total_ms\t%.3f\n", counters.open_total_ms);
+            for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
+                printf("open_stage_ms\t%d\t%.3f\n", i, counters.open_ms[i]);
+            }
+        }
+        ds4_v100_replay_close(rt);
+        free(expected);
+        return 0;
     }
 
     if (opt.serve) {

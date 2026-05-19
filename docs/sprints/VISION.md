@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-19
 last_updated_by: vision
-revision: 55
+revision: 56
 ---
 
 # Vision: DS4 V100 Appliance
@@ -32,9 +32,9 @@ it is a narrow DS4 runtime tuned for this hardware.
   target FP16 tensor cores or the selected low-bit/integer kernels.
 - The tightest observed residency case still leaves more than the planned 3 GiB
   reserve on a 32 GB V100. Weight VRAM fit is no longer the primary blocker.
-- The main remaining risk is no longer VRAM fit or first-token correctness; it
-  is throughput, startup/upload latency, multi-slot/context operating envelope,
-  and production speculative MTP serving.
+- The main remaining risk is no longer VRAM fit, first-token correctness, base
+  deployment, or cold startup/upload. It is production speculative MTP serving,
+  multi-slot scheduling, and aggregate context/throughput operating envelope.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation
@@ -262,7 +262,13 @@ it is a narrow DS4 runtime tuned for this hardware.
   an operator launcher, env config, systemd and Kubernetes templates,
   `/metrics`, richer status limits, a production deployment smoke, and runbook
   coverage. The full 8-GPU gate passes with `production_deployment PASS` and
-  now reports `missing=throughput_optimization`.
+  reports `production_deployment PASS`.
+- Sprint 044 shipped the first throughput optimization: parallel stage
+  open/upload for the replay runtime, with a serial fallback and benchmark
+  gate. Focused cluster timing improved cold open from `343989.990 ms` to
+  `63032.135 ms` (`5.457375x`), the full gate's optimization benchmark
+  improved from `227418.984 ms` to `59449.323 ms` (`3.825426x`), and the full
+  gate now reports `missing=mtp_speculative_serving`.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -280,14 +286,16 @@ mean "nothing works"; it should say which rung has not been proven yet.
 | 2 | Minimal usable base appliance | A human/operator can start the base model service and use it for short non-MTP one-slot generation with documented limits. | Longer prompt/decode smoke, repeat HTTP requests, failure logs, run command, health check, 1-slot timing report. | Complete through Sprint 032, with explicit limits: one slot, sequential loopback HTTP, no MTP, no streaming, no production supervisor. |
 | 3 | MTP-assisted correctness | The resident MTP sidecar can produce a K=1 draft token that matches a trusted oracle and does not corrupt target-model state. | MTP sidecar residency, Q8_0/Q4_K kernel parity, MTP forward logits/top-k, draft/verify/rollback tests. | Complete through Sprint 042. The focused and full 8-GPU gates produce a native prompt-token draft from committed token `926` and post-commit target HC, match target top-1 token `1` exactly, and preserve exact rollback/replay parity. |
 | 4 | Production deployment | The appliance can be left running on the cluster with operational confidence. | Supervised service, config files, restart behavior, health/metrics endpoint, deployment/runbook, known rollback path. | Complete through Sprint 043 for the base one-slot service. The full gate includes `production_deployment PASS` with launcher, config, `/metrics`, supervisor templates, runbook, and rollback mode. |
-| 5 | Throughput optimization | The service has measured aggregate tok/s and a clear slot/context operating envelope. | Startup/upload timings, decode timings, slot admission, 1/2/4/8-slot benchmarks, context-tier benchmarks, and the first targeted optimization. | Current gate blocker: `missing=throughput_optimization`. Existing timings are useful diagnostics, not a throughput claim. |
+| 5 | Startup and one-slot throughput optimization | Fresh-process startup/upload is measured and improved, and the one-slot decode path has gate-owned timing evidence. | Serial-vs-parallel startup benchmark, default replay timing, first-token correctness, full-gate `throughput_optimization PASS`. | Complete through Sprint 044. Focused timing improved cold open from `343989.990 ms` to `63032.135 ms`; full-gate timing improved from `227418.984 ms` to `59449.323 ms`; first token remains `3136`. |
+| 6 | Aggregate slot/context operating envelope | The appliance can admit and schedule multiple slots/context tiers and report aggregate tok/s. | 1/2/4/8-slot admission, context-tier benchmarks, active microbatch scheduling, queueing or rejection semantics, and MTP-aware throughput comparison. | Planned after MTP speculative serving. Not yet implemented and not claimed by Sprint 044. |
 
 MTP is not required for the first minimally usable base appliance. It is
 required for the intended performance path if speculative decoding proves
-correct and beneficial on V100. With Level 4 complete, "ready to use" means
-the checked base appliance plus native one-token MTP verify can be launched and
-supervised as a loopback cluster service. It does not yet mean
-throughput-optimized, multi-slot, streaming, or externally exposed serving.
+correct and beneficial on V100. With Level 5 complete, "ready to use" means
+the checked base appliance plus native one-token MTP verify can be launched,
+supervised, and cold-started in roughly one minute as a loopback cluster
+service. It does not yet mean MTP speculative serving, multi-slot batching,
+streaming, or externally exposed serving.
 
 ## Sprint Sequence
 
@@ -875,7 +883,7 @@ throughput-optimized, multi-slot, streaming, or externally exposed serving.
   focused deployment smoke and full gate both pass; the full gate now reports
   `failures=0 ready=false missing=throughput_optimization`.
 
-### Sprint 044 - Throughput Optimization And Operating Envelope [planned]
+### Sprint 044 - Throughput Optimization And Operating Envelope [complete]
 
 - **Goal**: Convert the current timing diagnostics into a credible throughput
   and operating-envelope baseline, then implement the first targeted
@@ -885,6 +893,23 @@ throughput-optimized, multi-slot, streaming, or externally exposed serving.
   startup still spends roughly 4.8-5.8 minutes opening/uploading the resident
   stages, and the current one-slot decode timings are diagnostic rather than a
   slot/context throughput claim.
+- **Outcome**: `SHIP`. The replay runtime now opens/uploads all eight stage
+  schedulers in parallel by default, with `--serial-open` retained for fallback
+  and before/after measurement. `tools/ds4-v100-throughput-bench.sh` proves
+  serial versus parallel open, preserves first-token bytes `3136`, and is wired
+  into the full gate as `throughput_optimization`. On the 8x V100 cluster, the
+  focused benchmark improved cold open from `343989.990 ms` to `63032.135 ms`
+  (`5.457375x`), and the full gate passed with
+  `failures=0 ready=false missing=mtp_speculative_serving`.
+
+### Sprint 045 - Production MTP Speculative Serving [planned]
+
+- **Goal**: Expose the gated one-token native MTP verify path through the
+  resident HTTP appliance as a bounded speculative serving mode.
+- **Rationale**: The project now has base serving, MTP correctness, deployment,
+  and startup optimization. The remaining readiness blocker is that the served
+  process still reports `mtp_enabled=false` and does not draft/verify/rollback
+  inside the request loop.
 - **Outcome**: Planned next sprint.
 
 ## Parking Lot
@@ -1007,6 +1032,9 @@ throughput-optimized, multi-slot, streaming, or externally exposed serving.
 - See `docs/sprints/SPRINT-043-FOLLOWUPS.md`: throughput optimization and
   operating envelope, production MTP serving object, request surface hardening,
   and deployment manifest hardening.
+- See `docs/sprints/SPRINT-044-FOLLOWUPS.md`: MTP speculative serving,
+  multi-slot aggregate throughput, persistent startup strategy, and broader
+  benchmark coverage.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -1064,6 +1092,7 @@ throughput-optimized, multi-slot, streaming, or externally exposed serving.
 | 2026-05-19 | Shipped Sprint 041 MTP rollback state safety. | The base target scheduler can now snapshot/restore mutable HC/KV/compressor/indexer state around a rejected speculative token while the real MTP sidecar remains resident; the remaining blocker is a real prompt-token MTP draft verified by exact target token equality. | Sprint 042+ |
 | 2026-05-19 | Shipped Sprint 042 native prompt-token MTP verify. | The real MTP sidecar now drafts from committed-token embedding plus gpu7 post-commit target HC and matches target top-1 exactly on the fixture, so the remaining gate blocker is production deployment packaging. | Sprint 043+ |
 | 2026-05-19 | Shipped Sprint 043 production deployment package. | The appliance now has a launcher, explicit config, supervisor templates, metrics/status probes, runbook, rollback mode, and a full-gate production deployment smoke; the remaining blocker is no longer deployment packaging but throughput optimization and operating-envelope measurement. | Sprint 044+ |
+| 2026-05-19 | Shipped Sprint 044 throughput optimization. | Parallel stage open/upload cut cold replay startup to about one minute while preserving selected-token correctness; the remaining blocker is now exposing the already-gated MTP verify path as production speculative serving. | Sprint 045+ |
 
 ## Open Questions
 
@@ -1072,8 +1101,8 @@ throughput-optimized, multi-slot, streaming, or externally exposed serving.
 2. What production serving milestone should follow the loopback service:
    OpenAI-compatible API, authenticated proxy, streaming, or a narrower
    internal endpoint?
-3. Which first throughput optimization should Sprint 044 prioritize:
-   parallel stage upload, longer resident decode baselines, or multi-slot
-   admission?
+3. What accept policy should Sprint 045 use for the first served MTP mode:
+   strict top-1 equality only, top-k assisted verification, or a diagnostic
+   mode that records drafts without accepting them by default?
 4. Should the persistent `/srv/dev/ds4-sprint004` pack become the seed
    deployment artifact, or should a formal pack release format come first?
