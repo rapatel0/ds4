@@ -1,0 +1,2 @@
+ds4: CUDA loading model tensors into device cache
+cuda_v100_output_head_parity_smoke: cpu_top1=83253 gpu_top1=83253 cpu_logit=21.160488 gpu_logit=21.160488 ok

@@ -8941,6 +8941,89 @@ extern "C" int ds4_gpu_router_select_batch_tensor(ds4_gpu_tensor *selected, ds4_
     return cuda_ok(cudaGetLastError(), "router_select launch");
 }
 
+extern "C" int ds4_gpu_arena_router_select_bias_tensor(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *bias,
+        ds4_gpu_tensor                *selected_i32,
+        ds4_gpu_tensor                *weights_f32,
+        ds4_gpu_tensor                *probs_f32,
+        const ds4_gpu_tensor          *logits_f32) {
+    if (!arena || !bias || !selected_i32 || !weights_f32 || !probs_f32 ||
+        !logits_f32 || !arena->valid || !arena->ptr ||
+        !selected_i32->ptr || !weights_f32->ptr || !probs_f32->ptr ||
+        !logits_f32->ptr) {
+        return 1;
+    }
+    if (bias->rows != 1u || bias->cols != 256u ||
+        (bias->arena_offset & 3ull) != 0 ||
+        (bias->row_stride_bytes & 3u) != 0 ||
+        !cuda_arena_range_ok(arena, bias->arena_offset, bias->byte_length) ||
+        bias->byte_length < 256ull * sizeof(float) ||
+        bias->row_stride_bytes < 256u * sizeof(float)) {
+        return 1;
+    }
+    if (selected_i32->device != arena->gpu ||
+        weights_f32->device != arena->gpu ||
+        probs_f32->device != arena->gpu ||
+        logits_f32->device != arena->gpu ||
+        selected_i32->bytes < 6ull * sizeof(int32_t) ||
+        weights_f32->bytes < 6ull * sizeof(float) ||
+        probs_f32->bytes < 256ull * sizeof(float) ||
+        logits_f32->bytes < 256ull * sizeof(float)) {
+        return 1;
+    }
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "arena router select set device")) return 1;
+
+    const float *bias_ptr =
+        (const float *)((const char *)arena->ptr + bias->arena_offset);
+    if (getenv("DS4_CUDA_NO_WARP_ROUTER_SELECT") == NULL &&
+        getenv("DS4_CUDA_NO_PARALLEL_ROUTER_SELECT") == NULL) {
+        dim3 block(32, 4, 1);
+        router_select_warp_topk_kernel<<<1, block>>>(
+                (int32_t *)selected_i32->ptr,
+                (float *)weights_f32->ptr,
+                (float *)probs_f32->ptr,
+                bias_ptr,
+                NULL,
+                (const float *)logits_f32->ptr,
+                NULL,
+                0,
+                0,
+                1,
+                1,
+                0);
+    } else if (getenv("DS4_CUDA_NO_PARALLEL_ROUTER_SELECT") == NULL) {
+        router_select_parallel_kernel<<<1, 256>>>(
+                (int32_t *)selected_i32->ptr,
+                (float *)weights_f32->ptr,
+                (float *)probs_f32->ptr,
+                bias_ptr,
+                NULL,
+                (const float *)logits_f32->ptr,
+                NULL,
+                0,
+                0,
+                1,
+                1,
+                0);
+    } else {
+        router_select_kernel<<<1, 1>>>(
+                (int32_t *)selected_i32->ptr,
+                (float *)weights_f32->ptr,
+                (float *)probs_f32->ptr,
+                bias_ptr,
+                NULL,
+                (const float *)logits_f32->ptr,
+                NULL,
+                0,
+                0,
+                1,
+                1,
+                0);
+    }
+    return cuda_ok(cudaGetLastError(), "arena router select launch") ? 0 : 1;
+}
+
 __device__ static float dev_f16_to_f32(uint16_t v) {
     return __half2float(*reinterpret_cast<const __half *>(&v));
 }
@@ -11924,6 +12007,68 @@ extern "C" int ds4_gpu_hc_split_weighted_sum_tensor(
             n_embd, n_hc, (uint32_t)n_rows, sinkhorn_iters, eps);
     return cuda_ok(cudaGetLastError(), "hc split weighted sum launch");
 }
+
+extern "C" int ds4_gpu_arena_hc_split_weighted_sum_tensor(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *scale,
+        const ds4_gpu_source_row_view *base,
+        ds4_gpu_tensor                *out,
+        ds4_gpu_tensor                *split,
+        const ds4_gpu_tensor          *mix,
+        const ds4_gpu_tensor          *residual_hc,
+        uint32_t                       n_embd,
+        uint32_t                       n_hc,
+        uint32_t                       sinkhorn_iters,
+        float                          eps) {
+    if (!arena || !scale || !base || !out || !split || !mix || !residual_hc ||
+        !arena->valid || !arena->ptr || !out->ptr || !split->ptr ||
+        !mix->ptr || !residual_hc->ptr || n_embd == 0 || n_hc != 4) {
+        return 1;
+    }
+    const uint64_t mix_hc = 2ull * n_hc + (uint64_t)n_hc * n_hc;
+    const uint64_t mix_bytes = mix_hc * sizeof(float);
+    const uint64_t out_row_bytes = (uint64_t)n_embd * sizeof(float);
+    const uint64_t residual_row_bytes = (uint64_t)n_hc * n_embd * sizeof(float);
+    if (scale->rows != 1u || scale->cols != 3u ||
+        base->rows != 1u || base->cols != mix_hc ||
+        (scale->arena_offset & 3ull) != 0 ||
+        (base->arena_offset & 3ull) != 0 ||
+        scale->byte_length < 3ull * sizeof(float) ||
+        base->byte_length < mix_bytes ||
+        !cuda_arena_range_ok(arena, scale->arena_offset, scale->byte_length) ||
+        !cuda_arena_range_ok(arena, base->arena_offset, base->byte_length) ||
+        out->bytes < out_row_bytes ||
+        out->bytes % out_row_bytes != 0) {
+        return 1;
+    }
+    const uint64_t n_rows = out->bytes / out_row_bytes;
+    if (mix->bytes < n_rows * mix_bytes ||
+        split->bytes < n_rows * mix_bytes ||
+        residual_hc->bytes < n_rows * residual_row_bytes ||
+        out->device != arena->gpu ||
+        split->device != arena->gpu ||
+        mix->device != arena->gpu ||
+        residual_hc->device != arena->gpu ||
+        n_rows > UINT32_MAX) {
+        return 1;
+    }
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "arena hc split weighted sum set device")) return 1;
+
+    const float *scale_ptr =
+        (const float *)((const char *)arena->ptr + scale->arena_offset);
+    const float *base_ptr =
+        (const float *)((const char *)arena->ptr + base->arena_offset);
+    hc_split_weighted_sum_fused_kernel<<<(uint32_t)n_rows, 256>>>(
+            (float *)out->ptr,
+            (float *)split->ptr,
+            (const float *)mix->ptr,
+            (const float *)residual_hc->ptr,
+            scale_ptr,
+            base_ptr,
+            n_embd, n_hc, (uint32_t)n_rows, sinkhorn_iters, eps);
+    return cuda_ok(cudaGetLastError(), "arena hc split weighted sum launch") ? 0 : 1;
+}
+
 extern "C" int ds4_gpu_hc_split_weighted_sum_norm_tensor(
         ds4_gpu_tensor       *out,
         ds4_gpu_tensor       *norm_out,

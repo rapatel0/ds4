@@ -392,6 +392,67 @@ int ds4_v100_mtp_sidecar_f32_vector_view(
     return 0;
 }
 
+int ds4_v100_mtp_sidecar_f32_matrix_view(
+        const ds4_v100_mtp_sidecar *sidecar,
+        const char *name,
+        ds4_gpu_source_row_view *out,
+        char *err,
+        size_t errlen) {
+    if (err && errlen) err[0] = '\0';
+    if (!sidecar || !name || !out) {
+        return mtp_error(err, errlen, "missing MTP F32 matrix view argument");
+    }
+    const ds4_mtp_sidecar_tensor_info *t =
+        ds4_v100_mtp_sidecar_tensor(sidecar, name);
+    if (!t) {
+        return mtp_errorf(err, errlen, "missing MTP tensor %s", name);
+    }
+    if (strcmp(t->dtype, "f32") != 0 || t->n_dims != 2 ||
+        t->shape[0] == 0 || t->shape[1] == 0 ||
+        t->shape[0] > UINT32_MAX || t->shape[1] > UINT32_MAX ||
+        t->shape[0] > UINT32_MAX / sizeof(float)) {
+        return mtp_errorf(err,
+                          errlen,
+                          "MTP tensor %s is not a supported 2D F32 tensor",
+                          name);
+    }
+
+    const uint64_t row_stride = t->shape[0] * sizeof(float);
+    if (t->shape[1] > UINT64_MAX / row_stride) {
+        return mtp_errorf(err, errlen, "MTP tensor %s F32 byte length overflows", name);
+    }
+    const uint64_t expected_bytes = t->shape[1] * row_stride;
+    if (expected_bytes != t->byte_length) {
+        return mtp_errorf(err,
+                          errlen,
+                          "MTP tensor %s byte length %" PRIu64
+                          " != expected F32 matrix bytes %" PRIu64,
+                          name,
+                          t->byte_length,
+                          expected_bytes);
+    }
+    if ((t->source_offset % sizeof(float)) != 0 ||
+        (t->resident_offset % sizeof(float)) != 0) {
+        return mtp_errorf(err, errlen, "MTP tensor %s F32 offset is unaligned", name);
+    }
+    if (t->source_offset > sidecar->size ||
+        t->byte_length > sidecar->size - t->source_offset) {
+        return mtp_errorf(err, errlen, "MTP tensor %s source range is invalid", name);
+    }
+    if (t->resident_offset > sidecar->info.resident_bytes ||
+        t->byte_length > sidecar->info.resident_bytes - t->resident_offset) {
+        return mtp_errorf(err, errlen, "MTP tensor %s resident range is invalid", name);
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->arena_offset = t->resident_offset;
+    out->byte_length = t->byte_length;
+    out->rows = (uint32_t)t->shape[1];
+    out->cols = (uint32_t)t->shape[0];
+    out->row_stride_bytes = (uint32_t)row_stride;
+    return 0;
+}
+
 int ds4_v100_mtp_sidecar_q4_k_expert_view(
         const ds4_v100_mtp_sidecar *sidecar,
         const char *name,

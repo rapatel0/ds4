@@ -165,6 +165,25 @@ int ds4_gpu_arena_q4_k_routed_moe_one_f32(
         const ds4_gpu_tensor            *x_f32,
         uint32_t                         n_expert,
         float                            clamp);
+int ds4_gpu_arena_router_select_bias_tensor(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *bias,
+        ds4_gpu_tensor                *selected_i32,
+        ds4_gpu_tensor                *weights_f32,
+        ds4_gpu_tensor                *probs_f32,
+        const ds4_gpu_tensor          *logits_f32);
+int ds4_gpu_arena_hc_split_weighted_sum_tensor(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *scale,
+        const ds4_gpu_source_row_view *base,
+        ds4_gpu_tensor                *out,
+        ds4_gpu_tensor                *split,
+        const ds4_gpu_tensor          *mix,
+        const ds4_gpu_tensor          *residual_hc,
+        uint32_t                       n_embd,
+        uint32_t                       n_hc,
+        uint32_t                       sinkhorn_iters,
+        float                          eps);
 
 /* =========================================================================
  * Embeddings and Indexer Helpers.

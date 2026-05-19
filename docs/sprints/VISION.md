@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-19
 last_updated_by: vision
-revision: 47
+revision: 48
 ---
 
 # Vision: DS4 V100 Appliance
@@ -207,6 +207,12 @@ it is a narrow DS4 runtime tuned for this hardware.
   focused CPU reference with `max_abs=1.43051147e-06`. The full V100 gate now
   includes `mtp_q4k` and passes with `failures=0 ready=false
   missing=mtp_forward`.
+- Sprint 036 shipped the resident MTP FFN slice. The gpu7 sidecar arena now
+  feeds HC FFN control, FFN RMS norm, bias-router selection, Q4_K routed
+  experts, Q8_0 shared experts, routed+shared accumulation, and HC expansion
+  to `next_hc`, matching a CPU sidecar-byte reference with `next_hc
+  max_abs=2.38418579e-06`. The full V100 gate now includes `mtp_ffn` and still
+  honestly reports `missing=mtp_forward`.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -222,7 +228,7 @@ mean "nothing works"; it should say which rung has not been proven yet.
 | 0 | Fit and residency | The source model can be mapped, packed, and held in 8x V100 VRAM with reserve. | Pack inventory, per-GPU memory plan, resident upload smoke, source-layout guards. | Complete through Sprints 001-006. |
 | 1 | Single-prompt base correctness | The base model path can run one known prompt through all 43 layers and select the expected first token. | Full 8-stage scheduler, output-head parity, selected-token hex `3136`, one-shot replay. | Complete through Sprints 024-028. |
 | 2 | Minimal usable base appliance | A human/operator can start the base model service and use it for short non-MTP one-slot generation with documented limits. | Longer prompt/decode smoke, repeat HTTP requests, failure logs, run command, health check, 1-slot timing report. | Complete through Sprint 032, with explicit limits: one slot, sequential loopback HTTP, no MTP, no streaming, no production supervisor. |
-| 3 | MTP-assisted correctness | The resident MTP sidecar can produce a K=1 draft token that matches a trusted oracle and does not corrupt target-model state. | MTP sidecar residency, Q8_0/Q4_K kernel parity, MTP forward logits/top-k, draft/verify/rollback tests. | Partially complete. Sprint 031 shipped residency; Sprint 033 shipped resident Q8_0 projection parity; Sprint 034 shipped resident F32 norm plus prefix HC composition; Sprint 035 shipped resident Q4_K routed expert execution. The current gate remains stopped at `missing=mtp_forward`. |
+| 3 | MTP-assisted correctness | The resident MTP sidecar can produce a K=1 draft token that matches a trusted oracle and does not corrupt target-model state. | MTP sidecar residency, Q8_0/Q4_K kernel parity, MTP forward logits/top-k, draft/verify/rollback tests. | Partially complete. Sprint 031 shipped residency; Sprint 033 shipped resident Q8_0 projection parity; Sprint 034 shipped resident F32 norm plus prefix HC composition; Sprint 035 shipped resident Q4_K routed expert execution; Sprint 036 shipped resident HC-wrapped FFN block parity through `next_hc`. The current gate remains stopped at `missing=mtp_forward`. |
 | 4 | Throughput appliance | The service has measured aggregate tok/s and a clear slot/context operating envelope. | Startup/upload timings, decode timings, slot admission, 1/2/4/8-slot benchmarks, context-tier benchmarks. | Not complete. Existing timings are diagnostic, not a throughput claim. |
 | 5 | Production deployment | The appliance can be left running on the cluster with operational confidence. | Supervised service, config files, restart behavior, health/metrics endpoint, deployment/runbook, known rollback path. | Not complete. Current HTTP path is a loopback smoke, not deployment packaging. |
 
@@ -697,6 +703,21 @@ MTP-assisted, or production-deployed serving.
   V100 gate now includes `mtp_q4k` while still honestly reporting
   `missing=mtp_forward`.
 
+### Sprint 036 - V100 Resident MTP FFN Slice [complete]
+
+- **Goal**: Assemble the resident MTP FFN block slice from sidecar-resident HC
+  control, router, routed Q4_K experts, shared Q8_0 experts, and HC expansion.
+- **Rationale**: Sprint 035 proved the dominant Q4_K routed expert primitive,
+  but full MTP forward still needed the surrounding native FFN structure:
+  bias-router selection, shared expert execution, routed+shared accumulation,
+  and return to `[4 x 4096]` HC state.
+- **Outcome**: `SHIP`. `tools/ds4-v100-mtp-ffn-smoke` now starts from
+  deterministic `after_attn_hc`, executes resident HC FFN control, FFN norm,
+  bias router, Q4_K routed experts, Q8_0 shared experts, and HC expand to
+  `next_hc`. The focused V100 smoke matches the CPU sidecar-byte reference
+  with `next_hc max_abs=2.38418579e-06`, and the full gate includes
+  `mtp_ffn` while still correctly reporting `missing=mtp_forward`.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -841,6 +862,7 @@ MTP-assisted, or production-deployed serving.
 | 2026-05-18 | Shipped Sprint 033 resident MTP Q8_0 projection parity. | The MTP sidecar now feeds real V100 Q8_0 projection kernels from compact gpu7 resident offsets, proving the first compute step beyond residency; the next blocker is full prefix composition, MTP block execution, logits/top-k, and draft verification. | Sprint 034+ |
 | 2026-05-19 | Shipped Sprint 034 resident MTP prefix composition. | The MTP sidecar now produces resident `mtp_input_hc` from F32 norms, Q8_0 projections, HC repeat, and add; the next blocker is executing the MTP block itself, especially Q4_K routed experts, then logits/top-k and draft rollback. | Sprint 035+ |
 | 2026-05-19 | Shipped Sprint 035 resident MTP Q4_K routed experts. | The MTP sidecar now runs its three 1.207959552 GB Q4_K expert tensors directly from gpu7 resident offsets with V100 decode kernels; the remaining blocker is assembling the full MTP block, logits/top-k, and draft verify/rollback. | Sprint 036+ |
+| 2026-05-19 | Shipped Sprint 036 resident MTP FFN slice. | The MTP sidecar now runs HC FFN control, bias router, routed Q4_K experts, shared Q8_0 experts, routed+shared accumulation, and HC expansion through `next_hc` from gpu7 resident bytes; the remaining blocker is MTP raw/SWA attention, logits/top-k, and draft verify/rollback. | Sprint 037+ |
 
 ## Open Questions
 
