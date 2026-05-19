@@ -25,6 +25,35 @@ typedef struct {
     ds4_gpu_tensor *indexer_topk;
 } scheduler_layer_cache;
 
+typedef struct {
+    unsigned char *data;
+    uint64_t bytes;
+} scheduler_snapshot_tensor;
+
+typedef struct {
+    uint32_t n_attn_comp;
+    uint32_t n_index_comp;
+    scheduler_snapshot_tensor raw_kv;
+    scheduler_snapshot_tensor attn_state_kv;
+    scheduler_snapshot_tensor attn_state_score;
+    scheduler_snapshot_tensor attn_comp_kv;
+    scheduler_snapshot_tensor index_state_kv;
+    scheduler_snapshot_tensor index_state_score;
+    scheduler_snapshot_tensor index_comp_kv;
+    scheduler_snapshot_tensor indexer_topk;
+} scheduler_layer_cache_snapshot;
+
+struct ds4_v100_stage_scheduler_snapshot {
+    int stage_id;
+    int gpu;
+    int layer_begin;
+    int layer_end;
+    int cur_hc_slot;
+    scheduler_snapshot_tensor cur_hc;
+    scheduler_layer_cache_snapshot layers[DS4_V100_N_LAYERS];
+    uint64_t captured_bytes;
+};
+
 struct ds4_v100_stage_scheduler {
     ds4_v100_context *ctx;
     ds4_pack *pack;
@@ -59,6 +88,11 @@ static int scheduler_error(char *err, size_t errlen, const char *msg) {
 }
 
 static int scheduler_errorf(char *err, size_t errlen, const char *fmt, int value) {
+    if (err && errlen) snprintf(err, errlen, fmt, value);
+    return 1;
+}
+
+static int scheduler_errorf_u64(char *err, size_t errlen, const char *fmt, uint64_t value) {
     if (err && errlen) snprintf(err, errlen, fmt, value);
     return 1;
 }
@@ -336,6 +370,173 @@ int ds4_v100_stage_scheduler_reset(ds4_v100_stage_scheduler *sched,
     }
     sched->cur_hc = sched->hc_a;
     return 0;
+}
+
+static void snapshot_tensor_free(scheduler_snapshot_tensor *snap) {
+    if (!snap) return;
+    free(snap->data);
+    memset(snap, 0, sizeof(*snap));
+}
+
+static int snapshot_tensor_capture(scheduler_snapshot_tensor *snap,
+                                   const ds4_gpu_tensor *tensor,
+                                   uint64_t *captured_bytes,
+                                   char *err,
+                                   size_t errlen) {
+    if (!snap) return scheduler_error(err, errlen, "missing snapshot tensor");
+    memset(snap, 0, sizeof(*snap));
+    if (!tensor) return 0;
+    const uint64_t bytes = ds4_gpu_tensor_bytes(tensor);
+    if (bytes == 0) return 0;
+    if (bytes > (uint64_t)SIZE_MAX) {
+        return scheduler_errorf_u64(err, errlen, "snapshot tensor too large: %" PRIu64, bytes);
+    }
+    snap->data = (unsigned char *)malloc((size_t)bytes);
+    if (!snap->data) {
+        return scheduler_errorf_u64(err, errlen, "failed to allocate snapshot tensor bytes=%" PRIu64, bytes);
+    }
+    snap->bytes = bytes;
+    if (!ds4_gpu_tensor_read(tensor, 0, snap->data, bytes)) {
+        snapshot_tensor_free(snap);
+        return scheduler_error(err, errlen, "snapshot tensor read failed");
+    }
+    if (captured_bytes) *captured_bytes += bytes;
+    return 0;
+}
+
+static int snapshot_tensor_restore(const scheduler_snapshot_tensor *snap,
+                                   ds4_gpu_tensor *tensor,
+                                   char *err,
+                                   size_t errlen) {
+    if (!snap || snap->bytes == 0) return 0;
+    if (!tensor || ds4_gpu_tensor_bytes(tensor) != snap->bytes) {
+        return scheduler_error(err, errlen, "snapshot tensor restore size mismatch");
+    }
+    if (!ds4_gpu_tensor_write(tensor, 0, snap->data, snap->bytes)) {
+        return scheduler_error(err, errlen, "snapshot tensor write failed");
+    }
+    return 0;
+}
+
+static void layer_snapshot_free(scheduler_layer_cache_snapshot *snap) {
+    if (!snap) return;
+    snapshot_tensor_free(&snap->raw_kv);
+    snapshot_tensor_free(&snap->attn_state_kv);
+    snapshot_tensor_free(&snap->attn_state_score);
+    snapshot_tensor_free(&snap->attn_comp_kv);
+    snapshot_tensor_free(&snap->index_state_kv);
+    snapshot_tensor_free(&snap->index_state_score);
+    snapshot_tensor_free(&snap->index_comp_kv);
+    snapshot_tensor_free(&snap->indexer_topk);
+    memset(snap, 0, sizeof(*snap));
+}
+
+int ds4_v100_stage_scheduler_snapshot_create(
+    const ds4_v100_stage_scheduler *sched,
+    ds4_v100_stage_scheduler_snapshot **out,
+    char *err,
+    size_t errlen) {
+    if (!out) return scheduler_error(err, errlen, "missing scheduler snapshot output");
+    *out = NULL;
+    if (!sched || !sched->cur_hc) {
+        return scheduler_error(err, errlen, "missing scheduler snapshot input");
+    }
+    if (!ds4_gpu_set_device(sched->stage.gpu)) {
+        return scheduler_errorf(err, errlen, "failed to set scheduler snapshot device gpu%d",
+                                sched->stage.gpu);
+    }
+
+    ds4_v100_stage_scheduler_snapshot *snap =
+        (ds4_v100_stage_scheduler_snapshot *)calloc(1, sizeof(*snap));
+    if (!snap) return scheduler_error(err, errlen, "failed to allocate scheduler snapshot");
+    snap->stage_id = sched->stage.stage_id;
+    snap->gpu = sched->stage.gpu;
+    snap->layer_begin = sched->stage.layer_begin;
+    snap->layer_end = sched->stage.layer_end;
+    snap->cur_hc_slot = sched->cur_hc == sched->hc_b ? 1 : 0;
+
+    if (snapshot_tensor_capture(&snap->cur_hc,
+                                sched->cur_hc,
+                                &snap->captured_bytes,
+                                err,
+                                errlen)) {
+        ds4_v100_stage_scheduler_snapshot_free(snap);
+        return 1;
+    }
+
+    for (int layer = sched->stage.layer_begin; layer <= sched->stage.layer_end; layer++) {
+        const scheduler_layer_cache *lc = &sched->caches[layer];
+        scheduler_layer_cache_snapshot *ls = &snap->layers[layer];
+        ls->n_attn_comp = lc->cache.n_attn_comp;
+        ls->n_index_comp = lc->cache.n_index_comp;
+        if (snapshot_tensor_capture(&ls->raw_kv, lc->raw_kv, &snap->captured_bytes, err, errlen) ||
+            snapshot_tensor_capture(&ls->attn_state_kv, lc->attn_state_kv, &snap->captured_bytes, err, errlen) ||
+            snapshot_tensor_capture(&ls->attn_state_score, lc->attn_state_score, &snap->captured_bytes, err, errlen) ||
+            snapshot_tensor_capture(&ls->attn_comp_kv, lc->attn_comp_kv, &snap->captured_bytes, err, errlen) ||
+            snapshot_tensor_capture(&ls->index_state_kv, lc->index_state_kv, &snap->captured_bytes, err, errlen) ||
+            snapshot_tensor_capture(&ls->index_state_score, lc->index_state_score, &snap->captured_bytes, err, errlen) ||
+            snapshot_tensor_capture(&ls->index_comp_kv, lc->index_comp_kv, &snap->captured_bytes, err, errlen) ||
+            snapshot_tensor_capture(&ls->indexer_topk, lc->indexer_topk, &snap->captured_bytes, err, errlen)) {
+            ds4_v100_stage_scheduler_snapshot_free(snap);
+            return 1;
+        }
+    }
+    *out = snap;
+    return 0;
+}
+
+int ds4_v100_stage_scheduler_snapshot_restore(
+    ds4_v100_stage_scheduler *sched,
+    const ds4_v100_stage_scheduler_snapshot *snap,
+    char *err,
+    size_t errlen) {
+    if (!sched || !snap) return scheduler_error(err, errlen, "missing scheduler snapshot restore input");
+    if (sched->stage.stage_id != snap->stage_id ||
+        sched->stage.gpu != snap->gpu ||
+        sched->stage.layer_begin != snap->layer_begin ||
+        sched->stage.layer_end != snap->layer_end) {
+        return scheduler_error(err, errlen, "scheduler snapshot restore stage mismatch");
+    }
+    if (!ds4_gpu_set_device(sched->stage.gpu)) {
+        return scheduler_errorf(err, errlen, "failed to set scheduler restore device gpu%d",
+                                sched->stage.gpu);
+    }
+    ds4_gpu_tensor *hc = snap->cur_hc_slot ? sched->hc_b : sched->hc_a;
+    if (snapshot_tensor_restore(&snap->cur_hc, hc, err, errlen)) return 1;
+    sched->cur_hc = hc;
+
+    for (int layer = sched->stage.layer_begin; layer <= sched->stage.layer_end; layer++) {
+        scheduler_layer_cache *lc = &sched->caches[layer];
+        const scheduler_layer_cache_snapshot *ls = &snap->layers[layer];
+        lc->cache.n_attn_comp = ls->n_attn_comp;
+        lc->cache.n_index_comp = ls->n_index_comp;
+        if (snapshot_tensor_restore(&ls->raw_kv, lc->raw_kv, err, errlen) ||
+            snapshot_tensor_restore(&ls->attn_state_kv, lc->attn_state_kv, err, errlen) ||
+            snapshot_tensor_restore(&ls->attn_state_score, lc->attn_state_score, err, errlen) ||
+            snapshot_tensor_restore(&ls->attn_comp_kv, lc->attn_comp_kv, err, errlen) ||
+            snapshot_tensor_restore(&ls->index_state_kv, lc->index_state_kv, err, errlen) ||
+            snapshot_tensor_restore(&ls->index_state_score, lc->index_state_score, err, errlen) ||
+            snapshot_tensor_restore(&ls->index_comp_kv, lc->index_comp_kv, err, errlen) ||
+            snapshot_tensor_restore(&ls->indexer_topk, lc->indexer_topk, err, errlen)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+uint64_t ds4_v100_stage_scheduler_snapshot_bytes(
+    const ds4_v100_stage_scheduler_snapshot *snapshot) {
+    return snapshot ? snapshot->captured_bytes : 0;
+}
+
+void ds4_v100_stage_scheduler_snapshot_free(
+    ds4_v100_stage_scheduler_snapshot *snapshot) {
+    if (!snapshot) return;
+    snapshot_tensor_free(&snapshot->cur_hc);
+    for (int layer = 0; layer < DS4_V100_N_LAYERS; layer++) {
+        layer_snapshot_free(&snapshot->layers[layer]);
+    }
+    free(snapshot);
 }
 
 int ds4_v100_stage_scheduler_open(ds4_v100_stage_scheduler **out,

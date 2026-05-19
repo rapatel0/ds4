@@ -13,6 +13,7 @@ extern "C" {
 #endif
 
 typedef struct ds4_v100_stage_scheduler ds4_v100_stage_scheduler;
+typedef struct ds4_v100_stage_scheduler_snapshot ds4_v100_stage_scheduler_snapshot;
 
 typedef struct {
     const char *pack_index_path;
@@ -72,6 +73,24 @@ void ds4_v100_stage_scheduler_close(ds4_v100_stage_scheduler *sched);
 int ds4_v100_stage_scheduler_reset(ds4_v100_stage_scheduler *sched,
                                    char *err,
                                    size_t errlen);
+
+int ds4_v100_stage_scheduler_snapshot_create(
+    const ds4_v100_stage_scheduler *sched,
+    ds4_v100_stage_scheduler_snapshot **out,
+    char *err,
+    size_t errlen);
+
+int ds4_v100_stage_scheduler_snapshot_restore(
+    ds4_v100_stage_scheduler *sched,
+    const ds4_v100_stage_scheduler_snapshot *snapshot,
+    char *err,
+    size_t errlen);
+
+uint64_t ds4_v100_stage_scheduler_snapshot_bytes(
+    const ds4_v100_stage_scheduler_snapshot *snapshot);
+
+void ds4_v100_stage_scheduler_snapshot_free(
+    ds4_v100_stage_scheduler_snapshot *snapshot);
 
 int ds4_v100_stage_scheduler_decode_token(ds4_v100_stage_scheduler *sched,
                                           uint32_t token,

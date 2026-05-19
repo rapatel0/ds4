@@ -117,6 +117,7 @@ if [ -n "$mtp_model" ]; then
     if [ -n "$pack_index" ]; then
         targets+=(tools/ds4-v100-mtp-logits-smoke)
         targets+=(tools/ds4-v100-mtp-forward-smoke)
+        targets+=(tools/ds4-v100-mtp-verify-smoke)
     fi
 fi
 
@@ -133,6 +134,7 @@ if [ -n "$pack_index" ]; then
     targets+=(tests/cuda_v100_output_head_parity_smoke)
     targets+=(tests/cuda_v100_selected_token_smoke)
     targets+=(tests/cuda_v100_scheduler_checkpoint_parity_smoke)
+    targets+=(tests/cuda_v100_scheduler_snapshot_smoke)
     targets+=(tools/ds4-v100-replay)
 fi
 
@@ -163,6 +165,7 @@ mtp_ffn_ready=0
 mtp_attn_ready=0
 mtp_logits_ready=0
 mtp_forward_ready=0
+mtp_rollback_ready=0
 
 run_gate() {
     local name="$1"
@@ -301,9 +304,26 @@ if [ -n "$mtp_model" ]; then
             if run_gate "mtp_forward" ./tools/ds4-v100-mtp-forward-smoke "${mtp_forward_args[@]}"; then
                 mtp_forward_ready=1
             fi
+            mtp_rollback_args=(
+                --model "$model"
+                --mtp-model "$mtp_model"
+                --pack-index "$pack_index"
+                --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt
+                --gpu 7
+                --require-gpus 8
+                --reserve-mib 4096
+                --ctx "$ctx"
+            )
+            if [ -n "$log_dir" ]; then
+                mtp_rollback_args+=(--report "$log_dir/mtp_rollback.report")
+            fi
+            if run_gate "mtp_rollback" ./tools/ds4-v100-mtp-verify-smoke "${mtp_rollback_args[@]}"; then
+                mtp_rollback_ready=1
+            fi
         else
             echo "gate	mtp_logits	SKIP	no_pack_index"
             echo "gate	mtp_forward	SKIP	no_pack_index"
+            echo "gate	mtp_rollback	SKIP	no_pack_index"
         fi
     fi
 else
@@ -315,6 +335,7 @@ else
     echo "gate	mtp_attn	SKIP	no_mtp_model"
     echo "gate	mtp_logits	SKIP	no_mtp_model"
     echo "gate	mtp_forward	SKIP	no_mtp_model"
+    echo "gate	mtp_rollback	SKIP	no_mtp_model"
 fi
 
 run_gate "source_dtypes" ./tests/cuda_source_dtypes_smoke || true
@@ -345,6 +366,7 @@ if [ -n "$pack_index" ]; then
                 full_scheduler_ready=1
             fi
             run_gate "scheduler_checkpoint_parity" ./tests/cuda_v100_scheduler_checkpoint_parity_smoke --index "$pack_index" --model "$model" --layers -1,0,1,2,3,a4 --ctx 4096 --prompt-tokens 1 || true
+            run_gate "scheduler_snapshot" ./tests/cuda_v100_scheduler_snapshot_smoke --index "$pack_index" --model "$model" --ctx 4096 --steps 8 || true
             run_gate "output_head_parity" ./tests/cuda_v100_output_head_parity_smoke --index "$pack_index" --model "$model" || true
             if run_gate "scheduler_output_head" ./tests/cuda_v100_selected_token_smoke --index "$pack_index" --model "$model" --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt --expected-token-hex 3136; then
                 selected_token_ready=1
@@ -393,6 +415,7 @@ if [ -n "$pack_index" ]; then
             echo "gate	two_stage_scheduler	SKIP	no_model"
             echo "gate	full_scheduler	SKIP	no_model"
             echo "gate	scheduler_checkpoint_parity	SKIP	no_model"
+            echo "gate	scheduler_snapshot	SKIP	no_model"
             echo "gate	output_head_parity	SKIP	no_model"
             echo "gate	scheduler_output_head	SKIP	no_model"
             echo "gate	v100_replay_tool	SKIP	no_model"
@@ -412,6 +435,7 @@ else
     echo "gate	two_stage_scheduler	SKIP	no_pack_index"
     echo "gate	full_scheduler	SKIP	no_pack_index"
     echo "gate	scheduler_checkpoint_parity	SKIP	no_pack_index"
+    echo "gate	scheduler_snapshot	SKIP	no_pack_index"
     echo "gate	output_head_parity	SKIP	no_pack_index"
     echo "gate	scheduler_output_head	SKIP	no_pack_index"
     echo "gate	v100_replay_tool	SKIP	no_pack_index"
@@ -462,6 +486,8 @@ if [ -n "$mtp_model" ]; then
         add_missing "mtp_logits"
     elif [ "$mtp_forward_ready" -eq 0 ]; then
         add_missing "mtp_forward"
+    elif [ "$mtp_rollback_ready" -eq 0 ]; then
+        add_missing "mtp_rollback"
     else
         add_missing "mtp_verify"
     fi
@@ -470,6 +496,9 @@ else
 fi
 if [ "$throughput_ready" -eq 0 ]; then
     add_missing "throughput_benchmark"
+fi
+if [ -z "$missing" ]; then
+    add_missing "production_deployment"
 fi
 echo "gate	readiness	NOT_READY	missing=$missing"
 echo "gate	summary	PASS	failures=0 ready=false"
