@@ -107,6 +107,9 @@ typedef struct {
     uint64_t rejected_busy;
     uint64_t rejected_context;
     uint64_t rejected_bad_request;
+    uint64_t tensor_batched_groups;
+    uint64_t tensor_batched_requests;
+    uint64_t tensor_batched_tokens;
 } replay_server_stats;
 
 typedef struct replay_pending_generation replay_pending_generation;
@@ -204,6 +207,18 @@ static void server_stats_add(replay_server_state *state,
     pthread_mutex_unlock(&state->stats_mu);
 }
 
+static void server_stats_add_tensor_batch(replay_server_state *state,
+                                          uint64_t groups,
+                                          uint64_t requests,
+                                          uint64_t tokens) {
+    if (!state) return;
+    pthread_mutex_lock(&state->stats_mu);
+    state->stats.tensor_batched_groups += groups;
+    state->stats.tensor_batched_requests += requests;
+    state->stats.tensor_batched_tokens += tokens;
+    pthread_mutex_unlock(&state->stats_mu);
+}
+
 static void pending_enqueue(replay_server_state *state, replay_pending_generation *req) {
     if (!state || !req) return;
     req->next = NULL;
@@ -267,16 +282,21 @@ static int process_pending_generation_batch(replay_server_state *state) {
     if (batch.count == 0) return 0;
 
     const bool mtp_enabled = state->mtp && state->mtp->enabled;
-    bool can_batch = !mtp_enabled && batch.count > 1;
+    const uint32_t batch_tokens = batch.items[0] ? batch.items[0]->tokens : 0;
+    bool can_batch = !mtp_enabled && batch.count > 1 && batch_tokens > 0 &&
+                     batch_tokens <= DS4_V100_REPLAY_MAX_TOKENS;
     for (uint32_t i = 0; i < batch.count && can_batch; i++) {
-        if (!batch.items[i] || batch.items[i]->tokens != 1u) can_batch = false;
+        if (!batch.items[i] || batch.items[i]->tokens != batch_tokens) can_batch = false;
     }
 
     if (can_batch) {
         ds4_tokens prompts[DS4_V100_SCHED_MAX_SLOTS];
-        ds4_v100_replay_output batch_outputs[DS4_V100_SCHED_MAX_SLOTS];
+        ds4_v100_replay_output batch_outputs[DS4_V100_SCHED_MAX_SLOTS *
+                                             DS4_V100_REPLAY_MAX_TOKENS];
+        uint32_t batch_counts[DS4_V100_SCHED_MAX_SLOTS];
         memset(prompts, 0, sizeof(prompts));
         memset(batch_outputs, 0, sizeof(batch_outputs));
+        memset(batch_counts, 0, sizeof(batch_counts));
         for (uint32_t i = 0; i < batch.count; i++) prompts[i] = batch.items[i]->prompt_tokens;
 
         char err[512] = {0};
@@ -284,13 +304,22 @@ static int process_pending_generation_batch(replay_server_state *state) {
         memset(&counters, 0, sizeof(counters));
         int rc = ds4_v100_replay_reset(state->rt, err, sizeof(err));
         if (!rc) {
-            rc = ds4_v100_replay_generate_first_token_batch(state->rt,
-                                                            prompts,
-                                                            batch.count,
-                                                            batch_outputs,
-                                                            &counters,
-                                                            err,
-                                                            sizeof(err));
+            rc = ds4_v100_replay_generate_batch(state->rt,
+                                                prompts,
+                                                batch.count,
+                                                batch_tokens,
+                                                batch_outputs,
+                                                DS4_V100_REPLAY_MAX_TOKENS,
+                                                batch_counts,
+                                                &counters,
+                                                err,
+                                                sizeof(err));
+        }
+        if (!rc) {
+            server_stats_add_tensor_batch(state,
+                                          1,
+                                          batch.count,
+                                          (uint64_t)batch.count * batch_tokens);
         }
         for (uint32_t i = 0; i < batch.count; i++) {
             replay_pending_generation *req = batch.items[i];
@@ -298,16 +327,29 @@ static int process_pending_generation_batch(replay_server_state *state) {
             memset(&req->counters, 0, sizeof(req->counters));
             req->counters = counters;
             req->counters.prompt_tokens = (uint32_t)req->prompt_tokens.len;
-            req->counters.total_input_tokens = (uint32_t)req->prompt_tokens.len;
             if (rc) {
                 pending_mark_done(req, 1, err);
             } else {
-                req->outputs[0] = batch_outputs[i];
-                req->n_outputs = 1;
-                req->counters.generated_tokens = 1;
+                const uint32_t n_out = batch_counts[i];
+                for (uint32_t j = 0; j < n_out; j++) {
+                    req->outputs[j] =
+                        batch_outputs[(uint64_t)i * DS4_V100_REPLAY_MAX_TOKENS + j];
+                }
+                req->n_outputs = n_out;
+                req->counters.generated_tokens = n_out;
+                req->counters.total_input_tokens =
+                    (uint32_t)req->prompt_tokens.len + (n_out > 0 ? n_out - 1u : 0u);
                 pending_mark_done(req, 0, NULL);
             }
             pending_remove(state, req);
+        }
+        if (rc) {
+            for (uint32_t i = 0; i < batch.count; i++) {
+                for (uint32_t j = 0; j < batch_tokens; j++) {
+                    ds4_v100_replay_output_free(
+                        &batch_outputs[(uint64_t)i * DS4_V100_REPLAY_MAX_TOKENS + j]);
+                }
+            }
         }
         return 0;
     }
@@ -1188,7 +1230,7 @@ static void write_status_json(FILE *fp,
             ",\"active_slots\":%" PRIu32 ",\"active_microbatch\":%" PRIu32
             ",\"concurrent_requests\":%" PRIu32
             ",\"queue_policy\":\"%s\",\"scheduler_slots_ready\":true,"
-            "\"tensor_batched_slots\":false,\"sequential_requests\":%s,"
+            "\"tensor_batched_slots\":%s,\"sequential_requests\":%s,"
             "\"streaming\":false,\"external_exposure\":false,"
             "\"speculative_serving\":%s},",
             opt->slots,
@@ -1197,10 +1239,18 @@ static void write_status_json(FILE *fp,
             opt->active_microbatch,
             opt->active_microbatch,
             queue_policy_name(opt->queue_policy),
+            opt->active_microbatch > 1 ? "true" : "false",
             opt->queue_policy == REPLAY_QUEUE_SEQUENTIAL ? "true" : "false",
             mtp_enabled ? "true" : "false");
     fprintf(fp, "\"served_requests\":%" PRIu64 ",", served);
     fprintf(fp, "\"generation_requests\":%" PRIu64 ",", stats ? stats->generation_requests : 0);
+    fprintf(fp,
+            "\"tensor_batched_groups\":%" PRIu64
+            ",\"tensor_batched_requests\":%" PRIu64
+            ",\"tensor_batched_tokens\":%" PRIu64 ",",
+            stats ? stats->tensor_batched_groups : 0,
+            stats ? stats->tensor_batched_requests : 0,
+            stats ? stats->tensor_batched_tokens : 0);
     fprintf(fp, "\"rejected_requests\":%" PRIu64, stats ? stats->rejected_requests : 0);
     if (mtp_enabled) {
         fprintf(fp, ",\"mtp\":{");
@@ -1236,6 +1286,15 @@ static void write_metrics_text(FILE *fp,
     fprintf(fp, "# HELP ds4_v100_generation_requests_total Generation requests accepted by the scheduler.\n");
     fprintf(fp, "# TYPE ds4_v100_generation_requests_total counter\n");
     fprintf(fp, "ds4_v100_generation_requests_total %" PRIu64 "\n", stats ? stats->generation_requests : 0);
+    fprintf(fp, "# HELP ds4_v100_tensor_batched_groups_total Same-token-count tensor batch groups executed by the scheduler.\n");
+    fprintf(fp, "# TYPE ds4_v100_tensor_batched_groups_total counter\n");
+    fprintf(fp, "ds4_v100_tensor_batched_groups_total %" PRIu64 "\n", stats ? stats->tensor_batched_groups : 0);
+    fprintf(fp, "# HELP ds4_v100_tensor_batched_requests_total Requests served through tensor batch groups.\n");
+    fprintf(fp, "# TYPE ds4_v100_tensor_batched_requests_total counter\n");
+    fprintf(fp, "ds4_v100_tensor_batched_requests_total %" PRIu64 "\n", stats ? stats->tensor_batched_requests : 0);
+    fprintf(fp, "# HELP ds4_v100_tensor_batched_tokens_total Generated tokens served through tensor batch groups.\n");
+    fprintf(fp, "# TYPE ds4_v100_tensor_batched_tokens_total counter\n");
+    fprintf(fp, "ds4_v100_tensor_batched_tokens_total %" PRIu64 "\n", stats ? stats->tensor_batched_tokens : 0);
     fprintf(fp, "# HELP ds4_v100_rejected_requests_total HTTP generation requests rejected by admission policy.\n");
     fprintf(fp, "# TYPE ds4_v100_rejected_requests_total counter\n");
     fprintf(fp, "ds4_v100_rejected_requests_total %" PRIu64 "\n", stats ? stats->rejected_requests : 0);

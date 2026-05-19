@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-19
 last_updated_by: vision
-revision: 64
+revision: 65
 ---
 
 # Vision: DS4 V100 Appliance
@@ -323,6 +323,16 @@ optimized V100 low-bit expert kernels in the actual hot path.
   average GPU utilization, and `22.000%` max GPU utilization. This confirms
   that the next blocker is not measurement shape anymore; it is keeping active
   multi-token work resident and batched.
+- Sprint 053 shipped same-length token-step microbatching for non-MTP HTTP
+  batches and added explicit tensor-batch counters/status snapshots to the
+  sustained benchmark. The cluster comparison at `ctx=1048576`, `tokens=16`,
+  and `requests=4` measured `3.291466` generated tok/s for one slot and
+  `3.371659` generated tok/s for two slots. The two-slot run proved the batch
+  path executed (`tensor_batched_groups=1`, `tensor_batched_requests=2`,
+  `tensor_batched_tokens=32`), but GPU utilization stayed low at `11.133%`
+  average / `22.000%` max. The practical blocker has moved from request-loop
+  wiring to hot-path kernel occupancy, routed expert batching, and persistent
+  scheduling.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -366,6 +376,7 @@ The practical target should be staged from current evidence, not from roofline:
 |---|---:|---|---|
 | Sprint 051 one-token aggregate gate | `~0.3` tok/s | Measured | Correctness-first one-token request shape; useful for admission/correctness but not practical serving throughput. |
 | Sprint 052 sustained one-slot baseline | `3.30` generated tok/s, `3.10` continuation tok/s | Measured | Multi-token requests at 1M context prove low utilization remains real: average GPU utilization `10.804%`, max `22.000%`. |
+| Sprint 053 same-length token-step batching | `3.37` generated tok/s, `3.16` continuation tok/s | Measured | Two-slot serving proves the batch branch is used (`1` group / `2` requests / `32` tokens), but only improves aggregate generated tok/s by about `2.4%`; average GPU utilization remains about `11%`. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -1108,7 +1119,7 @@ GPU utilization with architectural changes, and only then compare against the
   baseline measured `3.304551` aggregate generated tok/s and `10.804%` average
   GPU utilization at 1M context, one slot, and 16 generated tokens/request.
 
-### Sprint 053 - Continuous Token-Step Microbatching [planned]
+### Sprint 053 - Continuous Token-Step Microbatching [complete]
 
 - **Goal**: Extend request-loop batching from first-token-only execution to
   multi-token token-step execution across active slots.
@@ -1116,6 +1127,15 @@ GPU utilization with architectural changes, and only then compare against the
   multiple sequences resident and advance them together. The current
   `tensor_batched_slots=false` surface and fallback per-request generation path
   cannot feed the GPUs enough work.
+- **Outcome**: `SHIP`. Added `ds4_v100_replay_generate_batch`, routed
+  same-token-count non-MTP pending HTTP batches through it, exposed
+  `tensor_batched_*` counters in status/metrics, and added status snapshots to
+  `tools/ds4-v100-sustained-decode-bench.sh`. Cluster artifacts under
+  `logs/from-cluster/sprint053-token-step-batching` prove correctness and
+  batch execution. Performance improved only slightly (`3.291466` to
+  `3.371659` generated tok/s at 1M, `slots=1` to `slots=2`), so the next sprint
+  should focus on real hot-path kernel occupancy rather than more request-loop
+  plumbing.
 
 ### Sprint 054 - Hot-Path Kernel Selection And Low-Bit Expert Integration [planned]
 
@@ -1339,6 +1359,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-19 | Shipped Sprint 051 aggregate profile expansion plus full-profile cluster execution. | The full gate now has explicit `fast` and `full` aggregate throughput profiles with CLI overrides, and the 32-case full-profile matrix was executed on `gpu-01` with `ready=true` and archived artifacts. | Post-vision optimization |
 | 2026-05-19 | Reframed post-readiness work around practical-use optimization. | The current low tok/s and low GPU utilization are explained by one-token benchmark shape, first-token-only batching, per-request reset/prompt replay, diagnostic MTP verify, and non-persistent grouped expert execution; the next roadmap should optimize sustained decode before using 1k+ tok/s as a target. | Sprint 052+ |
 | 2026-05-19 | Shipped Sprint 052 sustained decode baseline. | The project now has a sustained multi-token benchmark with GPU utilization sampling and first cluster evidence: 1M context, one slot, 16 tokens/request, 3.304551 generated tok/s, 3.098017 continuation tok/s, and 10.804% average GPU utilization. The next blocker is continuous token-step batching. | Sprint 053+ |
+| 2026-05-19 | Shipped Sprint 053 continuous token-step microbatching. | Same-length non-MTP HTTP batches now advance through the multi-token replay batch API and expose tensor-batch counters. The V100 run proved one two-request / 32-token batch at 1M context, but throughput rose only about 2.4% and GPU utilization stayed near 11%, moving the next blocker to hot-path low-bit kernels and persistent expert scheduling. | Sprint 054+ |
 
 ## Open Questions
 

@@ -489,6 +489,67 @@ sys.exit(0 if ok else 1)
 PY
 }
 
+fetch_server_status() {
+    local port="$1"
+    local out_path="$2"
+    python3 - "$host" "$port" "$out_path" <<'PY'
+import http.client
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+out_path = sys.argv[3]
+
+try:
+    conn = http.client.HTTPConnection(host, port, timeout=30)
+    conn.request("GET", "/v100/status")
+    resp = conn.getresponse()
+    body = resp.read()
+    conn.close()
+except Exception:
+    sys.exit(1)
+
+if resp.status != 200:
+    sys.exit(1)
+
+with open(out_path, "wb") as f:
+    f.write(body)
+    if not body.endswith(b"\n"):
+        f.write(b"\n")
+PY
+}
+
+merge_server_status() {
+    local result_json="$1"
+    local before_json="$2"
+    local after_json="$3"
+    python3 - "$result_json" "$before_json" "$after_json" <<'PY'
+import json
+import os
+import sys
+
+result_path, before_path, after_path = sys.argv[1:4]
+with open(result_path, "r", encoding="utf-8") as f:
+    result = json.load(f)
+
+def load_status(path):
+    if not path or not os.path.exists(path):
+        return {"available": False, "reason": "missing_status_snapshot"}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as exc:
+        return {"available": False, "reason": repr(exc)}
+
+result["server_status_before"] = load_status(before_path)
+result["server_status_after"] = load_status(after_path)
+
+with open(result_path, "w", encoding="utf-8") as f:
+    json.dump(result, f, sort_keys=True)
+    f.write("\n")
+PY
+}
+
 merge_gpu_utilization() {
     local result_json="$1"
     local gpu_csv="$2"
@@ -598,6 +659,8 @@ load_case() {
 
     local server_log="$case_dir/server.log"
     local result_json="$case_dir/result.json"
+    local status_before_json="$case_dir/server_status_before.json"
+    local status_after_json="$case_dir/server_status_after.json"
     local gpu_csv="$case_dir/gpu_util.csv"
     local gpu_err="$case_dir/gpu_util.err"
     local server_max_requests
@@ -635,6 +698,7 @@ load_case() {
         cat "$server_log" >&2
         fail "case $case_name server did not start listening in time"
     fi
+    fetch_server_status "$port" "$status_before_json" || true
 
     gpu_pid=""
     if command -v nvidia-smi >/dev/null 2>&1; then
@@ -649,6 +713,7 @@ load_case() {
 
     local py_rc=0
     run_load_client "$port" "$slots" "$result_json" || py_rc=$?
+    fetch_server_status "$port" "$status_after_json" || true
 
     if [ -n "$gpu_pid" ]; then
         kill "$gpu_pid" >/dev/null 2>&1 || true
@@ -663,6 +728,7 @@ load_case() {
     fi
 
     if [ -f "$result_json" ]; then
+        merge_server_status "$result_json" "$status_before_json" "$status_after_json"
         merge_gpu_utilization "$result_json" "$gpu_csv" "$gpu_err"
     fi
     return "$py_rc"

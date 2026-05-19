@@ -2,9 +2,11 @@
 
 This runbook covers the current production deployment package for the DS4 V100
 appliance on the 8x 32 GiB V100 host. The default served endpoint is the
-verified base model path with configurable admission slots (default one slot). An explicit MTP verify mode can also expose
-the gated one-token MTP draft/verify diagnostics in the same resident HTTP
-process.
+verified base model path with configurable admission slots (default one slot).
+Same-length non-MTP request batches can advance through token-step
+microbatching when `active_microbatch > 1`. An explicit MTP verify mode can
+also expose the gated one-token MTP draft/verify diagnostics in the same
+resident HTTP process.
 
 ## Scope
 
@@ -16,7 +18,8 @@ Supported today:
 - Device-resident stage-scheduler batch primitives for multi-slot decode/handoff
   (`decode_token_batch`, `decode_hc_batch`, `handoff_batch`) with slot-strided
   KV and HC state.
-- Sequential/queued loopback HTTP requests (true concurrent generation is not yet implemented).
+- Sequential/queued loopback HTTP requests.
+- Same-token-count non-MTP request-loop microbatching across active slots.
 - `/health`, `/status`, `/v100/status`, `/metrics`.
 - `POST /v100/selected-token`.
 - Up to 64 generated tokens per request.
@@ -27,9 +30,9 @@ Supported today:
 Not supported today:
 
 - Multi-token MTP draft commit without recomputing the base target token.
-- Active request-loop microbatch scheduling across independent concurrent
-  prompts.
-- Concurrent overlapping generation.
+- Mixed-length request-loop microbatching.
+- MTP request-loop microbatching.
+- Concurrent overlapping generation outside the active batch window.
 - Streaming responses.
 - OpenAI-compatible API.
 - External unauthenticated exposure.
@@ -214,7 +217,8 @@ curl -sf http://127.0.0.1:18080/v100/status
 curl -sf http://127.0.0.1:18080/metrics
 ```
 
-Expected status shape for the default single active request mode (`slots=1`, `active_microbatch=1`):
+Expected status shape for the default single active request mode
+(`slots=1`, `active_microbatch=1`):
 
 ```json
 {
@@ -236,7 +240,10 @@ Expected status shape for the default single active request mode (`slots=1`, `ac
     "streaming": false,
     "external_exposure": false,
     "speculative_serving": false
-  }
+  },
+  "tensor_batched_groups": 0,
+  "tensor_batched_requests": 0,
+  "tensor_batched_tokens": 0
 }
 ```
 
@@ -245,8 +252,10 @@ For configured slots `N`:
 - if `N = 1` then `mode` is `base_one_slot`
 - if `N > 1` then `mode` is `base_slots_<N>`
 
-When `active_microbatch` is `M`, limits report `active_slots`, `active_microbatch`,
-and `concurrent_requests` as `M`.
+When `active_microbatch` is `M`, limits report `active_slots`,
+`active_microbatch`, and `concurrent_requests` as `M`. If `M > 1`,
+`tensor_batched_slots` reports `true`; the `tensor_batched_*` counters increase
+only when same-token-count non-MTP requests actually coalesce into a batch.
 
 Expected metrics include:
 
@@ -257,6 +266,9 @@ ds4_v100_mtp_enabled 0
 ds4_v100_configured_slots 1
 ds4_v100_active_microbatch 1
 ds4_v100_scheduler_slots_ready 1
+ds4_v100_tensor_batched_groups_total 0
+ds4_v100_tensor_batched_requests_total 0
+ds4_v100_tensor_batched_tokens_total 0
 ```
 
 With MTP verify mode enabled:
@@ -370,7 +382,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   --pack-index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv \
   --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt \
   --ctx-tiers 1048576 \
-  --slot-tiers 1 \
+  --slot-tiers 1,2 \
   --queue-policies sequential \
   --tokens 16 \
   --requests 8 \
@@ -380,7 +392,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 ```
 
 The benchmark writes `sustained_decode.tsv`, `sustained_decode.json`, per-case
-`result.json`, `server.log`, and `gpu_util.csv` when `nvidia-smi` is available.
+`result.json`, `server.log`, `server_status_before.json`,
+`server_status_after.json`, and `gpu_util.csv` when `nvidia-smi` is available.
 Important fields:
 
 - `aggregate_generated_tokens_per_second`: all generated tokens over timed
@@ -392,6 +405,8 @@ Important fields:
 - `timing_avg.handoff_ms`: average inter-stage handoff timing from replay
   responses.
 - `gpu_utilization`: average/max GPU utilization or an explicit skipped reason.
+- `server_status_after.tensor_batched_*`: whether same-length requests actually
+  executed through a tensor batch group.
 
 The same benchmark can be included in a full gate run without changing default
 readiness behavior:
