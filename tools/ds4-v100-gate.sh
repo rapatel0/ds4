@@ -145,6 +145,7 @@ failures=0
 full_scheduler_ready=0
 selected_token_ready=0
 public_serving_ready=0
+base_usability_ready=0
 throughput_ready=0
 mtp_sidecar_ready=0
 mtp_residency_ready=0
@@ -266,6 +267,22 @@ if [ -n "$pack_index" ]; then
             if run_gate "v100_appliance_http" ./tools/ds4-v100-appliance-smoke.sh "${appliance_args[@]}"; then
                 public_serving_ready=1
             fi
+            appliance_long_args=(
+                --index "$pack_index"
+                --model "$model"
+                --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt
+                --tokens 2
+                --requests 2
+                --expected-token-hex 3136
+                --host 127.0.0.1
+                --port 18081
+            )
+            if [ -n "$log_dir" ]; then
+                appliance_long_args+=(--log-dir "$log_dir/v100_appliance_http_long")
+            fi
+            if run_gate "v100_appliance_http_long" ./tools/ds4-v100-appliance-smoke.sh "${appliance_long_args[@]}"; then
+                base_usability_ready=1
+            fi
         else
             echo "gate	descriptor_bound_attention	SKIP	no_model"
             echo "gate	descriptor_bound_ffn	SKIP	no_model"
@@ -279,6 +296,7 @@ if [ -n "$pack_index" ]; then
             echo "gate	scheduler_output_head	SKIP	no_model"
             echo "gate	v100_replay_tool	SKIP	no_model"
             echo "gate	v100_appliance_http	SKIP	no_model"
+            echo "gate	v100_appliance_http_long	SKIP	no_model"
         fi
     fi
 else
@@ -297,6 +315,7 @@ else
     echo "gate	scheduler_output_head	SKIP	no_pack_index"
     echo "gate	v100_replay_tool	SKIP	no_pack_index"
     echo "gate	v100_appliance_http	SKIP	no_pack_index"
+    echo "gate	v100_appliance_http_long	SKIP	no_pack_index"
 fi
 
 if [ "$failures" -ne 0 ]; then
@@ -321,6 +340,9 @@ if [ "$selected_token_ready" -eq 0 ]; then
 fi
 if [ "$public_serving_ready" -eq 0 ]; then
     add_missing "public_serving"
+fi
+if [ "$base_usability_ready" -eq 0 ]; then
+    add_missing "base_appliance_usability"
 fi
 if [ -n "$mtp_model" ]; then
     if [ "$mtp_sidecar_ready" -eq 0 ]; then

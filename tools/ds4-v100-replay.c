@@ -48,6 +48,8 @@ static void usage(FILE *fp) {
             "  --expected-token-hex HEX  require first generated token bytes\n"
             "  --json                    emit JSON\n"
             "  --serve                   run a minimal HTTP endpoint\n"
+            "                            GET /health, GET /v100/status,\n"
+            "                            POST /v100/selected-token\n"
             "  --host ADDR               server bind address, default 127.0.0.1\n"
             "  --port N                  server port, default 8000\n"
             "  --max-requests N          server requests before exit, default unlimited\n"
@@ -488,7 +490,33 @@ static void http_error(int fd, int status, const char *msg) {
             msg);
 }
 
-static int handle_http_request(int fd, ds4_v100_replay *rt, const replay_cli_options *opt) {
+static void http_ok_json_begin(int fd) {
+    dprintf(fd,
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\n\r\n");
+}
+
+static void write_status_json(FILE *fp, const replay_cli_options *opt, uint32_t served) {
+    fprintf(fp, "{");
+    fprintf(fp, "\"service\":\"ds4-v100-replay\",");
+    fprintf(fp, "\"status\":\"ok\",");
+    fprintf(fp, "\"mode\":\"base_one_slot\",");
+    fprintf(fp, "\"readiness_level\":2,");
+    fprintf(fp, "\"mtp_enabled\":false,");
+    fprintf(fp, "\"model_path\":\"");
+    json_escape(fp, opt->model_path ? opt->model_path : "", strlen(opt->model_path ? opt->model_path : ""));
+    fprintf(fp, "\",\"pack_index_path\":\"");
+    json_escape(fp, opt->index_path ? opt->index_path : "", strlen(opt->index_path ? opt->index_path : ""));
+    fprintf(fp, "\",\"ctx_tokens\":%" PRIu64 ",", opt->ctx);
+    fprintf(fp, "\"default_tokens\":%" PRIu32 ",", opt->tokens);
+    fprintf(fp, "\"max_tokens\":%u,", DS4_V100_REPLAY_MAX_TOKENS);
+    fprintf(fp, "\"served_requests\":%" PRIu32, served);
+    fprintf(fp, "}\n");
+}
+
+static int handle_http_request(int fd,
+                               ds4_v100_replay *rt,
+                               const replay_cli_options *opt,
+                               uint32_t served) {
     size_t req_len = 0;
     char *req = read_http_request(fd, &req_len);
     (void)req_len;
@@ -504,9 +532,19 @@ static int handle_http_request(int fd, ds4_v100_replay *rt, const replay_cli_opt
         return 1;
     }
     if (!strcmp(method, "GET") && !strcmp(path, "/health")) {
-        dprintf(fd,
-                "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\n\r\n"
-                "{\"status\":\"ok\"}\n");
+        http_ok_json_begin(fd);
+        dprintf(fd, "{\"status\":\"ok\"}\n");
+        free(req);
+        return 0;
+    }
+    if (!strcmp(method, "GET") &&
+        (!strcmp(path, "/status") || !strcmp(path, "/v100/status"))) {
+        http_ok_json_begin(fd);
+        FILE *fp = fdopen(dup(fd), "w");
+        if (fp) {
+            write_status_json(fp, opt, served);
+            fclose(fp);
+        }
         free(req);
         return 0;
     }
@@ -564,8 +602,7 @@ static int handle_http_request(int fd, ds4_v100_replay *rt, const replay_cli_opt
     if (rc) {
         http_error(fd, 500, err[0] ? err : "generation_failed");
     } else {
-        dprintf(fd,
-                "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\n\r\n");
+        http_ok_json_begin(fd);
         FILE *fp = fdopen(dup(fd), "w");
         if (fp) {
             print_json_fp(fp, outputs, n_outputs, &counters);
@@ -615,7 +652,7 @@ static int run_server(const replay_cli_options *opt, ds4_v100_replay *rt) {
             close(listen_fd);
             return 1;
         }
-        (void)handle_http_request(fd, rt, opt);
+        (void)handle_http_request(fd, rt, opt, served);
         close(fd);
         served++;
     }

@@ -1,0 +1,2 @@
+ds4: CUDA loading model tensors into device cache
+cuda_v100_stage_scheduler_smoke: stage=0 gpu=0 layers=0-5 executed=6 token=16 pos=16 arena_bytes=22524134668 uploaded_tensors=173 uploaded_bytes=22524130064 expert0=35 ok

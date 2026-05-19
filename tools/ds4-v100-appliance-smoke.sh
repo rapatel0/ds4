@@ -25,6 +25,8 @@ Options:
   --host ADDR               bind/probe address, default 127.0.0.1
   --port N                  bind/probe port, default 18080
   --log-dir DIR             write server/request/response logs
+
+The smoke also probes GET /health and GET /v100/status before generation.
 USAGE
 }
 
@@ -105,6 +107,12 @@ case "$requests" in
         exit 2
         ;;
 esac
+case "$tokens" in
+    ''|0|*[!0-9]*)
+        echo "ds4-v100-appliance-smoke: --tokens must be a positive integer" >&2
+        exit 2
+        ;;
+esac
 
 work_dir="$log_dir"
 if [ -z "$work_dir" ]; then
@@ -116,6 +124,10 @@ server_log="$work_dir/appliance_server.log"
 request_json="$work_dir/appliance_request.json"
 response_http="$work_dir/appliance_response.http"
 response_json="$work_dir/appliance_response.json"
+health_http="$work_dir/appliance_health.http"
+health_json="$work_dir/appliance_health.json"
+status_http="$work_dir/appliance_status.http"
+status_json="$work_dir/appliance_status.json"
 
 cleanup() {
     if [ "${server_pid:-}" ]; then
@@ -128,6 +140,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
+server_max_requests=$((requests + 2))
+
 ./tools/ds4-v100-replay \
     --serve \
     --model "$model" \
@@ -135,7 +149,7 @@ trap cleanup EXIT
     --host "$host" \
     --port "$port" \
     --tokens "$tokens" \
-    --max-requests "$requests" \
+    --max-requests "$server_max_requests" \
     >"$server_log" 2>&1 &
 server_pid=$!
 
@@ -153,6 +167,54 @@ done
 if ! grep -q "serving http://" "$server_log"; then
     echo "ds4-v100-appliance-smoke: server did not start listening in time" >&2
     cat "$server_log" >&2
+    exit 1
+fi
+
+http_body() {
+    sed -n '/^\r\{0,1\}$/,$p' "$1" | sed '1{/^\r\{0,1\}$/d;}' >"$2"
+}
+
+http_get() {
+    path="$1"
+    out_http="$2"
+    out_json="$3"
+    if ! exec 3<>"/dev/tcp/$host/$port"; then
+        echo "ds4-v100-appliance-smoke: GET $path failed" >&2
+        cat "$server_log" >&2
+        exit 1
+    fi
+    {
+        printf 'GET %s HTTP/1.1\r\n' "$path"
+        printf 'Host: %s:%s\r\n' "$host" "$port"
+        printf 'Connection: close\r\n'
+        printf '\r\n'
+    } >&3
+    cat <&3 >"$out_http"
+    exec 3<&-
+    exec 3>&-
+    status_line="$(sed -n '1p' "$out_http")"
+    case "$status_line" in
+        *" 200 "*) ;;
+        *)
+            echo "ds4-v100-appliance-smoke: GET $path non-200 response: $status_line" >&2
+            cat "$out_http" >&2
+            exit 1
+            ;;
+    esac
+    http_body "$out_http" "$out_json"
+}
+
+http_get "/health" "$health_http" "$health_json"
+if ! grep -q '"status":"ok"' "$health_json"; then
+    echo "ds4-v100-appliance-smoke: bad /health response" >&2
+    cat "$health_json" >&2
+    exit 1
+fi
+http_get "/v100/status" "$status_http" "$status_json"
+if ! grep -q '"service":"ds4-v100-replay"' "$status_json" ||
+   ! grep -q '"readiness_level":2' "$status_json"; then
+    echo "ds4-v100-appliance-smoke: bad /v100/status response" >&2
+    cat "$status_json" >&2
     exit 1
 fi
 
@@ -218,7 +280,7 @@ for request_id in $(seq 1 "$requests"); do
             ;;
     esac
     sed -n '/^\r\{0,1\}$/,$p' "$response_http_i" | sed '1{/^\r\{0,1\}$/d;}' >"$response_json_i"
-    got="$(sed -n 's/.*"text_hex":"\([^"]*\)".*/\1/p' "$response_json_i" | sed -n '1p')"
+    got="$(grep -o '"text_hex":"[^"]*"' "$response_json_i" | sed -n '1{s/^"text_hex":"//;s/"$//;p;}')"
     if [ "$got" != "$expected_lower" ]; then
         echo "ds4-v100-appliance-smoke: request $request_id expected $expected_hex, got ${got:-none}" >&2
         cat "$response_json_i" >&2
@@ -227,10 +289,23 @@ for request_id in $(seq 1 "$requests"); do
     last_prompt_tokens="$(sed -n 's/.*"prompt_tokens":\([0-9][0-9]*\).*/\1/p' "$response_json_i" | sed -n '1p')"
     last_generated_tokens="$(sed -n 's/.*"generated_tokens":\([0-9][0-9]*\).*/\1/p' "$response_json_i" | sed -n '1p')"
     last_first_token="$(sed -n 's/.*"tokens":\[{"id":\([0-9][0-9]*\).*/\1/p' "$response_json_i" | sed -n '1p')"
+    last_continuation_ms="$(sed -n 's/.*"continuation_decode":\([0-9.][0-9.]*\).*/\1/p' "$response_json_i" | sed -n '1p')"
+    if [ "$last_generated_tokens" != "$tokens" ]; then
+        echo "ds4-v100-appliance-smoke: request $request_id expected generated_tokens=$tokens, got ${last_generated_tokens:-unknown}" >&2
+        cat "$response_json_i" >&2
+        exit 1
+    fi
+    if [ "$tokens" -gt 1 ] &&
+       ! awk -v v="${last_continuation_ms:-0}" 'BEGIN { exit !((v + 0.0) > 0.0) }'; then
+        echo "ds4-v100-appliance-smoke: request $request_id expected continuation_decode > 0 for tokens=$tokens" >&2
+        cat "$response_json_i" >&2
+        exit 1
+    fi
     last_hex="$got"
+    echo "ds4-v100-appliance-smoke: request=$request_id prompt_tokens=${last_prompt_tokens:-unknown} generated_tokens=${last_generated_tokens:-unknown} first_token=${last_first_token:-unknown} first_hex=$last_hex continuation_ms=${last_continuation_ms:-unknown} ok"
     cp "$response_http_i" "$response_http"
     cp "$response_json_i" "$response_json"
 done
 wait "$server_pid"
 server_pid=""
-echo "ds4-v100-appliance-smoke: requests=$requests prompt_tokens=${last_prompt_tokens:-unknown} generated_tokens=${last_generated_tokens:-unknown} first_token=${last_first_token:-unknown} first_hex=$last_hex ok"
+echo "ds4-v100-appliance-smoke: health=ok status=ok requests=$requests prompt_tokens=${last_prompt_tokens:-unknown} generated_tokens=${last_generated_tokens:-unknown} first_token=${last_first_token:-unknown} first_hex=$last_hex ok"

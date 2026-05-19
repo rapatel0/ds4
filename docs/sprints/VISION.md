@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-18
 last_updated_by: vision
-revision: 43
+revision: 44
 ---
 
 # Vision: DS4 V100 Appliance
@@ -186,6 +186,10 @@ it is a narrow DS4 runtime tuned for this hardware.
   typed MTP tensor inventory, uploads all 32 sidecar tensors into a compact
   gpu7 device arena, spot-checks resident bytes, and narrows readiness from
   `missing=mtp_runtime` to `missing=mtp_forward`.
+- Sprint 032 shipped the Level 2 base appliance usability gate. The one-slot
+  non-MTP loopback service now exposes health/status, proves two sequential
+  two-token HTTP requests from one resident process, documents operator limits,
+  and leaves overall readiness blocked only on `missing=mtp_forward`.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -200,15 +204,17 @@ mean "nothing works"; it should say which rung has not been proven yet.
 |---|---|---|---|---|
 | 0 | Fit and residency | The source model can be mapped, packed, and held in 8x V100 VRAM with reserve. | Pack inventory, per-GPU memory plan, resident upload smoke, source-layout guards. | Complete through Sprints 001-006. |
 | 1 | Single-prompt base correctness | The base model path can run one known prompt through all 43 layers and select the expected first token. | Full 8-stage scheduler, output-head parity, selected-token hex `3136`, one-shot replay. | Complete through Sprints 024-028. |
-| 2 | Minimal usable base appliance | A human/operator can start the base model service and use it for short non-MTP one-slot generation with documented limits. | Longer prompt/decode smoke, repeat HTTP requests, failure logs, run command, health check, 1-slot timing report. | Not complete. This is the next usable-service target if we defer MTP. |
-| 3 | MTP-assisted correctness | The resident MTP sidecar can produce a K=1 draft token that matches a trusted oracle and does not corrupt target-model state. | MTP sidecar residency, Q8_0/Q4_K kernel parity, MTP forward logits/top-k, draft/verify/rollback tests. | Partially complete. Sprint 031 shipped residency; current gate stops at `missing=mtp_forward`. |
+| 2 | Minimal usable base appliance | A human/operator can start the base model service and use it for short non-MTP one-slot generation with documented limits. | Longer prompt/decode smoke, repeat HTTP requests, failure logs, run command, health check, 1-slot timing report. | Complete through Sprint 032, with explicit limits: one slot, sequential loopback HTTP, no MTP, no streaming, no production supervisor. |
+| 3 | MTP-assisted correctness | The resident MTP sidecar can produce a K=1 draft token that matches a trusted oracle and does not corrupt target-model state. | MTP sidecar residency, Q8_0/Q4_K kernel parity, MTP forward logits/top-k, draft/verify/rollback tests. | Partially complete. Sprint 031 shipped residency; Sprint 032 keeps the current gate stopped at `missing=mtp_forward`. |
 | 4 | Throughput appliance | The service has measured aggregate tok/s and a clear slot/context operating envelope. | Startup/upload timings, decode timings, slot admission, 1/2/4/8-slot benchmarks, context-tier benchmarks. | Not complete. Existing timings are diagnostic, not a throughput claim. |
 | 5 | Production deployment | The appliance can be left running on the cluster with operational confidence. | Supervised service, config files, restart behavior, health/metrics endpoint, deployment/runbook, known rollback path. | Not complete. Current HTTP path is a loopback smoke, not deployment packaging. |
 
 MTP is not required for the first minimally usable base appliance. It is
 required for the intended performance path if speculative decoding proves
-correct and beneficial on V100. Until Level 2 is complete, "ready to use" means
-only a correctness smoke, not a practical service.
+correct and beneficial on V100. With Level 2 complete, "ready to use" means
+only the documented base correctness appliance: one-slot sequential loopback
+generation with short continuations. It does not yet mean throughput-optimized,
+MTP-assisted, or production-deployed serving.
 
 ## Sprint Sequence
 
@@ -617,6 +623,20 @@ only a correctness smoke, not a practical service.
   a compact gpu7 device arena, uploads all 32 MTP tensors, spot-checks resident
   bytes, and the full V100 gate now reports `missing=mtp_forward`.
 
+### Sprint 032 - V100 Level 2 Base Appliance Usability Gate [complete]
+
+- **Goal**: Make the non-MTP one-slot V100 appliance usable enough for
+  operator-driven short generation with health/status, repeated HTTP request
+  evidence, longer decode evidence, and a runbook.
+- **Rationale**: The readiness ladder needed a practical base appliance rung
+  before MTP forward work and throughput claims. Without this, `ready=false`
+  could hide the fact that the base model path was already usable within clear
+  limits.
+- **Outcome**: `SHIP`. The replay server exposes health/status, the smoke
+  proves two sequential two-token HTTP requests from one resident process, the
+  full V100 gate passes with `failures=0`, Level 2 no longer appears as a
+  readiness blocker, and the remaining blocker is `missing=mtp_forward`.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -699,6 +719,10 @@ only a correctness smoke, not a practical service.
   routed expert tests, gpu7 scheduler HC access, explicit draft/verify state,
   and continued separation between resident MTP sidecar tensors and the main
   source-layout pack path.
+- See `docs/sprints/SPRINT-032-FOLLOWUPS.md`: K=1 MTP forward remains the next
+  runtime slice, while base-appliance hardening should focus on clearer status
+  counters, startup/upload reduction, longer resident decode baselines, and
+  production packaging only after request-state ownership is explicit.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -744,16 +768,15 @@ only a correctness smoke, not a practical service.
 | 2026-05-18 | Shipped Sprint 030 MTP sidecar readiness gate. | The appliance now validates the real MTP companion GGUF and keeps baseline serving green; the remaining blocker is no longer sidecar format uncertainty but the concrete V100 MTP runtime forward/verify path. | Sprint 031+ |
 | 2026-05-18 | Shipped Sprint 031 MTP resident sidecar bridge. | The appliance now uploads the real 3.807600108 GB MTP sidecar into gpu7 device memory and spot-checks residency; the remaining blocker is the K=1 MTP forward/draft path, not sidecar loading or memory fit. | Sprint 032+ |
 | 2026-05-18 | Added the readiness ladder. | The vision now distinguishes base correctness, minimal usability, MTP-assisted correctness, throughput, and production deployment so `ready=false` has an actionable meaning. | Sprint 032+ |
+| 2026-05-18 | Shipped Sprint 032 Level 2 base appliance usability. | The one-slot base service now has health/status, repeated two-token HTTP smoke evidence, an operator runbook, and a full gate with `missing=mtp_forward` only; the next sprint can return to MTP forward without hiding base usability gaps. | Sprint 033+ |
 
 ## Open Questions
 
 1. What reference should define correctness tolerances for mixed
    BF16/F32/F8_E4M3_B128/MXFP4 execution on V100 after MoE is included?
-2. Should Sprint 032 target Level 2 minimal base usability before continuing
-   MTP forward work, or should MTP remain the immediate critical path?
-3. What production serving milestone should follow the loopback smoke:
+2. What production serving milestone should follow the loopback smoke:
    OpenAI-compatible API, process supervision, or a narrower internal endpoint?
-4. How much MTP work should land before longer resident decode benchmarks and
+3. How much MTP work should land before longer resident decode benchmarks and
    upload optimization?
-5. Should the persistent `/srv/dev/ds4-sprint004` pack become the seed
+4. Should the persistent `/srv/dev/ds4-sprint004` pack become the seed
    deployment artifact, or should a formal pack release format come first?
