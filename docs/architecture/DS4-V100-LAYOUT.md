@@ -206,9 +206,13 @@ possible future quality-gated INT8 expert packs.
 Sprint 084 adds the first offline sidecar producer for that production format:
 `tools/ds4-v100-turbomind-pack` reads the normal V100 `pack-index.tsv`, pulls
 source MXFP4 expert bytes from the DS4 GGUF, and writes `gpuN.turbomind` plus
-`turbomind-pack-index.tsv`. The runtime should later load this sidecar as a
-separate acceleration artifact, reconstruct device pointer tables after upload,
-and account for its bytes separately in the memory planner.
+`turbomind-pack-index.tsv`. Sprint 085 adds the first executable sidecar load
+path: `ds4_turbomind_pack.{h,c}` parses the derived index, and
+`tests/cuda_v100_turbomind_sidecar_smoke` uploads `gpuN.turbomind` once,
+reconstructs TurboMind `StridedPtrH` tables from the recorded offsets and
+strides, and matches the source-MXFP4 arena reference on V100. The runtime
+should next load this sidecar as a planner-admitted acceleration artifact and
+account for its bytes separately before enabling scheduler selection.
 
 Any chosen production kernel must avoid persistent duplicate MXFP4, FP8, and
 INT8 resident packs unless the planner explicitly admits the memory cost.

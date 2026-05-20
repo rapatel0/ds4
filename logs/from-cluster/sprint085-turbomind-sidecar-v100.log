@@ -1,0 +1,17 @@
+CUDA_ARCH=sm_70 make tools/ds4-v100-turbomind-pack tests/cuda_v100_turbomind_sidecar_smoke
+make: 'tools/ds4-v100-turbomind-pack' is up to date.
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread --std=c++17 -Ikernels/turbomind/ggml-turbomind/include -I. -c -o tests/cuda_v100_turbomind_sidecar_smoke.o tests/cuda_v100_turbomind_sidecar_smoke.cu
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -c -o ds4_turbomind_pack.o ds4_turbomind_pack.c
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -o tests/cuda_v100_turbomind_sidecar_smoke tests/cuda_v100_turbomind_sidecar_smoke.o ds4_cuda.o ds4_source_formats.o ds4_pack.o ds4_turbomind_pack.o -lm -Xcompiler -pthread -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/local/cuda/lib64 -lcudart -lcublas -ldl -ldl
+
+./tools/ds4-v100-turbomind-pack --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --source /models/DSv4-Flash-256e-fixed.gguf --out-dir /tmp/ds4-sprint085-tm-pack --layer 0 --kind all --expert-limit 2 --gpu 0 --lib ./build/turbomind-v100/libggml-turbomind.so
+packed blk.0.ffn_gate_exps.weight experts=2/256 N=2048 K=4096 weight=4194304 scale=262144 k_pack=0x341321
+packed blk.0.ffn_up_exps.weight experts=2/256 N=2048 K=4096 weight=4194304 scale=262144 k_pack=0x341321
+packed blk.0.ffn_down_exps.weight experts=2/256 N=4096 K=2048 weight=4194304 scale=262144 k_pack=0x341321
+wrote /tmp/ds4-sprint085-tm-pack/turbomind-pack-index.tsv
+wrote /tmp/ds4-sprint085-tm-pack/gpu0.turbomind
+
+./tests/cuda_v100_turbomind_sidecar_smoke --lib ./build/turbomind-v100/libggml-turbomind.so --tm-index /tmp/ds4-sprint085-tm-pack/turbomind-pack-index.tsv --tm-dir /tmp/ds4-sprint085-tm-pack --source-index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --source /models/DSv4-Flash-256e-fixed.gguf --layer 0
+ds4: CUDA backend initialized on Tesla V100-SXM2-32GB (sm_70)
+cuda_v100_turbomind_sidecar_smoke: layer=0 experts=2 routes=4 sidecar_bytes=26738688 max_abs=5.91128e-07 rel=0.000493098 bad=0 host_ms=0.265
+cuda_v100_turbomind_sidecar_smoke: PASS
