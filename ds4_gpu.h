@@ -31,6 +31,10 @@ int ds4_gpu_tensor_fill_f32(ds4_gpu_tensor *tensor, float value, uint64_t count)
 int ds4_gpu_f16_round_tensor(ds4_gpu_tensor *tensor, uint64_t count);
 int ds4_gpu_tensor_write(ds4_gpu_tensor *tensor, uint64_t offset, const void *data, uint64_t bytes);
 int ds4_gpu_tensor_read(const ds4_gpu_tensor *tensor, uint64_t offset, void *data, uint64_t bytes);
+int ds4_gpu_tensor_write_f32_row_ptrs(ds4_gpu_tensor *ptrs,
+                                      const ds4_gpu_tensor *const *rows,
+                                      uint32_t n_rows,
+                                      uint64_t min_row_bytes);
 int ds4_gpu_tensor_copy(ds4_gpu_tensor *dst, uint64_t dst_offset,
                           const ds4_gpu_tensor *src, uint64_t src_offset,
                           uint64_t bytes);
@@ -180,6 +184,12 @@ int ds4_gpu_arena_f8_e4m3_b128_matmul_batch_f32(
         const ds4_gpu_arena           *arena,
         const ds4_gpu_source_row_view *view,
         const ds4_gpu_tensor          *x_f32,
+        uint32_t                       n_tokens,
+        ds4_gpu_tensor                *out_f32);
+int ds4_gpu_arena_f8_e4m3_b128_matmul_batch_ptr_table_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *view,
+        const ds4_gpu_tensor          *x_row_ptrs,
         uint32_t                       n_tokens,
         ds4_gpu_tensor                *out_f32);
 int ds4_gpu_arena_f8_e4m3_b128_matmul_grouped_f32(

@@ -995,6 +995,265 @@ done:
     return rc;
 }
 
+static int execute_attention_output_batch(const ds4_v100_layer_state *state,
+                                          const ds4_v100_layer_execute_config *cfgs,
+                                          const ds4_gpu_tensor *const *hidden,
+                                          ds4_gpu_tensor *const *attn_out,
+                                          uint32_t n_slots,
+                                          char *err,
+                                          size_t errlen) {
+    if (!state || !cfgs || !hidden || !attn_out ||
+        n_slots == 0 || n_slots > DS4_V100_LAYER_MAX_BATCH) {
+        return exec_error(err, errlen, "invalid attention batch inputs");
+    }
+    if (n_slots == 1 || !env_flag_enabled("DS4_V100_ENABLE_BATCH_ATTN_PROJ")) {
+        for (uint32_t slot = 0; slot < n_slots; slot++) {
+            if (execute_attention_output(state,
+                                         &cfgs[slot],
+                                         hidden[slot],
+                                         attn_out[slot],
+                                         err,
+                                         errlen)) {
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    const uint32_t hidden_n = state->hidden_size;
+    const uint32_t q_rank = state->q_lora_rank;
+    const uint32_t q_width = state->q_width;
+    const uint32_t kv_width = state->kv_latent_width;
+    const uint32_t out_rank = state->attention_output_rank;
+    if (hidden_n != DS4_V100_OUT_GROUP_DIM ||
+        q_width != DS4_V100_N_HEAD * DS4_V100_HEAD_DIM ||
+        out_rank != DS4_V100_OUT_GROUPS * DS4_V100_OUT_GROUP_RANK) {
+        return exec_error(err, errlen, "attention batch dimensions do not match DS4");
+    }
+    for (uint32_t slot = 0; slot < n_slots; slot++) {
+        if (!hidden[slot] || !attn_out[slot] ||
+            ds4_gpu_tensor_bytes(hidden[slot]) < (uint64_t)hidden_n * sizeof(float) ||
+            ds4_gpu_tensor_bytes(attn_out[slot]) < (uint64_t)hidden_n * sizeof(float) ||
+            cfgs[slot].arena != cfgs[0].arena ||
+            cfgs[slot].model_map != cfgs[0].model_map ||
+            cfgs[slot].model_size != cfgs[0].model_size ||
+            cfgs[slot].batch_scratch != cfgs[0].batch_scratch) {
+            return exec_error(err, errlen, "attention batch cfgs must share arena/model");
+        }
+    }
+
+    ds4_gpu_source_row_view q_a_v;
+    ds4_gpu_source_row_view q_b_v;
+    ds4_gpu_source_row_view kv_v;
+    if (source_view(&state->attn_q_a, &q_a_v, err, errlen) ||
+        source_view(&state->attn_q_b, &q_b_v, err, errlen) ||
+        source_view(&state->attn_kv_latent, &kv_v, err, errlen)) {
+        return 1;
+    }
+
+    const bool use_scratch = cfgs[0].batch_scratch != NULL;
+    ds4_gpu_tensor *input_ptrs_t = use_scratch ? cfgs[0].batch_scratch->ffn_input_ptrs
+        : ds4_gpu_tensor_alloc((uint64_t)n_slots * sizeof(void *));
+    ds4_gpu_tensor *q_a_batch = ds4_gpu_tensor_alloc((uint64_t)n_slots * q_rank * sizeof(float));
+    ds4_gpu_tensor *q_a_norm_batch = ds4_gpu_tensor_alloc((uint64_t)n_slots * q_rank * sizeof(float));
+    ds4_gpu_tensor *q_batch = ds4_gpu_tensor_alloc((uint64_t)n_slots * q_width * sizeof(float));
+    ds4_gpu_tensor *kv_raw_batch = ds4_gpu_tensor_alloc((uint64_t)n_slots * kv_width * sizeof(float));
+    ds4_gpu_tensor *kv_batch = ds4_gpu_tensor_alloc((uint64_t)n_slots * kv_width * sizeof(float));
+    ds4_gpu_tensor *heads_batch = ds4_gpu_tensor_alloc((uint64_t)n_slots * q_width * sizeof(float));
+    ds4_gpu_tensor *low_batch = ds4_gpu_tensor_alloc((uint64_t)n_slots * out_rank * sizeof(float));
+
+    int rc = 1;
+    if (!input_ptrs_t || !q_a_batch || !q_a_norm_batch || !q_batch ||
+        !kv_raw_batch || !kv_batch || !heads_batch || !low_batch) {
+        exec_error(err, errlen, "failed to allocate attention batch tensors");
+        goto done;
+    }
+    if (!ds4_gpu_tensor_write_f32_row_ptrs(input_ptrs_t,
+                                           hidden,
+                                           n_slots,
+                                           (uint64_t)hidden_n * sizeof(float)) ||
+        ds4_gpu_arena_f8_e4m3_b128_matmul_batch_ptr_table_f32(cfgs[0].arena,
+                                                              &q_a_v,
+                                                              input_ptrs_t,
+                                                              n_slots,
+                                                              q_a_batch) != 0 ||
+        ds4_gpu_arena_f8_e4m3_b128_matmul_batch_ptr_table_f32(cfgs[0].arena,
+                                                              &kv_v,
+                                                              input_ptrs_t,
+                                                              n_slots,
+                                                              kv_raw_batch) != 0 ||
+        !ds4_gpu_dsv4_qkv_rms_norm_rows_tensor(q_a_norm_batch,
+                                               q_a_batch,
+                                               cfgs[0].model_map,
+                                               cfgs[0].model_size,
+                                               model_offset_for_binding(&cfgs[0], &state->attn_q_a_norm),
+                                               q_rank,
+                                               kv_batch,
+                                               kv_raw_batch,
+                                               model_offset_for_binding(&cfgs[0], &state->attn_kv_a_norm),
+                                               kv_width,
+                                               n_slots,
+                                               DS4_V100_RMS_EPS) ||
+        ds4_gpu_arena_f8_e4m3_b128_matmul_batch_f32(cfgs[0].arena,
+                                                    &q_b_v,
+                                                    q_a_norm_batch,
+                                                    n_slots,
+                                                    q_batch) != 0) {
+        exec_error(err, errlen, "attention batch projection sequence failed");
+        goto done;
+    }
+
+    for (uint32_t slot = 0; slot < n_slots; slot++) {
+        ds4_gpu_tensor *q_view = ds4_gpu_tensor_view(q_batch,
+                (uint64_t)slot * q_width * sizeof(float),
+                (uint64_t)q_width * sizeof(float));
+        ds4_gpu_tensor *q_a_norm_view = ds4_gpu_tensor_view(q_a_norm_batch,
+                (uint64_t)slot * q_rank * sizeof(float),
+                (uint64_t)q_rank * sizeof(float));
+        ds4_gpu_tensor *kv_view = ds4_gpu_tensor_view(kv_batch,
+                (uint64_t)slot * kv_width * sizeof(float),
+                (uint64_t)kv_width * sizeof(float));
+        ds4_gpu_tensor *heads_view = ds4_gpu_tensor_view(heads_batch,
+                (uint64_t)slot * q_width * sizeof(float),
+                (uint64_t)q_width * sizeof(float));
+        ds4_gpu_tensor *low_view = ds4_gpu_tensor_view(low_batch,
+                (uint64_t)slot * out_rank * sizeof(float),
+                (uint64_t)out_rank * sizeof(float));
+        if (!q_view || !q_a_norm_view || !kv_view || !heads_view || !low_view) {
+            ds4_gpu_tensor_free(low_view);
+            ds4_gpu_tensor_free(heads_view);
+            ds4_gpu_tensor_free(kv_view);
+            ds4_gpu_tensor_free(q_a_norm_view);
+            ds4_gpu_tensor_free(q_view);
+            exec_error(err, errlen, "failed to create attention batch tensor views");
+            goto done;
+        }
+
+        const uint32_t n_raw = cfgs[slot].n_raw ? cfgs[slot].n_raw : 1u;
+        const uint32_t raw_cap = cfgs[slot].raw_cap ? cfgs[slot].raw_cap : n_raw;
+        ds4_v100_attention_inputs attn_inputs = {
+            .raw_kv = cfgs[slot].raw_kv ? cfgs[slot].raw_kv : kv_view,
+            .n_raw = n_raw,
+            .raw_cap = raw_cap,
+            .raw_start = cfgs[slot].raw_start,
+            .compressed_kv = cfgs[slot].compressed_kv,
+            .n_compressed = cfgs[slot].n_compressed,
+            .compressed_mask = cfgs[slot].compressed_mask,
+            .use_compressed_mask = cfgs[slot].use_compressed_mask ? 1u : 0u,
+            .indexed_topk = NULL,
+            .indexed_top_k = 0,
+            .use_indexed_attention = false,
+        };
+        int attention_ok = 0;
+        if (!ds4_gpu_head_rms_norm_tensor(q_view, 1, DS4_V100_N_HEAD, DS4_V100_HEAD_DIM, DS4_V100_RMS_EPS) ||
+            !rope_tail_layer_tensor(q_view,
+                                    DS4_V100_N_HEAD,
+                                    DS4_V100_HEAD_DIM,
+                                    cfgs[slot].position,
+                                    state,
+                                    false) ||
+            !rope_tail_layer_tensor(kv_view,
+                                    1,
+                                    DS4_V100_HEAD_DIM,
+                                    cfgs[slot].position,
+                                    state,
+                                    false) ||
+            prepare_decode_cache_attention(state,
+                                           &cfgs[slot],
+                                           hidden[slot],
+                                           q_a_norm_view,
+                                           kv_view,
+                                           &attn_inputs,
+                                           err,
+                                           errlen)) {
+            ds4_gpu_tensor_free(low_view);
+            ds4_gpu_tensor_free(heads_view);
+            ds4_gpu_tensor_free(kv_view);
+            ds4_gpu_tensor_free(q_a_norm_view);
+            ds4_gpu_tensor_free(q_view);
+            goto done;
+        }
+        if (attn_inputs.use_indexed_attention) {
+            attention_ok = ds4_gpu_attention_indexed_mixed_batch_heads_tensor(
+                    heads_view,
+                    cfgs[slot].model_map,
+                    cfgs[slot].model_size,
+                    model_offset_for_binding(&cfgs[slot], &state->attn_sinks),
+                    q_view,
+                    attn_inputs.raw_kv,
+                    attn_inputs.compressed_kv,
+                    attn_inputs.indexed_topk,
+                    1,
+                    cfgs[slot].position,
+                    attn_inputs.n_raw,
+                    attn_inputs.raw_cap,
+                    attn_inputs.raw_start,
+                    attn_inputs.n_compressed,
+                    attn_inputs.indexed_top_k,
+                    cfgs[slot].decode_cache && cfgs[slot].decode_cache->raw_window ? cfgs[slot].decode_cache->raw_window : 128u,
+                    state->compress_ratio,
+                    DS4_V100_N_HEAD,
+                    DS4_V100_HEAD_DIM);
+        } else {
+            attention_ok = ds4_gpu_attention_decode_heads_tensor(heads_view,
+                                                                 cfgs[slot].model_map,
+                                                                 cfgs[slot].model_size,
+                                                                 model_offset_for_binding(&cfgs[slot], &state->attn_sinks),
+                                                                 q_view,
+                                                                 attn_inputs.raw_kv,
+                                                                 attn_inputs.n_raw,
+                                                                 attn_inputs.raw_cap,
+                                                                 attn_inputs.raw_start,
+                                                                 attn_inputs.compressed_kv,
+                                                                 attn_inputs.n_compressed,
+                                                                 attn_inputs.compressed_mask,
+                                                                 attn_inputs.use_compressed_mask,
+                                                                 DS4_V100_N_HEAD,
+                                                                 DS4_V100_HEAD_DIM);
+        }
+        if (!attention_ok ||
+            !rope_tail_layer_tensor(heads_view,
+                                    DS4_V100_N_HEAD,
+                                    DS4_V100_HEAD_DIM,
+                                    cfgs[slot].position,
+                                    state,
+                                    true) ||
+            grouped_attention_output(state,
+                                     &cfgs[slot],
+                                     heads_view,
+                                     low_view,
+                                     attn_out[slot],
+                                     err,
+                                     errlen)) {
+            if (err && err[0] == '\0') exec_error(err, errlen, "attention batch slot failed");
+            ds4_gpu_tensor_free(low_view);
+            ds4_gpu_tensor_free(heads_view);
+            ds4_gpu_tensor_free(kv_view);
+            ds4_gpu_tensor_free(q_a_norm_view);
+            ds4_gpu_tensor_free(q_view);
+            goto done;
+        }
+        ds4_gpu_tensor_free(low_view);
+        ds4_gpu_tensor_free(heads_view);
+        ds4_gpu_tensor_free(kv_view);
+        ds4_gpu_tensor_free(q_a_norm_view);
+        ds4_gpu_tensor_free(q_view);
+    }
+
+    rc = 0;
+
+done:
+    ds4_gpu_tensor_free(low_batch);
+    ds4_gpu_tensor_free(heads_batch);
+    ds4_gpu_tensor_free(kv_batch);
+    ds4_gpu_tensor_free(kv_raw_batch);
+    ds4_gpu_tensor_free(q_batch);
+    ds4_gpu_tensor_free(q_a_norm_batch);
+    ds4_gpu_tensor_free(q_a_batch);
+    if (!use_scratch) ds4_gpu_tensor_free(input_ptrs_t);
+    return rc;
+}
+
 static int execute_ffn_delta(const ds4_v100_layer_state *state,
                              const ds4_v100_layer_execute_config *cfg,
                              const ds4_gpu_tensor *ffn_input,
@@ -1904,18 +2163,23 @@ int ds4_v100_layer_execute_hc_decode_batch(
             exec_error(err, errlen, "HC batch attention prep profile sync failed");
             goto done;
         }
-        if (execute_attention_output(state,
-                                     &cfgs[slot],
-                                     attn_cur[slot],
-                                     attn_out[slot],
-                                     err,
-                                     errlen)) {
-            goto done;
-        }
-        if (profile && !profile_mark(&profile_last_ms, &timing_attention_ms)) {
-            exec_error(err, errlen, "HC batch attention profile sync failed");
-            goto done;
-        }
+    }
+
+    if (execute_attention_output_batch(state,
+                                       cfgs,
+                                       (const ds4_gpu_tensor *const *)attn_cur,
+                                       attn_out,
+                                       n_slots,
+                                       err,
+                                       errlen)) {
+        goto done;
+    }
+    if (profile && !profile_mark(&profile_last_ms, &timing_attention_ms)) {
+        exec_error(err, errlen, "HC batch attention profile sync failed");
+        goto done;
+    }
+
+    for (uint32_t slot = 0; slot < n_slots; slot++) {
         if (!ds4_gpu_hc_expand_split_tensor(after_attn_hc[slot],
                                             attn_out[slot],
                                             hidden_hc[slot],

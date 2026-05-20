@@ -686,6 +686,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 096 served decode profiler window | Served HTTP batch profile: F8 arena matmul `61.64%`, TurboMind `20.15%`, HtoD `0.14%` | Measured | Extends `--cuda-profiler-window` to the HTTP appliance path and adds launcher env `DS4_V100_CUDA_PROFILER_WINDOW=1` for diagnostic runs. This proves the warmed served path is not HtoD-bound after startup warmup; the next blocker is F8 projection/shared matmul plus allocator churn (`cudaFree`/`cudaMalloc` dominate API time). |
 | Sprint 097 CUDA tensor pool default | `17.532887` generated tok/s at 1M/4 slots; `25.232220` at 256K/8 slots | Measured | Adds a bounded per-device scratch tensor pool and defaults `DS4_V100_CUDA_TENSOR_POOL=auto` on for multi-slot serving. Same-binary paired fixtures improved from `11.902776` to `16.881653` generated tok/s at 1M/4 slots and from `17.193119` to `25.212896` at 256K/8 slots. The warmed profile removes `cudaMalloc` from the request window and reduces `cudaFree` to `9.18 ms` / `37` calls; F8 arena matmul is now the clear next GPU target. |
 | Sprint 098 grouped F8 attention output | `17.904697` generated tok/s at 1M/4 slots; `26.206100` at 256K/8 slots | Measured | Replaces eight attention output-A F8 matmul launches per layer/slot with one grouped launch and adds `DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A=1` rollback. Same-binary controls preserve correctness and show grouped beating rollback (`16.897788` and `25.456942`). Served profile reduces single F8 matmul calls from `11880` to `5544` and total CUDA kernel launches from `39684` to `34140`. |
+| Sprint 099 batch attention projection probe | `17.742637` generated tok/s opt-in vs `17.764257` rollback at 1M/4 slots | Measured | Adds an explicit `DS4_V100_ENABLE_BATCH_ATTN_PROJ=1` probe for batching Q-A, Q-B, and KV F8 projections across active slots. Correctness passes at 4-slot/1M and 8-slot/256K, but same-binary controls are flat/slightly faster without the probe (`26.149613` rollback vs `26.128571` opt-in at 8 slots). Keep it off by default and stop pursuing projection-only batching in this shape. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -2130,6 +2131,20 @@ GPU utilization with architectural changes, and only then compare against the
   F8 matmul calls from `11880` to `5544` and total CUDA kernel launches from
   `39684` to `34140`.
 
+### Sprint 099 - Batch Attention Projection Probe [complete]
+
+- **Goal**: Test whether projection-only batching across active slots moves the
+  remaining F8 attention bottleneck.
+- **Rationale**: After Sprint 098, Q-A, Q-B, and KV projection launches were
+  the next obvious F8 batching candidate.
+- **Outcome**: `KEEP_BATCH_ATTN_PROJ_OPT_IN`. Added reusable row-pointer table
+  support and an explicit `DS4_V100_ENABLE_BATCH_ATTN_PROJ=1` probe. The path
+  is correct, but same-binary V100 controls are flat/slightly faster without
+  it: `17.742637` opt-in vs `17.764257` rollback at 1M/4 slots, and
+  `26.128571` opt-in vs `26.149613` rollback at 256K/8 slots. Production
+  default remains the Sprint 098 path; do not continue projection-only batching
+  in this form.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -2389,6 +2404,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 096 served decode profiler window. | The profiler can now wrap warmed HTTP generation batches after startup warmup. Served-path `nvprof` shows HtoD is only `0.14%`; the dominant GPU bucket is F8 arena matmul at `61.64%`, followed by TurboMind at `20.15%`, while CUDA API time is dominated by allocator churn. The next sprint should reduce F8 matmul launch/shape overhead and stop repeated malloc/free in the hot path. | Sprint 097+ |
 | 2026-05-20 | Shipped Sprint 097 CUDA tensor pool default. | The appliance now defaults a bounded tensor pool on for multi-slot serving. Same-binary V100 fixtures improved from `11.902776` to `16.881653` generated tok/s at 1M/4 slots and from `17.193119` to `25.212896` at 256K/8 slots; production-style `auto` runs reached `17.532887` and `25.232220`. The next sprint should focus on the remaining F8 arena matmul and `cudaMemcpy` API overhead. | Sprint 098+ |
 | 2026-05-20 | Shipped Sprint 098 grouped F8 attention output. | Attention output-A now uses one grouped F8 launch instead of eight group launches per layer/slot, with a launcher rollback flag. Same-binary V100 controls show `17.904697` vs `16.897788` generated tok/s at 1M/4 slots and `26.206100` vs `25.456942` at 256K/8 slots. The next sprint should batch attention Q/KV projection work across active slots or reduce remaining `cudaMemcpy` API overhead. | Sprint 099+ |
+| 2026-05-20 | Completed Sprint 099 batch attention projection probe as opt-in only. | Projection-only batching across active slots is correct but not faster, so it remains behind `DS4_V100_ENABLE_BATCH_ATTN_PROJ=1` and is not a production default. The next sprint should shift away from projection-only batching and instead attack `cudaMemcpy` API overhead or a larger attention-stage batching boundary. | Sprint 100+ |
 
 ## Open Questions
 

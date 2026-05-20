@@ -1818,6 +1818,31 @@ extern "C" int ds4_gpu_tensor_read(const ds4_gpu_tensor *tensor, uint64_t offset
     return cuda_ok(cudaMemcpy(data, (const char *)tensor->ptr + offset, (size_t)bytes, cudaMemcpyDeviceToHost), "tensor read");
 }
 
+extern "C" int ds4_gpu_tensor_write_f32_row_ptrs(ds4_gpu_tensor *ptrs,
+                                                 const ds4_gpu_tensor *const *rows,
+                                                 uint32_t n_rows,
+                                                 uint64_t min_row_bytes) {
+    if (!ptrs || !rows || !ptrs->ptr ||
+        ptrs->bytes < (uint64_t)n_rows * sizeof(float *)) {
+        return 0;
+    }
+    std::vector<const float *> row_ptrs(n_rows);
+    for (uint32_t i = 0; i < n_rows; i++) {
+        const ds4_gpu_tensor *row = rows[i];
+        if (!row || !row->ptr || row->device != ptrs->device ||
+            row->bytes < min_row_bytes) {
+            return 0;
+        }
+        row_ptrs[i] = (const float *)row->ptr;
+    }
+    if (!cuda_ok(cudaSetDevice(ptrs->device), "tensor row ptr write set device")) return 0;
+    return cuda_ok(cudaMemcpy(ptrs->ptr,
+                              row_ptrs.data(),
+                              (size_t)n_rows * sizeof(float *),
+                              cudaMemcpyHostToDevice),
+                   "tensor row ptr write");
+}
+
 extern "C" int ds4_gpu_tensor_copy(ds4_gpu_tensor *dst, uint64_t dst_offset,
                                      const ds4_gpu_tensor *src, uint64_t src_offset,
                                      uint64_t bytes) {
@@ -2762,6 +2787,36 @@ __global__ static void arena_f8_e4m3_b128_matmul_batch_kernel(
     if (r >= rows) return;
     const uint8_t *row = base + (uint64_t)r * row_stride_bytes;
     const float *x_row = x + (uint64_t)tok * cols;
+    float acc = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        const uint8_t *block = row + (uint64_t)(c / 128u) * 129ull;
+        const float scale = arena_e8m0_to_f32(block[0]);
+        const float w = arena_e4m3fn_to_f32(block[1u + (c % 128u)]) * scale;
+        acc += w * x_row[c];
+    }
+
+    __shared__ float partial[256];
+    partial[threadIdx.x] = acc;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) partial[threadIdx.x] += partial[threadIdx.x + stride];
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) out[(uint64_t)tok * rows + r] = partial[0];
+}
+
+__global__ static void arena_f8_e4m3_b128_matmul_ptrs_kernel(
+        float *out,
+        const uint8_t *base,
+        const float *const *x_row_ptrs,
+        uint32_t rows,
+        uint32_t cols,
+        uint32_t row_stride_bytes) {
+    const uint32_t r = blockIdx.x;
+    const uint32_t tok = blockIdx.y;
+    if (r >= rows) return;
+    const uint8_t *row = base + (uint64_t)r * row_stride_bytes;
+    const float *x_row = x_row_ptrs[tok];
     float acc = 0.0f;
     for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
         const uint8_t *block = row + (uint64_t)(c / 128u) * 129ull;
@@ -5187,6 +5242,33 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_batch_f32(
         view->cols,
         view->row_stride_bytes);
     return cuda_ok(cudaGetLastError(), "f8 source batch matmul launch") ? 0 : 1;
+}
+
+extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_batch_ptr_table_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *view,
+        const ds4_gpu_tensor          *x_row_ptrs,
+        uint32_t                       n_tokens,
+        ds4_gpu_tensor                *out_f32) {
+    if (!x_row_ptrs || !out_f32 || !x_row_ptrs->ptr || !out_f32->ptr ||
+        n_tokens == 0 ||
+        !cuda_f8_e4m3_b128_view_layout_ok(arena, view) ||
+        x_row_ptrs->device != arena->gpu ||
+        x_row_ptrs->bytes < (uint64_t)n_tokens * sizeof(float *) ||
+        out_f32->bytes < (uint64_t)n_tokens * view->rows * sizeof(float)) {
+        return 1;
+    }
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "f8 source ptr table matmul set device")) return 1;
+    const uint8_t *base = (const uint8_t *)((const char *)arena->ptr + view->arena_offset);
+    dim3 grid(view->rows, n_tokens, 1);
+    arena_f8_e4m3_b128_matmul_ptrs_kernel<<<grid, 256>>>(
+        (float *)out_f32->ptr,
+        base,
+        (const float *const *)x_row_ptrs->ptr,
+        view->rows,
+        view->cols,
+        view->row_stride_bytes);
+    return cuda_ok(cudaGetLastError(), "f8 source ptr table matmul launch") ? 0 : 1;
 }
 
 extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_grouped_f32(
