@@ -2,6 +2,7 @@
 set -u
 
 model="/models/DSv4-Flash-256e-fixed.gguf"
+mtp_model="/models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf"
 pack_index=""
 prompt_file="tests/test-vectors/prompts/short_reasoning_plain.txt"
 expected_hex="3136"
@@ -19,6 +20,10 @@ profile_decode="0"
 wavefront_decode="0"
 async_pipeline_decode="0"
 async_pipeline_mode="off"
+mtp_serving="off"
+mtp_top_k="5"
+mtp_gpu="7"
+mtp_reserve_mib="4096"
 
 usage() {
     cat <<'USAGE'
@@ -26,6 +31,7 @@ usage: tools/ds4-v100-sustained-decode-bench.sh --pack-index FILE [options]
 
 Options:
   --model FILE              source-layout GGUF model
+  --mtp-model FILE          DeepSeek-V4 Flash MTP sidecar GGUF
   --pack-index FILE         V100 pack-index.tsv
   --prompt-file FILE        prompt file
   --expected-token-hex HEX  expected first response token bytes, default 3136
@@ -45,6 +51,10 @@ Options:
   --async-pipeline-decode   pass preferred async pipeline mode to the server
   --async-pipeline-mode M   off, persistent, or per-step
   --async-pipeline-per-step pass --async-pipeline-mode per-step
+  --mtp-serving MODE        off, verify, or commit, default off
+  --mtp-top-k N             MTP draft candidates to report, default 5
+  --mtp-gpu N               MTP sidecar GPU, default 7
+  --mtp-reserve-mib N       MTP free-memory reserve, default 4096
   --help                    show this help
 
 Each case starts one resident replay server with:
@@ -91,6 +101,11 @@ while [ "$#" -gt 0 ]; do
         --model)
             [ "$#" -ge 2 ] || fail "--model requires a value"
             model="$2"
+            shift 2
+            ;;
+        --mtp-model)
+            [ "$#" -ge 2 ] || fail "--mtp-model requires a value"
+            mtp_model="$2"
             shift 2
             ;;
         --pack-index|--index)
@@ -197,6 +212,31 @@ while [ "$#" -gt 0 ]; do
             esac
             shift 2
             ;;
+        --mtp-serving)
+            [ "$#" -ge 2 ] || fail "--mtp-serving requires a value"
+            case "$2" in
+                off|false|0) mtp_serving="off" ;;
+                verify) mtp_serving="verify" ;;
+                commit) mtp_serving="commit" ;;
+                *) fail "--mtp-serving must be off, verify, or commit" ;;
+            esac
+            shift 2
+            ;;
+        --mtp-top-k)
+            [ "$#" -ge 2 ] || fail "--mtp-top-k requires a value"
+            mtp_top_k="$2"
+            shift 2
+            ;;
+        --mtp-gpu)
+            [ "$#" -ge 2 ] || fail "--mtp-gpu requires a value"
+            mtp_gpu="$2"
+            shift 2
+            ;;
+        --mtp-reserve-mib)
+            [ "$#" -ge 2 ] || fail "--mtp-reserve-mib requires a value"
+            mtp_reserve_mib="$2"
+            shift 2
+            ;;
         --help|-h)
             usage
             exit 0
@@ -214,12 +254,19 @@ done
 [ -f "$model" ] || fail "missing model $model"
 [ -f "$pack_index" ] || fail "missing pack index $pack_index"
 [ -f "$prompt_file" ] || fail "missing prompt file $prompt_file"
+if [ "$mtp_serving" != "off" ]; then
+    [ -f "$mtp_model" ] || fail "missing MTP model $mtp_model"
+fi
 
 case "$tokens" in ''|0|1|*[!0-9]*) fail "--tokens must be an integer >= 2" ;; esac
 case "$requests" in ''|0|*[!0-9]*) fail "--requests must be a positive integer" ;; esac
 case "$warmup_requests" in ''|*[!0-9]*) fail "--warmup-requests must be a non-negative integer" ;; esac
 case "$port_base" in ''|0|*[!0-9]*) fail "--port-base must be a positive integer" ;; esac
 case "$sample_ms" in ''|0|*[!0-9]*) fail "--sample-ms must be a positive integer" ;; esac
+case "$mtp_top_k" in ''|0|1|*[!0-9]*) fail "--mtp-top-k must be an integer >= 2" ;; esac
+case "$mtp_gpu" in ''|*[!0-9]*) fail "--mtp-gpu must be an integer" ;; esac
+case "$mtp_reserve_mib" in ''|*[!0-9]*) fail "--mtp-reserve-mib must be an integer" ;; esac
+[ "$mtp_top_k" -le 16 ] || fail "--mtp-top-k must be <= 16"
 
 parse_csv_numbers "$ctx_tiers" "--ctx-tiers"
 parse_csv_numbers "$slot_tiers" "--slot-tiers"
@@ -339,6 +386,7 @@ def send_once():
             "generated": 0,
             "first_hex": "",
             "timing": {},
+            "mtp": {},
         }
     dt_ms = (time.perf_counter() - t0) * 1000.0
     timing = {}
@@ -353,8 +401,12 @@ def send_once():
             if toks:
                 first_hex = str(toks[0].get("text_hex", "")).lower()
             timing = data.get("timing_ms", {}) if isinstance(data, dict) else {}
+            mtp = data.get("mtp", {}) if isinstance(data, dict) else {}
         except Exception as exc:
             parse_error = repr(exc)
+            mtp = {}
+    else:
+        mtp = {}
     return {
         "status": status,
         "latency_ms": dt_ms,
@@ -362,6 +414,7 @@ def send_once():
         "generated": generated,
         "first_hex": first_hex,
         "timing": timing if isinstance(timing, dict) else {},
+        "mtp": mtp if isinstance(mtp, dict) else {},
     }
 
 def add_timing(acc, resp):
@@ -448,9 +501,15 @@ stats = {
     "token_mismatch": 0,
     "generated_token_total": 0,
     "continuation_token_total": 0,
+    "mtp_attempted": 0,
+    "mtp_accepted": 0,
+    "mtp_rejected": 0,
+    "mtp_committed": 0,
+    "mtp_skipped": 0,
 }
 latencies_ms = []
 timing_acc = {}
+mtp_draft_ms = []
 next_request = [0]
 next_lock = threading.Lock()
 stats_lock = threading.Lock()
@@ -484,6 +543,19 @@ def worker():
                 stats["token_mismatch"] += 1
             if r["status"] == 200:
                 add_timing(timing_acc, r)
+                mtp = r.get("mtp", {})
+                if isinstance(mtp, dict) and mtp.get("enabled"):
+                    if mtp.get("attempted"):
+                        stats["mtp_attempted"] += int(mtp.get("attempts", 1) or 1)
+                    stats["mtp_accepted"] += int(mtp.get("accepted_count", 1 if mtp.get("accepted") else 0) or 0)
+                    stats["mtp_rejected"] += int(mtp.get("rejected_count", 0) or 0)
+                    stats["mtp_committed"] += int(mtp.get("commit_count", 0) or 0)
+                    if mtp.get("skipped"):
+                        stats["mtp_skipped"] += 1
+                    try:
+                        mtp_draft_ms.append(float(mtp.get("draft_total_ms", mtp.get("draft_ms", 0.0)) or 0.0))
+                    except Exception:
+                        mtp_draft_ms.append(0.0)
 
 threads = []
 t0 = time.perf_counter()
@@ -544,6 +616,15 @@ summary = {
     "token_mismatch": stats["token_mismatch"],
     "generated_token_total": stats["generated_token_total"],
     "continuation_token_total": stats["continuation_token_total"],
+    "mtp": {
+        "attempted": stats["mtp_attempted"],
+        "accepted": stats["mtp_accepted"],
+        "rejected": stats["mtp_rejected"],
+        "committed": stats["mtp_committed"],
+        "skipped": stats["mtp_skipped"],
+        "draft_ms_avg": avg(mtp_draft_ms),
+        "draft_ms_total": sum(mtp_draft_ms),
+    },
     "latency_ms": {
         "avg": avg(latencies_ms),
         "p50": percentile(sorted_lat, 0.50),
@@ -752,6 +833,9 @@ load_case() {
     local gpu_err="$case_dir/gpu_util.err"
     local server_max_requests
     server_max_requests=$((requests + warmup_requests + 32))
+    if [ "$mtp_serving" != "off" ] && [ "$slots" -ne 1 ]; then
+        fail "MTP sustained decode benchmark currently requires slot tier 1"
+    fi
 
     local cmd=(
         ./tools/ds4-v100-replay
@@ -775,6 +859,15 @@ load_case() {
     fi
     if [ "$async_pipeline_decode" = "1" ]; then
         cmd+=(--async-pipeline-mode "$async_pipeline_mode")
+    fi
+    if [ "$mtp_serving" != "off" ]; then
+        cmd+=(
+            --mtp-model "$mtp_model"
+            --mtp-serving "$mtp_serving"
+            --mtp-top-k "$mtp_top_k"
+            --mtp-gpu "$mtp_gpu"
+            --mtp-reserve-mib "$mtp_reserve_mib"
+        )
     fi
 
     DS4_LOCK_FILE="$case_dir/ds4.lock" "${cmd[@]}" >"$server_log" 2>&1 &
@@ -842,7 +935,9 @@ printf 'profile_decode\t%s\n' "$profile_decode" >>"$summary_tsv"
 printf 'wavefront_decode\t%s\n' "$wavefront_decode" >>"$summary_tsv"
 printf 'async_pipeline_decode\t%s\n' "$async_pipeline_decode" >>"$summary_tsv"
 printf 'async_pipeline_mode\t%s\n' "$async_pipeline_mode" >>"$summary_tsv"
-printf '\nctx\tslots\tpolicy\tstatus_200\tstatus_other\terrors\ttoken_match\ttoken_mismatch\tlatency_avg_ms\tlatency_p50_ms\tlatency_p95_ms\tlatency_p99_ms\telapsed_s\taggregate_generated_tokens_per_second\taggregate_continuation_tokens_per_second\tavg_continuation_response_tokens_per_second\tavg_gpu_util_percent\tmax_gpu_util_percent\tavg_async_total_ms\tavg_async_setup_ms\tavg_async_host_wait_ms\tavg_async_complete_ms\tavg_async_wait_prev_sum_ms\tavg_async_handoff_sum_ms\tavg_async_device_sync_sum_ms\n' >>"$summary_tsv"
+printf 'mtp_serving\t%s\n' "$mtp_serving" >>"$summary_tsv"
+printf 'mtp_top_k\t%s\n' "$mtp_top_k" >>"$summary_tsv"
+printf '\nctx\tslots\tpolicy\tmtp_serving\tstatus_200\tstatus_other\terrors\ttoken_match\ttoken_mismatch\tlatency_avg_ms\tlatency_p50_ms\tlatency_p95_ms\tlatency_p99_ms\telapsed_s\taggregate_generated_tokens_per_second\taggregate_continuation_tokens_per_second\tavg_continuation_response_tokens_per_second\tavg_gpu_util_percent\tmax_gpu_util_percent\tmtp_attempted\tmtp_accepted\tmtp_rejected\tmtp_committed\tmtp_draft_ms_avg\tmtp_draft_ms_total\tavg_async_total_ms\tavg_async_setup_ms\tavg_async_host_wait_ms\tavg_async_complete_ms\tavg_async_wait_prev_sum_ms\tavg_async_handoff_sum_ms\tavg_async_device_sync_sum_ms\n' >>"$summary_tsv"
 
 case_index=0
 case_paths=()
@@ -856,7 +951,7 @@ for ctx in "${ctx_list[@]}"; do
         for policy in "${policy_list[@]}"; do
             case_index=$((case_index + 1))
             port=$((port_base + case_index - 1))
-            case_name="case_${case_index}_ctx${ctx}_s${slots}_${policy}_tok${tokens}"
+            case_name="case_${case_index}_ctx${ctx}_s${slots}_${policy}_mtp${mtp_serving}_tok${tokens}"
             case_dir="$cases_dir/$case_name"
             mkdir -p "$case_dir"
             if ! load_case "$case_dir" "$case_name" "$ctx" "$slots" "$policy" "$port"; then
@@ -869,11 +964,11 @@ for ctx in "${ctx_list[@]}"; do
                 fail "sustained decode case failed: $case_name"
             fi
             case_paths+=("$case_dir/result.json")
-            row="$(python3 - "$case_dir/result.json" "$ctx" "$slots" "$policy" <<'PY'
+            row="$(python3 - "$case_dir/result.json" "$ctx" "$slots" "$policy" "$mtp_serving" <<'PY'
 import json
 import sys
 
-rpath, ctx, slots, policy = sys.argv[1:]
+rpath, ctx, slots, policy, mtp_serving = sys.argv[1:]
 with open(rpath, "r", encoding="utf-8") as f:
     d = json.load(f)
 lat = d.get("latency_ms", {})
@@ -893,10 +988,14 @@ def sum_array(name):
         except Exception:
             pass
     return total
+mtp = d.get("mtp", {})
+if not isinstance(mtp, dict):
+    mtp = {}
 print("\t".join([
     ctx,
     slots,
     policy,
+    mtp_serving,
     str(d.get("status_200", 0)),
     str(d.get("status_other", 0)),
     str(d.get("errors", 0)),
@@ -912,6 +1011,12 @@ print("\t".join([
     f"{float(timing.get('continuation_tokens_per_second', 0.0)):.6f}",
     f"{float(gpu.get('avg_gpu_util_percent', 0.0)):.3f}",
     f"{float(gpu.get('max_gpu_util_percent', 0.0)):.3f}",
+    str(mtp.get("attempted", 0)),
+    str(mtp.get("accepted", 0)),
+    str(mtp.get("rejected", 0)),
+    str(mtp.get("committed", 0)),
+    f"{float(mtp.get('draft_ms_avg', 0.0)):.3f}",
+    f"{float(mtp.get('draft_ms_total', 0.0)):.3f}",
     f"{float(async_timing.get('total', 0.0)):.3f}",
     f"{float(async_timing.get('setup', 0.0)):.3f}",
     f"{float(async_timing.get('host_wait', 0.0)):.3f}",
@@ -928,18 +1033,22 @@ PY
     done
 done
 
-python3 - "$summary_json" "${case_paths[@]}" <<'PY'
+python3 - "$summary_json" "$mtp_serving" "$mtp_top_k" "${case_paths[@]}" <<'PY'
 import json
 import sys
 
 out = sys.argv[1]
-paths = sys.argv[2:]
+mtp_serving = sys.argv[2]
+mtp_top_k = int(sys.argv[3])
+paths = sys.argv[4:]
 rows = []
 for p in paths:
     with open(p, "r", encoding="utf-8") as f:
         rows.append(json.load(f))
 summary = {
     "schema": "ds4_v100_sustained_decode.v1",
+    "mtp_serving": mtp_serving,
+    "mtp_top_k": mtp_top_k,
     "cases": rows,
 }
 with open(out, "w", encoding="utf-8") as f:
