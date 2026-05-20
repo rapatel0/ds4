@@ -138,6 +138,8 @@ DS4_V100_ACTIVE_MICROBATCH=1
 DS4_V100_MICROBATCH_WAIT_US=auto
 DS4_V100_QUEUE_POLICY=reject-busy
 DS4_V100_CUDA_PROFILER_WINDOW=0
+DS4_V100_CUDA_TENSOR_POOL=auto
+DS4_V100_CUDA_TENSOR_POOL_MAX_MIB=2048
 DS4_V100_HOST=127.0.0.1
 DS4_V100_PORT=18080
 DS4_V100_CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
@@ -158,6 +160,11 @@ Set `DS4_V100_CUDA_PROFILER_WINDOW=1` only under `nvprof` or Nsight tooling.
 It starts/stops the CUDA profiler around generation batches after startup
 warmup, so profiles represent the served decode path rather than appliance
 opening.
+
+`DS4_V100_CUDA_TENSOR_POOL=auto` enables a bounded scratch tensor pool for
+multi-slot serving and disables it for one-slot latency configs. The default
+cap is `2048` MiB per process; raise it only after checking V100 memory
+telemetry.
 
 Validate a config without starting the service:
 

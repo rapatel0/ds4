@@ -684,6 +684,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 094 grouped TurboMind and shared F8 default | `12.634955` generated tok/s, `11.845270` continuation tok/s at 1M/4 slots with `warmup_requests=0` | Measured | Caches TurboMind per-expert device pointer tables, batches routed TurboMind experts across active slots, and defaults `DS4_V100_BATCH_SHARED_F8=1`. Correctness remains `token_match=4/4`; generated tok/s improves `12.40%` over Sprint 093. HtoD copy count in the one-shot profiler drops from `801` to `153`, but large first-generation model-cache copies and F8 projection launches remain dominant. |
 | Sprint 095 request rendezvous and F8 cache probe | `12.597711` generated tok/s at 1M/4 slots; `17.052974` at 256K/8 slots | Measured | Adds production `DS4_V100_MICROBATCH_WAIT_US=auto`, resolving to a 50 ms coalescing window for multi-slot serving. This fixes the split-batch behavior that previously made 8-slot probes unreliable: `token_match=8/8` now passes at 256K. An opt-in F8-to-F16 arena cache is correct but flat (`12.614479` generated tok/s), so it stays experimental. Decode-window profiling remains led by F8 arena matmul `42.52%`, HtoD `31.48%`, and TurboMind GEMM `13.82%`. |
 | Sprint 096 served decode profiler window | Served HTTP batch profile: F8 arena matmul `61.64%`, TurboMind `20.15%`, HtoD `0.14%` | Measured | Extends `--cuda-profiler-window` to the HTTP appliance path and adds launcher env `DS4_V100_CUDA_PROFILER_WINDOW=1` for diagnostic runs. This proves the warmed served path is not HtoD-bound after startup warmup; the next blocker is F8 projection/shared matmul plus allocator churn (`cudaFree`/`cudaMalloc` dominate API time). |
+| Sprint 097 CUDA tensor pool default | `17.532887` generated tok/s at 1M/4 slots; `25.232220` at 256K/8 slots | Measured | Adds a bounded per-device scratch tensor pool and defaults `DS4_V100_CUDA_TENSOR_POOL=auto` on for multi-slot serving. Same-binary paired fixtures improved from `11.902776` to `16.881653` generated tok/s at 1M/4 slots and from `17.193119` to `25.212896` at 256K/8 slots. The warmed profile removes `cudaMalloc` from the request window and reduces `cudaFree` to `9.18 ms` / `37` calls; F8 arena matmul is now the clear next GPU target. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -2072,6 +2073,46 @@ GPU utilization with architectural changes, and only then compare against the
   `generated_tokens=64`, `aggregate_generated_tokens_per_second=12.634955`,
   and `aggregate_continuation_tokens_per_second=11.845270`.
 
+### Sprint 095 - Request Rendezvous And F8 Cache Probe [complete]
+
+- **Goal**: Make multi-slot serving reliably coalesce concurrent requests and
+  probe whether resident F8-to-F16 conversion helps the dense/shared path.
+- **Rationale**: Split request batches hid the real 8-slot envelope, while the
+  one-shot profile still pointed at F8 projection and copy overhead.
+- **Outcome**: `SHIP_REQUEST_RENDEZVOUS`. Added
+  `DS4_V100_MICROBATCH_WAIT_US=auto`, resolving to 50 ms for multi-slot
+  serving. Correctness remains stable at `token_match=4/4` for 1M/4-slot and
+  `token_match=8/8` for 256K/8-slot fixtures. The opt-in F8-to-F16 arena cache
+  is correct but flat, so it stays experimental.
+
+### Sprint 096 - Served Decode Profiling Window [complete]
+
+- **Goal**: Profile the warmed HTTP appliance generation path rather than
+  cold one-shot replay startup.
+- **Rationale**: HtoD traffic in earlier profiles mixed startup cache loads
+  with real served decode. Kernel work needed a profile window around timed
+  generation only.
+- **Outcome**: `SHIP_SERVED_PROFILE_WINDOW`. Added
+  `DS4_V100_CUDA_PROFILER_WINDOW=1` and request-window
+  `cudaProfilerStart/Stop` support. Served-path `nvprof` shows F8 arena matmul
+  at `61.64%`, TurboMind at `20.15%`, HtoD at only `0.14%`, and CUDA API time
+  dominated by allocator churn.
+
+### Sprint 097 - CUDA Tensor Pool Default [complete]
+
+- **Goal**: Remove allocator churn from the warmed multi-slot serving path.
+- **Rationale**: Sprint 096 showed request-window API time dominated by
+  repeated `cudaMalloc`/`cudaFree`, which does not change model math and should
+  not be paid per token.
+- **Outcome**: `SHIP_CUDA_TENSOR_POOL_DEFAULT`. Added a bounded per-device
+  scratch tensor pool and launcher controls
+  `DS4_V100_CUDA_TENSOR_POOL=auto|0|1` plus
+  `DS4_V100_CUDA_TENSOR_POOL_MAX_MIB`. Multi-slot appliance configs now resolve
+  `auto` to enabled. V100 validation reports `17.532887` generated tok/s at
+  1M/4 slots and `25.232220` at 256K/8 slots, both with full token-match
+  correctness. Warmed profiling removes `cudaMalloc` from the request window
+  and reduces `cudaFree` to `9.18 ms`.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -2329,6 +2370,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 094 grouped TurboMind and shared F8 serving. | The production appliance now caches TurboMind pointer tables, batches routed experts across active slots, and defaults shared F8 batching on. This improves the 1M/4-slot appliance soak to `12.634955` generated tok/s with correctness preserved, but GPU utilization is still low enough that the next sprint should target F8 projection kernel shape and request batching/harness determinism. | Sprint 095+ |
 | 2026-05-20 | Shipped Sprint 095 request rendezvous and F8 cache probe. | The appliance launcher now uses a production microbatch coalescing window for multi-slot serving. This keeps concurrent requests in the same tensor batch and validates the 8-slot/256K profile at `17.052974` generated tok/s with `8/8` token matches. The F8-to-F16 cache probe is correct but flat, so the next sprint should focus on F8 projection kernels and HtoD/control-copy reduction. | Sprint 096+ |
 | 2026-05-20 | Shipped Sprint 096 served decode profiler window. | The profiler can now wrap warmed HTTP generation batches after startup warmup. Served-path `nvprof` shows HtoD is only `0.14%`; the dominant GPU bucket is F8 arena matmul at `61.64%`, followed by TurboMind at `20.15%`, while CUDA API time is dominated by allocator churn. The next sprint should reduce F8 matmul launch/shape overhead and stop repeated malloc/free in the hot path. | Sprint 097+ |
+| 2026-05-20 | Shipped Sprint 097 CUDA tensor pool default. | The appliance now defaults a bounded tensor pool on for multi-slot serving. Same-binary V100 fixtures improved from `11.902776` to `16.881653` generated tok/s at 1M/4 slots and from `17.193119` to `25.212896` at 256K/8 slots; production-style `auto` runs reached `17.532887` and `25.232220`. The next sprint should focus on the remaining F8 arena matmul and `cudaMemcpy` API overhead. | Sprint 098+ |
 
 ## Open Questions
 

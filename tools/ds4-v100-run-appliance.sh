@@ -83,6 +83,8 @@ fi
 : "${DS4_V100_ASYNC_EVENT_HANDOFF:=0}"
 : "${DS4_V100_STARTUP_WARMUP:=auto}"
 : "${DS4_V100_CUDA_PROFILER_WINDOW:=0}"
+: "${DS4_V100_CUDA_TENSOR_POOL:=auto}"
+: "${DS4_V100_CUDA_TENSOR_POOL_MAX_MIB:=2048}"
 : "${DS4_V100_ENABLE_OUTPUT_HEAD_BATCH:=0}"
 : "${DS4_V100_BATCH_SHARED_F8:=1}"
 : "${DS4_V100_TURBOMIND_ROUTED_FFN:=0}"
@@ -239,6 +241,9 @@ is_uint "$DS4_V100_MTP_GPU" || fail "DS4_V100_MTP_GPU must be an integer"
 if [ "$DS4_V100_MICROBATCH_WAIT_US" != "auto" ]; then
     [ "$DS4_V100_MICROBATCH_WAIT_US" -le 1000000 ] || fail "DS4_V100_MICROBATCH_WAIT_US must be <= 1000000"
 fi
+is_uint "$DS4_V100_CUDA_TENSOR_POOL_MAX_MIB" || fail "DS4_V100_CUDA_TENSOR_POOL_MAX_MIB must be an integer"
+[ "$DS4_V100_CUDA_TENSOR_POOL_MAX_MIB" -ge 64 ] || fail "DS4_V100_CUDA_TENSOR_POOL_MAX_MIB must be >= 64"
+[ "$DS4_V100_CUDA_TENSOR_POOL_MAX_MIB" -le 8192 ] || fail "DS4_V100_CUDA_TENSOR_POOL_MAX_MIB must be <= 8192"
 [ "$DS4_V100_TOKENS" -ge 1 ] || fail "DS4_V100_TOKENS must be positive"
 [ "$DS4_V100_TOKENS" -le 64 ] || fail "DS4_V100_TOKENS must be <= 64"
 [ "$DS4_V100_MTP_TOP_K" -ge 2 ] && [ "$DS4_V100_MTP_TOP_K" -le 16 ] || fail "DS4_V100_MTP_TOP_K must be between 2 and 16"
@@ -282,6 +287,18 @@ case "$DS4_V100_CUDA_PROFILER_WINDOW" in
     0|false|off) cuda_profiler_window=0 ;;
     1|true|on) cuda_profiler_window=1 ;;
     *) fail "DS4_V100_CUDA_PROFILER_WINDOW must be 0 or 1" ;;
+esac
+case "$DS4_V100_CUDA_TENSOR_POOL" in
+    auto)
+        if [ "$DS4_V100_ACTIVE_MICROBATCH" -gt 1 ]; then
+            cuda_tensor_pool=1
+        else
+            cuda_tensor_pool=0
+        fi
+        ;;
+    0|false|off) cuda_tensor_pool=0 ;;
+    1|true|on) cuda_tensor_pool=1 ;;
+    *) fail "DS4_V100_CUDA_TENSOR_POOL must be auto, 0, or 1" ;;
 esac
 microbatch_wait_us="$DS4_V100_MICROBATCH_WAIT_US"
 case "$microbatch_wait_us" in
@@ -393,7 +410,7 @@ print_resolved() {
 }
 
 if [ "$mode" = "check" ]; then
-    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff startup_warmup=$startup_warmup cuda_profiler_window=$cuda_profiler_window batch_shared_f8=$DS4_V100_BATCH_SHARED_F8 appliance_dir=${DS4_V100_APPLIANCE_DIR:-none} turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN"
+    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff startup_warmup=$startup_warmup cuda_profiler_window=$cuda_profiler_window cuda_tensor_pool=$cuda_tensor_pool cuda_tensor_pool_max_mib=$DS4_V100_CUDA_TENSOR_POOL_MAX_MIB batch_shared_f8=$DS4_V100_BATCH_SHARED_F8 appliance_dir=${DS4_V100_APPLIANCE_DIR:-none} turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN"
     exit 0
 fi
 if [ "$mode" = "print" ]; then
@@ -424,6 +441,9 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_STARTUP_WARMUP_RESOLVED=$startup_warmup"
     echo "DS4_V100_CUDA_PROFILER_WINDOW=$DS4_V100_CUDA_PROFILER_WINDOW"
     echo "DS4_V100_CUDA_PROFILER_WINDOW_RESOLVED=$cuda_profiler_window"
+    echo "DS4_V100_CUDA_TENSOR_POOL=$DS4_V100_CUDA_TENSOR_POOL"
+    echo "DS4_V100_CUDA_TENSOR_POOL_RESOLVED=$cuda_tensor_pool"
+    echo "DS4_V100_CUDA_TENSOR_POOL_MAX_MIB=$DS4_V100_CUDA_TENSOR_POOL_MAX_MIB"
     echo "DS4_V100_ENABLE_OUTPUT_HEAD_BATCH=$DS4_V100_ENABLE_OUTPUT_HEAD_BATCH"
     echo "DS4_V100_BATCH_SHARED_F8=$DS4_V100_BATCH_SHARED_F8"
     echo "DS4_V100_TURBOMIND_ROUTED_FFN=$DS4_V100_TURBOMIND_ROUTED_FFN"
@@ -446,4 +466,6 @@ export DS4_V100_BATCH_SHARED_F8
 export DS4_V100_TURBOMIND_ROUTED_FFN
 export DS4_V100_TURBOMIND_STRICT
 export DS4_V100_TURBOMIND_LIB
+export DS4_CUDA_TENSOR_POOL="$cuda_tensor_pool"
+export DS4_CUDA_TENSOR_POOL_MAX_MIB="$DS4_V100_CUDA_TENSOR_POOL_MAX_MIB"
 exec "${cmd[@]}"

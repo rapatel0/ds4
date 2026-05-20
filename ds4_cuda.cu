@@ -44,6 +44,7 @@ enum {
 struct ds4_gpu_tensor {
     void *ptr;
     uint64_t bytes;
+    uint64_t alloc_bytes;
     int owner;
     int device;
 };
@@ -195,6 +196,7 @@ static std::mutex g_tm_api_mutex;
 static void cuda_tm_matrix_table_cache_release_all(void);
 static void cuda_f8_f16_arena_cache_release_all(void);
 static void cuda_f8_f16_arena_cache_release_arena(const ds4_gpu_arena *arena);
+static void cuda_tensor_pool_release_all(void);
 
 struct cuda_model_range {
     const void *host_base;
@@ -246,6 +248,12 @@ struct cuda_f8_f16_arena_range {
     uint64_t bytes;
 };
 
+struct cuda_tensor_pool_entry {
+    void *ptr;
+    uint64_t bytes;
+    int device;
+};
+
 static std::vector<cuda_model_range> g_model_ranges;
 static std::vector<cuda_model_arena> g_model_arenas;
 static std::unordered_map<uint64_t, size_t> g_model_range_by_offset;
@@ -254,11 +262,14 @@ static std::unordered_map<uint64_t, size_t> g_q8_f16_by_offset;
 static std::vector<cuda_q8_f32_range> g_q8_f32_ranges;
 static std::unordered_map<uint64_t, size_t> g_q8_f32_by_offset;
 static std::vector<cuda_f8_f16_arena_range> g_f8_f16_arena_ranges;
+static std::vector<cuda_tensor_pool_entry> g_tensor_pool;
 static std::mutex g_f8_f16_arena_mutex;
+static std::mutex g_tensor_pool_mutex;
 static uint64_t g_model_range_bytes;
 static uint64_t g_q8_f16_bytes;
 static uint64_t g_q8_f32_bytes;
 static uint64_t g_f8_f16_arena_bytes;
+static uint64_t g_tensor_pool_bytes;
 static int g_q8_f16_disabled_after_oom;
 static int g_q8_f16_budget_notice_printed;
 static uint64_t g_model_load_progress_next;
@@ -548,6 +559,82 @@ static int cuda_env_flag_enabled(const char *name) {
            strcmp(env, "off") != 0 &&
            strcmp(env, "Off") != 0 &&
            strcmp(env, "OFF") != 0;
+}
+
+static int cuda_tensor_pool_enabled(void) {
+    return cuda_env_flag_enabled("DS4_CUDA_TENSOR_POOL");
+}
+
+static uint64_t cuda_tensor_pool_max_bytes(void) {
+    int present = 0;
+    const uint64_t bytes = cuda_parse_mib_env("DS4_CUDA_TENSOR_POOL_MAX_MIB", &present);
+    return present ? bytes : 2048ull * 1048576ull;
+}
+
+static uint64_t cuda_tensor_pool_align_bytes(uint64_t bytes) {
+    const uint64_t align = 256ull;
+    if (bytes == 0) bytes = 1;
+    if (bytes > UINT64_MAX - (align - 1ull)) return bytes;
+    return (bytes + align - 1ull) & ~(align - 1ull);
+}
+
+static void *cuda_tensor_pool_take(uint64_t bytes, uint64_t *alloc_bytes, int *device_out) {
+    if (!cuda_tensor_pool_enabled()) return NULL;
+    int dev = 0;
+    if (cudaGetDevice(&dev) != cudaSuccess) {
+        dev = 0;
+        (void)cudaGetLastError();
+    }
+    const uint64_t need = cuda_tensor_pool_align_bytes(bytes);
+    std::lock_guard<std::mutex> lk(g_tensor_pool_mutex);
+    size_t best = SIZE_MAX;
+    uint64_t best_bytes = UINT64_MAX;
+    for (size_t i = 0; i < g_tensor_pool.size(); i++) {
+        const cuda_tensor_pool_entry &e = g_tensor_pool[i];
+        if (e.device == dev && e.bytes >= need && e.bytes < best_bytes) {
+            best = i;
+            best_bytes = e.bytes;
+        }
+    }
+    if (best == SIZE_MAX) return NULL;
+    cuda_tensor_pool_entry e = g_tensor_pool[best];
+    g_tensor_pool.erase(g_tensor_pool.begin() + best);
+    if (g_tensor_pool_bytes >= e.bytes) {
+        g_tensor_pool_bytes -= e.bytes;
+    } else {
+        g_tensor_pool_bytes = 0;
+    }
+    if (alloc_bytes) *alloc_bytes = e.bytes;
+    if (device_out) *device_out = e.device;
+    return e.ptr;
+}
+
+static int cuda_tensor_pool_put(void *ptr, uint64_t bytes, int device) {
+    if (!ptr || bytes == 0 || !cuda_tensor_pool_enabled()) return 0;
+    const uint64_t max_bytes = cuda_tensor_pool_max_bytes();
+    if (bytes > max_bytes) return 0;
+    std::lock_guard<std::mutex> lk(g_tensor_pool_mutex);
+    if (g_tensor_pool_bytes > max_bytes || bytes > max_bytes - g_tensor_pool_bytes) {
+        return 0;
+    }
+    cuda_tensor_pool_entry e = {};
+    e.ptr = ptr;
+    e.bytes = bytes;
+    e.device = device;
+    g_tensor_pool.push_back(e);
+    g_tensor_pool_bytes += bytes;
+    return 1;
+}
+
+static void cuda_tensor_pool_release_all(void) {
+    std::lock_guard<std::mutex> lk(g_tensor_pool_mutex);
+    for (const cuda_tensor_pool_entry &e : g_tensor_pool) {
+        if (!e.ptr) continue;
+        (void)cudaSetDevice(e.device);
+        (void)cudaFree(e.ptr);
+    }
+    g_tensor_pool.clear();
+    g_tensor_pool_bytes = 0;
 }
 
 static void cuda_tm_warn_once(const char *msg) {
@@ -1498,6 +1585,7 @@ extern "C" int ds4_gpu_init(void) {
 
 extern "C" void ds4_gpu_cleanup(void) {
     (void)cudaDeviceSynchronize();
+    cuda_tensor_pool_release_all();
     cuda_tm_matrix_table_cache_release_all();
     cuda_f8_f16_arena_cache_release_all();
     if (g_cublas_ready) {
@@ -1589,16 +1677,27 @@ extern "C" ds4_gpu_tensor *ds4_gpu_tensor_alloc(uint64_t bytes) {
     if (bytes == 0) bytes = 1;
     ds4_gpu_tensor *t = (ds4_gpu_tensor *)calloc(1, sizeof(*t));
     if (!t) return NULL;
-    if (!cuda_ok(cudaMalloc(&t->ptr, (size_t)bytes), "tensor alloc")) {
-        free(t);
-        return NULL;
+    uint64_t alloc_bytes = 0;
+    int device = 0;
+    void *pooled = cuda_tensor_pool_take(bytes, &alloc_bytes, &device);
+    if (pooled) {
+        t->ptr = pooled;
+        t->alloc_bytes = alloc_bytes;
+        t->device = device;
+    } else {
+        alloc_bytes = cuda_tensor_pool_align_bytes(bytes);
+        if (!cuda_ok(cudaMalloc(&t->ptr, (size_t)alloc_bytes), "tensor alloc")) {
+            free(t);
+            return NULL;
+        }
+        t->alloc_bytes = alloc_bytes;
+        if (cudaGetDevice(&t->device) != cudaSuccess) {
+            t->device = 0;
+            (void)cudaGetLastError();
+        }
     }
     t->bytes = bytes;
     t->owner = 1;
-    if (cudaGetDevice(&t->device) != cudaSuccess) {
-        t->device = 0;
-        (void)cudaGetLastError();
-    }
     return t;
 }
 
@@ -1611,6 +1710,7 @@ extern "C" ds4_gpu_tensor *ds4_gpu_tensor_alloc_managed(uint64_t bytes) {
         return NULL;
     }
     t->bytes = bytes;
+    t->alloc_bytes = bytes;
     t->owner = 1;
     if (cudaGetDevice(&t->device) != cudaSuccess) {
         t->device = 0;
@@ -1661,6 +1761,7 @@ extern "C" ds4_gpu_tensor *ds4_gpu_tensor_view(const ds4_gpu_tensor *base, uint6
     if (!t) return NULL;
     t->ptr = (char *)base->ptr + offset;
     t->bytes = bytes;
+    t->alloc_bytes = bytes;
     t->owner = 0;
     t->device = base->device;
     return t;
@@ -1670,7 +1771,10 @@ extern "C" void ds4_gpu_tensor_free(ds4_gpu_tensor *tensor) {
     if (!tensor) return;
     if (tensor->owner && tensor->ptr) {
         (void)cudaSetDevice(tensor->device);
-        (void)cudaFree(tensor->ptr);
+        const uint64_t alloc_bytes = tensor->alloc_bytes ? tensor->alloc_bytes : tensor->bytes;
+        if (!cuda_tensor_pool_put(tensor->ptr, alloc_bytes, tensor->device)) {
+            (void)cudaFree(tensor->ptr);
+        }
     }
     free(tensor);
 }
