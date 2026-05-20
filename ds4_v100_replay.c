@@ -309,6 +309,12 @@ static void counters_add_report(ds4_v100_replay_counters *c,
     }
     c->arena_bytes[stage] = r->arena_bytes;
     c->layers_executed += r->layers_executed;
+    c->stage_hc_attn_ms[stage] += r->timing_hc_attn_ms;
+    c->stage_attention_ms[stage] += r->timing_attention_ms;
+    c->stage_hc_ffn_ms[stage] += r->timing_hc_ffn_ms;
+    c->stage_ffn_ms[stage] += r->timing_ffn_ms;
+    c->stage_hc_final_ms[stage] += r->timing_hc_final_ms;
+    c->stage_profile_total_ms[stage] += r->timing_total_ms;
 }
 
 static int replay_feed_token(ds4_v100_replay *rt,

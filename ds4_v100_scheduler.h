@@ -47,6 +47,12 @@ typedef struct {
     uint64_t uploaded_tensors;
     uint64_t uploaded_bytes;
     ds4_v100_layer_execute_report last_layer_report;
+    double timing_hc_attn_ms;
+    double timing_attention_ms;
+    double timing_hc_ffn_ms;
+    double timing_ffn_ms;
+    double timing_hc_final_ms;
+    double timing_total_ms;
 } ds4_v100_stage_scheduler_report;
 
 typedef struct {

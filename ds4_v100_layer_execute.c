@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static int exec_error(char *err, size_t errlen, const char *fmt, ...) {
     if (err && errlen) {
@@ -280,6 +281,23 @@ static bool env_flag_enabled(const char *name) {
            strcmp(v, "FALSE") != 0 &&
            strcmp(v, "off") != 0 &&
            strcmp(v, "OFF") != 0;
+}
+
+static double monotonic_ms(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0.0;
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
+}
+
+static int profile_mark(double *last_ms, double *bucket_ms) {
+    if (!last_ms || !bucket_ms) return 1;
+    if (!ds4_gpu_synchronize()) return 0;
+    const double now = monotonic_ms();
+    if (*last_ms > 0.0 && now >= *last_ms) {
+        *bucket_ms += now - *last_ms;
+    }
+    *last_ms = now;
+    return 1;
 }
 
 static uint32_t layer_ratio(const ds4_v100_layer_state *state) {
@@ -1770,6 +1788,21 @@ int ds4_v100_layer_execute_hc_decode_batch(
         }
     }
 
+    const bool profile = env_flag_enabled("DS4_V100_PROFILE_DECODE");
+    double profile_last_ms = 0.0;
+    double timing_hc_attn_ms = 0.0;
+    double timing_attention_ms = 0.0;
+    double timing_hc_ffn_ms = 0.0;
+    double timing_ffn_ms = 0.0;
+    double timing_hc_final_ms = 0.0;
+    if (profile) {
+        if (!ds4_gpu_synchronize()) {
+            exec_error(err, errlen, "HC batch profile start sync failed");
+            goto done;
+        }
+        profile_last_ms = monotonic_ms();
+    }
+
     for (uint32_t slot = 0; slot < n_slots; slot++) {
         if (!ds4_gpu_rms_norm_plain_tensor(hc_norm[slot],
                                            hidden_hc[slot],
@@ -1794,9 +1827,27 @@ int ds4_v100_layer_execute_hc_decode_batch(
                                                   hidden_n,
                                                   DS4_V100_N_HC,
                                                   DS4_V100_HC_SINKHORN_ITERS,
-                                                  DS4_V100_RMS_EPS) ||
-            execute_attention_output(state, &cfgs[slot], attn_cur[slot], attn_out[slot], err, errlen) ||
-            !ds4_gpu_hc_expand_split_tensor(after_attn_hc[slot],
+                                                  DS4_V100_RMS_EPS)) {
+            if (err && err[0] == '\0') exec_error(err, errlen, "HC batch attention prep failed");
+            goto done;
+        }
+        if (profile && !profile_mark(&profile_last_ms, &timing_hc_attn_ms)) {
+            exec_error(err, errlen, "HC batch attention prep profile sync failed");
+            goto done;
+        }
+        if (execute_attention_output(state,
+                                     &cfgs[slot],
+                                     attn_cur[slot],
+                                     attn_out[slot],
+                                     err,
+                                     errlen)) {
+            goto done;
+        }
+        if (profile && !profile_mark(&profile_last_ms, &timing_attention_ms)) {
+            exec_error(err, errlen, "HC batch attention profile sync failed");
+            goto done;
+        }
+        if (!ds4_gpu_hc_expand_split_tensor(after_attn_hc[slot],
                                             attn_out[slot],
                                             hidden_hc[slot],
                                             attn_split[slot],
@@ -1833,7 +1884,11 @@ int ds4_v100_layer_execute_hc_decode_batch(
                                             state->ffn_norm.source_offset,
                                             hidden_n,
                                             DS4_V100_RMS_EPS)) {
-            if (err && err[0] == '\0') exec_error(err, errlen, "HC batch pre-FFN sequence failed");
+            if (err && err[0] == '\0') exec_error(err, errlen, "HC batch FFN prep failed");
+            goto done;
+        }
+        if (profile && !profile_mark(&profile_last_ms, &timing_hc_ffn_ms)) {
+            exec_error(err, errlen, "HC batch FFN prep profile sync failed");
             goto done;
         }
     }
@@ -1848,6 +1903,10 @@ int ds4_v100_layer_execute_hc_decode_batch(
                                 errlen)) {
         goto done;
     }
+    if (profile && !profile_mark(&profile_last_ms, &timing_ffn_ms)) {
+        exec_error(err, errlen, "HC batch FFN profile sync failed");
+        goto done;
+    }
 
     for (uint32_t slot = 0; slot < n_slots; slot++) {
         if (!ds4_gpu_hc_expand_split_tensor(next_hidden_hc[slot],
@@ -1858,6 +1917,25 @@ int ds4_v100_layer_execute_hc_decode_batch(
                                             DS4_V100_N_HC)) {
             exec_error(err, errlen, "HC batch final expansion failed");
             goto done;
+        }
+    }
+    if (profile && !profile_mark(&profile_last_ms, &timing_hc_final_ms)) {
+        exec_error(err, errlen, "HC batch final profile sync failed");
+        goto done;
+    }
+    if (reports && profile) {
+        const double timing_total_ms = timing_hc_attn_ms +
+                                       timing_attention_ms +
+                                       timing_hc_ffn_ms +
+                                       timing_ffn_ms +
+                                       timing_hc_final_ms;
+        for (uint32_t slot = 0; slot < n_slots; slot++) {
+            reports[slot].timing_hc_attn_ms = timing_hc_attn_ms;
+            reports[slot].timing_attention_ms = timing_attention_ms;
+            reports[slot].timing_hc_ffn_ms = timing_hc_ffn_ms;
+            reports[slot].timing_ffn_ms = timing_ffn_ms;
+            reports[slot].timing_hc_final_ms = timing_hc_final_ms;
+            reports[slot].timing_total_ms = timing_total_ms;
         }
     }
 

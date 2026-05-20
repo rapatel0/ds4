@@ -788,6 +788,12 @@ int ds4_v100_stage_scheduler_decode_hc_batch(
     ds4_gpu_tensor *cur[DS4_V100_SCHED_MAX_SLOTS];
     ds4_gpu_tensor *next[DS4_V100_SCHED_MAX_SLOTS];
     ds4_v100_layer_execute_report last[DS4_V100_SCHED_MAX_SLOTS];
+    double timing_hc_attn_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
+    double timing_attention_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
+    double timing_hc_ffn_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
+    double timing_ffn_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
+    double timing_hc_final_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
+    double timing_total_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
     memset(last, 0, sizeof(last));
     for (uint32_t slot = 0; slot < n_slots; slot++) {
         if (!sched->cur_hc[slot]) {
@@ -850,6 +856,12 @@ int ds4_v100_stage_scheduler_decode_hc_batch(
             }
         }
         for (uint32_t slot = 0; slot < n_slots; slot++) {
+            timing_hc_attn_ms[slot] += last[slot].timing_hc_attn_ms;
+            timing_attention_ms[slot] += last[slot].timing_attention_ms;
+            timing_hc_ffn_ms[slot] += last[slot].timing_hc_ffn_ms;
+            timing_ffn_ms[slot] += last[slot].timing_ffn_ms;
+            timing_hc_final_ms[slot] += last[slot].timing_hc_final_ms;
+            timing_total_ms[slot] += last[slot].timing_total_ms;
             ds4_gpu_tensor *tmp = cur[slot];
             cur[slot] = next[slot];
             next[slot] = tmp;
@@ -872,6 +884,12 @@ int ds4_v100_stage_scheduler_decode_hc_batch(
             r->uploaded_tensors = sched->uploaded_tensors;
             r->uploaded_bytes = sched->uploaded_bytes;
             r->last_layer_report = last[slot];
+            r->timing_hc_attn_ms = timing_hc_attn_ms[slot];
+            r->timing_attention_ms = timing_attention_ms[slot];
+            r->timing_hc_ffn_ms = timing_hc_ffn_ms[slot];
+            r->timing_ffn_ms = timing_ffn_ms[slot];
+            r->timing_hc_final_ms = timing_hc_final_ms[slot];
+            r->timing_total_ms = timing_total_ms[slot];
         }
     }
     return 0;

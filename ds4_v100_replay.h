@@ -47,6 +47,12 @@ typedef struct {
     double prompt_replay_ms;
     double continuation_decode_ms;
     double stage_decode_ms[DS4_V100_EXPECTED_GPUS];
+    double stage_hc_attn_ms[DS4_V100_EXPECTED_GPUS];
+    double stage_attention_ms[DS4_V100_EXPECTED_GPUS];
+    double stage_hc_ffn_ms[DS4_V100_EXPECTED_GPUS];
+    double stage_ffn_ms[DS4_V100_EXPECTED_GPUS];
+    double stage_hc_final_ms[DS4_V100_EXPECTED_GPUS];
+    double stage_profile_total_ms[DS4_V100_EXPECTED_GPUS];
     double handoff_ms[DS4_V100_EXPECTED_GPUS - 1];
     double output_head_ms;
     double token_text_ms;

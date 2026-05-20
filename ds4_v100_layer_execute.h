@@ -135,6 +135,12 @@ typedef struct {
     int32_t selected_experts[6];
     float route_weights[6];
     uint32_t routes;
+    double timing_hc_attn_ms;
+    double timing_attention_ms;
+    double timing_hc_ffn_ms;
+    double timing_ffn_ms;
+    double timing_hc_final_ms;
+    double timing_total_ms;
 } ds4_v100_layer_execute_report;
 
 int ds4_v100_layer_execute_decode(

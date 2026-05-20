@@ -1009,7 +1009,37 @@ static void print_json_fp(FILE *fp,
         if (i) fprintf(fp, ",");
         fprintf(fp, "%.3f", c->stage_decode_ms[i]);
     }
-    fprintf(fp, "],\"handoff\":[");
+    fprintf(fp, "],\"stage_profile\":{\"hc_attn\":[");
+    for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
+        if (i) fprintf(fp, ",");
+        fprintf(fp, "%.3f", c->stage_hc_attn_ms[i]);
+    }
+    fprintf(fp, "],\"attention\":[");
+    for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
+        if (i) fprintf(fp, ",");
+        fprintf(fp, "%.3f", c->stage_attention_ms[i]);
+    }
+    fprintf(fp, "],\"hc_ffn\":[");
+    for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
+        if (i) fprintf(fp, ",");
+        fprintf(fp, "%.3f", c->stage_hc_ffn_ms[i]);
+    }
+    fprintf(fp, "],\"ffn\":[");
+    for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
+        if (i) fprintf(fp, ",");
+        fprintf(fp, "%.3f", c->stage_ffn_ms[i]);
+    }
+    fprintf(fp, "],\"hc_final\":[");
+    for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
+        if (i) fprintf(fp, ",");
+        fprintf(fp, "%.3f", c->stage_hc_final_ms[i]);
+    }
+    fprintf(fp, "],\"total\":[");
+    for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
+        if (i) fprintf(fp, ",");
+        fprintf(fp, "%.3f", c->stage_profile_total_ms[i]);
+    }
+    fprintf(fp, "]},\"handoff\":[");
     for (int i = 0; i < DS4_V100_EXPECTED_GPUS - 1; i++) {
         if (i) fprintf(fp, ",");
         fprintf(fp, "%.3f", c->handoff_ms[i]);
