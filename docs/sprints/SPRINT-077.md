@@ -2,8 +2,9 @@
 
 ## Status
 
-In progress. Local implementation checkpoint is ready to preserve; V100 cluster
-build, correctness, and throughput validation remain.
+Complete. The batched output-head primitive is correct and opt-in, but it is
+disabled by default because paired V100 throughput evidence showed a regression
+against the Sprint 076 per-slot device top-1 path.
 
 ## Overview
 
@@ -61,7 +62,7 @@ preserving the full-logit host path for diagnostics and rollback.
    - preserve per-token text decoding and counters.
 4. Benchmark:
    - baseline default from Sprint 076 behavior with batch selection disabled;
-   - new batched output-head path enabled by default;
+   - candidate batched output-head path with `DS4_V100_ENABLE_OUTPUT_HEAD_BATCH=1`;
    - same 1M context, 4 slots, 16 tokens/request, 4 measured requests,
      per-step async fixture.
 
@@ -69,15 +70,29 @@ preserving the full-logit host path for diagnostics and rollback.
 
 - [x] Local compile passes for changed C/CUDA-facing objects where possible.
 - [x] `git diff --check` passes.
-- [ ] V100 CUDA build passes for replay and relevant smokes.
-- [ ] `cuda_v100_bounded_logits_smoke` passes on V100.
-- [ ] V100 selected-token smoke passes for default and output-head fallback.
-- [ ] Sustained V100 A/B at `ctx=1048576`, `slots=4`, `tokens=16`,
+- [x] V100 CUDA build passes for replay and relevant smokes.
+- [x] `cuda_v100_bounded_logits_smoke` passes on V100.
+- [x] V100 selected-token smoke passes for default and output-head fallback.
+- [x] Sustained V100 A/B at `ctx=1048576`, `slots=4`, `tokens=16`,
   `requests=4`, `async_pipeline_mode=per-step` records generated tok/s,
   continuation tok/s, output-head ms, token matches, and GPU utilization.
-- [ ] Sprint report records whether batched output-head remains default.
-- [ ] Vision document is updated.
-- [ ] Artifacts are committed.
+- [x] Sprint report records whether batched output-head remains default.
+- [x] Vision document is updated.
+- [x] Artifacts are committed.
+
+## Results
+
+| Path | Generated tok/s | Continuation tok/s | Avg latency ms | Output-head ms | Avg GPU util | Token match |
+|---|---:|---:|---:|---:|---:|---:|
+| Batched output-head opt-in | `8.616841` | `8.078288` | `7425.525` | `139.750` | `18.269%` | `4/4` |
+| Per-slot device top-1 control | `9.028544` | `8.464260` | `7086.929` | `135.080` | `19.855%` | `4/4` |
+| Post-patch default | `9.011829` | `8.448590` | `7099.939` | `135.402` | `19.823%` | `4/4` |
+
+The batched path is correct, but it regressed generated/continuation tok/s by
+`4.56%`, increased output-head timing by `3.46%`, and increased average latency
+by `4.78%` relative to the paired per-slot control. It therefore remains
+available only with `DS4_V100_ENABLE_OUTPUT_HEAD_BATCH=1`; default serving stays
+on the Sprint 076 per-slot parallel device top-1 selector.
 
 ## Decision Rule
 

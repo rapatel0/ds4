@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-20
-last_updated_by: vision
-revision: 88
+last_updated_by: codex
+revision: 89
 ---
 
 # Vision: DS4 V100 Appliance
@@ -492,6 +492,12 @@ optimized V100 low-bit expert kernels in the actual hot path.
   `324.953 ms` to `134.510 ms`, so greedy `k == 1` output selection now uses
   the device top-1 path by default. `DS4_V100_DISABLE_OUTPUT_HEAD_FASTPATH=1`
   remains the rollback path.
+- Sprint 077 tested batching output-head selection across active slots. The
+  primitive is correct and opt-in, but the paired V100 run regressed generated
+  tok/s from `9.028544` to `8.616841` and output-head timing from `135.080 ms`
+  to `139.750 ms`, so practical serving keeps the Sprint 076 per-slot device
+  top-1 default. `DS4_V100_ENABLE_OUTPUT_HEAD_BATCH=1` is now an experiment
+  switch, not a production default.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -559,6 +565,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 074 async HC handoff | `8.74` generated tok/s at 1M/4 slots | Measured | Queued peer handoff is correct and improves per-step throughput by `1.54%`, but remains below the default-change threshold. Keep opt-in and pursue explicit stream/event handoff or kernel-side work. |
 | Sprint 075 output-head top-1 candidate | `8.70` generated tok/s at 1M/4 slots | Measured | Device top-1 is correct but not default-worthy: generated tok/s improved only `0.44%` while output-head timing regressed `22.33%` (`423.818 ms` vs `346.461 ms`). Keep it opt-in and either build a real parallel reducer or return to larger stage/kernel costs. |
 | Sprint 076 parallel output-head top-1 | `9.03` generated tok/s at 1M/4 slots | Measured | Parallel device top-1 clears the default-change gate: generated tok/s improves `4.33%`, continuation tok/s improves `4.33%`, and output-head timing drops `58.61%` (`134.510 ms` vs `324.953 ms`). Greedy `k == 1` now defaults to device top-1 with an env rollback. |
+| Sprint 077 batched output-head selection | `9.01` generated tok/s default, `8.62` with batch opt-in at 1M/4 slots | Measured | Batched row projection/top-1 is correct but slower than the per-slot device top-1 control: generated tok/s regressed `4.56%` and output-head timing rose `3.46%` (`139.750 ms` vs `135.080 ms`). Keep `DS4_V100_ENABLE_OUTPUT_HEAD_BATCH=1` opt-in and pivot back to stage/kernel costs. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -1650,6 +1657,23 @@ GPU utilization with architectural changes, and only then compare against the
   `134.510 ms`, so greedy `k == 1` selection now defaults to device top-1.
   `DS4_V100_DISABLE_OUTPUT_HEAD_FASTPATH=1` remains the fallback.
 
+### Sprint 077 - Batched Output-Head Selection [complete]
+
+- **Goal**: Batch greedy output-head selection across active slots by running
+  HC collapse, output norm, BF16 vocabulary projection, and top-1 as row-major
+  slot batches on gpu7.
+- **Rationale**: Sprint 076 made device top-1 fast enough to become the
+  default, but replay still paid the output-head sequence once per active slot.
+  Batching the output-head pass tested whether the remaining selector time was
+  a useful multi-slot throughput lever.
+- **Outcome**: `SHIP_OPT_IN_ONLY`. Added row-batched BF16 output projection,
+  row-batched F32 top-1, scheduler batch scratch, and replay batch selection.
+  V100 evidence proved correctness, but the 1M/4-slot fixture regressed
+  generated tok/s from `9.028544` to `8.616841`, continuation tok/s from
+  `8.464260` to `8.078288`, and output-head timing from `135.080 ms` to
+  `139.750 ms`. Default serving stays on the Sprint 076 per-slot device top-1
+  path; `DS4_V100_ENABLE_OUTPUT_HEAD_BATCH=1` is retained only for experiments.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -1887,6 +1911,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 074 async HC handoff. | Queued default-stream peer handoff is correct and slightly faster, but the gain is too small to change the appliance default. The next scheduling sprint should use explicit CUDA streams/events, or the roadmap should pivot to larger kernel-side work. | Sprint 075+ |
 | 2026-05-20 | Shipped Sprint 075 output-head top-1 probe. | The device top-1 candidate is correct but slower in output-head timing because the safe serial CUDA scan is worse than the existing host scan/readback. Keep the primitive opt-in and pursue a real parallel reducer, batched output-head selection, or larger stage/kernel work. | Sprint 076+ |
 | 2026-05-20 | Shipped Sprint 076 parallel output-head top-1. | Replacing the serial device scan with a deterministic parallel reducer produced a real default-worthy gain and removed most output-head selection time. The next sprint should move to a larger remaining bucket: stage synchronization/stream events, batched output-head projection, or routed MoE kernel occupancy. | Sprint 077+ |
+| 2026-05-20 | Shipped Sprint 077 batched output-head selection as opt-in only. | Row-batched output projection/top-1 is correct, but it is slower than the existing per-slot parallel top-1 path at 1M/4 slots. Keep output-head batching off by default and pivot away from output selection toward stage stream/event handoff, kernel-side scheduling, or routed MoE occupancy. | Sprint 078+ |
 
 ## Open Questions
 

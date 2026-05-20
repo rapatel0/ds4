@@ -1695,7 +1695,7 @@ int ds4_v100_replay_generate_batch(ds4_v100_replay *rt,
     ds4_v100_replay_counters *c = counters ? counters : &local;
     replay_init_counters(rt, 0, c);
 
-    replay_batch_slot_plan plan[DS4_V100_SCHED_MAX_SLOTS];
+    replay_batch_slot_plan plan[DS4_V100_SCHED_MAX_SLOTS] = {0};
     uint32_t max_prompt_len = 0;
     uint32_t total_prompt_len = 0;
     for (uint32_t i = 0; i < n_prompts; i++) {

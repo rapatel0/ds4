@@ -1424,9 +1424,18 @@ static bool output_head_fastpath_enabled(void) {
 }
 
 static bool output_head_batch_enabled(void) {
-    const char *v = getenv("DS4_V100_DISABLE_OUTPUT_HEAD_BATCH");
-    if (!v || !v[0]) return true;
-    return strcmp(v, "0") == 0 || strcmp(v, "false") == 0 || strcmp(v, "FALSE") == 0;
+    const char *disable = getenv("DS4_V100_DISABLE_OUTPUT_HEAD_BATCH");
+    if (disable && disable[0] &&
+        strcmp(disable, "0") != 0 &&
+        strcmp(disable, "false") != 0 &&
+        strcmp(disable, "FALSE") != 0) {
+        return false;
+    }
+    const char *enable = getenv("DS4_V100_ENABLE_OUTPUT_HEAD_BATCH");
+    return enable && enable[0] &&
+        strcmp(enable, "0") != 0 &&
+        strcmp(enable, "false") != 0 &&
+        strcmp(enable, "FALSE") != 0;
 }
 
 static int ensure_output_head_scratch(ds4_v100_stage_scheduler *sched,
