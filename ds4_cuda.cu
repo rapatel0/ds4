@@ -68,6 +68,20 @@ struct ds4_gpu_arena {
 };
 
 typedef struct {
+    uint64_t weight_offset;
+    uint64_t scale_offset;
+    uint64_t weight_bytes_per_expert;
+    uint64_t scale_bytes_per_expert;
+    uint32_t n;
+    uint32_t k;
+    uint32_t experts_packed;
+    uint32_t experts_total;
+    int k_pack;
+    int weight_stride;
+    int scale_stride;
+} ds4_gpu_turbomind_mxfp4_matrix_view;
+
+typedef struct {
     uint64_t arena_offset;
     uint64_t byte_length;
     uint32_t rows;
@@ -3438,6 +3452,78 @@ static void cuda_tm_matrix_pack_free(cuda_tm_matrix_pack *p) {
     memset(p, 0, sizeof(*p));
 }
 
+static void cuda_tm_matrix_pack_table_free(cuda_tm_matrix_pack *p) {
+    if (!p) return;
+    if (p->d_scales) (void)cudaFree(p->d_scales);
+    if (p->d_weights) (void)cudaFree(p->d_weights);
+    memset(p, 0, sizeof(*p));
+}
+
+static int cuda_tm_matrix_pack_from_arena(
+        cuda_tm_matrix_pack *out,
+        const ds4_gpu_arena *arena,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *view,
+        uint32_t n_total_experts,
+        const char *label) {
+    if (!out || !arena || !arena->ptr || !view ||
+        n_total_experts == 0 ||
+        view->experts_packed < n_total_experts ||
+        view->weight_bytes_per_expert == 0 ||
+        view->scale_bytes_per_expert == 0) {
+        return 0;
+    }
+    memset(out, 0, sizeof(*out));
+    const uint64_t weight_total =
+        (uint64_t)n_total_experts * view->weight_bytes_per_expert;
+    const uint64_t scale_total =
+        (uint64_t)n_total_experts * view->scale_bytes_per_expert;
+    if (!cuda_arena_range_ok(arena, view->weight_offset, weight_total) ||
+        !cuda_arena_range_ok(arena, view->scale_offset, scale_total)) {
+        fprintf(stderr,
+                "ds4: TurboMind packed %s span outside arena\n",
+                label ? label : "matrix");
+        return 0;
+    }
+    std::vector<cuda_tm_strided_ptr> h_weights(n_total_experts);
+    std::vector<cuda_tm_strided_ptr> h_scales(n_total_experts);
+    for (uint32_t expert = 0; expert < n_total_experts; expert++) {
+        h_weights[expert].p =
+            (uint8_t *)arena->ptr + view->weight_offset +
+            (uint64_t)expert * view->weight_bytes_per_expert;
+        h_weights[expert].stride = view->weight_stride;
+        h_weights[expert].pad = 0;
+        h_scales[expert].p =
+            (uint8_t *)arena->ptr + view->scale_offset +
+            (uint64_t)expert * view->scale_bytes_per_expert;
+        h_scales[expert].stride = view->scale_stride;
+        h_scales[expert].pad = 0;
+    }
+    if (!cuda_ok(cudaMalloc(&out->d_weights,
+                            (size_t)n_total_experts * sizeof(cuda_tm_strided_ptr)),
+                 "turbomind packed weight table alloc") ||
+        !cuda_ok(cudaMalloc(&out->d_scales,
+                            (size_t)n_total_experts * sizeof(cuda_tm_strided_ptr)),
+                 "turbomind packed scale table alloc") ||
+        !cuda_ok(cudaMemcpy(out->d_weights,
+                            h_weights.data(),
+                            (size_t)n_total_experts * sizeof(cuda_tm_strided_ptr),
+                            cudaMemcpyHostToDevice),
+                 "turbomind packed weight table upload") ||
+        !cuda_ok(cudaMemcpy(out->d_scales,
+                            h_scales.data(),
+                            (size_t)n_total_experts * sizeof(cuda_tm_strided_ptr),
+                            cudaMemcpyHostToDevice),
+                 "turbomind packed scale table upload")) {
+        cuda_tm_matrix_pack_table_free(out);
+        return 0;
+    }
+    out->weight_bytes = (size_t)view->weight_bytes_per_expert;
+    out->scale_bytes = (size_t)view->scale_bytes_per_expert;
+    out->k_pack = view->k_pack;
+    out->experts = n_total_experts;
+    return 1;
+}
+
 static int cuda_tm_pack_matrix(
         cuda_tm_matrix_pack *out,
         const uint8_t *src_base,
@@ -3774,6 +3860,187 @@ static int cuda_tm_routed_mxfp4_transient(
         hidden,
         total_routes);
     return cuda_ok(cudaGetLastError(), "turbomind down scatter sum launch");
+}
+
+extern "C" int ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_f32(
+        const ds4_gpu_arena *arena,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *gate,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *up,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *down,
+        uint32_t hidden,
+        uint32_t mid,
+        uint32_t n_total_experts,
+        const ds4_gpu_tensor *selected_i32,
+        const ds4_gpu_tensor *weights_f32,
+        uint32_t n_routes,
+        const ds4_gpu_tensor *x_f32,
+        uint32_t n_tokens,
+        ds4_gpu_tensor *out_f32) {
+    if (!cuda_tm_load_api()) return 1;
+    if (!arena || !arena->valid || !arena->ptr || !gate || !up || !down ||
+        !selected_i32 || !selected_i32->ptr || !weights_f32 || !weights_f32->ptr ||
+        !x_f32 || !x_f32->ptr || !out_f32 || !out_f32->ptr ||
+        hidden == 0 || mid == 0 || n_total_experts == 0 || n_routes == 0 ||
+        n_tokens == 0) {
+        return 1;
+    }
+    if (gate->n != mid || gate->k != hidden ||
+        up->n != mid || up->k != hidden ||
+        down->n != hidden || down->k != mid ||
+        gate->experts_packed < n_total_experts ||
+        up->experts_packed < n_total_experts ||
+        down->experts_packed < n_total_experts) {
+        return 1;
+    }
+    const uint32_t total_routes = n_tokens * n_routes;
+    if (total_routes == 0 || total_routes > INT_MAX ||
+        n_total_experts > INT_MAX || hidden > INT_MAX || mid > INT_MAX) {
+        return 1;
+    }
+    if (selected_i32->bytes < (uint64_t)n_tokens * n_routes * sizeof(int32_t) ||
+        weights_f32->bytes < (uint64_t)n_tokens * n_routes * sizeof(float) ||
+        x_f32->bytes < (uint64_t)n_tokens * hidden * sizeof(float) ||
+        out_f32->bytes < (uint64_t)n_tokens * hidden * sizeof(float)) {
+        return 1;
+    }
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "turbomind packed routed set device")) return 1;
+    if (g_tm_api.init(arena->gpu) != 0) {
+        cuda_tm_warn_once("ggml_turbomind_init failed");
+        return 1;
+    }
+
+    uint64_t scratch_bytes = 0;
+    const uint64_t counts_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
+    scratch_bytes += (uint64_t)n_total_experts * sizeof(int);
+    const uint64_t cursors_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
+    scratch_bytes += (uint64_t)n_total_experts * sizeof(int);
+    const uint64_t offsets_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
+    scratch_bytes += (uint64_t)(n_total_experts + 1u) * sizeof(int);
+    const uint64_t sorted_pairs_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
+    scratch_bytes += (uint64_t)total_routes * sizeof(int);
+    const uint64_t sorted_weights_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
+    scratch_bytes += (uint64_t)total_routes * sizeof(float);
+    const uint64_t bad_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
+    scratch_bytes += sizeof(int);
+    const uint64_t a_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
+    scratch_bytes += (uint64_t)total_routes * hidden * sizeof(__half);
+    const uint64_t gate_out_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
+    scratch_bytes += (uint64_t)total_routes * mid * sizeof(__half);
+    const uint64_t up_out_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
+    scratch_bytes += (uint64_t)total_routes * mid * sizeof(__half);
+    const uint64_t mid_half_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
+    scratch_bytes += (uint64_t)total_routes * mid * sizeof(__half);
+    const uint64_t down_routes_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
+    scratch_bytes += (uint64_t)total_routes * hidden * sizeof(__half);
+    scratch_bytes = cuda_tm_align16(scratch_bytes);
+
+    uint8_t *scratch = (uint8_t *)cuda_tmp_alloc(scratch_bytes, "turbomind packed routed FFN scratch");
+    if (!scratch) return 1;
+    int *counts = (int *)(scratch + counts_off);
+    int *cursors = (int *)(scratch + cursors_off);
+    int *offsets = (int *)(scratch + offsets_off);
+    int *sorted_pairs = (int *)(scratch + sorted_pairs_off);
+    float *sorted_weights = (float *)(scratch + sorted_weights_off);
+    int *bad = (int *)(scratch + bad_off);
+    __half *a_half = (__half *)(scratch + a_off);
+    __half *gate_out = (__half *)(scratch + gate_out_off);
+    __half *up_out = (__half *)(scratch + up_out_off);
+    __half *mid_half = (__half *)(scratch + mid_half_off);
+    __half *down_routes = (__half *)(scratch + down_routes_off);
+
+    if (!cuda_ok(cudaMemset(counts, 0, (size_t)n_total_experts * sizeof(int)),
+                 "turbomind packed route counts clear") ||
+        !cuda_ok(cudaMemset(bad, 0, sizeof(int)), "turbomind packed bad flag clear")) {
+        return 1;
+    }
+    tm_count_routes_kernel<<<(total_routes + 255u) / 256u, 256>>>(
+        counts,
+        bad,
+        (const int32_t *)selected_i32->ptr,
+        total_routes,
+        n_total_experts);
+    if (!cuda_ok(cudaGetLastError(), "turbomind packed count routes launch")) return 1;
+    tm_prefix_offsets_kernel<<<1, 1>>>(offsets, cursors, counts, n_total_experts);
+    if (!cuda_ok(cudaGetLastError(), "turbomind packed prefix routes launch")) return 1;
+    tm_scatter_routes_kernel<<<(total_routes + 255u) / 256u, 256>>>(
+        sorted_pairs,
+        sorted_weights,
+        bad,
+        cursors,
+        (const int32_t *)selected_i32->ptr,
+        (const float *)weights_f32->ptr,
+        total_routes,
+        n_total_experts);
+    if (!cuda_ok(cudaGetLastError(), "turbomind packed scatter routes launch")) return 1;
+    int h_bad = 0;
+    if (!cuda_ok(cudaMemcpy(&h_bad, bad, sizeof(h_bad), cudaMemcpyDeviceToHost),
+                 "turbomind packed route validation read")) {
+        return 1;
+    }
+    if (h_bad) return 1;
+
+    tm_gather_f32_to_f16_kernel<<<((uint64_t)total_routes * hidden + 255u) / 256u, 256>>>(
+        a_half,
+        (const float *)x_f32->ptr,
+        nullptr,
+        sorted_pairs,
+        n_routes,
+        hidden,
+        total_routes);
+    if (!cuda_ok(cudaGetLastError(), "turbomind packed gather activations launch")) return 1;
+
+    cuda_tm_matrix_pack gate_pack = {};
+    cuda_tm_matrix_pack up_pack = {};
+    cuda_tm_matrix_pack down_pack = {};
+    if (!cuda_tm_matrix_pack_from_arena(&gate_pack, arena, gate, n_total_experts, "gate") ||
+        !cuda_tm_matrix_pack_from_arena(&up_pack, arena, up, n_total_experts, "up") ||
+        !cuda_tm_matrix_pack_from_arena(&down_pack, arena, down, n_total_experts, "down")) {
+        cuda_tm_matrix_pack_table_free(&gate_pack);
+        cuda_tm_matrix_pack_table_free(&up_pack);
+        cuda_tm_matrix_pack_table_free(&down_pack);
+        return 1;
+    }
+    int ok = cuda_tm_grouped_matmul(
+        a_half, offsets, &gate_pack, n_total_experts, (int)mid, (int)hidden, gate_out, "packed gate");
+    if (ok) {
+        ok = cuda_tm_grouped_matmul(
+            a_half, offsets, &up_pack, n_total_experts, (int)mid, (int)hidden, up_out, "packed up");
+    }
+    if (ok) {
+        tm_swiglu_half_kernel<<<((uint64_t)total_routes * mid + 255u) / 256u, 256>>>(
+            mid_half,
+            gate_out,
+            up_out,
+            sorted_weights,
+            total_routes,
+            mid,
+            10.0f);
+        ok = cuda_ok(cudaGetLastError(), "turbomind packed swiglu launch");
+    }
+    if (ok) {
+        ok = cuda_tm_grouped_matmul(
+            mid_half, offsets, &down_pack, n_total_experts, (int)hidden, (int)mid,
+            down_routes, "packed down");
+    }
+    cuda_tm_matrix_pack_table_free(&down_pack);
+    cuda_tm_matrix_pack_table_free(&up_pack);
+    cuda_tm_matrix_pack_table_free(&gate_pack);
+    if (!ok) return 1;
+
+    if (!cuda_ok(cudaMemset(out_f32->ptr,
+                            0,
+                            (size_t)n_tokens * hidden * sizeof(float)),
+                 "turbomind packed output clear")) {
+        return 1;
+    }
+    tm_scatter_sum_half_to_f32_kernel<<<((uint64_t)total_routes * hidden + 255u) / 256u, 256>>>(
+        (float *)out_f32->ptr,
+        down_routes,
+        sorted_pairs,
+        n_routes,
+        hidden,
+        total_routes);
+    return cuda_ok(cudaGetLastError(), "turbomind packed down scatter sum launch") ? 0 : 1;
 }
 
 extern "C" int ds4_gpu_arena_open(ds4_gpu_arena **out, int gpu, uint64_t bytes) {

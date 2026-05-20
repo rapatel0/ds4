@@ -169,9 +169,11 @@ static int split_tabs(char *line, char **fields, int n_fields) {
 static bool valid_sidecar_name(const char *name, int owning_gpu) {
     if (!name || !*name) return false;
     if (strchr(name, '/') || strchr(name, '\\')) return false;
-    char expect[32];
-    snprintf(expect, sizeof(expect), "gpu%d.turbomind", owning_gpu);
-    return strcmp(name, expect) == 0;
+    char expect_tm[32];
+    char expect_weights[32];
+    snprintf(expect_tm, sizeof(expect_tm), "gpu%d.turbomind", owning_gpu);
+    snprintf(expect_weights, sizeof(expect_weights), "gpu%d.weights", owning_gpu);
+    return strcmp(name, expect_tm) == 0 || strcmp(name, expect_weights) == 0;
 }
 
 static int tm_append(ds4_tm_pack *pack, const ds4_tm_pack_entry *entry,

@@ -7,6 +7,9 @@
 /ds4_test
 /tools/ds4-v100-plan
 /tools/ds4-v100-pack
+/tools/ds4-v100-turbomind-pack
+/tools/ds4-v100-turbomind-admit
+/tools/ds4-v100-appliance-pack
 /ds4flash.gguf
 /TODO.md
 /gguf/

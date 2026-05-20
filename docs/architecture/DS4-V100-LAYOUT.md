@@ -215,10 +215,17 @@ should next load this sidecar as a planner-admitted acceleration artifact and
 account for its bytes separately before enabling scheduler selection.
 Sprint 086 adds `tools/ds4-v100-turbomind-admit` for that accounting: it
 reports source arena bytes, source expert payload, TurboMind sidecar bytes,
-duplicate totals, and replacement-style totals per GPU. This makes the memory
-policy explicit: bounded sidecar caches may be duplicated when admitted, but
-full production TurboMind packs should replace source expert residency or they
-will likely exceed the 32 GB V100 budget.
+duplicate totals, and replacement-style totals per GPU. Sprint 087 then moves
+the format into the production appliance shape: `tools/ds4-v100-appliance-pack`
+writes TurboMind-packed routed experts into `gpuN.weights`, and
+`turbomind-pack-index.tsv` points to offsets in that same shard. Non-experts
+remain in `pack-index.tsv`. The CUDA runtime now has
+`ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_f32`, which executes
+from prepacked resident spans without transient repacking.
+
+This makes the memory policy explicit: bounded sidecar caches may be duplicated
+when admitted, but full production TurboMind packs should replace source expert
+residency or they will likely exceed the 32 GB V100 budget.
 
 Any chosen production kernel must avoid persistent duplicate MXFP4, FP8, and
 INT8 resident packs unless the planner explicitly admits the memory cost.

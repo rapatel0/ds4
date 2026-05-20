@@ -293,6 +293,23 @@ static bool build_matrix_view(MatrixView *view, const ds4_tm_pack_entry &e, uint
     return true;
 }
 
+static ds4_gpu_turbomind_mxfp4_matrix_view gpu_tm_view(const ds4_tm_pack_entry &e) {
+    ds4_gpu_turbomind_mxfp4_matrix_view out;
+    std::memset(&out, 0, sizeof(out));
+    out.weight_offset = e.weight_offset;
+    out.scale_offset = e.scale_offset;
+    out.weight_bytes_per_expert = e.weight_bytes_per_expert;
+    out.scale_bytes_per_expert = e.scale_bytes_per_expert;
+    out.n = e.n;
+    out.k = e.k;
+    out.experts_packed = e.experts_packed;
+    out.experts_total = e.experts_total;
+    out.k_pack = e.k_pack;
+    out.weight_stride = e.weight_stride;
+    out.scale_stride = e.scale_stride;
+    return out;
+}
+
 static void free_matrix_view(MatrixView *view) {
     (void)cudaFree(view->d_weights);
     (void)cudaFree(view->d_scales);
@@ -628,6 +645,56 @@ int main(int argc, char **argv) {
                  host_ms);
     check(bad == 0 && rel_ok && max_abs < 2.0f, "sidecar output outside tolerance");
 
+    ds4_gpu_arena *tm_arena = nullptr;
+    check(ds4_gpu_arena_open(&tm_arena, 0, sidecar.size()) == 0,
+          "TurboMind appliance arena open failed");
+    check(ds4_gpu_arena_upload(tm_arena, 0, sidecar.data(), sidecar.size()) == 0,
+          "TurboMind appliance arena upload failed");
+    ds4_gpu_tensor *api_out_t = ds4_gpu_tensor_alloc((uint64_t)hidden * sizeof(float));
+    check(api_out_t != nullptr, "TurboMind packed API output allocation failed");
+    ds4_gpu_turbomind_mxfp4_matrix_view gate_gpu = gpu_tm_view(gate_tm);
+    ds4_gpu_turbomind_mxfp4_matrix_view up_gpu = gpu_tm_view(up_tm);
+    ds4_gpu_turbomind_mxfp4_matrix_view down_gpu = gpu_tm_view(down_tm);
+    check(ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_f32(
+              tm_arena,
+              &gate_gpu,
+              &up_gpu,
+              &down_gpu,
+              hidden,
+              mid,
+              experts,
+              selected_t,
+              weights_t,
+              routes,
+              hidden_t,
+              1,
+              api_out_t) == 0,
+          "DS4 packed TurboMind arena API failed");
+    std::vector<float> api_got(hidden);
+    check(ds4_gpu_tensor_read(api_out_t, 0, api_got.data(), (uint64_t)hidden * sizeof(float)),
+          "packed API read failed");
+    float api_max_abs = 0.0f;
+    float api_sum_abs = 0.0f;
+    float api_sum_ref = 0.0f;
+    uint32_t api_bad = 0;
+    for (uint32_t i = 0; i < hidden; i++) {
+        const float d = fabsf(api_got[i] - ref[i]);
+        api_max_abs = fmaxf(api_max_abs, d);
+        api_sum_abs += d;
+        api_sum_ref += fabsf(ref[i]);
+        if (!std::isfinite(api_got[i]) || d > 2.0f) api_bad++;
+    }
+    const float api_rel = api_sum_ref > 0.0f ? api_sum_abs / api_sum_ref : 0.0f;
+    const bool api_rel_ok = api_sum_ref < 1.0e-5f || api_rel < 0.08f;
+    std::fprintf(stderr,
+                 "cuda_v100_turbomind_sidecar_smoke: packed_api max_abs=%.6g "
+                 "rel=%.6g bad=%u\n",
+                 api_max_abs,
+                 api_rel,
+                 api_bad);
+    check(api_bad == 0 && api_rel_ok && api_max_abs < 2.0f,
+          "packed TurboMind arena API output outside tolerance");
+
     (void)cudaFree(d_offsets);
     (void)cudaFree(d_tm_out);
     (void)cudaFree(d_route_weights);
@@ -637,11 +704,13 @@ int main(int argc, char **argv) {
     (void)cudaFree(d_gate_out);
     (void)cudaFree(d_a);
     ds4_gpu_tensor_free(ref_out_t);
+    ds4_gpu_tensor_free(api_out_t);
     ds4_gpu_tensor_free(mid_ref_t);
     ds4_gpu_tensor_free(weights_t);
     ds4_gpu_tensor_free(selected_t);
     ds4_gpu_tensor_free(hidden_t);
     ds4_gpu_arena_close(arena);
+    ds4_gpu_arena_close(tm_arena);
     free_matrix_view(&down_view);
     free_matrix_view(&up_view);
     free_matrix_view(&gate_view);

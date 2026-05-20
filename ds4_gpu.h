@@ -104,6 +104,20 @@ typedef struct {
     uint64_t expert_stride_bytes;
 } ds4_gpu_q4_k_expert_view;
 
+typedef struct {
+    uint64_t weight_offset;
+    uint64_t scale_offset;
+    uint64_t weight_bytes_per_expert;
+    uint64_t scale_bytes_per_expert;
+    uint32_t n;
+    uint32_t k;
+    uint32_t experts_packed;
+    uint32_t experts_total;
+    int k_pack;
+    int weight_stride;
+    int scale_stride;
+} ds4_gpu_turbomind_mxfp4_matrix_view;
+
 int ds4_gpu_device_count(void);
 int ds4_gpu_arena_open(ds4_gpu_arena **out, int gpu, uint64_t bytes);
 void ds4_gpu_arena_close(ds4_gpu_arena *arena);
@@ -269,6 +283,20 @@ int ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_batch_ptrs_f32(
         const ds4_gpu_tensor *const *x_rows_f32,
         uint32_t n_tokens,
         ds4_gpu_tensor *mid_tmp_f32,
+        ds4_gpu_tensor *out_f32);
+int ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_f32(
+        const ds4_gpu_arena *arena,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *gate,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *up,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *down,
+        uint32_t hidden,
+        uint32_t mid,
+        uint32_t n_total_experts,
+        const ds4_gpu_tensor *selected_i32,
+        const ds4_gpu_tensor *weights_f32,
+        uint32_t n_routes,
+        const ds4_gpu_tensor *x_f32,
+        uint32_t n_tokens,
         ds4_gpu_tensor *out_f32);
 int ds4_gpu_arena_q8_0_matmul_f32(
         const ds4_gpu_arena           *arena,
