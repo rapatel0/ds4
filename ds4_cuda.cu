@@ -2739,6 +2739,48 @@ __device__ static float arena_mxfp4_nibble_to_f32(uint8_t q) {
     }
 }
 
+__device__ static float arena_warp_sum_f32(float v) {
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        v += __shfl_down_sync(0xffffffffu, v, offset);
+    }
+    return v;
+}
+
+__device__ static float arena_block_sum_256_f32(float v) {
+    __shared__ float warp_sums[8];
+    v = arena_warp_sum_f32(v);
+    if ((threadIdx.x & 31u) == 0u) {
+        warp_sums[threadIdx.x >> 5] = v;
+    }
+    __syncthreads();
+    v = threadIdx.x < 8u ? warp_sums[threadIdx.x] : 0.0f;
+    if (threadIdx.x < 32u) {
+        v = arena_warp_sum_f32(v);
+    }
+    return v;
+}
+
+__device__ static void arena_block_sum2_256_f32(float *a, float *b) {
+    __shared__ float warp_sums_a[8];
+    __shared__ float warp_sums_b[8];
+    float va = arena_warp_sum_f32(*a);
+    float vb = arena_warp_sum_f32(*b);
+    if ((threadIdx.x & 31u) == 0u) {
+        const uint32_t warp = threadIdx.x >> 5;
+        warp_sums_a[warp] = va;
+        warp_sums_b[warp] = vb;
+    }
+    __syncthreads();
+    va = threadIdx.x < 8u ? warp_sums_a[threadIdx.x] : 0.0f;
+    vb = threadIdx.x < 8u ? warp_sums_b[threadIdx.x] : 0.0f;
+    if (threadIdx.x < 32u) {
+        va = arena_warp_sum_f32(va);
+        vb = arena_warp_sum_f32(vb);
+    }
+    *a = va;
+    *b = vb;
+}
+
 __global__ static void arena_f8_e4m3_b128_row_decode_kernel(
         float *out,
         const uint8_t *base,
@@ -2775,14 +2817,8 @@ __global__ static void arena_f8_e4m3_b128_matmul_kernel(
         acc += w * x[c];
     }
 
-    __shared__ float partial[256];
-    partial[threadIdx.x] = acc;
-    __syncthreads();
-    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
-        if (threadIdx.x < stride) partial[threadIdx.x] += partial[threadIdx.x + stride];
-        __syncthreads();
-    }
-    if (threadIdx.x == 0) out[r] = partial[0];
+    acc = arena_block_sum_256_f32(acc);
+    if (threadIdx.x == 0) out[r] = acc;
 }
 
 __global__ static void arena_f8_e4m3_b128_matmul_rows2_kernel(
@@ -2814,21 +2850,10 @@ __global__ static void arena_f8_e4m3_b128_matmul_rows2_kernel(
         }
     }
 
-    __shared__ float partial0[256];
-    __shared__ float partial1[256];
-    partial0[threadIdx.x] = acc0;
-    partial1[threadIdx.x] = acc1;
-    __syncthreads();
-    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
-        if (threadIdx.x < stride) {
-            partial0[threadIdx.x] += partial0[threadIdx.x + stride];
-            partial1[threadIdx.x] += partial1[threadIdx.x + stride];
-        }
-        __syncthreads();
-    }
+    arena_block_sum2_256_f32(&acc0, &acc1);
     if (threadIdx.x == 0) {
-        out[r0] = partial0[0];
-        if (have_r1) out[r1] = partial1[0];
+        out[r0] = acc0;
+        if (have_r1) out[r1] = acc1;
     }
 }
 
@@ -2852,14 +2877,8 @@ __global__ static void arena_f8_e4m3_b128_matmul_batch_kernel(
         acc += w * x_row[c];
     }
 
-    __shared__ float partial[256];
-    partial[threadIdx.x] = acc;
-    __syncthreads();
-    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
-        if (threadIdx.x < stride) partial[threadIdx.x] += partial[threadIdx.x + stride];
-        __syncthreads();
-    }
-    if (threadIdx.x == 0) out[(uint64_t)tok * rows + r] = partial[0];
+    acc = arena_block_sum_256_f32(acc);
+    if (threadIdx.x == 0) out[(uint64_t)tok * rows + r] = acc;
 }
 
 __global__ static void arena_f8_e4m3_b128_matmul_batch_rows2_kernel(
@@ -2893,21 +2912,10 @@ __global__ static void arena_f8_e4m3_b128_matmul_batch_rows2_kernel(
         }
     }
 
-    __shared__ float partial0[256];
-    __shared__ float partial1[256];
-    partial0[threadIdx.x] = acc0;
-    partial1[threadIdx.x] = acc1;
-    __syncthreads();
-    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
-        if (threadIdx.x < stride) {
-            partial0[threadIdx.x] += partial0[threadIdx.x + stride];
-            partial1[threadIdx.x] += partial1[threadIdx.x + stride];
-        }
-        __syncthreads();
-    }
+    arena_block_sum2_256_f32(&acc0, &acc1);
     if (threadIdx.x == 0) {
-        out[(uint64_t)tok * rows + r0] = partial0[0];
-        if (have_r1) out[(uint64_t)tok * rows + r1] = partial1[0];
+        out[(uint64_t)tok * rows + r0] = acc0;
+        if (have_r1) out[(uint64_t)tok * rows + r1] = acc1;
     }
 }
 
@@ -2931,14 +2939,8 @@ __global__ static void arena_f8_e4m3_b128_matmul_ptrs_kernel(
         acc += w * x_row[c];
     }
 
-    __shared__ float partial[256];
-    partial[threadIdx.x] = acc;
-    __syncthreads();
-    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
-        if (threadIdx.x < stride) partial[threadIdx.x] += partial[threadIdx.x + stride];
-        __syncthreads();
-    }
-    if (threadIdx.x == 0) out[(uint64_t)tok * rows + r] = partial[0];
+    acc = arena_block_sum_256_f32(acc);
+    if (threadIdx.x == 0) out[(uint64_t)tok * rows + r] = acc;
 }
 
 __global__ static void arena_f8_e4m3_b128_matmul_ptrs_rows2_kernel(
@@ -2972,21 +2974,10 @@ __global__ static void arena_f8_e4m3_b128_matmul_ptrs_rows2_kernel(
         }
     }
 
-    __shared__ float partial0[256];
-    __shared__ float partial1[256];
-    partial0[threadIdx.x] = acc0;
-    partial1[threadIdx.x] = acc1;
-    __syncthreads();
-    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
-        if (threadIdx.x < stride) {
-            partial0[threadIdx.x] += partial0[threadIdx.x + stride];
-            partial1[threadIdx.x] += partial1[threadIdx.x + stride];
-        }
-        __syncthreads();
-    }
+    arena_block_sum2_256_f32(&acc0, &acc1);
     if (threadIdx.x == 0) {
-        out[(uint64_t)tok * rows + r0] = partial0[0];
-        if (have_r1) out[(uint64_t)tok * rows + r1] = partial1[0];
+        out[(uint64_t)tok * rows + r0] = acc0;
+        if (have_r1) out[(uint64_t)tok * rows + r1] = acc1;
     }
 }
 
@@ -3012,14 +3003,8 @@ __global__ static void arena_f8_e4m3_b128_matmul_grouped_kernel(
         acc += w * x_row[c];
     }
 
-    __shared__ float partial[256];
-    partial[threadIdx.x] = acc;
-    __syncthreads();
-    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
-        if (threadIdx.x < stride) partial[threadIdx.x] += partial[threadIdx.x + stride];
-        __syncthreads();
-    }
-    if (threadIdx.x == 0) out[r] = partial[0];
+    acc = arena_block_sum_256_f32(acc);
+    if (threadIdx.x == 0) out[r] = acc;
 }
 
 __global__ static void arena_f8_e4m3_b128_matmul_grouped_rows2_kernel(
@@ -3056,21 +3041,10 @@ __global__ static void arena_f8_e4m3_b128_matmul_grouped_rows2_kernel(
         }
     }
 
-    __shared__ float partial0[256];
-    __shared__ float partial1[256];
-    partial0[threadIdx.x] = acc0;
-    partial1[threadIdx.x] = acc1;
-    __syncthreads();
-    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
-        if (threadIdx.x < stride) {
-            partial0[threadIdx.x] += partial0[threadIdx.x + stride];
-            partial1[threadIdx.x] += partial1[threadIdx.x + stride];
-        }
-        __syncthreads();
-    }
+    arena_block_sum2_256_f32(&acc0, &acc1);
     if (threadIdx.x == 0) {
-        out[r0] = partial0[0];
-        if (have_r1) out[r1] = partial1[0];
+        out[r0] = acc0;
+        if (have_r1) out[r1] = acc1;
     }
 }
 
@@ -3123,21 +3097,10 @@ __global__ static void arena_f8_e4m3_b128_pair_swiglu_ptrs_kernel(
                   arena_e8m0_to_f32(up_block[0]) * xv;
     }
 
-    __shared__ float gate_partial[256];
-    __shared__ float up_partial[256];
-    gate_partial[threadIdx.x] = gate_acc;
-    up_partial[threadIdx.x] = up_acc;
-    __syncthreads();
-    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
-        if (threadIdx.x < stride) {
-            gate_partial[threadIdx.x] += gate_partial[threadIdx.x + stride];
-            up_partial[threadIdx.x] += up_partial[threadIdx.x + stride];
-        }
-        __syncthreads();
-    }
+    arena_block_sum2_256_f32(&gate_acc, &up_acc);
     if (threadIdx.x == 0) {
-        float g = gate_partial[0];
-        float u = up_partial[0];
+        float g = gate_acc;
+        float u = up_acc;
         if (clamp > 1.0e-6f) {
             g = fminf(g, clamp);
             u = fminf(fmaxf(u, -clamp), clamp);
