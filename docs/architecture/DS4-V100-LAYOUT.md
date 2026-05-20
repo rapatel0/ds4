@@ -194,7 +194,13 @@ it builds from the copied tree, passes grouped MXFP4 compare on DS4 gate/up and
 down shapes, keeps the expert source format MXFP4, and now passes a DS4
 routed-output adapter smoke that packs source bytes, groups selected route rows
 by expert, applies DS4 SwiGLU/route weights, and matches the existing
-source-MXFP4 arena reference. tc-grid remains useful for INT8 benchmarking and
+source-MXFP4 arena reference. Sprint 083 also wires this through the DS4 CUDA
+wrapper behind `DS4_V100_TURBOMIND_ROUTED_FFN=1`, but that bridge transiently
+repacks one expert matrix family at a time and is therefore a correctness
+bridge rather than the final throughput layout. The production format should
+store TurboMind-ready expert packs offline or use a planner-admitted cache so
+the runtime does not keep both source MXFP4 and TurboMind-packed experts
+resident for every layer. tc-grid remains useful for INT8 benchmarking and
 possible future quality-gated INT8 expert packs.
 
 Any chosen production kernel must avoid persistent duplicate MXFP4, FP8, and

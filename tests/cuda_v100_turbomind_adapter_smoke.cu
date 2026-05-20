@@ -9,6 +9,7 @@ extern "C" {
 #include <cuda_runtime.h>
 #include <dlfcn.h>
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -359,6 +360,8 @@ int main(int argc, char **argv) {
           "selected upload failed");
     check(ds4_gpu_tensor_write(weights_t, 0, route_weights, (uint64_t)ROUTES * sizeof(float)),
           "weights upload failed");
+    unsetenv("DS4_V100_TURBOMIND_ROUTED_FFN");
+    unsetenv("DS4_V100_TURBOMIND_STRICT");
     check(ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_f32(
               arena,
               gate_offset,
@@ -511,6 +514,72 @@ int main(int argc, char **argv) {
                  bad);
     check(bad == 0 && rel_ok && max_abs < 2.0f, "adapter output outside tolerance");
 
+    ds4_gpu_tensor *wrapper_mid_t = ds4_gpu_tensor_alloc((uint64_t)ROUTES * MID * sizeof(float));
+    ds4_gpu_tensor *wrapper_out_t = ds4_gpu_tensor_alloc((uint64_t)HIDDEN * sizeof(float));
+    check(wrapper_mid_t && wrapper_out_t, "wrapper tensor allocation failed");
+    setenv("DS4_V100_TURBOMIND_LIB", lib_path, 1);
+    setenv("DS4_V100_TURBOMIND_ROUTED_FFN", "1", 1);
+    setenv("DS4_V100_TURBOMIND_STRICT", "1", 1);
+    const auto wrapper_start = std::chrono::steady_clock::now();
+    check(ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_f32(
+              arena,
+              gate_offset,
+              (uint64_t)EXPERTS * gate_expert_bytes,
+              up_offset,
+              (uint64_t)EXPERTS * gate_expert_bytes,
+              down_offset,
+              (uint64_t)EXPERTS * down_expert_bytes,
+              gate_expert_bytes,
+              (uint32_t)hidden_row_bytes,
+              down_expert_bytes,
+              (uint32_t)mid_row_bytes,
+              HIDDEN,
+              MID,
+              EXPERTS,
+              selected_t,
+              weights_t,
+              ROUTES,
+              hidden_t,
+              wrapper_mid_t,
+              wrapper_out_t) == 0,
+          "DS4 TurboMind runtime wrapper failed");
+    cuda_check(cudaDeviceSynchronize(), "runtime wrapper synchronize");
+    const auto wrapper_end = std::chrono::steady_clock::now();
+    unsetenv("DS4_V100_TURBOMIND_ROUTED_FFN");
+    unsetenv("DS4_V100_TURBOMIND_STRICT");
+
+    std::vector<float> wrapped(HIDDEN);
+    check(ds4_gpu_tensor_read(wrapper_out_t,
+                              0,
+                              wrapped.data(),
+                              (uint64_t)HIDDEN * sizeof(float)),
+          "wrapper read failed");
+    float wrapper_max_abs = 0.0f;
+    float wrapper_sum_abs = 0.0f;
+    float wrapper_sum_ref = 0.0f;
+    uint32_t wrapper_bad = 0;
+    for (uint32_t i = 0; i < HIDDEN; i++) {
+        const float d = fabsf(wrapped[i] - ref[i]);
+        wrapper_max_abs = fmaxf(wrapper_max_abs, d);
+        wrapper_sum_abs += d;
+        wrapper_sum_ref += fabsf(ref[i]);
+        if (!std::isfinite(wrapped[i]) || d > 2.0f) wrapper_bad++;
+    }
+    const float wrapper_rel =
+        wrapper_sum_ref > 0.0f ? wrapper_sum_abs / wrapper_sum_ref : 0.0f;
+    const bool wrapper_rel_ok = wrapper_sum_ref < 1.0e-5f || wrapper_rel < 0.08f;
+    const double wrapper_ms =
+        std::chrono::duration<double, std::milli>(wrapper_end - wrapper_start).count();
+    std::fprintf(stderr,
+                 "cuda_v100_turbomind_adapter_smoke: runtime_wrapper max_abs=%.6g "
+                 "rel=%.6g bad=%u host_ms=%.3f\n",
+                 wrapper_max_abs,
+                 wrapper_rel,
+                 wrapper_bad,
+                 wrapper_ms);
+    check(wrapper_bad == 0 && wrapper_rel_ok && wrapper_max_abs < 2.0f,
+          "runtime wrapper output outside tolerance");
+
     (void)cudaFree(d_offsets);
     (void)cudaFree(d_tm_out);
     (void)cudaFree(d_route_weights);
@@ -520,6 +589,8 @@ int main(int argc, char **argv) {
     (void)cudaFree(d_gate_out);
     (void)cudaFree(d_a);
     ds4_gpu_tensor_free(ref_out_t);
+    ds4_gpu_tensor_free(wrapper_out_t);
+    ds4_gpu_tensor_free(wrapper_mid_t);
     ds4_gpu_tensor_free(mid_ref_t);
     ds4_gpu_tensor_free(weights_t);
     ds4_gpu_tensor_free(selected_t);

@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: codex
-revision: 94
+revision: 95
 ---
 
 # Vision: DS4 V100 Appliance
@@ -526,6 +526,14 @@ optimized V100 low-bit expert kernels in the actual hot path.
   matches the existing source-MXFP4 arena reference with `max_abs=0.00129318`
   and `rel=0.000258549`. This makes opt-in runtime integration the next
   kernel-side step.
+- Sprint 083 shipped that opt-in runtime integration. Setting
+  `DS4_V100_TURBOMIND_ROUTED_FFN=1` routes DS4's MXFP4 FFN wrapper through
+  copied TurboMind with device-built expert grouping and strict/fallback modes.
+  The V100 smoke matches the source-MXFP4 arena reference with
+  `max_abs=0.00129318`, `rel=0.000258549`, and `host_ms=43.298` for the
+  bounded eight-expert fixture. It stays off by default because it transiently
+  repacks expert weights during the call; the production path needs offline
+  TurboMind expert packs or a memory-planner-admitted cache.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -599,6 +607,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 080 copied tc-grid INT8 V100 kernel proof | `7.223 TFLOP/s` at `M=128,N=2048,K=4096`; `46.391 TFLOP/s` at `M=2048,N=7168,K=7168` | Measured | Copied tc-grid `v13_rf_v6` source now builds and runs from `ds4`. It confirms high-M V100 low-bit HMMA can work, but low-M routed decode remains underfilled and INT8 would expand source MXFP4 experts. Use this as a benchmark/proof path; prioritize TurboMind MXFP4 grouped GEMM for hot-path integration. |
 | Sprint 081 copied TurboMind MXFP4 grouped GEMM proof | `0.1037-0.1454 ms` grouped DS4-shape expert GEMMs | Measured | Copied TurboMind source builds from `ds4` and grouped MXFP4 compare passes for DS4 gate/up/down shapes. Down grouped is `1.23-1.26x` faster than six single calls; gate/up grouped is roughly neutral/slower at tiny token counts. This is the preferred source-format-preserving hot-path adapter target. |
 | Sprint 082 TurboMind routed expert adapter smoke | `max_abs=0.00129318`, `rel=0.000258549` versus DS4 arena reference | Measured | The adapter now packs source MXFP4 bytes through copied TurboMind, groups selected route rows by expert, runs grouped gate/up/down, applies DS4 SwiGLU and route weights, and matches the existing routed-output reference on V100. Next step is an opt-in runtime path with 256-expert packing and sustained throughput comparison. |
+| Sprint 083 opt-in TurboMind runtime bridge | `max_abs=0.00129318`, `rel=0.000258549`, `host_ms=43.298` on bounded runtime-wrapper smoke | Measured | The DS4 CUDA wrapper can now route MXFP4 FFN through copied TurboMind behind `DS4_V100_TURBOMIND_ROUTED_FFN=1`. This proves runtime semantics and fallback, but transient per-call packing makes it a validation bridge rather than a throughput default. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -1778,6 +1787,35 @@ GPU utilization with architectural changes, and only then compare against the
   this copied TurboMind source rather than continuing small scalar MXFP4 kernel
   tweaks.
 
+### Sprint 082 - TurboMind Routed Expert Adapter Smoke [complete]
+
+- **Goal**: Build a DS4 routed-expert adapter around the copied TurboMind C ABI
+  and compare its output against the existing source-MXFP4 arena reference.
+- **Rationale**: The grouped GEMM proof was not enough by itself; the runtime
+  needs the exact DS4 boundary: source MXFP4 pack, selected route grouping,
+  gate/up, SwiGLU, route weights, down projection, and route accumulation.
+- **Outcome**: `SHIP_ADAPTER_SMOKE`. The V100 smoke matched the arena
+  reference with `max_abs=0.00129318` and `rel=0.000258549` on real DS4 expert
+  dimensions with a bounded expert count. The next step was to wire the same
+  contract into the DS4 CUDA wrapper as an opt-in runtime path.
+
+### Sprint 083 - Opt-In TurboMind Runtime Routed FFN Bridge [complete]
+
+- **Goal**: Add an opt-in DS4 CUDA runtime branch that calls copied TurboMind
+  for routed MXFP4 FFN execution while preserving the existing arena kernels as
+  default and fallback.
+- **Rationale**: This proves the scheduler-facing runtime boundary without
+  committing to a memory-unsafe duplicate expert layout. The transient bridge
+  packs one matrix family at a time so 32 GB V100 cards are not overfilled.
+- **Outcome**: `SHIP_RUNTIME_BRIDGE`. `DS4_V100_TURBOMIND_ROUTED_FFN=1` now
+  builds device-side expert offsets, gathers FP16 route rows, runs TurboMind
+  grouped gate/up/down, applies DS4 SwiGLU/route weights, and scatters route
+  sums back to F32 output. The V100 adapter smoke validates the wrapper with
+  `max_abs=0.00129318`, `rel=0.000258549`, and `host_ms=43.298`. The bridge
+  remains off by default because transient repacking is not a production
+  throughput design; Sprint 084 should move TurboMind expert packs offline or
+  add a planner-bounded persistent cache.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -2021,6 +2059,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 080 copied tc-grid V100 INT8 kernel proof. | Candidate low-bit kernels must be copied into `ds4` and proven there before runtime use. The copied tc-grid v13 path proves high-M INT8 HMMA viability but not low-M routed decode practicality; the next kernel sprint should copy/prove TurboMind MXFP4 grouped GEMM. | Sprint 081+ |
 | 2026-05-20 | Shipped Sprint 081 copied TurboMind MXFP4 grouped GEMM proof. | The copied TurboMind tree builds from `ds4` and passes V100 grouped MXFP4 compare on DS4 gate/up/down expert shapes. Because it preserves source MXFP4 rather than expanding to INT8, the next implementation target should be a DS4 routed-expert adapter around TurboMind's grouped GEMM contract. | Sprint 082+ |
 | 2026-05-20 | Shipped Sprint 082 TurboMind routed expert adapter smoke. | The adapter now proves the end-to-end DS4 routed expert boundary around copied TurboMind: source MXFP4 pack, expert-grouped route rows, grouped gate/up/down, DS4 SwiGLU/route weights, and output parity against the current source-MXFP4 arena reference. The next sprint should wire it into runtime behind an opt-in flag and measure sustained throughput. | Sprint 083+ |
+| 2026-05-20 | Shipped Sprint 083 opt-in TurboMind runtime bridge. | The DS4 CUDA wrapper can now call copied TurboMind behind `DS4_V100_TURBOMIND_ROUTED_FFN=1`, with strict and fallback modes. Because it repacks expert matrices transiently, it is a semantic bridge rather than the performance layout. The next sprint should make TurboMind packs offline/device-resident without duplicate source expert residency. | Sprint 084+ |
 
 ## Open Questions
 

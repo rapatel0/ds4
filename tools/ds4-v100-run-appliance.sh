@@ -80,6 +80,9 @@ fi
 : "${DS4_V100_ASYNC_HANDOFF:=0}"
 : "${DS4_V100_ASYNC_EVENT_HANDOFF:=0}"
 : "${DS4_V100_ENABLE_OUTPUT_HEAD_BATCH:=0}"
+: "${DS4_V100_TURBOMIND_ROUTED_FFN:=0}"
+: "${DS4_V100_TURBOMIND_STRICT:=0}"
+: "${DS4_V100_TURBOMIND_LIB:=./build/turbomind-v100/libggml-turbomind.so}"
 : "${DS4_V100_HOST:=127.0.0.1}"
 : "${DS4_V100_PORT:=18080}"
 : "${DS4_V100_CUDA_VISIBLE_DEVICES:=0,1,2,3,4,5,6,7}"
@@ -239,6 +242,16 @@ case "$DS4_V100_ASYNC_EVENT_HANDOFF" in
     1|true|on) async_event_handoff=1 ;;
     *) fail "DS4_V100_ASYNC_EVENT_HANDOFF must be 0 or 1" ;;
 esac
+case "$DS4_V100_TURBOMIND_ROUTED_FFN" in
+    0|false|off) DS4_V100_TURBOMIND_ROUTED_FFN=0 ;;
+    1|true|on) DS4_V100_TURBOMIND_ROUTED_FFN=1 ;;
+    *) fail "DS4_V100_TURBOMIND_ROUTED_FFN must be 0 or 1" ;;
+esac
+case "$DS4_V100_TURBOMIND_STRICT" in
+    0|false|off) DS4_V100_TURBOMIND_STRICT=0 ;;
+    1|true|on) DS4_V100_TURBOMIND_STRICT=1 ;;
+    *) fail "DS4_V100_TURBOMIND_STRICT must be 0 or 1" ;;
+esac
 
 async_pipeline_mode="$DS4_V100_ASYNC_PIPELINE_MODE"
 case "$async_pipeline_mode" in
@@ -309,7 +322,7 @@ print_resolved() {
 }
 
 if [ "$mode" = "check" ]; then
-    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff"
+    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN"
     exit 0
 fi
 if [ "$mode" = "print" ]; then
@@ -334,6 +347,9 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_ASYNC_EVENT_HANDOFF=$DS4_V100_ASYNC_EVENT_HANDOFF"
     echo "DS4_V100_ASYNC_EVENT_HANDOFF_RESOLVED=$async_event_handoff"
     echo "DS4_V100_ENABLE_OUTPUT_HEAD_BATCH=$DS4_V100_ENABLE_OUTPUT_HEAD_BATCH"
+    echo "DS4_V100_TURBOMIND_ROUTED_FFN=$DS4_V100_TURBOMIND_ROUTED_FFN"
+    echo "DS4_V100_TURBOMIND_STRICT=$DS4_V100_TURBOMIND_STRICT"
+    echo "DS4_V100_TURBOMIND_LIB=$DS4_V100_TURBOMIND_LIB"
     echo "DS4_V100_HOST=$DS4_V100_HOST"
     echo "DS4_V100_PORT=$DS4_V100_PORT"
     echo "DS4_V100_CUDA_VISIBLE_DEVICES=$DS4_V100_CUDA_VISIBLE_DEVICES"
@@ -347,4 +363,7 @@ mkdir -p "$DS4_V100_LOG_DIR"
 print_resolved >"$DS4_V100_LOG_DIR/command.txt"
 
 export CUDA_VISIBLE_DEVICES="$DS4_V100_CUDA_VISIBLE_DEVICES"
+export DS4_V100_TURBOMIND_ROUTED_FFN
+export DS4_V100_TURBOMIND_STRICT
+export DS4_V100_TURBOMIND_LIB
 exec "${cmd[@]}"

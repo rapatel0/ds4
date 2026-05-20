@@ -34,7 +34,7 @@ ifneq ($(strip $(CUDA_ARCH)),)
 NVCC_ARCH_FLAGS := -arch=$(CUDA_ARCH)
 endif
 NVCCFLAGS ?= -O3 --use_fast_math $(NVCC_ARCH_FLAGS) -Xcompiler $(NATIVE_CPU_FLAG) -Xcompiler -pthread
-CUDA_LDLIBS ?= -lm -Xcompiler -pthread -L$(CUDA_HOME)/targets/sbsa-linux/lib -L$(CUDA_HOME)/lib64 -lcudart -lcublas
+CUDA_LDLIBS ?= -lm -Xcompiler -pthread -L$(CUDA_HOME)/targets/sbsa-linux/lib -L$(CUDA_HOME)/lib64 -lcudart -lcublas -ldl
 TCGRID_CUDAFLAGS := --std=c++17 --expt-relaxed-constexpr --expt-extended-lambda -Ikernels/tc-grid/include -Ikernels/tc-grid/kernels
 TURBOMIND_ADAPTER_CUDAFLAGS := --std=c++17 -Ikernels/turbomind/ggml-turbomind/include
 CORE_OBJS = ds4.o ds4_cuda.o $(PACK_OBJS) $(SOURCE_FORMAT_OBJS)
@@ -420,7 +420,7 @@ ds4_eval_cpu.o: ds4_eval.c ds4.h
 ds4_metal.o: ds4_metal.m ds4_gpu.h $(METAL_SRCS)
 	$(CC) $(OBJCFLAGS) -c -o $@ ds4_metal.m
 
-ds4_cuda.o: ds4_cuda.cu ds4_gpu.h ds4_iq2_tables_cuda.inc
+ds4_cuda.o: ds4_cuda.cu ds4_gpu.h ds4_source_formats.h ds4_iq2_tables_cuda.inc kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h
 	$(NVCC) $(NVCCFLAGS) -c -o $@ ds4_cuda.cu
 
 tests/cuda_long_context_smoke: tests/cuda_long_context_smoke.o ds4_cuda.o
