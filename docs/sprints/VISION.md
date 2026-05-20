@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: codex
-revision: 95
+revision: 96
 ---
 
 # Vision: DS4 V100 Appliance
@@ -534,6 +534,13 @@ optimized V100 low-bit expert kernels in the actual hot path.
   bounded eight-expert fixture. It stays off by default because it transiently
   repacks expert weights during the call; the production path needs offline
   TurboMind expert packs or a memory-planner-admitted cache.
+- Sprint 084 shipped the first offline TurboMind expert sidecar packer.
+  `tools/ds4-v100-turbomind-pack` reads the existing V100 pack index and real
+  DS4 Flash GGUF, packs MXFP4 gate/up/down experts through copied TurboMind,
+  and writes `gpuN.turbomind` plus `turbomind-pack-index.tsv`. The V100
+  bounded validation packed layer 0 gate/up/down with two experts each,
+  recording `k_pack=0x341321` and a `26,738,688` byte sidecar. Runtime loading
+  is still pending.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -608,6 +615,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 081 copied TurboMind MXFP4 grouped GEMM proof | `0.1037-0.1454 ms` grouped DS4-shape expert GEMMs | Measured | Copied TurboMind source builds from `ds4` and grouped MXFP4 compare passes for DS4 gate/up/down shapes. Down grouped is `1.23-1.26x` faster than six single calls; gate/up grouped is roughly neutral/slower at tiny token counts. This is the preferred source-format-preserving hot-path adapter target. |
 | Sprint 082 TurboMind routed expert adapter smoke | `max_abs=0.00129318`, `rel=0.000258549` versus DS4 arena reference | Measured | The adapter now packs source MXFP4 bytes through copied TurboMind, groups selected route rows by expert, runs grouped gate/up/down, applies DS4 SwiGLU and route weights, and matches the existing routed-output reference on V100. Next step is an opt-in runtime path with 256-expert packing and sustained throughput comparison. |
 | Sprint 083 opt-in TurboMind runtime bridge | `max_abs=0.00129318`, `rel=0.000258549`, `host_ms=43.298` on bounded runtime-wrapper smoke | Measured | The DS4 CUDA wrapper can now route MXFP4 FFN through copied TurboMind behind `DS4_V100_TURBOMIND_ROUTED_FFN=1`. This proves runtime semantics and fallback, but transient per-call packing makes it a validation bridge rather than a throughput default. |
+| Sprint 084 offline TurboMind sidecar packer | layer-0 gate/up/down, `2/256` experts each, `26,738,688` byte sidecar | Measured | The new packer reads real source GGUF bytes through the existing pack index and emits `gpuN.turbomind` plus `turbomind-pack-index.tsv`. This starts the production format path; runtime sidecar loading and full memory admission are still pending. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -1816,6 +1824,23 @@ GPU utilization with architectural changes, and only then compare against the
   throughput design; Sprint 084 should move TurboMind expert packs offline or
   add a planner-bounded persistent cache.
 
+### Sprint 084 - Offline TurboMind Expert Sidecar Pack [complete]
+
+- **Goal**: Add an offline conversion tool that derives TurboMind-ready expert
+  sidecars from the normal DS4 V100 pack index and source GGUF.
+- **Rationale**: The transient runtime bridge proves semantics but cannot be
+  the performance path. Persistent packed experts need a separate acceleration
+  artifact so runtime can avoid per-token repacking and the planner can account
+  for memory explicitly.
+- **Outcome**: `SHIP_SIDECAR_PACKER`. Added
+  `tools/ds4-v100-turbomind-pack`, which reads real source MXFP4 expert bytes,
+  packs them through copied TurboMind, and writes `gpuN.turbomind` plus
+  `turbomind-pack-index.tsv`. V100 validation packed layer 0 gate/up/down with
+  `2/256` experts each, `k_pack=0x341321`, and a `26,738,688` byte bounded
+  sidecar. The next sprint should load a bounded sidecar into device memory,
+  rebuild `StridedPtrH` tables, and run the adapter from persistent packed
+  buffers instead of runtime repacking.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -2060,6 +2085,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 081 copied TurboMind MXFP4 grouped GEMM proof. | The copied TurboMind tree builds from `ds4` and passes V100 grouped MXFP4 compare on DS4 gate/up/down expert shapes. Because it preserves source MXFP4 rather than expanding to INT8, the next implementation target should be a DS4 routed-expert adapter around TurboMind's grouped GEMM contract. | Sprint 082+ |
 | 2026-05-20 | Shipped Sprint 082 TurboMind routed expert adapter smoke. | The adapter now proves the end-to-end DS4 routed expert boundary around copied TurboMind: source MXFP4 pack, expert-grouped route rows, grouped gate/up/down, DS4 SwiGLU/route weights, and output parity against the current source-MXFP4 arena reference. The next sprint should wire it into runtime behind an opt-in flag and measure sustained throughput. | Sprint 083+ |
 | 2026-05-20 | Shipped Sprint 083 opt-in TurboMind runtime bridge. | The DS4 CUDA wrapper can now call copied TurboMind behind `DS4_V100_TURBOMIND_ROUTED_FFN=1`, with strict and fallback modes. Because it repacks expert matrices transiently, it is a semantic bridge rather than the performance layout. The next sprint should make TurboMind packs offline/device-resident without duplicate source expert residency. | Sprint 084+ |
+| 2026-05-20 | Shipped Sprint 084 offline TurboMind expert sidecar packer. | The project now has a CUDA tool that derives TurboMind packed expert sidecars from the real DS4 GGUF and existing V100 pack index. This keeps source provenance stable while creating the format needed to remove runtime repacking. The next sprint should add a bounded sidecar loader and adapter path from persistent packed buffers. | Sprint 085+ |
 
 ## Open Questions
 

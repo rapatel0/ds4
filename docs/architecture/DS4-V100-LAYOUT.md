@@ -203,6 +203,13 @@ the runtime does not keep both source MXFP4 and TurboMind-packed experts
 resident for every layer. tc-grid remains useful for INT8 benchmarking and
 possible future quality-gated INT8 expert packs.
 
+Sprint 084 adds the first offline sidecar producer for that production format:
+`tools/ds4-v100-turbomind-pack` reads the normal V100 `pack-index.tsv`, pulls
+source MXFP4 expert bytes from the DS4 GGUF, and writes `gpuN.turbomind` plus
+`turbomind-pack-index.tsv`. The runtime should later load this sidecar as a
+separate acceleration artifact, reconstruct device pointer tables after upload,
+and account for its bytes separately in the memory planner.
+
 Any chosen production kernel must avoid persistent duplicate MXFP4, FP8, and
 INT8 resident packs unless the planner explicitly admits the memory cost.
 

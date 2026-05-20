@@ -1,0 +1,17 @@
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread --std=c++17 -Ikernels/turbomind/ggml-turbomind/include -I. -c -o tools/ds4-v100-turbomind-pack.o tools/ds4-v100-turbomind-pack.cu
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -o tools/ds4-v100-turbomind-pack tools/ds4-v100-turbomind-pack.o ds4_pack.o ds4_source_formats.o -lm -Xcompiler -pthread -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/local/cuda/lib64 -lcudart -lcublas -ldl
+packed blk.0.ffn_gate_exps.weight experts=2/256 N=2048 K=4096 weight=4194304 scale=262144 k_pack=0x341321
+packed blk.0.ffn_up_exps.weight experts=2/256 N=2048 K=4096 weight=4194304 scale=262144 k_pack=0x341321
+packed blk.0.ffn_down_exps.weight experts=2/256 N=4096 K=2048 weight=4194304 scale=262144 k_pack=0x341321
+wrote /tmp/ds4-sprint084-tm-pack/turbomind-pack-index.tsv
+wrote /tmp/ds4-sprint084-tm-pack/gpu0.turbomind
+total 26M
+-rw-r--r-- 1 root root  26M May 20 13:16 gpu0.turbomind
+-rw-r--r-- 1 root root 1.1K May 20 13:16 turbomind-pack-index.tsv
+26738688 /tmp/ds4-sprint084-tm-pack/gpu0.turbomind
+    1120 /tmp/ds4-sprint084-tm-pack/turbomind-pack-index.tsv
+26739808 total
+semantic_tensor_id	source_name	source_dtype	source_shape	runtime_layout	owning_gpu	layer_id	kernel_family	n	k	experts_packed	experts_total	weight_bytes_per_expert	scale_bytes_per_expert	k_pack	weight_stride	scale_stride	sidecar_file	weight_offset	scale_offset	source_shard_file	source_shard_offset	source_byte_length	source_checksum	tm_abi_version
+blk.0.ffn_gate_exps.weight	blk.0.ffn_gate_exps.weight	mxfp4	[4096x2048x256]	turbomind_mxfp4_grouped	0	0	turbomind_mxfp4_grouped_sm70	2048	4096	2	256	4194304	262144	3412769	131072	2048	gpu0.turbomind	0	8388608	gpu0.weights	2307725568	1140850688	pending	1
+blk.0.ffn_up_exps.weight	blk.0.ffn_up_exps.weight	mxfp4	[4096x2048x256]	turbomind_mxfp4_grouped	0	0	turbomind_mxfp4_grouped_sm70	2048	4096	2	256	4194304	262144	3412769	131072	2048	gpu0.turbomind	8912896	17301504	gpu0.weights	3448576256	1140850688	pending	1
+blk.0.ffn_down_exps.weight	blk.0.ffn_down_exps.weight	mxfp4	[2048x4096x256]	turbomind_mxfp4_grouped	0	0	turbomind_mxfp4_grouped_sm70	4096	2048	2	256	4194304	262144	3412769	65536	4096	gpu0.turbomind	17825792	26214400	gpu0.weights	1166874880	1140850688	pending	1
