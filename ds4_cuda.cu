@@ -2781,6 +2781,39 @@ __device__ static void arena_block_sum2_256_f32(float *a, float *b) {
     *b = vb;
 }
 
+__device__ static void arena_block_sum4_256_f32(float *a, float *b, float *c, float *d) {
+    __shared__ float warp_sums_a[8];
+    __shared__ float warp_sums_b[8];
+    __shared__ float warp_sums_c[8];
+    __shared__ float warp_sums_d[8];
+    float va = arena_warp_sum_f32(*a);
+    float vb = arena_warp_sum_f32(*b);
+    float vc = arena_warp_sum_f32(*c);
+    float vd = arena_warp_sum_f32(*d);
+    if ((threadIdx.x & 31u) == 0u) {
+        const uint32_t warp = threadIdx.x >> 5;
+        warp_sums_a[warp] = va;
+        warp_sums_b[warp] = vb;
+        warp_sums_c[warp] = vc;
+        warp_sums_d[warp] = vd;
+    }
+    __syncthreads();
+    va = threadIdx.x < 8u ? warp_sums_a[threadIdx.x] : 0.0f;
+    vb = threadIdx.x < 8u ? warp_sums_b[threadIdx.x] : 0.0f;
+    vc = threadIdx.x < 8u ? warp_sums_c[threadIdx.x] : 0.0f;
+    vd = threadIdx.x < 8u ? warp_sums_d[threadIdx.x] : 0.0f;
+    if (threadIdx.x < 32u) {
+        va = arena_warp_sum_f32(va);
+        vb = arena_warp_sum_f32(vb);
+        vc = arena_warp_sum_f32(vc);
+        vd = arena_warp_sum_f32(vd);
+    }
+    *a = va;
+    *b = vb;
+    *c = vc;
+    *d = vd;
+}
+
 __global__ static void arena_f8_e4m3_b128_row_decode_kernel(
         float *out,
         const uint8_t *base,
@@ -2854,6 +2887,62 @@ __global__ static void arena_f8_e4m3_b128_matmul_rows2_kernel(
     if (threadIdx.x == 0) {
         out[r0] = acc0;
         if (have_r1) out[r1] = acc1;
+    }
+}
+
+__global__ static void arena_f8_e4m3_b128_matmul_rows4_kernel(
+        float *out,
+        const uint8_t *base,
+        const float *x,
+        uint32_t rows,
+        uint32_t cols,
+        uint32_t row_stride_bytes) {
+    const uint32_t r0 = blockIdx.x * 4u;
+    const uint32_t r1 = r0 + 1u;
+    const uint32_t r2 = r0 + 2u;
+    const uint32_t r3 = r0 + 3u;
+    if (r0 >= rows) return;
+    const int have_r1 = r1 < rows;
+    const int have_r2 = r2 < rows;
+    const int have_r3 = r3 < rows;
+    const uint8_t *row0 = base + (uint64_t)r0 * row_stride_bytes;
+    const uint8_t *row1 = have_r1 ? base + (uint64_t)r1 * row_stride_bytes : row0;
+    const uint8_t *row2 = have_r2 ? base + (uint64_t)r2 * row_stride_bytes : row0;
+    const uint8_t *row3 = have_r3 ? base + (uint64_t)r3 * row_stride_bytes : row0;
+    float acc0 = 0.0f;
+    float acc1 = 0.0f;
+    float acc2 = 0.0f;
+    float acc3 = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        const float xv = x[c];
+        const uint64_t block_offset = (uint64_t)(c / 128u) * 129ull;
+        const uint32_t block_lane = c % 128u;
+        const uint8_t *block0 = row0 + block_offset;
+        const float scale0 = arena_e8m0_to_f32(block0[0]);
+        acc0 += arena_e4m3fn_to_f32(block0[1u + block_lane]) * scale0 * xv;
+        if (have_r1) {
+            const uint8_t *block1 = row1 + block_offset;
+            const float scale1 = arena_e8m0_to_f32(block1[0]);
+            acc1 += arena_e4m3fn_to_f32(block1[1u + block_lane]) * scale1 * xv;
+        }
+        if (have_r2) {
+            const uint8_t *block2 = row2 + block_offset;
+            const float scale2 = arena_e8m0_to_f32(block2[0]);
+            acc2 += arena_e4m3fn_to_f32(block2[1u + block_lane]) * scale2 * xv;
+        }
+        if (have_r3) {
+            const uint8_t *block3 = row3 + block_offset;
+            const float scale3 = arena_e8m0_to_f32(block3[0]);
+            acc3 += arena_e4m3fn_to_f32(block3[1u + block_lane]) * scale3 * xv;
+        }
+    }
+
+    arena_block_sum4_256_f32(&acc0, &acc1, &acc2, &acc3);
+    if (threadIdx.x == 0) {
+        out[r0] = acc0;
+        if (have_r1) out[r1] = acc1;
+        if (have_r2) out[r2] = acc2;
+        if (have_r3) out[r3] = acc3;
     }
 }
 
@@ -3048,6 +3137,71 @@ __global__ static void arena_f8_e4m3_b128_matmul_grouped_rows2_kernel(
     }
 }
 
+__global__ static void arena_f8_e4m3_b128_matmul_grouped_rows4_kernel(
+        float *out,
+        const uint8_t *base,
+        const float *x,
+        uint32_t groups,
+        uint32_t rows_per_group,
+        uint32_t cols_per_group,
+        uint32_t row_stride_bytes) {
+    const uint32_t r0 = blockIdx.x * 4u;
+    const uint32_t r1 = r0 + 1u;
+    const uint32_t r2 = r0 + 2u;
+    const uint32_t r3 = r0 + 3u;
+    const uint32_t rows = groups * rows_per_group;
+    if (r0 >= rows) return;
+    const int have_r1 = r1 < rows;
+    const int have_r2 = r2 < rows;
+    const int have_r3 = r3 < rows;
+    const uint32_t group0 = r0 / rows_per_group;
+    const uint32_t group1 = have_r1 ? r1 / rows_per_group : group0;
+    const uint32_t group2 = have_r2 ? r2 / rows_per_group : group0;
+    const uint32_t group3 = have_r3 ? r3 / rows_per_group : group0;
+    const uint8_t *row0 = base + (uint64_t)r0 * row_stride_bytes;
+    const uint8_t *row1 = have_r1 ? base + (uint64_t)r1 * row_stride_bytes : row0;
+    const uint8_t *row2 = have_r2 ? base + (uint64_t)r2 * row_stride_bytes : row0;
+    const uint8_t *row3 = have_r3 ? base + (uint64_t)r3 * row_stride_bytes : row0;
+    const float *x0 = x + (uint64_t)group0 * cols_per_group;
+    const float *x1 = x + (uint64_t)group1 * cols_per_group;
+    const float *x2 = x + (uint64_t)group2 * cols_per_group;
+    const float *x3 = x + (uint64_t)group3 * cols_per_group;
+    float acc0 = 0.0f;
+    float acc1 = 0.0f;
+    float acc2 = 0.0f;
+    float acc3 = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols_per_group; c += blockDim.x) {
+        const uint64_t block_offset = (uint64_t)(c / 128u) * 129ull;
+        const uint32_t block_lane = c % 128u;
+        const uint8_t *block0 = row0 + block_offset;
+        const float scale0 = arena_e8m0_to_f32(block0[0]);
+        acc0 += arena_e4m3fn_to_f32(block0[1u + block_lane]) * scale0 * x0[c];
+        if (have_r1) {
+            const uint8_t *block1 = row1 + block_offset;
+            const float scale1 = arena_e8m0_to_f32(block1[0]);
+            acc1 += arena_e4m3fn_to_f32(block1[1u + block_lane]) * scale1 * x1[c];
+        }
+        if (have_r2) {
+            const uint8_t *block2 = row2 + block_offset;
+            const float scale2 = arena_e8m0_to_f32(block2[0]);
+            acc2 += arena_e4m3fn_to_f32(block2[1u + block_lane]) * scale2 * x2[c];
+        }
+        if (have_r3) {
+            const uint8_t *block3 = row3 + block_offset;
+            const float scale3 = arena_e8m0_to_f32(block3[0]);
+            acc3 += arena_e4m3fn_to_f32(block3[1u + block_lane]) * scale3 * x3[c];
+        }
+    }
+
+    arena_block_sum4_256_f32(&acc0, &acc1, &acc2, &acc3);
+    if (threadIdx.x == 0) {
+        out[r0] = acc0;
+        if (have_r1) out[r1] = acc1;
+        if (have_r2) out[r2] = acc2;
+        if (have_r3) out[r3] = acc3;
+    }
+}
+
 __global__ static void arena_f8_e4m3_b128_matmul_grouped_rows2_ds4_attn_o_kernel(
         float *out,
         const uint8_t *base,
@@ -3086,6 +3240,61 @@ __global__ static void arena_f8_e4m3_b128_matmul_grouped_rows2_ds4_attn_o_kernel
     if (threadIdx.x == 0) {
         out[r0] = acc0;
         out[r1] = acc1;
+    }
+}
+
+__global__ static void arena_f8_e4m3_b128_matmul_grouped_rows4_ds4_attn_o_kernel(
+        float *out,
+        const uint8_t *base,
+        const float *x,
+        uint32_t row_stride_bytes) {
+    enum {
+        DS4_GROUPS = 8,
+        DS4_ROWS_PER_GROUP = 1024,
+        DS4_COLS_PER_GROUP = 4096,
+        DS4_ROWS = DS4_GROUPS * DS4_ROWS_PER_GROUP,
+    };
+
+    const uint32_t quad = blockIdx.x;
+    const uint32_t r0 = quad * 4u;
+    if (r0 >= DS4_ROWS) return;
+    const uint32_t r1 = r0 + 1u;
+    const uint32_t r2 = r0 + 2u;
+    const uint32_t r3 = r0 + 3u;
+    const uint32_t group = quad >> 8;
+    const uint8_t *row0 = base + (uint64_t)r0 * row_stride_bytes;
+    const uint8_t *row1 = base + (uint64_t)r1 * row_stride_bytes;
+    const uint8_t *row2 = base + (uint64_t)r2 * row_stride_bytes;
+    const uint8_t *row3 = base + (uint64_t)r3 * row_stride_bytes;
+    const float *xg = x + (uint64_t)group * DS4_COLS_PER_GROUP;
+    float acc0 = 0.0f;
+    float acc1 = 0.0f;
+    float acc2 = 0.0f;
+    float acc3 = 0.0f;
+    for (uint32_t c = threadIdx.x; c < DS4_COLS_PER_GROUP; c += blockDim.x) {
+        const float xv = xg[c];
+        const uint64_t block_offset = (uint64_t)(c >> 7) * 129ull;
+        const uint32_t block_lane = c & 127u;
+        const uint8_t *block0 = row0 + block_offset;
+        const uint8_t *block1 = row1 + block_offset;
+        const uint8_t *block2 = row2 + block_offset;
+        const uint8_t *block3 = row3 + block_offset;
+        const float scale0 = arena_e8m0_to_f32(block0[0]);
+        const float scale1 = arena_e8m0_to_f32(block1[0]);
+        const float scale2 = arena_e8m0_to_f32(block2[0]);
+        const float scale3 = arena_e8m0_to_f32(block3[0]);
+        acc0 += arena_e4m3fn_to_f32(block0[1u + block_lane]) * scale0 * xv;
+        acc1 += arena_e4m3fn_to_f32(block1[1u + block_lane]) * scale1 * xv;
+        acc2 += arena_e4m3fn_to_f32(block2[1u + block_lane]) * scale2 * xv;
+        acc3 += arena_e4m3fn_to_f32(block3[1u + block_lane]) * scale3 * xv;
+    }
+
+    arena_block_sum4_256_f32(&acc0, &acc1, &acc2, &acc3);
+    if (threadIdx.x == 0) {
+        out[r0] = acc0;
+        out[r1] = acc1;
+        out[r2] = acc2;
+        out[r3] = acc3;
     }
 }
 
@@ -5432,6 +5641,21 @@ static int cuda_f8_rowpair_enabled(void) {
            strcmp(v, "OFF") != 0;
 }
 
+static int cuda_f8_row4_enabled(void) {
+    const char *v = getenv("DS4_CUDA_F8_ROW4");
+    return v && v[0] &&
+           strcmp(v, "0") != 0 &&
+           strcmp(v, "false") != 0 &&
+           strcmp(v, "FALSE") != 0 &&
+           strcmp(v, "off") != 0 &&
+           strcmp(v, "OFF") != 0;
+}
+
+static int cuda_f8_row4_shape_ok(uint64_t rows, uint32_t cols) {
+    if (rows < 2048u || (rows & 3u) != 0u) return 0;
+    return cols == 1024u || cols == 2048u || cols == 4096u || cols == 8192u;
+}
+
 static int cuda_f8_grouped_ds4_fast_enabled(void) {
     const char *v = getenv("DS4_CUDA_F8_GROUPED_DS4_FAST");
     return !v || !v[0] ||
@@ -5557,7 +5781,17 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_f32(
     if (!cuda_f8_e4m3_b128_matmul_view_ok(arena, view, x_f32, out_f32)) return 1;
     if (!cuda_ok(cudaSetDevice(arena->gpu), "f8 source matmul set device")) return 1;
     const uint8_t *base = (const uint8_t *)((const char *)arena->ptr + view->arena_offset);
-    if (cuda_f8_rowpair_enabled() && view->rows > 1u) {
+    if (cuda_f8_row4_enabled() &&
+        cuda_f8_rowpair_enabled() &&
+        cuda_f8_row4_shape_ok(view->rows, view->cols)) {
+        arena_f8_e4m3_b128_matmul_rows4_kernel<<<(view->rows + 3u) / 4u, 256>>>(
+            (float *)out_f32->ptr,
+            base,
+            (const float *)x_f32->ptr,
+            view->rows,
+            view->cols,
+            view->row_stride_bytes);
+    } else if (cuda_f8_rowpair_enabled() && view->rows > 1u) {
         arena_f8_e4m3_b128_matmul_rows2_kernel<<<(view->rows + 1u) / 2u, 256>>>(
             (float *)out_f32->ptr,
             base,
@@ -5705,7 +5939,27 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_grouped_f32(
     }
     if (!cuda_ok(cudaSetDevice(arena->gpu), "f8 source grouped matmul set device")) return 1;
     const uint8_t *base = (const uint8_t *)((const char *)arena->ptr + view->arena_offset);
-    if (cuda_f8_rowpair_enabled() && rows > 1u) {
+    if (cuda_f8_row4_enabled() &&
+        cuda_f8_rowpair_enabled() &&
+        cuda_f8_row4_shape_ok(rows, cols_per_group)) {
+        if (cuda_f8_grouped_ds4_fast_enabled() &&
+            groups == 8u && rows_per_group == 1024u && cols_per_group == 4096u) {
+            arena_f8_e4m3_b128_matmul_grouped_rows4_ds4_attn_o_kernel<<<2048u, 256>>>(
+                (float *)out_f32->ptr,
+                base,
+                (const float *)x_f32->ptr,
+                view->row_stride_bytes);
+        } else {
+            arena_f8_e4m3_b128_matmul_grouped_rows4_kernel<<<(unsigned int)((rows + 3u) / 4u), 256>>>(
+                (float *)out_f32->ptr,
+                base,
+                (const float *)x_f32->ptr,
+                groups,
+                rows_per_group,
+                cols_per_group,
+                view->row_stride_bytes);
+        }
+    } else if (cuda_f8_rowpair_enabled() && rows > 1u) {
         if (cuda_f8_grouped_ds4_fast_enabled() &&
             groups == 8u && rows_per_group == 1024u && cols_per_group == 4096u) {
             arena_f8_e4m3_b128_matmul_grouped_rows2_ds4_attn_o_kernel<<<4096u, 256>>>(

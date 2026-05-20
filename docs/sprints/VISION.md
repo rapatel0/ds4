@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: codex
-revision: 114
+revision: 115
 ---
 
 # Vision: DS4 V100 Appliance
@@ -2522,6 +2522,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Completed Sprint 106 served decode baseline profile. | Fresh warmed HTTP `nvprof` evidence shows F8 arena rows2/grouped rows2 still dominate at about 51% of GPU time, with TurboMind SM70 MXFP4 GEMM next at about 25%. GPU memcpy traffic is tiny despite noisy API `cudaMemcpy` accounting, so the next implementation should target F8 execution shape or TurboMind route batching rather than host RAM, disk, or more BF16/F32 cleanup. | Sprint 107+ |
 | 2026-05-20 | Shipped Sprint 107 DS4 grouped F8 attention-output kernel. | A DS4-specialized grouped rows2 kernel for the fixed attention-output-A shape improves 8-slot/256K serving to `31.81` generated tok/s best observed and `31.63` on repeat, while 4-slot/1M remains neutral around `20.1` tok/s. The next larger target should move to TurboMind route-build fusion rather than more small F8 shape tweaks. | Sprint 108+ |
 | 2026-05-20 | Completed Sprint 108 TurboMind small-route build probe. | Fusing route count/prefix/scatter into one small-route CUDA kernel preserves correctness, but the primary 8-slot/256K A/B stayed neutral to slightly slower (`31.76` opt-in vs `31.79` rollback on repeat). Keep it opt-in and move the next optimization to larger hot-path work: F8 matmul tiling/vectorization or TurboMind expert input layout. | Sprint 109+ |
+| 2026-05-20 | Completed Sprint 109 F8 row4 CTA probe. | Four-output-row CTAs preserved correctness but regressed both 8-slot/256K (`30.998` vs `31.380` control) and 4-slot/1M (`19.898` vs `20.042` control). Keep row4 off by default and move the next sprint to a software-pipelined/fused boundary that raises tensor-core occupancy, especially TurboMind gate+up expert fusion or persistent grouped experts. | Sprint 110+ |
 
 ## Open Questions
 

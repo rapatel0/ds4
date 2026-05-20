@@ -42,6 +42,7 @@ slightly worse.
 | 106 | Warm served `nvprof` profile | F8 rows2/grouped rows2 ~51% GPU time; TurboMind ~25% | Used for targeting |
 | 107 | DS4 grouped F8 attention-output kernel | Best 8-slot/256K `31.811137` | Shipped/default |
 | 108 | TurboMind small-route build fusion | Correct; `31.759013` opt-in vs `31.794180` rollback on repeat | Kept opt-in |
+| 109 | F8 row4 CTA probe | Correct; `30.998275` row4 vs `31.380225` control at 8-slot/256K | Rejected as default |
 
 ## Remaining
 
@@ -50,21 +51,21 @@ slightly worse.
 - Improve GPU utilization. The latest profile says the bottleneck is device
   kernel shape/occupancy, not disk, host RAM, or bulk PCIe/NVLink traffic.
 - Attack larger hot-path buckets instead of small host-side route plumbing:
-  - F8 arena rows2 / grouped rows2 execution shape.
   - TurboMind MXFP4 expert occupancy and route-expanded activation layout.
-  - Fusing or batching a larger layer boundary than the isolated projection and
-    route-build attempts.
+  - Fused gate+up expert packing/GEMM.
+  - Software-pipelined F8 dequant+dot work that improves instruction throughput
+    without the row4 occupancy loss.
 - Decide whether the next production step is a deeper TurboMind adapter change
-  or an F8 matmul tiling/vectorization change, based on a fresh profile after
-  Sprint 107.
+  or a lower-level CUTLASS/TurboMind-inspired persistent kernel probe.
 
 ## Operator Status
 
-The default launcher now keeps `DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=0`. The
-opt-in diagnostic path can be enabled with:
+The default launcher now keeps `DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=0` and
+`DS4_V100_CUDA_F8_ROW4=0`. The opt-in diagnostic paths can be enabled with:
 
 ```text
 DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=1
+DS4_V100_CUDA_F8_ROW4=1
 ```
 
 The current default selected-token smoke passed after rebuilding with the

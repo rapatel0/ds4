@@ -6,7 +6,9 @@ Last updated: 2026-05-20
 
 Current best 8-slot throughput remains the Sprint 107 DS4 grouped F8 fast path.
 Sprint 108 tested TurboMind small-route build fusion and kept it opt-in because
-the primary 8-slot/256K A/B was neutral to slightly slower.
+the primary 8-slot/256K A/B was neutral to slightly slower. Sprint 109 tested
+F8 row4 CTAs and rejected them as a default because both measured tiers
+regressed.
 
 | Mode | Context | Slots | Generated tok/s | Continuation tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
@@ -28,6 +30,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 106 | Warm served `nvprof` profile of Sprint 104 | F8 rows2/grouped rows2 were ~51% GPU time; TurboMind SM70 MXFP4 was ~25%; GPU memcpy traffic was small | Use profile to choose next kernel target |
 | 107 | DS4-specific grouped F8 rows2 attention-output-A kernel | Correct and faster for 8-slot/256K; neutral for 4-slot/1M | Shipped |
 | 108 | TurboMind small-route count/prefix/scatter fusion | Correct; 8-slot repeat was `31.759013` opt-in vs `31.794180` rollback, while 4-slot/1M was `20.249531` opt-in vs `20.081695` rollback | Kept opt-in |
+| 109 | F8 four-output-row CTA probe | Correct; regressed 8-slot/256K to `30.998275` vs `31.380225` control and 4-slot/1M to `19.898462` vs `20.041787` control | Rejected as default; opt-in only |
 
 ## Sprint 106 Profile Takeaway
 
@@ -92,14 +95,31 @@ Validation completed on the cluster:
 - selected-token smoke with small-route off: passed, token id `926`, hex `3136`
 - rebuilt default check: `turbomind_small_route_build=0`, selected-token passed
 
+Sprint 109 adds a guarded F8 row4 CTA probe:
+
+- computes four large F8 output rows per CTA for the ungrouped and DS4 grouped
+  attention-output paths;
+- is controlled by `DS4_V100_CUDA_F8_ROW4`;
+- remains disabled by default because it reduced throughput in both measured
+  serving tiers.
+
+Validation completed on the cluster:
+
+- `cuda_source_dtypes_smoke`: passed
+- `cuda_v100_projection_attention_smoke`: passed
+- `cuda_v100_full_scheduler_smoke --slots 8`: passed
+- selected-token smoke with row4 on: passed, token id `926`, hex `3136`
+
 ## Next Target
 
-The next larger target should skip small route-metadata plumbing and attack a
-larger hot-path bucket:
+The next larger target should skip row-count consolidation and small
+route-metadata plumbing, then attack a boundary that removes real traffic or
+raises tensor-core occupancy:
 
-- F8 rows2/grouped rows2 tiling or vectorized decode;
-- TurboMind expert input layout that avoids route-expanded activation rows;
-- output scatter/inverse-map cleanup only if profiling shows it is material.
+- fused TurboMind gate+up packing/GEMM;
+- persistent grouped expert scheduling;
+- software-pipelined F8 dequant+dot work that improves instruction throughput
+  without reducing occupancy.
 
 The concise current status is also tracked in
 `docs/sprints/EXPERIMENT-STATUS.md`.
