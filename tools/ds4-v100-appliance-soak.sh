@@ -39,7 +39,7 @@ Options:
   --requests N              timed requests, default 4
   --host ADDR               bind/probe address, default 127.0.0.1
   --port N                  server port, default 18420
-  --async-pipeline-mode M   off, auto, per-step, or persistent, default auto
+  --async-pipeline-mode M   off, auto, per-step, persistent, or mailbox, default auto
   --sample-ms N             nvidia-smi sample interval, default 500
   --cuda-visible-devices L  CUDA_VISIBLE_DEVICES list, default 0..7
   --require-gpus N          required visible GPU count, default 8
@@ -106,7 +106,10 @@ done
 [ "$slots" -ge 1 ] && [ "$slots" -le 8 ] || fail "--slots must be in [1,8]"
 [ "$active_microbatch" -ge 1 ] && [ "$active_microbatch" -le "$slots" ] || fail "--active-microbatch must be in [1,slots]"
 case "$queue_policy" in sequential|reject-busy) ;; *) fail "--queue-policy must be sequential or reject-busy" ;; esac
-case "$async_pipeline_mode" in off|auto|per-step|per_step|persistent) ;; *) fail "--async-pipeline-mode must be off, auto, per-step, or persistent" ;; esac
+case "$async_pipeline_mode" in
+    off|auto|per-step|per_step|persistent|mailbox|mbox) ;;
+    *) fail "--async-pipeline-mode must be off, auto, per-step, persistent, or mailbox" ;;
+esac
 
 rm -rf "$log_dir"
 mkdir -p "$log_dir/runtime"

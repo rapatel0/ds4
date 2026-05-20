@@ -49,7 +49,7 @@ Options:
                             preserve averaged stage_profile timing
   --wavefront-decode        pass --wavefront-decode to the replay server
   --async-pipeline-decode   pass preferred async pipeline mode to the server
-  --async-pipeline-mode M   off, persistent, or per-step
+  --async-pipeline-mode M   off, persistent, per-step, or mailbox
   --async-pipeline-per-step pass --async-pipeline-mode per-step
   --mtp-serving MODE        off, verify, or commit, default off
   --mtp-top-k N             MTP draft candidates to report, default 5
@@ -206,8 +206,12 @@ while [ "$#" -gt 0 ]; do
                     async_pipeline_decode="1"
                     async_pipeline_mode="per-step"
                     ;;
+                mailbox|mbox)
+                    async_pipeline_decode="1"
+                    async_pipeline_mode="mailbox"
+                    ;;
                 *)
-                    fail "--async-pipeline-mode must be off, persistent, or per-step"
+                    fail "--async-pipeline-mode must be off, persistent, per-step, or mailbox"
                     ;;
             esac
             shift 2

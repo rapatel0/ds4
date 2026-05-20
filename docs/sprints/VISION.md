@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: vision
-revision: 84
+revision: 85
 ---
 
 # Vision: DS4 V100 Appliance
@@ -469,6 +469,12 @@ optimized V100 low-bit expert kernels in the actual hot path.
   it is not throughput-positive because target verification still computes the
   verifier token; the next practical lever should return to stage/kernel
   throughput before recursive or skip-verify MTP.
+- Sprint 073 shipped an opt-in persistent mailbox async mode. It is correct and
+  improves old persistent 1M/4-slot throughput from `7.865004` to `8.053284`
+  generated tok/s, but remains slower than per-step at `8.649395` generated
+  tok/s. Appliance `auto` should stay on `per-step`; the next performance
+  lever should move below pthread scheduling to CUDA event/stream handoff,
+  peer-copy overlap, or kernel-side execution work.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -532,6 +538,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 070 persistent MTP forward runtime | `4.56-4.80 ms` MTP draft time, `3/3` accepted drafts | Measured | MTP forward scratch is now resident and reused across requests, with scratch/run counters exposed in serving JSON. Timing stayed flat versus Sprint 045, so the next practical MTP gain requires true draft commit. |
 | Sprint 071 exact MTP commit serving | `2/2` accepted and committed drafts, sequence `[926, 1]` matches verify baseline | Measured | Commit mode now mutates the generation path by emitting accepted MTP drafts after exact target verification. This closes the state-contract gap but does not yet improve throughput because verification still computes the target token. |
 | Sprint 072 MTP commit throughput gate | `0.789` off, `0.774` verify, `0.777` commit generated tok/s at 1M/1 slot | Measured | Commit accepted and committed `4/4` drafts, but exact commit was `1.43%` slower than off because the target verifier token still runs. MTP remains correct; near-term throughput work should pivot back to stage/kernel scheduling. |
+| Sprint 073 persistent mailbox workers | `8.05` generated tok/s at 1M/4 slots | Measured | Mailbox workers are correct and beat old persistent by `2.39%`, but stay `6.89%` slower than per-step. Keep `per-step` as the appliance `auto` default and pivot below pthread scheduling. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -1563,6 +1570,21 @@ GPU utilization with architectural changes, and only then compare against the
   `0.788607` for MTP off. Exact commit is correct but not throughput-positive,
   so the next sprint should return to stage/kernel throughput.
 
+### Sprint 073 - Persistent Stage Pipeline Mailboxes [complete]
+
+- **Goal**: Make persistent stage workers competitive by replacing the old
+  global wakeup pattern with per-stage mailbox readiness.
+- **Rationale**: Per-step async is the best practical path, but recreates
+  workers each token-step. The old persistent path avoids that setup cost but
+  regresses, so mailbox scheduling tests whether host synchronization was the
+  material blocker.
+- **Outcome**: `SHIP_DIAGNOSTIC`. Added `--async-pipeline-mode mailbox` across
+  replay, benchmark, launcher, and soak tooling. V100 evidence proved
+  correctness and showed mailbox improved old persistent at 1M/4 slots
+  (`8.053284` vs `7.865004` generated tok/s), but still trailed per-step
+  (`8.649395`). Keep appliance `auto` on per-step and pivot next to CUDA
+  event/stream handoff, peer-copy overlap, or kernel-side execution work.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -1796,6 +1818,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 070 persistent MTP forward runtime. | MTP forward now reuses resident scratch and serving JSON proves sequential `forward_run_count`, but draft timing remains near `4.6 ms`. The next useful MTP work is true one-slot commit into target replay state, not more scratch allocation cleanup. | Sprint 071+ |
 | 2026-05-20 | Shipped Sprint 071 exact MTP commit serving. | MTP can now mutate the one-slot generation path by emitting accepted drafts after exact verification, and V100 evidence proves the committed sequence matches the target baseline. The next decision is whether commit-mode throughput justifies safe skip-verify/recursive MTP work or whether optimization should return to stage/kernel scheduling. | Sprint 072+ |
 | 2026-05-20 | Shipped Sprint 072 MTP commit throughput gate. | Exact commit accepted and committed all measured drafts, but the same-fixture V100 benchmark was slightly slower than MTP off because target verification still runs. Keep MTP commit as a correctness feature and pivot practical throughput back to stage/kernel scheduling before recursive or skip-verify MTP. | Sprint 073+ |
+| 2026-05-20 | Shipped Sprint 073 persistent mailbox workers. | Mailbox scheduling reduces old persistent wait accounting and improves over old persistent, but it remains slower than per-step. Keep per-step as the practical default and move the next optimization below host condition-variable scheduling. | Sprint 074+ |
 
 ## Open Questions
 

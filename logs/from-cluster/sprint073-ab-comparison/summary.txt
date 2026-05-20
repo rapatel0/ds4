@@ -1,0 +1,13 @@
+Sprint 073 async pipeline comparison
+
+mode	ctx	slots	gen_tok_s	cont_tok_s	avg_gpu_util	async_total_ms	async_wait_prev_sum_ms	async_handoff_sum_ms	delta_vs_per_step_pct	delta_vs_persistent_pct
+off	1048576	2	3.862534	3.621125	12.328	0.000	0.000	0.000
+off	1048576	4	3.801132	3.563561	11.756	0.000	0.000	0.000
+per-step	1048576	2	5.562124	5.214491	14.780	5583.052	17905.501	41.363	0.000	8.666
+per-step	1048576	4	8.649395	8.108808	19.029	7066.214	18833.140	245.775	0.000	9.973
+persistent	1048576	2	5.118536	4.798627	13.761	6083.273	20463.285	60.041	-7.975	0.000
+persistent	1048576	4	7.865004	7.373441	18.116	7770.067	22034.078	156.900	-9.069	0.000
+mailbox	1048576	2	5.123876	4.803634	13.936	6072.623	420.237	58.426	-7.879	0.104
+mailbox	1048576	4	8.053284	7.549953	18.202	7599.400	1610.146	168.069	-6.892	2.394
+
+Decision: mailbox is correct and improves over old persistent workers, but it remains slower than per-step. Keep appliance auto on per-step and use mailbox as diagnostic groundwork for event/stream handoff work.

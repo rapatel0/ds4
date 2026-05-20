@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 typedef struct replay_pipeline_runtime replay_pipeline_runtime;
+typedef struct replay_mailbox_runtime replay_mailbox_runtime;
 
 struct ds4_v100_replay {
     ds4_engine *tokenizer;
@@ -22,6 +23,7 @@ struct ds4_v100_replay {
     int model_fd;
     ds4_v100_stage_scheduler *scheds[DS4_V100_EXPECTED_GPUS];
     replay_pipeline_runtime *pipeline;
+    replay_mailbox_runtime *mailbox;
     ds4_v100_replay_options opts;
     double open_ms[DS4_V100_EXPECTED_GPUS];
     double open_total_ms;
@@ -30,6 +32,8 @@ struct ds4_v100_replay {
 
 static void replay_pipeline_runtime_close(replay_pipeline_runtime *p);
 static int replay_pipeline_runtime_open(ds4_v100_replay *rt, char *err, size_t errlen);
+static void replay_mailbox_runtime_close(replay_mailbox_runtime *m);
+static int replay_mailbox_runtime_open(ds4_v100_replay *rt, char *err, size_t errlen);
 
 static double replay_now_ms(void) {
     struct timeval tv;
@@ -128,6 +132,7 @@ uint64_t ds4_v100_replay_model_size(const ds4_v100_replay *rt) {
 void ds4_v100_replay_close(ds4_v100_replay *rt) {
     if (!rt) return;
     replay_pipeline_runtime_close(rt->pipeline);
+    replay_mailbox_runtime_close(rt->mailbox);
     for (int i = DS4_V100_EXPECTED_GPUS - 1; i >= 0; i--) {
         ds4_v100_stage_scheduler_close(rt->scheds[i]);
     }
@@ -312,10 +317,23 @@ int ds4_v100_replay_open(ds4_v100_replay **out,
         ds4_v100_replay_close(rt);
         return 1;
     }
-    if (replay_async_pipeline_mode(opts) == DS4_V100_REPLAY_ASYNC_PIPELINE_PERSISTENT &&
-        replay_pipeline_runtime_open(rt, err, errlen)) {
-        ds4_v100_replay_close(rt);
-        return 1;
+    switch (replay_async_pipeline_mode(opts)) {
+    case DS4_V100_REPLAY_ASYNC_PIPELINE_PERSISTENT:
+        if (replay_pipeline_runtime_open(rt, err, errlen)) {
+            ds4_v100_replay_close(rt);
+            return 1;
+        }
+        break;
+    case DS4_V100_REPLAY_ASYNC_PIPELINE_MAILBOX:
+        if (replay_mailbox_runtime_open(rt, err, errlen)) {
+            ds4_v100_replay_close(rt);
+            return 1;
+        }
+        break;
+    case DS4_V100_REPLAY_ASYNC_PIPELINE_PER_STEP:
+    case DS4_V100_REPLAY_ASYNC_PIPELINE_OFF:
+    default:
+        break;
     }
     rt->open_total_ms = replay_now_ms() - open0;
     *out = rt;
@@ -877,6 +895,317 @@ static int replay_pipeline_runtime_dispatch(replay_pipeline_runtime *p,
 }
 
 typedef struct {
+    replay_mailbox_runtime *mailbox;
+    int stage;
+} replay_mailbox_worker;
+
+struct replay_mailbox_runtime {
+    ds4_v100_replay *rt;
+    pthread_mutex_t mu;
+    pthread_cond_t stage_cv[DS4_V100_EXPECTED_GPUS];
+    pthread_cond_t host_cv;
+    pthread_t threads[DS4_V100_EXPECTED_GPUS];
+    bool thread_created[DS4_V100_EXPECTED_GPUS];
+    replay_mailbox_worker workers[DS4_V100_EXPECTED_GPUS];
+    bool stop;
+    bool active;
+    bool failed;
+    uint64_t generation;
+    const uint32_t *tokens;
+    const uint32_t *positions;
+    uint32_t n_slots;
+    uint64_t done_generation[DS4_V100_EXPECTED_GPUS][DS4_V100_SCHED_MAX_SLOTS];
+    uint32_t done_count[DS4_V100_EXPECTED_GPUS];
+    char err[512];
+    ds4_v100_stage_scheduler_report reports[DS4_V100_EXPECTED_GPUS][DS4_V100_SCHED_MAX_SLOTS];
+    double stage_decode_ms[DS4_V100_EXPECTED_GPUS];
+    double handoff_ms[DS4_V100_EXPECTED_GPUS - 1];
+    double worker_wait_ms[DS4_V100_EXPECTED_GPUS];
+    double sync_ms[DS4_V100_EXPECTED_GPUS];
+};
+
+static void replay_mailbox_signal_all_locked(replay_mailbox_runtime *m) {
+    if (!m) return;
+    for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
+        pthread_cond_broadcast(&m->stage_cv[stage]);
+    }
+    pthread_cond_broadcast(&m->host_cv);
+}
+
+static void replay_mailbox_fail(replay_mailbox_runtime *m, const char *msg) {
+    pthread_mutex_lock(&m->mu);
+    if (!m->failed) {
+        m->failed = true;
+        m->active = false;
+        snprintf(m->err, sizeof(m->err), "%s", msg ? msg : "async mailbox pipeline failed");
+    }
+    replay_mailbox_signal_all_locked(m);
+    pthread_mutex_unlock(&m->mu);
+}
+
+static bool replay_mailbox_wait_generation(replay_mailbox_runtime *m,
+                                           int stage,
+                                           uint64_t *seen_generation) {
+    pthread_mutex_lock(&m->mu);
+    while (!m->stop && (!m->active || m->generation == *seen_generation)) {
+        pthread_cond_wait(&m->stage_cv[stage], &m->mu);
+    }
+    if (m->stop) {
+        pthread_mutex_unlock(&m->mu);
+        return false;
+    }
+    *seen_generation = m->generation;
+    pthread_mutex_unlock(&m->mu);
+    return true;
+}
+
+static bool replay_mailbox_wait_prev(replay_mailbox_runtime *m,
+                                     int stage,
+                                     uint32_t slot,
+                                     uint64_t generation) {
+    if (stage == 0) return true;
+    pthread_mutex_lock(&m->mu);
+    while (!m->stop && m->active && m->generation == generation &&
+           !m->failed &&
+           m->done_generation[stage - 1][slot] != generation) {
+        pthread_cond_wait(&m->stage_cv[stage], &m->mu);
+    }
+    const bool ok = !m->stop && m->active &&
+        m->generation == generation && !m->failed;
+    pthread_mutex_unlock(&m->mu);
+    return ok;
+}
+
+static void replay_mailbox_mark_done(replay_mailbox_runtime *m,
+                                     int stage,
+                                     uint32_t slot,
+                                     uint64_t generation) {
+    pthread_mutex_lock(&m->mu);
+    if (m->active && m->generation == generation && !m->failed) {
+        m->done_generation[stage][slot] = generation;
+        m->done_count[stage]++;
+        if (stage + 1 < DS4_V100_EXPECTED_GPUS) {
+            pthread_cond_signal(&m->stage_cv[stage + 1]);
+        } else if (m->done_count[stage] >= m->n_slots) {
+            m->active = false;
+            pthread_cond_broadcast(&m->host_cv);
+        }
+    }
+    pthread_mutex_unlock(&m->mu);
+}
+
+static void *replay_mailbox_worker_main(void *arg) {
+    replay_mailbox_worker *w = (replay_mailbox_worker *)arg;
+    if (!w || !w->mailbox) return NULL;
+    replay_mailbox_runtime *m = w->mailbox;
+    const int stage = w->stage;
+    uint64_t seen_generation = 0;
+
+    for (;;) {
+        if (!replay_mailbox_wait_generation(m, stage, &seen_generation)) {
+            break;
+        }
+
+        char local_err[512] = {0};
+        for (uint32_t slot = 0; slot < m->n_slots; slot++) {
+            const double wait0 = replay_now_ms();
+            const bool prev_ready =
+                replay_mailbox_wait_prev(m, stage, slot, seen_generation);
+            m->worker_wait_ms[stage] += replay_now_ms() - wait0;
+            if (!prev_ready) {
+                break;
+            }
+
+            ds4_v100_stage_scheduler_report report;
+            memset(&report, 0, sizeof(report));
+            double t0 = replay_now_ms();
+            if (stage == 0) {
+                if (ds4_v100_stage_scheduler_decode_token_slot_span(
+                        m->rt->scheds[0],
+                        slot,
+                        &m->tokens[slot],
+                        &m->positions[slot],
+                        1,
+                        &report,
+                        local_err,
+                        sizeof(local_err))) {
+                    replay_mailbox_fail(m, local_err);
+                    break;
+                }
+            } else {
+                if (ds4_v100_stage_scheduler_handoff_slot_span(
+                        m->rt->scheds[stage],
+                        m->rt->scheds[stage - 1],
+                        slot,
+                        1,
+                        local_err,
+                        sizeof(local_err))) {
+                    replay_mailbox_fail(m, local_err);
+                    break;
+                }
+                m->handoff_ms[stage - 1] += replay_now_ms() - t0;
+                t0 = replay_now_ms();
+                if (ds4_v100_stage_scheduler_decode_hc_slot_span(
+                        m->rt->scheds[stage],
+                        slot,
+                        &m->tokens[slot],
+                        &m->positions[slot],
+                        1,
+                        &report,
+                        local_err,
+                        sizeof(local_err))) {
+                    replay_mailbox_fail(m, local_err);
+                    break;
+                }
+            }
+            const double sync0 = replay_now_ms();
+            if (!ds4_gpu_set_device(stage) || !ds4_gpu_synchronize()) {
+                replay_mailbox_fail(m, "async mailbox pipeline synchronize failed");
+                break;
+            }
+            m->sync_ms[stage] += replay_now_ms() - sync0;
+            m->stage_decode_ms[stage] += replay_now_ms() - t0;
+            m->reports[stage][slot] = report;
+            replay_mailbox_mark_done(m, stage, slot, seen_generation);
+        }
+    }
+    return NULL;
+}
+
+static int replay_mailbox_runtime_open(ds4_v100_replay *rt, char *err, size_t errlen) {
+    if (!rt) return replay_error(err, errlen, "missing async mailbox runtime input");
+    if (rt->mailbox) return 0;
+
+    replay_mailbox_runtime *m =
+        (replay_mailbox_runtime *)calloc(1, sizeof(*m));
+    if (!m) return replay_error(err, errlen, "failed to allocate async mailbox runtime");
+    m->rt = rt;
+    pthread_mutex_init(&m->mu, NULL);
+    pthread_cond_init(&m->host_cv, NULL);
+    for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
+        pthread_cond_init(&m->stage_cv[stage], NULL);
+    }
+
+    for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
+        m->workers[stage].mailbox = m;
+        m->workers[stage].stage = stage;
+        if (pthread_create(&m->threads[stage],
+                           NULL,
+                           replay_mailbox_worker_main,
+                           &m->workers[stage]) != 0) {
+            if (err && errlen) {
+                snprintf(err, errlen, "failed to create mailbox async pipeline worker %d", stage);
+            }
+            replay_mailbox_runtime_close(m);
+            return 1;
+        }
+        m->thread_created[stage] = true;
+    }
+    rt->mailbox = m;
+    return 0;
+}
+
+static void replay_mailbox_runtime_close(replay_mailbox_runtime *m) {
+    if (!m) return;
+    pthread_mutex_lock(&m->mu);
+    m->stop = true;
+    replay_mailbox_signal_all_locked(m);
+    pthread_mutex_unlock(&m->mu);
+
+    for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
+        if (m->thread_created[stage]) {
+            (void)pthread_join(m->threads[stage], NULL);
+        }
+    }
+    for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
+        pthread_cond_destroy(&m->stage_cv[stage]);
+    }
+    pthread_cond_destroy(&m->host_cv);
+    pthread_mutex_destroy(&m->mu);
+    free(m);
+}
+
+static int replay_mailbox_runtime_dispatch(replay_mailbox_runtime *m,
+                                           const uint32_t *tokens,
+                                           const uint32_t *positions,
+                                           uint32_t n_slots,
+                                           ds4_v100_replay_counters *counters,
+                                           double *bucket_ms,
+                                           char *err,
+                                           size_t errlen) {
+    if (!m || !tokens || !positions || n_slots == 0 ||
+        n_slots > DS4_V100_SCHED_MAX_SLOTS) {
+        return replay_error(err, errlen, "missing async mailbox dispatch input");
+    }
+
+    const double total0 = replay_now_ms();
+    pthread_mutex_lock(&m->mu);
+    if (m->active) {
+        pthread_mutex_unlock(&m->mu);
+        return replay_error(err, errlen, "async mailbox dispatch while active");
+    }
+    memset(m->done_generation, 0, sizeof(m->done_generation));
+    memset(m->done_count, 0, sizeof(m->done_count));
+    memset(m->reports, 0, sizeof(m->reports));
+    memset(m->stage_decode_ms, 0, sizeof(m->stage_decode_ms));
+    memset(m->handoff_ms, 0, sizeof(m->handoff_ms));
+    memset(m->worker_wait_ms, 0, sizeof(m->worker_wait_ms));
+    memset(m->sync_ms, 0, sizeof(m->sync_ms));
+    m->err[0] = '\0';
+    m->failed = false;
+    m->tokens = tokens;
+    m->positions = positions;
+    m->n_slots = n_slots;
+    m->generation++;
+    m->active = true;
+    pthread_cond_signal(&m->stage_cv[0]);
+    const uint64_t generation = m->generation;
+    const double setup_ms = replay_now_ms() - total0;
+    const double wait0 = replay_now_ms();
+    while (m->active && m->generation == generation && !m->failed) {
+        pthread_cond_wait(&m->host_cv, &m->mu);
+    }
+    const double host_wait_ms = replay_now_ms() - wait0;
+    const bool failed = m->failed;
+    char local_err[512] = {0};
+    if (failed) snprintf(local_err, sizeof(local_err), "%s", m->err);
+    pthread_mutex_unlock(&m->mu);
+
+    if (failed) {
+        if (err && errlen) {
+            snprintf(err,
+                     errlen,
+                     "%s",
+                     local_err[0] ? local_err : "async mailbox pipeline failed");
+        }
+        return 1;
+    }
+
+    const double complete0 = replay_now_ms();
+    if (replay_sync_all_stages(err, errlen)) return 1;
+    const double complete_ms = replay_now_ms() - complete0;
+    const double total_ms = replay_now_ms() - total0;
+    if (bucket_ms) *bucket_ms += total_ms;
+    if (counters) {
+        counters->async_pipeline_dispatches++;
+        counters->async_pipeline_total_ms += total_ms;
+        counters->async_pipeline_setup_ms += setup_ms;
+        counters->async_pipeline_host_wait_ms += host_wait_ms;
+        counters->async_pipeline_complete_ms += complete_ms;
+        for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
+            counters->stage_decode_ms[stage] += m->stage_decode_ms[stage];
+            counters->async_pipeline_worker_wait_ms[stage] += m->worker_wait_ms[stage];
+            counters->async_pipeline_sync_ms[stage] += m->sync_ms[stage];
+            counters_add_report(counters, stage, &m->reports[stage][0]);
+        }
+        for (int stage = 1; stage < DS4_V100_EXPECTED_GPUS; stage++) {
+            counters->handoff_ms[stage - 1] += m->handoff_ms[stage - 1];
+        }
+    }
+    return 0;
+}
+
+typedef struct {
     ds4_v100_replay *rt;
     const uint32_t *tokens;
     const uint32_t *positions;
@@ -1113,6 +1442,28 @@ static int replay_feed_token_batch_async_pipeline(ds4_v100_replay *rt,
         rt->pipeline, tokens, positions, n_slots, counters, bucket_ms, err, errlen);
 }
 
+static int replay_feed_token_batch_async_mailbox(ds4_v100_replay *rt,
+                                                 const uint32_t *tokens,
+                                                 const uint32_t *positions,
+                                                 uint32_t n_slots,
+                                                 ds4_v100_replay_counters *counters,
+                                                 double *bucket_ms,
+                                                 char *err,
+                                                 size_t errlen) {
+    if (!rt || !tokens || !positions || n_slots == 0 ||
+        n_slots > DS4_V100_SCHED_MAX_SLOTS) {
+        return replay_error(err, errlen, "missing V100 replay async mailbox input");
+    }
+    if (n_slots == 1) {
+        return replay_feed_token_batch(rt, tokens, positions, n_slots, counters, bucket_ms, err, errlen);
+    }
+    if (!rt->mailbox) {
+        return replay_error(err, errlen, "async mailbox runtime is not open");
+    }
+    return replay_mailbox_runtime_dispatch(
+        rt->mailbox, tokens, positions, n_slots, counters, bucket_ms, err, errlen);
+}
+
 static int replay_feed_token_batch_async_selected(ds4_v100_replay *rt,
                                                   const uint32_t *tokens,
                                                   const uint32_t *positions,
@@ -1127,6 +1478,9 @@ static int replay_feed_token_batch_async_selected(ds4_v100_replay *rt,
             rt, tokens, positions, n_slots, counters, bucket_ms, err, errlen);
     case DS4_V100_REPLAY_ASYNC_PIPELINE_PER_STEP:
         return replay_feed_token_batch_async_per_step(
+            rt, tokens, positions, n_slots, counters, bucket_ms, err, errlen);
+    case DS4_V100_REPLAY_ASYNC_PIPELINE_MAILBOX:
+        return replay_feed_token_batch_async_mailbox(
             rt, tokens, positions, n_slots, counters, bucket_ms, err, errlen);
     case DS4_V100_REPLAY_ASYNC_PIPELINE_OFF:
     default:

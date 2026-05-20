@@ -2,7 +2,7 @@
 
 ## Status
 
-Planned.
+Complete.
 
 ## Overview
 
@@ -88,20 +88,51 @@ V100 evidence proves it beats or matches the per-step path.
 
 ## Definition of Done
 
-- [ ] Local compile passes for changed C files.
-- [ ] `bash -n tools/ds4-v100-sustained-decode-bench.sh` passes.
-- [ ] `git diff --check` passes.
-- [ ] CLI rejects invalid async modes and accepts `mailbox`.
-- [ ] `/v100/status` reports `async_pipeline_mode="mailbox"` when selected.
-- [ ] Existing serial, per-step, and persistent modes still build and run.
-- [ ] V100 two-stage/wavefront correctness smoke passes.
-- [ ] V100 selected-token or short sustained smoke returns token hex `3136` in
+- [x] Local compile passes for changed C files.
+- [x] `bash -n tools/ds4-v100-sustained-decode-bench.sh` passes.
+- [x] `git diff --check` passes.
+- [x] CLI rejects invalid async modes and accepts `mailbox`.
+- [x] `/v100/status` reports `async_pipeline_mode="mailbox"` when selected.
+- [x] Existing serial, per-step, and persistent modes still build and run.
+- [x] V100 two-stage/wavefront correctness smoke passes.
+- [x] V100 selected-token or short sustained smoke returns token hex `3136` in
   mailbox mode.
-- [ ] V100 A/B matrix records `off`, `per-step`, `persistent`, and `mailbox`
+- [x] V100 A/B matrix records `off`, `per-step`, `persistent`, and `mailbox`
   at 1M/2 slots and 1M/4 slots.
-- [ ] Sprint report records whether `mailbox` beats, matches, or regresses
+- [x] Sprint report records whether `mailbox` beats, matches, or regresses
   versus `per-step`.
-- [ ] Vision document is updated with the scheduling decision.
+- [x] Vision document is updated with the scheduling decision.
+
+## Outcome
+
+`SHIP`, but keep `mailbox` diagnostic and leave appliance `auto` on
+`per-step`.
+
+The mailbox runtime adds persistent per-stage workers with per-stage condition
+variables and readiness signaling. It is correct and reduces the old persistent
+pipeline's measured wait-prev counter, but the same-build V100 matrix shows it
+does not beat the existing per-step implementation:
+
+| Mode | 1M/2 generated tok/s | 1M/4 generated tok/s | Decision |
+|---|---:|---:|---|
+| off | `3.862534` | `3.801132` | serial control |
+| per-step | `5.562124` | `8.649395` | keep as appliance `auto` default |
+| persistent | `5.118536` | `7.865004` | old persistent control |
+| mailbox | `5.123876` | `8.053284` | opt-in diagnostic |
+
+At 1M/4 slots, mailbox is `2.394%` faster than old persistent but `6.892%`
+slower than per-step. The next throughput sprint should not spend more time on
+host condition-variable scheduling alone; it should target CUDA event/stream
+handoff or kernel-side work.
+
+Artifacts:
+
+- `logs/from-cluster/sprint073-mailbox-smoke`
+- `logs/from-cluster/sprint073-ab-off`
+- `logs/from-cluster/sprint073-ab-per-step`
+- `logs/from-cluster/sprint073-ab-persistent`
+- `logs/from-cluster/sprint073-ab-mailbox`
+- `logs/from-cluster/sprint073-ab-comparison`
 
 ## Decision Rule
 

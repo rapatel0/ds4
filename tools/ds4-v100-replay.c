@@ -213,6 +213,8 @@ static const char *async_pipeline_mode_name(ds4_v100_replay_async_pipeline_mode 
         return "persistent";
     case DS4_V100_REPLAY_ASYNC_PIPELINE_PER_STEP:
         return "per-step";
+    case DS4_V100_REPLAY_ASYNC_PIPELINE_MAILBOX:
+        return "mailbox";
     case DS4_V100_REPLAY_ASYNC_PIPELINE_OFF:
     default:
         return "off";
@@ -537,7 +539,7 @@ static void usage(FILE *fp) {
             "  --profile-decode          enable synchronized per-stage decode profiling\n"
             "  --wavefront-decode        enable opt-in stage-wavefront batch decode\n"
             "  --async-pipeline-decode   enable preferred opt-in async pipeline decode\n"
-            "  --async-pipeline-mode M   off, persistent, or per-step\n"
+            "  --async-pipeline-mode M   off, persistent, per-step, or mailbox\n"
             "  --async-pipeline-per-step enable diagnostic per-token-step async workers\n"
             "  --mtp-serving MODE        off, verify, or commit, default off\n"
             "  --mtp-top-k N             MTP draft top-k to report, default 5\n"
@@ -677,9 +679,12 @@ static replay_cli_options parse_options(int argc, char **argv) {
                        !strcmp(v, "step")) {
                 opt.async_pipeline_decode = true;
                 opt.async_pipeline_mode = DS4_V100_REPLAY_ASYNC_PIPELINE_PER_STEP;
+            } else if (!strcmp(v, "mailbox") || !strcmp(v, "mbox")) {
+                opt.async_pipeline_decode = true;
+                opt.async_pipeline_mode = DS4_V100_REPLAY_ASYNC_PIPELINE_MAILBOX;
             } else {
                 fprintf(stderr,
-                        "ds4-v100-replay: --async-pipeline-mode must be off, persistent, or per-step\n");
+                        "ds4-v100-replay: --async-pipeline-mode must be off, persistent, per-step, or mailbox\n");
                 exit(2);
             }
         } else if (!strcmp(arg, "--mtp-serving")) {

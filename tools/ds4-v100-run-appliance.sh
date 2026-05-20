@@ -223,13 +223,14 @@ case "$DS4_V100_QUEUE_POLICY" in
     *) fail "DS4_V100_QUEUE_POLICY must be reject-busy or sequential" ;;
 esac
 case "$DS4_V100_ASYNC_PIPELINE_MODE" in
-    off|auto|per-step|per_step|persistent) ;;
-    *) fail "DS4_V100_ASYNC_PIPELINE_MODE must be off, auto, per-step, or persistent" ;;
+    off|auto|per-step|per_step|persistent|mailbox|mbox) ;;
+    *) fail "DS4_V100_ASYNC_PIPELINE_MODE must be off, auto, per-step, persistent, or mailbox" ;;
 esac
 
 async_pipeline_mode="$DS4_V100_ASYNC_PIPELINE_MODE"
 case "$async_pipeline_mode" in
     per_step) async_pipeline_mode="per-step" ;;
+    mbox) async_pipeline_mode="mailbox" ;;
     auto)
         if [ "$DS4_V100_ACTIVE_MICROBATCH" -gt 1 ]; then
             async_pipeline_mode="per-step"
