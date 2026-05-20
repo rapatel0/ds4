@@ -76,6 +76,7 @@ void ds4_v100_replay_options_init(ds4_v100_replay_options *opts) {
     opts->kv_active_slots = 1;
     opts->suppress_router_readback = true;
     opts->wavefront_decode = false;
+    opts->async_pipeline_decode = false;
 }
 
 void ds4_v100_replay_open_counters(const ds4_v100_replay *rt,
@@ -539,6 +540,204 @@ static int replay_feed_token_batch_wavefront(ds4_v100_replay *rt,
     return 0;
 }
 
+typedef struct {
+    ds4_v100_replay *rt;
+    const uint32_t *tokens;
+    const uint32_t *positions;
+    uint32_t n_slots;
+    pthread_mutex_t mu;
+    pthread_cond_t cv;
+    bool done[DS4_V100_EXPECTED_GPUS][DS4_V100_SCHED_MAX_SLOTS];
+    bool failed;
+    char err[512];
+    ds4_v100_stage_scheduler_report reports[DS4_V100_EXPECTED_GPUS][DS4_V100_SCHED_MAX_SLOTS];
+    double stage_decode_ms[DS4_V100_EXPECTED_GPUS];
+    double handoff_ms[DS4_V100_EXPECTED_GPUS - 1];
+} replay_pipeline_batch;
+
+typedef struct {
+    replay_pipeline_batch *batch;
+    int stage;
+} replay_pipeline_worker;
+
+static void replay_pipeline_fail(replay_pipeline_batch *b, const char *msg) {
+    pthread_mutex_lock(&b->mu);
+    if (!b->failed) {
+        b->failed = true;
+        snprintf(b->err, sizeof(b->err), "%s", msg ? msg : "async pipeline failed");
+    }
+    pthread_cond_broadcast(&b->cv);
+    pthread_mutex_unlock(&b->mu);
+}
+
+static bool replay_pipeline_wait_prev(replay_pipeline_batch *b, int stage, uint32_t slot) {
+    if (stage == 0) return true;
+    pthread_mutex_lock(&b->mu);
+    while (!b->failed && !b->done[stage - 1][slot]) {
+        pthread_cond_wait(&b->cv, &b->mu);
+    }
+    const bool ok = !b->failed;
+    pthread_mutex_unlock(&b->mu);
+    return ok;
+}
+
+static void replay_pipeline_mark_done(replay_pipeline_batch *b, int stage, uint32_t slot) {
+    pthread_mutex_lock(&b->mu);
+    b->done[stage][slot] = true;
+    pthread_cond_broadcast(&b->cv);
+    pthread_mutex_unlock(&b->mu);
+}
+
+static void *replay_pipeline_worker_main(void *arg) {
+    replay_pipeline_worker *w = (replay_pipeline_worker *)arg;
+    if (!w || !w->batch) return NULL;
+    replay_pipeline_batch *b = w->batch;
+    const int stage = w->stage;
+    char local_err[512] = {0};
+
+    for (uint32_t slot = 0; slot < b->n_slots; slot++) {
+        if (!replay_pipeline_wait_prev(b, stage, slot)) break;
+
+        ds4_v100_stage_scheduler_report report;
+        memset(&report, 0, sizeof(report));
+        double t0 = replay_now_ms();
+        if (stage == 0) {
+            if (ds4_v100_stage_scheduler_decode_token_slot_span(b->rt->scheds[0],
+                                                                 slot,
+                                                                 &b->tokens[slot],
+                                                                 &b->positions[slot],
+                                                                 1,
+                                                                 &report,
+                                                                 local_err,
+                                                                 sizeof(local_err))) {
+                replay_pipeline_fail(b, local_err);
+                break;
+            }
+        } else {
+            if (ds4_v100_stage_scheduler_handoff_slot_span(b->rt->scheds[stage],
+                                                           b->rt->scheds[stage - 1],
+                                                           slot,
+                                                           1,
+                                                           local_err,
+                                                           sizeof(local_err))) {
+                replay_pipeline_fail(b, local_err);
+                break;
+            }
+            b->handoff_ms[stage - 1] += replay_now_ms() - t0;
+            t0 = replay_now_ms();
+            if (ds4_v100_stage_scheduler_decode_hc_slot_span(b->rt->scheds[stage],
+                                                             slot,
+                                                             &b->tokens[slot],
+                                                             &b->positions[slot],
+                                                             1,
+                                                             &report,
+                                                             local_err,
+                                                             sizeof(local_err))) {
+                replay_pipeline_fail(b, local_err);
+                break;
+            }
+        }
+        if (!ds4_gpu_set_device(stage) || !ds4_gpu_synchronize()) {
+            replay_pipeline_fail(b, "async pipeline synchronize failed");
+            break;
+        }
+        b->stage_decode_ms[stage] += replay_now_ms() - t0;
+        b->reports[stage][slot] = report;
+        replay_pipeline_mark_done(b, stage, slot);
+    }
+    return NULL;
+}
+
+static int replay_feed_token_batch_async_pipeline(ds4_v100_replay *rt,
+                                                  const uint32_t *tokens,
+                                                  const uint32_t *positions,
+                                                  uint32_t n_slots,
+                                                  ds4_v100_replay_counters *counters,
+                                                  double *bucket_ms,
+                                                  char *err,
+                                                  size_t errlen) {
+    if (!rt || !tokens || !positions || n_slots == 0 ||
+        n_slots > DS4_V100_SCHED_MAX_SLOTS) {
+        return replay_error(err, errlen, "missing V100 replay async pipeline input");
+    }
+    if (n_slots == 1) {
+        return replay_feed_token_batch(rt, tokens, positions, n_slots, counters, bucket_ms, err, errlen);
+    }
+
+    replay_pipeline_batch batch;
+    memset(&batch, 0, sizeof(batch));
+    batch.rt = rt;
+    batch.tokens = tokens;
+    batch.positions = positions;
+    batch.n_slots = n_slots;
+    pthread_mutex_init(&batch.mu, NULL);
+    pthread_cond_init(&batch.cv, NULL);
+
+    pthread_t threads[DS4_V100_EXPECTED_GPUS];
+    replay_pipeline_worker workers[DS4_V100_EXPECTED_GPUS];
+    memset(threads, 0, sizeof(threads));
+    memset(workers, 0, sizeof(workers));
+
+    const double total0 = replay_now_ms();
+    int created = 0;
+    for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
+        workers[stage].batch = &batch;
+        workers[stage].stage = stage;
+        if (pthread_create(&threads[stage], NULL, replay_pipeline_worker_main, &workers[stage]) != 0) {
+            replay_pipeline_fail(&batch, "failed to create async pipeline worker");
+            break;
+        }
+        created++;
+    }
+    for (int i = 0; i < created; i++) {
+        (void)pthread_join(threads[i], NULL);
+    }
+
+    const bool failed = batch.failed;
+    if (!failed) {
+        if (replay_sync_all_stages(err, errlen)) {
+            pthread_cond_destroy(&batch.cv);
+            pthread_mutex_destroy(&batch.mu);
+            return 1;
+        }
+        if (bucket_ms) *bucket_ms += replay_now_ms() - total0;
+        if (counters) {
+            for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
+                counters->stage_decode_ms[stage] += batch.stage_decode_ms[stage];
+                counters_add_report(counters, stage, &batch.reports[stage][0]);
+            }
+            for (int stage = 1; stage < DS4_V100_EXPECTED_GPUS; stage++) {
+                counters->handoff_ms[stage - 1] += batch.handoff_ms[stage - 1];
+            }
+        }
+    } else if (err && errlen) {
+        snprintf(err, errlen, "%s", batch.err[0] ? batch.err : "async pipeline failed");
+    }
+
+    pthread_cond_destroy(&batch.cv);
+    pthread_mutex_destroy(&batch.mu);
+    return failed ? 1 : 0;
+}
+
+static int replay_feed_token_batch_selected(ds4_v100_replay *rt,
+                                            const uint32_t *tokens,
+                                            const uint32_t *positions,
+                                            uint32_t n_slots,
+                                            ds4_v100_replay_counters *counters,
+                                            double *bucket_ms,
+                                            char *err,
+                                            size_t errlen) {
+    if (rt && rt->opts.async_pipeline_decode && n_slots > 1) {
+        return replay_feed_token_batch_async_pipeline(
+            rt, tokens, positions, n_slots, counters, bucket_ms, err, errlen);
+    }
+    if (rt && rt->opts.wavefront_decode) {
+        return replay_feed_token_batch_wavefront(
+            rt, tokens, positions, n_slots, counters, bucket_ms, err, errlen);
+    }
+    return replay_feed_token_batch(rt, tokens, positions, n_slots, counters, bucket_ms, err, errlen);
+}
+
 static int replay_select_token_slot(ds4_v100_replay *rt,
                                     uint32_t slot,
                                     ds4_v100_replay_output *out,
@@ -646,15 +845,14 @@ int ds4_v100_replay_generate_batch(ds4_v100_replay *rt,
             active++;
         }
         if (active == 0) continue;
-        if ((rt->opts.wavefront_decode ? replay_feed_token_batch_wavefront
-                                        : replay_feed_token_batch)(rt,
-                                                                  batch_tokens,
-                                                                  batch_positions,
-                                                                  active,
-                                                                  c,
-                                                                  &c->prompt_replay_ms,
-                                                                  err,
-                                                                  errlen)) {
+        if (replay_feed_token_batch_selected(rt,
+                                             batch_tokens,
+                                             batch_positions,
+                                             active,
+                                             c,
+                                             &c->prompt_replay_ms,
+                                             err,
+                                             errlen)) {
             return 1;
         }
         c->total_input_tokens += active;
@@ -679,15 +877,14 @@ int ds4_v100_replay_generate_batch(ds4_v100_replay *rt,
             batch_tokens[slot] = row[step - 1].token;
             batch_positions[slot] = plan[slot].prompt_len + step - 1;
         }
-        if ((rt->opts.wavefront_decode ? replay_feed_token_batch_wavefront
-                                        : replay_feed_token_batch)(rt,
-                                                                  batch_tokens,
-                                                                  batch_positions,
-                                                                  n_prompts,
-                                                                  c,
-                                                                  &c->continuation_decode_ms,
-                                                                  err,
-                                                                  errlen)) {
+        if (replay_feed_token_batch_selected(rt,
+                                             batch_tokens,
+                                             batch_positions,
+                                             n_prompts,
+                                             c,
+                                             &c->continuation_decode_ms,
+                                             err,
+                                             errlen)) {
             return 1;
         }
         c->total_input_tokens += n_prompts;

@@ -17,6 +17,7 @@ sample_ms="500"
 log_dir=""
 profile_decode="0"
 wavefront_decode="0"
+async_pipeline_decode="0"
 
 usage() {
     cat <<'USAGE'
@@ -40,6 +41,7 @@ Options:
   --profile-decode          pass --profile-decode to the replay server and
                             preserve averaged stage_profile timing
   --wavefront-decode        pass --wavefront-decode to the replay server
+  --async-pipeline-decode   pass --async-pipeline-decode to the replay server
   --help                    show this help
 
 Each case starts one resident replay server with:
@@ -159,6 +161,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --wavefront-decode)
             wavefront_decode="1"
+            shift
+            ;;
+        --async-pipeline-decode)
+            async_pipeline_decode="1"
             shift
             ;;
         --help|-h)
@@ -715,6 +721,9 @@ load_case() {
     if [ "$wavefront_decode" = "1" ]; then
         cmd+=(--wavefront-decode)
     fi
+    if [ "$async_pipeline_decode" = "1" ]; then
+        cmd+=(--async-pipeline-decode)
+    fi
 
     DS4_LOCK_FILE="$case_dir/ds4.lock" "${cmd[@]}" >"$server_log" 2>&1 &
     server_pid="$!"
@@ -779,6 +788,7 @@ printf 'requests_per_case\t%s\n' "$requests" >>"$summary_tsv"
 printf 'warmup_requests\t%s\n' "$warmup_requests" >>"$summary_tsv"
 printf 'profile_decode\t%s\n' "$profile_decode" >>"$summary_tsv"
 printf 'wavefront_decode\t%s\n' "$wavefront_decode" >>"$summary_tsv"
+printf 'async_pipeline_decode\t%s\n' "$async_pipeline_decode" >>"$summary_tsv"
 printf '\nctx\tslots\tpolicy\tstatus_200\tstatus_other\terrors\ttoken_match\ttoken_mismatch\tlatency_avg_ms\tlatency_p50_ms\tlatency_p95_ms\tlatency_p99_ms\telapsed_s\taggregate_generated_tokens_per_second\taggregate_continuation_tokens_per_second\tavg_continuation_response_tokens_per_second\tavg_gpu_util_percent\tmax_gpu_util_percent\n' >>"$summary_tsv"
 
 case_index=0

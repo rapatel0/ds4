@@ -25,6 +25,7 @@ typedef struct {
     bool fp8_kv_cache;
     bool serial_open;
     bool wavefront_decode;
+    bool async_pipeline_decode;
     bool suppress_router_readback;
 } ds4_v100_replay_options;
 

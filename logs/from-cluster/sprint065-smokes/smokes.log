@@ -1,0 +1,7 @@
+cuda_source_dtypes_smoke: ok
+ds4: CUDA loading model tensors into device cache
+cuda_v100_full_scheduler_smoke: stages=8 token=16 pos=16 slots=2 layers=43 last=40-42 gpu=7 uploaded_tensors=1328 uploaded_bytes=156142862684 expert_last=26 ok
+ds4: CUDA loading model tensors into device cache
+cuda_v100_selected_token_smoke: prompt_tokens=18 selected=926 logit=35.250481 expected=3136 topk=926:35.250481:3136,11154:26.781448:323034,1:25.741684:3cefbd9c656e64e296816f66e2968173656e74656e6365efbd9c3e,3054:24.171469:546f,5718:24.016806:4c6574 ok
+ds4: CUDA loading model tensors into device cache
+cuda_v100_stage_wavefront_smoke: token0=16 token1=926 max_abs_slot0=0 max_abs_slot1=0 ok
