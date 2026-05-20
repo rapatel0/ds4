@@ -63,6 +63,7 @@ int main(void) {
         ROWS = 3,
         COLS = 256,
         OFFSET = 5,
+        TOKENS = 2,
     };
     const uint64_t row_bytes = ds4_src_f8_e4m3_b128_row_bytes(COLS);
     const uint32_t stride = (uint32_t)(row_bytes + 7);
@@ -147,6 +148,102 @@ int main(void) {
             expect_close_f32(out_dot[r], ref_dot[r], 1e-5f, "f8 matmul row");
         }
     }
+
+    float x_batch[TOKENS][COLS];
+    float ref_batch_dot[TOKENS][ROWS];
+    for (uint32_t tok = 0; tok < TOKENS; tok++) {
+        for (uint32_t i = 0; i < COLS; i++) {
+            x_batch[tok][i] = (float)((int)((i + 7u * tok) % 29u) - 14) * 0.0234375f;
+        }
+        for (uint32_t r = 0; r < ROWS; r++) {
+            char err[128] = {0};
+            const uint8_t *row = payload + OFFSET + (uint64_t)r * stride;
+            check(ds4_src_f8_e4m3_b128_row_dot(&ref_batch_dot[tok][r],
+                                                row,
+                                                x_batch[tok],
+                                                COLS,
+                                                err,
+                                                sizeof(err)) == 0,
+                  "reference f8 batch dot");
+        }
+    }
+
+    ds4_gpu_tensor *x_batch_t = ds4_gpu_tensor_alloc(sizeof(x_batch));
+    ds4_gpu_tensor *x0_t = ds4_gpu_tensor_alloc(sizeof(x_batch[0]));
+    ds4_gpu_tensor *x1_t = ds4_gpu_tensor_alloc(sizeof(x_batch[1]));
+    ds4_gpu_tensor *x_ptrs_t = ds4_gpu_tensor_alloc(TOKENS * sizeof(void *));
+    ds4_gpu_tensor *batch_out_t = ds4_gpu_tensor_alloc(sizeof(ref_batch_dot));
+    ds4_gpu_tensor *pair_out_t = ds4_gpu_tensor_alloc(sizeof(ref_batch_dot));
+    ds4_gpu_tensor *pair_table_out_t = ds4_gpu_tensor_alloc(sizeof(ref_batch_dot));
+    check(x_batch_t && x0_t && x1_t && x_ptrs_t && batch_out_t && pair_out_t && pair_table_out_t,
+          "f8 batch tensors allocate");
+    if (x_batch_t && x0_t && x1_t && x_ptrs_t && batch_out_t && pair_out_t && pair_table_out_t) {
+        float got_batch[TOKENS][ROWS];
+        float got_pair[TOKENS][ROWS];
+        float got_pair_table[TOKENS][ROWS];
+        memset(got_batch, 0, sizeof(got_batch));
+        memset(got_pair, 0, sizeof(got_pair));
+        memset(got_pair_table, 0, sizeof(got_pair_table));
+        check(ds4_gpu_tensor_write(x_batch_t, 0, x_batch, sizeof(x_batch)),
+              "f8 batch x upload");
+        check(ds4_gpu_tensor_write(x0_t, 0, x_batch[0], sizeof(x_batch[0])),
+              "f8 batch x0 upload");
+        check(ds4_gpu_tensor_write(x1_t, 0, x_batch[1], sizeof(x_batch[1])),
+              "f8 batch x1 upload");
+        check(ds4_gpu_arena_f8_e4m3_b128_matmul_batch_f32(arena,
+                                                           &view,
+                                                           x_batch_t,
+                                                           TOKENS,
+                                                           batch_out_t) == 0,
+              "cuda f8 batch matmul");
+        const ds4_gpu_tensor *x_rows[TOKENS] = {x0_t, x1_t};
+        check(ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_batch_ptrs_f32(arena,
+                                                                     &view,
+                                                                     &view,
+                                                                     x_ptrs_t,
+                                                                     x_rows,
+                                                                     TOKENS,
+                                                                     pair_out_t,
+                                                                     10.0f,
+                                                                     1.0f) == 0,
+              "cuda f8 pair swiglu batch ptrs");
+        check(ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_batch_ptr_table_f32(arena,
+                                                                          &view,
+                                                                          &view,
+                                                                          x_ptrs_t,
+                                                                          TOKENS,
+                                                                          pair_table_out_t,
+                                                                          10.0f,
+                                                                          1.0f) == 0,
+              "cuda f8 pair swiglu batch ptr table");
+        check(ds4_gpu_tensor_read(batch_out_t, 0, got_batch, sizeof(got_batch)),
+              "f8 batch output read");
+        check(ds4_gpu_tensor_read(pair_out_t, 0, got_pair, sizeof(got_pair)),
+              "f8 pair output read");
+        check(ds4_gpu_tensor_read(pair_table_out_t, 0, got_pair_table, sizeof(got_pair_table)),
+              "f8 pair table output read");
+        for (uint32_t tok = 0; tok < TOKENS; tok++) {
+            for (uint32_t r = 0; r < ROWS; r++) {
+                expect_close_f32(got_batch[tok][r],
+                                 ref_batch_dot[tok][r],
+                                 1e-5f,
+                                 "f8 batch matmul row");
+                float g = ref_batch_dot[tok][r];
+                float u = ref_batch_dot[tok][r];
+                g = fminf(g, 10.0f);
+                u = fminf(fmaxf(u, -10.0f), 10.0f);
+                const float want_pair = (g / (1.0f + expf(-g))) * u;
+                expect_close_f32(got_pair[tok][r],
+                                 want_pair,
+                                 1e-5f,
+                                 "f8 pair swiglu batch row");
+                expect_close_f32(got_pair_table[tok][r],
+                                 want_pair,
+                                 1e-5f,
+                                 "f8 pair swiglu table batch row");
+            }
+        }
+    }
     uint32_t bad_row[] = {ROWS};
     check(ds4_gpu_arena_f8_e4m3_b128_row_decode_f32(arena, &view, bad_row, 1,
                                                      got, sizeof(got)) != 0,
@@ -175,6 +272,13 @@ int main(void) {
     check(ds4_gpu_arena_f8_e4m3_b128_matmul_f32(arena, &bad, x_t, out_t) != 0,
           "accepted truncated f8 matmul view");
 
+    ds4_gpu_tensor_free(pair_table_out_t);
+    ds4_gpu_tensor_free(pair_out_t);
+    ds4_gpu_tensor_free(batch_out_t);
+    ds4_gpu_tensor_free(x_ptrs_t);
+    ds4_gpu_tensor_free(x1_t);
+    ds4_gpu_tensor_free(x0_t);
+    ds4_gpu_tensor_free(x_batch_t);
     ds4_gpu_tensor_free(out_t);
     ds4_gpu_tensor_free(x_t);
     ds4_gpu_arena_close(arena);

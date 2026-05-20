@@ -187,7 +187,7 @@ expert weight bytes and must beat that extra HBM traffic.
 |---|---|
 | correctness | run active slot batch gpu0 -> gpu7; copy HC only at stage boundaries |
 | throughput | wavefront slot batches so gpu0 works on batch N while gpu1 works on N-1 |
-| batching | batch active slots inside each stage to raise effective M for grouped experts; Sprint 057 makes request coalescing deterministic, Sprint 058 removes replay-only router readback sync, Sprint 059 enables scratch-backed multi-slot layer batching by default, and Sprint 060 removes the routed FFN input-copy staging with a pointer-input MXFP4 batch primitive |
+| batching | batch active slots inside each stage to raise effective M for grouped experts; Sprint 057 makes request coalescing deterministic, Sprint 058 removes replay-only router readback sync, Sprint 059 enables scratch-backed multi-slot layer batching by default, Sprint 060 removes routed FFN input-copy staging with a pointer-input MXFP4 batch primitive, and Sprint 061 keeps shared F8 batching opt-in after V100 evidence showed flat slot scaling |
 | transfer | boundary payload is `[active_slots][4][4096]`, FP16 normal or FP32 debug |
 
 ## Tensor-Parallel Version To Evaluate

@@ -1964,6 +1964,91 @@ __global__ static void arena_f8_e4m3_b128_matmul_kernel(
     if (threadIdx.x == 0) out[r] = partial[0];
 }
 
+__global__ static void arena_f8_e4m3_b128_matmul_batch_kernel(
+        float *out,
+        const uint8_t *base,
+        const float *x,
+        uint32_t rows,
+        uint32_t cols,
+        uint32_t row_stride_bytes) {
+    const uint32_t r = blockIdx.x;
+    const uint32_t tok = blockIdx.y;
+    if (r >= rows) return;
+    const uint8_t *row = base + (uint64_t)r * row_stride_bytes;
+    const float *x_row = x + (uint64_t)tok * cols;
+    float acc = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        const uint8_t *block = row + (uint64_t)(c / 128u) * 129ull;
+        const float scale = arena_e8m0_to_f32(block[0]);
+        const float w = arena_e4m3fn_to_f32(block[1u + (c % 128u)]) * scale;
+        acc += w * x_row[c];
+    }
+
+    __shared__ float partial[256];
+    partial[threadIdx.x] = acc;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) partial[threadIdx.x] += partial[threadIdx.x + stride];
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) out[(uint64_t)tok * rows + r] = partial[0];
+}
+
+__global__ static void arena_f8_e4m3_b128_pair_swiglu_ptrs_kernel(
+        float *out,
+        const uint8_t *gate_base,
+        const uint8_t *up_base,
+        const float *const *x_rows,
+        uint32_t rows,
+        uint32_t cols,
+        uint32_t gate_row_stride_bytes,
+        uint32_t up_row_stride_bytes,
+        float clamp,
+        float weight) {
+    const uint32_t r = blockIdx.x;
+    const uint32_t tok = blockIdx.y;
+    if (r >= rows) return;
+    const float *x = x_rows[tok];
+    if (!x) return;
+    const uint8_t *gate_row = gate_base + (uint64_t)r * gate_row_stride_bytes;
+    const uint8_t *up_row = up_base + (uint64_t)r * up_row_stride_bytes;
+    float gate_acc = 0.0f;
+    float up_acc = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        const uint8_t *gate_block = gate_row + (uint64_t)(c / 128u) * 129ull;
+        const uint8_t *up_block = up_row + (uint64_t)(c / 128u) * 129ull;
+        const uint32_t lane = c % 128u;
+        const float xv = x[c];
+        gate_acc += arena_e4m3fn_to_f32(gate_block[1u + lane]) *
+                    arena_e8m0_to_f32(gate_block[0]) * xv;
+        up_acc += arena_e4m3fn_to_f32(up_block[1u + lane]) *
+                  arena_e8m0_to_f32(up_block[0]) * xv;
+    }
+
+    __shared__ float gate_partial[256];
+    __shared__ float up_partial[256];
+    gate_partial[threadIdx.x] = gate_acc;
+    up_partial[threadIdx.x] = up_acc;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            gate_partial[threadIdx.x] += gate_partial[threadIdx.x + stride];
+            up_partial[threadIdx.x] += up_partial[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        float g = gate_partial[0];
+        float u = up_partial[0];
+        if (clamp > 1.0e-6f) {
+            g = fminf(g, clamp);
+            u = fminf(fmaxf(u, -clamp), clamp);
+        }
+        const float s = g / (1.0f + expf(-g));
+        out[(uint64_t)tok * rows + r] = s * u * weight;
+    }
+}
+
 __global__ static void arena_mxfp4_matmul_kernel(
         float *out,
         const uint8_t *base,
@@ -2702,12 +2787,9 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_row_decode_f32(
     return ok ? 0 : 1;
 }
 
-static int cuda_f8_e4m3_b128_matmul_view_ok(const ds4_gpu_arena *arena,
-                                            const ds4_gpu_source_row_view *view,
-                                            const ds4_gpu_tensor *x_f32,
-                                            const ds4_gpu_tensor *out_f32) {
-    if (!arena || !view || !x_f32 || !out_f32 || !arena->valid ||
-        !arena->ptr || !x_f32->ptr || !out_f32->ptr) {
+static int cuda_f8_e4m3_b128_view_layout_ok(const ds4_gpu_arena *arena,
+                                            const ds4_gpu_source_row_view *view) {
+    if (!arena || !view || !arena->valid || !arena->ptr) {
         return 0;
     }
     if (view->rows == 0 || view->cols == 0 || view->row_stride_bytes == 0) return 0;
@@ -2722,6 +2804,19 @@ static int cuda_f8_e4m3_b128_matmul_view_ok(const ds4_gpu_arena *arena,
         return 0;
     }
     if (last_start > view->byte_length || row_bytes > view->byte_length - last_start) {
+        return 0;
+    }
+    return 1;
+}
+
+static int cuda_f8_e4m3_b128_matmul_view_ok(const ds4_gpu_arena *arena,
+                                            const ds4_gpu_source_row_view *view,
+                                            const ds4_gpu_tensor *x_f32,
+                                            const ds4_gpu_tensor *out_f32) {
+    if (!x_f32 || !out_f32 || !x_f32->ptr || !out_f32->ptr) {
+        return 0;
+    }
+    if (!cuda_f8_e4m3_b128_view_layout_ok(arena, view)) {
         return 0;
     }
     if (x_f32->bytes < (uint64_t)view->cols * sizeof(float) ||
@@ -2747,6 +2842,126 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_f32(
         view->cols,
         view->row_stride_bytes);
     return cuda_ok(cudaGetLastError(), "f8 source matmul launch") ? 0 : 1;
+}
+
+extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_batch_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *view,
+        const ds4_gpu_tensor          *x_f32,
+        uint32_t                       n_tokens,
+        ds4_gpu_tensor                *out_f32) {
+    if (!x_f32 || !out_f32 || !x_f32->ptr || !out_f32->ptr || n_tokens == 0 ||
+        !cuda_f8_e4m3_b128_view_layout_ok(arena, view) ||
+        x_f32->bytes < (uint64_t)n_tokens * view->cols * sizeof(float) ||
+        out_f32->bytes < (uint64_t)n_tokens * view->rows * sizeof(float)) {
+        return 1;
+    }
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "f8 source batch matmul set device")) return 1;
+    const uint8_t *base = (const uint8_t *)((const char *)arena->ptr + view->arena_offset);
+    dim3 grid(view->rows, n_tokens, 1);
+    arena_f8_e4m3_b128_matmul_batch_kernel<<<grid, 256>>>(
+        (float *)out_f32->ptr,
+        base,
+        (const float *)x_f32->ptr,
+        view->rows,
+        view->cols,
+        view->row_stride_bytes);
+    return cuda_ok(cudaGetLastError(), "f8 source batch matmul launch") ? 0 : 1;
+}
+
+extern "C" int ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_batch_ptrs_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *gate,
+        const ds4_gpu_source_row_view *up,
+        ds4_gpu_tensor                *x_row_ptrs,
+        const ds4_gpu_tensor *const   *x_rows_f32,
+        uint32_t                       n_tokens,
+        ds4_gpu_tensor                *out_f32,
+        float                          clamp,
+        float                          weight) {
+    if (!gate || !up || !x_row_ptrs || !x_rows_f32 || !out_f32 ||
+        !x_row_ptrs->ptr || !out_f32->ptr || n_tokens == 0 ||
+        gate->rows != up->rows || gate->cols != up->cols ||
+        !cuda_f8_e4m3_b128_view_layout_ok(arena, gate) ||
+        !cuda_f8_e4m3_b128_view_layout_ok(arena, up) ||
+        x_row_ptrs->device != arena->gpu ||
+        x_row_ptrs->bytes < (uint64_t)n_tokens * sizeof(float *) ||
+        out_f32->bytes < (uint64_t)n_tokens * gate->rows * sizeof(float)) {
+        return 1;
+    }
+    std::vector<const float *> row_ptrs(n_tokens);
+    for (uint32_t tok = 0; tok < n_tokens; tok++) {
+        const ds4_gpu_tensor *x = x_rows_f32[tok];
+        if (!x || !x->ptr || x->device != arena->gpu ||
+            x->bytes < (uint64_t)gate->cols * sizeof(float)) {
+            return 1;
+        }
+        row_ptrs[tok] = (const float *)x->ptr;
+    }
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "f8 source pair ptr swiglu set device")) return 1;
+    if (!cuda_ok(cudaMemcpy(x_row_ptrs->ptr,
+                            row_ptrs.data(),
+                            (size_t)n_tokens * sizeof(float *),
+                            cudaMemcpyHostToDevice),
+                 "f8 source pair row ptr upload")) {
+        return 1;
+    }
+    const uint8_t *gate_base =
+        (const uint8_t *)((const char *)arena->ptr + gate->arena_offset);
+    const uint8_t *up_base =
+        (const uint8_t *)((const char *)arena->ptr + up->arena_offset);
+    dim3 grid(gate->rows, n_tokens, 1);
+    arena_f8_e4m3_b128_pair_swiglu_ptrs_kernel<<<grid, 256>>>(
+        (float *)out_f32->ptr,
+        gate_base,
+        up_base,
+        (const float *const *)x_row_ptrs->ptr,
+        gate->rows,
+        gate->cols,
+        gate->row_stride_bytes,
+        up->row_stride_bytes,
+        clamp,
+        weight);
+    return cuda_ok(cudaGetLastError(), "f8 source pair ptr swiglu launch") ? 0 : 1;
+}
+
+extern "C" int ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_batch_ptr_table_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *gate,
+        const ds4_gpu_source_row_view *up,
+        const ds4_gpu_tensor          *x_row_ptrs,
+        uint32_t                       n_tokens,
+        ds4_gpu_tensor                *out_f32,
+        float                          clamp,
+        float                          weight) {
+    if (!gate || !up || !x_row_ptrs || !out_f32 ||
+        !x_row_ptrs->ptr || !out_f32->ptr || n_tokens == 0 ||
+        gate->rows != up->rows || gate->cols != up->cols ||
+        !cuda_f8_e4m3_b128_view_layout_ok(arena, gate) ||
+        !cuda_f8_e4m3_b128_view_layout_ok(arena, up) ||
+        x_row_ptrs->device != arena->gpu ||
+        x_row_ptrs->bytes < (uint64_t)n_tokens * sizeof(float *) ||
+        out_f32->bytes < (uint64_t)n_tokens * gate->rows * sizeof(float)) {
+        return 1;
+    }
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "f8 source pair ptr table swiglu set device")) return 1;
+    const uint8_t *gate_base =
+        (const uint8_t *)((const char *)arena->ptr + gate->arena_offset);
+    const uint8_t *up_base =
+        (const uint8_t *)((const char *)arena->ptr + up->arena_offset);
+    dim3 grid(gate->rows, n_tokens, 1);
+    arena_f8_e4m3_b128_pair_swiglu_ptrs_kernel<<<grid, 256>>>(
+        (float *)out_f32->ptr,
+        gate_base,
+        up_base,
+        (const float *const *)x_row_ptrs->ptr,
+        gate->rows,
+        gate->cols,
+        gate->row_stride_bytes,
+        up->row_stride_bytes,
+        clamp,
+        weight);
+    return cuda_ok(cudaGetLastError(), "f8 source pair ptr table swiglu launch") ? 0 : 1;
 }
 
 static int cuda_mxfp4_matmul_view_ok(const ds4_gpu_arena *arena,

@@ -131,6 +131,31 @@ int ds4_gpu_arena_f8_e4m3_b128_matmul_f32(
         const ds4_gpu_source_row_view *view,
         const ds4_gpu_tensor          *x_f32,
         ds4_gpu_tensor                *out_f32);
+int ds4_gpu_arena_f8_e4m3_b128_matmul_batch_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *view,
+        const ds4_gpu_tensor          *x_f32,
+        uint32_t                       n_tokens,
+        ds4_gpu_tensor                *out_f32);
+int ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_batch_ptrs_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *gate,
+        const ds4_gpu_source_row_view *up,
+        ds4_gpu_tensor                *x_row_ptrs,
+        const ds4_gpu_tensor *const   *x_rows_f32,
+        uint32_t                       n_tokens,
+        ds4_gpu_tensor                *out_f32,
+        float                          clamp,
+        float                          weight);
+int ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_batch_ptr_table_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *gate,
+        const ds4_gpu_source_row_view *up,
+        const ds4_gpu_tensor          *x_row_ptrs,
+        uint32_t                       n_tokens,
+        ds4_gpu_tensor                *out_f32,
+        float                          clamp,
+        float                          weight);
 int ds4_gpu_arena_mxfp4_matmul_f32(
         const ds4_gpu_arena           *arena,
         const ds4_gpu_source_row_view *view,

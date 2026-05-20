@@ -3,6 +3,7 @@
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int exec_error(char *err, size_t errlen, const char *fmt, ...) {
@@ -71,7 +72,11 @@ void ds4_v100_layer_batch_scratch_free(ds4_v100_layer_batch_scratch *scratch) {
     free_tensor_array(scratch->ffn_cur, DS4_V100_LAYER_MAX_BATCH);
     free_tensor_array(scratch->ffn_norm, DS4_V100_LAYER_MAX_BATCH);
     free_tensor_array(scratch->ffn_delta, DS4_V100_LAYER_MAX_BATCH);
+    free_tensor_array(scratch->ffn_shared_batch_view, DS4_V100_LAYER_MAX_BATCH);
+    free_tensor_array(scratch->ffn_routed_out_view, DS4_V100_LAYER_MAX_BATCH);
     ds4_gpu_tensor_free(scratch->ffn_shared);
+    ds4_gpu_tensor_free(scratch->ffn_shared_batch);
+    ds4_gpu_tensor_free(scratch->ffn_shared_mid_batch);
     ds4_gpu_tensor_free(scratch->ffn_shared_mid);
     ds4_gpu_tensor_free(scratch->ffn_shared_up);
     ds4_gpu_tensor_free(scratch->ffn_shared_gate);
@@ -230,7 +235,17 @@ static int ensure_batch_scratch(ds4_v100_layer_batch_scratch *scratch,
                           hidden_bytes,
                           err,
                           errlen,
-                          "batch ffn_shared")) {
+                          "batch ffn_shared") ||
+        alloc_tensor_slot(&scratch->ffn_shared_mid_batch,
+                          max_slots * mid_bytes,
+                          err,
+                          errlen,
+                          "batch ffn_shared_mid_batch") ||
+        alloc_tensor_slot(&scratch->ffn_shared_batch,
+                          max_slots * hidden_bytes,
+                          err,
+                          errlen,
+                          "batch ffn_shared_batch")) {
         ds4_v100_layer_batch_scratch_free(scratch);
         return 1;
     }
@@ -239,7 +254,32 @@ static int ensure_batch_scratch(ds4_v100_layer_batch_scratch *scratch,
     scratch->intermediate = mid;
     scratch->routes = routes;
     scratch->max_slots = DS4_V100_LAYER_MAX_BATCH;
+    for (uint32_t slot = 0; slot < DS4_V100_LAYER_MAX_BATCH; slot++) {
+        scratch->ffn_routed_out_view[slot] =
+            ds4_gpu_tensor_view(scratch->ffn_routed_out,
+                                (uint64_t)slot * hidden_bytes,
+                                hidden_bytes);
+        scratch->ffn_shared_batch_view[slot] =
+            ds4_gpu_tensor_view(scratch->ffn_shared_batch,
+                                (uint64_t)slot * hidden_bytes,
+                                hidden_bytes);
+        if (!scratch->ffn_routed_out_view[slot] ||
+            !scratch->ffn_shared_batch_view[slot]) {
+            ds4_v100_layer_batch_scratch_free(scratch);
+            return exec_error(err, errlen, "failed to allocate batch FFN views");
+        }
+    }
     return 0;
+}
+
+static bool env_flag_enabled(const char *name) {
+    const char *v = getenv(name);
+    if (!v || !*v) return false;
+    return strcmp(v, "0") != 0 &&
+           strcmp(v, "false") != 0 &&
+           strcmp(v, "FALSE") != 0 &&
+           strcmp(v, "off") != 0 &&
+           strcmp(v, "OFF") != 0;
 }
 
 static uint32_t layer_ratio(const ds4_v100_layer_state *state) {
@@ -1139,6 +1179,7 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
                                             errlen)) {
         return 1;
     }
+    const bool batch_shared_f8 = env_flag_enabled("DS4_V100_BATCH_SHARED_F8");
     ds4_gpu_tensor *router_t = use_scratch ? cfgs[0].batch_scratch->ffn_router
         : ds4_gpu_tensor_alloc((uint64_t)n_slots * 256u * sizeof(float));
     ds4_gpu_tensor *probs_t = use_scratch ? cfgs[0].batch_scratch->ffn_probs
@@ -1163,6 +1204,10 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
         : ds4_gpu_tensor_alloc((uint64_t)mid * sizeof(float));
     ds4_gpu_tensor *shared_t = use_scratch ? cfgs[0].batch_scratch->ffn_shared
         : ds4_gpu_tensor_alloc((uint64_t)hidden * sizeof(float));
+    ds4_gpu_tensor *shared_mid_batch_t = use_scratch ? cfgs[0].batch_scratch->ffn_shared_mid_batch
+        : (batch_shared_f8 ? ds4_gpu_tensor_alloc((uint64_t)n_slots * mid * sizeof(float)) : NULL);
+    ds4_gpu_tensor *shared_batch_t = use_scratch ? cfgs[0].batch_scratch->ffn_shared_batch
+        : (batch_shared_f8 ? ds4_gpu_tensor_alloc((uint64_t)n_slots * hidden * sizeof(float)) : NULL);
 
     int rc = 1;
     int32_t tokens[DS4_V100_LAYER_MAX_BATCH] = {0};
@@ -1177,7 +1222,8 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
     }
     if (!router_t || !probs_t || !selected_t || !weights_t || !tokens_t || !input_ptrs_t ||
         !routed_mid_t || !routed_out_t ||
-        !shared_gate_t || !shared_up_t || !shared_mid_t || !shared_t) {
+        !shared_gate_t || !shared_up_t || !shared_mid_t || !shared_t ||
+        (batch_shared_f8 && (!shared_mid_batch_t || !shared_batch_t))) {
         exec_error(err, errlen, "failed to allocate FFN batch tensors");
         goto done;
     }
@@ -1289,36 +1335,98 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
         goto done;
     }
 
-    for (uint32_t slot = 0; slot < n_slots; slot++) {
-        ds4_gpu_tensor *routed_view =
-            ds4_gpu_tensor_view(routed_out_t,
-                                (uint64_t)slot * hidden * sizeof(float),
-                                (uint64_t)hidden * sizeof(float));
-        if (!routed_view) {
-            exec_error(err, errlen, "FFN batch routed output view failed");
+    if (batch_shared_f8) {
+        if (ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_batch_ptr_table_f32(
+                cfgs[0].arena,
+                &shared_gate_v,
+                &shared_up_v,
+                input_ptrs_t,
+                n_slots,
+                shared_mid_batch_t,
+                10.0f,
+                1.0f) != 0 ||
+            ds4_gpu_arena_f8_e4m3_b128_matmul_batch_f32(cfgs[0].arena,
+                                                        &shared_down_v,
+                                                        shared_mid_batch_t,
+                                                        n_slots,
+                                                        shared_batch_t) != 0) {
+            exec_error(err, errlen, "shared FFN batch failed");
             goto done;
         }
-        const int shared_rc =
-            ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfgs[slot].arena,
-                                                  &shared_gate_v,
-                                                  ffn_inputs[slot],
-                                                  shared_gate_t) != 0 ||
-            ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfgs[slot].arena,
-                                                  &shared_up_v,
-                                                  ffn_inputs[slot],
-                                                  shared_up_t) != 0 ||
-            !ds4_gpu_swiglu_tensor(shared_mid_t, shared_gate_t, shared_up_t, mid, 10.0f, 1.0f) ||
-            ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfgs[slot].arena,
-                                                  &shared_down_v,
-                                                  shared_mid_t,
-                                                  shared_t) != 0 ||
-            !ds4_gpu_add_tensor(ffn_deltas[slot], routed_view, shared_t, hidden);
-        ds4_gpu_tensor_free(routed_view);
-        if (shared_rc) {
-            exec_error(err, errlen, "shared FFN batch slot %u failed", slot);
-            goto done;
+        for (uint32_t slot = 0; slot < n_slots; slot++) {
+            ds4_gpu_tensor *routed_view = use_scratch
+                ? cfgs[0].batch_scratch->ffn_routed_out_view[slot]
+                : ds4_gpu_tensor_view(routed_out_t,
+                                      (uint64_t)slot * hidden * sizeof(float),
+                                      (uint64_t)hidden * sizeof(float));
+            ds4_gpu_tensor *shared_view = use_scratch
+                ? cfgs[0].batch_scratch->ffn_shared_batch_view[slot]
+                : ds4_gpu_tensor_view(shared_batch_t,
+                                      (uint64_t)slot * hidden * sizeof(float),
+                                      (uint64_t)hidden * sizeof(float));
+            if (!routed_view || !shared_view) {
+                if (!use_scratch) {
+                    ds4_gpu_tensor_free(shared_view);
+                    ds4_gpu_tensor_free(routed_view);
+                }
+                exec_error(err, errlen, "FFN batch output view failed");
+                goto done;
+            }
+            const int shared_rc = !ds4_gpu_add_tensor(ffn_deltas[slot],
+                                                      routed_view,
+                                                      shared_view,
+                                                      hidden);
+            if (!use_scratch) {
+                ds4_gpu_tensor_free(shared_view);
+                ds4_gpu_tensor_free(routed_view);
+            }
+            if (shared_rc) {
+                exec_error(err, errlen, "shared FFN batch slot %u failed", slot);
+                goto done;
+            }
         }
-        if (reports) {
+    } else {
+        for (uint32_t slot = 0; slot < n_slots; slot++) {
+            ds4_gpu_tensor *routed_view = use_scratch
+                ? cfgs[0].batch_scratch->ffn_routed_out_view[slot]
+                : ds4_gpu_tensor_view(routed_out_t,
+                                      (uint64_t)slot * hidden * sizeof(float),
+                                      (uint64_t)hidden * sizeof(float));
+            if (!routed_view) {
+                if (!use_scratch) ds4_gpu_tensor_free(routed_view);
+                exec_error(err, errlen, "FFN batch routed output view failed");
+                goto done;
+            }
+            const int shared_rc =
+                ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfgs[slot].arena,
+                                                      &shared_gate_v,
+                                                      ffn_inputs[slot],
+                                                      shared_gate_t) != 0 ||
+                ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfgs[slot].arena,
+                                                      &shared_up_v,
+                                                      ffn_inputs[slot],
+                                                      shared_up_t) != 0 ||
+                !ds4_gpu_swiglu_tensor(shared_mid_t,
+                                       shared_gate_t,
+                                       shared_up_t,
+                                       mid,
+                                       10.0f,
+                                       1.0f) ||
+                ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfgs[slot].arena,
+                                                      &shared_down_v,
+                                                      shared_mid_t,
+                                                      shared_t) != 0 ||
+                !ds4_gpu_add_tensor(ffn_deltas[slot], routed_view, shared_t, hidden);
+            if (!use_scratch) ds4_gpu_tensor_free(routed_view);
+            if (shared_rc) {
+                exec_error(err, errlen, "shared FFN batch slot %u failed", slot);
+                goto done;
+            }
+        }
+    }
+
+    if (reports) {
+        for (uint32_t slot = 0; slot < n_slots; slot++) {
             ds4_v100_layer_execute_report *report = &reports[slot];
             memset(report, 0, sizeof(*report));
             report->routes = routes;
@@ -1335,6 +1443,8 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
 
 done:
     if (!use_scratch) {
+        ds4_gpu_tensor_free(shared_batch_t);
+        ds4_gpu_tensor_free(shared_mid_batch_t);
         ds4_gpu_tensor_free(shared_t);
         ds4_gpu_tensor_free(shared_mid_t);
         ds4_gpu_tensor_free(shared_up_t);

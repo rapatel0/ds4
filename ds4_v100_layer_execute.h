@@ -90,10 +90,14 @@ typedef struct {
     ds4_gpu_tensor *ffn_input_ptrs;
     ds4_gpu_tensor *ffn_routed_mid;
     ds4_gpu_tensor *ffn_routed_out;
+    ds4_gpu_tensor *ffn_routed_out_view[DS4_V100_LAYER_MAX_BATCH];
     ds4_gpu_tensor *ffn_shared_gate;
     ds4_gpu_tensor *ffn_shared_up;
     ds4_gpu_tensor *ffn_shared_mid;
     ds4_gpu_tensor *ffn_shared;
+    ds4_gpu_tensor *ffn_shared_mid_batch;
+    ds4_gpu_tensor *ffn_shared_batch;
+    ds4_gpu_tensor *ffn_shared_batch_view[DS4_V100_LAYER_MAX_BATCH];
 } ds4_v100_layer_batch_scratch;
 
 void ds4_v100_layer_batch_scratch_init(ds4_v100_layer_batch_scratch *scratch);
