@@ -1579,6 +1579,61 @@ extern "C" int ds4_gpu_tensor_copy_async(ds4_gpu_tensor *dst, uint64_t dst_offse
                    "async tensor peer copy");
 }
 
+__global__ static void top1_f32_serial_kernel(const float *logits,
+                                              uint32_t n_logits,
+                                              float *out_logit,
+                                              uint32_t *out_token) {
+    if (threadIdx.x != 0 || blockIdx.x != 0 || n_logits == 0) return;
+    float best_logit = logits[0];
+    uint32_t best_token = 0;
+    for (uint32_t i = 1; i < n_logits; i++) {
+        const float v = logits[i];
+        if (v > best_logit) {
+            best_logit = v;
+            best_token = i;
+        }
+    }
+    *out_logit = best_logit;
+    *out_token = best_token;
+}
+
+extern "C" int ds4_gpu_top1_f32_tensor(const ds4_gpu_tensor *logits,
+                                        uint32_t n_logits,
+                                        uint32_t *token,
+                                        float *logit) {
+    if (!logits || !logits->ptr || !token || !logit || n_logits == 0 ||
+        logits->bytes < (uint64_t)n_logits * sizeof(float)) {
+        return 0;
+    }
+    if (!cuda_ok(cudaSetDevice(logits->device), "top1 set device")) return 0;
+
+    const uint64_t token_offset = 16u;
+    const uint64_t tmp_bytes = token_offset + sizeof(uint32_t);
+    void *tmp = cuda_tmp_alloc(tmp_bytes, "top1 f32 reduce");
+    if (!tmp) return 0;
+
+    float *block_logits = (float *)tmp;
+    uint32_t *block_tokens = (uint32_t *)((char *)tmp + token_offset);
+    top1_f32_serial_kernel<<<1, 1>>>((const float *)logits->ptr,
+                                     n_logits,
+                                     block_logits,
+                                     block_tokens);
+    if (!cuda_ok(cudaGetLastError(), "top1 f32 launch")) return 0;
+    if (!cuda_ok(cudaMemcpy(logit,
+                            block_logits,
+                            sizeof(*logit),
+                            cudaMemcpyDeviceToHost),
+                 "top1 f32 logit read") ||
+        !cuda_ok(cudaMemcpy(token,
+                            block_tokens,
+                            sizeof(*token),
+                            cudaMemcpyDeviceToHost),
+                 "top1 f32 token read")) {
+        return 0;
+    }
+    return *token < n_logits;
+}
+
 extern "C" int ds4_gpu_begin_commands(void) { return 1; }
 extern "C" int ds4_gpu_flush_commands(void) { return cuda_ok(cudaDeviceSynchronize(), "flush"); }
 extern "C" int ds4_gpu_end_commands(void) { return cuda_ok(cudaDeviceSynchronize(), "end commands"); }

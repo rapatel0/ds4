@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: vision
-revision: 86
+revision: 87
 ---
 
 # Vision: DS4 V100 Appliance
@@ -480,6 +480,12 @@ optimized V100 low-bit expert kernels in the actual hot path.
   (`+1.543%`) while preserving token correctness, but stayed below the `3%`
   threshold for changing the appliance default. Keep async handoff opt-in; the
   next lever should be explicit CUDA stream/event handoff or kernel-side work.
+- Sprint 075 tested a device-resident output-head top-1 path. The CUDA top-1
+  primitive and persistent gpu7 scratch are correct, but the one-thread device
+  reducer regressed output-head timing from `346.461 ms` to `423.818 ms`.
+  Generated tok/s moved only from `8.659254` to `8.697510`, so the path stays
+  opt-in behind `DS4_V100_ENABLE_OUTPUT_HEAD_FASTPATH=1` and the host-logit
+  output-head path remains default.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -545,6 +551,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 072 MTP commit throughput gate | `0.789` off, `0.774` verify, `0.777` commit generated tok/s at 1M/1 slot | Measured | Commit accepted and committed `4/4` drafts, but exact commit was `1.43%` slower than off because the target verifier token still runs. MTP remains correct; near-term throughput work should pivot back to stage/kernel scheduling. |
 | Sprint 073 persistent mailbox workers | `8.05` generated tok/s at 1M/4 slots | Measured | Mailbox workers are correct and beat old persistent by `2.39%`, but stay `6.89%` slower than per-step. Keep `per-step` as the appliance `auto` default and pivot below pthread scheduling. |
 | Sprint 074 async HC handoff | `8.74` generated tok/s at 1M/4 slots | Measured | Queued peer handoff is correct and improves per-step throughput by `1.54%`, but remains below the default-change threshold. Keep opt-in and pursue explicit stream/event handoff or kernel-side work. |
+| Sprint 075 output-head top-1 candidate | `8.70` generated tok/s at 1M/4 slots | Measured | Device top-1 is correct but not default-worthy: generated tok/s improved only `0.44%` while output-head timing regressed `22.33%` (`423.818 ms` vs `346.461 ms`). Keep it opt-in and either build a real parallel reducer or return to larger stage/kernel costs. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -1604,6 +1611,22 @@ GPU utilization with architectural changes, and only then compare against the
   the default-change rule. Keep opt-in and target explicit stream/event handoff
   or kernel-side work next.
 
+### Sprint 075 - Output-Head Top-1 Fast Path [complete]
+
+- **Goal**: Remove full-logit CPU readback from greedy `k == 1` output-head
+  selection by adding persistent gpu7 output-head scratch plus a device top-1
+  reducer.
+- **Rationale**: The output-head path still allocated scratch per selection,
+  copied all `129280` logits to the host, and scanned on CPU. A device-resident
+  top-1 selector tested whether that synchronization/readback was a practical
+  throughput blocker.
+- **Outcome**: `SHIP_OPT_IN_ONLY`. The CUDA top-1 primitive and scratch reuse
+  are correct, but the serial device reducer regressed output-head timing from
+  `346.461 ms` to `423.818 ms` on the 1M/4-slot per-step fixture. Generated
+  tok/s moved only from `8.659254` to `8.697510`, so the host-logit path stays
+  default and the candidate remains opt-in with
+  `DS4_V100_ENABLE_OUTPUT_HEAD_FASTPATH=1`.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -1839,6 +1862,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 072 MTP commit throughput gate. | Exact commit accepted and committed all measured drafts, but the same-fixture V100 benchmark was slightly slower than MTP off because target verification still runs. Keep MTP commit as a correctness feature and pivot practical throughput back to stage/kernel scheduling before recursive or skip-verify MTP. | Sprint 073+ |
 | 2026-05-20 | Shipped Sprint 073 persistent mailbox workers. | Mailbox scheduling reduces old persistent wait accounting and improves over old persistent, but it remains slower than per-step. Keep per-step as the practical default and move the next optimization below host condition-variable scheduling. | Sprint 074+ |
 | 2026-05-20 | Shipped Sprint 074 async HC handoff. | Queued default-stream peer handoff is correct and slightly faster, but the gain is too small to change the appliance default. The next scheduling sprint should use explicit CUDA streams/events, or the roadmap should pivot to larger kernel-side work. | Sprint 075+ |
+| 2026-05-20 | Shipped Sprint 075 output-head top-1 probe. | The device top-1 candidate is correct but slower in output-head timing because the safe serial CUDA scan is worse than the existing host scan/readback. Keep the primitive opt-in and pursue a real parallel reducer, batched output-head selection, or larger stage/kernel work. | Sprint 076+ |
 
 ## Open Questions
 

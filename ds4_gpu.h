@@ -36,6 +36,10 @@ int ds4_gpu_tensor_copy(ds4_gpu_tensor *dst, uint64_t dst_offset,
 int ds4_gpu_tensor_copy_async(ds4_gpu_tensor *dst, uint64_t dst_offset,
                               const ds4_gpu_tensor *src, uint64_t src_offset,
                               uint64_t bytes);
+int ds4_gpu_top1_f32_tensor(const ds4_gpu_tensor *logits,
+                            uint32_t n_logits,
+                            uint32_t *token,
+                            float *logit);
 
 int ds4_gpu_begin_commands(void);
 int ds4_gpu_flush_commands(void);

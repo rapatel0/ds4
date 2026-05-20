@@ -169,6 +169,19 @@ int main(void) {
                 failures++;
             }
         }
+        uint32_t device_top1 = UINT32_MAX;
+        float device_logit = 0.0f;
+        check(ds4_gpu_top1_f32_tensor(out_t, ROWS, &device_top1, &device_logit),
+              "device top1");
+        if (device_top1 != got_top[0] || fabsf(device_logit - got[got_top[0]]) > 5e-4f) {
+            fprintf(stderr,
+                    "cuda_v100_bounded_logits_smoke: device top1 got %u %.8g expected gpu %u %.8g\n",
+                    device_top1,
+                    device_logit,
+                    got_top[0],
+                    got[got_top[0]]);
+            failures++;
+        }
     }
 
     ds4_gpu_bf16_matrix_view bad = view;
