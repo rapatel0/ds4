@@ -533,7 +533,7 @@ tests/cuda_hc_relay_smoke:
 else
 tests/cuda_bf16_probe: tests/cuda_bf16_probe.o ds4_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
-tests/cuda_v100_context_smoke: tests/cuda_v100_context_smoke.o ds4_v100_context.o ds4_v100_context_cuda.o ds4_pack.o
+tests/cuda_v100_context_smoke: tests/cuda_v100_context_smoke.o $(V100_CONTEXT_OBJS) ds4_v100_context_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tests/cuda_source_dtypes_smoke: tests/cuda_source_dtypes_smoke.o ds4_cuda.o ds4_source_formats.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
@@ -541,7 +541,7 @@ tests/cuda_v100_prefill_kv_smoke: tests/cuda_v100_prefill_kv_smoke.o ds4_cuda.o 
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tests/cuda_v100_compressor_bridge_smoke: tests/cuda_v100_compressor_bridge_smoke.o ds4_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
-tests/cuda_v100_projection_attention_smoke: tests/cuda_v100_projection_attention_smoke.o ds4_cuda.o ds4_source_formats.o ds4_v100_context.o ds4_v100_context_cuda.o ds4_pack.o
+tests/cuda_v100_projection_attention_smoke: tests/cuda_v100_projection_attention_smoke.o ds4_cuda.o ds4_source_formats.o $(V100_CONTEXT_OBJS) ds4_v100_context_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tests/cuda_v100_bounded_logits_smoke: tests/cuda_v100_bounded_logits_smoke.o ds4_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
@@ -553,9 +553,9 @@ tests/cuda_v100_turbomind_adapter_smoke: tests/cuda_v100_turbomind_adapter_smoke
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS) -ldl
 tests/cuda_v100_turbomind_sidecar_smoke: tests/cuda_v100_turbomind_sidecar_smoke.o ds4_cuda.o ds4_source_formats.o ds4_pack.o ds4_turbomind_pack.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS) -ldl
-tests/cuda_v100_descriptor_bound_ffn_smoke: tests/cuda_v100_descriptor_bound_ffn_smoke.o ds4_cuda.o ds4_v100_layer_state.o ds4_source_formats.o ds4_v100_context.o ds4_pack.o
+tests/cuda_v100_descriptor_bound_ffn_smoke: tests/cuda_v100_descriptor_bound_ffn_smoke.o ds4_cuda.o ds4_v100_layer_state.o ds4_source_formats.o $(V100_CONTEXT_OBJS) ds4_v100_context_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
-tests/cuda_v100_descriptor_bound_attention_smoke: tests/cuda_v100_descriptor_bound_attention_smoke.o ds4_cuda.o ds4_v100_layer_state.o ds4_source_formats.o ds4_v100_context.o ds4_pack.o
+tests/cuda_v100_descriptor_bound_attention_smoke: tests/cuda_v100_descriptor_bound_attention_smoke.o ds4_cuda.o ds4_v100_layer_state.o ds4_source_formats.o $(V100_CONTEXT_OBJS) ds4_v100_context_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tests/cuda_v100_integrated_layer_smoke: tests/cuda_v100_integrated_layer_smoke.o ds4_cuda.o $(V100_LAYER_EXECUTE_OBJS)
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
@@ -575,7 +575,7 @@ tests/cuda_v100_scheduler_snapshot_smoke: tests/cuda_v100_scheduler_snapshot_smo
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tests/cuda_v100_stage_wavefront_smoke: tests/cuda_v100_stage_wavefront_smoke.o ds4_cuda.o $(V100_SCHEDULER_OBJS)
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
-tests/cuda_hc_relay_smoke: tests/cuda_hc_relay_smoke.o ds4_v100_context.o ds4_v100_context_cuda.o ds4_pack.o
+tests/cuda_hc_relay_smoke: tests/cuda_hc_relay_smoke.o $(V100_CONTEXT_OBJS) ds4_v100_context_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 endif
 

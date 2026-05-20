@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: codex
-revision: 106
+revision: 107
 ---
 
 # Vision: DS4 V100 Appliance
@@ -598,6 +598,18 @@ optimized V100 low-bit expert kernels in the actual hot path.
   enables shared F8 FFN batching by default for multi-slot appliance serving.
   The 1M/4-slot no-client-warmup soak remains correct and improves to
   `12.634955` generated tok/s and `11.845270` continuation tok/s.
+- Sprints 095-100 moved the appliance from low-teens tok/s to the current
+  production-default baseline. Request rendezvous made 8-slot 256K serving
+  deterministic, the CUDA tensor pool removed request-window allocator churn,
+  grouped F8 attention output cut F8 launch count, and TurboMind route
+  validation readback is now debug-only. The current best production-default
+  evidence is the 8-slot/256K soak at about `26.4` generated tok/s with
+  `token_match=8/8`.
+- Sprint 101 repaired the opt-in batch attention projection semantics so it
+  matches the single-slot path's attention RMS norm and compressed-KV prep
+  ordering. V100 evidence says it should remain opt-in: 8-slot/256K was flat
+  (`26.432087` opt-in vs `26.402101` default generated tok/s) and 4-slot/1M
+  regressed (`17.503345` opt-in vs `18.102742` default).
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -688,6 +700,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 098 grouped F8 attention output | `17.904697` generated tok/s at 1M/4 slots; `26.206100` at 256K/8 slots | Measured | Replaces eight attention output-A F8 matmul launches per layer/slot with one grouped launch and adds `DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A=1` rollback. Same-binary controls preserve correctness and show grouped beating rollback (`16.897788` and `25.456942`). Served profile reduces single F8 matmul calls from `11880` to `5544` and total CUDA kernel launches from `39684` to `34140`. |
 | Sprint 099 batch attention projection probe | `17.742637` generated tok/s opt-in vs `17.764257` rollback at 1M/4 slots | Measured | Adds an explicit `DS4_V100_ENABLE_BATCH_ATTN_PROJ=1` probe for batching Q-A, Q-B, and KV F8 projections across active slots. Correctness passes at 4-slot/1M and 8-slot/256K, but same-binary controls are flat/slightly faster without the probe (`26.149613` rollback vs `26.128571` opt-in at 8 slots). Keep it off by default and stop pursuing projection-only batching in this shape. |
 | Sprint 100 TurboMind sync readback A/B | `26.372672` generated tok/s at 256K/8 slots production default | Measured | Adds an opt-in TurboMind grouped GEMM ABI that accepts host-known routed row count and makes packed route validation readback debug-only. V100 evidence showed the no-row-count-readback ABI moves wait time into `cudaDeviceSynchronize` and is slower, so production defaults to the old ABI with route validation sync off (`DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS=1`, `DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC=0`). |
+| Sprint 101 batch attention semantic repair | `26.402101` default vs `26.432087` opt-in at 256K/8 slots; `18.102742` default vs `17.503345` opt-in at 1M/4 slots | Measured | Repairs the opt-in batch projection path to use attention RMS-normalized rows and the same compressed-KV preparation input as the single-slot path. Correctness passes, but the 8-slot result is noise-level and the 1M/4-slot result regresses, so `DS4_V100_ENABLE_BATCH_ATTN_PROJ=1` remains off by default. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -2162,6 +2175,25 @@ GPU utilization with architectural changes, and only then compare against the
   `DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC=0`). The production-default 8-slot
   256K soak reports `26.372672` generated tok/s with `token_match=8/8`.
 
+### Sprint 101 - Batch Attention Projection Semantic Repair [complete]
+
+- **Goal**: Repair the opt-in batch attention projection path so its semantics
+  match the single-slot path before using it as a throughput candidate.
+- **Rationale**: The Sprint 099 probe batched Q-A/Q-B/KV projections across
+  active slots but skipped the attention RMS norm before projection and passed
+  raw hidden rows into compressed-KV preparation. That made the path a poor
+  optimization target even if the token fixture happened to pass.
+- **Outcome**: `KEEP_BATCH_ATTN_PROJ_OPT_IN`. The batch path now normalizes
+  each active slot before Q-A/KV projection, builds the projection pointer
+  table from normalized rows, and passes the normalized row into
+  `prepare_decode_cache_attention()`. It also reuses persistent attention batch
+  scratch and rejects mixed shard/source offset model maps. V100 validation
+  passed attention smoke, 4-slot and 8-slot full scheduler smokes, and the
+  selected-token oracle. Throughput does not justify defaulting it:
+  4-slot/1M regressed from `18.102742` to `17.503345` generated tok/s, while
+  8-slot/256K moved only from `26.402101` to `26.432087`. The production
+  default remains Sprint 100.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -2423,6 +2455,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 098 grouped F8 attention output. | Attention output-A now uses one grouped F8 launch instead of eight group launches per layer/slot, with a launcher rollback flag. Same-binary V100 controls show `17.904697` vs `16.897788` generated tok/s at 1M/4 slots and `26.206100` vs `25.456942` at 256K/8 slots. The next sprint should batch attention Q/KV projection work across active slots or reduce remaining `cudaMemcpy` API overhead. | Sprint 099+ |
 | 2026-05-20 | Completed Sprint 099 batch attention projection probe as opt-in only. | Projection-only batching across active slots is correct but not faster, so it remains behind `DS4_V100_ENABLE_BATCH_ATTN_PROJ=1` and is not a production default. The next sprint should shift away from projection-only batching and instead attack `cudaMemcpy` API overhead or a larger attention-stage batching boundary. | Sprint 100+ |
 | 2026-05-20 | Shipped Sprint 100 TurboMind sync readback A/B. | The packed TurboMind route-validation readback is now debug-only in production, while the no-row-count-readback ABI remains opt-in because V100 profiling showed the wait moved into `cudaDeviceSynchronize` and 8-slot throughput regressed. The measured production default is old ABI plus route sync off at `26.372672` generated tok/s for 256K/8 slots. The next sprint should target stage/layer synchronization or a larger batched attention boundary. | Sprint 101+ |
+| 2026-05-20 | Shipped Sprint 101 batch attention semantic repair. | The opt-in batch attention projection path now matches single-slot attention RMS norm and compressed-KV prep ordering, but V100 A/B shows no production-worthy gain (`26.43` vs `26.40` at 256K/8 slots and a regression at 1M/4 slots). Keep it opt-in and move the next optimization to a larger attention-stage boundary, stage/layer synchronization, or F8 matmul shape work. | Sprint 102+ |
 
 ## Open Questions
 

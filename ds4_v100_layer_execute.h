@@ -69,6 +69,10 @@ typedef struct {
     uint32_t hidden;
     uint32_t intermediate;
     uint32_t routes;
+    uint32_t q_rank;
+    uint32_t q_width;
+    uint32_t kv_width;
+    uint32_t out_rank;
     uint32_t max_slots;
 
     ds4_gpu_tensor *hc_norm[DS4_V100_LAYER_MAX_BATCH];
@@ -98,6 +102,22 @@ typedef struct {
     ds4_gpu_tensor *ffn_shared_mid_batch;
     ds4_gpu_tensor *ffn_shared_batch;
     ds4_gpu_tensor *ffn_shared_batch_view[DS4_V100_LAYER_MAX_BATCH];
+
+    ds4_gpu_tensor *attn_input_ptrs;
+    ds4_gpu_tensor *attn_norm_batch;
+    ds4_gpu_tensor *attn_q_a_batch;
+    ds4_gpu_tensor *attn_q_a_norm_batch;
+    ds4_gpu_tensor *attn_q_batch;
+    ds4_gpu_tensor *attn_kv_raw_batch;
+    ds4_gpu_tensor *attn_kv_batch;
+    ds4_gpu_tensor *attn_heads_batch;
+    ds4_gpu_tensor *attn_low_batch;
+    ds4_gpu_tensor *attn_norm_view[DS4_V100_LAYER_MAX_BATCH];
+    ds4_gpu_tensor *attn_q_a_norm_view[DS4_V100_LAYER_MAX_BATCH];
+    ds4_gpu_tensor *attn_q_view[DS4_V100_LAYER_MAX_BATCH];
+    ds4_gpu_tensor *attn_kv_view[DS4_V100_LAYER_MAX_BATCH];
+    ds4_gpu_tensor *attn_heads_view[DS4_V100_LAYER_MAX_BATCH];
+    ds4_gpu_tensor *attn_low_view[DS4_V100_LAYER_MAX_BATCH];
 } ds4_v100_layer_batch_scratch;
 
 void ds4_v100_layer_batch_scratch_init(ds4_v100_layer_batch_scratch *scratch);
