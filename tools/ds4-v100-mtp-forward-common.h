@@ -29,6 +29,9 @@ typedef struct {
     uint32_t output_vocab;
     uint64_t output_weight_bytes;
     uint64_t free_after_output_upload_bytes;
+    uint64_t scratch_device_bytes;
+    uint64_t scratch_host_bytes;
+    uint64_t run_count;
 } ds4_v100_mtp_forward_report;
 
 int ds4_v100_mtp_forward_open(ds4_v100_mtp_forward **out,

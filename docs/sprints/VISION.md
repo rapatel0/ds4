@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: vision
-revision: 81
+revision: 82
 ---
 
 # Vision: DS4 V100 Appliance
@@ -450,6 +450,12 @@ optimized V100 low-bit expert kernels in the actual hot path.
   generated tok/s, and `7.048697` continuation tok/s. The deployment path is now
   repeatably validated; the next throughput gain must come from MTP draft commit
   or lower-overhead inter-stage handoff rather than more launcher plumbing.
+- Sprint 070 made the MTP forward runtime persistent and reusable. The focused
+  V100 MTP serving smoke accepted `3/3` drafts with `forward_run_count=1..3`,
+  `scratch_device_bytes=1848592`, `scratch_host_bytes=517120`, and draft timing
+  of `4.800`, `4.560`, and `4.562 ms`. Because that is effectively flat versus
+  the Sprint 045 `~4.6 ms` baseline, Sprint 071 should implement true one-slot
+  MTP commit rather than continue allocation cleanup.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -510,6 +516,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 067 async A/B dispatch | `5.58` generated tok/s at 1M/2 slots, `8.62` at 1M/4 slots | Measured | Same-binary A/B confirms per-step async beats persistent by `7-9%`. Timing counters show persistent saves setup but loses more in wait-for-previous-slot accumulation, so `--async-pipeline-decode` now selects per-step. |
 | Sprint 068 appliance async serving profile | 4-slot per-step async deployment path | Measured | The launcher now resolves `DS4_V100_ASYNC_PIPELINE_MODE=auto` to per-step for multi-slot practical serving. V100 loopback smoke through `ds4-v100-run-appliance.sh` reports `async_pipeline_mode=per-step` and returns token hex `3136`. |
 | Sprint 069 appliance launcher soak | `7.52` generated tok/s, `7.05` continuation tok/s at 1M/4 slots | Measured | Reusable launcher soak validates health/status/metrics and concurrent generation through `ds4-v100-run-appliance.sh`, with `4/4` token matches and async timing present in responses. |
+| Sprint 070 persistent MTP forward runtime | `4.56-4.80 ms` MTP draft time, `3/3` accepted drafts | Measured | MTP forward scratch is now resident and reused across requests, with scratch/run counters exposed in serving JSON. Timing stayed flat versus Sprint 045, so the next practical MTP gain requires true draft commit. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -1501,6 +1508,19 @@ GPU utilization with architectural changes, and only then compare against the
   `async_pipeline_mode=per-step`, `7.518610` generated tok/s, and `7.048697`
   continuation tok/s.
 
+### Sprint 070 - Persistent MTP Forward Runtime [complete]
+
+- **Goal**: Move MTP forward scratch from per-draft allocation into the resident
+  MTP forward object and expose enough counters to validate reuse.
+- **Rationale**: True MTP commit needs a stateful forward runtime, and the
+  project needed to know whether allocation churn was a material draft-time
+  cost before committing to the next MTP speed lever.
+- **Outcome**: `SHIP`. MTP serving now reuses resident scratch, reports
+  scratch bytes and forward run count, and is explicitly one-slot while verify
+  state is shared. The V100 serving smoke accepted `3/3` drafts with draft
+  timing `4.800`, `4.560`, and `4.562 ms`, so the next lever is true one-slot
+  commit rather than more allocation cleanup.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -1731,6 +1751,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 067 async A/B dispatch profiling. | Same-binary V100 evidence confirms per-step async is the preferred opt-in path and explains the persistent-worker regression as global wakeup/wait accumulation. The next sprint should wire the preferred mode into the appliance deployment path. | Sprint 068+ |
 | 2026-05-20 | Shipped Sprint 068 appliance async serving profile. | The measured per-step async path is now selected by `DS4_V100_ASYNC_PIPELINE_MODE=auto` for multi-slot appliance deployments, and the launcher smoke proves status plus generation correctness. The next blocker is a longer launched-appliance soak and the next throughput lever: MTP commit or stream/event handoff. | Sprint 069+ |
 | 2026-05-20 | Shipped Sprint 069 appliance launcher soak harness. | Practical 4-slot serving is now repeatably validated through the launcher with health/status/metrics and generation artifacts. The next throughput gain must come from MTP draft commit or lower-overhead inter-stage handoff. | Sprint 070+ |
+| 2026-05-20 | Shipped Sprint 070 persistent MTP forward runtime. | MTP forward now reuses resident scratch and serving JSON proves sequential `forward_run_count`, but draft timing remains near `4.6 ms`. The next useful MTP work is true one-slot commit into target replay state, not more scratch allocation cleanup. | Sprint 071+ |
 
 ## Open Questions
 

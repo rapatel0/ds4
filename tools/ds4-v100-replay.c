@@ -85,6 +85,9 @@ typedef struct {
     uint64_t sidecar_arena_bytes;
     uint64_t output_weight_bytes;
     uint64_t free_after_output_upload_bytes;
+    uint64_t scratch_device_bytes;
+    uint64_t scratch_host_bytes;
+    uint64_t forward_run_count;
     char reason[96];
 } replay_mtp_result;
 
@@ -103,6 +106,8 @@ typedef struct {
     uint64_t sidecar_uploaded_bytes;
     uint64_t sidecar_arena_bytes;
     uint64_t output_weight_bytes;
+    pthread_mutex_t mu;
+    bool mu_ready;
 } replay_mtp_service;
 
 typedef struct {
@@ -698,6 +703,10 @@ static replay_cli_options parse_options(int argc, char **argv) {
         fprintf(stderr, "ds4-v100-replay: --mtp-serving requires --mtp-model\n");
         exit(2);
     }
+    if (opt.mtp_serving != REPLAY_MTP_SERVING_OFF && opt.active_microbatch != 1) {
+        fprintf(stderr, "ds4-v100-replay: --mtp-serving currently requires --active-microbatch 1\n");
+        exit(2);
+    }
     if (opt.prompt && opt.prompt_file) {
         fprintf(stderr, "ds4-v100-replay: use --prompt or --prompt-file, not both\n");
         exit(2);
@@ -813,6 +822,7 @@ static void replay_mtp_service_close(replay_mtp_service *svc) {
     if (!svc) return;
     ds4_v100_mtp_forward_close(svc->forward);
     ds4_v100_mtp_sidecar_close(svc->sidecar);
+    if (svc->mu_ready) pthread_mutex_destroy(&svc->mu);
     free(svc);
 }
 
@@ -834,6 +844,12 @@ static int replay_mtp_service_open(replay_mtp_service **out,
     svc->top_k = opt->mtp_top_k;
     svc->gpu = opt->mtp_gpu;
     svc->reserve_mib = opt->mtp_reserve_mib;
+    if (pthread_mutex_init(&svc->mu, NULL) != 0) {
+        snprintf(err, errlen, "failed to initialize MTP service mutex");
+        replay_mtp_service_close(svc);
+        return 1;
+    }
+    svc->mu_ready = true;
 
     ds4_v100_mtp_sidecar_options mtp_opts;
     ds4_v100_mtp_sidecar_options_init(&mtp_opts);
@@ -940,6 +956,7 @@ static int replay_mtp_service_run(replay_mtp_service *svc,
     memset(&report, 0, sizeof(report));
     result->attempted = true;
     const double t0 = now_ms();
+    pthread_mutex_lock(&svc->mu);
     if (ds4_v100_mtp_forward_run_host(svc->forward,
                                       embed,
                                       hc,
@@ -950,8 +967,10 @@ static int replay_mtp_service_run(replay_mtp_service *svc,
                                       &report,
                                       err,
                                       errlen) != 0) {
+        pthread_mutex_unlock(&svc->mu);
         return 1;
     }
+    pthread_mutex_unlock(&svc->mu);
     result->draft_ms = now_ms() - t0;
     result->draft_token = result->draft_tokens[0];
     result->draft_logit = result->draft_logits[0];
@@ -960,6 +979,9 @@ static int replay_mtp_service_run(replay_mtp_service *svc,
     result->output_vocab = report.output_vocab;
     result->output_weight_bytes = report.output_weight_bytes;
     result->free_after_output_upload_bytes = report.free_after_output_upload_bytes;
+    result->scratch_device_bytes = report.scratch_device_bytes;
+    result->scratch_host_bytes = report.scratch_host_bytes;
+    result->forward_run_count = report.run_count;
     if (result->free_after_output_upload_bytes) {
         const uint64_t reserve_bytes = (uint64_t)svc->reserve_mib * 1024ull * 1024ull;
         if (result->free_after_output_upload_bytes < reserve_bytes) {
@@ -1000,6 +1022,9 @@ static void print_mtp_json(FILE *fp, const replay_mtp_result *mtp) {
     fprintf(fp, "\"sidecar_arena_bytes\":%" PRIu64 ",", mtp->sidecar_arena_bytes);
     fprintf(fp, "\"output_weight_bytes\":%" PRIu64 ",", mtp->output_weight_bytes);
     fprintf(fp, "\"free_after_output_upload_bytes\":%" PRIu64 ",", mtp->free_after_output_upload_bytes);
+    fprintf(fp, "\"scratch_device_bytes\":%" PRIu64 ",", mtp->scratch_device_bytes);
+    fprintf(fp, "\"scratch_host_bytes\":%" PRIu64 ",", mtp->scratch_host_bytes);
+    fprintf(fp, "\"forward_run_count\":%" PRIu64 ",", mtp->forward_run_count);
     fprintf(fp, "\"reason\":\"");
     json_escape(fp, mtp->reason, strlen(mtp->reason));
     fprintf(fp, "\",\"draft_topk\":[");

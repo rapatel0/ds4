@@ -1,0 +1,117 @@
+model	/models/DSv4-Flash-256e-fixed.gguf
+mtp_model	/models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf
+pack_index	docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv
+prompt_file	tests/test-vectors/prompts/short_reasoning_plain.txt
+gpu	7
+require_gpus	8
+reserve_mib	4096
+top_k	5
+ctx	1048576
+visible_cuda_devices	8
+prompt_tokens	18
+mtp_sidecar	path	/models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf
+mtp_sidecar	architecture	deepseek4_mtp_support
+mtp_sidecar	gguf	version=3	metadata=5	tensors=32	alignment=32	tensor_data_pos=2208	file_bytes=3807602400
+mtp_dtype	f32	count=19	bytes=7691756
+mtp_dtype	q8_0	count=10	bytes=176029696
+mtp_dtype	q4_k	count=3	bytes=3623878656
+mtp_sidecar	described_tensor_bytes	3807600108
+mtp_sidecar	resident_bytes	3807601408
+mtp_tensor	mtp.0.hc_head_base.weight	dtype=f32	shape=[4]	bytes=16	offset=2208	kernel=v100_hc_control
+mtp_resident	mtp.0.hc_head_base.weight	offset=0	bytes=16
+mtp_tensor	mtp.0.hc_head_fn.weight	dtype=f32	shape=[16384,4]	bytes=262144	offset=2240	kernel=v100_hc_control
+mtp_resident	mtp.0.hc_head_fn.weight	offset=256	bytes=262144
+mtp_tensor	mtp.0.hc_head_scale.weight	dtype=f32	shape=[1]	bytes=4	offset=264384	kernel=v100_hc_control
+mtp_resident	mtp.0.hc_head_scale.weight	offset=262400	bytes=4
+mtp_tensor	mtp.0.e_proj.weight	dtype=q8_0	shape=[4096,4096]	bytes=17825792	offset=3771901664	kernel=v100_q8_0_dense
+mtp_resident	mtp.0.e_proj.weight	offset=262656	bytes=17825792
+mtp_tensor	mtp.0.h_proj.weight	dtype=q8_0	shape=[4096,4096]	bytes=17825792	offset=3789727456	kernel=v100_q8_0_dense
+mtp_resident	mtp.0.h_proj.weight	offset=18088448	bytes=17825792
+mtp_tensor	mtp.0.enorm.weight	dtype=f32	shape=[4096]	bytes=16384	offset=3807553248	kernel=v100_f32_control
+mtp_resident	mtp.0.enorm.weight	offset=35914240	bytes=16384
+mtp_tensor	mtp.0.hnorm.weight	dtype=f32	shape=[4096]	bytes=16384	offset=3807569632	kernel=v100_f32_control
+mtp_resident	mtp.0.hnorm.weight	offset=35930624	bytes=16384
+mtp_tensor	mtp.0.norm.weight	dtype=f32	shape=[4096]	bytes=16384	offset=3807586016	kernel=v100_f32_control
+mtp_resident	mtp.0.norm.weight	offset=35947008	bytes=16384
+mtp_tensor	mtp.0.hc_attn_fn.weight	dtype=f32	shape=[16384,24]	bytes=1572864	offset=264608	kernel=v100_hc_control
+mtp_resident	mtp.0.hc_attn_fn.weight	offset=35963392	bytes=1572864
+mtp_tensor	mtp.0.hc_attn_scale.weight	dtype=f32	shape=[3]	bytes=12	offset=1837472	kernel=v100_hc_control
+mtp_resident	mtp.0.hc_attn_scale.weight	offset=37536256	bytes=12
+mtp_tensor	mtp.0.hc_attn_base.weight	dtype=f32	shape=[24]	bytes=96	offset=264416	kernel=v100_hc_control
+mtp_resident	mtp.0.hc_attn_base.weight	offset=37536512	bytes=96
+mtp_tensor	mtp.0.attn_norm.weight	dtype=f32	shape=[4096]	bytes=16384	offset=117056224	kernel=v100_f32_control
+mtp_resident	mtp.0.attn_norm.weight	offset=37536768	bytes=16384
+mtp_tensor	mtp.0.attn_q_a.weight	dtype=q8_0	shape=[4096,1024]	bytes=4456448	offset=3410656	kernel=v100_q8_0_dense
+mtp_resident	mtp.0.attn_q_a.weight	offset=37553152	bytes=4456448
+mtp_tensor	mtp.0.attn_q_a_norm.weight	dtype=f32	shape=[1024]	bytes=4096	offset=43518688	kernel=v100_f32_control
+mtp_resident	mtp.0.attn_q_a_norm.weight	offset=42009600	bytes=4096
+mtp_tensor	mtp.0.attn_q_b.weight	dtype=q8_0	shape=[1024,32768]	bytes=35651584	offset=7867104	kernel=v100_q8_0_dense
+mtp_resident	mtp.0.attn_q_b.weight	offset=42013696	bytes=35651584
+mtp_tensor	mtp.0.attn_kv.weight	dtype=q8_0	shape=[4096,512]	bytes=2228224	offset=79174368	kernel=v100_q8_0_dense
+mtp_resident	mtp.0.attn_kv.weight	offset=77665280	bytes=2228224
+mtp_tensor	mtp.0.attn_kv_a_norm.weight	dtype=f32	shape=[512]	bytes=2048	offset=81402592	kernel=v100_f32_control
+mtp_resident	mtp.0.attn_kv_a_norm.weight	offset=79893504	bytes=2048
+mtp_tensor	mtp.0.attn_sinks.weight	dtype=f32	shape=[64]	bytes=256	offset=3410400	kernel=v100_f32_control
+mtp_resident	mtp.0.attn_sinks.weight	offset=79895552	bytes=256
+mtp_tensor	mtp.0.attn_output_a.weight	dtype=q8_0	shape=[4096,8192]	bytes=35651584	offset=43522784	kernel=v100_q8_0_dense
+mtp_resident	mtp.0.attn_output_a.weight	offset=79895808	bytes=35651584
+mtp_tensor	mtp.0.attn_output_b.weight	dtype=q8_0	shape=[8192,4096]	bytes=35651584	offset=81404640	kernel=v100_q8_0_dense
+mtp_resident	mtp.0.attn_output_b.weight	offset=115547392	bytes=35651584
+mtp_tensor	mtp.0.hc_ffn_fn.weight	dtype=f32	shape=[16384,24]	bytes=1572864	offset=1837504	kernel=v100_hc_control
+mtp_resident	mtp.0.hc_ffn_fn.weight	offset=151198976	bytes=1572864
+mtp_tensor	mtp.0.hc_ffn_scale.weight	dtype=f32	shape=[3]	bytes=12	offset=3410368	kernel=v100_hc_control
+mtp_resident	mtp.0.hc_ffn_scale.weight	offset=152771840	bytes=12
+mtp_tensor	mtp.0.hc_ffn_base.weight	dtype=f32	shape=[24]	bytes=96	offset=264512	kernel=v100_hc_control
+mtp_resident	mtp.0.hc_ffn_base.weight	offset=152772096	bytes=96
+mtp_tensor	mtp.0.ffn_norm.weight	dtype=f32	shape=[4096]	bytes=16384	offset=117072608	kernel=v100_f32_control
+mtp_resident	mtp.0.ffn_norm.weight	offset=152772352	bytes=16384
+mtp_tensor	mtp.0.ffn_gate_inp.weight	dtype=f32	shape=[4096,256]	bytes=4194304	offset=3767706336	kernel=v100_f32_control
+mtp_resident	mtp.0.ffn_gate_inp.weight	offset=152788736	bytes=4194304
+mtp_tensor	mtp.0.exp_probs_b.bias	dtype=f32	shape=[256]	bytes=1024	offset=3771900640	kernel=v100_f32_control
+mtp_resident	mtp.0.exp_probs_b.bias	offset=156983040	bytes=1024
+mtp_tensor	mtp.0.ffn_gate_exps.weight	dtype=q4_k	shape=[4096,2048,256]	bytes=1207959552	offset=143827680	kernel=v100_q4_k_routed_moe
+mtp_resident	mtp.0.ffn_gate_exps.weight	offset=156984064	bytes=1207959552
+mtp_tensor	mtp.0.ffn_up_exps.weight	dtype=q4_k	shape=[4096,2048,256]	bytes=1207959552	offset=1351787232	kernel=v100_q4_k_routed_moe
+mtp_resident	mtp.0.ffn_up_exps.weight	offset=1364943616	bytes=1207959552
+mtp_tensor	mtp.0.ffn_down_exps.weight	dtype=q4_k	shape=[2048,4096,256]	bytes=1207959552	offset=2559746784	kernel=v100_q4_k_routed_moe
+mtp_resident	mtp.0.ffn_down_exps.weight	offset=2572903168	bytes=1207959552
+mtp_tensor	mtp.0.ffn_gate_shexp.weight	dtype=q8_0	shape=[4096,2048]	bytes=8912896	offset=117088992	kernel=v100_q8_0_shared_dense
+mtp_resident	mtp.0.ffn_gate_shexp.weight	offset=3780862720	bytes=8912896
+mtp_tensor	mtp.0.ffn_up_shexp.weight	dtype=q8_0	shape=[4096,2048]	bytes=8912896	offset=126001888	kernel=v100_q8_0_shared_dense
+mtp_resident	mtp.0.ffn_up_shexp.weight	offset=3789775616	bytes=8912896
+mtp_tensor	mtp.0.ffn_down_shexp.weight	dtype=q8_0	shape=[2048,4096]	bytes=8912896	offset=134914784	kernel=v100_q8_0_shared_dense
+mtp_resident	mtp.0.ffn_down_shexp.weight	offset=3798688512	bytes=8912896
+mtp_sidecar	PASS	layout=deepseek4_mtp_support_q4k_q8_0_f32
+mtp_runtime	gpu	7
+mtp_runtime	arena_kind	device
+mtp_runtime	arena_bytes	3807601408
+mtp_runtime	uploaded_tensors	32
+mtp_runtime	uploaded_bytes	3807600108
+mtp_runtime	spot_checks	60
+mtp_runtime	free_after_upload_bytes	29937369088
+mtp_runtime	PASS	resident_sidecar=1
+mtp_uploaded_bytes	3807600108
+mtp_arena_bytes	3807601408
+mtp_arena_kind	device
+mtp_free_after_upload_bytes	29937369088
+reserve_bytes	4294967296
+mtp_verify_topk	rank=1	target_token=1	mtp_token=1	target_logit=39.3046379	mtp_logit=28.6970482
+mtp_verify_topk	rank=2	target_token=16	mtp_token=33	target_logit=23.1669445	mtp_logit=22.6799164
+mtp_verify_topk	rank=3	target_token=201	mtp_token=16	target_logit=22.882122	mtp_logit=22.1759281
+mtp_verify_topk	rank=4	target_token=1718	mtp_token=1718	target_logit=22.4879875	mtp_logit=21.9426823
+mtp_verify_topk	rank=5	target_token=271	mtp_token=4	target_logit=22.2025509	mtp_logit=21.0112724
+mtp_verify_decision	committed_token=926	committed_pos=18	target_top1=1	mtp_top1=1	accepted=true	raw_row=18	n_raw=1	output_vocab=129280	output_weight_bytes=1059061760	free_after_output_upload_bytes=17056661504
+mtp_rollback_compare	restore	rank=1	a_token=1	b_token=1	a_logit=39.3046379	b_logit=39.3046379	delta=0	tol=1e-05
+mtp_rollback_compare	restore	rank=2	a_token=16	b_token=16	a_logit=23.1669445	b_logit=23.1669445	delta=0	tol=1e-05
+mtp_rollback_compare	restore	rank=3	a_token=201	b_token=201	a_logit=22.882122	b_logit=22.882122	delta=0	tol=1e-05
+mtp_rollback_compare	restore	rank=4	a_token=1718	b_token=1718	a_logit=22.4879875	b_logit=22.4879875	delta=0	tol=1e-05
+mtp_rollback_compare	restore	rank=5	a_token=271	b_token=271	a_logit=22.2025509	b_logit=22.2025509	delta=0	tol=1e-05
+mtp_rollback_mtp_raw_restore	mtp_n_raw=0	max_abs=0	PASS
+mtp_rollback_compare	clean_replay	rank=1	a_token=380	b_token=380	a_logit=21.3834457	b_logit=21.3834457	delta=0	tol=1e-05
+mtp_rollback_compare	clean_replay	rank=2	a_token=420	b_token=420	a_logit=20.5955086	b_logit=20.5955086	delta=0	tol=1e-05
+mtp_rollback_compare	clean_replay	rank=3	a_token=345	b_token=345	a_logit=20.4687119	b_logit=20.4687119	delta=0	tol=1e-05
+mtp_rollback_compare	clean_replay	rank=4	a_token=0	b_token=0	a_logit=20.1701584	b_logit=20.1701584	delta=0	tol=1e-05
+mtp_rollback_compare	clean_replay	rank=5	a_token=223	b_token=223	a_logit=20.0869293	b_logit=20.0869293	delta=0	tol=1e-05
+mtp_rollback_decision	committed_token=926	target_top1=1	mtp_top1=1	mtp_accepted=true	rejected_draft=16	forced_reject=true	margin=16.1376934
+mtp_verify_summary	committed_token=926	committed_pos=18	target_top1=1	mtp_top1=1	accepted=true	raw_row=18	n_raw=1	snapshot_bytes=30107648	restore_delta=0	replay_delta=0	PASS
+mtp_rollback_summary	snapshot_bytes=30107648	mtp_raw_bytes=262144	restore_delta=0	replay_delta=0	continued_top1=380	replay_top1=380	PASS

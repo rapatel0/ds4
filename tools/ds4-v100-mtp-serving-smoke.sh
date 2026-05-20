@@ -325,6 +325,9 @@ for request_id in $(seq 1 "$requests"); do
     grep -q '"committed_token":926' "$response_json_i" || fail "response committed token mismatch"
     grep -q '"target_token":1' "$response_json_i" || fail "response target token mismatch"
     grep -q '"draft_token":1' "$response_json_i" || fail "response draft token mismatch"
+    grep -q '"scratch_device_bytes":' "$response_json_i" || fail "response missing MTP scratch device bytes"
+    grep -q '"scratch_host_bytes":' "$response_json_i" || fail "response missing MTP scratch host bytes"
+    grep -q "\"forward_run_count\":$request_id" "$response_json_i" || fail "response MTP forward run counter mismatch"
     grep -q '"draft_topk":\[' "$response_json_i" || fail "response missing draft_topk"
 
     last_prompt_tokens="$(sed -n 's/.*"prompt_tokens":\([0-9][0-9]*\).*/\1/p' "$response_json_i" | sed -n '1p')"

@@ -66,14 +66,57 @@ typedef struct {
     ds4_gpu_source_row_view output_norm;
 } mtpf_views;
 
+typedef struct {
+    ds4_gpu_tensor *embed_t;
+    ds4_gpu_tensor *prev_hc_t;
+    ds4_gpu_tensor *prefix_t;
+    ds4_gpu_tensor *attn_next_t;
+    ds4_gpu_tensor *ffn_next_t;
+    ds4_gpu_tensor *row0;
+    ds4_gpu_tensor *row1;
+    ds4_gpu_tensor *hc0;
+    ds4_gpu_tensor *hc1;
+    ds4_gpu_tensor *mix_t;
+    ds4_gpu_tensor *split_t;
+    ds4_gpu_tensor *q_t;
+    ds4_gpu_tensor *q_norm_t;
+    ds4_gpu_tensor *heads_t;
+    ds4_gpu_tensor *attn_heads_t;
+    ds4_gpu_tensor *kv_t;
+    ds4_gpu_tensor *raw_t;
+    ds4_gpu_tensor *low_t;
+    ds4_gpu_tensor *router_logits_t;
+    ds4_gpu_tensor *router_probs_t;
+    ds4_gpu_tensor *selected_t;
+    ds4_gpu_tensor *weights_t;
+    ds4_gpu_tensor *routed_t;
+    ds4_gpu_tensor *q4_gate_tmp_t;
+    ds4_gpu_tensor *q4_up_tmp_t;
+    ds4_gpu_tensor *q4_mid_tmp_t;
+    ds4_gpu_tensor *q4_down_tmp_t;
+    ds4_gpu_tensor *shared_gate_t;
+    ds4_gpu_tensor *shared_up_t;
+    ds4_gpu_tensor *shared_mid_t;
+    ds4_gpu_tensor *shared_t;
+    ds4_gpu_tensor *ffn_t;
+    ds4_gpu_tensor *head_pre_t;
+    ds4_gpu_tensor *head_weights_t;
+    ds4_gpu_tensor *logits_t;
+    float *all_logits;
+    uint64_t device_bytes;
+    uint64_t host_bytes;
+} mtpf_scratch;
+
 struct ds4_v100_mtp_forward {
     ds4_v100_mtp_sidecar *sidecar;
     ds4_gpu_arena *output_arena;
     ds4_gpu_bf16_matrix_view output_view;
     mtpf_views views;
+    mtpf_scratch scratch;
     int gpu;
     uint64_t output_weight_bytes;
     uint64_t free_after_output_upload_bytes;
+    uint64_t run_count;
 };
 
 static int mtpf_error(char *err, size_t errlen, const char *msg) {
@@ -301,6 +344,137 @@ static int grouped_output_arena(ds4_v100_mtp_forward *fwd,
             1);
 }
 
+static ds4_gpu_tensor *mtpf_scratch_tensor(mtpf_scratch *s, uint64_t bytes) {
+    ds4_gpu_tensor *t = ds4_gpu_tensor_alloc(bytes);
+    if (t) s->device_bytes += bytes;
+    return t;
+}
+
+static void mtpf_scratch_free(mtpf_scratch *s) {
+    if (!s) return;
+    free(s->all_logits);
+    ds4_gpu_tensor_free(s->logits_t);
+    ds4_gpu_tensor_free(s->head_weights_t);
+    ds4_gpu_tensor_free(s->head_pre_t);
+    ds4_gpu_tensor_free(s->ffn_t);
+    ds4_gpu_tensor_free(s->shared_t);
+    ds4_gpu_tensor_free(s->shared_mid_t);
+    ds4_gpu_tensor_free(s->shared_up_t);
+    ds4_gpu_tensor_free(s->shared_gate_t);
+    ds4_gpu_tensor_free(s->q4_down_tmp_t);
+    ds4_gpu_tensor_free(s->q4_mid_tmp_t);
+    ds4_gpu_tensor_free(s->q4_up_tmp_t);
+    ds4_gpu_tensor_free(s->q4_gate_tmp_t);
+    ds4_gpu_tensor_free(s->routed_t);
+    ds4_gpu_tensor_free(s->weights_t);
+    ds4_gpu_tensor_free(s->selected_t);
+    ds4_gpu_tensor_free(s->router_probs_t);
+    ds4_gpu_tensor_free(s->router_logits_t);
+    ds4_gpu_tensor_free(s->low_t);
+    ds4_gpu_tensor_free(s->raw_t);
+    ds4_gpu_tensor_free(s->kv_t);
+    ds4_gpu_tensor_free(s->attn_heads_t);
+    ds4_gpu_tensor_free(s->heads_t);
+    ds4_gpu_tensor_free(s->q_norm_t);
+    ds4_gpu_tensor_free(s->q_t);
+    ds4_gpu_tensor_free(s->split_t);
+    ds4_gpu_tensor_free(s->mix_t);
+    ds4_gpu_tensor_free(s->hc1);
+    ds4_gpu_tensor_free(s->hc0);
+    ds4_gpu_tensor_free(s->row1);
+    ds4_gpu_tensor_free(s->row0);
+    ds4_gpu_tensor_free(s->ffn_next_t);
+    ds4_gpu_tensor_free(s->attn_next_t);
+    ds4_gpu_tensor_free(s->prefix_t);
+    ds4_gpu_tensor_free(s->prev_hc_t);
+    ds4_gpu_tensor_free(s->embed_t);
+    memset(s, 0, sizeof(*s));
+}
+
+static int mtpf_scratch_alloc(ds4_v100_mtp_forward *fwd,
+                              char *err,
+                              size_t errlen) {
+    if (!fwd) return mtpf_error(err, errlen, "missing MTP forward scratch owner");
+    if (!ds4_gpu_set_device(fwd->gpu)) {
+        return mtpf_error(err, errlen, "failed to set MTP scratch device");
+    }
+    mtpf_scratch *s = &fwd->scratch;
+    mtpf_scratch_free(s);
+
+    const uint64_t embd_bytes = (uint64_t)MTPF_N_EMBD * sizeof(float);
+    const uint64_t hc_bytes = (uint64_t)MTPF_HC_DIM * sizeof(float);
+    const uint64_t mix_bytes = (uint64_t)MTPF_HC_MIX * sizeof(float);
+    const uint64_t q_lora_bytes = (uint64_t)MTPF_Q_LORA * sizeof(float);
+    const uint64_t heads_bytes = (uint64_t)MTPF_N_HEAD * MTPF_HEAD_DIM * sizeof(float);
+    const uint64_t kv_bytes = (uint64_t)MTPF_HEAD_DIM * sizeof(float);
+    const uint64_t raw_bytes = (uint64_t)MTPF_RAW_CAP * MTPF_HEAD_DIM * sizeof(float);
+    const uint64_t low_bytes = (uint64_t)MTPF_OUT_LOW_DIM * sizeof(float);
+    const uint64_t mid_bytes = (uint64_t)MTPF_N_FF_EXP * sizeof(float);
+    const uint64_t route_i32_bytes = (uint64_t)MTPF_N_ROUTE * sizeof(int32_t);
+    const uint64_t route_f32_bytes = (uint64_t)MTPF_N_ROUTE * sizeof(float);
+    const uint64_t probs_bytes = (uint64_t)MTPF_N_EXPERT * sizeof(float);
+    const uint64_t q4_mid_values = (uint64_t)MTPF_N_ROUTE * MTPF_N_FF_EXP;
+    const uint64_t q4_down_values = (uint64_t)MTPF_N_ROUTE * MTPF_N_EMBD;
+    const uint64_t logits_bytes = (uint64_t)fwd->output_view.rows * sizeof(float);
+
+#define ALLOC_T(field, bytes_) \
+    do { s->field = mtpf_scratch_tensor(s, (bytes_)); } while (0)
+    ALLOC_T(embed_t, embd_bytes);
+    ALLOC_T(prev_hc_t, hc_bytes);
+    ALLOC_T(prefix_t, hc_bytes);
+    ALLOC_T(attn_next_t, hc_bytes);
+    ALLOC_T(ffn_next_t, hc_bytes);
+    ALLOC_T(row0, embd_bytes);
+    ALLOC_T(row1, embd_bytes);
+    ALLOC_T(hc0, hc_bytes);
+    ALLOC_T(hc1, hc_bytes);
+    ALLOC_T(mix_t, mix_bytes);
+    ALLOC_T(split_t, mix_bytes);
+    ALLOC_T(q_t, q_lora_bytes);
+    ALLOC_T(q_norm_t, q_lora_bytes);
+    ALLOC_T(heads_t, heads_bytes);
+    ALLOC_T(attn_heads_t, heads_bytes);
+    ALLOC_T(kv_t, kv_bytes);
+    ALLOC_T(raw_t, raw_bytes);
+    ALLOC_T(low_t, low_bytes);
+    ALLOC_T(router_logits_t, probs_bytes);
+    ALLOC_T(router_probs_t, probs_bytes);
+    ALLOC_T(selected_t, route_i32_bytes);
+    ALLOC_T(weights_t, route_f32_bytes);
+    ALLOC_T(routed_t, embd_bytes);
+    ALLOC_T(q4_gate_tmp_t, q4_mid_values * sizeof(float));
+    ALLOC_T(q4_up_tmp_t, q4_mid_values * sizeof(float));
+    ALLOC_T(q4_mid_tmp_t, q4_mid_values * sizeof(float));
+    ALLOC_T(q4_down_tmp_t, q4_down_values * sizeof(float));
+    ALLOC_T(shared_gate_t, mid_bytes);
+    ALLOC_T(shared_up_t, mid_bytes);
+    ALLOC_T(shared_mid_t, mid_bytes);
+    ALLOC_T(shared_t, embd_bytes);
+    ALLOC_T(ffn_t, embd_bytes);
+    ALLOC_T(head_pre_t, (uint64_t)MTPF_N_HC * sizeof(float));
+    ALLOC_T(head_weights_t, (uint64_t)MTPF_N_HC * sizeof(float));
+    ALLOC_T(logits_t, logits_bytes);
+#undef ALLOC_T
+
+    s->all_logits = (float *)malloc((size_t)logits_bytes);
+    if (s->all_logits) s->host_bytes = logits_bytes;
+
+    if (!s->embed_t || !s->prev_hc_t || !s->prefix_t || !s->attn_next_t ||
+        !s->ffn_next_t || !s->row0 || !s->row1 || !s->hc0 || !s->hc1 ||
+        !s->mix_t || !s->split_t || !s->q_t || !s->q_norm_t || !s->heads_t ||
+        !s->attn_heads_t || !s->kv_t || !s->raw_t || !s->low_t ||
+        !s->router_logits_t || !s->router_probs_t || !s->selected_t ||
+        !s->weights_t || !s->routed_t || !s->q4_gate_tmp_t ||
+        !s->q4_up_tmp_t || !s->q4_mid_tmp_t || !s->q4_down_tmp_t ||
+        !s->shared_gate_t || !s->shared_up_t || !s->shared_mid_t ||
+        !s->shared_t || !s->ffn_t || !s->head_pre_t || !s->head_weights_t ||
+        !s->logits_t || !s->all_logits) {
+        mtpf_scratch_free(s);
+        return mtpf_error(err, errlen, "MTP forward persistent scratch allocation failed");
+    }
+    return 0;
+}
+
 int ds4_v100_mtp_forward_open(ds4_v100_mtp_forward **out,
                               ds4_v100_mtp_sidecar *sidecar,
                               const void *base_model,
@@ -340,6 +514,10 @@ int ds4_v100_mtp_forward_open(ds4_v100_mtp_forward **out,
     fwd->output_weight_bytes = output_weight->byte_length;
     fwd->free_after_output_upload_bytes =
         ds4_gpu_arena_free_after_upload_bytes(fwd->output_arena);
+    if (mtpf_scratch_alloc(fwd, err, errlen)) {
+        ds4_v100_mtp_forward_close(fwd);
+        return 1;
+    }
     *out = fwd;
     return 0;
 }
@@ -366,56 +544,45 @@ int ds4_v100_mtp_forward_run_host(ds4_v100_mtp_forward *fwd,
 
     const uint64_t embd_bytes = (uint64_t)MTPF_N_EMBD * sizeof(float);
     const uint64_t hc_bytes = (uint64_t)MTPF_HC_DIM * sizeof(float);
-    const uint64_t mix_bytes = (uint64_t)MTPF_HC_MIX * sizeof(float);
-    const uint64_t q_lora_bytes = (uint64_t)MTPF_Q_LORA * sizeof(float);
-    const uint64_t heads_bytes = (uint64_t)MTPF_N_HEAD * MTPF_HEAD_DIM * sizeof(float);
-    const uint64_t kv_bytes = (uint64_t)MTPF_HEAD_DIM * sizeof(float);
-    const uint64_t raw_bytes = (uint64_t)MTPF_RAW_CAP * MTPF_HEAD_DIM * sizeof(float);
-    const uint64_t low_bytes = (uint64_t)MTPF_OUT_LOW_DIM * sizeof(float);
-    const uint64_t mid_bytes = (uint64_t)MTPF_N_FF_EXP * sizeof(float);
-    const uint64_t route_i32_bytes = (uint64_t)MTPF_N_ROUTE * sizeof(int32_t);
-    const uint64_t route_f32_bytes = (uint64_t)MTPF_N_ROUTE * sizeof(float);
-    const uint64_t probs_bytes = (uint64_t)MTPF_N_EXPERT * sizeof(float);
-    const uint64_t q4_mid_values = (uint64_t)MTPF_N_ROUTE * MTPF_N_FF_EXP;
-    const uint64_t q4_down_values = (uint64_t)MTPF_N_ROUTE * MTPF_N_EMBD;
     const uint64_t logits_bytes = (uint64_t)fwd->output_view.rows * sizeof(float);
 
-    ds4_gpu_tensor *embed_t = ds4_gpu_tensor_alloc(embd_bytes);
-    ds4_gpu_tensor *prev_hc_t = ds4_gpu_tensor_alloc(hc_bytes);
-    ds4_gpu_tensor *prefix_t = ds4_gpu_tensor_alloc(hc_bytes);
-    ds4_gpu_tensor *attn_next_t = ds4_gpu_tensor_alloc(hc_bytes);
-    ds4_gpu_tensor *ffn_next_t = ds4_gpu_tensor_alloc(hc_bytes);
-    ds4_gpu_tensor *row0 = ds4_gpu_tensor_alloc(embd_bytes);
-    ds4_gpu_tensor *row1 = ds4_gpu_tensor_alloc(embd_bytes);
-    ds4_gpu_tensor *hc0 = ds4_gpu_tensor_alloc(hc_bytes);
-    ds4_gpu_tensor *hc1 = ds4_gpu_tensor_alloc(hc_bytes);
-    ds4_gpu_tensor *mix_t = ds4_gpu_tensor_alloc(mix_bytes);
-    ds4_gpu_tensor *split_t = ds4_gpu_tensor_alloc(mix_bytes);
-    ds4_gpu_tensor *q_t = ds4_gpu_tensor_alloc(q_lora_bytes);
-    ds4_gpu_tensor *q_norm_t = ds4_gpu_tensor_alloc(q_lora_bytes);
-    ds4_gpu_tensor *heads_t = ds4_gpu_tensor_alloc(heads_bytes);
-    ds4_gpu_tensor *attn_heads_t = ds4_gpu_tensor_alloc(heads_bytes);
-    ds4_gpu_tensor *kv_t = ds4_gpu_tensor_alloc(kv_bytes);
-    ds4_gpu_tensor *raw_t = ds4_gpu_tensor_alloc(raw_bytes);
-    ds4_gpu_tensor *low_t = ds4_gpu_tensor_alloc(low_bytes);
-    ds4_gpu_tensor *router_logits_t = ds4_gpu_tensor_alloc(probs_bytes);
-    ds4_gpu_tensor *router_probs_t = ds4_gpu_tensor_alloc(probs_bytes);
-    ds4_gpu_tensor *selected_t = ds4_gpu_tensor_alloc(route_i32_bytes);
-    ds4_gpu_tensor *weights_t = ds4_gpu_tensor_alloc(route_f32_bytes);
-    ds4_gpu_tensor *routed_t = ds4_gpu_tensor_alloc(embd_bytes);
-    ds4_gpu_tensor *q4_gate_tmp_t = ds4_gpu_tensor_alloc(q4_mid_values * sizeof(float));
-    ds4_gpu_tensor *q4_up_tmp_t = ds4_gpu_tensor_alloc(q4_mid_values * sizeof(float));
-    ds4_gpu_tensor *q4_mid_tmp_t = ds4_gpu_tensor_alloc(q4_mid_values * sizeof(float));
-    ds4_gpu_tensor *q4_down_tmp_t = ds4_gpu_tensor_alloc(q4_down_values * sizeof(float));
-    ds4_gpu_tensor *shared_gate_t = ds4_gpu_tensor_alloc(mid_bytes);
-    ds4_gpu_tensor *shared_up_t = ds4_gpu_tensor_alloc(mid_bytes);
-    ds4_gpu_tensor *shared_mid_t = ds4_gpu_tensor_alloc(mid_bytes);
-    ds4_gpu_tensor *shared_t = ds4_gpu_tensor_alloc(embd_bytes);
-    ds4_gpu_tensor *ffn_t = ds4_gpu_tensor_alloc(embd_bytes);
-    ds4_gpu_tensor *head_pre_t = ds4_gpu_tensor_alloc((uint64_t)MTPF_N_HC * sizeof(float));
-    ds4_gpu_tensor *head_weights_t = ds4_gpu_tensor_alloc((uint64_t)MTPF_N_HC * sizeof(float));
-    ds4_gpu_tensor *logits_t = ds4_gpu_tensor_alloc(logits_bytes);
-    float *all_logits = (float *)malloc((size_t)logits_bytes);
+    mtpf_scratch *s = &fwd->scratch;
+    ds4_gpu_tensor *embed_t = s->embed_t;
+    ds4_gpu_tensor *prev_hc_t = s->prev_hc_t;
+    ds4_gpu_tensor *prefix_t = s->prefix_t;
+    ds4_gpu_tensor *attn_next_t = s->attn_next_t;
+    ds4_gpu_tensor *ffn_next_t = s->ffn_next_t;
+    ds4_gpu_tensor *row0 = s->row0;
+    ds4_gpu_tensor *row1 = s->row1;
+    ds4_gpu_tensor *hc0 = s->hc0;
+    ds4_gpu_tensor *hc1 = s->hc1;
+    ds4_gpu_tensor *mix_t = s->mix_t;
+    ds4_gpu_tensor *split_t = s->split_t;
+    ds4_gpu_tensor *q_t = s->q_t;
+    ds4_gpu_tensor *q_norm_t = s->q_norm_t;
+    ds4_gpu_tensor *heads_t = s->heads_t;
+    ds4_gpu_tensor *attn_heads_t = s->attn_heads_t;
+    ds4_gpu_tensor *kv_t = s->kv_t;
+    ds4_gpu_tensor *raw_t = s->raw_t;
+    ds4_gpu_tensor *low_t = s->low_t;
+    ds4_gpu_tensor *router_logits_t = s->router_logits_t;
+    ds4_gpu_tensor *router_probs_t = s->router_probs_t;
+    ds4_gpu_tensor *selected_t = s->selected_t;
+    ds4_gpu_tensor *weights_t = s->weights_t;
+    ds4_gpu_tensor *routed_t = s->routed_t;
+    ds4_gpu_tensor *q4_gate_tmp_t = s->q4_gate_tmp_t;
+    ds4_gpu_tensor *q4_up_tmp_t = s->q4_up_tmp_t;
+    ds4_gpu_tensor *q4_mid_tmp_t = s->q4_mid_tmp_t;
+    ds4_gpu_tensor *q4_down_tmp_t = s->q4_down_tmp_t;
+    ds4_gpu_tensor *shared_gate_t = s->shared_gate_t;
+    ds4_gpu_tensor *shared_up_t = s->shared_up_t;
+    ds4_gpu_tensor *shared_mid_t = s->shared_mid_t;
+    ds4_gpu_tensor *shared_t = s->shared_t;
+    ds4_gpu_tensor *ffn_t = s->ffn_t;
+    ds4_gpu_tensor *head_pre_t = s->head_pre_t;
+    ds4_gpu_tensor *head_weights_t = s->head_weights_t;
+    ds4_gpu_tensor *logits_t = s->logits_t;
+    float *all_logits = s->all_logits;
     int rc = 1;
 
     if (!embed_t || !prev_hc_t || !prefix_t || !attn_next_t || !ffn_next_t ||
@@ -426,7 +593,7 @@ int ds4_v100_mtp_forward_run_host(ds4_v100_mtp_forward *fwd,
         !q4_down_tmp_t || !shared_gate_t || !shared_up_t || !shared_mid_t ||
         !shared_t || !ffn_t || !head_pre_t || !head_weights_t || !logits_t ||
         !all_logits) {
-        mtpf_error(err, errlen, "MTP forward allocation failed");
+        mtpf_error(err, errlen, "MTP forward scratch is not initialized");
         goto done;
     }
 
@@ -480,6 +647,7 @@ int ds4_v100_mtp_forward_run_host(ds4_v100_mtp_forward *fwd,
     }
 
     topk_from_logits(all_logits, fwd->output_view.rows, top_k, tokens, out_logits);
+    fwd->run_count++;
     if (report) {
         memset(report, 0, sizeof(*report));
         report->raw_row = raw_row;
@@ -487,51 +655,19 @@ int ds4_v100_mtp_forward_run_host(ds4_v100_mtp_forward *fwd,
         report->output_vocab = fwd->output_view.rows;
         report->output_weight_bytes = fwd->output_weight_bytes;
         report->free_after_output_upload_bytes = fwd->free_after_output_upload_bytes;
+        report->scratch_device_bytes = s->device_bytes;
+        report->scratch_host_bytes = s->host_bytes;
+        report->run_count = fwd->run_count;
     }
     rc = 0;
 
 done:
-    free(all_logits);
-    ds4_gpu_tensor_free(logits_t);
-    ds4_gpu_tensor_free(head_weights_t);
-    ds4_gpu_tensor_free(head_pre_t);
-    ds4_gpu_tensor_free(ffn_t);
-    ds4_gpu_tensor_free(shared_t);
-    ds4_gpu_tensor_free(shared_mid_t);
-    ds4_gpu_tensor_free(shared_up_t);
-    ds4_gpu_tensor_free(shared_gate_t);
-    ds4_gpu_tensor_free(q4_down_tmp_t);
-    ds4_gpu_tensor_free(q4_mid_tmp_t);
-    ds4_gpu_tensor_free(q4_up_tmp_t);
-    ds4_gpu_tensor_free(q4_gate_tmp_t);
-    ds4_gpu_tensor_free(routed_t);
-    ds4_gpu_tensor_free(weights_t);
-    ds4_gpu_tensor_free(selected_t);
-    ds4_gpu_tensor_free(router_probs_t);
-    ds4_gpu_tensor_free(router_logits_t);
-    ds4_gpu_tensor_free(low_t);
-    ds4_gpu_tensor_free(raw_t);
-    ds4_gpu_tensor_free(kv_t);
-    ds4_gpu_tensor_free(attn_heads_t);
-    ds4_gpu_tensor_free(heads_t);
-    ds4_gpu_tensor_free(q_norm_t);
-    ds4_gpu_tensor_free(q_t);
-    ds4_gpu_tensor_free(split_t);
-    ds4_gpu_tensor_free(mix_t);
-    ds4_gpu_tensor_free(hc1);
-    ds4_gpu_tensor_free(hc0);
-    ds4_gpu_tensor_free(row1);
-    ds4_gpu_tensor_free(row0);
-    ds4_gpu_tensor_free(ffn_next_t);
-    ds4_gpu_tensor_free(attn_next_t);
-    ds4_gpu_tensor_free(prefix_t);
-    ds4_gpu_tensor_free(prev_hc_t);
-    ds4_gpu_tensor_free(embed_t);
     return rc;
 }
 
 void ds4_v100_mtp_forward_close(ds4_v100_mtp_forward *fwd) {
     if (!fwd) return;
+    mtpf_scratch_free(&fwd->scratch);
     ds4_gpu_arena_close(fwd->output_arena);
     free(fwd);
 }
