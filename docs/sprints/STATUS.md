@@ -4,13 +4,16 @@ Last updated: 2026-05-20
 
 ## Topline
 
-Current best throughput is now the Sprint 107 DS4 grouped F8 fast path:
+Current best 8-slot throughput remains the Sprint 107 DS4 grouped F8 fast path.
+Sprint 108 tested TurboMind small-route build fusion and kept it opt-in because
+the primary 8-slot/256K A/B was neutral to slightly slower.
 
 | Mode | Context | Slots | Generated tok/s | Continuation tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
-| Production appliance, best observed | 262,144 | 8 | 31.811137 | 29.822941 | 8/8 token match |
-| Production appliance, repeat | 262,144 | 8 | 31.630774 | 29.653851 | 8/8 token match |
-| Production appliance | 1,048,576 | 4 | 20.095510 | 18.839541 | 4/4 token match |
+| Production appliance, best observed | 262,144 | 8 | `31.811137` | `29.822941` | 8/8 token match |
+| Current default A/B repeat | 262,144 | 8 | `31.794180` | `29.807044` | 8/8 token match |
+| Current default | 1,048,576 | 4 | `20.081695` | `18.826589` | 4/4 token match |
+| Small-route opt-in | 1,048,576 | 4 | `20.249531` | `18.983935` | 4/4 token match |
 
 The last pre-Sprint107 committed baseline was Sprint 104 at `31.451185`
 generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
@@ -24,6 +27,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 105 | Extend warp reductions to BF16/F32 matmuls | Correct, but repeat result was inside Sprint 104 band | Rejected and reverted |
 | 106 | Warm served `nvprof` profile of Sprint 104 | F8 rows2/grouped rows2 were ~51% GPU time; TurboMind SM70 MXFP4 was ~25%; GPU memcpy traffic was small | Use profile to choose next kernel target |
 | 107 | DS4-specific grouped F8 rows2 attention-output-A kernel | Correct and faster for 8-slot/256K; neutral for 4-slot/1M | Shipped |
+| 108 | TurboMind small-route count/prefix/scatter fusion | Correct; 8-slot repeat was `31.759013` opt-in vs `31.794180` rollback, while 4-slot/1M was `20.249531` opt-in vs `20.081695` rollback | Kept opt-in |
 
 ## Sprint 106 Profile Takeaway
 
@@ -69,11 +73,33 @@ Remaining optional validation:
 
 - Focused profile to confirm whether grouped F8 kernel time moved.
 
+## Current Opt-In Probe
+
+Sprint 108 adds a guarded small-route TurboMind route builder:
+
+- combines route count, prefix, and scatter into one one-block kernel for the
+  production small-route shape;
+- is controlled by `DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD`;
+- remains disabled by default because it did not improve the 8-slot/256K
+  practical target.
+
+Validation completed on the cluster:
+
+- `cuda_v100_turbomind_adapter_smoke`: passed
+- `cuda_v100_stage_scheduler_smoke --stage 0 --slots 4`: passed
+- `cuda_v100_full_scheduler_smoke --slots 8`: passed
+- selected-token smoke with small-route on: passed, token id `926`, hex `3136`
+- selected-token smoke with small-route off: passed, token id `926`, hex `3136`
+- rebuilt default check: `turbomind_small_route_build=0`, selected-token passed
+
 ## Next Target
 
-The next larger target should be TurboMind route-build fusion:
+The next larger target should skip small route-metadata plumbing and attack a
+larger hot-path bucket:
 
-- replace route count/prefix/scatter launch chain with one small-route kernel;
-- remove output memset plus atomic scatter using an inverse route map;
-- then consider TurboMind indexed gate/up inputs or optional fused gate/up
-  appliance packing.
+- F8 rows2/grouped rows2 tiling or vectorized decode;
+- TurboMind expert input layout that avoids route-expanded activation rows;
+- output scatter/inverse-map cleanup only if profiling shows it is material.
+
+The concise current status is also tracked in
+`docs/sprints/EXPERIMENT-STATUS.md`.

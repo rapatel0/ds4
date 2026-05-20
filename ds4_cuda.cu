@@ -3933,6 +3933,58 @@ __global__ static void tm_scatter_routes_kernel(
     sorted_weights[row] = weights[pair];
 }
 
+__global__ static void tm_build_routes_small_kernel(
+        int *counts,
+        int *cursors,
+        int *offsets,
+        int *sorted_pairs,
+        float *sorted_weights,
+        int *bad,
+        const int32_t *selected,
+        const float *weights,
+        uint32_t total_routes,
+        uint32_t n_total_experts) {
+    const uint32_t tid = threadIdx.x;
+    if (blockIdx.x != 0) return;
+    if (tid == 0) *bad = 0;
+    if (tid < n_total_experts) {
+        counts[tid] = 0;
+        cursors[tid] = 0;
+        offsets[tid] = 0;
+    }
+    if (tid == n_total_experts) offsets[n_total_experts] = 0;
+    __syncthreads();
+
+    if (tid < total_routes) {
+        const int32_t e = selected[tid];
+        if (e < 0 || (uint32_t)e >= n_total_experts) {
+            atomicExch(bad, 1);
+        } else {
+            atomicAdd(&counts[(uint32_t)e], 1);
+        }
+    }
+    __syncthreads();
+
+    if (tid == 0) {
+        int sum = 0;
+        for (uint32_t e = 0; e < n_total_experts; e++) {
+            offsets[e] = sum;
+            cursors[e] = sum;
+            sum += counts[e];
+        }
+        offsets[n_total_experts] = sum;
+    }
+    __syncthreads();
+
+    if (tid < total_routes) {
+        const int32_t e = selected[tid];
+        if (e < 0 || (uint32_t)e >= n_total_experts) return;
+        const int row = atomicAdd(&cursors[(uint32_t)e], 1);
+        sorted_pairs[row] = (int)tid;
+        sorted_weights[row] = weights[tid];
+    }
+}
+
 __global__ static void tm_gather_f32_to_f16_kernel(
         __half *out,
         const float *x,
@@ -4006,6 +4058,75 @@ static int cuda_tm_total_tokens_abi_enabled(void) {
     const char *disable = getenv("DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS");
     if (!disable || !disable[0]) return 0;
     return !cuda_env_flag_enabled("DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS");
+}
+
+static int cuda_tm_small_route_build_enabled(void) {
+    const char *disable = getenv("DS4_V100_TURBOMIND_DISABLE_SMALL_ROUTE_BUILD");
+    if (disable && disable[0]) {
+        return !cuda_env_flag_enabled("DS4_V100_TURBOMIND_DISABLE_SMALL_ROUTE_BUILD");
+    }
+    const char *enable = getenv("DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD");
+    if (!enable || !enable[0]) return 0;
+    return cuda_env_flag_enabled("DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD");
+}
+
+static int cuda_tm_use_small_route_build(uint32_t total_routes, uint32_t n_total_experts) {
+    return cuda_tm_small_route_build_enabled() &&
+           total_routes <= 128u &&
+           n_total_experts <= 256u;
+}
+
+static int cuda_tm_build_routes(
+        int *counts,
+        int *cursors,
+        int *offsets,
+        int *sorted_pairs,
+        float *sorted_weights,
+        int *bad,
+        const int32_t *selected,
+        const float *weights,
+        uint32_t total_routes,
+        uint32_t n_total_experts,
+        const char *label) {
+    if (cuda_tm_use_small_route_build(total_routes, n_total_experts)) {
+        tm_build_routes_small_kernel<<<1, 256>>>(
+            counts,
+            cursors,
+            offsets,
+            sorted_pairs,
+            sorted_weights,
+            bad,
+            selected,
+            weights,
+            total_routes,
+            n_total_experts);
+        return cuda_ok(cudaGetLastError(), label ? label : "turbomind small route build launch");
+    }
+
+    if (!cuda_ok(cudaMemset(counts, 0, (size_t)n_total_experts * sizeof(int)),
+                 "turbomind route counts clear") ||
+        !cuda_ok(cudaMemset(bad, 0, sizeof(int)), "turbomind bad flag clear")) {
+        return 0;
+    }
+    tm_count_routes_kernel<<<(total_routes + 255u) / 256u, 256>>>(
+        counts,
+        bad,
+        selected,
+        total_routes,
+        n_total_experts);
+    if (!cuda_ok(cudaGetLastError(), "turbomind count routes launch")) return 0;
+    tm_prefix_offsets_kernel<<<1, 1>>>(offsets, cursors, counts, n_total_experts);
+    if (!cuda_ok(cudaGetLastError(), "turbomind prefix routes launch")) return 0;
+    tm_scatter_routes_kernel<<<(total_routes + 255u) / 256u, 256>>>(
+        sorted_pairs,
+        sorted_weights,
+        bad,
+        cursors,
+        selected,
+        weights,
+        total_routes,
+        n_total_experts);
+    return cuda_ok(cudaGetLastError(), "turbomind scatter routes launch");
 }
 
 static int cuda_tm_checked_total_routes(
@@ -4400,30 +4521,19 @@ static int cuda_tm_routed_mxfp4_transient(
     __half *mid_half = (__half *)(scratch + mid_half_off);
     __half *down_routes = (__half *)(scratch + down_routes_off);
 
-    if (!cuda_ok(cudaMemset(counts, 0, (size_t)n_total_experts * sizeof(int)),
-                 "turbomind route counts clear") ||
-        !cuda_ok(cudaMemset(bad, 0, sizeof(int)), "turbomind bad flag clear")) {
+    if (!cuda_tm_build_routes(counts,
+                              cursors,
+                              offsets,
+                              sorted_pairs,
+                              sorted_weights,
+                              bad,
+                              (const int32_t *)selected_i32->ptr,
+                              (const float *)weights_f32->ptr,
+                              total_routes,
+                              n_total_experts,
+                              "turbomind route build launch")) {
         return 0;
     }
-    tm_count_routes_kernel<<<(total_routes + 255u) / 256u, 256>>>(
-        counts,
-        bad,
-        (const int32_t *)selected_i32->ptr,
-        total_routes,
-        n_total_experts);
-    if (!cuda_ok(cudaGetLastError(), "turbomind count routes launch")) return 0;
-    tm_prefix_offsets_kernel<<<1, 1>>>(offsets, cursors, counts, n_total_experts);
-    if (!cuda_ok(cudaGetLastError(), "turbomind prefix routes launch")) return 0;
-    tm_scatter_routes_kernel<<<(total_routes + 255u) / 256u, 256>>>(
-        sorted_pairs,
-        sorted_weights,
-        bad,
-        cursors,
-        (const int32_t *)selected_i32->ptr,
-        (const float *)weights_f32->ptr,
-        total_routes,
-        n_total_experts);
-    if (!cuda_ok(cudaGetLastError(), "turbomind scatter routes launch")) return 0;
     int h_bad = 0;
     if (!cuda_ok(cudaMemcpy(&h_bad, bad, sizeof(h_bad), cudaMemcpyDeviceToHost),
                  "turbomind route validation read")) {
@@ -4619,30 +4729,19 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     __half *mid_half = (__half *)(scratch + mid_half_off);
     __half *down_routes = (__half *)(scratch + down_routes_off);
 
-    if (!cuda_ok(cudaMemset(counts, 0, (size_t)n_total_experts * sizeof(int)),
-                 "turbomind packed route counts clear") ||
-        !cuda_ok(cudaMemset(bad, 0, sizeof(int)), "turbomind packed bad flag clear")) {
+    if (!cuda_tm_build_routes(counts,
+                              cursors,
+                              offsets,
+                              sorted_pairs,
+                              sorted_weights,
+                              bad,
+                              (const int32_t *)selected_i32->ptr,
+                              (const float *)weights_f32->ptr,
+                              total_routes,
+                              n_total_experts,
+                              "turbomind packed route build launch")) {
         return 1;
     }
-    tm_count_routes_kernel<<<(total_routes + 255u) / 256u, 256>>>(
-        counts,
-        bad,
-        (const int32_t *)selected_i32->ptr,
-        total_routes,
-        n_total_experts);
-    if (!cuda_ok(cudaGetLastError(), "turbomind packed count routes launch")) return 1;
-    tm_prefix_offsets_kernel<<<1, 1>>>(offsets, cursors, counts, n_total_experts);
-    if (!cuda_ok(cudaGetLastError(), "turbomind packed prefix routes launch")) return 1;
-    tm_scatter_routes_kernel<<<(total_routes + 255u) / 256u, 256>>>(
-        sorted_pairs,
-        sorted_weights,
-        bad,
-        cursors,
-        (const int32_t *)selected_i32->ptr,
-        (const float *)weights_f32->ptr,
-        total_routes,
-        n_total_experts);
-    if (!cuda_ok(cudaGetLastError(), "turbomind packed scatter routes launch")) return 1;
     if (cuda_tm_route_validation_sync_enabled()) {
         int h_bad = 0;
         if (!cuda_ok(cudaMemcpy(&h_bad, bad, sizeof(h_bad), cudaMemcpyDeviceToHost),

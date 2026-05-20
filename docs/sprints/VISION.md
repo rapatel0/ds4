@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: codex
-revision: 113
+revision: 114
 ---
 
 # Vision: DS4 V100 Appliance
@@ -2521,6 +2521,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Rejected Sprint 105 BF16/F32 warp-reduction probe. | Extending warp reductions to BF16/F32 arena matmuls preserved correctness but did not clear the default-change bar: the 8-slot repeat landed inside the Sprint 104 band. The code was reverted. Sprint 106 should start from a fresh profile and target a larger execution-shape change. | Sprint 106+ |
 | 2026-05-20 | Completed Sprint 106 served decode baseline profile. | Fresh warmed HTTP `nvprof` evidence shows F8 arena rows2/grouped rows2 still dominate at about 51% of GPU time, with TurboMind SM70 MXFP4 GEMM next at about 25%. GPU memcpy traffic is tiny despite noisy API `cudaMemcpy` accounting, so the next implementation should target F8 execution shape or TurboMind route batching rather than host RAM, disk, or more BF16/F32 cleanup. | Sprint 107+ |
 | 2026-05-20 | Shipped Sprint 107 DS4 grouped F8 attention-output kernel. | A DS4-specialized grouped rows2 kernel for the fixed attention-output-A shape improves 8-slot/256K serving to `31.81` generated tok/s best observed and `31.63` on repeat, while 4-slot/1M remains neutral around `20.1` tok/s. The next larger target should move to TurboMind route-build fusion rather than more small F8 shape tweaks. | Sprint 108+ |
+| 2026-05-20 | Completed Sprint 108 TurboMind small-route build probe. | Fusing route count/prefix/scatter into one small-route CUDA kernel preserves correctness, but the primary 8-slot/256K A/B stayed neutral to slightly slower (`31.76` opt-in vs `31.79` rollback on repeat). Keep it opt-in and move the next optimization to larger hot-path work: F8 matmul tiling/vectorization or TurboMind expert input layout. | Sprint 109+ |
 
 ## Open Questions
 

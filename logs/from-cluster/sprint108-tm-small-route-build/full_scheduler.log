@@ -1,0 +1,1 @@
+cuda_v100_full_scheduler_smoke: stages=8 token=16 pos=16 slots=8 layers=43 tm_layers=43 last=40-42 gpu=7 uploaded_tensors=8 uploaded_bytes=156142896212 expert_last=26 ok
