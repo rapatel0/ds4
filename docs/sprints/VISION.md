@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: codex
-revision: 110
+revision: 111
 ---
 
 # Vision: DS4 V100 Appliance
@@ -626,6 +626,11 @@ optimized V100 low-bit expert kernels in the actual hot path.
   `20.026385` generated tok/s at 1M/4 slots, with token-match correctness
   preserved. A served-path F8-to-F16 cache/cuBLAS experiment was rejected
   because it was too slow to satisfy the practical-use path.
+- Sprint 105 tested extending the same warp-reduction pattern to BF16/F32
+  output/control arena matmuls. Correctness passed and one 8-slot run reached
+  `31.612471` generated tok/s, but the repeat fell back to `31.479378`, too
+  close to the Sprint 104 band to justify shipping the reduction-order change.
+  The code was reverted and Sprint 104 remains the committed baseline.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -720,6 +725,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 102 F8 row-pair default | `27.049799` generated tok/s at 256K/8 slots; `18.500281` at 1M/4 slots | Measured | Computes two F8 arena output rows per CTA across the hot F8 APIs. Same-binary A/B improved 8-slot/256K from `26.447308` to `27.037514` and 4-slot/1M from `17.821073` to `18.500281`, with launcher-default validation at `27.049799`. `DS4_V100_CUDA_F8_ROWPAIR=1` is now the appliance default with rollback to `0`. |
 | Sprint 103 exact-bit F8 decode | `30.862791` generated tok/s at 256K/8 slots; `19.733742` at 1M/4 slots | Measured | Replaces per-weight `ldexpf()` E4M3 decode with exact F32 bit construction. Selected-token correctness remains `3136`; production soaks preserve `8/8` and `4/4` token matches. This improves the Sprint 102 launcher default by about `14.1%` at 256K/8 slots and `6.7%` at 1M/4 slots. |
 | Sprint 104 F8 warp-reduction kernels | `31.383579` and repeat `31.451185` generated tok/s at 256K/8 slots; `20.026385` at 1M/4 slots | Measured | Replaces F8 arena shared-memory tree reductions with warp-shuffle block reductions in the hot F8 matmul and shared F8 pair-SwiGLU paths. Correctness remains `3136`; production soaks preserve `8/8` and `4/4` token matches. The gain over Sprint 103 is modest but repeatable and adds no VRAM pressure. |
+| Sprint 105 BF16/F32 warp-reduction probe | rejected | Measured | Correctness passed and the first 8-slot run reached `31.612471`, but the repeat was `31.479378`, effectively inside the Sprint 104 band. The code was reverted; do not retry this as a default without a stronger profile reason. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -2512,6 +2518,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 102 F8 row-pair default. | The F8 arena matmul path now has a two-output-row CTA shape across the hot F8 APIs and is defaulted through `DS4_V100_CUDA_F8_ROWPAIR=1`. V100 A/B produced a real but modest default-worthy gain (`27.05` generated tok/s at 256K/8 slots), so the next sprint should profile the new default and pursue larger F8/TurboMind kernel occupancy or cross-layer synchronization reductions. | Sprint 103+ |
 | 2026-05-20 | Shipped Sprint 103 exact-bit F8 decode. | Removing `ldexpf()` from E4M3 decode produced the first post-row-pair double-digit kernel-side gain: `30.86` generated tok/s at 256K/8 slots and `19.73` at 1M/4 slots, with selected-token correctness preserved. The next sprint should profile this new default and decide between more F8 kernel shaping, vectorized decode, or the next TurboMind occupancy step. | Sprint 104+ |
 | 2026-05-20 | Shipped Sprint 104 F8 warp-reduction kernels. | Replacing F8 shared-memory tree reductions with warp-shuffle block reductions produced repeatable but modest serving gains: `31.38` and `31.45` generated tok/s at 256K/8 slots and `20.03` at 1M/4 slots. The F8-to-F16 cache/cuBLAS idea was rejected as impractically slow in the served path. The next sprint should use a fresh profile and target either larger F8 kernel tiling or TurboMind occupancy, not VRAM-heavy cache expansion. | Sprint 105+ |
+| 2026-05-20 | Rejected Sprint 105 BF16/F32 warp-reduction probe. | Extending warp reductions to BF16/F32 arena matmuls preserved correctness but did not clear the default-change bar: the 8-slot repeat landed inside the Sprint 104 band. The code was reverted. Sprint 106 should start from a fresh profile and target a larger execution-shape change. | Sprint 106+ |
 
 ## Open Questions
 
