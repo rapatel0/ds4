@@ -5,17 +5,18 @@ Last updated: 2026-05-20
 ## Topline
 
 The appliance is correct and served on the 8x V100 node, but it is not yet in
-the practical throughput range from the vision. Current measured decode
-throughput is still about `32` aggregate tok/s at the 8-slot/256K target.
+the practical throughput range from the vision. Sprint 111 raises the main
+8-slot/256K target to `33.430971` generated tok/s by shipping fused TurboMind
+gate/up expert packing and execution.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
-| Throughput serving target | 262,144 | 8 | `31.811137` | `31.794180` | 8/8 token match |
-| Long-context target | 1,048,576 | 4 | `20.249531` opt-in | `20.081695` | 4/4 token match |
+| Throughput serving target | 262,144 | 8 | `33.430971` | `33.430971` | 8/8 token match |
+| Long-context target | 1,048,576 | 4 | `21.403909` | `21.403909` | 4/4 token match |
 
-The `20.249531` long-context result uses the Sprint 108 small-route build path,
-but that path is not the default because the 8-slot/256K A/B was neutral to
-slightly worse.
+The older `20.249531` long-context result used the Sprint 108 small-route build
+path, but that path is not the default because the 8-slot/256K A/B was neutral
+to slightly worse.
 
 ## Tested
 
@@ -44,6 +45,7 @@ slightly worse.
 | 108 | TurboMind small-route build fusion | Correct; `31.759013` opt-in vs `31.794180` rollback on repeat | Kept opt-in |
 | 109 | F8 row4 CTA probe | Correct; `30.998275` row4 vs `31.380225` control at 8-slot/256K | Rejected as default |
 | 110 | TurboMind fused gate/up grouped-GEMM probe | Correct; fused gate_up was `1.46x-1.53x` faster than separate gate and up calls | Proceed to appliance implementation |
+| 111 | Production fused TurboMind gate_up appliance | Correct; `33.430971` fused vs `31.312694` same-binary separate control at 8-slot/256K; `21.403909` at 4-slot/1M | Shipped/default for fused packs |
 
 ## Remaining
 
@@ -53,8 +55,8 @@ slightly worse.
   kernel shape/occupancy, not disk, host RAM, or bulk PCIe/NVLink traffic.
 - Attack larger hot-path buckets instead of small host-side route plumbing:
   - TurboMind MXFP4 expert occupancy and route-expanded activation layout.
-  - Fused gate+up expert packing/GEMM; Sprint 110 microbench clears the
-    implementation gate.
+  - Persistent/grouped expert execution beyond the shipped Sprint 111 fused
+    gate_up launch reduction.
   - Software-pipelined F8 dequant+dot work that improves instruction throughput
     without the row4 occupancy loss.
 - Decide whether the next production step is a deeper TurboMind adapter change
@@ -68,7 +70,9 @@ The default launcher now keeps `DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=0` and
 ```text
 DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=1
 DS4_V100_CUDA_F8_ROW4=1
+DS4_V100_TURBOMIND_FUSED_GATE_UP=0
 ```
 
-The current default selected-token smoke passed after rebuilding with the
-opt-in path disabled by default.
+The fused gate/up path is default-enabled for appliances that contain fused
+`ffn_gate_up_exps.weight` tensors. Set `DS4_V100_TURBOMIND_FUSED_GATE_UP=0`
+only when the appliance also contains separate gate/up tensors.

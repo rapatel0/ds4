@@ -4235,6 +4235,29 @@ __global__ static void tm_swiglu_half_kernel(
     out[idx] = __float2half_rn(s * u * weights[row]);
 }
 
+__global__ static void tm_swiglu_fused_gate_up_half_kernel(
+        __half *out,
+        const __half *gate_up,
+        const float *weights,
+        uint32_t total_routes,
+        uint32_t cols,
+        float clamp) {
+    const uint64_t idx = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t n = (uint64_t)total_routes * cols;
+    if (idx >= n) return;
+    const uint32_t row = (uint32_t)(idx / cols);
+    const uint32_t col = (uint32_t)(idx - (uint64_t)row * cols);
+    const uint64_t base = (uint64_t)row * (uint64_t)cols * 2u + col;
+    float g = __half2float(gate_up[base]);
+    float u = __half2float(gate_up[base + cols]);
+    if (clamp > 1.0e-6f) {
+        g = fminf(g, clamp);
+        u = fminf(fmaxf(u, -clamp), clamp);
+    }
+    const float s = g / (1.0f + expf(-g));
+    out[idx] = __float2half_rn(s * u * weights[row]);
+}
+
 __global__ static void tm_scatter_sum_half_to_f32_kernel(
         float *out,
         const __half *routes,
@@ -4851,6 +4874,7 @@ static int cuda_tm_routed_mxfp4_packed_impl(
         const ds4_gpu_arena *arena,
         const ds4_gpu_turbomind_mxfp4_matrix_view *gate,
         const ds4_gpu_turbomind_mxfp4_matrix_view *up,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *gate_up,
         const ds4_gpu_turbomind_mxfp4_matrix_view *down,
         uint32_t hidden,
         uint32_t mid,
@@ -4863,7 +4887,8 @@ static int cuda_tm_routed_mxfp4_packed_impl(
         uint32_t n_tokens,
         ds4_gpu_tensor *out_f32) {
     if (!cuda_tm_load_api()) return 1;
-    if (!arena || !arena->valid || !arena->ptr || !gate || !up || !down ||
+    const int fused_gate_up = gate_up != nullptr;
+    if (!arena || !arena->valid || !arena->ptr || !down ||
         !selected_i32 || !selected_i32->ptr || !weights_f32 || !weights_f32->ptr ||
         (!x_f32 && !x_row_ptrs) ||
         (x_f32 && !x_f32->ptr) ||
@@ -4873,17 +4898,21 @@ static int cuda_tm_routed_mxfp4_packed_impl(
         n_tokens == 0) {
         return 1;
     }
-    if (gate->n != mid || gate->k != hidden ||
-        up->n != mid || up->k != hidden ||
-        down->n != hidden || down->k != mid ||
-        gate->experts_packed < n_total_experts ||
-        up->experts_packed < n_total_experts ||
-        down->experts_packed < n_total_experts) {
+    uint32_t total_routes = 0;
+    const uint64_t fused_n_u64 = (uint64_t)mid * 2u;
+    if (!cuda_tm_checked_total_routes(n_tokens, n_routes, &total_routes) ||
+        n_total_experts > INT_MAX || hidden > INT_MAX || mid > INT_MAX ||
+        (fused_gate_up && fused_n_u64 > INT_MAX)) {
         return 1;
     }
-    uint32_t total_routes = 0;
-    if (!cuda_tm_checked_total_routes(n_tokens, n_routes, &total_routes) ||
-        n_total_experts > INT_MAX || hidden > INT_MAX || mid > INT_MAX) {
+    if ((!fused_gate_up && (!gate || !up)) ||
+        (fused_gate_up && (!gate_up || (uint64_t)gate_up->n != fused_n_u64 || gate_up->k != hidden)) ||
+        (!fused_gate_up && (gate->n != mid || gate->k != hidden ||
+                            up->n != mid || up->k != hidden)) ||
+        down->n != hidden || down->k != mid ||
+        (fused_gate_up ? gate_up->experts_packed : gate->experts_packed) < n_total_experts ||
+        (!fused_gate_up && up->experts_packed < n_total_experts) ||
+        down->experts_packed < n_total_experts) {
         return 1;
     }
     if (selected_i32->bytes < (uint64_t)n_tokens * n_routes * sizeof(int32_t) ||
@@ -4915,9 +4944,11 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     const uint64_t a_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     scratch_bytes += (uint64_t)total_routes * hidden * sizeof(__half);
     const uint64_t gate_out_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
-    scratch_bytes += (uint64_t)total_routes * mid * sizeof(__half);
+    scratch_bytes += (uint64_t)total_routes * mid * (fused_gate_up ? 2u : 1u) * sizeof(__half);
     const uint64_t up_out_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
-    scratch_bytes += (uint64_t)total_routes * mid * sizeof(__half);
+    if (!fused_gate_up) {
+        scratch_bytes += (uint64_t)total_routes * mid * sizeof(__half);
+    }
     const uint64_t mid_half_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     scratch_bytes += (uint64_t)total_routes * mid * sizeof(__half);
     const uint64_t down_routes_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
@@ -4934,7 +4965,7 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     int *bad = (int *)(scratch + bad_off);
     __half *a_half = (__half *)(scratch + a_off);
     __half *gate_out = (__half *)(scratch + gate_out_off);
-    __half *up_out = (__half *)(scratch + up_out_off);
+    __half *up_out = fused_gate_up ? nullptr : (__half *)(scratch + up_out_off);
     __half *mid_half = (__half *)(scratch + mid_half_off);
     __half *down_routes = (__half *)(scratch + down_routes_off);
 
@@ -4972,32 +5003,53 @@ static int cuda_tm_routed_mxfp4_packed_impl(
 
     cuda_tm_matrix_pack gate_pack = {};
     cuda_tm_matrix_pack up_pack = {};
+    cuda_tm_matrix_pack gate_up_pack = {};
     cuda_tm_matrix_pack down_pack = {};
-    if (!cuda_tm_matrix_pack_from_arena(&gate_pack, arena, gate, n_total_experts, "gate") ||
-        !cuda_tm_matrix_pack_from_arena(&up_pack, arena, up, n_total_experts, "up") ||
+    if ((fused_gate_up
+            ? !cuda_tm_matrix_pack_from_arena(&gate_up_pack, arena, gate_up, n_total_experts, "gate_up")
+            : (!cuda_tm_matrix_pack_from_arena(&gate_pack, arena, gate, n_total_experts, "gate") ||
+               !cuda_tm_matrix_pack_from_arena(&up_pack, arena, up, n_total_experts, "up"))) ||
         !cuda_tm_matrix_pack_from_arena(&down_pack, arena, down, n_total_experts, "down")) {
+        cuda_tm_matrix_pack_table_free(&gate_up_pack);
         cuda_tm_matrix_pack_table_free(&gate_pack);
         cuda_tm_matrix_pack_table_free(&up_pack);
         cuda_tm_matrix_pack_table_free(&down_pack);
         return 1;
     }
-    int ok = cuda_tm_grouped_matmul(
-        a_half, offsets, &gate_pack, total_routes, n_total_experts, (int)mid, (int)hidden,
-        gate_out, "packed gate");
-    if (ok) {
+    int ok = 1;
+    if (fused_gate_up) {
         ok = cuda_tm_grouped_matmul(
-            a_half, offsets, &up_pack, total_routes, n_total_experts, (int)mid, (int)hidden,
-            up_out, "packed up");
+            a_half, offsets, &gate_up_pack, total_routes, n_total_experts, (int)fused_n_u64, (int)hidden,
+            gate_out, "packed gate_up");
+    } else {
+        ok = cuda_tm_grouped_matmul(
+            a_half, offsets, &gate_pack, total_routes, n_total_experts, (int)mid, (int)hidden,
+            gate_out, "packed gate");
+        if (ok) {
+            ok = cuda_tm_grouped_matmul(
+                a_half, offsets, &up_pack, total_routes, n_total_experts, (int)mid, (int)hidden,
+                up_out, "packed up");
+        }
     }
     if (ok) {
-        tm_swiglu_half_kernel<<<((uint64_t)total_routes * mid + 255u) / 256u, 256>>>(
-            mid_half,
-            gate_out,
-            up_out,
-            sorted_weights,
-            total_routes,
-            mid,
-            10.0f);
+        if (fused_gate_up) {
+            tm_swiglu_fused_gate_up_half_kernel<<<((uint64_t)total_routes * mid + 255u) / 256u, 256>>>(
+                mid_half,
+                gate_out,
+                sorted_weights,
+                total_routes,
+                mid,
+                10.0f);
+        } else {
+            tm_swiglu_half_kernel<<<((uint64_t)total_routes * mid + 255u) / 256u, 256>>>(
+                mid_half,
+                gate_out,
+                up_out,
+                sorted_weights,
+                total_routes,
+                mid,
+                10.0f);
+        }
         ok = cuda_ok(cudaGetLastError(), "turbomind packed swiglu launch");
     }
     if (ok) {
@@ -5006,6 +5058,7 @@ static int cuda_tm_routed_mxfp4_packed_impl(
             down_routes, "packed down");
     }
     cuda_tm_matrix_pack_table_free(&down_pack);
+    cuda_tm_matrix_pack_table_free(&gate_up_pack);
     cuda_tm_matrix_pack_table_free(&up_pack);
     cuda_tm_matrix_pack_table_free(&gate_pack);
     if (!ok) return 1;
@@ -5043,6 +5096,7 @@ extern "C" int ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_f32(
     return cuda_tm_routed_mxfp4_packed_impl(arena,
                                            gate,
                                            up,
+                                           nullptr,
                                            down,
                                            hidden,
                                            mid,
@@ -5097,6 +5151,91 @@ extern "C" int ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_batch_ptrs_f
     return cuda_tm_routed_mxfp4_packed_impl(arena,
                                            gate,
                                            up,
+                                           nullptr,
+                                           down,
+                                           hidden,
+                                           mid,
+                                           n_total_experts,
+                                           selected_i32,
+                                           weights_f32,
+                                           n_routes,
+                                           nullptr,
+                                           x_row_ptrs,
+                                           n_tokens,
+                                           out_f32);
+}
+
+extern "C" int ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_f32(
+        const ds4_gpu_arena *arena,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *gate_up,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *down,
+        uint32_t hidden,
+        uint32_t mid,
+        uint32_t n_total_experts,
+        const ds4_gpu_tensor *selected_i32,
+        const ds4_gpu_tensor *weights_f32,
+        uint32_t n_routes,
+        const ds4_gpu_tensor *x_f32,
+        uint32_t n_tokens,
+        ds4_gpu_tensor *out_f32) {
+    return cuda_tm_routed_mxfp4_packed_impl(arena,
+                                           nullptr,
+                                           nullptr,
+                                           gate_up,
+                                           down,
+                                           hidden,
+                                           mid,
+                                           n_total_experts,
+                                           selected_i32,
+                                           weights_f32,
+                                           n_routes,
+                                           x_f32,
+                                           nullptr,
+                                           n_tokens,
+                                           out_f32);
+}
+
+extern "C" int ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_batch_ptrs_f32(
+        const ds4_gpu_arena *arena,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *gate_up,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *down,
+        uint32_t hidden,
+        uint32_t mid,
+        uint32_t n_total_experts,
+        const ds4_gpu_tensor *selected_i32,
+        const ds4_gpu_tensor *weights_f32,
+        uint32_t n_routes,
+        ds4_gpu_tensor *x_row_ptrs,
+        const ds4_gpu_tensor *const *x_rows_f32,
+        uint32_t n_tokens,
+        ds4_gpu_tensor *out_f32) {
+    if (!arena || !x_row_ptrs || !x_rows_f32 || !x_row_ptrs->ptr ||
+        x_row_ptrs->device != arena->gpu ||
+        x_row_ptrs->bytes < (uint64_t)n_tokens * sizeof(float *) ||
+        n_tokens == 0) {
+        return 1;
+    }
+    std::vector<const float *> row_ptrs(n_tokens);
+    for (uint32_t tok = 0; tok < n_tokens; tok++) {
+        const ds4_gpu_tensor *x = x_rows_f32[tok];
+        if (!x || !x->ptr || x->device != arena->gpu ||
+            x->bytes < (uint64_t)hidden * sizeof(float)) {
+            return 1;
+        }
+        row_ptrs[tok] = (const float *)x->ptr;
+    }
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "turbomind fused batch ptr set device") ||
+        !cuda_ok(cudaMemcpy(x_row_ptrs->ptr,
+                            row_ptrs.data(),
+                            (size_t)n_tokens * sizeof(float *),
+                            cudaMemcpyHostToDevice),
+                 "turbomind fused batch row ptr upload")) {
+        return 1;
+    }
+    return cuda_tm_routed_mxfp4_packed_impl(arena,
+                                           nullptr,
+                                           nullptr,
+                                           gate_up,
                                            down,
                                            hidden,
                                            mid,

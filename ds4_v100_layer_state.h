@@ -92,11 +92,14 @@ typedef struct {
     ds4_v100_tensor_binding routed_up_binding;
     ds4_v100_tensor_binding routed_down_binding;
     bool has_turbomind_routed;
+    bool has_turbomind_fused_gate_up;
     ds4_v100_turbomind_binding turbomind_gate_binding;
     ds4_v100_turbomind_binding turbomind_up_binding;
+    ds4_v100_turbomind_binding turbomind_gate_up_binding;
     ds4_v100_turbomind_binding turbomind_down_binding;
     ds4_gpu_turbomind_mxfp4_matrix_view turbomind_gate_view;
     ds4_gpu_turbomind_mxfp4_matrix_view turbomind_up_view;
+    ds4_gpu_turbomind_mxfp4_matrix_view turbomind_gate_up_view;
     ds4_gpu_turbomind_mxfp4_matrix_view turbomind_down_view;
     ds4_v100_bound_matrix shared_gate;
     ds4_v100_bound_matrix shared_up;

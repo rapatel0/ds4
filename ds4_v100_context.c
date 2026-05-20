@@ -715,6 +715,7 @@ static bool is_routed_expert_id(const char *id) {
     return id &&
            (strstr(id, ".ffn_gate_exps.weight") ||
             strstr(id, ".ffn_up_exps.weight") ||
+            strstr(id, ".ffn_gate_up_exps.weight") ||
             strstr(id, ".ffn_down_exps.weight"));
 }
 

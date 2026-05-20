@@ -96,6 +96,7 @@ fi
 : "${DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS:=1}"
 : "${DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC:=0}"
 : "${DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD:=0}"
+: "${DS4_V100_TURBOMIND_FUSED_GATE_UP:=1}"
 : "${DS4_V100_TURBOMIND_LIB:=./build/turbomind-v100/libggml-turbomind.so}"
 : "${DS4_V100_HOST:=127.0.0.1}"
 : "${DS4_V100_PORT:=18080}"
@@ -362,6 +363,11 @@ case "$DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD" in
     1|true|on) DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=1 ;;
     *) fail "DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD must be 0 or 1" ;;
 esac
+case "$DS4_V100_TURBOMIND_FUSED_GATE_UP" in
+    0|false|off) DS4_V100_TURBOMIND_FUSED_GATE_UP=0 ;;
+    1|true|on) DS4_V100_TURBOMIND_FUSED_GATE_UP=1 ;;
+    *) fail "DS4_V100_TURBOMIND_FUSED_GATE_UP must be 0 or 1" ;;
+esac
 
 async_pipeline_mode="$DS4_V100_ASYNC_PIPELINE_MODE"
 case "$async_pipeline_mode" in
@@ -452,7 +458,7 @@ print_resolved() {
 }
 
 if [ "$mode" = "check" ]; then
-    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff startup_warmup=$startup_warmup cuda_profiler_window=$cuda_profiler_window cuda_tensor_pool=$cuda_tensor_pool cuda_tensor_pool_max_mib=$DS4_V100_CUDA_TENSOR_POOL_MAX_MIB cuda_f8_rowpair=$DS4_V100_CUDA_F8_ROWPAIR cuda_f8_row4=$DS4_V100_CUDA_F8_ROW4 cuda_f8_grouped_ds4_fast=$DS4_V100_CUDA_F8_GROUPED_DS4_FAST batch_shared_f8=$DS4_V100_BATCH_SHARED_F8 disable_grouped_attn_output_a=$DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A appliance_dir=${DS4_V100_APPLIANCE_DIR:-none} turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN disable_turbomind_total_tokens=$DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS turbomind_route_validate_sync=$DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC turbomind_small_route_build=$DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD"
+    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff startup_warmup=$startup_warmup cuda_profiler_window=$cuda_profiler_window cuda_tensor_pool=$cuda_tensor_pool cuda_tensor_pool_max_mib=$DS4_V100_CUDA_TENSOR_POOL_MAX_MIB cuda_f8_rowpair=$DS4_V100_CUDA_F8_ROWPAIR cuda_f8_row4=$DS4_V100_CUDA_F8_ROW4 cuda_f8_grouped_ds4_fast=$DS4_V100_CUDA_F8_GROUPED_DS4_FAST batch_shared_f8=$DS4_V100_BATCH_SHARED_F8 disable_grouped_attn_output_a=$DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A appliance_dir=${DS4_V100_APPLIANCE_DIR:-none} turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN disable_turbomind_total_tokens=$DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS turbomind_route_validate_sync=$DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC turbomind_small_route_build=$DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD turbomind_fused_gate_up=$DS4_V100_TURBOMIND_FUSED_GATE_UP"
     exit 0
 fi
 if [ "$mode" = "print" ]; then
@@ -497,6 +503,7 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS=$DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS"
     echo "DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC=$DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC"
     echo "DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=$DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD"
+    echo "DS4_V100_TURBOMIND_FUSED_GATE_UP=$DS4_V100_TURBOMIND_FUSED_GATE_UP"
     echo "DS4_V100_TURBOMIND_LIB=$DS4_V100_TURBOMIND_LIB"
     echo "DS4_V100_HOST=$DS4_V100_HOST"
     echo "DS4_V100_PORT=$DS4_V100_PORT"
@@ -518,6 +525,7 @@ export DS4_V100_TURBOMIND_STRICT
 export DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS
 export DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC
 export DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD
+export DS4_V100_TURBOMIND_FUSED_GATE_UP
 export DS4_V100_TURBOMIND_LIB
 export DS4_CUDA_TENSOR_POOL="$cuda_tensor_pool"
 export DS4_CUDA_TENSOR_POOL_MAX_MIB="$DS4_V100_CUDA_TENSOR_POOL_MAX_MIB"

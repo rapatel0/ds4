@@ -4,19 +4,16 @@ Last updated: 2026-05-20
 
 ## Topline
 
-Current best 8-slot throughput remains the Sprint 107 DS4 grouped F8 fast path.
-Sprint 108 tested TurboMind small-route build fusion and kept it opt-in because
-the primary 8-slot/256K A/B was neutral to slightly slower. Sprint 109 tested
-F8 row4 CTAs and rejected them as a default because both measured tiers
-regressed. Sprint 110 found a materially better expert path: a fused
-TurboMind gate+up grouped-GEMM microbenchmark is `1.46x-1.53x` faster than the
-current two-call shape on V100.
+Current best 8-slot throughput is the Sprint 111 fused TurboMind gate/up
+appliance path. It turns each layer's separate gate and up expert GEMMs into one
+offline-packed `gate_up` grouped GEMM and keeps the same per-GPU VRAM footprint
+as the previous appliance.
 
 | Mode | Context | Slots | Generated tok/s | Continuation tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
-| Production appliance, best observed | 262,144 | 8 | `31.811137` | `29.822941` | 8/8 token match |
-| Current default A/B repeat | 262,144 | 8 | `31.794180` | `29.807044` | 8/8 token match |
-| Current default | 1,048,576 | 4 | `20.081695` | `18.826589` | 4/4 token match |
+| Production fused gate_up appliance | 262,144 | 8 | `33.430971` | `31.341535` | 8/8 token match |
+| Same-binary separate gate/up control | 262,144 | 8 | `31.312694` | `29.355651` | 8/8 token match |
+| Production fused gate_up appliance | 1,048,576 | 4 | `21.403909` | `20.066165` | 4/4 token match |
 | Small-route opt-in | 1,048,576 | 4 | `20.249531` | `18.983935` | 4/4 token match |
 
 The last pre-Sprint107 committed baseline was Sprint 104 at `31.451185`
@@ -34,6 +31,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 108 | TurboMind small-route count/prefix/scatter fusion | Correct; 8-slot repeat was `31.759013` opt-in vs `31.794180` rollback, while 4-slot/1M was `20.249531` opt-in vs `20.081695` rollback | Kept opt-in |
 | 109 | F8 four-output-row CTA probe | Correct; regressed 8-slot/256K to `30.998275` vs `31.380225` control and 4-slot/1M to `19.898462` vs `20.041787` control | Rejected as default; opt-in only |
 | 110 | TurboMind fused gate+up grouped-GEMM probe | Correct; `1.504x`, `1.532x`, and `1.462x` faster at 6, 24, and 48 total routes | Proceed to appliance implementation |
+| 111 | Production fused TurboMind gate_up appliance | Correct; 8-slot/256K improved to `33.430971` from `31.312694` same-binary separate control | Shipped/default for fused packs |
 
 ## Sprint 106 Profile Takeaway
 
@@ -121,15 +119,24 @@ Sprint 110 adds a standalone TurboMind fused gate/up benchmark:
   grouped calls;
 - correctness: exact output match for both halves of the fused tensor.
 
+Sprint 111 ships that fused gate/up result into the appliance:
+
+- packer emits `blk.N.ffn_gate_up_exps.weight` with `--fuse-gate-up`;
+- runtime defaults to the fused path with `DS4_V100_TURBOMIND_FUSED_GATE_UP=1`;
+- selected-token smoke passed with token id `926`, hex `3136`;
+- full scheduler smoke passed with `tm_layers=43`;
+- 8-slot/256K served A/B improved from `31.312694` to `33.430971`
+  generated tok/s;
+- 4-slot/1M fused sanity passed at `21.403909` generated tok/s.
+
 ## Next Target
 
-The next target is the production fused TurboMind gate+up path:
-
-- add fused gate_up expert packing or deterministic repack;
-- add manifest/layer-state support for the fused expert tensor;
-- replace two grouped calls with one fused grouped call under a rollback knob;
-- split the fused output for SwiGLU and validate selected-token correctness;
-- run served 8-slot/256K and 4-slot/1M A/B throughput before making it default.
+The next target is deeper expert-kernel utilization. Fused gate/up removes one
+large grouped GEMM launch per routed layer, but aggregate throughput is still
+only `33.43` tok/s, far below the practical serving target. The next sprint
+should profile the fused served path and decide between persistent/grouped
+TurboMind expert execution, fused SwiGLU/down scheduling, or larger F8 kernel
+pipeline changes.
 
 The concise current status is also tracked in
 `docs/sprints/EXPERIMENT-STATUS.md`.

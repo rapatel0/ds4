@@ -217,6 +217,22 @@ static int make_turbomind_routed_binding(const ds4_v100_turbomind_binding *b,
     return 0;
 }
 
+static int make_turbomind_fused_gate_up_synthetic_binding(
+        const ds4_v100_turbomind_binding *b,
+        ds4_v100_tensor_binding *out,
+        const char *label,
+        char *err,
+        size_t errlen) {
+    if (make_turbomind_routed_binding(b, out, label, err, errlen)) return 1;
+    if (b->n == 0 || (b->n % 2u) != 0 || b->n_shape_dims != 3 ||
+        b->shape[1] != b->n || b->shape[0] != b->k) {
+        return state_error(err, errlen, "%s must be a fused gate_up tensor with even N", label);
+    }
+    out->shape[1] = (uint64_t)b->n / 2u;
+    out->byte_length = b->source_byte_length / 2u;
+    return 0;
+}
+
 static int bind_routed_expert_tensors(ds4_v100_layer_state *out,
                                       const ds4_v100_context *ctx,
                                       int layer_id,
@@ -230,29 +246,60 @@ static int bind_routed_expert_tensors(ds4_v100_layer_state *out,
     int u = ds4_v100_context_require_layer_turbomind_binding(
         ctx, layer_id, "ffn_up_exps.weight", &out->turbomind_up_binding,
         tm_err, sizeof(tm_err));
+    int gu = ds4_v100_context_require_layer_turbomind_binding(
+        ctx, layer_id, "ffn_gate_up_exps.weight", &out->turbomind_gate_up_binding,
+        tm_err, sizeof(tm_err));
     int d = ds4_v100_context_require_layer_turbomind_binding(
         ctx, layer_id, "ffn_down_exps.weight", &out->turbomind_down_binding,
         tm_err, sizeof(tm_err));
-    if (!g || !u || !d) {
-        if (g || u || d) {
+    const bool has_separate_gate_up = !g && !u;
+    const bool has_partial_separate_gate_up = (!g) != (!u);
+    const bool has_fused_gate_up = !gu;
+    if (!d && (has_separate_gate_up || has_fused_gate_up)) {
+        if (has_partial_separate_gate_up) {
             return state_error(err, errlen,
                                "partial TurboMind routed expert binding for layer %d",
                                layer_id);
         }
         out->has_turbomind_routed = true;
-        if (make_turbomind_routed_binding(&out->turbomind_gate_binding,
-                                          &out->routed_gate_binding,
-                                          "ffn_gate_exps.weight", err, errlen) ||
-            make_turbomind_routed_binding(&out->turbomind_up_binding,
-                                          &out->routed_up_binding,
-                                          "ffn_up_exps.weight", err, errlen) ||
-            make_turbomind_routed_binding(&out->turbomind_down_binding,
+        out->has_turbomind_fused_gate_up = has_fused_gate_up;
+        ds4_v100_tensor_binding fused_gate_binding;
+        ds4_v100_tensor_binding fused_up_binding;
+        memset(&fused_gate_binding, 0, sizeof(fused_gate_binding));
+        memset(&fused_up_binding, 0, sizeof(fused_up_binding));
+        if (has_fused_gate_up) {
+            if (make_turbomind_fused_gate_up_synthetic_binding(
+                    &out->turbomind_gate_up_binding,
+                    &fused_gate_binding,
+                    "ffn_gate_up_exps.weight", err, errlen) ||
+                make_turbomind_fused_gate_up_synthetic_binding(
+                    &out->turbomind_gate_up_binding,
+                    &fused_up_binding,
+                    "ffn_gate_up_exps.weight", err, errlen)) {
+                return 1;
+            }
+            out->turbomind_gate_up_view = tm_gpu_view(&out->turbomind_gate_up_binding);
+        }
+        if (has_separate_gate_up) {
+            if (make_turbomind_routed_binding(&out->turbomind_gate_binding,
+                                              &out->routed_gate_binding,
+                                              "ffn_gate_exps.weight", err, errlen) ||
+                make_turbomind_routed_binding(&out->turbomind_up_binding,
+                                              &out->routed_up_binding,
+                                              "ffn_up_exps.weight", err, errlen)) {
+                return 1;
+            }
+            out->turbomind_gate_view = tm_gpu_view(&out->turbomind_gate_binding);
+            out->turbomind_up_view = tm_gpu_view(&out->turbomind_up_binding);
+        } else if (has_fused_gate_up) {
+            out->routed_gate_binding = fused_gate_binding;
+            out->routed_up_binding = fused_up_binding;
+        }
+        if (make_turbomind_routed_binding(&out->turbomind_down_binding,
                                           &out->routed_down_binding,
                                           "ffn_down_exps.weight", err, errlen)) {
             return 1;
         }
-        out->turbomind_gate_view = tm_gpu_view(&out->turbomind_gate_binding);
-        out->turbomind_up_view = tm_gpu_view(&out->turbomind_up_binding);
         out->turbomind_down_view = tm_gpu_view(&out->turbomind_down_binding);
         return 0;
     }
@@ -650,9 +697,16 @@ int ds4_v100_layer_state_ffn_arena_span(const ds4_v100_layer_state *state,
                                    selected_experts[i]);
             }
         }
-        if (grow_span_for_turbomind_view(&state->turbomind_gate_view, &span) ||
-            grow_span_for_turbomind_view(&state->turbomind_up_view, &span) ||
-            grow_span_for_turbomind_view(&state->turbomind_down_view, &span)) {
+        if (state->has_turbomind_fused_gate_up &&
+            grow_span_for_turbomind_view(&state->turbomind_gate_up_view, &span)) {
+            return state_error(err, errlen, "TurboMind routed FFN arena span overflow");
+        }
+        if ((state->turbomind_gate_view.experts_packed || state->turbomind_up_view.experts_packed) &&
+            (grow_span_for_turbomind_view(&state->turbomind_gate_view, &span) ||
+             grow_span_for_turbomind_view(&state->turbomind_up_view, &span))) {
+            return state_error(err, errlen, "TurboMind routed FFN arena span overflow");
+        }
+        if (grow_span_for_turbomind_view(&state->turbomind_down_view, &span)) {
             return state_error(err, errlen, "TurboMind routed FFN arena span overflow");
         }
         *out_bytes = span;

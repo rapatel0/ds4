@@ -400,6 +400,22 @@ static bool env_flag_enabled(const char *name) {
            strcmp(v, "OFF") != 0;
 }
 
+static bool env_flag_default_enabled(const char *name) {
+    const char *v = getenv(name);
+    if (!v || !*v) return true;
+    return strcmp(v, "0") != 0 &&
+           strcmp(v, "false") != 0 &&
+           strcmp(v, "FALSE") != 0 &&
+           strcmp(v, "off") != 0 &&
+           strcmp(v, "OFF") != 0;
+}
+
+static bool has_turbomind_separate_gate_up(const ds4_v100_layer_state *state) {
+    return state &&
+           state->turbomind_gate_view.experts_packed != 0 &&
+           state->turbomind_up_view.experts_packed != 0;
+}
+
 static double monotonic_ms(void) {
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0.0;
@@ -1511,20 +1527,43 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
     }
 
     if (state->has_turbomind_routed) {
-        if (ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_f32(
-                cfg->arena,
-                &state->turbomind_gate_view,
-                &state->turbomind_up_view,
-                &state->turbomind_down_view,
-                hidden,
-                mid,
-                state->routed_experts,
-                selected_t,
-                weights_t,
-                routes,
-                ffn_input,
-                1,
-                accum_a) != 0) {
+        const bool use_fused_gate_up =
+            state->has_turbomind_fused_gate_up &&
+            env_flag_default_enabled("DS4_V100_TURBOMIND_FUSED_GATE_UP");
+        if (!use_fused_gate_up && !has_turbomind_separate_gate_up(state)) {
+            exec_error(err, errlen,
+                       "TurboMind fused gate_up disabled but no separate gate/up tensors are bound");
+            goto done;
+        }
+        const int tm_rc = use_fused_gate_up
+            ? ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_f32(
+                  cfg->arena,
+                  &state->turbomind_gate_up_view,
+                  &state->turbomind_down_view,
+                  hidden,
+                  mid,
+                  state->routed_experts,
+                  selected_t,
+                  weights_t,
+                  routes,
+                  ffn_input,
+                  1,
+                  accum_a)
+            : ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_f32(
+                  cfg->arena,
+                  &state->turbomind_gate_view,
+                  &state->turbomind_up_view,
+                  &state->turbomind_down_view,
+                  hidden,
+                  mid,
+                  state->routed_experts,
+                  selected_t,
+                  weights_t,
+                  routes,
+                  ffn_input,
+                  1,
+                  accum_a);
+        if (tm_rc != 0) {
             exec_error(err, errlen, "TurboMind routed FFN failed");
             goto done;
         }
@@ -1795,21 +1834,45 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
     }
 
     if (state->has_turbomind_routed) {
-        if (ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_batch_ptrs_f32(
-                cfgs[0].arena,
-                &state->turbomind_gate_view,
-                &state->turbomind_up_view,
-                &state->turbomind_down_view,
-                hidden,
-                mid,
-                state->routed_experts,
-                selected_t,
-                weights_t,
-                routes,
-                input_ptrs_t,
-                ffn_inputs,
-                n_slots,
-                routed_out_t) != 0) {
+        const bool use_fused_gate_up =
+            state->has_turbomind_fused_gate_up &&
+            env_flag_default_enabled("DS4_V100_TURBOMIND_FUSED_GATE_UP");
+        if (!use_fused_gate_up && !has_turbomind_separate_gate_up(state)) {
+            exec_error(err, errlen,
+                       "TurboMind fused gate_up disabled but no separate gate/up tensors are bound");
+            goto done;
+        }
+        const int tm_rc = use_fused_gate_up
+            ? ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_batch_ptrs_f32(
+                  cfgs[0].arena,
+                  &state->turbomind_gate_up_view,
+                  &state->turbomind_down_view,
+                  hidden,
+                  mid,
+                  state->routed_experts,
+                  selected_t,
+                  weights_t,
+                  routes,
+                  input_ptrs_t,
+                  ffn_inputs,
+                  n_slots,
+                  routed_out_t)
+            : ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_batch_ptrs_f32(
+                  cfgs[0].arena,
+                  &state->turbomind_gate_view,
+                  &state->turbomind_up_view,
+                  &state->turbomind_down_view,
+                  hidden,
+                  mid,
+                  state->routed_experts,
+                  selected_t,
+                  weights_t,
+                  routes,
+                  input_ptrs_t,
+                  ffn_inputs,
+                  n_slots,
+                  routed_out_t);
+        if (tm_rc != 0) {
             exec_error(err, errlen, "TurboMind routed FFN batch failed");
             goto done;
         }

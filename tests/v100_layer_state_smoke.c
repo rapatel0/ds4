@@ -15,7 +15,7 @@ static void check(int cond, const char *msg) {
 }
 
 static void usage(FILE *fp) {
-    fprintf(fp, "usage: tests/v100_layer_state_smoke --index FILE [--layer N]\n");
+    fprintf(fp, "usage: tests/v100_layer_state_smoke --index FILE [--tm-index FILE] [--layer N]\n");
 }
 
 static int parse_int_arg(const char *s, const char *name, int max_v) {
@@ -30,6 +30,7 @@ static int parse_int_arg(const char *s, const char *name, int max_v) {
 
 int main(int argc, char **argv) {
     const char *index = NULL;
+    const char *tm_index = NULL;
     int layer = 2;
 
     for (int i = 1; i < argc; i++) {
@@ -38,6 +39,8 @@ int main(int argc, char **argv) {
             return 0;
         } else if (!strcmp(argv[i], "--index") && i + 1 < argc) {
             index = argv[++i];
+        } else if (!strcmp(argv[i], "--tm-index") && i + 1 < argc) {
+            tm_index = argv[++i];
         } else if (!strcmp(argv[i], "--layer") && i + 1 < argc) {
             layer = parse_int_arg(argv[++i], "--layer", 42);
         } else {
@@ -53,6 +56,7 @@ int main(int argc, char **argv) {
     ds4_v100_context_options opts;
     ds4_v100_context_options_init(&opts);
     opts.pack_index_path = index;
+    opts.turbomind_pack_index_path = tm_index;
     opts.kv_ctx_tokens = 1048576;
     opts.kv_active_slots = 1;
 
@@ -105,6 +109,27 @@ int main(int argc, char **argv) {
     check(state.intermediate_size == 2048, "intermediate size");
     check(state.routed_experts == 256, "routed expert count");
     check(state.routes_per_token == 6, "routes per token");
+    if (tm_index) {
+        check(state.has_turbomind_routed, "TurboMind routed metadata present");
+        if (state.has_turbomind_fused_gate_up) {
+            check(state.turbomind_gate_up_view.n == state.intermediate_size * 2u,
+                  "fused gate_up N dimension");
+            check(state.turbomind_gate_up_view.k == state.hidden_size,
+                  "fused gate_up K dimension");
+            check(state.turbomind_gate_up_view.experts_total == state.routed_experts,
+                  "fused gate_up expert count");
+        }
+        if (state.turbomind_gate_view.experts_packed || state.turbomind_up_view.experts_packed) {
+            check(state.turbomind_gate_view.n == state.intermediate_size,
+                  "separate gate N dimension");
+            check(state.turbomind_up_view.n == state.intermediate_size,
+                  "separate up N dimension");
+            check(state.turbomind_gate_view.k == state.hidden_size,
+                  "separate gate K dimension");
+            check(state.turbomind_up_view.k == state.hidden_size,
+                  "separate up K dimension");
+        }
+    }
     if (layer <= 2) {
         check(state.router_kind == DS4_V100_ROUTER_HASH, "hash router kind");
         check(state.has_hash_router, "hash router metadata present");
@@ -113,24 +138,26 @@ int main(int argc, char **argv) {
 
     const int32_t selected[6] = {84, 17, 31, 63, 127, 255};
     ds4_v100_route_matrices route;
-    check(ds4_v100_layer_state_route_matrices(&state,
-                                              (uint32_t)selected[0],
-                                              &route,
-                                              err,
-                                              sizeof(err)) == 0,
-          "route matrix views");
-    check(route.gate.cols == state.hidden_size && route.gate.rows == state.intermediate_size,
-          "route gate dimensions");
-    check(route.up.cols == state.hidden_size && route.up.rows == state.intermediate_size,
-          "route up dimensions");
-    check(route.down.cols == state.intermediate_size && route.down.rows == state.hidden_size,
-          "route down dimensions");
+    if (!state.has_turbomind_routed) {
+        check(ds4_v100_layer_state_route_matrices(&state,
+                                                  (uint32_t)selected[0],
+                                                  &route,
+                                                  err,
+                                                  sizeof(err)) == 0,
+              "route matrix views");
+        check(route.gate.cols == state.hidden_size && route.gate.rows == state.intermediate_size,
+              "route gate dimensions");
+        check(route.up.cols == state.hidden_size && route.up.rows == state.intermediate_size,
+              "route up dimensions");
+        check(route.down.cols == state.intermediate_size && route.down.rows == state.hidden_size,
+              "route down dimensions");
 
-    ds4_gpu_source_row_view view;
-    check(ds4_v100_bound_matrix_source_view(&route.gate, &view, err, sizeof(err)) == 0,
-          "route source row view");
-    check(view.cols == state.hidden_size && view.rows == state.intermediate_size,
-          "source row view dimensions");
+        ds4_gpu_source_row_view view;
+        check(ds4_v100_bound_matrix_source_view(&route.gate, &view, err, sizeof(err)) == 0,
+              "route source row view");
+        check(view.cols == state.hidden_size && view.rows == state.intermediate_size,
+              "source row view dimensions");
+    }
 
     uint64_t span = 0;
     check(ds4_v100_layer_state_ffn_arena_span(&state,
