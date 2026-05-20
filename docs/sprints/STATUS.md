@@ -8,7 +8,9 @@ Current best 8-slot throughput remains the Sprint 107 DS4 grouped F8 fast path.
 Sprint 108 tested TurboMind small-route build fusion and kept it opt-in because
 the primary 8-slot/256K A/B was neutral to slightly slower. Sprint 109 tested
 F8 row4 CTAs and rejected them as a default because both measured tiers
-regressed.
+regressed. Sprint 110 found a materially better expert path: a fused
+TurboMind gate+up grouped-GEMM microbenchmark is `1.46x-1.53x` faster than the
+current two-call shape on V100.
 
 | Mode | Context | Slots | Generated tok/s | Continuation tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
@@ -31,6 +33,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 107 | DS4-specific grouped F8 rows2 attention-output-A kernel | Correct and faster for 8-slot/256K; neutral for 4-slot/1M | Shipped |
 | 108 | TurboMind small-route count/prefix/scatter fusion | Correct; 8-slot repeat was `31.759013` opt-in vs `31.794180` rollback, while 4-slot/1M was `20.249531` opt-in vs `20.081695` rollback | Kept opt-in |
 | 109 | F8 four-output-row CTA probe | Correct; regressed 8-slot/256K to `30.998275` vs `31.380225` control and 4-slot/1M to `19.898462` vs `20.041787` control | Rejected as default; opt-in only |
+| 110 | TurboMind fused gate+up grouped-GEMM probe | Correct; `1.504x`, `1.532x`, and `1.462x` faster at 6, 24, and 48 total routes | Proceed to appliance implementation |
 
 ## Sprint 106 Profile Takeaway
 
@@ -110,16 +113,23 @@ Validation completed on the cluster:
 - `cuda_v100_full_scheduler_smoke --slots 8`: passed
 - selected-token smoke with row4 on: passed, token id `926`, hex `3136`
 
+Sprint 110 adds a standalone TurboMind fused gate/up benchmark:
+
+- shape: `K=4096`, `N=2048`, fused `N=4096`, 256 experts;
+- route set: six sparse active experts;
+- result: fused gate_up is `1.46x-1.53x` faster than separate gate and up
+  grouped calls;
+- correctness: exact output match for both halves of the fused tensor.
+
 ## Next Target
 
-The next larger target should skip row-count consolidation and small
-route-metadata plumbing, then attack a boundary that removes real traffic or
-raises tensor-core occupancy:
+The next target is the production fused TurboMind gate+up path:
 
-- fused TurboMind gate+up packing/GEMM;
-- persistent grouped expert scheduling;
-- software-pipelined F8 dequant+dot work that improves instruction throughput
-  without reducing occupancy.
+- add fused gate_up expert packing or deterministic repack;
+- add manifest/layer-state support for the fused expert tensor;
+- replace two grouped calls with one fused grouped call under a rollback knob;
+- split the fused output for SwiGLU and validate selected-token correctness;
+- run served 8-slot/256K and 4-slot/1M A/B throughput before making it default.
 
 The concise current status is also tracked in
 `docs/sprints/EXPERIMENT-STATUS.md`.

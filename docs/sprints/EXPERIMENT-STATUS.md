@@ -43,6 +43,7 @@ slightly worse.
 | 107 | DS4 grouped F8 attention-output kernel | Best 8-slot/256K `31.811137` | Shipped/default |
 | 108 | TurboMind small-route build fusion | Correct; `31.759013` opt-in vs `31.794180` rollback on repeat | Kept opt-in |
 | 109 | F8 row4 CTA probe | Correct; `30.998275` row4 vs `31.380225` control at 8-slot/256K | Rejected as default |
+| 110 | TurboMind fused gate/up grouped-GEMM probe | Correct; fused gate_up was `1.46x-1.53x` faster than separate gate and up calls | Proceed to appliance implementation |
 
 ## Remaining
 
@@ -52,7 +53,8 @@ slightly worse.
   kernel shape/occupancy, not disk, host RAM, or bulk PCIe/NVLink traffic.
 - Attack larger hot-path buckets instead of small host-side route plumbing:
   - TurboMind MXFP4 expert occupancy and route-expanded activation layout.
-  - Fused gate+up expert packing/GEMM.
+  - Fused gate+up expert packing/GEMM; Sprint 110 microbench clears the
+    implementation gate.
   - Software-pipelined F8 dequant+dot work that improves instruction throughput
     without the row4 occupancy loss.
 - Decide whether the next production step is a deeper TurboMind adapter change

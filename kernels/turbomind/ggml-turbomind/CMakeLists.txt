@@ -210,6 +210,14 @@ if(GGML_TURBOMIND_TEST)
     target_link_libraries(test_ggml_turbomind_grouped_compare PRIVATE CUDA::cudart ${CMAKE_DL_LIBS})
     add_dependencies(test_ggml_turbomind_grouped_compare ggml-turbomind)
 
+    # DS4 expert gate/up fusion benchmark.
+    add_executable(test_ggml_turbomind_grouped_gate_up_fusion test_grouped_gate_up_fusion.cpp)
+    target_include_directories(test_ggml_turbomind_grouped_gate_up_fusion PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(test_ggml_turbomind_grouped_gate_up_fusion PRIVATE CUDA::cudart ${CMAKE_DL_LIBS})
+    add_dependencies(test_ggml_turbomind_grouped_gate_up_fusion ggml-turbomind)
+
     # SPRINT-025 P2 — multi-device init/dispatch smoke.
     add_executable(test_ggml_turbomind_multi_device test_multi_device.cpp)
     target_include_directories(test_ggml_turbomind_multi_device PRIVATE

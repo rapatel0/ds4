@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: codex
-revision: 115
+revision: 116
 ---
 
 # Vision: DS4 V100 Appliance
@@ -42,6 +42,9 @@ optimized V100 low-bit expert kernels in the actual hot path.
   is practical-use performance: sustained decode throughput, GPU utilization,
   multi-token batching, true MTP draft commit, and hot-path low-bit kernel
   integration.
+- Sprint 110 measured a DS4-shaped fused TurboMind gate+up grouped-GEMM on V100
+  and found it `1.46x-1.53x` faster than the current separate gate and up calls
+  with exact output parity. This is the next production implementation target.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation
@@ -726,6 +729,11 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 103 exact-bit F8 decode | `30.862791` generated tok/s at 256K/8 slots; `19.733742` at 1M/4 slots | Measured | Replaces per-weight `ldexpf()` E4M3 decode with exact F32 bit construction. Selected-token correctness remains `3136`; production soaks preserve `8/8` and `4/4` token matches. This improves the Sprint 102 launcher default by about `14.1%` at 256K/8 slots and `6.7%` at 1M/4 slots. |
 | Sprint 104 F8 warp-reduction kernels | `31.383579` and repeat `31.451185` generated tok/s at 256K/8 slots; `20.026385` at 1M/4 slots | Measured | Replaces F8 arena shared-memory tree reductions with warp-shuffle block reductions in the hot F8 matmul and shared F8 pair-SwiGLU paths. Correctness remains `3136`; production soaks preserve `8/8` and `4/4` token matches. The gain over Sprint 103 is modest but repeatable and adds no VRAM pressure. |
 | Sprint 105 BF16/F32 warp-reduction probe | rejected | Measured | Correctness passed and the first 8-slot run reached `31.612471`, but the repeat was `31.479378`, effectively inside the Sprint 104 band. The code was reverted; do not retry this as a default without a stronger profile reason. |
+| Sprint 106 served decode baseline profile | F8 rows2/grouped rows2 about `51%` GPU time; TurboMind about `25%` | Measured | Warmed served profiling shows the request window is kernel-shape limited, not disk, host RAM, or bulk copy limited. The next useful work must change F8 execution shape or TurboMind expert occupancy. |
+| Sprint 107 DS4 grouped F8 attention output | best `31.811137` generated tok/s at 256K/8 slots | Measured | Adds a DS4-specialized grouped rows2 attention-output kernel. It improves the main 8-slot/256K target and is the current best observed served throughput. |
+| Sprint 108 TurboMind small-route build fusion | `31.759013` opt-in vs `31.794180` rollback at 256K/8 slots | Measured | Small route metadata fusion is correct but too small to matter. It remains opt-in. |
+| Sprint 109 F8 row4 CTA probe | `30.998275` row4 vs `31.380225` row2 control at 256K/8 slots | Measured | Four-output-row CTAs preserve correctness but lose throughput, likely from register pressure and occupancy loss. Row4 remains off by default. |
+| Sprint 110 TurboMind fused gate+up probe | `1.46x-1.53x` faster than separate gate/up grouped calls | Measured | A DS4-shaped fused `N=4096` gate_up MXFP4 grouped GEMM exactly matches separate gate/up outputs and clears the production implementation gate. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -2523,6 +2531,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 107 DS4 grouped F8 attention-output kernel. | A DS4-specialized grouped rows2 kernel for the fixed attention-output-A shape improves 8-slot/256K serving to `31.81` generated tok/s best observed and `31.63` on repeat, while 4-slot/1M remains neutral around `20.1` tok/s. The next larger target should move to TurboMind route-build fusion rather than more small F8 shape tweaks. | Sprint 108+ |
 | 2026-05-20 | Completed Sprint 108 TurboMind small-route build probe. | Fusing route count/prefix/scatter into one small-route CUDA kernel preserves correctness, but the primary 8-slot/256K A/B stayed neutral to slightly slower (`31.76` opt-in vs `31.79` rollback on repeat). Keep it opt-in and move the next optimization to larger hot-path work: F8 matmul tiling/vectorization or TurboMind expert input layout. | Sprint 109+ |
 | 2026-05-20 | Completed Sprint 109 F8 row4 CTA probe. | Four-output-row CTAs preserved correctness but regressed both 8-slot/256K (`30.998` vs `31.380` control) and 4-slot/1M (`19.898` vs `20.042` control). Keep row4 off by default and move the next sprint to a software-pipelined/fused boundary that raises tensor-core occupancy, especially TurboMind gate+up expert fusion or persistent grouped experts. | Sprint 110+ |
+| 2026-05-20 | Completed Sprint 110 TurboMind fused gate/up probe. | A standalone DS4-shaped MXFP4 grouped-GEMM benchmark showed fused gate_up is `1.46x-1.53x` faster than separate gate and up calls at 6, 24, and 48 routed rows, with exact output parity. Proceed to the production appliance implementation behind a rollback knob. | Sprint 111+ |
 
 ## Open Questions
 

@@ -1,0 +1,6 @@
+[gate_up_fusion tpa=1] total_routes=6 active=6 separate_ms=0.2478 fused_ms=0.1647 speedup=1.504x max_abs_gate=0.0000e+00 max_abs_up=0.0000e+00 rel=0.0000e+00 bad=0/24576 k_pack_sep=0x341321 k_pack_fused=0x341321
+[gate_up_fusion tpa=1] PASS
+[gate_up_fusion tpa=4] total_routes=24 active=6 separate_ms=0.2169 fused_ms=0.1416 speedup=1.532x max_abs_gate=0.0000e+00 max_abs_up=0.0000e+00 rel=0.0000e+00 bad=0/98304 k_pack_sep=0x341321 k_pack_fused=0x341321
+[gate_up_fusion tpa=4] PASS
+[gate_up_fusion tpa=8] total_routes=48 active=6 separate_ms=0.2082 fused_ms=0.1424 speedup=1.462x max_abs_gate=0.0000e+00 max_abs_up=0.0000e+00 rel=0.0000e+00 bad=0/196608 k_pack_sep=0x341321 k_pack_fused=0x341321
+[gate_up_fusion tpa=8] PASS
