@@ -238,6 +238,23 @@ tensors source-packed in the same shard, opens the scheduler with
 `--appliance-dir`, and executes layers 0-5 with `tm_layers=1`. This is the
 first scheduler-level validation of the single production appliance shape.
 
+Sprint 090 extends that proof to the full 8-GPU appliance. The packer emits
+all 43 layers into one directory with 1199 source rows and 129 TurboMind rows,
+the full scheduler smoke uploads exactly 8 shard tensors and executes all
+43 layers with `tm_layers=43`, and replay preserves first-token bytes `3136`.
+The measured shard sizes are:
+
+| GPU | `gpuN.weights` Bytes | Approx GiB |
+|---:|---:|---:|
+| 0 | 22524134668 | 20.98 |
+| 1 | 21494393612 | 20.02 |
+| 2 | 21494393612 | 20.02 |
+| 3 | 21494393612 | 20.02 |
+| 4 | 21494393612 | 20.02 |
+| 5 | 17922654732 | 16.69 |
+| 6 | 17901334540 | 16.67 |
+| 7 | 11817197824 | 11.01 |
+
 This makes the memory policy explicit: earlier bounded sidecar caches may be
 duplicated only as validation artifacts, but the production appliance should
 replace source expert residency with TurboMind-packed expert residency inside

@@ -36,7 +36,8 @@ static void usage(FILE *fp) {
     fprintf(fp,
             "usage: tests/cuda_v100_full_scheduler_smoke --index FILE "
             "[--model FILE | --shard-dir DIR | --appliance-dir DIR] [--tm-index FILE] "
-            "[--token N] [--position N] [--stages N] [--slots N]\n");
+            "[--token N] [--position N] [--stages N] [--slots N] "
+            "[--expect-tm-layers N]\n");
 }
 
 static int parse_int_arg(const char *s, const char *name, int max_v) {
@@ -131,6 +132,7 @@ int main(int argc, char **argv) {
     int position = 16;
     int stages = DS4_V100_EXPECTED_GPUS;
     int slots = 1;
+    int expect_tm_layers = -1;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--index") && i + 1 < argc) {
@@ -155,6 +157,9 @@ int main(int argc, char **argv) {
             stages = parse_int_arg(argv[++i], "--stages", DS4_V100_EXPECTED_GPUS);
         } else if (!strcmp(argv[i], "--slots") && i + 1 < argc) {
             slots = parse_int_arg(argv[++i], "--slots", DS4_V100_SCHED_MAX_SLOTS);
+        } else if (!strcmp(argv[i], "--expect-tm-layers") && i + 1 < argc) {
+            expect_tm_layers = parse_int_arg(argv[++i], "--expect-tm-layers",
+                                             DS4_V100_N_LAYERS);
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             usage(stdout);
             return 0;
@@ -300,8 +305,11 @@ int main(int argc, char **argv) {
         check(reports[stages - 1].last_layer == DS4_V100_N_LAYERS - 1,
               "full scheduler reached final layer");
     }
-    if (shard_dir) {
-        check(tm_layers_executed == 1, "full appliance smoke used one TurboMind routed layer");
+    if (expect_tm_layers >= 0) {
+        check(tm_layers_executed == (uint32_t)expect_tm_layers,
+              "full appliance smoke used expected TurboMind routed layers");
+    } else if (shard_dir) {
+        check(tm_layers_executed > 0, "full appliance smoke used TurboMind routed layers");
     }
 
     const uint64_t hc_values = (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS;

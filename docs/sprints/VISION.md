@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: codex
-revision: 100
+revision: 101
 ---
 
 # Vision: DS4 V100 Appliance
@@ -563,6 +563,13 @@ optimized V100 low-bit expert kernels in the actual hot path.
   directly from prepacked resident spans without transient repacking. V100
   bounded validation against the appliance-shaped `gpu0.weights` reports
   `packed_api max_abs=5.91128e-07`, `rel=0.000493098`, and `PASS`.
+- Sprints 088-090 promoted that format into the scheduler and then into a full
+  8-GPU appliance. The V100 cluster now has a production-shaped appliance
+  directory on k8s-local storage at `/workspace/ds4-appliance-full-tm-s090`.
+  It contains `gpu0.weights` through `gpu7.weights`, replaces routed expert
+  residency with TurboMind-packed experts inside those shard files, runs all
+  43 layers with `tm_layers=43`, and preserves the official first token
+  `3136` in replay.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -642,6 +649,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 086 TurboMind sidecar admission | GPU0 bounded duplicate total `27.002 GiB`; source expert payload `19.125 GiB` | Measured | The admission tool proves the accounting path and shows the production constraint: bounded sidecars fit as duplicate cache, but full sidecars should be replacement/admitted artifacts because source experts already occupy most per-GPU payload. |
 | Sprint 087 appliance-packed TurboMind experts | `packed_api max_abs=5.91128e-07`, `rel=0.000493098`, `PASS` | Measured | TurboMind experts now live in the appliance `gpuN.weights` file rather than a separate sidecar file, and the DS4 CUDA API can execute directly from those prepacked resident spans without repacking. Scheduler binding is the next step. |
 | Sprint 089 appliance-backed scheduler smoke | stage-0 `gpu0.weights` `22,524,134,668` bytes; scheduler `tm_layers=1` | Measured | The scheduler now opens a bounded appliance directory without a source GGUF model map, uploads `gpu0.weights`, executes layers 0-5, and positively reports that one routed layer used the no-repack TurboMind appliance path. This is not a throughput result; full 8-GPU appliance generation and sustained decode benchmarking remain next. |
+| Sprint 090 full appliance replay | full appliance `142G`; `tm_layers=43`; replay `0.620997` generated tok/s, `9.491896` continuation tok/s | Measured | A full 8-GPU appliance was generated on k8s-local storage, all shards fit in 32 GB V100 VRAM, full scheduler smoke executed all 43 layers from `gpuN.weights`, and replay returned first token hex `3136`. This proves the format and residency contract; launcher integration and multi-slot async benchmarking remain. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -1951,6 +1959,22 @@ GPU utilization with architectural changes, and only then compare against the
   `gpu0.weights bytes=22524134668`; both stage and one-stage full scheduler
   smokes executed 6 layers with `tm_layers=1` and returned `ok`.
 
+### Sprint 090 - Full Appliance Pack And Scheduler Run [complete]
+
+- **Goal**: Generate a full 8-GPU appliance directory and run scheduler/replay
+  from `gpuN.weights` shards instead of source GGUF residency.
+- **Rationale**: Bounded stage-0 validation was not enough to prove the
+  production artifact. The project needed exact shard sizes, full 43-layer
+  execution, and first-token replay evidence from one appliance directory.
+- **Outcome**: `SHIP_FULL_APPLIANCE_RUN`. Recreated the 8-GPU build pod with
+  `/workspace` on `localpool/k8s-local`, generated
+  `/workspace/ds4-appliance-full-tm-s090`, and validated:
+  `source_rows=1199`, `tm_rows=129`, total size `142G`, largest shard
+  `22524134668` bytes, scheduler `layers=43 tm_layers=43 ok`, and replay
+  first token `3136` with `uploaded_tensors=8`,
+  `uploaded_bytes=156142896212`, `generated_tokens_per_second=0.620997`, and
+  `continuation_tokens_per_second=9.491896`.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -2201,6 +2225,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 087 single-shard TurboMind appliance pack. | TurboMind expert bytes can now be emitted into `gpuN.weights` and executed through a DS4 CUDA no-repack API from resident arena spans. The next step is scheduler integration: combined arena sizing/upload and layer-state bindings from `turbomind-pack-index.tsv`. | Sprint 088+ |
 | 2026-05-20 | Shipped Sprint 088 scheduler-bound TurboMind appliance runtime. | Context/layer/scheduler code can now bind TurboMind metadata, map/upload appliance `gpuN.weights`, use shard offsets for control tensors, and dispatch routed experts through the no-repack TurboMind API. V100 compile validation passes for scheduler smoke targets; the next step is V100 execution and throughput measurement on a full or bounded appliance directory. | Sprint 089+ |
 | 2026-05-20 | Shipped Sprint 089 appliance-backed scheduler smoke. | A bounded stage-0 appliance directory now runs scheduler decode on V100 without a source GGUF model map, using `gpu0.weights` and positively reporting one TurboMind-routed layer. The next step is generating the full 8-GPU appliance, running full 43-layer decode, then benchmarking aggregate tok/s. | Sprint 090+ |
+| 2026-05-20 | Shipped Sprint 090 full appliance pack and replay. | The single-directory TurboMind appliance now exists on k8s-local storage, fits all 8 V100s, executes all 43 layers with TurboMind-routed experts, and preserves first-token correctness. Next work should wire `--appliance-dir` into the launcher/service path and benchmark multi-slot async serving from this artifact. | Sprint 091+ |
 
 ## Open Questions
 

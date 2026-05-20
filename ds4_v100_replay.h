@@ -24,6 +24,8 @@ typedef enum {
 typedef struct {
     const char *model_path;
     const char *pack_index_path;
+    const char *turbomind_pack_index_path;
+    const char *shard_dir;
     uint64_t kv_ctx_tokens;
     uint32_t attn_comp_cap;
     uint32_t index_comp_cap;

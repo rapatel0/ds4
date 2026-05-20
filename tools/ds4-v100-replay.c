@@ -38,6 +38,8 @@ typedef struct {
     const char *model_path;
     const char *mtp_model_path;
     const char *index_path;
+    const char *turbomind_index_path;
+    const char *shard_dir;
     const char *prompt;
     const char *prompt_file;
     const char *system;
@@ -526,6 +528,9 @@ static void usage(FILE *fp) {
             "  --model FILE              source-layout GGUF model\n"
             "  --mtp-model FILE          DeepSeek-V4 Flash MTP sidecar GGUF\n"
             "  --index FILE              V100 pack-index.tsv\n"
+            "  --tm-index FILE           TurboMind appliance pack-index.tsv\n"
+            "  --shard-dir DIR           directory containing gpuN.weights shards\n"
+            "  --appliance-dir DIR       shorthand for DIR/pack-index.tsv, DIR/turbomind-pack-index.tsv, and shards\n"
             "  --prompt TEXT             prompt text\n"
             "  --prompt-file FILE        prompt file\n"
             "  --system TEXT             system prompt, default empty\n"
@@ -564,6 +569,21 @@ static const char *need_arg(int *i, int argc, char **argv, const char *arg) {
         exit(2);
     }
     return argv[++*i];
+}
+
+static char *join_path_alloc(const char *dir, const char *base) {
+    if (!dir || !base) return NULL;
+    size_t nd = strlen(dir);
+    size_t nb = strlen(base);
+    char *out = (char *)malloc(nd + 1u + nb + 1u);
+    if (!out) {
+        fprintf(stderr, "ds4-v100-replay: out of memory while joining path\n");
+        exit(2);
+    }
+    memcpy(out, dir, nd);
+    out[nd] = '/';
+    memcpy(out + nd + 1u, base, nb + 1u);
+    return out;
 }
 
 static uint64_t parse_u64_arg(const char *s, const char *arg) {
@@ -611,6 +631,15 @@ static replay_cli_options parse_options(int argc, char **argv) {
             opt.mtp_model_path = need_arg(&i, argc, argv, arg);
         } else if (!strcmp(arg, "--index")) {
             opt.index_path = need_arg(&i, argc, argv, arg);
+        } else if (!strcmp(arg, "--tm-index")) {
+            opt.turbomind_index_path = need_arg(&i, argc, argv, arg);
+        } else if (!strcmp(arg, "--shard-dir")) {
+            opt.shard_dir = need_arg(&i, argc, argv, arg);
+        } else if (!strcmp(arg, "--appliance-dir")) {
+            opt.shard_dir = need_arg(&i, argc, argv, arg);
+            opt.index_path = join_path_alloc(opt.shard_dir, "pack-index.tsv");
+            opt.turbomind_index_path =
+                join_path_alloc(opt.shard_dir, "turbomind-pack-index.tsv");
         } else if (!strcmp(arg, "--prompt")) {
             opt.prompt = need_arg(&i, argc, argv, arg);
         } else if (!strcmp(arg, "--prompt-file")) {
@@ -2095,6 +2124,8 @@ int main(int argc, char **argv) {
     ds4_v100_replay_options_init(&ropts);
     ropts.model_path = opt.model_path;
     ropts.pack_index_path = opt.index_path;
+    ropts.turbomind_pack_index_path = opt.turbomind_index_path;
+    ropts.shard_dir = opt.shard_dir;
     ropts.kv_ctx_tokens = opt.ctx;
     ropts.kv_active_slots = opt.slots;
     ropts.serial_open = opt.serial_open;

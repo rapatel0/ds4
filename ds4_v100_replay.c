@@ -334,6 +334,8 @@ int ds4_v100_replay_open(ds4_v100_replay **out,
     ds4_v100_stage_scheduler_options sopts;
     ds4_v100_stage_scheduler_options_init(&sopts);
     sopts.pack_index_path = opts->pack_index_path;
+    sopts.turbomind_pack_index_path = opts->turbomind_pack_index_path;
+    sopts.shard_dir = opts->shard_dir;
     sopts.model_map = rt->model_map;
     sopts.model_size = rt->model_size;
     sopts.kv_ctx_tokens = opts->kv_ctx_tokens;

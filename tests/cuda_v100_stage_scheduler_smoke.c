@@ -37,7 +37,8 @@ static void usage(FILE *fp) {
             "usage: tests/cuda_v100_stage_scheduler_smoke --index FILE "
             "[--model FILE | --shard-dir DIR | --appliance-dir DIR] "
             "[--tm-index FILE] "
-            "[--stage N] [--token N] [--position N] [--slots N]\n");
+            "[--stage N] [--token N] [--position N] [--slots N] "
+            "[--expect-tm-layers N]\n");
 }
 
 static int parse_int_arg(const char *s, const char *name, int max_v) {
@@ -132,6 +133,7 @@ int main(int argc, char **argv) {
     int token = 16;
     int position = 16;
     int slots = 1;
+    int expect_tm_layers = -1;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--index") && i + 1 < argc) {
@@ -156,6 +158,9 @@ int main(int argc, char **argv) {
             position = parse_int_arg(argv[++i], "--position", 2000000);
         } else if (!strcmp(argv[i], "--slots") && i + 1 < argc) {
             slots = parse_int_arg(argv[++i], "--slots", DS4_V100_SCHED_MAX_SLOTS);
+        } else if (!strcmp(argv[i], "--expect-tm-layers") && i + 1 < argc) {
+            expect_tm_layers = parse_int_arg(argv[++i], "--expect-tm-layers",
+                                             DS4_V100_N_LAYERS);
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             usage(stdout);
             return 0;
@@ -243,9 +248,12 @@ int main(int argc, char **argv) {
     for (uint32_t i = 0; i < n_slots; i++) {
         check(reports[i].layers_executed > 0, "stage executed at least one layer");
         check(reports[i].last_layer_report.routes == 6, "last layer reported six routes");
-        if (shard_dir && stage == 0) {
-            check(reports[i].turbomind_routed_layers_executed == 1,
-                  "stage 0 used one TurboMind routed layer");
+        if (expect_tm_layers >= 0) {
+            check(reports[i].turbomind_routed_layers_executed == (uint32_t)expect_tm_layers,
+                  "stage used expected TurboMind routed layers");
+        } else if (shard_dir) {
+            check(reports[i].turbomind_routed_layers_executed > 0,
+                  "appliance stage used TurboMind routed layers");
         }
     }
 
