@@ -4,11 +4,16 @@
 #include "ds4_source_formats.h"
 
 #include <float.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <inttypes.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 enum {
     DS4_V100_SCHED_UPLOAD_CHUNK = 8 * 1024 * 1024,
@@ -86,6 +91,11 @@ struct ds4_v100_stage_scheduler {
     uint64_t uploaded_bytes;
     const void *model_map;
     uint64_t model_size;
+    bool model_map_uses_shard_offsets;
+    int shard_fd;
+    void *shard_map;
+    uint64_t shard_size;
+    char shard_path[1024];
     uint32_t active_slots;
     uint32_t raw_cap;
     uint32_t raw_window;
@@ -114,6 +124,12 @@ static int scheduler_errorf_u64(char *err, size_t errlen, const char *fmt, uint6
 static int scheduler_errorf_u32(char *err, size_t errlen, const char *fmt, uint32_t value) {
     if (err && errlen) snprintf(err, errlen, fmt, value);
     return 1;
+}
+
+static uint64_t scheduler_model_offset(const ds4_v100_stage_scheduler *sched,
+                                       const ds4_v100_tensor_binding *b) {
+    if (!b) return 0;
+    return (sched && sched->model_map_uses_shard_offsets) ? b->shard_offset : b->source_offset;
 }
 
 static scheduler_layer_cache *scheduler_cache_slot(ds4_v100_stage_scheduler *sched,
@@ -227,6 +243,10 @@ void ds4_v100_stage_scheduler_close(ds4_v100_stage_scheduler *sched) {
     free_output_head_scratch(sched);
     ds4_v100_layer_batch_scratch_free(&sched->batch_scratch);
     ds4_gpu_arena_close(sched->arena);
+    if (sched->shard_map && sched->shard_map != MAP_FAILED) {
+        munmap(sched->shard_map, (size_t)sched->shard_size);
+    }
+    if (sched->shard_fd >= 0) close(sched->shard_fd);
     ds4_pack_close(sched->pack);
     ds4_v100_context_close(sched->ctx);
     free(sched);
@@ -239,6 +259,55 @@ typedef struct {
     char *err;
     size_t errlen;
 } upload_stage_ud;
+
+static int map_stage_shard(ds4_v100_stage_scheduler *sched,
+                           const char *shard_dir,
+                           char *err,
+                           size_t errlen) {
+    if (!sched || !shard_dir || !shard_dir[0]) {
+        return scheduler_error(err, errlen, "missing stage shard directory");
+    }
+    int n = snprintf(sched->shard_path,
+                     sizeof(sched->shard_path),
+                     "%s/gpu%d.weights",
+                     shard_dir,
+                     sched->stage.gpu);
+    if (n < 0 || (size_t)n >= sizeof(sched->shard_path)) {
+        return scheduler_error(err, errlen, "stage shard path is too long");
+    }
+    sched->shard_fd = open(sched->shard_path, O_RDONLY);
+    if (sched->shard_fd < 0) {
+        if (err && errlen) {
+            snprintf(err, errlen, "cannot open %s: %s", sched->shard_path, strerror(errno));
+        }
+        return 1;
+    }
+    struct stat st;
+    if (fstat(sched->shard_fd, &st) != 0 || st.st_size <= 0) {
+        if (err && errlen) {
+            snprintf(err, errlen, "cannot stat %s: %s", sched->shard_path, strerror(errno));
+        }
+        return 1;
+    }
+    sched->shard_size = (uint64_t)st.st_size;
+    sched->shard_map = mmap(NULL,
+                            (size_t)sched->shard_size,
+                            PROT_READ,
+                            MAP_PRIVATE,
+                            sched->shard_fd,
+                            0);
+    if (sched->shard_map == MAP_FAILED) {
+        sched->shard_map = NULL;
+        if (err && errlen) {
+            snprintf(err, errlen, "cannot mmap %s: %s", sched->shard_path, strerror(errno));
+        }
+        return 1;
+    }
+    sched->model_map = sched->shard_map;
+    sched->model_size = sched->shard_size;
+    sched->model_map_uses_shard_offsets = true;
+    return 0;
+}
 
 static int upload_stage_entry(const ds4_pack_entry *e, void *ud_ptr) {
     upload_stage_ud *ud = (upload_stage_ud *)ud_ptr;
@@ -267,9 +336,32 @@ static int upload_stage_entry(const ds4_pack_entry *e, void *ud_ptr) {
     return 0;
 }
 
+static int upload_stage_shard(ds4_v100_stage_scheduler *sched,
+                              char *err,
+                              size_t errlen) {
+    if (!sched || !sched->shard_map || sched->shard_size == 0) {
+        return scheduler_error(err, errlen, "missing mapped appliance shard");
+    }
+    uint64_t done = 0;
+    const unsigned char *src = (const unsigned char *)sched->shard_map;
+    while (done < sched->shard_size) {
+        uint64_t n = sched->shard_size - done;
+        if (n > DS4_V100_SCHED_UPLOAD_CHUNK) n = DS4_V100_SCHED_UPLOAD_CHUNK;
+        if (ds4_gpu_arena_upload(sched->arena, done, src + done, n) != 0) {
+            return scheduler_errorf(err, errlen, "stage shard upload failed on gpu%d",
+                                    sched->stage.gpu);
+        }
+        done += n;
+    }
+    sched->uploaded_tensors++;
+    sched->uploaded_bytes += sched->shard_size;
+    return 0;
+}
+
 static int upload_stage_weights(ds4_v100_stage_scheduler *sched,
                                 char *err,
                                 size_t errlen) {
+    if (sched && sched->shard_map) return upload_stage_shard(sched, err, errlen);
     unsigned char *chunk = (unsigned char *)malloc(DS4_V100_SCHED_UPLOAD_CHUNK);
     if (!chunk) return scheduler_error(err, errlen, "failed to allocate stage upload chunk");
     upload_stage_ud ud = {
@@ -642,8 +734,13 @@ int ds4_v100_stage_scheduler_open(ds4_v100_stage_scheduler **out,
                                   size_t errlen) {
     if (!out) return scheduler_error(err, errlen, "missing scheduler output");
     *out = NULL;
-    if (!opts || !opts->pack_index_path || !opts->model_map || opts->model_size == 0) {
+    if (!opts || !opts->pack_index_path ||
+        (!opts->shard_dir && (!opts->model_map || opts->model_size == 0))) {
         return scheduler_error(err, errlen, "missing scheduler options");
+    }
+    if (opts->turbomind_pack_index_path && !opts->shard_dir) {
+        return scheduler_error(err, errlen,
+                               "TurboMind appliance scheduling requires shard_dir");
     }
     if (opts->stage_id < 0 || opts->stage_id >= DS4_V100_EXPECTED_GPUS) {
         return scheduler_errorf(err, errlen, "invalid scheduler stage %d", opts->stage_id);
@@ -652,6 +749,7 @@ int ds4_v100_stage_scheduler_open(ds4_v100_stage_scheduler **out,
     ds4_v100_stage_scheduler *sched =
         (ds4_v100_stage_scheduler *)calloc(1, sizeof(*sched));
     if (!sched) return scheduler_error(err, errlen, "failed to allocate scheduler");
+    sched->shard_fd = -1;
     sched->active_slots = (uint32_t)(opts->kv_active_slots ? opts->kv_active_slots : 1u);
     if (sched->active_slots == 0 || sched->active_slots > DS4_V100_SCHED_MAX_SLOTS) {
         ds4_v100_stage_scheduler_close(sched);
@@ -662,6 +760,7 @@ int ds4_v100_stage_scheduler_open(ds4_v100_stage_scheduler **out,
     }
     sched->model_map = opts->model_map;
     sched->model_size = opts->model_size;
+    sched->model_map_uses_shard_offsets = false;
     sched->raw_cap = opts->raw_cap ? opts->raw_cap : DS4_V100_SWA_ROWS;
     sched->raw_window = opts->raw_window ? opts->raw_window : DS4_V100_SWA_ROWS;
     sched->attn_comp_cap = opts->attn_comp_cap ? opts->attn_comp_cap : 1u;
@@ -674,6 +773,7 @@ int ds4_v100_stage_scheduler_open(ds4_v100_stage_scheduler **out,
     ds4_v100_context_options ctx_opts;
     ds4_v100_context_options_init(&ctx_opts);
     ctx_opts.pack_index_path = opts->pack_index_path;
+    ctx_opts.turbomind_pack_index_path = opts->turbomind_pack_index_path;
     ctx_opts.kv_ctx_tokens = opts->kv_ctx_tokens ? opts->kv_ctx_tokens : 1048576;
     ctx_opts.kv_active_slots = sched->active_slots;
     if (ds4_v100_context_open(&sched->ctx, &ctx_opts, err, errlen) ||
@@ -689,6 +789,10 @@ int ds4_v100_stage_scheduler_open(ds4_v100_stage_scheduler **out,
         return scheduler_errorf(err, errlen, "missing context stage %d", opts->stage_id);
     }
     sched->stage = *stage;
+    if (opts->shard_dir && map_stage_shard(sched, opts->shard_dir, err, errlen)) {
+        ds4_v100_stage_scheduler_close(sched);
+        return 1;
+    }
     if (ds4_v100_context_lookup_tensor_binding(sched->ctx,
                                                "token_embd.weight",
                                                &sched->token_embedding,
@@ -725,7 +829,9 @@ int ds4_v100_stage_scheduler_open(ds4_v100_stage_scheduler **out,
         return 1;
     }
 
-    const uint64_t arena_bytes = ds4_pack_arena_bytes(sched->pack, sched->stage.gpu);
+    uint64_t arena_bytes = sched->stage.arena_bytes;
+    if (sched->shard_size > arena_bytes) arena_bytes = sched->shard_size;
+    sched->stage.arena_bytes = arena_bytes;
     if (arena_bytes == 0 ||
         ds4_gpu_arena_open(&sched->arena, sched->stage.gpu, arena_bytes) != 0) {
         ds4_v100_stage_scheduler_close(sched);
@@ -876,6 +982,7 @@ int ds4_v100_stage_scheduler_decode_hc_slot_span(
             cfgs[rel] = (ds4_v100_layer_execute_config) {
                 .model_map = sched->model_map,
                 .model_size = sched->model_size,
+                .model_map_uses_shard_offsets = sched->model_map_uses_shard_offsets,
                 .arena = sched->arena,
                 .batch_scratch = use_layer_batch && n_slots > 1 ? &sched->batch_scratch : NULL,
                 .router_token = tokens[rel],
@@ -1028,7 +1135,7 @@ int ds4_v100_stage_scheduler_decode_token_slot_span(
         if (!ds4_gpu_embed_token_hc_tensor(sched->hc_a[slot],
                                            sched->model_map,
                                            sched->model_size,
-                                           sched->token_embedding.source_offset,
+                                           scheduler_model_offset(sched, &sched->token_embedding),
                                            n_vocab,
                                            token,
                                            DS4_V100_HC_COLS,
@@ -1086,7 +1193,7 @@ int ds4_v100_stage_scheduler_decode_token_checkpoints(
     if (!ds4_gpu_embed_token_hc_tensor(sched->hc_a[0],
                                        sched->model_map,
                                        sched->model_size,
-                                       sched->token_embedding.source_offset,
+                                       scheduler_model_offset(sched, &sched->token_embedding),
                                        n_vocab,
                                        token,
                                        DS4_V100_HC_COLS,
@@ -1268,6 +1375,7 @@ int ds4_v100_stage_scheduler_decode_hc_checkpoints(
         ds4_v100_layer_execute_config cfg = {
             .model_map = sched->model_map,
             .model_size = sched->model_size,
+            .model_map_uses_shard_offsets = sched->model_map_uses_shard_offsets,
             .arena = sched->arena,
             .router_token = token,
             .position = position,
@@ -1367,7 +1475,7 @@ int ds4_v100_stage_scheduler_read_token_embedding_f32(
         return scheduler_error(err, errlen, "token outside embedding vocab");
     }
     const uint64_t row_bytes = b->shape[0] * sizeof(uint16_t);
-    const uint64_t row_offset = b->source_offset + (uint64_t)token * row_bytes;
+    const uint64_t row_offset = scheduler_model_offset(sched, b) + (uint64_t)token * row_bytes;
     if (row_offset > sched->model_size ||
         row_bytes > sched->model_size - row_offset) {
         return scheduler_error(err, errlen, "token embedding row outside model map");
@@ -1535,7 +1643,7 @@ static int scheduler_select_top1_fastpath(ds4_v100_stage_scheduler *sched,
         !ds4_gpu_matmul_f32_tensor(sched->output_head_pre,
                                    sched->model_map,
                                    sched->model_size,
-                                   sched->hc_head_fn.source_offset,
+                                   scheduler_model_offset(sched, &sched->hc_head_fn),
                                    hc_values,
                                    DS4_V100_HC_ROWS,
                                    sched->output_hc_norm,
@@ -1544,8 +1652,8 @@ static int scheduler_select_top1_fastpath(ds4_v100_stage_scheduler *sched,
                                           sched->output_head_pre,
                                           sched->model_map,
                                           sched->model_size,
-                                          sched->hc_head_scale.source_offset,
-                                          sched->hc_head_base.source_offset,
+                                          scheduler_model_offset(sched, &sched->hc_head_scale),
+                                          scheduler_model_offset(sched, &sched->hc_head_base),
                                           DS4_V100_HC_ROWS,
                                           1.0e-6f) ||
         !ds4_gpu_hc_weighted_sum_tensor(sched->output_embd,
@@ -1557,7 +1665,7 @@ static int scheduler_select_top1_fastpath(ds4_v100_stage_scheduler *sched,
                                         sched->output_embd,
                                         sched->model_map,
                                         sched->model_size,
-                                        sched->output_norm.source_offset,
+                                        scheduler_model_offset(sched, &sched->output_norm),
                                         DS4_V100_HC_COLS,
                                         1.0e-6f) ||
         ds4_gpu_arena_bf16_matmul_f32(sched->arena,
@@ -1650,7 +1758,7 @@ int ds4_v100_stage_scheduler_select_topk_slot(ds4_v100_stage_scheduler *sched,
         !ds4_gpu_matmul_f32_tensor(head_pre,
                                    sched->model_map,
                                    sched->model_size,
-                                   sched->hc_head_fn.source_offset,
+                                   scheduler_model_offset(sched, &sched->hc_head_fn),
                                    hc_values,
                                    DS4_V100_HC_ROWS,
                                    hc_norm,
@@ -1659,8 +1767,8 @@ int ds4_v100_stage_scheduler_select_topk_slot(ds4_v100_stage_scheduler *sched,
                                           head_pre,
                                           sched->model_map,
                                           sched->model_size,
-                                          sched->hc_head_scale.source_offset,
-                                          sched->hc_head_base.source_offset,
+                                          scheduler_model_offset(sched, &sched->hc_head_scale),
+                                          scheduler_model_offset(sched, &sched->hc_head_base),
                                           DS4_V100_HC_ROWS,
                                           1.0e-6f) ||
         !ds4_gpu_hc_weighted_sum_tensor(output_embd,
@@ -1672,7 +1780,7 @@ int ds4_v100_stage_scheduler_select_topk_slot(ds4_v100_stage_scheduler *sched,
                                         output_embd,
                                         sched->model_map,
                                         sched->model_size,
-                                        sched->output_norm.source_offset,
+                                        scheduler_model_offset(sched, &sched->output_norm),
                                         DS4_V100_HC_COLS,
                                         1.0e-6f) ||
         ds4_gpu_arena_bf16_matmul_f32(sched->arena,
@@ -1817,7 +1925,7 @@ int ds4_v100_stage_scheduler_select_token_batch(ds4_v100_stage_scheduler *sched,
         !ds4_gpu_matmul_f32_tensor(sched->output_head_pre,
                                    sched->model_map,
                                    sched->model_size,
-                                   sched->hc_head_fn.source_offset,
+                                   scheduler_model_offset(sched, &sched->hc_head_fn),
                                    hc_values,
                                    DS4_V100_HC_ROWS,
                                    sched->output_hc_norm,
@@ -1826,8 +1934,8 @@ int ds4_v100_stage_scheduler_select_token_batch(ds4_v100_stage_scheduler *sched,
                                           sched->output_head_pre,
                                           sched->model_map,
                                           sched->model_size,
-                                          sched->hc_head_scale.source_offset,
-                                          sched->hc_head_base.source_offset,
+                                          scheduler_model_offset(sched, &sched->hc_head_scale),
+                                          scheduler_model_offset(sched, &sched->hc_head_base),
                                           DS4_V100_HC_ROWS,
                                           1.0e-6f) ||
         !ds4_gpu_hc_weighted_sum_tensor(sched->output_embd,
@@ -1839,7 +1947,7 @@ int ds4_v100_stage_scheduler_select_token_batch(ds4_v100_stage_scheduler *sched,
                                              sched->output_embd,
                                              sched->model_map,
                                              sched->model_size,
-                                             sched->output_norm.source_offset,
+                                             scheduler_model_offset(sched, &sched->output_norm),
                                              DS4_V100_HC_COLS,
                                              n_slots,
                                              1.0e-6f) ||

@@ -182,6 +182,15 @@ static const char *pack_header =
     "runtime_layout\towning_gpu\tlayer_id\tkernel_family\tsource_offset\t"
     "byte_length\tshard_file\tshard_offset\tscale_offset\tchecksum\n";
 
+static const char *tm_pack_header =
+    "semantic_tensor_id\tsource_name\tsource_dtype\tsource_shape\t"
+    "runtime_layout\towning_gpu\tlayer_id\tkernel_family\t"
+    "n\tk\texperts_packed\texperts_total\tweight_bytes_per_expert\t"
+    "scale_bytes_per_expert\tk_pack\tweight_stride\tscale_stride\t"
+    "sidecar_file\tweight_offset\tscale_offset\tsource_shard_file\t"
+    "source_shard_offset\tsource_byte_length\tsource_checksum\t"
+    "tm_abi_version\n";
+
 static void test_pack_binding(void) {
     char *path = make_pack_path();
     char body[4096];
@@ -231,6 +240,61 @@ static void test_pack_binding(void) {
 
     unlink(path);
     free(path);
+}
+
+static void test_turbomind_pack_binding(void) {
+    char *pack_path = make_pack_path();
+    char *tm_path = make_pack_path();
+    char pack_body[4096];
+    snprintf(pack_body, sizeof(pack_body),
+             "%s"
+             "token_embd.weight\ttoken_embd.weight\tbf16\t[2x4]\tsource_bf16\t0\t-1\tds4_embedding_bf16\t0\t16\tgpu0.weights\t0\t-1\tpending\n"
+             "blk.0.attn_norm.weight\tblk.0.attn_norm.weight\tf32\t[4]\tsource_f32_control\t0\t0\tds4_attention_control\t16\t16\tgpu0.weights\t16\t-1\tpending\n"
+             "blk.0.attn_q.weight\tblk.0.attn_q.weight\tf8_e4m3_b128\t[128]\tsource_f8_e4m3_b128_blocked\t0\t0\tv100_fp8_dequant_f16_hmma_pending\t32\t129\tgpu0.weights\t32\t-1\tpending\n"
+             "blk.0.hc_attn_fn\tblk.0.hc_attn_fn\tf32\t[4x4]\tsource_f32\t0\t0\tds4_hc_control_f32\t178\t64\tgpu0.weights\t178\t-1\tpending\n",
+             pack_header);
+    write_file(pack_path, pack_body);
+
+    char tm_body[2048];
+    snprintf(tm_body, sizeof(tm_body),
+             "%s"
+             "blk.0.ffn_gate_exps.weight\tblk.0.ffn_gate_exps.weight\tmxfp4\t[4096x2048x256]\tturbomind_mxfp4_grouped\t0\t0\tturbomind_mxfp4_grouped_sm70\t2048\t4096\t256\t256\t1024\t256\t3413217\t131072\t2048\tgpu0.weights\t100000\t200000\tgpu0.weights\t1000\t178257920\tpending\t1\n",
+             tm_pack_header);
+    write_file(tm_path, tm_body);
+
+    ds4_v100_context_options opts;
+    ds4_v100_context_options_init(&opts);
+    opts.pack_index_path = pack_path;
+    opts.turbomind_pack_index_path = tm_path;
+
+    char err[256];
+    ds4_v100_context *ctx = NULL;
+    require_true(ds4_v100_context_open(&ctx, &opts, err, sizeof(err)) == 0,
+                 "context should open with TurboMind pack index");
+    require_true(ds4_v100_context_tensor_count(ctx) == 5,
+                 "TurboMind descriptor contributes to tensor count");
+    require_true(ds4_v100_context_exec_count(ctx, DS4_V100_EXEC_LOWBIT_KERNEL) == 1,
+                 "TurboMind descriptor contributes lowbit exec count");
+    const ds4_v100_layer_info *l0 = ds4_v100_context_layer(ctx, 0);
+    require_true(l0 && l0->has_mxfp4_expert,
+                 "TurboMind descriptor marks layer mxfp4 expert present");
+    const ds4_v100_stage_info *s0 = ds4_v100_context_stage(ctx, 0);
+    require_true(s0 && s0->arena_bytes >= 265536,
+                 "TurboMind descriptor extends stage arena bytes");
+    ds4_v100_turbomind_binding tm;
+    require_true(ds4_v100_context_require_layer_turbomind_binding(
+                     ctx, 0, "ffn_gate_exps.weight", &tm, err, sizeof(err)) == 0,
+                 "TurboMind layer binding lookup");
+    require_true(tm.k == 4096 && tm.n == 2048 && tm.experts_total == 256,
+                 "TurboMind binding dimensions");
+    require_true(!strcmp(tm.shard_file, "gpu0.weights"),
+                 "TurboMind binding points into appliance shard");
+    ds4_v100_context_close(ctx);
+
+    unlink(tm_path);
+    unlink(pack_path);
+    free(tm_path);
+    free(pack_path);
 }
 
 static void test_bad_pack_binding(void) {
@@ -467,6 +531,7 @@ int main(void) {
     test_layer_map();
     test_topology_fail_closed();
     test_pack_binding();
+    test_turbomind_pack_binding();
     test_bad_pack_binding();
     test_memory_reserve_fail_closed();
     test_kv_budget_math();

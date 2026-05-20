@@ -223,6 +223,14 @@ remain in `pack-index.tsv`. The CUDA runtime now has
 `ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_f32`, which executes
 from prepacked resident spans without transient repacking.
 
+Sprint 088 wires that format into the scheduler path. `ds4_v100_context` can
+open both metadata files, account TurboMind offsets in the stage arena size,
+and expose routed expert bindings separately from source MXFP4 bindings.
+`ds4_v100_stage_scheduler` can map `shard_dir/gpuN.weights`, upload the shard
+to the resident arena, use shard offsets for CPU-side F32/BF16 control tensors,
+and dispatch routed experts through the no-repack TurboMind API when a layer is
+TurboMind-bound.
+
 This makes the memory policy explicit: bounded sidecar caches may be duplicated
 when admitted, but full production TurboMind packs should replace source expert
 residency or they will likely exceed the 32 GB V100 budget.

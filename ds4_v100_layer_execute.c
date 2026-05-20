@@ -24,6 +24,17 @@ static int source_view(const ds4_v100_bound_matrix *m,
     return ds4_v100_bound_matrix_source_view(m, out, err, errlen);
 }
 
+static uint64_t model_offset_for_binding(const ds4_v100_layer_execute_config *cfg,
+                                         const ds4_v100_tensor_binding *b) {
+    if (!b) return 0;
+    return (cfg && cfg->model_map_uses_shard_offsets) ? b->shard_offset : b->source_offset;
+}
+
+static uint64_t model_offset_for_matrix(const ds4_v100_layer_execute_config *cfg,
+                                        const ds4_v100_bound_matrix *m) {
+    return m ? model_offset_for_binding(cfg, &m->binding) : 0;
+}
+
 static int source_view_rows(const ds4_v100_bound_matrix *m,
                             uint32_t first_row,
                             uint32_t rows,
@@ -601,9 +612,9 @@ static int prepare_decode_cache_attention(
                                           cache->attn_comp_kv,
                                           cfg->model_map,
                                           cfg->model_size,
-                                          state->attn_compressor_ape.binding.source_offset,
+                                          model_offset_for_matrix(cfg, &state->attn_compressor_ape),
                                           0,
-                                          state->attn_compressor_norm.source_offset,
+                                          model_offset_for_binding(cfg, &state->attn_compressor_norm),
                                           0,
                                           DS4_V100_HEAD_DIM,
                                           ratio,
@@ -685,9 +696,9 @@ static int prepare_decode_cache_attention(
                                               cache->index_comp_kv,
                                               cfg->model_map,
                                               cfg->model_size,
-                                              state->indexer_compressor_ape.binding.source_offset,
+                                              model_offset_for_matrix(cfg, &state->indexer_compressor_ape),
                                               0,
-                                              state->indexer_compressor_norm.source_offset,
+                                              model_offset_for_binding(cfg, &state->indexer_compressor_norm),
                                               0,
                                               DS4_V100_INDEXER_HEAD_DIM,
                                               ratio,
@@ -838,7 +849,7 @@ static int execute_attention_output(const ds4_v100_layer_state *state,
                                         hidden,
                                         cfg->model_map,
                                         cfg->model_size,
-                                        state->attn_norm.source_offset,
+                                        model_offset_for_binding(cfg, &state->attn_norm),
                                         hidden_n,
                                         DS4_V100_RMS_EPS) ||
         ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena, &q_a_v, attn_norm, q_a) != 0 ||
@@ -846,7 +857,7 @@ static int execute_attention_output(const ds4_v100_layer_state *state,
                                         q_a,
                                         cfg->model_map,
                                         cfg->model_size,
-                                        state->attn_q_a_norm.source_offset,
+                                        model_offset_for_binding(cfg, &state->attn_q_a_norm),
                                         q_rank,
                                         DS4_V100_RMS_EPS) ||
         ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena, &q_b_v, q_a_norm, q) != 0 ||
@@ -862,7 +873,7 @@ static int execute_attention_output(const ds4_v100_layer_state *state,
                                         kv_raw,
                                         cfg->model_map,
                                         cfg->model_size,
-                                        state->attn_kv_a_norm.source_offset,
+                                        model_offset_for_binding(cfg, &state->attn_kv_a_norm),
                                         kv_width,
                                         DS4_V100_RMS_EPS) ||
         !rope_tail_layer_tensor(kv,
@@ -905,7 +916,7 @@ static int execute_attention_output(const ds4_v100_layer_state *state,
                 heads,
                 cfg->model_map,
                 cfg->model_size,
-                state->attn_sinks.source_offset,
+                model_offset_for_binding(cfg, &state->attn_sinks),
                 q,
                 attn_inputs.raw_kv,
                 attn_inputs.compressed_kv,
@@ -925,7 +936,7 @@ static int execute_attention_output(const ds4_v100_layer_state *state,
         attention_ok = ds4_gpu_attention_decode_heads_tensor(heads,
                                                              cfg->model_map,
                                                              cfg->model_size,
-                                                             state->attn_sinks.source_offset,
+                                                             model_offset_for_binding(cfg, &state->attn_sinks),
                                                              q,
                                                              attn_inputs.raw_kv,
                                                              attn_inputs.n_raw,
@@ -1030,8 +1041,8 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
                                       probs_t,
                                       cfg->model_map,
                                       cfg->model_size,
-                                      bias_mode ? state->router_bias.source_offset : 0,
-                                      hash_mode ? state->router_hash.source_offset : 0,
+                                      bias_mode ? model_offset_for_binding(cfg, &state->router_bias) : 0,
+                                      hash_mode ? model_offset_for_binding(cfg, &state->router_hash) : 0,
                                       hash_mode ? (uint32_t)state->router_hash.shape[1] : 0,
                                       cfg->router_token,
                                       0,
@@ -1056,40 +1067,60 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
         }
     }
 
-    ds4_v100_route_matrices route0;
-    if (ds4_v100_layer_state_route_matrices(state, 0, &route0, err, errlen)) {
-        goto done;
-    }
-    if (route0.gate.bytes != route0.up.bytes ||
-        route0.gate.row_bytes != route0.up.row_bytes ||
-        route0.gate.rows != route0.up.rows ||
-        route0.gate.cols != route0.up.cols) {
-        exec_error(err, errlen, "routed gate/up MXFP4 layouts differ");
-        goto done;
-    }
-    if (ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_f32(
-            cfg->arena,
-            state->routed_gate_binding.shard_offset,
-            state->routed_gate_binding.byte_length,
-            state->routed_up_binding.shard_offset,
-            state->routed_up_binding.byte_length,
-            state->routed_down_binding.shard_offset,
-            state->routed_down_binding.byte_length,
-            route0.gate.bytes,
-            (uint32_t)route0.gate.row_bytes,
-            route0.down.bytes,
-            (uint32_t)route0.down.row_bytes,
-            hidden,
-            mid,
-            state->routed_experts,
-            selected_t,
-            weights_t,
-            routes,
-            ffn_input,
-            routed_mid_t,
-            accum_a) != 0) {
-        exec_error(err, errlen, "grouped routed FFN failed");
-        goto done;
+    if (state->has_turbomind_routed) {
+        if (ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_f32(
+                cfg->arena,
+                &state->turbomind_gate_view,
+                &state->turbomind_up_view,
+                &state->turbomind_down_view,
+                hidden,
+                mid,
+                state->routed_experts,
+                selected_t,
+                weights_t,
+                routes,
+                ffn_input,
+                1,
+                accum_a) != 0) {
+            exec_error(err, errlen, "TurboMind routed FFN failed");
+            goto done;
+        }
+    } else {
+        ds4_v100_route_matrices route0;
+        if (ds4_v100_layer_state_route_matrices(state, 0, &route0, err, errlen)) {
+            goto done;
+        }
+        if (route0.gate.bytes != route0.up.bytes ||
+            route0.gate.row_bytes != route0.up.row_bytes ||
+            route0.gate.rows != route0.up.rows ||
+            route0.gate.cols != route0.up.cols) {
+            exec_error(err, errlen, "routed gate/up MXFP4 layouts differ");
+            goto done;
+        }
+        if (ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_f32(
+                cfg->arena,
+                state->routed_gate_binding.shard_offset,
+                state->routed_gate_binding.byte_length,
+                state->routed_up_binding.shard_offset,
+                state->routed_up_binding.byte_length,
+                state->routed_down_binding.shard_offset,
+                state->routed_down_binding.byte_length,
+                route0.gate.bytes,
+                (uint32_t)route0.gate.row_bytes,
+                route0.down.bytes,
+                (uint32_t)route0.down.row_bytes,
+                hidden,
+                mid,
+                state->routed_experts,
+                selected_t,
+                weights_t,
+                routes,
+                ffn_input,
+                routed_mid_t,
+                accum_a) != 0) {
+            exec_error(err, errlen, "grouped routed FFN failed");
+            goto done;
+        }
     }
 
     ds4_gpu_tensor *accum = accum_a;
@@ -1279,8 +1310,8 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
                                             probs_t,
                                             cfgs[0].model_map,
                                             cfgs[0].model_size,
-                                            bias_mode ? state->router_bias.source_offset : 0,
-                                            hash_mode ? state->router_hash.source_offset : 0,
+                                            bias_mode ? model_offset_for_binding(&cfgs[0], &state->router_bias) : 0,
+                                            hash_mode ? model_offset_for_binding(&cfgs[0], &state->router_hash) : 0,
                                             hash_mode ? (uint32_t)state->router_hash.shape[1] : 0,
                                             0,
                                             0,
@@ -1315,42 +1346,88 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
         }
     }
 
-    ds4_v100_route_matrices route0;
-    if (ds4_v100_layer_state_route_matrices(state, 0, &route0, err, errlen)) {
-        goto done;
-    }
-    if (route0.gate.bytes != route0.up.bytes ||
-        route0.gate.row_bytes != route0.up.row_bytes ||
-        route0.gate.rows != route0.up.rows ||
-        route0.gate.cols != route0.up.cols) {
-        exec_error(err, errlen, "routed gate/up MXFP4 layouts differ");
-        goto done;
-    }
-    if (ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_batch_ptrs_f32(
-            cfgs[0].arena,
-            state->routed_gate_binding.shard_offset,
-            state->routed_gate_binding.byte_length,
-            state->routed_up_binding.shard_offset,
-            state->routed_up_binding.byte_length,
-            state->routed_down_binding.shard_offset,
-            state->routed_down_binding.byte_length,
-            route0.gate.bytes,
-            (uint32_t)route0.gate.row_bytes,
-            route0.down.bytes,
-            (uint32_t)route0.down.row_bytes,
-            hidden,
-            mid,
-            state->routed_experts,
-            selected_t,
-            weights_t,
-            routes,
-            input_ptrs_t,
-            ffn_inputs,
-            n_slots,
-            routed_mid_t,
-            routed_out_t) != 0) {
-        exec_error(err, errlen, "grouped routed FFN batch failed");
-        goto done;
+    if (state->has_turbomind_routed) {
+        for (uint32_t slot = 0; slot < n_slots; slot++) {
+            ds4_gpu_tensor *selected_view =
+                ds4_gpu_tensor_view(selected_t,
+                                    (uint64_t)slot * routes * sizeof(int32_t),
+                                    (uint64_t)routes * sizeof(int32_t));
+            ds4_gpu_tensor *weights_view =
+                ds4_gpu_tensor_view(weights_t,
+                                    (uint64_t)slot * routes * sizeof(float),
+                                    (uint64_t)routes * sizeof(float));
+            ds4_gpu_tensor *routed_view = use_scratch
+                ? cfgs[0].batch_scratch->ffn_routed_out_view[slot]
+                : ds4_gpu_tensor_view(routed_out_t,
+                                      (uint64_t)slot * hidden * sizeof(float),
+                                      (uint64_t)hidden * sizeof(float));
+            if (!selected_view || !weights_view || !routed_view) {
+                if (!use_scratch) ds4_gpu_tensor_free(routed_view);
+                ds4_gpu_tensor_free(weights_view);
+                ds4_gpu_tensor_free(selected_view);
+                exec_error(err, errlen, "TurboMind FFN batch view failed");
+                goto done;
+            }
+            const int tm_rc = ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_f32(
+                cfgs[slot].arena,
+                &state->turbomind_gate_view,
+                &state->turbomind_up_view,
+                &state->turbomind_down_view,
+                hidden,
+                mid,
+                state->routed_experts,
+                selected_view,
+                weights_view,
+                routes,
+                ffn_inputs[slot],
+                1,
+                routed_view);
+            if (!use_scratch) ds4_gpu_tensor_free(routed_view);
+            ds4_gpu_tensor_free(weights_view);
+            ds4_gpu_tensor_free(selected_view);
+            if (tm_rc != 0) {
+                exec_error(err, errlen, "TurboMind routed FFN batch failed");
+                goto done;
+            }
+        }
+    } else {
+        ds4_v100_route_matrices route0;
+        if (ds4_v100_layer_state_route_matrices(state, 0, &route0, err, errlen)) {
+            goto done;
+        }
+        if (route0.gate.bytes != route0.up.bytes ||
+            route0.gate.row_bytes != route0.up.row_bytes ||
+            route0.gate.rows != route0.up.rows ||
+            route0.gate.cols != route0.up.cols) {
+            exec_error(err, errlen, "routed gate/up MXFP4 layouts differ");
+            goto done;
+        }
+        if (ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_batch_ptrs_f32(
+                cfgs[0].arena,
+                state->routed_gate_binding.shard_offset,
+                state->routed_gate_binding.byte_length,
+                state->routed_up_binding.shard_offset,
+                state->routed_up_binding.byte_length,
+                state->routed_down_binding.shard_offset,
+                state->routed_down_binding.byte_length,
+                route0.gate.bytes,
+                (uint32_t)route0.gate.row_bytes,
+                route0.down.bytes,
+                (uint32_t)route0.down.row_bytes,
+                hidden,
+                mid,
+                state->routed_experts,
+                selected_t,
+                weights_t,
+                routes,
+                input_ptrs_t,
+                ffn_inputs,
+                n_slots,
+                routed_mid_t,
+                routed_out_t) != 0) {
+            exec_error(err, errlen, "grouped routed FFN batch failed");
+            goto done;
+        }
     }
 
     if (batch_shared_f8) {
@@ -1512,7 +1589,7 @@ int ds4_v100_layer_execute_decode(
                                         residual,
                                         cfg->model_map,
                                         cfg->model_size,
-                                        state->ffn_norm.source_offset,
+                                        model_offset_for_binding(cfg, &state->ffn_norm),
                                         hidden_n,
                                         DS4_V100_RMS_EPS) ||
         execute_ffn_delta(state, cfg, ffn_norm, ffn_delta, report, err, errlen) ||
@@ -1580,7 +1657,7 @@ int ds4_v100_layer_execute_hc_decode(
         !ds4_gpu_matmul_f32_tensor(hc_mix,
                                    cfg->model_map,
                                    cfg->model_size,
-                                   state->hc_attn_fn.source_offset,
+                                   model_offset_for_binding(cfg, &state->hc_attn_fn),
                                    hc_values,
                                    DS4_V100_HC_MIX,
                                    hc_norm,
@@ -1591,8 +1668,8 @@ int ds4_v100_layer_execute_hc_decode(
                                               hidden_hc,
                                               cfg->model_map,
                                               cfg->model_size,
-                                              state->hc_attn_scale.source_offset,
-                                              state->hc_attn_base.source_offset,
+                                              model_offset_for_binding(cfg, &state->hc_attn_scale),
+                                              model_offset_for_binding(cfg, &state->hc_attn_base),
                                               hidden_n,
                                               DS4_V100_N_HC,
                                               DS4_V100_HC_SINKHORN_ITERS,
@@ -1608,7 +1685,7 @@ int ds4_v100_layer_execute_hc_decode(
         !ds4_gpu_matmul_f32_tensor(hc_mix,
                                    cfg->model_map,
                                    cfg->model_size,
-                                   state->hc_ffn_fn.source_offset,
+                                   model_offset_for_binding(cfg, &state->hc_ffn_fn),
                                    hc_values,
                                    DS4_V100_HC_MIX,
                                    hc_norm,
@@ -1619,8 +1696,8 @@ int ds4_v100_layer_execute_hc_decode(
                                               after_attn_hc,
                                               cfg->model_map,
                                               cfg->model_size,
-                                              state->hc_ffn_scale.source_offset,
-                                              state->hc_ffn_base.source_offset,
+                                              model_offset_for_binding(cfg, &state->hc_ffn_scale),
+                                              model_offset_for_binding(cfg, &state->hc_ffn_base),
                                               hidden_n,
                                               DS4_V100_N_HC,
                                               DS4_V100_HC_SINKHORN_ITERS,
@@ -1629,7 +1706,7 @@ int ds4_v100_layer_execute_hc_decode(
                                         ffn_cur,
                                         cfg->model_map,
                                         cfg->model_size,
-                                        state->ffn_norm.source_offset,
+                                        model_offset_for_binding(cfg, &state->ffn_norm),
                                         hidden_n,
                                         DS4_V100_RMS_EPS) ||
         execute_ffn_delta(state, cfg, ffn_norm, ffn_delta, report, err, errlen) ||
@@ -1811,7 +1888,7 @@ int ds4_v100_layer_execute_hc_decode_batch(
             !ds4_gpu_matmul_f32_tensor(hc_mix[slot],
                                        cfgs[slot].model_map,
                                        cfgs[slot].model_size,
-                                       state->hc_attn_fn.source_offset,
+                                       model_offset_for_binding(&cfgs[slot], &state->hc_attn_fn),
                                        hc_values,
                                        DS4_V100_HC_MIX,
                                        hc_norm[slot],
@@ -1822,8 +1899,8 @@ int ds4_v100_layer_execute_hc_decode_batch(
                                                   hidden_hc[slot],
                                                   cfgs[slot].model_map,
                                                   cfgs[slot].model_size,
-                                                  state->hc_attn_scale.source_offset,
-                                                  state->hc_attn_base.source_offset,
+                                                  model_offset_for_binding(&cfgs[slot], &state->hc_attn_scale),
+                                                  model_offset_for_binding(&cfgs[slot], &state->hc_attn_base),
                                                   hidden_n,
                                                   DS4_V100_N_HC,
                                                   DS4_V100_HC_SINKHORN_ITERS,
@@ -1860,7 +1937,7 @@ int ds4_v100_layer_execute_hc_decode_batch(
             !ds4_gpu_matmul_f32_tensor(hc_mix[slot],
                                        cfgs[slot].model_map,
                                        cfgs[slot].model_size,
-                                       state->hc_ffn_fn.source_offset,
+                                       model_offset_for_binding(&cfgs[slot], &state->hc_ffn_fn),
                                        hc_values,
                                        DS4_V100_HC_MIX,
                                        hc_norm[slot],
@@ -1871,8 +1948,8 @@ int ds4_v100_layer_execute_hc_decode_batch(
                                                   after_attn_hc[slot],
                                                   cfgs[slot].model_map,
                                                   cfgs[slot].model_size,
-                                                  state->hc_ffn_scale.source_offset,
-                                                  state->hc_ffn_base.source_offset,
+                                                  model_offset_for_binding(&cfgs[slot], &state->hc_ffn_scale),
+                                                  model_offset_for_binding(&cfgs[slot], &state->hc_ffn_base),
                                                   hidden_n,
                                                   DS4_V100_N_HC,
                                                   DS4_V100_HC_SINKHORN_ITERS,
@@ -1881,7 +1958,7 @@ int ds4_v100_layer_execute_hc_decode_batch(
                                             ffn_cur[slot],
                                             cfgs[slot].model_map,
                                             cfgs[slot].model_size,
-                                            state->ffn_norm.source_offset,
+                                            model_offset_for_binding(&cfgs[slot], &state->ffn_norm),
                                             hidden_n,
                                             DS4_V100_RMS_EPS)) {
             if (err && err[0] == '\0') exec_error(err, errlen, "HC batch FFN prep failed");

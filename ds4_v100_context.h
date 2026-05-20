@@ -178,7 +178,38 @@ typedef struct {
 } ds4_v100_tensor_binding;
 
 typedef struct {
+    const char *semantic_tensor_id;
+    const char *source_name;
+    const char *source_dtype;
+    const char *source_shape;
+    const char *runtime_layout;
+    const char *kernel_family;
+    const char *shard_file;
+    const char *source_shard_file;
+    int owning_gpu;
+    int layer_id;
+    uint32_t n;
+    uint32_t k;
+    uint32_t experts_packed;
+    uint32_t experts_total;
+    uint64_t weight_bytes_per_expert;
+    uint64_t scale_bytes_per_expert;
+    int k_pack;
+    int weight_stride;
+    int scale_stride;
+    uint64_t weight_offset;
+    uint64_t scale_offset;
+    uint64_t source_shard_offset;
+    uint64_t source_byte_length;
+    int tm_abi_version;
+    ds4_v100_policy policy;
+    uint32_t n_shape_dims;
+    uint64_t shape[DS4_V100_MAX_SHAPE_DIMS];
+} ds4_v100_turbomind_binding;
+
+typedef struct {
     const char *pack_index_path;
+    const char *turbomind_pack_index_path;
     int expected_gpus;
     ds4_v100_init_mode mode;
     bool require_production_topology;
@@ -244,6 +275,17 @@ int ds4_v100_context_require_layer_tensor_binding(const ds4_v100_context *ctx,
                                                   ds4_v100_tensor_binding *out,
                                                   char *err,
                                                   size_t errlen);
+int ds4_v100_context_lookup_turbomind_binding(const ds4_v100_context *ctx,
+                                              const char *semantic_tensor_id,
+                                              ds4_v100_turbomind_binding *out,
+                                              char *err,
+                                              size_t errlen);
+int ds4_v100_context_require_layer_turbomind_binding(const ds4_v100_context *ctx,
+                                                     int layer_id,
+                                                     const char *tensor_suffix,
+                                                     ds4_v100_turbomind_binding *out,
+                                                     char *err,
+                                                     size_t errlen);
 int ds4_v100_context_output_head_binding(const ds4_v100_context *ctx,
                                          ds4_v100_tensor_binding *out,
                                          char *err,

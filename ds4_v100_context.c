@@ -1,5 +1,6 @@
 #include "ds4_v100_context.h"
 #include "ds4_pack.h"
+#include "ds4_turbomind_pack.h"
 
 #include <ctype.h>
 #include <inttypes.h>
@@ -13,13 +14,22 @@ typedef struct {
     ds4_v100_policy policy;
 } ds4_v100_tensor_desc;
 
+typedef struct {
+    const ds4_tm_pack_entry *entry;
+    ds4_v100_policy policy;
+} ds4_v100_tm_tensor_desc;
+
 struct ds4_v100_context {
     ds4_v100_context_options opts;
     ds4_pack *pack;
+    ds4_tm_pack *tm_pack;
     ds4_v100_stage_info stages[DS4_V100_EXPECTED_GPUS];
     ds4_v100_tensor_desc *descs;
+    ds4_v100_tm_tensor_desc *tm_descs;
     uint64_t n_descs;
     uint64_t cap_descs;
+    uint64_t n_tm_descs;
+    uint64_t cap_tm_descs;
     uint64_t exec_counts[DS4_V100_EXEC_COUNT];
     bool has_token_embedding;
     ds4_v100_layer_info layers[DS4_V100_N_LAYERS];
@@ -604,6 +614,30 @@ static int append_desc(ds4_v100_context *ctx, const ds4_pack_entry *entry,
     return 0;
 }
 
+static int append_tm_desc(ds4_v100_context *ctx,
+                          const ds4_tm_pack_entry *entry,
+                          const ds4_v100_policy *policy,
+                          char *err,
+                          size_t errlen) {
+    if (ctx->n_tm_descs == ctx->cap_tm_descs) {
+        uint64_t next = ctx->cap_tm_descs ? ctx->cap_tm_descs * 2 : 128;
+        if (next < ctx->cap_tm_descs || next > SIZE_MAX / sizeof(ctx->tm_descs[0])) {
+            return v100_error(err, errlen, "too many V100 TurboMind descriptors");
+        }
+        ds4_v100_tm_tensor_desc *p =
+            (ds4_v100_tm_tensor_desc *)realloc(ctx->tm_descs,
+                                               (size_t)next * sizeof(ctx->tm_descs[0]));
+        if (!p) return v100_error(err, errlen, "out of memory growing V100 TurboMind descriptors");
+        ctx->tm_descs = p;
+        ctx->cap_tm_descs = next;
+    }
+    ctx->tm_descs[ctx->n_tm_descs].entry = entry;
+    ctx->tm_descs[ctx->n_tm_descs].policy = *policy;
+    ctx->n_tm_descs++;
+    ctx->exec_counts[policy->exec_kind]++;
+    return 0;
+}
+
 static int bind_pack_entry(const ds4_pack_entry *e, void *ud) {
     ds4_v100_bind_state *state = (ds4_v100_bind_state *)ud;
     ds4_v100_context *ctx = state->ctx;
@@ -677,6 +711,90 @@ static int bind_pack(ds4_v100_context *ctx, char *err, size_t errlen) {
     return ds4_pack_for_each(ctx->pack, bind_pack_entry, &state);
 }
 
+static bool is_routed_expert_id(const char *id) {
+    return id &&
+           (strstr(id, ".ffn_gate_exps.weight") ||
+            strstr(id, ".ffn_up_exps.weight") ||
+            strstr(id, ".ffn_down_exps.weight"));
+}
+
+static int bind_tm_pack_entry(const ds4_tm_pack_entry *e, void *ud) {
+    ds4_v100_bind_state *state = (ds4_v100_bind_state *)ud;
+    ds4_v100_context *ctx = state->ctx;
+    int max_gpu = ctx->opts.expected_gpus > 0 ? ctx->opts.expected_gpus : DS4_V100_EXPECTED_GPUS;
+    if (e->owning_gpu < 0 || e->owning_gpu >= max_gpu) {
+        return v100_error(state->err, state->errlen, "%s has invalid TurboMind owning GPU %d",
+                          e->semantic_tensor_id, e->owning_gpu);
+    }
+    if (e->layer_id < 0 || e->layer_id >= DS4_V100_N_LAYERS) {
+        return v100_error(state->err, state->errlen, "%s has invalid TurboMind layer id %d",
+                          e->semantic_tensor_id, e->layer_id);
+    }
+    if (ds4_v100_stage_for_layer(e->layer_id) != e->owning_gpu) {
+        return v100_error(state->err, state->errlen,
+                          "%s TurboMind owner gpu %d does not match layer %d stage %d",
+                          e->semantic_tensor_id, e->owning_gpu, e->layer_id,
+                          ds4_v100_stage_for_layer(e->layer_id));
+    }
+    if (!is_routed_expert_id(e->semantic_tensor_id)) {
+        return v100_error(state->err, state->errlen,
+                          "%s TurboMind binding is not a routed expert tensor",
+                          e->semantic_tensor_id);
+    }
+    if (!str_eq_ci(e->source_dtype, "mxfp4")) {
+        return v100_error(state->err, state->errlen,
+                          "%s TurboMind source dtype must be mxfp4",
+                          e->semantic_tensor_id);
+    }
+    uint64_t dims[DS4_V100_MAX_SHAPE_DIMS] = {0};
+    uint32_t n_dims = 0;
+    if (parse_shape_dims(e->source_shape, dims, DS4_V100_MAX_SHAPE_DIMS, &n_dims, NULL) ||
+        n_dims != 3 ||
+        dims[0] != e->k ||
+        dims[1] != e->n ||
+        dims[2] != e->experts_total) {
+        return v100_error(state->err, state->errlen,
+                          "%s TurboMind shape does not match n/k/expert metadata",
+                          e->semantic_tensor_id);
+    }
+
+    ds4_v100_policy policy;
+    if (ds4_v100_classify_or_die(e->source_dtype, e->runtime_layout,
+                                 e->kernel_family, &policy, state->err, state->errlen)) {
+        return 1;
+    }
+    ds4_v100_stage_info *stage = &ctx->stages[e->owning_gpu];
+    uint64_t weight_end =
+        e->weight_offset + (uint64_t)e->experts_packed * e->weight_bytes_per_expert;
+    uint64_t scale_end =
+        e->scale_offset + (uint64_t)e->experts_packed * e->scale_bytes_per_expert;
+    if (weight_end < e->weight_offset || scale_end < e->scale_offset) {
+        return v100_error(state->err, state->errlen,
+                          "%s TurboMind arena span overflows",
+                          e->semantic_tensor_id);
+    }
+    if (weight_end > stage->arena_bytes) stage->arena_bytes = weight_end;
+    if (scale_end > stage->arena_bytes) stage->arena_bytes = scale_end;
+    stage->tensor_count++;
+
+    ds4_v100_layer_info *li = &ctx->layers[e->layer_id];
+    li->tensor_count++;
+    li->has_mxfp4_expert = true;
+    return append_tm_desc(ctx, e, &policy, state->err, state->errlen);
+}
+
+static int bind_tm_pack(ds4_v100_context *ctx, char *err, size_t errlen) {
+    if (!ctx->opts.turbomind_pack_index_path ||
+        !ctx->opts.turbomind_pack_index_path[0]) {
+        return 0;
+    }
+    if (ds4_tm_pack_open(&ctx->tm_pack, ctx->opts.turbomind_pack_index_path, err, errlen)) {
+        return 1;
+    }
+    ds4_v100_bind_state state = { ctx, err, errlen };
+    return ds4_tm_pack_for_each(ctx->tm_pack, bind_tm_pack_entry, &state);
+}
+
 static int validate_memory_budget(ds4_v100_context *ctx, char *err, size_t errlen) {
     if (!ctx->opts.require_production_topology) return 0;
     for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
@@ -722,6 +840,7 @@ int ds4_v100_context_open(ds4_v100_context **out,
     apply_derived_kv_plan(ctx);
     if (validate_topology(ctx, err, errlen) ||
         bind_pack(ctx, err, errlen) ||
+        bind_tm_pack(ctx, err, errlen) ||
         validate_memory_budget(ctx, err, errlen)) {
         ds4_v100_context_close(ctx);
         return 1;
@@ -732,7 +851,9 @@ int ds4_v100_context_open(ds4_v100_context **out,
 
 void ds4_v100_context_close(ds4_v100_context *ctx) {
     if (!ctx) return;
+    ds4_tm_pack_close(ctx->tm_pack);
     ds4_pack_close(ctx->pack);
+    free(ctx->tm_descs);
     free(ctx->descs);
     free(ctx);
 }
@@ -754,7 +875,7 @@ const ds4_v100_layer_info *ds4_v100_context_layer(const ds4_v100_context *ctx,
 }
 
 uint64_t ds4_v100_context_tensor_count(const ds4_v100_context *ctx) {
-    return ctx ? ctx->n_descs : 0;
+    return ctx ? ctx->n_descs + ctx->n_tm_descs : 0;
 }
 
 uint64_t ds4_v100_context_exec_count(const ds4_v100_context *ctx,
@@ -801,6 +922,51 @@ static int fill_binding(const ds4_v100_tensor_desc *desc,
     return 0;
 }
 
+static int fill_tm_binding(const ds4_v100_tm_tensor_desc *desc,
+                           ds4_v100_turbomind_binding *out,
+                           char *err,
+                           size_t errlen) {
+    if (!desc || !desc->entry || !out) {
+        return v100_error(err, errlen, "missing TurboMind descriptor binding output");
+    }
+    const ds4_tm_pack_entry *e = desc->entry;
+    memset(out, 0, sizeof(*out));
+    out->semantic_tensor_id = e->semantic_tensor_id;
+    out->source_name = e->source_name;
+    out->source_dtype = e->source_dtype;
+    out->source_shape = e->source_shape;
+    out->runtime_layout = e->runtime_layout;
+    out->kernel_family = e->kernel_family;
+    out->shard_file = e->sidecar_file;
+    out->source_shard_file = e->source_shard_file;
+    out->owning_gpu = e->owning_gpu;
+    out->layer_id = e->layer_id;
+    out->n = e->n;
+    out->k = e->k;
+    out->experts_packed = e->experts_packed;
+    out->experts_total = e->experts_total;
+    out->weight_bytes_per_expert = e->weight_bytes_per_expert;
+    out->scale_bytes_per_expert = e->scale_bytes_per_expert;
+    out->k_pack = e->k_pack;
+    out->weight_stride = e->weight_stride;
+    out->scale_stride = e->scale_stride;
+    out->weight_offset = e->weight_offset;
+    out->scale_offset = e->scale_offset;
+    out->source_shard_offset = e->source_shard_offset;
+    out->source_byte_length = e->source_byte_length;
+    out->tm_abi_version = e->tm_abi_version;
+    out->policy = desc->policy;
+    if (parse_shape_dims(e->source_shape,
+                         out->shape,
+                         DS4_V100_MAX_SHAPE_DIMS,
+                         &out->n_shape_dims,
+                         NULL)) {
+        return v100_error(err, errlen, "%s has invalid TurboMind source shape %s",
+                          e->semantic_tensor_id, e->source_shape);
+    }
+    return 0;
+}
+
 int ds4_v100_context_lookup_tensor_binding(const ds4_v100_context *ctx,
                                            const char *semantic_tensor_id,
                                            ds4_v100_tensor_binding *out,
@@ -818,6 +984,26 @@ int ds4_v100_context_lookup_tensor_binding(const ds4_v100_context *ctx,
         }
     }
     return v100_error(err, errlen, "missing tensor descriptor %s", semantic_tensor_id);
+}
+
+int ds4_v100_context_lookup_turbomind_binding(const ds4_v100_context *ctx,
+                                              const char *semantic_tensor_id,
+                                              ds4_v100_turbomind_binding *out,
+                                              char *err,
+                                              size_t errlen) {
+    if (!ctx) return v100_error(err, errlen, "missing V100 context");
+    if (!semantic_tensor_id || !semantic_tensor_id[0]) {
+        return v100_error(err, errlen, "missing semantic tensor id");
+    }
+    if (!out) return v100_error(err, errlen, "missing TurboMind binding output");
+    for (uint64_t i = 0; i < ctx->n_tm_descs; i++) {
+        const ds4_v100_tm_tensor_desc *desc = &ctx->tm_descs[i];
+        if (desc->entry && !strcmp(desc->entry->semantic_tensor_id, semantic_tensor_id)) {
+            return fill_tm_binding(desc, out, err, errlen);
+        }
+    }
+    return v100_error(err, errlen, "missing TurboMind tensor descriptor %s",
+                      semantic_tensor_id);
 }
 
 int ds4_v100_context_require_layer_tensor_binding(const ds4_v100_context *ctx,
@@ -840,6 +1026,26 @@ int ds4_v100_context_require_layer_tensor_binding(const ds4_v100_context *ctx,
     return ds4_v100_context_lookup_tensor_binding(ctx, id, out, err, errlen);
 }
 
+int ds4_v100_context_require_layer_turbomind_binding(const ds4_v100_context *ctx,
+                                                     int layer_id,
+                                                     const char *tensor_suffix,
+                                                     ds4_v100_turbomind_binding *out,
+                                                     char *err,
+                                                     size_t errlen) {
+    if (layer_id < 0 || layer_id >= DS4_V100_N_LAYERS) {
+        return v100_error(err, errlen, "bad layer id %d", layer_id);
+    }
+    if (!tensor_suffix || !tensor_suffix[0]) {
+        return v100_error(err, errlen, "missing layer tensor suffix");
+    }
+    char id[192];
+    int n = snprintf(id, sizeof(id), "blk.%d.%s", layer_id, tensor_suffix);
+    if (n < 0 || (size_t)n >= sizeof(id)) {
+        return v100_error(err, errlen, "layer tensor id too long");
+    }
+    return ds4_v100_context_lookup_turbomind_binding(ctx, id, out, err, errlen);
+}
+
 int ds4_v100_context_output_head_binding(const ds4_v100_context *ctx,
                                          ds4_v100_tensor_binding *out,
                                          char *err,
@@ -852,6 +1058,7 @@ int ds4_v100_context_validate_layer_skeleton(const ds4_v100_context *ctx,
                                              char *err,
                                              size_t errlen) {
     if (!ctx) return v100_error(err, errlen, "missing V100 context");
+    const uint64_t total_descs = ds4_v100_context_tensor_count(ctx);
     if (report) {
         fprintf(report, "layer\tstage\tclass\tkv_bytes\ttensors\tf32_control\tfp8_dense\tmxfp4_expert\thc_control\tstatus\n");
     }
@@ -860,11 +1067,11 @@ int ds4_v100_context_validate_layer_skeleton(const ds4_v100_context *ctx,
         int expect_stage = ds4_v100_stage_for_layer(layer);
         const char *status = "OK";
         if (li->stage_id != expect_stage) status = "BAD_STAGE";
-        else if (ctx->n_descs > 0 && li->tensor_count == 0) status = "MISSING_LAYER_DESCRIPTORS";
-        else if (ctx->n_descs > 0 && !li->has_f32_control) status = "MISSING_F32_CONTROL";
-        else if (ctx->n_descs > 0 && !li->has_fp8_dense) status = "MISSING_FP8_DENSE";
-        else if (ctx->n_descs > 0 && !li->has_mxfp4_expert) status = "MISSING_MXFP4_EXPERT";
-        else if (ctx->n_descs > 0 && !li->has_hc_control) status = "MISSING_HC_CONTROL";
+        else if (total_descs > 0 && li->tensor_count == 0) status = "MISSING_LAYER_DESCRIPTORS";
+        else if (total_descs > 0 && !li->has_f32_control) status = "MISSING_F32_CONTROL";
+        else if (total_descs > 0 && !li->has_fp8_dense) status = "MISSING_FP8_DENSE";
+        else if (total_descs > 0 && !li->has_mxfp4_expert) status = "MISSING_MXFP4_EXPERT";
+        else if (total_descs > 0 && !li->has_hc_control) status = "MISSING_HC_CONTROL";
         if (report) {
             fprintf(report, "%d\t%d\t%s\t%" PRIu64 "\t%" PRIu64 "\t%d\t%d\t%d\t%d\t%s\n",
                     layer, li->stage_id,
@@ -882,7 +1089,7 @@ int ds4_v100_context_validate_layer_skeleton(const ds4_v100_context *ctx,
                               layer, status);
         }
     }
-    if (ctx->n_descs > 0 && !ctx->has_token_embedding) {
+    if (total_descs > 0 && !ctx->has_token_embedding) {
         return v100_error(err, errlen, "missing token embedding descriptor");
     }
     return 0;
@@ -897,7 +1104,9 @@ void ds4_v100_context_print_report(const ds4_v100_context *ctx, FILE *fp) {
     fprintf(fp, "policy\tproduction_dense_gemm_target_fp16_hmma_with_fp32_accumulation\n");
     fprintf(fp, "kv_ctx_tokens\t%" PRIu64 "\n", ctx->opts.kv_ctx_tokens);
     fprintf(fp, "kv_active_slots\t%" PRIu64 "\n", ctx->opts.kv_active_slots);
-    fprintf(fp, "tensor_count\t%" PRIu64 "\n", ctx->n_descs);
+    fprintf(fp, "tensor_count\t%" PRIu64 "\n", ds4_v100_context_tensor_count(ctx));
+    fprintf(fp, "pack_tensor_count\t%" PRIu64 "\n", ctx->n_descs);
+    fprintf(fp, "turbomind_tensor_count\t%" PRIu64 "\n", ctx->n_tm_descs);
     for (int k = 0; k < DS4_V100_EXEC_COUNT; k++) {
         fprintf(fp, "exec_count\t%s\t%" PRIu64 "\n",
                 ds4_v100_exec_kind_name((ds4_v100_exec_kind)k),

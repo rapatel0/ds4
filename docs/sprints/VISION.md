@@ -1920,6 +1920,22 @@ GPU utilization with architectural changes, and only then compare against the
   should wire scheduler context binding and arena upload from the appliance
   directory.
 
+### Sprint 088 - Scheduler-Bound TurboMind Appliance Runtime [complete]
+
+- **Goal**: Bind `turbomind-pack-index.tsv` into the scheduler/runtime path so
+  the single appliance directory can drive routed expert execution.
+- **Rationale**: Sprint 087 created the correct payload shape, but the runtime
+  still needed explicit metadata lookup, arena sizing, shard upload, and layer
+  dispatch for those prepacked spans.
+- **Outcome**: `SHIP_RUNTIME_BINDING`. Added TurboMind descriptor lookup to the
+  V100 context, layer-state bindings for prepacked routed experts, shard-offset
+  model-map mode for appliance CPU-side control tensors, scheduler
+  `shard_dir` loading for `gpuN.weights`, and layer-execute dispatch through
+  `ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_f32`. Local validation
+  passes `tests/v100_context_smoke`; V100 build validation passes for the
+  stage/full scheduler smoke targets. V100 scheduler execution against a full
+  appliance pack and throughput measurement are next.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -2168,6 +2184,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 085 persistent TurboMind sidecar smoke. | The project can now parse the TurboMind sidecar index, upload a bounded sidecar once, reconstruct device pointer tables, and run grouped MXFP4 experts from persistent packed buffers with source-arena parity. The next sprint should make this planner-admitted and scheduler-selectable instead of a standalone smoke. | Sprint 086+ |
 | 2026-05-20 | Shipped Sprint 086 TurboMind sidecar admission. | The project now reports whether sidecar layouts fit the 32 GiB V100 budget under duplicate and replacement-style residency assumptions. Use this before enabling persistent TurboMind packs broadly; full sidecars should replace source expert bytes or be admitted as bounded cache. | Sprint 087+ |
 | 2026-05-20 | Shipped Sprint 087 single-shard TurboMind appliance pack. | TurboMind expert bytes can now be emitted into `gpuN.weights` and executed through a DS4 CUDA no-repack API from resident arena spans. The next step is scheduler integration: combined arena sizing/upload and layer-state bindings from `turbomind-pack-index.tsv`. | Sprint 088+ |
+| 2026-05-20 | Shipped Sprint 088 scheduler-bound TurboMind appliance runtime. | Context/layer/scheduler code can now bind TurboMind metadata, map/upload appliance `gpuN.weights`, use shard offsets for control tensors, and dispatch routed experts through the no-repack TurboMind API. V100 compile validation passes for scheduler smoke targets; the next step is V100 execution and throughput measurement on a full or bounded appliance directory. | Sprint 089+ |
 
 ## Open Questions
 

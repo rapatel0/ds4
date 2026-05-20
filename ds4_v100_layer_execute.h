@@ -106,6 +106,7 @@ void ds4_v100_layer_batch_scratch_free(ds4_v100_layer_batch_scratch *scratch);
 typedef struct {
     const void *model_map;
     uint64_t model_size;
+    bool model_map_uses_shard_offsets;
     ds4_gpu_arena *arena;
     ds4_v100_layer_batch_scratch *batch_scratch;
 

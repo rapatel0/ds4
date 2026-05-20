@@ -15,7 +15,7 @@ METAL_SRCS := $(wildcard metal/*.metal)
 PACK_OBJS = ds4_pack.o
 SOURCE_FORMAT_OBJS = ds4_source_formats.o
 TURBOMIND_PACK_OBJS = ds4_turbomind_pack.o
-V100_CONTEXT_OBJS = ds4_v100_context.o $(PACK_OBJS)
+V100_CONTEXT_OBJS = ds4_v100_context.o $(PACK_OBJS) $(TURBOMIND_PACK_OBJS)
 V100_LAYER_STATE_OBJS = ds4_v100_layer_state.o $(V100_CONTEXT_OBJS) $(SOURCE_FORMAT_OBJS)
 V100_LAYER_EXECUTE_OBJS = ds4_v100_layer_execute.o $(V100_LAYER_STATE_OBJS)
 V100_SCHEDULER_OBJS = ds4_v100_scheduler.o $(V100_LAYER_EXECUTE_OBJS)
@@ -135,7 +135,7 @@ ds4_source_formats.o: ds4_source_formats.c ds4_source_formats.h
 ds4_turbomind_pack.o: ds4_turbomind_pack.c ds4_turbomind_pack.h
 	$(CC) $(CFLAGS) -c -o $@ ds4_turbomind_pack.c
 
-ds4_v100_context.o: ds4_v100_context.c ds4_v100_context.h ds4_pack.h
+ds4_v100_context.o: ds4_v100_context.c ds4_v100_context.h ds4_pack.h ds4_turbomind_pack.h
 	$(CC) $(CFLAGS) -I. -c -o $@ ds4_v100_context.c
 
 ds4_v100_layer_state.o: ds4_v100_layer_state.c ds4_v100_layer_state.h ds4_v100_context.h ds4_gpu.h ds4_source_formats.h

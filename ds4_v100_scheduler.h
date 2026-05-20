@@ -21,6 +21,8 @@ enum {
 
 typedef struct {
     const char *pack_index_path;
+    const char *turbomind_pack_index_path;
+    const char *shard_dir;
     const void *model_map;
     uint64_t model_size;
     int stage_id;

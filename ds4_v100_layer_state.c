@@ -160,6 +160,111 @@ static int make_mxfp4_expert_matrix(const ds4_v100_tensor_binding *b,
     return 0;
 }
 
+static ds4_gpu_turbomind_mxfp4_matrix_view tm_gpu_view(
+        const ds4_v100_turbomind_binding *b) {
+    ds4_gpu_turbomind_mxfp4_matrix_view v;
+    memset(&v, 0, sizeof(v));
+    if (!b) return v;
+    v.n = b->n;
+    v.k = b->k;
+    v.weight_offset = b->weight_offset;
+    v.scale_offset = b->scale_offset;
+    v.weight_bytes_per_expert = b->weight_bytes_per_expert;
+    v.scale_bytes_per_expert = b->scale_bytes_per_expert;
+    v.k_pack = b->k_pack;
+    v.weight_stride = b->weight_stride;
+    v.scale_stride = b->scale_stride;
+    v.experts_packed = b->experts_packed;
+    v.experts_total = b->experts_total;
+    return v;
+}
+
+static int make_turbomind_routed_binding(const ds4_v100_turbomind_binding *b,
+                                         ds4_v100_tensor_binding *out,
+                                         const char *label,
+                                         char *err,
+                                         size_t errlen) {
+    if (!b || !out || b->n_shape_dims != 3 ||
+        !b->source_dtype || strcmp(b->source_dtype, "mxfp4") != 0) {
+        return state_error(err, errlen, "%s must be a 3D TurboMind MXFP4 tensor", label);
+    }
+    if (b->experts_packed < b->experts_total) {
+        return state_error(err, errlen,
+                           "%s TurboMind binding packs only %u/%u experts",
+                           label,
+                           b->experts_packed,
+                           b->experts_total);
+    }
+    memset(out, 0, sizeof(*out));
+    out->semantic_tensor_id = b->semantic_tensor_id;
+    out->source_name = b->source_name;
+    out->source_dtype = b->source_dtype;
+    out->source_shape = b->source_shape;
+    out->runtime_layout = b->runtime_layout;
+    out->kernel_family = b->kernel_family;
+    out->shard_file = b->shard_file;
+    out->owning_gpu = b->owning_gpu;
+    out->layer_id = b->layer_id;
+    out->scale_offset = -1;
+    out->source_offset = 0;
+    out->byte_length = b->source_byte_length;
+    out->shard_offset = b->source_shard_offset;
+    out->policy = b->policy;
+    out->n_shape_dims = b->n_shape_dims;
+    for (uint32_t i = 0; i < b->n_shape_dims && i < DS4_V100_MAX_SHAPE_DIMS; i++) {
+        out->shape[i] = b->shape[i];
+    }
+    return 0;
+}
+
+static int bind_routed_expert_tensors(ds4_v100_layer_state *out,
+                                      const ds4_v100_context *ctx,
+                                      int layer_id,
+                                      char *err,
+                                      size_t errlen) {
+    char tm_err[256];
+    memset(tm_err, 0, sizeof(tm_err));
+    int g = ds4_v100_context_require_layer_turbomind_binding(
+        ctx, layer_id, "ffn_gate_exps.weight", &out->turbomind_gate_binding,
+        tm_err, sizeof(tm_err));
+    int u = ds4_v100_context_require_layer_turbomind_binding(
+        ctx, layer_id, "ffn_up_exps.weight", &out->turbomind_up_binding,
+        tm_err, sizeof(tm_err));
+    int d = ds4_v100_context_require_layer_turbomind_binding(
+        ctx, layer_id, "ffn_down_exps.weight", &out->turbomind_down_binding,
+        tm_err, sizeof(tm_err));
+    if (!g || !u || !d) {
+        if (g || u || d) {
+            return state_error(err, errlen,
+                               "partial TurboMind routed expert binding for layer %d",
+                               layer_id);
+        }
+        out->has_turbomind_routed = true;
+        if (make_turbomind_routed_binding(&out->turbomind_gate_binding,
+                                          &out->routed_gate_binding,
+                                          "ffn_gate_exps.weight", err, errlen) ||
+            make_turbomind_routed_binding(&out->turbomind_up_binding,
+                                          &out->routed_up_binding,
+                                          "ffn_up_exps.weight", err, errlen) ||
+            make_turbomind_routed_binding(&out->turbomind_down_binding,
+                                          &out->routed_down_binding,
+                                          "ffn_down_exps.weight", err, errlen)) {
+            return 1;
+        }
+        out->turbomind_gate_view = tm_gpu_view(&out->turbomind_gate_binding);
+        out->turbomind_up_view = tm_gpu_view(&out->turbomind_up_binding);
+        out->turbomind_down_view = tm_gpu_view(&out->turbomind_down_binding);
+        return 0;
+    }
+
+    return bind_required(ctx, layer_id, "ffn_gate_exps.weight",
+                         &out->routed_gate_binding, err, errlen) ||
+           bind_required(ctx, layer_id, "ffn_up_exps.weight",
+                         &out->routed_up_binding, err, errlen) ||
+           bind_required(ctx, layer_id, "ffn_down_exps.weight",
+                         &out->routed_down_binding, err, errlen);
+}
+
 static int check_same_owner(const ds4_v100_layer_state *state,
                             const ds4_v100_tensor_binding *b,
                             const char *label,
@@ -229,9 +334,7 @@ int ds4_v100_layer_state_init(ds4_v100_layer_state *out,
     out->layer_class = li->layer_class;
     out->kv_view = li->kv_view;
 
-    if (bind_required(ctx, layer_id, "ffn_gate_exps.weight", &out->routed_gate_binding, err, errlen) ||
-        bind_required(ctx, layer_id, "ffn_up_exps.weight", &out->routed_up_binding, err, errlen) ||
-        bind_required(ctx, layer_id, "ffn_down_exps.weight", &out->routed_down_binding, err, errlen) ||
+    if (bind_routed_expert_tensors(out, ctx, layer_id, err, errlen) ||
         bind_required(ctx, layer_id, "ffn_gate_shexp.weight", &out->shared_gate.binding, err, errlen) ||
         bind_required(ctx, layer_id, "ffn_up_shexp.weight", &out->shared_up.binding, err, errlen) ||
         bind_required(ctx, layer_id, "ffn_down_shexp.weight", &out->shared_down.binding, err, errlen) ||
@@ -477,6 +580,11 @@ int ds4_v100_layer_state_route_matrices(const ds4_v100_layer_state *state,
                                         size_t errlen) {
     if (!state || !out) return state_error(err, errlen, "missing route matrix output");
     memset(out, 0, sizeof(*out));
+    if (state->has_turbomind_routed) {
+        return state_error(err, errlen,
+                           "source MXFP4 expert matrix view is unavailable for TurboMind-bound layer %d",
+                           state->layer_id);
+    }
     if (expert >= state->routed_experts) {
         return state_error(err, errlen,
                            "expert %u outside routed expert count %u",
@@ -507,6 +615,19 @@ static int grow_span_for_matrix(const ds4_v100_bound_matrix *matrix, uint64_t *s
     return 0;
 }
 
+static int grow_span_for_turbomind_view(const ds4_gpu_turbomind_mxfp4_matrix_view *view,
+                                        uint64_t *span) {
+    if (!view || !span) return 1;
+    uint64_t weight_end =
+        view->weight_offset + (uint64_t)view->experts_packed * view->weight_bytes_per_expert;
+    uint64_t scale_end =
+        view->scale_offset + (uint64_t)view->experts_packed * view->scale_bytes_per_expert;
+    if (weight_end < view->weight_offset || scale_end < view->scale_offset) return 1;
+    if (weight_end > *span) *span = weight_end;
+    if (scale_end > *span) *span = scale_end;
+    return 0;
+}
+
 int ds4_v100_layer_state_ffn_arena_span(const ds4_v100_layer_state *state,
                                         const int32_t *selected_experts,
                                         uint32_t n_selected,
@@ -520,6 +641,22 @@ int ds4_v100_layer_state_ffn_arena_span(const ds4_v100_layer_state *state,
         grow_span_for_matrix(&state->shared_up, &span) ||
         grow_span_for_matrix(&state->shared_down, &span)) {
         return state_error(err, errlen, "fixed FFN arena span overflow");
+    }
+    if (state->has_turbomind_routed) {
+        for (uint32_t i = 0; i < n_selected; i++) {
+            if (!selected_experts) return state_error(err, errlen, "missing selected experts");
+            if (selected_experts[i] < 0 || (uint32_t)selected_experts[i] >= state->routed_experts) {
+                return state_error(err, errlen, "selected expert %d outside routed expert count",
+                                   selected_experts[i]);
+            }
+        }
+        if (grow_span_for_turbomind_view(&state->turbomind_gate_view, &span) ||
+            grow_span_for_turbomind_view(&state->turbomind_up_view, &span) ||
+            grow_span_for_turbomind_view(&state->turbomind_down_view, &span)) {
+            return state_error(err, errlen, "TurboMind routed FFN arena span overflow");
+        }
+        *out_bytes = span;
+        return 0;
     }
     for (uint32_t i = 0; i < n_selected; i++) {
         if (!selected_experts) return state_error(err, errlen, "missing selected experts");
