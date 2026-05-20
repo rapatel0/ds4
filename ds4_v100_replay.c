@@ -75,6 +75,7 @@ void ds4_v100_replay_options_init(ds4_v100_replay_options *opts) {
     opts->indexer_top_k = 512;
     opts->kv_active_slots = 1;
     opts->suppress_router_readback = true;
+    opts->wavefront_decode = false;
 }
 
 void ds4_v100_replay_open_counters(const ds4_v100_replay *rt,
@@ -458,6 +459,86 @@ static int replay_feed_token_batch(ds4_v100_replay *rt,
     return 0;
 }
 
+static int replay_sync_all_stages(char *err, size_t errlen) {
+    for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
+        if (!ds4_gpu_set_device(stage)) {
+            return replay_error(err, errlen, "wavefront set-device failed");
+        }
+        if (!ds4_gpu_synchronize()) {
+            return replay_error(err, errlen, "wavefront synchronize failed");
+        }
+    }
+    return 0;
+}
+
+static int replay_feed_token_batch_wavefront(ds4_v100_replay *rt,
+                                             const uint32_t *tokens,
+                                             const uint32_t *positions,
+                                             uint32_t n_slots,
+                                             ds4_v100_replay_counters *counters,
+                                             double *bucket_ms,
+                                             char *err,
+                                             size_t errlen) {
+    if (!rt || !tokens || !positions || n_slots == 0 ||
+        n_slots > DS4_V100_SCHED_MAX_SLOTS) {
+        return replay_error(err, errlen, "missing V100 replay wavefront input");
+    }
+
+    const double total0 = replay_now_ms();
+    for (uint32_t diag = 0; diag < n_slots + DS4_V100_EXPECTED_GPUS - 1; diag++) {
+        int stage_hi = (int)diag;
+        if (stage_hi >= DS4_V100_EXPECTED_GPUS) stage_hi = DS4_V100_EXPECTED_GPUS - 1;
+        int stage_lo = (int)diag - (int)n_slots + 1;
+        if (stage_lo < 0) stage_lo = 0;
+
+        for (int stage = stage_hi; stage >= stage_lo; stage--) {
+            const uint32_t slot = diag - (uint32_t)stage;
+            ds4_v100_stage_scheduler_report report;
+            memset(&report, 0, sizeof(report));
+            const double t0 = replay_now_ms();
+
+            if (stage == 0) {
+                if (ds4_v100_stage_scheduler_decode_token_slot_span(rt->scheds[0],
+                                                                     slot,
+                                                                     &tokens[slot],
+                                                                     &positions[slot],
+                                                                     1,
+                                                                     &report,
+                                                                     err,
+                                                                     errlen)) {
+                    return 1;
+                }
+            } else {
+                if (ds4_v100_stage_scheduler_handoff_slot_span(rt->scheds[stage],
+                                                               rt->scheds[stage - 1],
+                                                               slot,
+                                                               1,
+                                                               err,
+                                                               errlen) ||
+                    ds4_v100_stage_scheduler_decode_hc_slot_span(rt->scheds[stage],
+                                                                 slot,
+                                                                 &tokens[slot],
+                                                                 &positions[slot],
+                                                                 1,
+                                                                 &report,
+                                                                 err,
+                                                                 errlen)) {
+                    return 1;
+                }
+            }
+
+            if (counters) {
+                counters->stage_decode_ms[stage] += replay_now_ms() - t0;
+                if (slot == 0) counters_add_report(counters, stage, &report);
+            }
+        }
+    }
+
+    if (replay_sync_all_stages(err, errlen)) return 1;
+    if (bucket_ms) *bucket_ms += replay_now_ms() - total0;
+    return 0;
+}
+
 static int replay_select_token_slot(ds4_v100_replay *rt,
                                     uint32_t slot,
                                     ds4_v100_replay_output *out,
@@ -565,14 +646,15 @@ int ds4_v100_replay_generate_batch(ds4_v100_replay *rt,
             active++;
         }
         if (active == 0) continue;
-        if (replay_feed_token_batch(rt,
-                                    batch_tokens,
-                                    batch_positions,
-                                    active,
-                                    c,
-                                    &c->prompt_replay_ms,
-                                    err,
-                                    errlen)) {
+        if ((rt->opts.wavefront_decode ? replay_feed_token_batch_wavefront
+                                        : replay_feed_token_batch)(rt,
+                                                                  batch_tokens,
+                                                                  batch_positions,
+                                                                  active,
+                                                                  c,
+                                                                  &c->prompt_replay_ms,
+                                                                  err,
+                                                                  errlen)) {
             return 1;
         }
         c->total_input_tokens += active;
@@ -597,14 +679,15 @@ int ds4_v100_replay_generate_batch(ds4_v100_replay *rt,
             batch_tokens[slot] = row[step - 1].token;
             batch_positions[slot] = plan[slot].prompt_len + step - 1;
         }
-        if (replay_feed_token_batch(rt,
-                                    batch_tokens,
-                                    batch_positions,
-                                    n_prompts,
-                                    c,
-                                    &c->continuation_decode_ms,
-                                    err,
-                                    errlen)) {
+        if ((rt->opts.wavefront_decode ? replay_feed_token_batch_wavefront
+                                        : replay_feed_token_batch)(rt,
+                                                                  batch_tokens,
+                                                                  batch_positions,
+                                                                  n_prompts,
+                                                                  c,
+                                                                  &c->continuation_decode_ms,
+                                                                  err,
+                                                                  errlen)) {
             return 1;
         }
         c->total_input_tokens += n_prompts;

@@ -58,6 +58,7 @@ typedef struct {
     bool open_only;
     bool serial_open;
     bool profile_decode;
+    bool wavefront_decode;
 } replay_cli_options;
 
 typedef struct {
@@ -458,6 +459,7 @@ static void usage(FILE *fp) {
             "  --open-only               open resident stages, print timing, and exit\n"
             "  --serial-open             open resident stages serially for benchmarking\n"
             "  --profile-decode          enable synchronized per-stage decode profiling\n"
+            "  --wavefront-decode        enable opt-in stage-wavefront batch decode\n"
             "  --mtp-serving MODE        off or verify, default off\n"
             "  --mtp-top-k N             MTP draft top-k to report, default 5\n"
             "  --mtp-gpu N               MTP sidecar GPU, default 7\n"
@@ -575,6 +577,8 @@ static replay_cli_options parse_options(int argc, char **argv) {
             opt.serial_open = true;
         } else if (!strcmp(arg, "--profile-decode")) {
             opt.profile_decode = true;
+        } else if (!strcmp(arg, "--wavefront-decode")) {
+            opt.wavefront_decode = true;
         } else if (!strcmp(arg, "--mtp-serving")) {
             const char *v = need_arg(&i, argc, argv, arg);
             if (!strcmp(v, "off") || !strcmp(v, "false") || !strcmp(v, "0")) {
@@ -1290,6 +1294,7 @@ static void write_status_json(FILE *fp,
     fprintf(fp, "\"default_tokens\":%" PRIu32 ",", opt->tokens);
     fprintf(fp, "\"max_tokens\":%u,", DS4_V100_REPLAY_MAX_TOKENS);
     fprintf(fp, "\"decode_profile\":%s,", opt->profile_decode ? "true" : "false");
+    fprintf(fp, "\"wavefront_decode\":%s,", opt->wavefront_decode ? "true" : "false");
     fprintf(fp,
             "\"limits\":{\"slots\":%" PRIu32 ",\"configured_slots\":%" PRIu32
             ",\"active_slots\":%" PRIu32 ",\"active_microbatch\":%" PRIu32
@@ -1753,6 +1758,7 @@ int main(int argc, char **argv) {
     ropts.kv_ctx_tokens = opt.ctx;
     ropts.kv_active_slots = opt.slots;
     ropts.serial_open = opt.serial_open;
+    ropts.wavefront_decode = opt.wavefront_decode;
     if (opt.profile_decode) {
         setenv("DS4_V100_PROFILE_DECODE", "1", 1);
     }
