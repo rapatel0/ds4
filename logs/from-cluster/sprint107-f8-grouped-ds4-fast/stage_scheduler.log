@@ -1,0 +1,1 @@
+cuda_v100_stage_scheduler_smoke: stage=0 gpu=0 layers=0-5 executed=6 tm_layers=6 token=16 pos=16 slots=4 arena_bytes=22524134668 uploaded_tensors=1 uploaded_bytes=22524134668 expert0=35 ok

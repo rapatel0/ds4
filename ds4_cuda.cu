@@ -3048,6 +3048,47 @@ __global__ static void arena_f8_e4m3_b128_matmul_grouped_rows2_kernel(
     }
 }
 
+__global__ static void arena_f8_e4m3_b128_matmul_grouped_rows2_ds4_attn_o_kernel(
+        float *out,
+        const uint8_t *base,
+        const float *x,
+        uint32_t row_stride_bytes) {
+    enum {
+        DS4_GROUPS = 8,
+        DS4_ROWS_PER_GROUP = 1024,
+        DS4_COLS_PER_GROUP = 4096,
+        DS4_ROWS = DS4_GROUPS * DS4_ROWS_PER_GROUP,
+    };
+
+    const uint32_t pair = blockIdx.x;
+    const uint32_t r0 = pair * 2u;
+    if (r0 >= DS4_ROWS) return;
+    const uint32_t r1 = r0 + 1u;
+    const uint32_t group = pair >> 9;
+    const uint8_t *row0 = base + (uint64_t)r0 * row_stride_bytes;
+    const uint8_t *row1 = base + (uint64_t)r1 * row_stride_bytes;
+    const float *xg = x + (uint64_t)group * DS4_COLS_PER_GROUP;
+    float acc0 = 0.0f;
+    float acc1 = 0.0f;
+    for (uint32_t c = threadIdx.x; c < DS4_COLS_PER_GROUP; c += blockDim.x) {
+        const float xv = xg[c];
+        const uint64_t block_offset = (uint64_t)(c >> 7) * 129ull;
+        const uint32_t block_lane = c & 127u;
+        const uint8_t *block0 = row0 + block_offset;
+        const uint8_t *block1 = row1 + block_offset;
+        const float scale0 = arena_e8m0_to_f32(block0[0]);
+        const float scale1 = arena_e8m0_to_f32(block1[0]);
+        acc0 += arena_e4m3fn_to_f32(block0[1u + block_lane]) * scale0 * xv;
+        acc1 += arena_e4m3fn_to_f32(block1[1u + block_lane]) * scale1 * xv;
+    }
+
+    arena_block_sum2_256_f32(&acc0, &acc1);
+    if (threadIdx.x == 0) {
+        out[r0] = acc0;
+        out[r1] = acc1;
+    }
+}
+
 __global__ static void arena_f8_e4m3_b128_to_f16_kernel(
         __half *out,
         const uint8_t *base,
@@ -5292,6 +5333,16 @@ static int cuda_f8_rowpair_enabled(void) {
            strcmp(v, "OFF") != 0;
 }
 
+static int cuda_f8_grouped_ds4_fast_enabled(void) {
+    const char *v = getenv("DS4_CUDA_F8_GROUPED_DS4_FAST");
+    return !v || !v[0] ||
+           (strcmp(v, "0") != 0 &&
+            strcmp(v, "false") != 0 &&
+            strcmp(v, "FALSE") != 0 &&
+            strcmp(v, "off") != 0 &&
+            strcmp(v, "OFF") != 0);
+}
+
 static uint64_t cuda_f8_f16_arena_cache_reserve_bytes(void) {
     int present = 0;
     const uint64_t mib = cuda_parse_mib_env("DS4_CUDA_F8_F16_CACHE_RESERVE_MIB", &present);
@@ -5556,14 +5607,23 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_grouped_f32(
     if (!cuda_ok(cudaSetDevice(arena->gpu), "f8 source grouped matmul set device")) return 1;
     const uint8_t *base = (const uint8_t *)((const char *)arena->ptr + view->arena_offset);
     if (cuda_f8_rowpair_enabled() && rows > 1u) {
-        arena_f8_e4m3_b128_matmul_grouped_rows2_kernel<<<(unsigned int)((rows + 1u) / 2u), 256>>>(
-            (float *)out_f32->ptr,
-            base,
-            (const float *)x_f32->ptr,
-            groups,
-            rows_per_group,
-            cols_per_group,
-            view->row_stride_bytes);
+        if (cuda_f8_grouped_ds4_fast_enabled() &&
+            groups == 8u && rows_per_group == 1024u && cols_per_group == 4096u) {
+            arena_f8_e4m3_b128_matmul_grouped_rows2_ds4_attn_o_kernel<<<4096u, 256>>>(
+                (float *)out_f32->ptr,
+                base,
+                (const float *)x_f32->ptr,
+                view->row_stride_bytes);
+        } else {
+            arena_f8_e4m3_b128_matmul_grouped_rows2_kernel<<<(unsigned int)((rows + 1u) / 2u), 256>>>(
+                (float *)out_f32->ptr,
+                base,
+                (const float *)x_f32->ptr,
+                groups,
+                rows_per_group,
+                cols_per_group,
+                view->row_stride_bytes);
+        }
     } else {
         arena_f8_e4m3_b128_matmul_grouped_kernel<<<(unsigned int)rows, 256>>>(
             (float *)out_f32->ptr,
