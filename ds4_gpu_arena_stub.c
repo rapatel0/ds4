@@ -266,6 +266,33 @@ int ds4_gpu_arena_bf16_matmul_f32(
     return 1;
 }
 
+int ds4_gpu_arena_bf16_matmul_f32_rows(
+        const ds4_gpu_arena            *arena,
+        const ds4_gpu_bf16_matrix_view *view,
+        const ds4_gpu_tensor           *x_f32,
+        uint32_t                        n_rows,
+        ds4_gpu_tensor                 *out_f32) {
+    (void)arena;
+    (void)view;
+    (void)x_f32;
+    (void)n_rows;
+    (void)out_f32;
+    return 1;
+}
+
+int ds4_gpu_top1_f32_rows_tensor(const ds4_gpu_tensor *logits,
+                                 uint32_t n_rows,
+                                 uint32_t n_logits,
+                                 uint32_t *tokens,
+                                 float *logits_out) {
+    (void)logits;
+    (void)n_rows;
+    (void)n_logits;
+    (void)tokens;
+    (void)logits_out;
+    return 0;
+}
+
 int ds4_gpu_arena_f32_matmul_f32(
         const ds4_gpu_arena           *arena,
         const ds4_gpu_source_row_view *view,

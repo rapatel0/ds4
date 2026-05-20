@@ -1692,6 +1692,119 @@ __global__ static void top1_f32_final_kernel(const float *block_logits,
     }
 }
 
+template <uint32_t BLOCK_THREADS, uint32_t ITEMS_PER_BLOCK>
+__global__ static void top1_f32_rows_blocks_kernel(const float *logits,
+                                                   uint32_t n_rows,
+                                                   uint32_t n_logits,
+                                                   float *block_logits,
+                                                   uint32_t *block_tokens,
+                                                   uint32_t *block_bad,
+                                                   uint32_t n_blocks) {
+    const uint32_t tid = threadIdx.x;
+    const uint32_t block = blockIdx.x;
+    const uint32_t row = blockIdx.y;
+    if (row >= n_rows || block >= n_blocks) return;
+    const uint32_t start = block * ITEMS_PER_BLOCK;
+    const uint32_t end = start + ITEMS_PER_BLOCK < n_logits
+        ? start + ITEMS_PER_BLOCK
+        : n_logits;
+    const float *row_logits = logits + (uint64_t)row * n_logits;
+    __shared__ float vals[BLOCK_THREADS];
+    __shared__ uint32_t idxs[BLOCK_THREADS];
+    __shared__ uint32_t bads[BLOCK_THREADS];
+
+    float best_logit = -INFINITY;
+    uint32_t best_token = UINT32_MAX;
+    uint32_t bad = 0;
+    for (uint32_t i = start + tid; i < end; i += BLOCK_THREADS) {
+        const float v = row_logits[i];
+        if (!top1_f32_isfinite_raw(v)) {
+            bad = 1u;
+        } else if (top1_f32_better(v, i, best_logit, best_token)) {
+            best_logit = v;
+            best_token = i;
+        }
+    }
+    vals[tid] = best_logit;
+    idxs[tid] = best_token;
+    bads[tid] = bad;
+    __syncthreads();
+
+    for (uint32_t stride = BLOCK_THREADS >> 1u; stride > 0u; stride >>= 1u) {
+        if (tid < stride) {
+            const float ov = vals[tid + stride];
+            const uint32_t oi = idxs[tid + stride];
+            bads[tid] |= bads[tid + stride];
+            if (top1_f32_better(ov, oi, vals[tid], idxs[tid])) {
+                vals[tid] = ov;
+                idxs[tid] = oi;
+            }
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0) {
+        const uint64_t out = (uint64_t)row * n_blocks + block;
+        block_logits[out] = vals[0];
+        block_tokens[out] = idxs[0];
+        block_bad[out] = bads[0];
+    }
+}
+
+template <uint32_t BLOCK_THREADS>
+__global__ static void top1_f32_rows_final_kernel(const float *block_logits,
+                                                  const uint32_t *block_tokens,
+                                                  const uint32_t *block_bad,
+                                                  uint32_t n_rows,
+                                                  uint32_t n_blocks,
+                                                  float *out_logits,
+                                                  uint32_t *out_tokens,
+                                                  uint32_t *out_bad) {
+    const uint32_t tid = threadIdx.x;
+    const uint32_t row = blockIdx.x;
+    if (row >= n_rows) return;
+    __shared__ float vals[BLOCK_THREADS];
+    __shared__ uint32_t idxs[BLOCK_THREADS];
+    __shared__ uint32_t bads[BLOCK_THREADS];
+
+    const uint64_t row_off = (uint64_t)row * n_blocks;
+    float best_logit = -INFINITY;
+    uint32_t best_token = UINT32_MAX;
+    uint32_t bad = 0;
+    for (uint32_t i = tid; i < n_blocks; i += BLOCK_THREADS) {
+        const float v = block_logits[row_off + i];
+        const uint32_t token = block_tokens[row_off + i];
+        bad |= block_bad[row_off + i];
+        if (top1_f32_better(v, token, best_logit, best_token)) {
+            best_logit = v;
+            best_token = token;
+        }
+    }
+    vals[tid] = best_logit;
+    idxs[tid] = best_token;
+    bads[tid] = bad;
+    __syncthreads();
+
+    for (uint32_t stride = BLOCK_THREADS >> 1u; stride > 0u; stride >>= 1u) {
+        if (tid < stride) {
+            const float ov = vals[tid + stride];
+            const uint32_t oi = idxs[tid + stride];
+            bads[tid] |= bads[tid + stride];
+            if (top1_f32_better(ov, oi, vals[tid], idxs[tid])) {
+                vals[tid] = ov;
+                idxs[tid] = oi;
+            }
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0) {
+        out_logits[row] = vals[0];
+        out_tokens[row] = idxs[0];
+        out_bad[row] = bads[0];
+    }
+}
+
 extern "C" int ds4_gpu_top1_f32_tensor(const ds4_gpu_tensor *logits,
                                         uint32_t n_logits,
                                         uint32_t *token,
@@ -1758,6 +1871,89 @@ extern "C" int ds4_gpu_top1_f32_tensor(const ds4_gpu_tensor *logits,
         return 0;
     }
     return bad == 0 && *token < n_logits;
+}
+
+extern "C" int ds4_gpu_top1_f32_rows_tensor(const ds4_gpu_tensor *logits,
+                                             uint32_t n_rows,
+                                             uint32_t n_logits,
+                                             uint32_t *tokens,
+                                             float *logits_out) {
+    if (!logits || !logits->ptr || !tokens || !logits_out ||
+        n_rows == 0 || n_logits == 0 ||
+        logits->bytes < (uint64_t)n_rows * n_logits * sizeof(float)) {
+        return 0;
+    }
+    if (!cuda_ok(cudaSetDevice(logits->device), "top1 rows set device")) return 0;
+
+    constexpr uint32_t TOP1_THREADS = 256u;
+    constexpr uint32_t TOP1_ITEMS_PER_BLOCK = 1024u;
+    const uint32_t n_blocks = (n_logits + TOP1_ITEMS_PER_BLOCK - 1u) / TOP1_ITEMS_PER_BLOCK;
+    const uint64_t candidates = (uint64_t)n_rows * n_blocks;
+    const uint64_t block_logits_bytes = candidates * sizeof(float);
+    const uint64_t block_tokens_offset = (block_logits_bytes + 15u) & ~15ull;
+    const uint64_t block_tokens_bytes = candidates * sizeof(uint32_t);
+    const uint64_t block_bad_offset = (block_tokens_offset + block_tokens_bytes + 15u) & ~15ull;
+    const uint64_t block_bad_bytes = candidates * sizeof(uint32_t);
+    const uint64_t out_logits_offset = (block_bad_offset + block_bad_bytes + 15u) & ~15ull;
+    const uint64_t out_logits_bytes = (uint64_t)n_rows * sizeof(float);
+    const uint64_t out_tokens_offset = (out_logits_offset + out_logits_bytes + 15u) & ~15ull;
+    const uint64_t out_tokens_bytes = (uint64_t)n_rows * sizeof(uint32_t);
+    const uint64_t out_bad_offset = (out_tokens_offset + out_tokens_bytes + 15u) & ~15ull;
+    const uint64_t out_bad_bytes = (uint64_t)n_rows * sizeof(uint32_t);
+    const uint64_t tmp_bytes = out_bad_offset + out_bad_bytes;
+    void *tmp = cuda_tmp_alloc(tmp_bytes, "top1 f32 rows reduce");
+    if (!tmp) return 0;
+
+    float *block_logits = (float *)tmp;
+    uint32_t *block_tokens = (uint32_t *)((char *)tmp + block_tokens_offset);
+    uint32_t *block_bad = (uint32_t *)((char *)tmp + block_bad_offset);
+    float *device_logits = (float *)((char *)tmp + out_logits_offset);
+    uint32_t *device_tokens = (uint32_t *)((char *)tmp + out_tokens_offset);
+    uint32_t *device_bad = (uint32_t *)((char *)tmp + out_bad_offset);
+
+    dim3 grid_blocks(n_blocks, n_rows, 1);
+    top1_f32_rows_blocks_kernel<TOP1_THREADS, TOP1_ITEMS_PER_BLOCK><<<grid_blocks, TOP1_THREADS>>>(
+            (const float *)logits->ptr,
+            n_rows,
+            n_logits,
+            block_logits,
+            block_tokens,
+            block_bad,
+            n_blocks);
+    if (!cuda_ok(cudaGetLastError(), "top1 f32 rows block launch")) return 0;
+    top1_f32_rows_final_kernel<TOP1_THREADS><<<n_rows, TOP1_THREADS>>>(
+            block_logits,
+            block_tokens,
+            block_bad,
+            n_rows,
+            n_blocks,
+            device_logits,
+            device_tokens,
+            device_bad);
+    if (!cuda_ok(cudaGetLastError(), "top1 f32 rows final launch")) return 0;
+
+    std::vector<uint32_t> bad(n_rows);
+    if (!cuda_ok(cudaMemcpy(logits_out,
+                            device_logits,
+                            (size_t)n_rows * sizeof(float),
+                            cudaMemcpyDeviceToHost),
+                 "top1 f32 rows logits read") ||
+        !cuda_ok(cudaMemcpy(tokens,
+                            device_tokens,
+                            (size_t)n_rows * sizeof(uint32_t),
+                            cudaMemcpyDeviceToHost),
+                 "top1 f32 rows tokens read") ||
+        !cuda_ok(cudaMemcpy(bad.data(),
+                            device_bad,
+                            (size_t)n_rows * sizeof(uint32_t),
+                            cudaMemcpyDeviceToHost),
+                 "top1 f32 rows status read")) {
+        return 0;
+    }
+    for (uint32_t row = 0; row < n_rows; row++) {
+        if (bad[row] != 0 || tokens[row] >= n_logits) return 0;
+    }
+    return 1;
 }
 
 extern "C" int ds4_gpu_begin_commands(void) { return 1; }
@@ -2078,6 +2274,34 @@ __global__ static void arena_bf16_matmul_kernel(
         __syncthreads();
     }
     if (threadIdx.x == 0) out[r] = partial[0];
+}
+
+__global__ static void arena_bf16_matmul_rows_kernel(
+        float *out,
+        const uint16_t *base,
+        const float *x,
+        uint32_t rows,
+        uint32_t cols,
+        uint32_t row_stride_elements,
+        uint32_t n_tokens) {
+    const uint32_t r = blockIdx.x;
+    const uint32_t t = blockIdx.y;
+    if (r >= rows || t >= n_tokens) return;
+    const uint16_t *row = base + (uint64_t)r * row_stride_elements;
+    const float *xt = x + (uint64_t)t * cols;
+    float acc = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        acc += arena_bf16_to_f32(row[c]) * xt[c];
+    }
+
+    __shared__ float partial[256];
+    partial[threadIdx.x] = acc;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) partial[threadIdx.x] += partial[threadIdx.x + stride];
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) out[(uint64_t)t * rows + r] = partial[0];
 }
 
 __global__ static void arena_f32_matmul_kernel(
@@ -2898,6 +3122,56 @@ extern "C" int ds4_gpu_arena_bf16_matmul_f32(
         view->cols,
         view->row_stride_elements);
     return cuda_ok(cudaGetLastError(), "bf16 source matmul launch") ? 0 : 1;
+}
+
+extern "C" int ds4_gpu_arena_bf16_matmul_f32_rows(
+        const ds4_gpu_arena            *arena,
+        const ds4_gpu_bf16_matrix_view *view,
+        const ds4_gpu_tensor           *x_f32,
+        uint32_t                        n_rows,
+        ds4_gpu_tensor                 *out_f32) {
+    if (!arena || !view || !x_f32 || !out_f32 || !arena->valid ||
+        !arena->ptr || !x_f32->ptr || !out_f32->ptr || n_rows == 0) {
+        return 1;
+    }
+    if (view->rows == 0 || view->cols == 0 ||
+        view->row_stride_elements < view->cols ||
+        (view->arena_offset & 1ull) != 0 ||
+        (view->byte_length & 1ull) != 0 ||
+        !cuda_arena_range_ok(arena, view->arena_offset, view->byte_length)) {
+        return 1;
+    }
+    const uint64_t total_elements = view->byte_length / sizeof(uint16_t);
+    uint64_t last_start = 0;
+    if (checked_mul_u64((uint64_t)view->rows - 1u,
+                        (uint64_t)view->row_stride_elements,
+                        &last_start) ||
+        (uint64_t)view->cols > total_elements ||
+        last_start > total_elements - (uint64_t)view->cols) {
+        return 1;
+    }
+    uint64_t x_elems = 0;
+    uint64_t out_elems = 0;
+    if (checked_mul_u64((uint64_t)view->cols, n_rows, &x_elems) ||
+        checked_mul_u64((uint64_t)view->rows, n_rows, &out_elems) ||
+        x_elems > UINT64_MAX / sizeof(float) ||
+        out_elems > UINT64_MAX / sizeof(float) ||
+        x_f32->bytes < x_elems * sizeof(float) ||
+        out_f32->bytes < out_elems * sizeof(float)) {
+        return 1;
+    }
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "bf16 source rows matmul set device")) return 1;
+    const uint16_t *base = (const uint16_t *)((const char *)arena->ptr + view->arena_offset);
+    dim3 grid(view->rows, n_rows, 1);
+    arena_bf16_matmul_rows_kernel<<<grid, 256>>>(
+        (float *)out_f32->ptr,
+        base,
+        (const float *)x_f32->ptr,
+        view->rows,
+        view->cols,
+        view->row_stride_elements,
+        n_rows);
+    return cuda_ok(cudaGetLastError(), "bf16 source rows matmul launch") ? 0 : 1;
 }
 
 static int cuda_f32_matmul_view_ok(const ds4_gpu_arena *arena,

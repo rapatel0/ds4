@@ -40,6 +40,11 @@ int ds4_gpu_top1_f32_tensor(const ds4_gpu_tensor *logits,
                             uint32_t n_logits,
                             uint32_t *token,
                             float *logit);
+int ds4_gpu_top1_f32_rows_tensor(const ds4_gpu_tensor *logits,
+                                 uint32_t n_rows,
+                                 uint32_t n_logits,
+                                 uint32_t *tokens,
+                                 float *logits_out);
 
 int ds4_gpu_begin_commands(void);
 int ds4_gpu_flush_commands(void);
@@ -120,6 +125,12 @@ int ds4_gpu_arena_bf16_matmul_f32(
         const ds4_gpu_arena            *arena,
         const ds4_gpu_bf16_matrix_view *view,
         const ds4_gpu_tensor           *x_f32,
+        ds4_gpu_tensor                 *out_f32);
+int ds4_gpu_arena_bf16_matmul_f32_rows(
+        const ds4_gpu_arena            *arena,
+        const ds4_gpu_bf16_matrix_view *view,
+        const ds4_gpu_tensor           *x_f32,
+        uint32_t                        n_rows,
         ds4_gpu_tensor                 *out_f32);
 int ds4_gpu_arena_f32_matmul_f32(
         const ds4_gpu_arena           *arena,

@@ -69,6 +69,7 @@ int main(void) {
         STRIDE = 520,
         OFFSET = 8,
         TOPK = 3,
+        BATCH = 4,
     };
 
     int devices = ds4_gpu_device_count();
@@ -143,8 +144,10 @@ int main(void) {
     };
     ds4_gpu_tensor *x_t = ds4_gpu_tensor_alloc(sizeof(hidden));
     ds4_gpu_tensor *out_t = ds4_gpu_tensor_alloc(ROWS * sizeof(float));
-    check(x_t && out_t, "logit tensors allocate");
-    if (x_t && out_t) {
+    ds4_gpu_tensor *x_rows_t = ds4_gpu_tensor_alloc((uint64_t)BATCH * COLS * sizeof(float));
+    ds4_gpu_tensor *out_rows_t = ds4_gpu_tensor_alloc((uint64_t)BATCH * ROWS * sizeof(float));
+    check(x_t && out_t && x_rows_t && out_rows_t, "logit tensors allocate");
+    if (x_t && out_t && x_rows_t && out_rows_t) {
         check(ds4_gpu_tensor_write(x_t, 0, hidden, sizeof(hidden)),
               "hidden upload");
         check(ds4_gpu_arena_bf16_matmul_f32(arena, &view, x_t, out_t) == 0,
@@ -169,6 +172,64 @@ int main(void) {
                 failures++;
             }
         }
+        float hidden_rows[BATCH][COLS];
+        float ref_rows[BATCH][ROWS];
+        float got_rows[BATCH][ROWS];
+        for (uint32_t b = 0; b < BATCH; b++) {
+            for (uint32_t c = 0; c < COLS; c++) {
+                hidden_rows[b][c] = hidden[c] * (1.0f + 0.125f * (float)b) +
+                    (float)((int)((b + c) % 5u) - 2) * 0.0009765625f;
+            }
+            for (uint32_t r = 0; r < ROWS; r++) {
+                float acc = 0.0f;
+                for (uint32_t c = 0; c < COLS; c++) {
+                    acc += bf16_to_f32(matrix[(uint64_t)r * STRIDE + c]) *
+                        hidden_rows[b][c];
+                }
+                ref_rows[b][r] = acc;
+            }
+        }
+        check(ds4_gpu_tensor_write(x_rows_t, 0, hidden_rows, sizeof(hidden_rows)),
+              "hidden rows upload");
+        check(ds4_gpu_arena_bf16_matmul_f32_rows(arena, &view, x_rows_t, BATCH, out_rows_t) == 0,
+              "bf16 output-head rows matmul");
+        check(ds4_gpu_tensor_read(out_rows_t, 0, got_rows, sizeof(got_rows)),
+              "row logits read");
+        uint32_t batch_tokens[BATCH];
+        float batch_logits[BATCH];
+        check(ds4_gpu_top1_f32_rows_tensor(out_rows_t, BATCH, ROWS, batch_tokens, batch_logits),
+              "device rows top1");
+        for (uint32_t b = 0; b < BATCH; b++) {
+            uint32_t ref_b_top[TOPK];
+            uint32_t got_b_top[TOPK];
+            topk3(ref_rows[b], ROWS, ref_b_top);
+            topk3(got_rows[b], ROWS, got_b_top);
+            if (batch_tokens[b] != got_b_top[0] ||
+                fabsf(batch_logits[b] - got_rows[b][got_b_top[0]]) > 5e-4f) {
+                fprintf(stderr,
+                        "cuda_v100_bounded_logits_smoke: rows top1 row %u got %u %.8g expected gpu %u %.8g\n",
+                        b,
+                        batch_tokens[b],
+                        batch_logits[b],
+                        got_b_top[0],
+                        got_rows[b][got_b_top[0]]);
+                failures++;
+            }
+            if (got_b_top[0] != ref_b_top[0]) {
+                fprintf(stderr,
+                        "cuda_v100_bounded_logits_smoke: rows top1 parity row %u got %u expected %u\n",
+                        b,
+                        got_b_top[0],
+                        ref_b_top[0]);
+                failures++;
+            }
+        }
+        const uint32_t inf_bits = 0x7f800000u;
+        memcpy(&got_rows[2][7], &inf_bits, sizeof(got_rows[2][7]));
+        check(ds4_gpu_tensor_write(out_rows_t, 0, got_rows, sizeof(got_rows)),
+              "nonfinite row logits upload");
+        check(!ds4_gpu_top1_f32_rows_tensor(out_rows_t, BATCH, ROWS, batch_tokens, batch_logits),
+              "accepted nonfinite row logits");
         uint32_t device_top1 = UINT32_MAX;
         float device_logit = 0.0f;
         check(ds4_gpu_top1_f32_tensor(out_t, ROWS, &device_top1, &device_logit),
@@ -210,6 +271,8 @@ int main(void) {
 
     ds4_gpu_tensor_free(short_out);
     ds4_gpu_tensor_free(short_x);
+    ds4_gpu_tensor_free(out_rows_t);
+    ds4_gpu_tensor_free(x_rows_t);
     ds4_gpu_tensor_free(out_t);
     ds4_gpu_tensor_free(x_t);
     ds4_gpu_arena_close(arena);

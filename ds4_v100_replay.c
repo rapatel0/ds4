@@ -476,6 +476,11 @@ static int replay_select_token(ds4_v100_replay *rt,
     return 0;
 }
 
+typedef struct {
+    uint32_t prompt_idx;
+    uint32_t prompt_len;
+} replay_batch_slot_plan;
+
 static int replay_feed_token_batch(ds4_v100_replay *rt,
                                    const uint32_t *tokens,
                                    const uint32_t *positions,
@@ -1554,6 +1559,57 @@ static int replay_select_token_slot(ds4_v100_replay *rt,
     return 0;
 }
 
+static int replay_select_token_batch(ds4_v100_replay *rt,
+                                     const replay_batch_slot_plan *plan,
+                                     uint32_t n_slots,
+                                     uint32_t step,
+                                     ds4_v100_replay_output *outputs,
+                                     uint32_t output_stride,
+                                     ds4_v100_replay_counters *counters,
+                                     char *err,
+                                     size_t errlen) {
+    if (!rt || !plan || !outputs || n_slots == 0 || n_slots > DS4_V100_SCHED_MAX_SLOTS) {
+        return replay_error(err, errlen, "missing V100 replay output batch input");
+    }
+    if (n_slots == 1) {
+        const uint32_t prompt_idx = plan[0].prompt_idx;
+        return replay_select_token_slot(rt,
+                                        0,
+                                        &outputs[(uint64_t)prompt_idx * output_stride + step],
+                                        counters,
+                                        err,
+                                        errlen);
+    }
+
+    uint32_t tokens[DS4_V100_SCHED_MAX_SLOTS];
+    float logits[DS4_V100_SCHED_MAX_SLOTS];
+    double t0 = replay_now_ms();
+    if (ds4_v100_stage_scheduler_select_token_batch(rt->scheds[DS4_V100_EXPECTED_GPUS - 1],
+                                                    0,
+                                                    n_slots,
+                                                    tokens,
+                                                    logits,
+                                                    err,
+                                                    errlen)) {
+        return 1;
+    }
+    if (counters) counters->output_head_ms += replay_now_ms() - t0;
+
+    for (uint32_t slot = 0; slot < n_slots; slot++) {
+        const uint32_t prompt_idx = plan[slot].prompt_idx;
+        ds4_v100_replay_output *out =
+            &outputs[(uint64_t)prompt_idx * output_stride + step];
+        memset(out, 0, sizeof(*out));
+        out->token = tokens[slot];
+        out->logit = logits[slot];
+        t0 = replay_now_ms();
+        out->text = ds4_token_text(rt->tokenizer, (int)tokens[slot], &out->text_len);
+        if (counters) counters->token_text_ms += replay_now_ms() - t0;
+        if (!out->text) return replay_error(err, errlen, "failed to decode selected token text");
+    }
+    return 0;
+}
+
 int ds4_v100_replay_begin_generation(ds4_v100_replay *rt,
                                       uint32_t prompt_tokens,
                                       ds4_v100_replay_counters *counters,
@@ -1599,11 +1655,6 @@ void ds4_v100_replay_finish_generation(ds4_v100_replay *rt,
     }
     if (rt) rt->used = true;
 }
-
-typedef struct {
-    uint32_t prompt_idx;
-    uint32_t prompt_len;
-} replay_batch_slot_plan;
 
 static void replay_sort_batch_plan(replay_batch_slot_plan *plan, uint32_t n) {
     for (uint32_t i = 1; i < n; i++) {
@@ -1693,11 +1744,19 @@ int ds4_v100_replay_generate_batch(ds4_v100_replay *rt,
         if (out_counts) out_counts[i] = 0;
     }
 
+    if (replay_select_token_batch(rt,
+                                  plan,
+                                  n_prompts,
+                                  0,
+                                  outputs,
+                                  output_stride,
+                                  c,
+                                  err,
+                                  errlen)) {
+        return 1;
+    }
     for (uint32_t slot = 0; slot < n_prompts; slot++) {
-        const uint32_t prompt_idx = plan[slot].prompt_idx;
-        ds4_v100_replay_output *row = &outputs[(uint64_t)prompt_idx * output_stride];
-        if (replay_select_token_slot(rt, slot, &row[0], c, err, errlen)) return 1;
-        if (out_counts) out_counts[prompt_idx] = 1;
+        if (out_counts) out_counts[plan[slot].prompt_idx] = 1;
     }
 
     for (uint32_t step = 1; step < max_tokens; step++) {
@@ -1719,11 +1778,19 @@ int ds4_v100_replay_generate_batch(ds4_v100_replay *rt,
             return 1;
         }
         c->total_input_tokens += n_prompts;
+        if (replay_select_token_batch(rt,
+                                      plan,
+                                      n_prompts,
+                                      step,
+                                      outputs,
+                                      output_stride,
+                                      c,
+                                      err,
+                                      errlen)) {
+            return 1;
+        }
         for (uint32_t slot = 0; slot < n_prompts; slot++) {
-            const uint32_t prompt_idx = plan[slot].prompt_idx;
-            ds4_v100_replay_output *row = &outputs[(uint64_t)prompt_idx * output_stride];
-            if (replay_select_token_slot(rt, slot, &row[step], c, err, errlen)) return 1;
-            if (out_counts) out_counts[prompt_idx] = step + 1;
+            if (out_counts) out_counts[plan[slot].prompt_idx] = step + 1;
         }
     }
     c->generated_tokens = n_prompts * max_tokens;

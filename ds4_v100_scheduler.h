@@ -250,6 +250,14 @@ int ds4_v100_stage_scheduler_select_token_slot(ds4_v100_stage_scheduler *sched,
                                                char *err,
                                                size_t errlen);
 
+int ds4_v100_stage_scheduler_select_token_batch(ds4_v100_stage_scheduler *sched,
+                                                uint32_t slot_start,
+                                                uint32_t n_slots,
+                                                uint32_t *tokens,
+                                                float *logits,
+                                                char *err,
+                                                size_t errlen);
+
 #ifdef __cplusplus
 }
 #endif
