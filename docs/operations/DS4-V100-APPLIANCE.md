@@ -140,6 +140,7 @@ DS4_V100_QUEUE_POLICY=reject-busy
 DS4_V100_CUDA_PROFILER_WINDOW=0
 DS4_V100_CUDA_TENSOR_POOL=auto
 DS4_V100_CUDA_TENSOR_POOL_MAX_MIB=2048
+DS4_V100_CUDA_F8_ROWPAIR=1
 DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A=0
 DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS=1
 DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC=0
@@ -168,6 +169,10 @@ opening.
 multi-slot serving and disables it for one-slot latency configs. The default
 cap is `2048` MiB per process; raise it only after checking V100 memory
 telemetry.
+
+`DS4_V100_CUDA_F8_ROWPAIR=1` enables the Sprint 102 row-pair F8 arena matmul
+kernels. Set it to `0` to restore the older one-output-row-per-CTA F8 kernels
+for A/B diagnostics.
 
 `DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A=1` restores the older attention
 output-A path that launches one F8 matmul per output group. Leave it `0` for

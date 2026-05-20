@@ -2782,6 +2782,53 @@ __global__ static void arena_f8_e4m3_b128_matmul_kernel(
     if (threadIdx.x == 0) out[r] = partial[0];
 }
 
+__global__ static void arena_f8_e4m3_b128_matmul_rows2_kernel(
+        float *out,
+        const uint8_t *base,
+        const float *x,
+        uint32_t rows,
+        uint32_t cols,
+        uint32_t row_stride_bytes) {
+    const uint32_t r0 = blockIdx.x * 2u;
+    const uint32_t r1 = r0 + 1u;
+    if (r0 >= rows) return;
+    const int have_r1 = r1 < rows;
+    const uint8_t *row0 = base + (uint64_t)r0 * row_stride_bytes;
+    const uint8_t *row1 = have_r1 ? base + (uint64_t)r1 * row_stride_bytes : row0;
+    float acc0 = 0.0f;
+    float acc1 = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        const float xv = x[c];
+        const uint64_t block_offset = (uint64_t)(c / 128u) * 129ull;
+        const uint32_t block_lane = c % 128u;
+        const uint8_t *block0 = row0 + block_offset;
+        const float scale0 = arena_e8m0_to_f32(block0[0]);
+        acc0 += arena_e4m3fn_to_f32(block0[1u + block_lane]) * scale0 * xv;
+        if (have_r1) {
+            const uint8_t *block1 = row1 + block_offset;
+            const float scale1 = arena_e8m0_to_f32(block1[0]);
+            acc1 += arena_e4m3fn_to_f32(block1[1u + block_lane]) * scale1 * xv;
+        }
+    }
+
+    __shared__ float partial0[256];
+    __shared__ float partial1[256];
+    partial0[threadIdx.x] = acc0;
+    partial1[threadIdx.x] = acc1;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            partial0[threadIdx.x] += partial0[threadIdx.x + stride];
+            partial1[threadIdx.x] += partial1[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        out[r0] = partial0[0];
+        if (have_r1) out[r1] = partial1[0];
+    }
+}
+
 __global__ static void arena_f8_e4m3_b128_matmul_batch_kernel(
         float *out,
         const uint8_t *base,
@@ -2810,6 +2857,55 @@ __global__ static void arena_f8_e4m3_b128_matmul_batch_kernel(
         __syncthreads();
     }
     if (threadIdx.x == 0) out[(uint64_t)tok * rows + r] = partial[0];
+}
+
+__global__ static void arena_f8_e4m3_b128_matmul_batch_rows2_kernel(
+        float *out,
+        const uint8_t *base,
+        const float *x,
+        uint32_t rows,
+        uint32_t cols,
+        uint32_t row_stride_bytes) {
+    const uint32_t r0 = blockIdx.x * 2u;
+    const uint32_t r1 = r0 + 1u;
+    const uint32_t tok = blockIdx.y;
+    if (r0 >= rows) return;
+    const int have_r1 = r1 < rows;
+    const uint8_t *row0 = base + (uint64_t)r0 * row_stride_bytes;
+    const uint8_t *row1 = have_r1 ? base + (uint64_t)r1 * row_stride_bytes : row0;
+    const float *x_row = x + (uint64_t)tok * cols;
+    float acc0 = 0.0f;
+    float acc1 = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        const float xv = x_row[c];
+        const uint64_t block_offset = (uint64_t)(c / 128u) * 129ull;
+        const uint32_t block_lane = c % 128u;
+        const uint8_t *block0 = row0 + block_offset;
+        const float scale0 = arena_e8m0_to_f32(block0[0]);
+        acc0 += arena_e4m3fn_to_f32(block0[1u + block_lane]) * scale0 * xv;
+        if (have_r1) {
+            const uint8_t *block1 = row1 + block_offset;
+            const float scale1 = arena_e8m0_to_f32(block1[0]);
+            acc1 += arena_e4m3fn_to_f32(block1[1u + block_lane]) * scale1 * xv;
+        }
+    }
+
+    __shared__ float partial0[256];
+    __shared__ float partial1[256];
+    partial0[threadIdx.x] = acc0;
+    partial1[threadIdx.x] = acc1;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            partial0[threadIdx.x] += partial0[threadIdx.x + stride];
+            partial1[threadIdx.x] += partial1[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        out[(uint64_t)tok * rows + r0] = partial0[0];
+        if (have_r1) out[(uint64_t)tok * rows + r1] = partial1[0];
+    }
 }
 
 __global__ static void arena_f8_e4m3_b128_matmul_ptrs_kernel(
@@ -2842,6 +2938,55 @@ __global__ static void arena_f8_e4m3_b128_matmul_ptrs_kernel(
     if (threadIdx.x == 0) out[(uint64_t)tok * rows + r] = partial[0];
 }
 
+__global__ static void arena_f8_e4m3_b128_matmul_ptrs_rows2_kernel(
+        float *out,
+        const uint8_t *base,
+        const float *const *x_row_ptrs,
+        uint32_t rows,
+        uint32_t cols,
+        uint32_t row_stride_bytes) {
+    const uint32_t r0 = blockIdx.x * 2u;
+    const uint32_t r1 = r0 + 1u;
+    const uint32_t tok = blockIdx.y;
+    if (r0 >= rows) return;
+    const int have_r1 = r1 < rows;
+    const uint8_t *row0 = base + (uint64_t)r0 * row_stride_bytes;
+    const uint8_t *row1 = have_r1 ? base + (uint64_t)r1 * row_stride_bytes : row0;
+    const float *x_row = x_row_ptrs[tok];
+    float acc0 = 0.0f;
+    float acc1 = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        const float xv = x_row[c];
+        const uint64_t block_offset = (uint64_t)(c / 128u) * 129ull;
+        const uint32_t block_lane = c % 128u;
+        const uint8_t *block0 = row0 + block_offset;
+        const float scale0 = arena_e8m0_to_f32(block0[0]);
+        acc0 += arena_e4m3fn_to_f32(block0[1u + block_lane]) * scale0 * xv;
+        if (have_r1) {
+            const uint8_t *block1 = row1 + block_offset;
+            const float scale1 = arena_e8m0_to_f32(block1[0]);
+            acc1 += arena_e4m3fn_to_f32(block1[1u + block_lane]) * scale1 * xv;
+        }
+    }
+
+    __shared__ float partial0[256];
+    __shared__ float partial1[256];
+    partial0[threadIdx.x] = acc0;
+    partial1[threadIdx.x] = acc1;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            partial0[threadIdx.x] += partial0[threadIdx.x + stride];
+            partial1[threadIdx.x] += partial1[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        out[(uint64_t)tok * rows + r0] = partial0[0];
+        if (have_r1) out[(uint64_t)tok * rows + r1] = partial1[0];
+    }
+}
+
 __global__ static void arena_f8_e4m3_b128_matmul_grouped_kernel(
         float *out,
         const uint8_t *base,
@@ -2872,6 +3017,58 @@ __global__ static void arena_f8_e4m3_b128_matmul_grouped_kernel(
         __syncthreads();
     }
     if (threadIdx.x == 0) out[r] = partial[0];
+}
+
+__global__ static void arena_f8_e4m3_b128_matmul_grouped_rows2_kernel(
+        float *out,
+        const uint8_t *base,
+        const float *x,
+        uint32_t groups,
+        uint32_t rows_per_group,
+        uint32_t cols_per_group,
+        uint32_t row_stride_bytes) {
+    const uint32_t r0 = blockIdx.x * 2u;
+    const uint32_t r1 = r0 + 1u;
+    const uint32_t rows = groups * rows_per_group;
+    if (r0 >= rows) return;
+    const int have_r1 = r1 < rows;
+    const uint32_t group0 = r0 / rows_per_group;
+    const uint32_t group1 = have_r1 ? r1 / rows_per_group : group0;
+    const uint8_t *row0 = base + (uint64_t)r0 * row_stride_bytes;
+    const uint8_t *row1 = have_r1 ? base + (uint64_t)r1 * row_stride_bytes : row0;
+    const float *x0 = x + (uint64_t)group0 * cols_per_group;
+    const float *x1 = x + (uint64_t)group1 * cols_per_group;
+    float acc0 = 0.0f;
+    float acc1 = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols_per_group; c += blockDim.x) {
+        const uint64_t block_offset = (uint64_t)(c / 128u) * 129ull;
+        const uint32_t block_lane = c % 128u;
+        const uint8_t *block0 = row0 + block_offset;
+        const float scale0 = arena_e8m0_to_f32(block0[0]);
+        acc0 += arena_e4m3fn_to_f32(block0[1u + block_lane]) * scale0 * x0[c];
+        if (have_r1) {
+            const uint8_t *block1 = row1 + block_offset;
+            const float scale1 = arena_e8m0_to_f32(block1[0]);
+            acc1 += arena_e4m3fn_to_f32(block1[1u + block_lane]) * scale1 * x1[c];
+        }
+    }
+
+    __shared__ float partial0[256];
+    __shared__ float partial1[256];
+    partial0[threadIdx.x] = acc0;
+    partial1[threadIdx.x] = acc1;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            partial0[threadIdx.x] += partial0[threadIdx.x + stride];
+            partial1[threadIdx.x] += partial1[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        out[r0] = partial0[0];
+        if (have_r1) out[r1] = partial1[0];
+    }
 }
 
 __global__ static void arena_f8_e4m3_b128_to_f16_kernel(
@@ -5119,6 +5316,16 @@ static int cuda_f8_f16_arena_cache_enabled(void) {
            strcmp(v, "OFF") != 0;
 }
 
+static int cuda_f8_rowpair_enabled(void) {
+    const char *v = getenv("DS4_CUDA_F8_ROWPAIR");
+    return v && v[0] &&
+           strcmp(v, "0") != 0 &&
+           strcmp(v, "false") != 0 &&
+           strcmp(v, "FALSE") != 0 &&
+           strcmp(v, "off") != 0 &&
+           strcmp(v, "OFF") != 0;
+}
+
 static uint64_t cuda_f8_f16_arena_cache_reserve_bytes(void) {
     int present = 0;
     const uint64_t mib = cuda_parse_mib_env("DS4_CUDA_F8_F16_CACHE_RESERVE_MIB", &present);
@@ -5234,13 +5441,23 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_f32(
     if (!cuda_f8_e4m3_b128_matmul_view_ok(arena, view, x_f32, out_f32)) return 1;
     if (!cuda_ok(cudaSetDevice(arena->gpu), "f8 source matmul set device")) return 1;
     const uint8_t *base = (const uint8_t *)((const char *)arena->ptr + view->arena_offset);
-    arena_f8_e4m3_b128_matmul_kernel<<<view->rows, 256>>>(
-        (float *)out_f32->ptr,
-        base,
-        (const float *)x_f32->ptr,
-        view->rows,
-        view->cols,
-        view->row_stride_bytes);
+    if (cuda_f8_rowpair_enabled() && view->rows > 1u) {
+        arena_f8_e4m3_b128_matmul_rows2_kernel<<<(view->rows + 1u) / 2u, 256>>>(
+            (float *)out_f32->ptr,
+            base,
+            (const float *)x_f32->ptr,
+            view->rows,
+            view->cols,
+            view->row_stride_bytes);
+    } else {
+        arena_f8_e4m3_b128_matmul_kernel<<<view->rows, 256>>>(
+            (float *)out_f32->ptr,
+            base,
+            (const float *)x_f32->ptr,
+            view->rows,
+            view->cols,
+            view->row_stride_bytes);
+    }
     return cuda_ok(cudaGetLastError(), "f8 source matmul launch") ? 0 : 1;
 }
 
@@ -5291,14 +5508,25 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_batch_f32(
         }
     }
     const uint8_t *base = (const uint8_t *)((const char *)arena->ptr + view->arena_offset);
-    dim3 grid(view->rows, n_tokens, 1);
-    arena_f8_e4m3_b128_matmul_batch_kernel<<<grid, 256>>>(
-        (float *)out_f32->ptr,
-        base,
-        (const float *)x_f32->ptr,
-        view->rows,
-        view->cols,
-        view->row_stride_bytes);
+    if (cuda_f8_rowpair_enabled() && view->rows > 1u) {
+        dim3 grid((view->rows + 1u) / 2u, n_tokens, 1);
+        arena_f8_e4m3_b128_matmul_batch_rows2_kernel<<<grid, 256>>>(
+            (float *)out_f32->ptr,
+            base,
+            (const float *)x_f32->ptr,
+            view->rows,
+            view->cols,
+            view->row_stride_bytes);
+    } else {
+        dim3 grid(view->rows, n_tokens, 1);
+        arena_f8_e4m3_b128_matmul_batch_kernel<<<grid, 256>>>(
+            (float *)out_f32->ptr,
+            base,
+            (const float *)x_f32->ptr,
+            view->rows,
+            view->cols,
+            view->row_stride_bytes);
+    }
     return cuda_ok(cudaGetLastError(), "f8 source batch matmul launch") ? 0 : 1;
 }
 
@@ -5318,14 +5546,25 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_batch_ptr_table_f32(
     }
     if (!cuda_ok(cudaSetDevice(arena->gpu), "f8 source ptr table matmul set device")) return 1;
     const uint8_t *base = (const uint8_t *)((const char *)arena->ptr + view->arena_offset);
-    dim3 grid(view->rows, n_tokens, 1);
-    arena_f8_e4m3_b128_matmul_ptrs_kernel<<<grid, 256>>>(
-        (float *)out_f32->ptr,
-        base,
-        (const float *const *)x_row_ptrs->ptr,
-        view->rows,
-        view->cols,
-        view->row_stride_bytes);
+    if (cuda_f8_rowpair_enabled() && view->rows > 1u) {
+        dim3 grid((view->rows + 1u) / 2u, n_tokens, 1);
+        arena_f8_e4m3_b128_matmul_ptrs_rows2_kernel<<<grid, 256>>>(
+            (float *)out_f32->ptr,
+            base,
+            (const float *const *)x_row_ptrs->ptr,
+            view->rows,
+            view->cols,
+            view->row_stride_bytes);
+    } else {
+        dim3 grid(view->rows, n_tokens, 1);
+        arena_f8_e4m3_b128_matmul_ptrs_kernel<<<grid, 256>>>(
+            (float *)out_f32->ptr,
+            base,
+            (const float *const *)x_row_ptrs->ptr,
+            view->rows,
+            view->cols,
+            view->row_stride_bytes);
+    }
     return cuda_ok(cudaGetLastError(), "f8 source ptr table matmul launch") ? 0 : 1;
 }
 
@@ -5350,14 +5589,25 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_grouped_f32(
     }
     if (!cuda_ok(cudaSetDevice(arena->gpu), "f8 source grouped matmul set device")) return 1;
     const uint8_t *base = (const uint8_t *)((const char *)arena->ptr + view->arena_offset);
-    arena_f8_e4m3_b128_matmul_grouped_kernel<<<(unsigned int)rows, 256>>>(
-        (float *)out_f32->ptr,
-        base,
-        (const float *)x_f32->ptr,
-        groups,
-        rows_per_group,
-        cols_per_group,
-        view->row_stride_bytes);
+    if (cuda_f8_rowpair_enabled() && rows > 1u) {
+        arena_f8_e4m3_b128_matmul_grouped_rows2_kernel<<<(unsigned int)((rows + 1u) / 2u), 256>>>(
+            (float *)out_f32->ptr,
+            base,
+            (const float *)x_f32->ptr,
+            groups,
+            rows_per_group,
+            cols_per_group,
+            view->row_stride_bytes);
+    } else {
+        arena_f8_e4m3_b128_matmul_grouped_kernel<<<(unsigned int)rows, 256>>>(
+            (float *)out_f32->ptr,
+            base,
+            (const float *)x_f32->ptr,
+            groups,
+            rows_per_group,
+            cols_per_group,
+            view->row_stride_bytes);
+    }
     return cuda_ok(cudaGetLastError(), "f8 source grouped matmul launch") ? 0 : 1;
 }
 

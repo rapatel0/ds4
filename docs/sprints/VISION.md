@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: codex
-revision: 107
+revision: 108
 ---
 
 # Vision: DS4 V100 Appliance
@@ -610,6 +610,12 @@ optimized V100 low-bit expert kernels in the actual hot path.
   ordering. V100 evidence says it should remain opt-in: 8-slot/256K was flat
   (`26.432087` opt-in vs `26.402101` default generated tok/s) and 4-slot/1M
   regressed (`17.503345` opt-in vs `18.102742` default).
+- Sprint 102 shipped a broader F8 arena matmul kernel-shape change. Row-pair
+  F8 kernels compute two output rows per CTA across the single, batch,
+  pointer-table, and grouped arena F8 APIs. `DS4_V100_CUDA_F8_ROWPAIR=1` is now
+  the launcher default after V100 A/B improved 8-slot/256K serving to
+  `27.049799` generated tok/s and 4-slot/1M serving to `18.500281` generated
+  tok/s with token-match correctness.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -701,6 +707,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 099 batch attention projection probe | `17.742637` generated tok/s opt-in vs `17.764257` rollback at 1M/4 slots | Measured | Adds an explicit `DS4_V100_ENABLE_BATCH_ATTN_PROJ=1` probe for batching Q-A, Q-B, and KV F8 projections across active slots. Correctness passes at 4-slot/1M and 8-slot/256K, but same-binary controls are flat/slightly faster without the probe (`26.149613` rollback vs `26.128571` opt-in at 8 slots). Keep it off by default and stop pursuing projection-only batching in this shape. |
 | Sprint 100 TurboMind sync readback A/B | `26.372672` generated tok/s at 256K/8 slots production default | Measured | Adds an opt-in TurboMind grouped GEMM ABI that accepts host-known routed row count and makes packed route validation readback debug-only. V100 evidence showed the no-row-count-readback ABI moves wait time into `cudaDeviceSynchronize` and is slower, so production defaults to the old ABI with route validation sync off (`DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS=1`, `DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC=0`). |
 | Sprint 101 batch attention semantic repair | `26.402101` default vs `26.432087` opt-in at 256K/8 slots; `18.102742` default vs `17.503345` opt-in at 1M/4 slots | Measured | Repairs the opt-in batch projection path to use attention RMS-normalized rows and the same compressed-KV preparation input as the single-slot path. Correctness passes, but the 8-slot result is noise-level and the 1M/4-slot result regresses, so `DS4_V100_ENABLE_BATCH_ATTN_PROJ=1` remains off by default. |
+| Sprint 102 F8 row-pair default | `27.049799` generated tok/s at 256K/8 slots; `18.500281` at 1M/4 slots | Measured | Computes two F8 arena output rows per CTA across the hot F8 APIs. Same-binary A/B improved 8-slot/256K from `26.447308` to `27.037514` and 4-slot/1M from `17.821073` to `18.500281`, with launcher-default validation at `27.049799`. `DS4_V100_CUDA_F8_ROWPAIR=1` is now the appliance default with rollback to `0`. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -2194,6 +2201,24 @@ GPU utilization with architectural changes, and only then compare against the
   8-slot/256K moved only from `26.402101` to `26.432087`. The production
   default remains Sprint 100.
 
+### Sprint 102 - F8 Row-Pair Kernel Shape Probe [complete]
+
+- **Goal**: Change the F8 arena matmul execution shape broadly enough to move
+  the warmed served decode bottleneck, while keeping a simple rollback.
+- **Rationale**: F8 arena matmul remained the largest served decode GPU bucket.
+  The batch-projection path alone was not enough; the next useful probe was a
+  kernel-shape change applied across single, batch, pointer-table, and grouped
+  F8 APIs.
+- **Outcome**: `SHIP_F8_ROWPAIR_DEFAULT`. Added row-pair F8 kernels behind
+  `DS4_CUDA_F8_ROWPAIR=1` and exposed the production knob as
+  `DS4_V100_CUDA_F8_ROWPAIR=1`. V100 correctness passed projection attention,
+  stage scheduler, full 8-slot scheduler, and selected-token oracle gates.
+  Same-binary throughput improved from `26.447308` to `27.037514` generated
+  tok/s at 256K/8 slots and from `17.821073` to `18.500281` at 1M/4 slots.
+  Launcher-default validation reported `27.049799` generated tok/s with
+  `token_match=8/8`, so row-pair is now the appliance default with rollback to
+  `DS4_V100_CUDA_F8_ROWPAIR=0`.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -2456,6 +2481,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Completed Sprint 099 batch attention projection probe as opt-in only. | Projection-only batching across active slots is correct but not faster, so it remains behind `DS4_V100_ENABLE_BATCH_ATTN_PROJ=1` and is not a production default. The next sprint should shift away from projection-only batching and instead attack `cudaMemcpy` API overhead or a larger attention-stage batching boundary. | Sprint 100+ |
 | 2026-05-20 | Shipped Sprint 100 TurboMind sync readback A/B. | The packed TurboMind route-validation readback is now debug-only in production, while the no-row-count-readback ABI remains opt-in because V100 profiling showed the wait moved into `cudaDeviceSynchronize` and 8-slot throughput regressed. The measured production default is old ABI plus route sync off at `26.372672` generated tok/s for 256K/8 slots. The next sprint should target stage/layer synchronization or a larger batched attention boundary. | Sprint 101+ |
 | 2026-05-20 | Shipped Sprint 101 batch attention semantic repair. | The opt-in batch attention projection path now matches single-slot attention RMS norm and compressed-KV prep ordering, but V100 A/B shows no production-worthy gain (`26.43` vs `26.40` at 256K/8 slots and a regression at 1M/4 slots). Keep it opt-in and move the next optimization to a larger attention-stage boundary, stage/layer synchronization, or F8 matmul shape work. | Sprint 102+ |
+| 2026-05-20 | Shipped Sprint 102 F8 row-pair default. | The F8 arena matmul path now has a two-output-row CTA shape across the hot F8 APIs and is defaulted through `DS4_V100_CUDA_F8_ROWPAIR=1`. V100 A/B produced a real but modest default-worthy gain (`27.05` generated tok/s at 256K/8 slots), so the next sprint should profile the new default and pursue larger F8/TurboMind kernel occupancy or cross-layer synchronization reductions. | Sprint 103+ |
 
 ## Open Questions
 
