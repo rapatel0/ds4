@@ -547,6 +547,45 @@ int main(void) {
             expect_close(batch_out[HIDDEN + h], next_ref[h], 1e-4f, "batched grouped routed ptrs slot1");
         }
 
+        setenv("DS4_CUDA_MXFP4_ROUTE_ROWS2", "1", 1);
+        check(ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_batch_ptrs_f32(
+                  arena,
+                  gate_offset,
+                  gate_expert_bytes * EXPERTS,
+                  up_offset,
+                  gate_expert_bytes * EXPERTS,
+                  down_offset,
+                  down_expert_bytes * EXPERTS,
+                  gate_expert_bytes,
+                  (uint32_t)hidden_row_bytes,
+                  down_expert_bytes,
+                  (uint32_t)mid_row_bytes,
+                  HIDDEN,
+                  MID,
+                  EXPERTS,
+                  batch_selected_t,
+                  batch_weights_t,
+                  ROUTES,
+                  batch_ptrs_t,
+                  batch_inputs,
+                  2,
+                  batch_mid_t,
+                  batch_out_t) == 0,
+              "batched grouped routed ptrs rows2 mxfp4");
+        unsetenv("DS4_CUDA_MXFP4_ROUTE_ROWS2");
+        check(ds4_gpu_tensor_read(batch_out_t, 0, batch_out, sizeof(batch_out)),
+              "batched grouped routed ptrs rows2 read");
+        for (uint32_t h = 0; h < HIDDEN; h++) {
+            expect_close(batch_out[h],
+                         next_ref[h],
+                         1e-4f,
+                         "batched grouped routed ptrs rows2 slot0");
+            expect_close(batch_out[HIDDEN + h],
+                         next_ref[h],
+                         1e-4f,
+                         "batched grouped routed ptrs rows2 slot1");
+        }
+
         ds4_gpu_bf16_matrix_view head_view = {
             .arena_offset = head_offset,
             .byte_length = head_bytes,

@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: codex
-revision: 90
+revision: 91
 ---
 
 # Vision: DS4 V100 Appliance
@@ -503,6 +503,11 @@ optimized V100 low-bit expert kernels in the actual hot path.
   bucket, and reduces handoff timing from `248.432 ms` to `193.909 ms`, but
   generated tok/s only moves from `9.147418` to `9.158602`. The next useful
   sprint should pivot to kernel-side work, especially routed MXFP4 occupancy.
+- Sprint 079 tested row-pair routed MXFP4 gate/up/SwiGLU and down-sum kernels.
+  The path is correct and opt-in, but paired V100 evidence regressed generated
+  tok/s from `9.055694` to `9.035946` at 1M/4 slots. Halving CTA row count is
+  not enough; the next kernel sprint needs route/expert tiling, packed low-bit
+  dot products, or a persistent grouped expert shape.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -572,6 +577,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 076 parallel output-head top-1 | `9.03` generated tok/s at 1M/4 slots | Measured | Parallel device top-1 clears the default-change gate: generated tok/s improves `4.33%`, continuation tok/s improves `4.33%`, and output-head timing drops `58.61%` (`134.510 ms` vs `324.953 ms`). Greedy `k == 1` now defaults to device top-1 with an env rollback. |
 | Sprint 077 batched output-head selection | `9.01` generated tok/s default, `8.62` with batch opt-in at 1M/4 slots | Measured | Batched row projection/top-1 is correct but slower than the per-slot device top-1 control: generated tok/s regressed `4.56%` and output-head timing rose `3.46%` (`139.750 ms` vs `135.080 ms`). Keep `DS4_V100_ENABLE_OUTPUT_HEAD_BATCH=1` opt-in and pivot back to stage/kernel costs. |
 | Sprint 078 event-ordered stage handoff | `9.16` generated tok/s at 1M/4 slots | Measured | CUDA events removed the explicit device-sync bucket and reduced handoff sum by `21.95%`, but generated tok/s improved only `0.12%` (`9.158602` vs `9.147418`). Keep `DS4_V100_ASYNC_EVENT_HANDOFF=1` opt-in and pivot to kernel-side routed MXFP4 occupancy. |
+| Sprint 079 routed MXFP4 row-pair probe | `9.06` default, `9.04` row-pair opt-in at 1M/4 slots | Measured | Row-pair MXFP4 gate/up/SwiGLU and down-sum kernels are correct, but generated tok/s regressed `0.22%` (`9.035946` vs `9.055694`). Keep `DS4_CUDA_MXFP4_ROUTE_ROWS2=1` opt-in and target a larger route/expert tiling or packed low-bit kernel rewrite next. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -1695,6 +1701,23 @@ GPU utilization with architectural changes, and only then compare against the
   to `9.158602` at 1M/4 slots. Keep `DS4_V100_ASYNC_EVENT_HANDOFF=1` opt-in and
   pivot next to routed MXFP4 occupancy or other kernel-side work.
 
+### Sprint 079 - Routed MXFP4 Row-Pair Occupancy Probe [complete]
+
+- **Goal**: Test whether computing two adjacent routed MXFP4 rows per CTA in
+  grouped gate/up/SwiGLU and down-sum kernels improves practical V100
+  utilization without changing source layout or public APIs.
+- **Rationale**: Sprints 077 and 078 showed output-head batching and event
+  handoff do not materially move end-to-end throughput. The routed MXFP4 expert
+  path remains scalar row-reduction work with low GPU utilization, so a bounded
+  row-pair kernel was the smallest kernel-side occupancy probe.
+- **Outcome**: `SHIP_OPT_IN_ONLY`. Added
+  `DS4_CUDA_MXFP4_ROUTE_ROWS2=1`, row-pair grouped routed MXFP4 kernels, and
+  focused smoke coverage. V100 correctness passed, including selected token hex
+  `3136`, but paired 1M/4-slot throughput regressed from `9.055694` to
+  `9.035946` generated tok/s. The next useful kernel sprint needs a larger
+  execution-shape change such as route/expert tiling, packed low-bit dot
+  products, or a persistent grouped expert kernel.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -1934,6 +1957,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 076 parallel output-head top-1. | Replacing the serial device scan with a deterministic parallel reducer produced a real default-worthy gain and removed most output-head selection time. The next sprint should move to a larger remaining bucket: stage synchronization/stream events, batched output-head projection, or routed MoE kernel occupancy. | Sprint 077+ |
 | 2026-05-20 | Shipped Sprint 077 batched output-head selection as opt-in only. | Row-batched output projection/top-1 is correct, but it is slower than the existing per-slot parallel top-1 path at 1M/4 slots. Keep output-head batching off by default and pivot away from output selection toward stage stream/event handoff, kernel-side scheduling, or routed MoE occupancy. | Sprint 078+ |
 | 2026-05-20 | Shipped Sprint 078 event-ordered stage handoff as opt-in only. | CUDA events reduce the measured handoff/sync bucket but do not materially move end-to-end throughput. Stop spending sprint budget on small host scheduling variants and move to the kernel hot path, starting with routed MXFP4 occupancy experiments. | Sprint 079+ |
+| 2026-05-20 | Shipped Sprint 079 routed MXFP4 row-pair kernels as opt-in only. | Pairing adjacent rows in the routed MXFP4 kernels preserves correctness but slightly regresses sustained 1M/4-slot throughput. The next kernel attempt should stop doing row-level CTA consolidation and instead change the expert execution shape more materially. | Sprint 080+ |
 
 ## Open Questions
 

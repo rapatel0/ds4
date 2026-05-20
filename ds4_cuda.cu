@@ -441,6 +441,18 @@ static uint64_t cuda_parse_mib_env(const char *name, int *present) {
     return (uint64_t)v * 1048576ull;
 }
 
+static int cuda_env_flag_enabled(const char *name) {
+    const char *env = getenv(name);
+    if (!env || !env[0]) return 0;
+    return strcmp(env, "0") != 0 &&
+           strcmp(env, "false") != 0 &&
+           strcmp(env, "False") != 0 &&
+           strcmp(env, "FALSE") != 0 &&
+           strcmp(env, "off") != 0 &&
+           strcmp(env, "Off") != 0 &&
+           strcmp(env, "OFF") != 0;
+}
+
 static uint64_t cuda_q8_f16_cache_limit_bytes(void) {
     int present = 0;
     const uint64_t limit = cuda_parse_mib_env("DS4_CUDA_Q8_F16_CACHE_MB", &present);
@@ -2824,6 +2836,252 @@ __global__ static void arena_mxfp4_grouped_pair_swiglu_ptrs_kernel(
     }
 }
 
+__global__ static void arena_mxfp4_grouped_pair_swiglu_rows2_kernel(
+        float *mid_out,
+        const uint8_t *gate_base,
+        const uint8_t *up_base,
+        const int32_t *selected,
+        const float *weights,
+        const float *x,
+        uint32_t hidden,
+        uint32_t mid,
+        uint32_t n_total_experts,
+        uint32_t n_routes,
+        uint64_t gate_expert_stride_bytes,
+        uint32_t gate_row_stride_bytes,
+        uint64_t up_expert_stride_bytes,
+        uint32_t up_row_stride_bytes,
+        float clamp) {
+    const uint32_t r0 = blockIdx.x * 2u;
+    const uint32_t r1 = r0 + 1u;
+    const uint32_t route = blockIdx.y;
+    const uint32_t tok = blockIdx.z;
+    if (r0 >= mid || route >= n_routes) return;
+    const int have_r1 = r1 < mid;
+    const int32_t expert_i = selected[(uint64_t)tok * n_routes + route];
+    if (expert_i < 0 || (uint32_t)expert_i >= n_total_experts) return;
+    const uint32_t expert = (uint32_t)expert_i;
+
+    const uint8_t *gate_row0 =
+        gate_base + (uint64_t)expert * gate_expert_stride_bytes +
+        (uint64_t)r0 * gate_row_stride_bytes;
+    const uint8_t *up_row0 =
+        up_base + (uint64_t)expert * up_expert_stride_bytes +
+        (uint64_t)r0 * up_row_stride_bytes;
+    const uint8_t *gate_row1 = have_r1
+        ? gate_base + (uint64_t)expert * gate_expert_stride_bytes +
+              (uint64_t)r1 * gate_row_stride_bytes
+        : gate_row0;
+    const uint8_t *up_row1 = have_r1
+        ? up_base + (uint64_t)expert * up_expert_stride_bytes +
+              (uint64_t)r1 * up_row_stride_bytes
+        : up_row0;
+
+    float gate0_acc = 0.0f;
+    float up0_acc = 0.0f;
+    float gate1_acc = 0.0f;
+    float up1_acc = 0.0f;
+    for (uint32_t c = threadIdx.x; c < hidden; c += blockDim.x) {
+        const uint32_t block_idx = c / 32u;
+        const uint32_t lane = c % 32u;
+        const uint32_t packed_idx = 1u + (lane % 16u);
+        const float xv = x[(uint64_t)tok * hidden + c];
+
+        const uint8_t *gate_block0 = gate_row0 + (uint64_t)block_idx * 17ull;
+        const uint8_t *up_block0 = up_row0 + (uint64_t)block_idx * 17ull;
+        const uint8_t gate_packed0 = gate_block0[packed_idx];
+        const uint8_t up_packed0 = up_block0[packed_idx];
+        const uint8_t gate_q0 =
+            lane < 16u ? (gate_packed0 & 0x0fu) : ((gate_packed0 >> 4) & 0x0fu);
+        const uint8_t up_q0 =
+            lane < 16u ? (up_packed0 & 0x0fu) : ((up_packed0 >> 4) & 0x0fu);
+        gate0_acc += arena_mxfp4_nibble_to_f32(gate_q0) *
+                     arena_e8m0_to_f32(gate_block0[0]) * xv;
+        up0_acc += arena_mxfp4_nibble_to_f32(up_q0) *
+                   arena_e8m0_to_f32(up_block0[0]) * xv;
+
+        if (have_r1) {
+            const uint8_t *gate_block1 = gate_row1 + (uint64_t)block_idx * 17ull;
+            const uint8_t *up_block1 = up_row1 + (uint64_t)block_idx * 17ull;
+            const uint8_t gate_packed1 = gate_block1[packed_idx];
+            const uint8_t up_packed1 = up_block1[packed_idx];
+            const uint8_t gate_q1 = lane < 16u
+                ? (gate_packed1 & 0x0fu)
+                : ((gate_packed1 >> 4) & 0x0fu);
+            const uint8_t up_q1 = lane < 16u
+                ? (up_packed1 & 0x0fu)
+                : ((up_packed1 >> 4) & 0x0fu);
+            gate1_acc += arena_mxfp4_nibble_to_f32(gate_q1) *
+                         arena_e8m0_to_f32(gate_block1[0]) * xv;
+            up1_acc += arena_mxfp4_nibble_to_f32(up_q1) *
+                       arena_e8m0_to_f32(up_block1[0]) * xv;
+        }
+    }
+
+    __shared__ float gate0_partial[256];
+    __shared__ float up0_partial[256];
+    __shared__ float gate1_partial[256];
+    __shared__ float up1_partial[256];
+    gate0_partial[threadIdx.x] = gate0_acc;
+    up0_partial[threadIdx.x] = up0_acc;
+    gate1_partial[threadIdx.x] = gate1_acc;
+    up1_partial[threadIdx.x] = up1_acc;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            gate0_partial[threadIdx.x] += gate0_partial[threadIdx.x + stride];
+            up0_partial[threadIdx.x] += up0_partial[threadIdx.x + stride];
+            gate1_partial[threadIdx.x] += gate1_partial[threadIdx.x + stride];
+            up1_partial[threadIdx.x] += up1_partial[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        float g0 = gate0_partial[0];
+        float u0 = up0_partial[0];
+        float g1 = gate1_partial[0];
+        float u1 = up1_partial[0];
+        if (clamp > 1.0e-6f) {
+            g0 = fminf(g0, clamp);
+            u0 = fminf(fmaxf(u0, -clamp), clamp);
+            g1 = fminf(g1, clamp);
+            u1 = fminf(fmaxf(u1, -clamp), clamp);
+        }
+        const float route_weight = weights[(uint64_t)tok * n_routes + route];
+        const uint64_t base_index = ((uint64_t)tok * n_routes + route) * mid;
+        const float s0 = g0 / (1.0f + expf(-g0));
+        mid_out[base_index + r0] = s0 * u0 * route_weight;
+        if (have_r1) {
+            const float s1 = g1 / (1.0f + expf(-g1));
+            mid_out[base_index + r1] = s1 * u1 * route_weight;
+        }
+    }
+}
+
+__global__ static void arena_mxfp4_grouped_pair_swiglu_ptrs_rows2_kernel(
+        float *mid_out,
+        const uint8_t *gate_base,
+        const uint8_t *up_base,
+        const int32_t *selected,
+        const float *weights,
+        const float *const *x_rows,
+        uint32_t hidden,
+        uint32_t mid,
+        uint32_t n_total_experts,
+        uint32_t n_routes,
+        uint64_t gate_expert_stride_bytes,
+        uint32_t gate_row_stride_bytes,
+        uint64_t up_expert_stride_bytes,
+        uint32_t up_row_stride_bytes,
+        float clamp) {
+    const uint32_t r0 = blockIdx.x * 2u;
+    const uint32_t r1 = r0 + 1u;
+    const uint32_t route = blockIdx.y;
+    const uint32_t tok = blockIdx.z;
+    if (r0 >= mid || route >= n_routes) return;
+    const float *x = x_rows[tok];
+    if (!x) return;
+    const int have_r1 = r1 < mid;
+    const int32_t expert_i = selected[(uint64_t)tok * n_routes + route];
+    if (expert_i < 0 || (uint32_t)expert_i >= n_total_experts) return;
+    const uint32_t expert = (uint32_t)expert_i;
+
+    const uint8_t *gate_row0 =
+        gate_base + (uint64_t)expert * gate_expert_stride_bytes +
+        (uint64_t)r0 * gate_row_stride_bytes;
+    const uint8_t *up_row0 =
+        up_base + (uint64_t)expert * up_expert_stride_bytes +
+        (uint64_t)r0 * up_row_stride_bytes;
+    const uint8_t *gate_row1 = have_r1
+        ? gate_base + (uint64_t)expert * gate_expert_stride_bytes +
+              (uint64_t)r1 * gate_row_stride_bytes
+        : gate_row0;
+    const uint8_t *up_row1 = have_r1
+        ? up_base + (uint64_t)expert * up_expert_stride_bytes +
+              (uint64_t)r1 * up_row_stride_bytes
+        : up_row0;
+
+    float gate0_acc = 0.0f;
+    float up0_acc = 0.0f;
+    float gate1_acc = 0.0f;
+    float up1_acc = 0.0f;
+    for (uint32_t c = threadIdx.x; c < hidden; c += blockDim.x) {
+        const uint32_t block_idx = c / 32u;
+        const uint32_t lane = c % 32u;
+        const uint32_t packed_idx = 1u + (lane % 16u);
+        const float xv = x[c];
+
+        const uint8_t *gate_block0 = gate_row0 + (uint64_t)block_idx * 17ull;
+        const uint8_t *up_block0 = up_row0 + (uint64_t)block_idx * 17ull;
+        const uint8_t gate_packed0 = gate_block0[packed_idx];
+        const uint8_t up_packed0 = up_block0[packed_idx];
+        const uint8_t gate_q0 =
+            lane < 16u ? (gate_packed0 & 0x0fu) : ((gate_packed0 >> 4) & 0x0fu);
+        const uint8_t up_q0 =
+            lane < 16u ? (up_packed0 & 0x0fu) : ((up_packed0 >> 4) & 0x0fu);
+        gate0_acc += arena_mxfp4_nibble_to_f32(gate_q0) *
+                     arena_e8m0_to_f32(gate_block0[0]) * xv;
+        up0_acc += arena_mxfp4_nibble_to_f32(up_q0) *
+                   arena_e8m0_to_f32(up_block0[0]) * xv;
+
+        if (have_r1) {
+            const uint8_t *gate_block1 = gate_row1 + (uint64_t)block_idx * 17ull;
+            const uint8_t *up_block1 = up_row1 + (uint64_t)block_idx * 17ull;
+            const uint8_t gate_packed1 = gate_block1[packed_idx];
+            const uint8_t up_packed1 = up_block1[packed_idx];
+            const uint8_t gate_q1 = lane < 16u
+                ? (gate_packed1 & 0x0fu)
+                : ((gate_packed1 >> 4) & 0x0fu);
+            const uint8_t up_q1 = lane < 16u
+                ? (up_packed1 & 0x0fu)
+                : ((up_packed1 >> 4) & 0x0fu);
+            gate1_acc += arena_mxfp4_nibble_to_f32(gate_q1) *
+                         arena_e8m0_to_f32(gate_block1[0]) * xv;
+            up1_acc += arena_mxfp4_nibble_to_f32(up_q1) *
+                       arena_e8m0_to_f32(up_block1[0]) * xv;
+        }
+    }
+
+    __shared__ float gate0_partial[256];
+    __shared__ float up0_partial[256];
+    __shared__ float gate1_partial[256];
+    __shared__ float up1_partial[256];
+    gate0_partial[threadIdx.x] = gate0_acc;
+    up0_partial[threadIdx.x] = up0_acc;
+    gate1_partial[threadIdx.x] = gate1_acc;
+    up1_partial[threadIdx.x] = up1_acc;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            gate0_partial[threadIdx.x] += gate0_partial[threadIdx.x + stride];
+            up0_partial[threadIdx.x] += up0_partial[threadIdx.x + stride];
+            gate1_partial[threadIdx.x] += gate1_partial[threadIdx.x + stride];
+            up1_partial[threadIdx.x] += up1_partial[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        float g0 = gate0_partial[0];
+        float u0 = up0_partial[0];
+        float g1 = gate1_partial[0];
+        float u1 = up1_partial[0];
+        if (clamp > 1.0e-6f) {
+            g0 = fminf(g0, clamp);
+            u0 = fminf(fmaxf(u0, -clamp), clamp);
+            g1 = fminf(g1, clamp);
+            u1 = fminf(fmaxf(u1, -clamp), clamp);
+        }
+        const float route_weight = weights[(uint64_t)tok * n_routes + route];
+        const uint64_t base_index = ((uint64_t)tok * n_routes + route) * mid;
+        const float s0 = g0 / (1.0f + expf(-g0));
+        mid_out[base_index + r0] = s0 * u0 * route_weight;
+        if (have_r1) {
+            const float s1 = g1 / (1.0f + expf(-g1));
+            mid_out[base_index + r1] = s1 * u1 * route_weight;
+        }
+    }
+}
+
 __global__ static void arena_mxfp4_grouped_down_sum_kernel(
         float *out,
         const uint8_t *down_base,
@@ -2865,6 +3123,80 @@ __global__ static void arena_mxfp4_grouped_down_sum_kernel(
         __syncthreads();
     }
     if (threadIdx.x == 0) out[(uint64_t)tok * hidden + r] = partial[0];
+}
+
+__global__ static void arena_mxfp4_grouped_down_sum_rows2_kernel(
+        float *out,
+        const uint8_t *down_base,
+        const int32_t *selected,
+        const float *mid_in,
+        uint32_t hidden,
+        uint32_t mid,
+        uint32_t n_total_experts,
+        uint32_t n_routes,
+        uint64_t down_expert_stride_bytes,
+        uint32_t down_row_stride_bytes) {
+    const uint32_t r0 = blockIdx.x * 2u;
+    const uint32_t r1 = r0 + 1u;
+    const uint32_t tok = blockIdx.y;
+    if (r0 >= hidden) return;
+    const int have_r1 = r1 < hidden;
+    float acc0 = 0.0f;
+    float acc1 = 0.0f;
+    for (uint32_t route = 0; route < n_routes; route++) {
+        const int32_t expert_i = selected[(uint64_t)tok * n_routes + route];
+        if (expert_i < 0 || (uint32_t)expert_i >= n_total_experts) continue;
+        const uint32_t expert = (uint32_t)expert_i;
+        const uint8_t *row0 =
+            down_base + (uint64_t)expert * down_expert_stride_bytes +
+            (uint64_t)r0 * down_row_stride_bytes;
+        const uint8_t *row1 = have_r1
+            ? down_base + (uint64_t)expert * down_expert_stride_bytes +
+                  (uint64_t)r1 * down_row_stride_bytes
+            : row0;
+        const float *route_mid = mid_in + ((uint64_t)tok * n_routes + route) * mid;
+        for (uint32_t c = threadIdx.x; c < mid; c += blockDim.x) {
+            const uint32_t block_idx = c / 32u;
+            const uint32_t lane = c % 32u;
+            const uint32_t packed_idx = 1u + (lane % 16u);
+            const float mv = route_mid[c];
+
+            const uint8_t *block0 = row0 + (uint64_t)block_idx * 17ull;
+            const uint8_t packed0 = block0[packed_idx];
+            const uint8_t q0 =
+                lane < 16u ? (packed0 & 0x0fu) : ((packed0 >> 4) & 0x0fu);
+            const float w0 = arena_mxfp4_nibble_to_f32(q0) *
+                             arena_e8m0_to_f32(block0[0]);
+            acc0 += w0 * mv;
+
+            if (have_r1) {
+                const uint8_t *block1 = row1 + (uint64_t)block_idx * 17ull;
+                const uint8_t packed1 = block1[packed_idx];
+                const uint8_t q1 =
+                    lane < 16u ? (packed1 & 0x0fu) : ((packed1 >> 4) & 0x0fu);
+                const float w1 = arena_mxfp4_nibble_to_f32(q1) *
+                                 arena_e8m0_to_f32(block1[0]);
+                acc1 += w1 * mv;
+            }
+        }
+    }
+
+    __shared__ float partial0[256];
+    __shared__ float partial1[256];
+    partial0[threadIdx.x] = acc0;
+    partial1[threadIdx.x] = acc1;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            partial0[threadIdx.x] += partial0[threadIdx.x + stride];
+            partial1[threadIdx.x] += partial1[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        out[(uint64_t)tok * hidden + r0] = partial0[0];
+        if (have_r1) out[(uint64_t)tok * hidden + r1] = partial1[0];
+    }
 }
 
 extern "C" int ds4_gpu_arena_open(ds4_gpu_arena **out, int gpu, uint64_t bytes) {
@@ -3687,36 +4019,72 @@ extern "C" int ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_batch_f32(
         (const uint8_t *)((const char *)arena->ptr + up_arena_offset);
     const uint8_t *down_base =
         (const uint8_t *)((const char *)arena->ptr + down_arena_offset);
-    dim3 mid_grid(mid, n_routes, n_tokens);
-    arena_mxfp4_grouped_pair_swiglu_kernel<<<mid_grid, 256>>>(
-        (float *)mid_tmp_f32->ptr,
-        gate_base,
-        up_base,
-        (const int32_t *)selected_i32->ptr,
-        (const float *)weights_f32->ptr,
-        (const float *)x_f32->ptr,
-        hidden,
-        mid,
-        n_total_experts,
-        n_routes,
-        gate_expert_stride_bytes,
-        gate_row_stride_bytes,
-        gate_expert_stride_bytes,
-        gate_row_stride_bytes,
-        10.0f);
+    const int rows2 = cuda_env_flag_enabled("DS4_CUDA_MXFP4_ROUTE_ROWS2");
+    if (rows2) {
+        dim3 mid_grid((mid + 1u) / 2u, n_routes, n_tokens);
+        arena_mxfp4_grouped_pair_swiglu_rows2_kernel<<<mid_grid, 256>>>(
+            (float *)mid_tmp_f32->ptr,
+            gate_base,
+            up_base,
+            (const int32_t *)selected_i32->ptr,
+            (const float *)weights_f32->ptr,
+            (const float *)x_f32->ptr,
+            hidden,
+            mid,
+            n_total_experts,
+            n_routes,
+            gate_expert_stride_bytes,
+            gate_row_stride_bytes,
+            gate_expert_stride_bytes,
+            gate_row_stride_bytes,
+            10.0f);
+    } else {
+        dim3 mid_grid(mid, n_routes, n_tokens);
+        arena_mxfp4_grouped_pair_swiglu_kernel<<<mid_grid, 256>>>(
+            (float *)mid_tmp_f32->ptr,
+            gate_base,
+            up_base,
+            (const int32_t *)selected_i32->ptr,
+            (const float *)weights_f32->ptr,
+            (const float *)x_f32->ptr,
+            hidden,
+            mid,
+            n_total_experts,
+            n_routes,
+            gate_expert_stride_bytes,
+            gate_row_stride_bytes,
+            gate_expert_stride_bytes,
+            gate_row_stride_bytes,
+            10.0f);
+    }
     if (!cuda_ok(cudaGetLastError(), "mxfp4 grouped gate/up launch")) return 1;
-    dim3 down_grid(hidden, n_tokens, 1);
-    arena_mxfp4_grouped_down_sum_kernel<<<down_grid, 256>>>(
-        (float *)out_f32->ptr,
-        down_base,
-        (const int32_t *)selected_i32->ptr,
-        (const float *)mid_tmp_f32->ptr,
-        hidden,
-        mid,
-        n_total_experts,
-        n_routes,
-        down_expert_stride_bytes,
-        down_row_stride_bytes);
+    if (rows2) {
+        dim3 down_grid((hidden + 1u) / 2u, n_tokens, 1);
+        arena_mxfp4_grouped_down_sum_rows2_kernel<<<down_grid, 256>>>(
+            (float *)out_f32->ptr,
+            down_base,
+            (const int32_t *)selected_i32->ptr,
+            (const float *)mid_tmp_f32->ptr,
+            hidden,
+            mid,
+            n_total_experts,
+            n_routes,
+            down_expert_stride_bytes,
+            down_row_stride_bytes);
+    } else {
+        dim3 down_grid(hidden, n_tokens, 1);
+        arena_mxfp4_grouped_down_sum_kernel<<<down_grid, 256>>>(
+            (float *)out_f32->ptr,
+            down_base,
+            (const int32_t *)selected_i32->ptr,
+            (const float *)mid_tmp_f32->ptr,
+            hidden,
+            mid,
+            n_total_experts,
+            n_routes,
+            down_expert_stride_bytes,
+            down_row_stride_bytes);
+    }
     return cuda_ok(cudaGetLastError(), "mxfp4 grouped down sum launch") ? 0 : 1;
 }
 
@@ -3807,36 +4175,72 @@ extern "C" int ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_batch_ptrs_f32(
         (const uint8_t *)((const char *)arena->ptr + up_arena_offset);
     const uint8_t *down_base =
         (const uint8_t *)((const char *)arena->ptr + down_arena_offset);
-    dim3 mid_grid(mid, n_routes, n_tokens);
-    arena_mxfp4_grouped_pair_swiglu_ptrs_kernel<<<mid_grid, 256>>>(
-        (float *)mid_tmp_f32->ptr,
-        gate_base,
-        up_base,
-        (const int32_t *)selected_i32->ptr,
-        (const float *)weights_f32->ptr,
-        (const float *const *)x_row_ptrs->ptr,
-        hidden,
-        mid,
-        n_total_experts,
-        n_routes,
-        gate_expert_stride_bytes,
-        gate_row_stride_bytes,
-        gate_expert_stride_bytes,
-        gate_row_stride_bytes,
-        10.0f);
+    const int rows2 = cuda_env_flag_enabled("DS4_CUDA_MXFP4_ROUTE_ROWS2");
+    if (rows2) {
+        dim3 mid_grid((mid + 1u) / 2u, n_routes, n_tokens);
+        arena_mxfp4_grouped_pair_swiglu_ptrs_rows2_kernel<<<mid_grid, 256>>>(
+            (float *)mid_tmp_f32->ptr,
+            gate_base,
+            up_base,
+            (const int32_t *)selected_i32->ptr,
+            (const float *)weights_f32->ptr,
+            (const float *const *)x_row_ptrs->ptr,
+            hidden,
+            mid,
+            n_total_experts,
+            n_routes,
+            gate_expert_stride_bytes,
+            gate_row_stride_bytes,
+            gate_expert_stride_bytes,
+            gate_row_stride_bytes,
+            10.0f);
+    } else {
+        dim3 mid_grid(mid, n_routes, n_tokens);
+        arena_mxfp4_grouped_pair_swiglu_ptrs_kernel<<<mid_grid, 256>>>(
+            (float *)mid_tmp_f32->ptr,
+            gate_base,
+            up_base,
+            (const int32_t *)selected_i32->ptr,
+            (const float *)weights_f32->ptr,
+            (const float *const *)x_row_ptrs->ptr,
+            hidden,
+            mid,
+            n_total_experts,
+            n_routes,
+            gate_expert_stride_bytes,
+            gate_row_stride_bytes,
+            gate_expert_stride_bytes,
+            gate_row_stride_bytes,
+            10.0f);
+    }
     if (!cuda_ok(cudaGetLastError(), "mxfp4 grouped ptr gate/up launch")) return 1;
-    dim3 down_grid(hidden, n_tokens, 1);
-    arena_mxfp4_grouped_down_sum_kernel<<<down_grid, 256>>>(
-        (float *)out_f32->ptr,
-        down_base,
-        (const int32_t *)selected_i32->ptr,
-        (const float *)mid_tmp_f32->ptr,
-        hidden,
-        mid,
-        n_total_experts,
-        n_routes,
-        down_expert_stride_bytes,
-        down_row_stride_bytes);
+    if (rows2) {
+        dim3 down_grid((hidden + 1u) / 2u, n_tokens, 1);
+        arena_mxfp4_grouped_down_sum_rows2_kernel<<<down_grid, 256>>>(
+            (float *)out_f32->ptr,
+            down_base,
+            (const int32_t *)selected_i32->ptr,
+            (const float *)mid_tmp_f32->ptr,
+            hidden,
+            mid,
+            n_total_experts,
+            n_routes,
+            down_expert_stride_bytes,
+            down_row_stride_bytes);
+    } else {
+        dim3 down_grid(hidden, n_tokens, 1);
+        arena_mxfp4_grouped_down_sum_kernel<<<down_grid, 256>>>(
+            (float *)out_f32->ptr,
+            down_base,
+            (const int32_t *)selected_i32->ptr,
+            (const float *)mid_tmp_f32->ptr,
+            hidden,
+            mid,
+            n_total_experts,
+            n_routes,
+            down_expert_stride_bytes,
+            down_row_stride_bytes);
+    }
     return cuda_ok(cudaGetLastError(), "mxfp4 grouped ptr down sum launch") ? 0 : 1;
 }
 
