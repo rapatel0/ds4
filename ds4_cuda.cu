@@ -1579,22 +1579,117 @@ extern "C" int ds4_gpu_tensor_copy_async(ds4_gpu_tensor *dst, uint64_t dst_offse
                    "async tensor peer copy");
 }
 
-__global__ static void top1_f32_serial_kernel(const float *logits,
+__device__ __forceinline__ static bool top1_f32_better(float av,
+                                                       uint32_t ai,
+                                                       float bv,
+                                                       uint32_t bi) {
+    return av > bv || (av == bv && ai < bi);
+}
+
+__device__ __forceinline__ static bool top1_f32_isfinite_raw(float v) {
+    return (__float_as_uint(v) & 0x7f800000u) != 0x7f800000u;
+}
+
+template <uint32_t BLOCK_THREADS, uint32_t ITEMS_PER_BLOCK>
+__global__ static void top1_f32_blocks_kernel(const float *logits,
                                               uint32_t n_logits,
-                                              float *out_logit,
-                                              uint32_t *out_token) {
-    if (threadIdx.x != 0 || blockIdx.x != 0 || n_logits == 0) return;
-    float best_logit = logits[0];
-    uint32_t best_token = 0;
-    for (uint32_t i = 1; i < n_logits; i++) {
+                                              float *block_logits,
+                                              uint32_t *block_tokens,
+                                              uint32_t *block_bad) {
+    const uint32_t tid = threadIdx.x;
+    const uint32_t start = blockIdx.x * ITEMS_PER_BLOCK;
+    const uint32_t end = start + ITEMS_PER_BLOCK < n_logits
+        ? start + ITEMS_PER_BLOCK
+        : n_logits;
+    __shared__ float vals[BLOCK_THREADS];
+    __shared__ uint32_t idxs[BLOCK_THREADS];
+    __shared__ uint32_t bads[BLOCK_THREADS];
+
+    float best_logit = -INFINITY;
+    uint32_t best_token = UINT32_MAX;
+    uint32_t bad = 0;
+    for (uint32_t i = start + tid; i < end; i += BLOCK_THREADS) {
         const float v = logits[i];
-        if (v > best_logit) {
+        if (!top1_f32_isfinite_raw(v)) {
+            bad = 1u;
+        } else if (top1_f32_better(v, i, best_logit, best_token)) {
             best_logit = v;
             best_token = i;
         }
     }
-    *out_logit = best_logit;
-    *out_token = best_token;
+    vals[tid] = best_logit;
+    idxs[tid] = best_token;
+    bads[tid] = bad;
+    __syncthreads();
+
+    for (uint32_t stride = BLOCK_THREADS >> 1u; stride > 0u; stride >>= 1u) {
+        if (tid < stride) {
+            const float ov = vals[tid + stride];
+            const uint32_t oi = idxs[tid + stride];
+            bads[tid] |= bads[tid + stride];
+            if (top1_f32_better(ov, oi, vals[tid], idxs[tid])) {
+                vals[tid] = ov;
+                idxs[tid] = oi;
+            }
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0) {
+        block_logits[blockIdx.x] = vals[0];
+        block_tokens[blockIdx.x] = idxs[0];
+        block_bad[blockIdx.x] = bads[0];
+    }
+}
+
+template <uint32_t BLOCK_THREADS>
+__global__ static void top1_f32_final_kernel(const float *block_logits,
+                                             const uint32_t *block_tokens,
+                                             const uint32_t *block_bad,
+                                             uint32_t n_blocks,
+                                             float *out_logit,
+                                             uint32_t *out_token,
+                                             uint32_t *out_bad) {
+    const uint32_t tid = threadIdx.x;
+    __shared__ float vals[BLOCK_THREADS];
+    __shared__ uint32_t idxs[BLOCK_THREADS];
+    __shared__ uint32_t bads[BLOCK_THREADS];
+
+    float best_logit = -INFINITY;
+    uint32_t best_token = UINT32_MAX;
+    uint32_t bad = 0;
+    for (uint32_t i = tid; i < n_blocks; i += BLOCK_THREADS) {
+        const float v = block_logits[i];
+        const uint32_t token = block_tokens[i];
+        bad |= block_bad[i];
+        if (top1_f32_better(v, token, best_logit, best_token)) {
+            best_logit = v;
+            best_token = token;
+        }
+    }
+    vals[tid] = best_logit;
+    idxs[tid] = best_token;
+    bads[tid] = bad;
+    __syncthreads();
+
+    for (uint32_t stride = BLOCK_THREADS >> 1u; stride > 0u; stride >>= 1u) {
+        if (tid < stride) {
+            const float ov = vals[tid + stride];
+            const uint32_t oi = idxs[tid + stride];
+            bads[tid] |= bads[tid + stride];
+            if (top1_f32_better(ov, oi, vals[tid], idxs[tid])) {
+                vals[tid] = ov;
+                idxs[tid] = oi;
+            }
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0) {
+        *out_logit = vals[0];
+        *out_token = idxs[0];
+        *out_bad = bads[0];
+    }
 }
 
 extern "C" int ds4_gpu_top1_f32_tensor(const ds4_gpu_tensor *logits,
@@ -1607,31 +1702,62 @@ extern "C" int ds4_gpu_top1_f32_tensor(const ds4_gpu_tensor *logits,
     }
     if (!cuda_ok(cudaSetDevice(logits->device), "top1 set device")) return 0;
 
-    const uint64_t token_offset = 16u;
-    const uint64_t tmp_bytes = token_offset + sizeof(uint32_t);
+    constexpr uint32_t TOP1_THREADS = 256u;
+    constexpr uint32_t TOP1_ITEMS_PER_BLOCK = 1024u;
+    const uint32_t n_blocks = (n_logits + TOP1_ITEMS_PER_BLOCK - 1u) / TOP1_ITEMS_PER_BLOCK;
+    const uint64_t block_logits_bytes = (uint64_t)n_blocks * sizeof(float);
+    const uint64_t block_tokens_offset = (block_logits_bytes + 15u) & ~15ull;
+    const uint64_t block_tokens_bytes = (uint64_t)n_blocks * sizeof(uint32_t);
+    const uint64_t block_bad_offset = (block_tokens_offset + block_tokens_bytes + 15u) & ~15ull;
+    const uint64_t block_bad_bytes = (uint64_t)n_blocks * sizeof(uint32_t);
+    const uint64_t out_logit_offset = (block_bad_offset + block_bad_bytes + 15u) & ~15ull;
+    const uint64_t out_token_offset = (out_logit_offset + sizeof(float) + 15u) & ~15ull;
+    const uint64_t out_bad_offset = (out_token_offset + sizeof(uint32_t) + 15u) & ~15ull;
+    const uint64_t tmp_bytes = out_bad_offset + sizeof(uint32_t);
     void *tmp = cuda_tmp_alloc(tmp_bytes, "top1 f32 reduce");
     if (!tmp) return 0;
 
     float *block_logits = (float *)tmp;
-    uint32_t *block_tokens = (uint32_t *)((char *)tmp + token_offset);
-    top1_f32_serial_kernel<<<1, 1>>>((const float *)logits->ptr,
-                                     n_logits,
-                                     block_logits,
-                                     block_tokens);
-    if (!cuda_ok(cudaGetLastError(), "top1 f32 launch")) return 0;
+    uint32_t *block_tokens = (uint32_t *)((char *)tmp + block_tokens_offset);
+    uint32_t *block_bad = (uint32_t *)((char *)tmp + block_bad_offset);
+    float *device_logit = (float *)((char *)tmp + out_logit_offset);
+    uint32_t *device_token = (uint32_t *)((char *)tmp + out_token_offset);
+    uint32_t *device_bad = (uint32_t *)((char *)tmp + out_bad_offset);
+    top1_f32_blocks_kernel<TOP1_THREADS, TOP1_ITEMS_PER_BLOCK><<<n_blocks, TOP1_THREADS>>>(
+            (const float *)logits->ptr,
+            n_logits,
+            block_logits,
+            block_tokens,
+            block_bad);
+    if (!cuda_ok(cudaGetLastError(), "top1 f32 block launch")) return 0;
+    top1_f32_final_kernel<TOP1_THREADS><<<1, TOP1_THREADS>>>(
+            block_logits,
+            block_tokens,
+            block_bad,
+            n_blocks,
+            device_logit,
+            device_token,
+            device_bad);
+    if (!cuda_ok(cudaGetLastError(), "top1 f32 final launch")) return 0;
+    uint32_t bad = 0;
     if (!cuda_ok(cudaMemcpy(logit,
-                            block_logits,
+                            device_logit,
                             sizeof(*logit),
                             cudaMemcpyDeviceToHost),
                  "top1 f32 logit read") ||
         !cuda_ok(cudaMemcpy(token,
-                            block_tokens,
+                            device_token,
                             sizeof(*token),
                             cudaMemcpyDeviceToHost),
-                 "top1 f32 token read")) {
+                 "top1 f32 token read") ||
+        !cuda_ok(cudaMemcpy(&bad,
+                            device_bad,
+                            sizeof(bad),
+                            cudaMemcpyDeviceToHost),
+                 "top1 f32 status read")) {
         return 0;
     }
-    return *token < n_logits;
+    return bad == 0 && *token < n_logits;
 }
 
 extern "C" int ds4_gpu_begin_commands(void) { return 1; }

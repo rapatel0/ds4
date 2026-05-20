@@ -1,0 +1,3 @@
+mode	generated_tok_s	continuation_tok_s	latency_avg_ms	output_head_ms	stage7_decode_ms	avg_gpu_util_percent	max_gpu_util_percent	token_match	errors	delta_generated_percent	delta_output_head_percent	default_decision
+host_logit_control	8.656498	8.115467	7391.521	324.953	1979.423	19.075	40.000	4	0	0.000	0.000	control
+parallel_device_top1	9.031197	8.466747	7084.718	134.510	1470.800	19.271	40.000	4	0	4.329	-58.606	default

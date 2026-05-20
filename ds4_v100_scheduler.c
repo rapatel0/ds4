@@ -1403,16 +1403,16 @@ static void insert_topk(uint32_t *tokens,
 }
 
 static bool output_head_fastpath_enabled(void) {
-    const char *v = getenv("DS4_V100_ENABLE_OUTPUT_HEAD_FASTPATH");
-    if (!v || !v[0]) return false;
-    if (strcmp(v, "0") == 0 || strcmp(v, "false") == 0 || strcmp(v, "FALSE") == 0) {
-        return false;
-    }
     const char *disabled = getenv("DS4_V100_DISABLE_OUTPUT_HEAD_FASTPATH");
     if (disabled && disabled[0] &&
         strcmp(disabled, "0") != 0 &&
         strcmp(disabled, "false") != 0 &&
         strcmp(disabled, "FALSE") != 0) {
+        return false;
+    }
+    const char *v = getenv("DS4_V100_ENABLE_OUTPUT_HEAD_FASTPATH");
+    if (v && v[0] &&
+        (strcmp(v, "0") == 0 || strcmp(v, "false") == 0 || strcmp(v, "FALSE") == 0)) {
         return false;
     }
     return true;

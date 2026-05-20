@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: vision
-revision: 87
+revision: 88
 ---
 
 # Vision: DS4 V100 Appliance
@@ -486,6 +486,12 @@ optimized V100 low-bit expert kernels in the actual hot path.
   Generated tok/s moved only from `8.659254` to `8.697510`, so the path stays
   opt-in behind `DS4_V100_ENABLE_OUTPUT_HEAD_FASTPATH=1` and the host-logit
   output-head path remains default.
+- Sprint 076 replaced that serial scan with a deterministic parallel F32
+  top-1 reducer. On the same 1M/4-slot per-step fixture, generated tok/s
+  improved from `8.656498` to `9.031197` and output-head timing dropped from
+  `324.953 ms` to `134.510 ms`, so greedy `k == 1` output selection now uses
+  the device top-1 path by default. `DS4_V100_DISABLE_OUTPUT_HEAD_FASTPATH=1`
+  remains the rollback path.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -552,6 +558,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 073 persistent mailbox workers | `8.05` generated tok/s at 1M/4 slots | Measured | Mailbox workers are correct and beat old persistent by `2.39%`, but stay `6.89%` slower than per-step. Keep `per-step` as the appliance `auto` default and pivot below pthread scheduling. |
 | Sprint 074 async HC handoff | `8.74` generated tok/s at 1M/4 slots | Measured | Queued peer handoff is correct and improves per-step throughput by `1.54%`, but remains below the default-change threshold. Keep opt-in and pursue explicit stream/event handoff or kernel-side work. |
 | Sprint 075 output-head top-1 candidate | `8.70` generated tok/s at 1M/4 slots | Measured | Device top-1 is correct but not default-worthy: generated tok/s improved only `0.44%` while output-head timing regressed `22.33%` (`423.818 ms` vs `346.461 ms`). Keep it opt-in and either build a real parallel reducer or return to larger stage/kernel costs. |
+| Sprint 076 parallel output-head top-1 | `9.03` generated tok/s at 1M/4 slots | Measured | Parallel device top-1 clears the default-change gate: generated tok/s improves `4.33%`, continuation tok/s improves `4.33%`, and output-head timing drops `58.61%` (`134.510 ms` vs `324.953 ms`). Greedy `k == 1` now defaults to device top-1 with an env rollback. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -1627,6 +1634,22 @@ GPU utilization with architectural changes, and only then compare against the
   default and the candidate remains opt-in with
   `DS4_V100_ENABLE_OUTPUT_HEAD_FASTPATH=1`.
 
+### Sprint 076 - Parallel Output-Head Top-1 Reducer [complete]
+
+- **Goal**: Convert the Sprint 075 output-head top-1 candidate from a serial
+  CUDA scan into a deterministic parallel reducer and decide whether it should
+  become the greedy output selector.
+- **Rationale**: Sprint 075 proved the device-resident output-head path was
+  correct but slow because it used one CUDA thread to scan `129280` logits.
+  A real block-level reducer was the smallest way to test whether output-head
+  readback/scan remained a practical throughput lever.
+- **Outcome**: `SHIP_DEFAULT`. The new two-stage reducer preserves lower-token
+  tie handling, carries a non-finite status flag, and keeps the public API
+  stable. V100 evidence at 1M/4 slots improved generated tok/s from
+  `8.656498` to `9.031197` and output-head timing from `324.953 ms` to
+  `134.510 ms`, so greedy `k == 1` selection now defaults to device top-1.
+  `DS4_V100_DISABLE_OUTPUT_HEAD_FASTPATH=1` remains the fallback.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -1863,6 +1886,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 073 persistent mailbox workers. | Mailbox scheduling reduces old persistent wait accounting and improves over old persistent, but it remains slower than per-step. Keep per-step as the practical default and move the next optimization below host condition-variable scheduling. | Sprint 074+ |
 | 2026-05-20 | Shipped Sprint 074 async HC handoff. | Queued default-stream peer handoff is correct and slightly faster, but the gain is too small to change the appliance default. The next scheduling sprint should use explicit CUDA streams/events, or the roadmap should pivot to larger kernel-side work. | Sprint 075+ |
 | 2026-05-20 | Shipped Sprint 075 output-head top-1 probe. | The device top-1 candidate is correct but slower in output-head timing because the safe serial CUDA scan is worse than the existing host scan/readback. Keep the primitive opt-in and pursue a real parallel reducer, batched output-head selection, or larger stage/kernel work. | Sprint 076+ |
+| 2026-05-20 | Shipped Sprint 076 parallel output-head top-1. | Replacing the serial device scan with a deterministic parallel reducer produced a real default-worthy gain and removed most output-head selection time. The next sprint should move to a larger remaining bucket: stage synchronization/stream events, batched output-head projection, or routed MoE kernel occupancy. | Sprint 077+ |
 
 ## Open Questions
 
