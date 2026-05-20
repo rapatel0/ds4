@@ -76,6 +76,7 @@ fi
 : "${DS4_V100_ACTIVE_MICROBATCH:=1}"
 : "${DS4_V100_QUEUE_POLICY:=reject-busy}"
 : "${DS4_V100_TOKENS:=2}"
+: "${DS4_V100_ASYNC_PIPELINE_MODE:=off}"
 : "${DS4_V100_HOST:=127.0.0.1}"
 : "${DS4_V100_PORT:=18080}"
 : "${DS4_V100_CUDA_VISIBLE_DEVICES:=0,1,2,3,4,5,6,7}"
@@ -221,6 +222,22 @@ case "$DS4_V100_QUEUE_POLICY" in
     reject-busy|sequential) ;;
     *) fail "DS4_V100_QUEUE_POLICY must be reject-busy or sequential" ;;
 esac
+case "$DS4_V100_ASYNC_PIPELINE_MODE" in
+    off|auto|per-step|per_step|persistent) ;;
+    *) fail "DS4_V100_ASYNC_PIPELINE_MODE must be off, auto, per-step, or persistent" ;;
+esac
+
+async_pipeline_mode="$DS4_V100_ASYNC_PIPELINE_MODE"
+case "$async_pipeline_mode" in
+    per_step) async_pipeline_mode="per-step" ;;
+    auto)
+        if [ "$DS4_V100_ACTIVE_MICROBATCH" -gt 1 ]; then
+            async_pipeline_mode="per-step"
+        else
+            async_pipeline_mode="off"
+        fi
+        ;;
+esac
 
 require_exec "$DS4_V100_BIN"
 require_file "model" "$DS4_V100_MODEL"
@@ -249,6 +266,9 @@ cmd=(
 if [ "$DS4_V100_MAX_REQUESTS" -gt 0 ]; then
     cmd+=(--max-requests "$DS4_V100_MAX_REQUESTS")
 fi
+if [ "$async_pipeline_mode" != "off" ]; then
+    cmd+=(--async-pipeline-mode "$async_pipeline_mode")
+fi
 if [ "$mtp_serving_enabled" -eq 1 ]; then
     cmd+=(
         --mtp-model "$DS4_V100_MTP_MODEL"
@@ -266,7 +286,7 @@ print_resolved() {
 }
 
 if [ "$mode" = "check" ]; then
-    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS tokens=$DS4_V100_TOKENS"
+    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode"
     exit 0
 fi
 if [ "$mode" = "print" ]; then
@@ -284,6 +304,8 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_ACTIVE_MICROBATCH=$DS4_V100_ACTIVE_MICROBATCH"
     echo "DS4_V100_QUEUE_POLICY=$DS4_V100_QUEUE_POLICY"
     echo "DS4_V100_TOKENS=$DS4_V100_TOKENS"
+    echo "DS4_V100_ASYNC_PIPELINE_MODE=$DS4_V100_ASYNC_PIPELINE_MODE"
+    echo "DS4_V100_ASYNC_PIPELINE_MODE_RESOLVED=$async_pipeline_mode"
     echo "DS4_V100_HOST=$DS4_V100_HOST"
     echo "DS4_V100_PORT=$DS4_V100_PORT"
     echo "DS4_V100_CUDA_VISIBLE_DEVICES=$DS4_V100_CUDA_VISIBLE_DEVICES"

@@ -1,0 +1,2 @@
+ds4-v100-run-appliance: config ok mode=base mtp=off host=127.0.0.1 port=18080 ctx=1048576 slots=4 active_microbatch=4 tokens=16 async_pipeline_mode=per-step
+CUDA_VISIBLE_DEVICES=0\,1\,2\,3\,4\,5\,6\,7 ./tools/ds4-v100-replay --serve --model /models/DSv4-Flash-256e-fixed.gguf --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --ctx 1048576 --slots 4 --active-microbatch 4 --queue-policy sequential --tokens 16 --host 127.0.0.1 --port 18080 --async-pipeline-mode per-step
