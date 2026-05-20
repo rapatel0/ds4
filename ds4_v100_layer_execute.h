@@ -136,6 +136,7 @@ typedef struct {
     int32_t selected_experts[6];
     float route_weights[6];
     uint32_t routes;
+    uint32_t turbomind_routed;
     double timing_hc_attn_ms;
     double timing_attention_ms;
     double timing_hc_ffn_ms;

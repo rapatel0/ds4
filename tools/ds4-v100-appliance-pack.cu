@@ -50,6 +50,7 @@ struct options {
     uint32_t gpus = 8;
     uint64_t alignment = 256;
     int pack_gpu = 0;
+    int only_gpu = -1;
     int layer_filter = -1;
     uint32_t expert_limit = 0;
     bool skip_non_experts = false;
@@ -131,9 +132,10 @@ static void usage(FILE *fp) {
                  "  --align N                Shard alignment in bytes. Default: 256\n"
                  "  --lib FILE               libggml-turbomind.so path\n"
                  "  --pack-gpu N             CUDA device used for offline packing. Default: 0\n"
-                 "  --layer N                Bounded validation: pack routed experts only for layer N\n"
+                 "  --only-gpu N             Bounded validation: emit rows only for owning GPU N\n"
+                 "  --layer N                Bounded validation: TurboMind-pack routed experts only for layer N\n"
                  "  --expert-limit N         Bounded validation: pack first N experts per routed tensor\n"
-                 "  --skip-non-experts       Bounded validation: do not copy non-expert tensors\n"
+                 "  --skip-non-experts       Bounded validation: do not copy non-selected tensors\n"
                  "\n"
                  "Without bounded options this emits one production-shaped appliance directory:\n"
                  "gpuN.weights plus pack-index.tsv and turbomind-pack-index.tsv.\n");
@@ -163,6 +165,8 @@ static void parse_args(int argc, char **argv, options *opt) {
             opt->lib_path = need(a);
         } else if (!std::strcmp(a, "--pack-gpu")) {
             opt->pack_gpu = parse_i32(need(a), a);
+        } else if (!std::strcmp(a, "--only-gpu")) {
+            opt->only_gpu = parse_i32(need(a), a);
         } else if (!std::strcmp(a, "--layer")) {
             opt->layer_filter = parse_i32(need(a), a);
         } else if (!std::strcmp(a, "--expert-limit")) {
@@ -183,6 +187,7 @@ static void parse_args(int argc, char **argv, options *opt) {
         std::exit(2);
     }
     if (opt->gpus == 0 || opt->gpus > MAX_GPUS) die("--gpus must be in 1..8");
+    if (opt->only_gpu >= (int)opt->gpus) die("--only-gpu must be less than --gpus");
     if (opt->alignment == 0) die("--align must be positive");
 }
 
@@ -486,9 +491,17 @@ static int emit_entry_cb(const ds4_pack_entry *e, void *ud) {
                      e->owning_gpu);
         return 1;
     }
+    if (st->opt.only_gpu >= 0 && e->owning_gpu != st->opt.only_gpu) {
+        st->skipped_rows++;
+        return 0;
+    }
     if (is_routed_expert(e)) {
         if (st->opt.layer_filter >= 0 && e->layer_id != st->opt.layer_filter) {
-            st->skipped_rows++;
+            if (st->opt.skip_non_experts) {
+                st->skipped_rows++;
+            } else {
+                emit_source_tensor(st, e);
+            }
             return 0;
         }
         emit_turbomind_tensor(st, e);

@@ -1,0 +1,31 @@
+kubectl -n llm exec llamacpp-build-8gpu -- bash -lc 'cd /workspace/ds4-sprint082 && CUDA_ARCH=sm_70 make tools/ds4-v100-appliance-pack tests/cuda_v100_stage_scheduler_smoke tests/cuda_v100_full_scheduler_smoke'
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread --std=c++17 -Ikernels/turbomind/ggml-turbomind/include -I. -c -o tools/ds4-v100-appliance-pack.o tools/ds4-v100-appliance-pack.cu
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -o tools/ds4-v100-appliance-pack tools/ds4-v100-appliance-pack.o ds4_pack.o ds4_source_formats.o -lm -Xcompiler -pthread -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/local/cuda/lib64 -lcudart -lcublas -ldl
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -D_FILE_OFFSET_BITS=64 -c -o tests/cuda_v100_stage_scheduler_smoke.o tests/cuda_v100_stage_scheduler_smoke.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -c -o ds4_v100_scheduler.o ds4_v100_scheduler.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -c -o ds4_v100_layer_execute.o ds4_v100_layer_execute.c
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -o tests/cuda_v100_stage_scheduler_smoke tests/cuda_v100_stage_scheduler_smoke.o ds4_cuda.o ds4_v100_scheduler.o ds4_v100_layer_execute.o ds4_v100_layer_state.o ds4_v100_context.o ds4_pack.o ds4_turbomind_pack.o ds4_source_formats.o -lm -Xcompiler -pthread -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/local/cuda/lib64 -lcudart -lcublas -ldl
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -D_FILE_OFFSET_BITS=64 -c -o tests/cuda_v100_full_scheduler_smoke.o tests/cuda_v100_full_scheduler_smoke.c
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -o tests/cuda_v100_full_scheduler_smoke tests/cuda_v100_full_scheduler_smoke.o ds4_cuda.o ds4_v100_scheduler.o ds4_v100_layer_execute.o ds4_v100_layer_state.o ds4_v100_context.o ds4_pack.o ds4_turbomind_pack.o ds4_source_formats.o -lm -Xcompiler -pthread -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/local/cuda/lib64 -lcudart -lcublas -ldl
+
+kubectl -n llm exec llamacpp-build-8gpu -- bash -lc 'cd /workspace/ds4-sprint082 && rm -rf /tmp/ds4-appliance-stage0-l0tm && ./tools/ds4-v100-appliance-pack --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --source /models/DSv4-Flash-256e-fixed.gguf --out-dir /tmp/ds4-appliance-stage0-l0tm --only-gpu 0 --layer 0 --pack-gpu 0 --lib ./build/turbomind-v100/libggml-turbomind.so'
+appliance packed blk.0.ffn_down_exps.weight experts=256/256 gpu=0 weight_offset=1166874880 scale_offset=2240616704 k_pack=0x341321
+appliance packed blk.0.ffn_gate_exps.weight experts=256/256 gpu=0 weight_offset=2307725568 scale_offset=3381467392 k_pack=0x341321
+appliance packed blk.0.ffn_up_exps.weight experts=256/256 gpu=0 weight_offset=3448576256 scale_offset=4522318080 k_pack=0x341321
+ds4-v100-appliance-pack: wrote /tmp/ds4-appliance-stage0-l0tm source_rows=170 tm_rows=3 skipped_rows=1155 source_bytes=19101578000 tm_weight_bytes=3221225472 tm_scale_bytes=201326592
+ds4-v100-appliance-pack: gpu0.weights bytes=22524134668
+ds4-v100-appliance-pack: gpu1.weights bytes=0
+ds4-v100-appliance-pack: gpu2.weights bytes=0
+ds4-v100-appliance-pack: gpu3.weights bytes=0
+ds4-v100-appliance-pack: gpu4.weights bytes=0
+ds4-v100-appliance-pack: gpu5.weights bytes=0
+ds4-v100-appliance-pack: gpu6.weights bytes=0
+ds4-v100-appliance-pack: gpu7.weights bytes=0
+
+kubectl -n llm exec llamacpp-build-8gpu -- bash -lc 'cd /workspace/ds4-sprint082 && ./tests/cuda_v100_stage_scheduler_smoke --appliance-dir /tmp/ds4-appliance-stage0-l0tm --stage 0 --token 16 --position 16 --slots 1'
+ds4: CUDA loading model tensors into device cache
+cuda_v100_stage_scheduler_smoke: stage=0 gpu=0 layers=0-5 executed=6 tm_layers=1 token=16 pos=16 slots=1 arena_bytes=22524134668 uploaded_tensors=1 uploaded_bytes=22524134668 expert0=35 ok
+
+kubectl -n llm exec llamacpp-build-8gpu -- bash -lc 'cd /workspace/ds4-sprint082 && ./tests/cuda_v100_full_scheduler_smoke --appliance-dir /tmp/ds4-appliance-stage0-l0tm --stages 1 --token 16 --position 16 --slots 1'
+ds4: CUDA loading model tensors into device cache
+cuda_v100_full_scheduler_smoke: stages=1 token=16 pos=16 slots=1 layers=6 tm_layers=1 last=0-5 gpu=0 uploaded_tensors=1 uploaded_bytes=22524134668 expert_last=35 ok

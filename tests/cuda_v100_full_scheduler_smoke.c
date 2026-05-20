@@ -13,6 +13,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+enum {
+    PATH_BUF_SIZE = 4096,
+};
+
 typedef struct {
     const unsigned char *ptr;
     uint64_t size;
@@ -30,7 +34,8 @@ static void check(int cond, const char *msg) {
 
 static void usage(FILE *fp) {
     fprintf(fp,
-            "usage: tests/cuda_v100_full_scheduler_smoke --index FILE --model FILE "
+            "usage: tests/cuda_v100_full_scheduler_smoke --index FILE "
+            "[--model FILE | --shard-dir DIR | --appliance-dir DIR] [--tm-index FILE] "
             "[--token N] [--position N] [--stages N] [--slots N]\n");
 }
 
@@ -44,6 +49,16 @@ static int parse_int_arg(const char *s, const char *name, int max_v) {
         exit(2);
     }
     return (int)v;
+}
+
+static void join_path(char *dst, size_t dst_size, const char *dir, const char *base) {
+    int n = snprintf(dst, dst_size, "%s/%s", dir, base);
+    if (n < 0 || (size_t)n >= dst_size) {
+        fprintf(stderr, "cuda_v100_full_scheduler_smoke: path too long: %s/%s\n",
+                dir ? dir : "(null)",
+                base ? base : "(null)");
+        exit(2);
+    }
 }
 
 static int map_model_file(const char *path, model_map *out) {
@@ -105,7 +120,13 @@ static void expect_finite_nonzero(const float *x, uint64_t n, const char *label)
 
 int main(int argc, char **argv) {
     const char *index = NULL;
+    const char *tm_index = NULL;
     const char *model_path = NULL;
+    const char *shard_dir = NULL;
+    char appliance_index[PATH_BUF_SIZE];
+    char appliance_tm_index[PATH_BUF_SIZE];
+    memset(appliance_index, 0, sizeof(appliance_index));
+    memset(appliance_tm_index, 0, sizeof(appliance_tm_index));
     int token = 16;
     int position = 16;
     int stages = DS4_V100_EXPECTED_GPUS;
@@ -114,8 +135,18 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--index") && i + 1 < argc) {
             index = argv[++i];
+        } else if (!strcmp(argv[i], "--tm-index") && i + 1 < argc) {
+            tm_index = argv[++i];
         } else if (!strcmp(argv[i], "--model") && i + 1 < argc) {
             model_path = argv[++i];
+        } else if (!strcmp(argv[i], "--shard-dir") && i + 1 < argc) {
+            shard_dir = argv[++i];
+        } else if (!strcmp(argv[i], "--appliance-dir") && i + 1 < argc) {
+            shard_dir = argv[++i];
+            join_path(appliance_index, sizeof(appliance_index), shard_dir, "pack-index.tsv");
+            join_path(appliance_tm_index, sizeof(appliance_tm_index), shard_dir, "turbomind-pack-index.tsv");
+            index = appliance_index;
+            tm_index = appliance_tm_index;
         } else if (!strcmp(argv[i], "--token") && i + 1 < argc) {
             token = parse_int_arg(argv[++i], "--token", 200000);
         } else if (!strcmp(argv[i], "--position") && i + 1 < argc) {
@@ -132,7 +163,7 @@ int main(int argc, char **argv) {
             return 2;
         }
     }
-    if (!index || !model_path || stages <= 0) {
+    if (!index || (!model_path && !shard_dir) || stages <= 0) {
         usage(stderr);
         return 2;
     }
@@ -147,14 +178,19 @@ int main(int argc, char **argv) {
     }
 
     model_map model;
-    if (map_model_file(model_path, &model)) return 1;
-    check(ds4_gpu_set_model_fd(model.fd), "model fd");
+    memset(&model, 0, sizeof(model));
+    model.fd = -1;
+    if (model_path) {
+        if (map_model_file(model_path, &model)) return 1;
+        check(ds4_gpu_set_model_fd(model.fd), "model fd");
+    }
 
     ds4_v100_stage_scheduler *scheds[DS4_V100_EXPECTED_GPUS];
     ds4_v100_stage_scheduler_report reports[DS4_V100_EXPECTED_GPUS];
     memset(scheds, 0, sizeof(scheds));
     memset(reports, 0, sizeof(reports));
     uint32_t layers_executed = 0;
+    uint32_t tm_layers_executed = 0;
     uint64_t uploaded_bytes = 0;
     uint64_t uploaded_tensors = 0;
     const uint32_t n_slots = (uint32_t)slots;
@@ -162,6 +198,8 @@ int main(int argc, char **argv) {
     ds4_v100_stage_scheduler_options opts;
     ds4_v100_stage_scheduler_options_init(&opts);
     opts.pack_index_path = index;
+    opts.turbomind_pack_index_path = tm_index;
+    opts.shard_dir = shard_dir;
     opts.model_map = model.ptr;
     opts.model_size = model.size;
     opts.kv_active_slots = (uint64_t)slots;
@@ -253,6 +291,7 @@ int main(int argc, char **argv) {
                   reports[i].layers_executed == (uint32_t)expected_layers,
               msg);
         layers_executed += reports[i].layers_executed;
+        tm_layers_executed += reports[i].turbomind_routed_layers_executed;
         uploaded_bytes += reports[i].uploaded_bytes;
         uploaded_tensors += reports[i].uploaded_tensors;
     }
@@ -260,6 +299,9 @@ int main(int argc, char **argv) {
         check(layers_executed == DS4_V100_N_LAYERS, "full scheduler executed 43 layers");
         check(reports[stages - 1].last_layer == DS4_V100_N_LAYERS - 1,
               "full scheduler reached final layer");
+    }
+    if (shard_dir) {
+        check(tm_layers_executed == 1, "full appliance smoke used one TurboMind routed layer");
     }
 
     const uint64_t hc_values = (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS;
@@ -276,13 +318,14 @@ int main(int argc, char **argv) {
 
 cleanup:
     printf("cuda_v100_full_scheduler_smoke: stages=%d token=%d pos=%d slots=%u layers=%" PRIu32
-           " last=%d-%d gpu=%d uploaded_tensors=%" PRIu64 " uploaded_bytes=%" PRIu64
+           " tm_layers=%" PRIu32 " last=%d-%d gpu=%d uploaded_tensors=%" PRIu64 " uploaded_bytes=%" PRIu64
            " expert_last=%d %s\n",
            stages,
            token,
            position,
            n_slots,
            layers_executed,
+           tm_layers_executed,
            reports[stages - 1].first_layer,
            reports[stages - 1].last_layer,
            reports[stages - 1].gpu,

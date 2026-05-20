@@ -1137,6 +1137,7 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
     if (report) {
         memset(report, 0, sizeof(*report));
         report->routes = routes;
+        report->turbomind_routed = state->has_turbomind_routed ? 1u : 0u;
         if (readback_routes) {
             for (uint32_t i = 0; i < routes && i < 6u; i++) {
                 report->selected_experts[i] = selected[i];
@@ -1525,6 +1526,7 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
             ds4_v100_layer_execute_report *report = &reports[slot];
             memset(report, 0, sizeof(*report));
             report->routes = routes;
+            report->turbomind_routed = state->has_turbomind_routed ? 1u : 0u;
             if (readback_routes) {
                 for (uint32_t i = 0; i < routes && i < 6u; i++) {
                     report->selected_experts[i] = selected[(uint64_t)slot * routes + i];

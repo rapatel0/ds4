@@ -43,6 +43,7 @@ typedef struct {
     int first_layer;
     int last_layer;
     uint32_t layers_executed;
+    uint32_t turbomind_routed_layers_executed;
     uint32_t position;
     uint32_t token;
     uint64_t arena_bytes;

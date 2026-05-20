@@ -132,6 +132,17 @@ static uint64_t scheduler_model_offset(const ds4_v100_stage_scheduler *sched,
     return (sched && sched->model_map_uses_shard_offsets) ? b->shard_offset : b->source_offset;
 }
 
+static int scheduler_activate_model_source(const ds4_v100_stage_scheduler *sched,
+                                           char *err,
+                                           size_t errlen) {
+    if (!sched || sched->shard_fd < 0) return 0;
+    if (!ds4_gpu_set_model_fd(sched->shard_fd)) {
+        return scheduler_errorf(err, errlen, "failed to activate shard fd for gpu%d",
+                                sched->stage.gpu);
+    }
+    return 0;
+}
+
 static scheduler_layer_cache *scheduler_cache_slot(ds4_v100_stage_scheduler *sched,
                                                    int layer,
                                                    uint32_t slot) {
@@ -793,7 +804,8 @@ int ds4_v100_stage_scheduler_open(ds4_v100_stage_scheduler **out,
         ds4_v100_stage_scheduler_close(sched);
         return 1;
     }
-    if (ds4_v100_context_lookup_tensor_binding(sched->ctx,
+    if (sched->stage.owns_token_embedding &&
+        ds4_v100_context_lookup_tensor_binding(sched->ctx,
                                                "token_embd.weight",
                                                &sched->token_embedding,
                                                err,
@@ -801,32 +813,34 @@ int ds4_v100_stage_scheduler_open(ds4_v100_stage_scheduler **out,
         ds4_v100_stage_scheduler_close(sched);
         return 1;
     }
-    if (ds4_v100_context_lookup_tensor_binding(sched->ctx,
-                                               "hc_head_fn",
-                                               &sched->hc_head_fn,
-                                               err,
-                                               errlen) ||
-        ds4_v100_context_lookup_tensor_binding(sched->ctx,
-                                               "hc_head_base",
-                                               &sched->hc_head_base,
-                                               err,
-                                               errlen) ||
-        ds4_v100_context_lookup_tensor_binding(sched->ctx,
-                                               "hc_head_scale",
-                                               &sched->hc_head_scale,
-                                               err,
-                                               errlen) ||
-        ds4_v100_context_lookup_tensor_binding(sched->ctx,
-                                               "output_norm.weight",
-                                               &sched->output_norm,
-                                               err,
-                                               errlen) ||
-        ds4_v100_context_output_head_binding(sched->ctx,
-                                             &sched->output_weight,
-                                             err,
-                                             errlen)) {
-        ds4_v100_stage_scheduler_close(sched);
-        return 1;
+    if (sched->stage.owns_output_head) {
+        if (ds4_v100_context_lookup_tensor_binding(sched->ctx,
+                                                   "hc_head_fn",
+                                                   &sched->hc_head_fn,
+                                                   err,
+                                                   errlen) ||
+            ds4_v100_context_lookup_tensor_binding(sched->ctx,
+                                                   "hc_head_base",
+                                                   &sched->hc_head_base,
+                                                   err,
+                                                   errlen) ||
+            ds4_v100_context_lookup_tensor_binding(sched->ctx,
+                                                   "hc_head_scale",
+                                                   &sched->hc_head_scale,
+                                                   err,
+                                                   errlen) ||
+            ds4_v100_context_lookup_tensor_binding(sched->ctx,
+                                                   "output_norm.weight",
+                                                   &sched->output_norm,
+                                                   err,
+                                                   errlen) ||
+            ds4_v100_context_output_head_binding(sched->ctx,
+                                                 &sched->output_weight,
+                                                 err,
+                                                 errlen)) {
+            ds4_v100_stage_scheduler_close(sched);
+            return 1;
+        }
     }
 
     uint64_t arena_bytes = sched->stage.arena_bytes;
@@ -945,6 +959,7 @@ int ds4_v100_stage_scheduler_decode_hc_slot_span(
         return scheduler_errorf(err, errlen, "failed to set scheduler device gpu%d",
                                 sched->stage.gpu);
     }
+    if (scheduler_activate_model_source(sched, err, errlen)) return 1;
 
     ds4_gpu_tensor *cur[DS4_V100_SCHED_MAX_SLOTS];
     ds4_gpu_tensor *next[DS4_V100_SCHED_MAX_SLOTS];
@@ -955,6 +970,7 @@ int ds4_v100_stage_scheduler_decode_hc_slot_span(
     double timing_ffn_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
     double timing_hc_final_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
     double timing_total_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
+    uint32_t turbomind_layers[DS4_V100_SCHED_MAX_SLOTS] = {0};
     memset(last, 0, sizeof(last));
     for (uint32_t rel = 0; rel < n_slots; rel++) {
         const uint32_t slot = slot_start + rel;
@@ -1044,6 +1060,7 @@ int ds4_v100_stage_scheduler_decode_hc_slot_span(
             timing_ffn_ms[rel] += last[rel].timing_ffn_ms;
             timing_hc_final_ms[rel] += last[rel].timing_hc_final_ms;
             timing_total_ms[rel] += last[rel].timing_total_ms;
+            turbomind_layers[rel] += last[rel].turbomind_routed ? 1u : 0u;
             ds4_gpu_tensor *tmp = cur[rel];
             cur[rel] = next[rel];
             next[rel] = tmp;
@@ -1067,6 +1084,7 @@ int ds4_v100_stage_scheduler_decode_hc_slot_span(
             r->uploaded_tensors = sched->uploaded_tensors;
             r->uploaded_bytes = sched->uploaded_bytes;
             r->last_layer_report = last[rel];
+            r->turbomind_routed_layers_executed = turbomind_layers[rel];
             r->timing_hc_attn_ms = timing_hc_attn_ms[rel];
             r->timing_attention_ms = timing_attention_ms[rel];
             r->timing_hc_ffn_ms = timing_hc_ffn_ms[rel];
@@ -1123,6 +1141,7 @@ int ds4_v100_stage_scheduler_decode_token_slot_span(
         return scheduler_errorf(err, errlen, "failed to set scheduler device gpu%d",
                                 sched->stage.gpu);
     }
+    if (scheduler_activate_model_source(sched, err, errlen)) return 1;
     if (sched->token_embedding.n_shape_dims != 2 ||
         sched->token_embedding.shape[0] != DS4_V100_HC_COLS) {
         return scheduler_error(err, errlen, "token embedding shape does not match HC width");
@@ -1184,6 +1203,7 @@ int ds4_v100_stage_scheduler_decode_token_checkpoints(
         return scheduler_errorf(err, errlen, "failed to set scheduler device gpu%d",
                                 sched->stage.gpu);
     }
+    if (scheduler_activate_model_source(sched, err, errlen)) return 1;
     if (sched->token_embedding.n_shape_dims != 2 ||
         sched->token_embedding.shape[0] != DS4_V100_HC_COLS) {
         return scheduler_error(err, errlen, "token embedding shape does not match HC width");
@@ -1357,9 +1377,11 @@ int ds4_v100_stage_scheduler_decode_hc_checkpoints(
         return scheduler_errorf(err, errlen, "failed to set scheduler device gpu%d",
                                 sched->stage.gpu);
     }
+    if (scheduler_activate_model_source(sched, err, errlen)) return 1;
     ds4_gpu_tensor *cur = sched->cur_hc[0];
     ds4_gpu_tensor *next = cur == sched->hc_a[0] ? sched->hc_b[0] : sched->hc_a[0];
     ds4_v100_layer_execute_report last;
+    uint32_t turbomind_layers = 0;
     memset(&last, 0, sizeof(last));
     uint32_t executed = 0;
     for (int layer = sched->stage.layer_begin; layer <= sched->stage.layer_end; layer++) {
@@ -1400,6 +1422,7 @@ int ds4_v100_stage_scheduler_decode_hc_checkpoints(
         cur = next;
         next = tmp;
         executed++;
+        turbomind_layers += last.turbomind_routed ? 1u : 0u;
         if (checkpoint_fn) {
             const uint64_t hc_bytes =
                 (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS * sizeof(float);
@@ -1431,6 +1454,7 @@ int ds4_v100_stage_scheduler_decode_hc_checkpoints(
         report->uploaded_tensors = sched->uploaded_tensors;
         report->uploaded_bytes = sched->uploaded_bytes;
         report->last_layer_report = last;
+        report->turbomind_routed_layers_executed = turbomind_layers;
     }
     return 0;
 }
@@ -1474,6 +1498,7 @@ int ds4_v100_stage_scheduler_read_token_embedding_f32(
     if (token >= b->shape[1]) {
         return scheduler_error(err, errlen, "token outside embedding vocab");
     }
+    if (scheduler_activate_model_source(sched, err, errlen)) return 1;
     const uint64_t row_bytes = b->shape[0] * sizeof(uint16_t);
     const uint64_t row_offset = scheduler_model_offset(sched, b) + (uint64_t)token * row_bytes;
     if (row_offset > sched->model_size ||
@@ -1706,6 +1731,7 @@ int ds4_v100_stage_scheduler_select_topk_slot(ds4_v100_stage_scheduler *sched,
         return scheduler_errorf(err, errlen, "failed to set scheduler device gpu%d",
                                 sched->stage.gpu);
     }
+    if (scheduler_activate_model_source(sched, err, errlen)) return 1;
 
     const uint64_t hc_values = (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS;
     if (sched->hc_head_fn.n_shape_dims != 2 ||
@@ -1880,6 +1906,7 @@ int ds4_v100_stage_scheduler_select_token_batch(ds4_v100_stage_scheduler *sched,
         return scheduler_errorf(err, errlen, "failed to set scheduler device gpu%d",
                                 sched->stage.gpu);
     }
+    if (scheduler_activate_model_source(sched, err, errlen)) return 1;
 
     const uint64_t hc_values = (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS;
     const uint64_t hc_bytes = hc_values * sizeof(float);

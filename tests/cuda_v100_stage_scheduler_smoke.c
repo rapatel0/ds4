@@ -13,6 +13,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+enum {
+    PATH_BUF_SIZE = 4096,
+};
+
 typedef struct {
     const unsigned char *ptr;
     uint64_t size;
@@ -30,7 +34,10 @@ static void check(int cond, const char *msg) {
 
 static void usage(FILE *fp) {
     fprintf(fp,
-            "usage: tests/cuda_v100_stage_scheduler_smoke --index FILE --model FILE [--stage N] [--token N] [--position N] [--slots N]\n");
+            "usage: tests/cuda_v100_stage_scheduler_smoke --index FILE "
+            "[--model FILE | --shard-dir DIR | --appliance-dir DIR] "
+            "[--tm-index FILE] "
+            "[--stage N] [--token N] [--position N] [--slots N]\n");
 }
 
 static int parse_int_arg(const char *s, const char *name, int max_v) {
@@ -43,6 +50,16 @@ static int parse_int_arg(const char *s, const char *name, int max_v) {
         exit(2);
     }
     return (int)v;
+}
+
+static void join_path(char *dst, size_t dst_size, const char *dir, const char *base) {
+    int n = snprintf(dst, dst_size, "%s/%s", dir, base);
+    if (n < 0 || (size_t)n >= dst_size) {
+        fprintf(stderr, "cuda_v100_stage_scheduler_smoke: path too long: %s/%s\n",
+                dir ? dir : "(null)",
+                base ? base : "(null)");
+        exit(2);
+    }
 }
 
 static int map_model_file(const char *path, model_map *out) {
@@ -104,7 +121,13 @@ static void expect_finite_nonzero(const float *x, uint64_t n, const char *label)
 
 int main(int argc, char **argv) {
     const char *index = NULL;
+    const char *tm_index = NULL;
     const char *model_path = NULL;
+    const char *shard_dir = NULL;
+    char appliance_index[PATH_BUF_SIZE];
+    char appliance_tm_index[PATH_BUF_SIZE];
+    memset(appliance_index, 0, sizeof(appliance_index));
+    memset(appliance_tm_index, 0, sizeof(appliance_tm_index));
     int stage = 0;
     int token = 16;
     int position = 16;
@@ -113,8 +136,18 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--index") && i + 1 < argc) {
             index = argv[++i];
+        } else if (!strcmp(argv[i], "--tm-index") && i + 1 < argc) {
+            tm_index = argv[++i];
         } else if (!strcmp(argv[i], "--model") && i + 1 < argc) {
             model_path = argv[++i];
+        } else if (!strcmp(argv[i], "--shard-dir") && i + 1 < argc) {
+            shard_dir = argv[++i];
+        } else if (!strcmp(argv[i], "--appliance-dir") && i + 1 < argc) {
+            shard_dir = argv[++i];
+            join_path(appliance_index, sizeof(appliance_index), shard_dir, "pack-index.tsv");
+            join_path(appliance_tm_index, sizeof(appliance_tm_index), shard_dir, "turbomind-pack-index.tsv");
+            index = appliance_index;
+            tm_index = appliance_tm_index;
         } else if (!strcmp(argv[i], "--stage") && i + 1 < argc) {
             stage = parse_int_arg(argv[++i], "--stage", 7);
         } else if (!strcmp(argv[i], "--token") && i + 1 < argc) {
@@ -131,7 +164,7 @@ int main(int argc, char **argv) {
             return 2;
         }
     }
-    if (!index || !model_path) {
+    if (!index || (!model_path && !shard_dir)) {
         usage(stderr);
         return 2;
     }
@@ -143,12 +176,18 @@ int main(int argc, char **argv) {
     }
 
     model_map model;
-    if (map_model_file(model_path, &model)) return 1;
-    check(ds4_gpu_set_model_fd(model.fd), "model fd");
+    memset(&model, 0, sizeof(model));
+    model.fd = -1;
+    if (model_path) {
+        if (map_model_file(model_path, &model)) return 1;
+        check(ds4_gpu_set_model_fd(model.fd), "model fd");
+    }
 
     ds4_v100_stage_scheduler_options opts;
     ds4_v100_stage_scheduler_options_init(&opts);
     opts.pack_index_path = index;
+    opts.turbomind_pack_index_path = tm_index;
+    opts.shard_dir = shard_dir;
     opts.model_map = model.ptr;
     opts.model_size = model.size;
     opts.stage_id = stage;
@@ -204,14 +243,19 @@ int main(int argc, char **argv) {
     for (uint32_t i = 0; i < n_slots; i++) {
         check(reports[i].layers_executed > 0, "stage executed at least one layer");
         check(reports[i].last_layer_report.routes == 6, "last layer reported six routes");
+        if (shard_dir && stage == 0) {
+            check(reports[i].turbomind_routed_layers_executed == 1,
+                  "stage 0 used one TurboMind routed layer");
+        }
     }
 
-    printf("cuda_v100_stage_scheduler_smoke: stage=%d gpu=%d layers=%d-%d executed=%u token=%d pos=%d slots=%u arena_bytes=%" PRIu64 " uploaded_tensors=%" PRIu64 " uploaded_bytes=%" PRIu64 " expert0=%d %s\n",
+    printf("cuda_v100_stage_scheduler_smoke: stage=%d gpu=%d layers=%d-%d executed=%u tm_layers=%u token=%d pos=%d slots=%u arena_bytes=%" PRIu64 " uploaded_tensors=%" PRIu64 " uploaded_bytes=%" PRIu64 " expert0=%d %s\n",
            reports[0].stage_id,
            reports[0].gpu,
            reports[0].first_layer,
            reports[0].last_layer,
            reports[0].layers_executed,
+           reports[0].turbomind_routed_layers_executed,
            token,
            position,
            n_slots,

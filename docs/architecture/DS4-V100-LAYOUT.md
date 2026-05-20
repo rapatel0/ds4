@@ -231,9 +231,18 @@ to the resident arena, use shard offsets for CPU-side F32/BF16 control tensors,
 and dispatch routed experts through the no-repack TurboMind API when a layer is
 TurboMind-bound.
 
-This makes the memory policy explicit: bounded sidecar caches may be duplicated
-when admitted, but full production TurboMind packs should replace source expert
-residency or they will likely exceed the 32 GB V100 budget.
+Sprint 089 proves that scheduler execution can run from that appliance
+directory on V100. A bounded stage-0 appliance packs layer-0 routed experts in
+TurboMind format inside `gpu0.weights`, leaves the rest of gpu0's required
+tensors source-packed in the same shard, opens the scheduler with
+`--appliance-dir`, and executes layers 0-5 with `tm_layers=1`. This is the
+first scheduler-level validation of the single production appliance shape.
+
+This makes the memory policy explicit: earlier bounded sidecar caches may be
+duplicated only as validation artifacts, but the production appliance should
+replace source expert residency with TurboMind-packed expert residency inside
+`gpuN.weights`. Keeping full source MXFP4 experts plus full TurboMind experts
+resident together will likely exceed the 32 GB V100 budget.
 
 Any chosen production kernel must avoid persistent duplicate MXFP4, FP8, and
 INT8 resident packs unless the planner explicitly admits the memory cost.
