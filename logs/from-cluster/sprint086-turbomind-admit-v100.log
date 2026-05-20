@@ -1,0 +1,15 @@
+make tools/ds4-v100-turbomind-admit
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -D_FILE_OFFSET_BITS=64 -c -o tools/ds4-v100-turbomind-admit.o tools/ds4-v100-turbomind-admit.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -o tools/ds4-v100-turbomind-admit tools/ds4-v100-turbomind-admit.o ds4_pack.o ds4_turbomind_pack.o -lm -pthread
+
+./tools/ds4-v100-turbomind-admit --source-index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv --tm-index /tmp/ds4-sprint085-tm-pack/turbomind-pack-index.tsv --gpus 8 --vram-gib 32 --reserve-gib 4 --kv-gib 1 --scratch-gib 1
+gpu	source_arena_gib	source_payload_gib	source_expert_payload_gib	tm_sidecar_gib	duplicate_total_gib	replacement_payload_total_gib	duplicate_free_gib	replacement_free_gib	duplicate_status	replacement_status
+0	20.977	20.977	19.125	0.025	27.002	7.877	4.998	24.123	OK	OK
+1	20.018	20.018	19.125	0.000	26.018	6.893	5.982	25.107	OK	OK
+2	20.018	20.018	19.125	0.000	26.018	6.893	5.982	25.107	OK	OK
+3	20.018	20.018	19.125	0.000	26.018	6.893	5.982	25.107	OK	OK
+4	20.018	20.018	19.125	0.000	26.018	6.893	5.982	25.107	OK	OK
+5	16.692	16.692	15.938	0.000	22.692	6.754	9.308	25.246	OK	OK
+6	16.672	16.672	15.938	0.000	22.672	6.734	9.328	25.266	OK	OK
+7	11.006	11.006	9.562	0.000	17.006	7.443	14.994	24.557	OK	OK
+summary	duplicate_fit=yes	replacement_fit=yes	vram_gib=32.000	reserve_gib=4.000	kv_gib=1.000	scratch_gib=1.000

@@ -213,6 +213,12 @@ reconstructs TurboMind `StridedPtrH` tables from the recorded offsets and
 strides, and matches the source-MXFP4 arena reference on V100. The runtime
 should next load this sidecar as a planner-admitted acceleration artifact and
 account for its bytes separately before enabling scheduler selection.
+Sprint 086 adds `tools/ds4-v100-turbomind-admit` for that accounting: it
+reports source arena bytes, source expert payload, TurboMind sidecar bytes,
+duplicate totals, and replacement-style totals per GPU. This makes the memory
+policy explicit: bounded sidecar caches may be duplicated when admitted, but
+full production TurboMind packs should replace source expert residency or they
+will likely exceed the 32 GB V100 budget.
 
 Any chosen production kernel must avoid persistent duplicate MXFP4, FP8, and
 INT8 resident packs unless the planner explicitly admits the memory cost.

@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: codex
-revision: 97
+revision: 98
 ---
 
 # Vision: DS4 V100 Appliance
@@ -548,6 +548,13 @@ optimized V100 low-bit expert kernels in the actual hot path.
   gate/up/down from persistent packed buffers. The V100 smoke matches the
   source-MXFP4 arena reference with `max_abs=5.91128e-07`, `rel=0.000493098`,
   and `host_ms=0.265` for the bounded layer-0/two-expert fixture.
+- Sprint 086 added explicit VRAM admission for TurboMind sidecars.
+  `tools/ds4-v100-turbomind-admit` reports source arena bytes, source expert
+  payload bytes, sidecar bytes, duplicate totals, and replacement-style totals
+  per GPU. On the bounded sidecar, duplicate residency fits; the report also
+  shows GPU 0 already carries `19.125 GiB` of source expert payload, so full
+  production sidecars should replace source expert residency or be admitted as
+  a bounded cache instead of silently duplicating all experts.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -624,6 +631,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 083 opt-in TurboMind runtime bridge | `max_abs=0.00129318`, `rel=0.000258549`, `host_ms=43.298` on bounded runtime-wrapper smoke | Measured | The DS4 CUDA wrapper can now route MXFP4 FFN through copied TurboMind behind `DS4_V100_TURBOMIND_ROUTED_FFN=1`. This proves runtime semantics and fallback, but transient per-call packing makes it a validation bridge rather than a throughput default. |
 | Sprint 084 offline TurboMind sidecar packer | layer-0 gate/up/down, `2/256` experts each, `26,738,688` byte sidecar | Measured | The new packer reads real source GGUF bytes through the existing pack index and emits `gpuN.turbomind` plus `turbomind-pack-index.tsv`. This starts the production format path; runtime sidecar loading and full memory admission are still pending. |
 | Sprint 085 persistent TurboMind sidecar smoke | `max_abs=5.91128e-07`, `rel=0.000493098`, `host_ms=0.265` | Measured | The new sidecar parser and CUDA smoke load `gpuN.turbomind` once, reconstruct TurboMind pointer tables from offsets/strides, and run grouped gate/up/down from persistent packed buffers against the source-MXFP4 arena reference. This removes the transient repack tax at the adapter boundary; full memory admission and scheduler selection remain. |
+| Sprint 086 TurboMind sidecar admission | GPU0 bounded duplicate total `27.002 GiB`; source expert payload `19.125 GiB` | Measured | The admission tool proves the accounting path and shows the production constraint: bounded sidecars fit as duplicate cache, but full sidecars should be replacement/admitted artifacts because source experts already occupy most per-GPU payload. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -1867,6 +1875,23 @@ GPU utilization with architectural changes, and only then compare against the
   sprint should add memory admission and scheduler-side selection for resident
   TurboMind sidecars.
 
+### Sprint 086 - TurboMind Sidecar VRAM Admission [complete]
+
+- **Goal**: Add an admission report that prevents TurboMind sidecars from
+  silently overfilling 32 GB V100s when moving beyond bounded smokes.
+- **Rationale**: Persistent sidecars are the right performance path, but a full
+  duplicate expert cache would be dangerous. The runtime needs explicit memory
+  accounting before any broad scheduler enablement.
+- **Outcome**: `SHIP_SIDECAR_ADMISSION`. Added
+  `tools/ds4-v100-turbomind-admit`, which reads the source pack index and the
+  TurboMind sidecar index, then reports source arena bytes, source expert
+  payload, sidecar bytes, duplicate totals, and replacement-style totals per
+  GPU. With 32 GiB VRAM, 4 GiB reserve, 1 GiB KV, and 1 GiB scratch, the
+  bounded sidecar reports GPU0 duplicate total `27.002 GiB` and
+  replacement-style total `7.877 GiB`. The key production signal is that GPU0
+  already has `19.125 GiB` of source expert payload, so full sidecars should
+  replace source experts or be admitted as a bounded cache.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -2113,6 +2138,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 083 opt-in TurboMind runtime bridge. | The DS4 CUDA wrapper can now call copied TurboMind behind `DS4_V100_TURBOMIND_ROUTED_FFN=1`, with strict and fallback modes. Because it repacks expert matrices transiently, it is a semantic bridge rather than the performance layout. The next sprint should make TurboMind packs offline/device-resident without duplicate source expert residency. | Sprint 084+ |
 | 2026-05-20 | Shipped Sprint 084 offline TurboMind expert sidecar packer. | The project now has a CUDA tool that derives TurboMind packed expert sidecars from the real DS4 GGUF and existing V100 pack index. This keeps source provenance stable while creating the format needed to remove runtime repacking. The next sprint should add a bounded sidecar loader and adapter path from persistent packed buffers. | Sprint 085+ |
 | 2026-05-20 | Shipped Sprint 085 persistent TurboMind sidecar smoke. | The project can now parse the TurboMind sidecar index, upload a bounded sidecar once, reconstruct device pointer tables, and run grouped MXFP4 experts from persistent packed buffers with source-arena parity. The next sprint should make this planner-admitted and scheduler-selectable instead of a standalone smoke. | Sprint 086+ |
+| 2026-05-20 | Shipped Sprint 086 TurboMind sidecar admission. | The project now reports whether sidecar layouts fit the 32 GiB V100 budget under duplicate and replacement-style residency assumptions. Use this before enabling persistent TurboMind packs broadly; full sidecars should replace source expert bytes or be admitted as bounded cache. | Sprint 087+ |
 
 ## Open Questions
 
