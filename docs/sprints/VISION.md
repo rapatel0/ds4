@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: codex
-revision: 108
+revision: 109
 ---
 
 # Vision: DS4 V100 Appliance
@@ -616,6 +616,10 @@ optimized V100 low-bit expert kernels in the actual hot path.
   the launcher default after V100 A/B improved 8-slot/256K serving to
   `27.049799` generated tok/s and 4-slot/1M serving to `18.500281` generated
   tok/s with token-match correctness.
+- Sprint 103 removed the per-weight `ldexpf()` path from E4M3 F8 decode by
+  constructing exact F32 bit patterns directly. The production appliance now
+  measures `30.862791` generated tok/s at 256K/8 slots and `19.733742`
+  generated tok/s at 1M/4 slots, with token-match correctness preserved.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -708,6 +712,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 100 TurboMind sync readback A/B | `26.372672` generated tok/s at 256K/8 slots production default | Measured | Adds an opt-in TurboMind grouped GEMM ABI that accepts host-known routed row count and makes packed route validation readback debug-only. V100 evidence showed the no-row-count-readback ABI moves wait time into `cudaDeviceSynchronize` and is slower, so production defaults to the old ABI with route validation sync off (`DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS=1`, `DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC=0`). |
 | Sprint 101 batch attention semantic repair | `26.402101` default vs `26.432087` opt-in at 256K/8 slots; `18.102742` default vs `17.503345` opt-in at 1M/4 slots | Measured | Repairs the opt-in batch projection path to use attention RMS-normalized rows and the same compressed-KV preparation input as the single-slot path. Correctness passes, but the 8-slot result is noise-level and the 1M/4-slot result regresses, so `DS4_V100_ENABLE_BATCH_ATTN_PROJ=1` remains off by default. |
 | Sprint 102 F8 row-pair default | `27.049799` generated tok/s at 256K/8 slots; `18.500281` at 1M/4 slots | Measured | Computes two F8 arena output rows per CTA across the hot F8 APIs. Same-binary A/B improved 8-slot/256K from `26.447308` to `27.037514` and 4-slot/1M from `17.821073` to `18.500281`, with launcher-default validation at `27.049799`. `DS4_V100_CUDA_F8_ROWPAIR=1` is now the appliance default with rollback to `0`. |
+| Sprint 103 exact-bit F8 decode | `30.862791` generated tok/s at 256K/8 slots; `19.733742` at 1M/4 slots | Measured | Replaces per-weight `ldexpf()` E4M3 decode with exact F32 bit construction. Selected-token correctness remains `3136`; production soaks preserve `8/8` and `4/4` token matches. This improves the Sprint 102 launcher default by about `14.1%` at 256K/8 slots and `6.7%` at 1M/4 slots. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -2219,6 +2224,22 @@ GPU utilization with architectural changes, and only then compare against the
   `token_match=8/8`, so row-pair is now the appliance default with rollback to
   `DS4_V100_CUDA_F8_ROWPAIR=0`.
 
+### Sprint 103 - Exact-Bit F8 Decode [complete]
+
+- **Goal**: Remove the remaining per-element `ldexpf()` cost from the dominant
+  F8 arena decode/matmul path without changing source dtype or tensor layout.
+- **Rationale**: The warmed appliance profile still pointed at F8 arena matmul
+  after Sprint 102. Because E4M3 values and E8M0 scales are finite low-bit
+  formats, the E4M3 value can be decoded by exact F32 exponent/mantissa bit
+  construction instead of runtime `ldexpf()`.
+- **Outcome**: `SHIP_EXACT_F8_DECODE`. The CUDA helper now constructs exact F32
+  bits for normal and subnormal E4M3 values, preserving zero/NaN handling.
+  V100 validation passed source dtype, projection attention, stage scheduler,
+  full scheduler, appliance selected-token, and served throughput gates. The
+  8-slot/256K production soak improved from `27.049799` to `30.862791`
+  generated tok/s, and the 4-slot/1M soak improved from `18.500281` to
+  `19.733742`, both with token-match correctness.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -2482,6 +2503,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 100 TurboMind sync readback A/B. | The packed TurboMind route-validation readback is now debug-only in production, while the no-row-count-readback ABI remains opt-in because V100 profiling showed the wait moved into `cudaDeviceSynchronize` and 8-slot throughput regressed. The measured production default is old ABI plus route sync off at `26.372672` generated tok/s for 256K/8 slots. The next sprint should target stage/layer synchronization or a larger batched attention boundary. | Sprint 101+ |
 | 2026-05-20 | Shipped Sprint 101 batch attention semantic repair. | The opt-in batch attention projection path now matches single-slot attention RMS norm and compressed-KV prep ordering, but V100 A/B shows no production-worthy gain (`26.43` vs `26.40` at 256K/8 slots and a regression at 1M/4 slots). Keep it opt-in and move the next optimization to a larger attention-stage boundary, stage/layer synchronization, or F8 matmul shape work. | Sprint 102+ |
 | 2026-05-20 | Shipped Sprint 102 F8 row-pair default. | The F8 arena matmul path now has a two-output-row CTA shape across the hot F8 APIs and is defaulted through `DS4_V100_CUDA_F8_ROWPAIR=1`. V100 A/B produced a real but modest default-worthy gain (`27.05` generated tok/s at 256K/8 slots), so the next sprint should profile the new default and pursue larger F8/TurboMind kernel occupancy or cross-layer synchronization reductions. | Sprint 103+ |
+| 2026-05-20 | Shipped Sprint 103 exact-bit F8 decode. | Removing `ldexpf()` from E4M3 decode produced the first post-row-pair double-digit kernel-side gain: `30.86` generated tok/s at 256K/8 slots and `19.73` at 1M/4 slots, with selected-token correctness preserved. The next sprint should profile this new default and decide between more F8 kernel shaping, vectorized decode, or the next TurboMind occupancy step. | Sprint 104+ |
 
 ## Open Questions
 

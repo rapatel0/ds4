@@ -2704,15 +2704,18 @@ __device__ static float arena_e8m0_to_f32(uint8_t e) {
 }
 
 __device__ static float arena_e4m3fn_to_f32(uint8_t x) {
-    uint8_t ax = x & 0x7fu;
-    bool sign = (x & 0x80u) != 0;
+    const uint32_t sign = ((uint32_t)x & 0x80u) << 24;
+    const uint32_t ax = (uint32_t)x & 0x7fu;
     if (ax == 0) return __uint_as_float(sign ? 0x80000000u : 0u);
     if (ax == 0x7f) return __uint_as_float(0x7fc00000u);
-    int exp = (x >> 3) & 0x0f;
-    int man = x & 0x07;
-    float v = exp == 0 ? ldexpf((float)man, -9)
-                       : ldexpf(1.0f + (float)man / 8.0f, exp - 7);
-    return sign ? -v : v;
+    const uint32_t exp = ax >> 3;
+    const uint32_t man = ax & 0x07u;
+    if (exp != 0) {
+        return __uint_as_float(sign | ((exp + 120u) << 23) | (man << 20));
+    }
+    const uint32_t hi = man >= 4u ? 2u : (man >= 2u ? 1u : 0u);
+    const uint32_t mant = (man << (23u - hi)) & 0x007fffffu;
+    return __uint_as_float(sign | ((118u + hi) << 23) | mant);
 }
 
 __device__ static float arena_mxfp4_nibble_to_f32(uint8_t q) {

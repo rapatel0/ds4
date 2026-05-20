@@ -19,6 +19,10 @@ typedef struct {
     int fd;
 } model_map;
 
+enum {
+    PATH_BUF_SIZE = 4096,
+};
+
 static int failures;
 
 static void check(int cond, const char *msg) {
@@ -30,8 +34,20 @@ static void check(int cond, const char *msg) {
 
 static void usage(FILE *fp) {
     fprintf(fp,
-            "usage: tests/cuda_v100_selected_token_smoke --index FILE --model FILE "
+            "usage: tests/cuda_v100_selected_token_smoke (--index FILE | --appliance-dir DIR) "
+            "--model FILE [--tm-index FILE] [--shard-dir DIR] "
             "[--prompt-file FILE] [--expected-token-hex HEX] [--top-k N]\n");
+}
+
+static void join_path(char *dst, size_t dst_size, const char *dir, const char *base) {
+    int n = snprintf(dst, dst_size, "%s/%s", dir, base);
+    if (n < 0 || (size_t)n >= dst_size) {
+        fprintf(stderr,
+                "cuda_v100_selected_token_smoke: path too long: %s/%s\n",
+                dir ? dir : "(null)",
+                base ? base : "(null)");
+        exit(2);
+    }
 }
 
 static int hex_value(char c) {
@@ -144,14 +160,30 @@ static void unmap_model_file(model_map *m) {
 
 int main(int argc, char **argv) {
     const char *index = NULL;
+    const char *tm_index = NULL;
+    const char *shard_dir = NULL;
     const char *model_path = NULL;
     const char *prompt_file = "tests/test-vectors/prompts/short_reasoning_plain.txt";
     const char *expected_hex = NULL;
+    char appliance_index[PATH_BUF_SIZE];
+    char appliance_tm_index[PATH_BUF_SIZE];
+    memset(appliance_index, 0, sizeof(appliance_index));
+    memset(appliance_tm_index, 0, sizeof(appliance_tm_index));
     uint32_t top_k = 5;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--index") && i + 1 < argc) {
             index = argv[++i];
+        } else if (!strcmp(argv[i], "--tm-index") && i + 1 < argc) {
+            tm_index = argv[++i];
+        } else if (!strcmp(argv[i], "--shard-dir") && i + 1 < argc) {
+            shard_dir = argv[++i];
+        } else if (!strcmp(argv[i], "--appliance-dir") && i + 1 < argc) {
+            shard_dir = argv[++i];
+            join_path(appliance_index, sizeof(appliance_index), shard_dir, "pack-index.tsv");
+            join_path(appliance_tm_index, sizeof(appliance_tm_index), shard_dir, "turbomind-pack-index.tsv");
+            index = appliance_index;
+            tm_index = appliance_tm_index;
         } else if (!strcmp(argv[i], "--model") && i + 1 < argc) {
             model_path = argv[++i];
         } else if (!strcmp(argv[i], "--prompt-file") && i + 1 < argc) {
@@ -240,8 +272,11 @@ int main(int argc, char **argv) {
     ds4_v100_stage_scheduler_options opts;
     ds4_v100_stage_scheduler_options_init(&opts);
     opts.pack_index_path = index;
+    opts.turbomind_pack_index_path = tm_index;
+    opts.shard_dir = shard_dir;
     opts.model_map = model.ptr;
     opts.model_size = model.size;
+    opts.kv_active_slots = 1;
     opts.attn_comp_cap = 64;
     opts.index_comp_cap = 64;
     opts.indexer_top_k = 512;
