@@ -60,6 +60,7 @@ typedef struct {
     bool profile_decode;
     bool wavefront_decode;
     bool async_pipeline_decode;
+    ds4_v100_replay_async_pipeline_mode async_pipeline_mode;
 } replay_cli_options;
 
 typedef struct {
@@ -165,6 +166,18 @@ static const char *queue_policy_name(replay_queue_policy p) {
     case REPLAY_QUEUE_SEQUENTIAL: return "sequential";
     case REPLAY_QUEUE_REJECT_BUSY:
     default: return "reject-busy";
+    }
+}
+
+static const char *async_pipeline_mode_name(ds4_v100_replay_async_pipeline_mode mode) {
+    switch (mode) {
+    case DS4_V100_REPLAY_ASYNC_PIPELINE_PERSISTENT:
+        return "persistent";
+    case DS4_V100_REPLAY_ASYNC_PIPELINE_PER_STEP:
+        return "per-step";
+    case DS4_V100_REPLAY_ASYNC_PIPELINE_OFF:
+    default:
+        return "off";
     }
 }
 
@@ -461,7 +474,9 @@ static void usage(FILE *fp) {
             "  --serial-open             open resident stages serially for benchmarking\n"
             "  --profile-decode          enable synchronized per-stage decode profiling\n"
             "  --wavefront-decode        enable opt-in stage-wavefront batch decode\n"
-            "  --async-pipeline-decode   enable opt-in threaded stage pipeline decode\n"
+            "  --async-pipeline-decode   enable preferred opt-in async pipeline decode\n"
+            "  --async-pipeline-mode M   off, persistent, or per-step\n"
+            "  --async-pipeline-per-step enable diagnostic per-token-step async workers\n"
             "  --mtp-serving MODE        off or verify, default off\n"
             "  --mtp-top-k N             MTP draft top-k to report, default 5\n"
             "  --mtp-gpu N               MTP sidecar GPU, default 7\n"
@@ -583,6 +598,28 @@ static replay_cli_options parse_options(int argc, char **argv) {
             opt.wavefront_decode = true;
         } else if (!strcmp(arg, "--async-pipeline-decode")) {
             opt.async_pipeline_decode = true;
+            opt.async_pipeline_mode = DS4_V100_REPLAY_ASYNC_PIPELINE_PER_STEP;
+        } else if (!strcmp(arg, "--async-pipeline-per-step")) {
+            opt.async_pipeline_decode = true;
+            opt.async_pipeline_mode = DS4_V100_REPLAY_ASYNC_PIPELINE_PER_STEP;
+        } else if (!strcmp(arg, "--async-pipeline-mode")) {
+            const char *v = need_arg(&i, argc, argv, arg);
+            if (!strcmp(v, "off") || !strcmp(v, "false") || !strcmp(v, "0")) {
+                opt.async_pipeline_decode = false;
+                opt.async_pipeline_mode = DS4_V100_REPLAY_ASYNC_PIPELINE_OFF;
+            } else if (!strcmp(v, "persistent") || !strcmp(v, "on") ||
+                       !strcmp(v, "true") || !strcmp(v, "1")) {
+                opt.async_pipeline_decode = true;
+                opt.async_pipeline_mode = DS4_V100_REPLAY_ASYNC_PIPELINE_PERSISTENT;
+            } else if (!strcmp(v, "per-step") || !strcmp(v, "per_step") ||
+                       !strcmp(v, "step")) {
+                opt.async_pipeline_decode = true;
+                opt.async_pipeline_mode = DS4_V100_REPLAY_ASYNC_PIPELINE_PER_STEP;
+            } else {
+                fprintf(stderr,
+                        "ds4-v100-replay: --async-pipeline-mode must be off, persistent, or per-step\n");
+                exit(2);
+            }
         } else if (!strcmp(arg, "--mtp-serving")) {
             const char *v = need_arg(&i, argc, argv, arg);
             if (!strcmp(v, "off") || !strcmp(v, "false") || !strcmp(v, "0")) {
@@ -1061,7 +1098,33 @@ static void print_json_fp(FILE *fp,
         if (i) fprintf(fp, ",");
         fprintf(fp, "%.3f", c->open_ms[i]);
     }
-    fprintf(fp, "]},\"memory\":{");
+    if (c->async_pipeline_dispatches > 0) {
+        fprintf(fp, "],\"async_pipeline\":{");
+        fprintf(fp, "\"dispatches\":%" PRIu64 ",", c->async_pipeline_dispatches);
+        fprintf(fp, "\"total\":%.3f,", c->async_pipeline_total_ms);
+        fprintf(fp, "\"setup\":%.3f,", c->async_pipeline_setup_ms);
+        fprintf(fp, "\"host_wait\":%.3f,", c->async_pipeline_host_wait_ms);
+        fprintf(fp, "\"complete\":%.3f,", c->async_pipeline_complete_ms);
+        fprintf(fp, "\"wait_prev\":[");
+        for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
+            if (i) fprintf(fp, ",");
+            fprintf(fp, "%.3f", c->async_pipeline_worker_wait_ms[i]);
+        }
+        fprintf(fp, "],\"handoff\":[");
+        for (int i = 0; i < DS4_V100_EXPECTED_GPUS - 1; i++) {
+            if (i) fprintf(fp, ",");
+            fprintf(fp, "%.3f", c->handoff_ms[i]);
+        }
+        fprintf(fp, "],\"device_sync\":[");
+        for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
+            if (i) fprintf(fp, ",");
+            fprintf(fp, "%.3f", c->async_pipeline_sync_ms[i]);
+        }
+        fprintf(fp, "]}");
+    } else {
+        fprintf(fp, "]");
+    }
+    fprintf(fp, "},\"memory\":{");
     fprintf(fp, "\"uploaded_tensors\":%" PRIu64 ",", c->uploaded_tensors);
     fprintf(fp, "\"uploaded_bytes\":%" PRIu64 ",", c->uploaded_bytes);
     fprintf(fp, "\"arena_bytes\":[");
@@ -1300,6 +1363,9 @@ static void write_status_json(FILE *fp,
     fprintf(fp, "\"decode_profile\":%s,", opt->profile_decode ? "true" : "false");
     fprintf(fp, "\"wavefront_decode\":%s,", opt->wavefront_decode ? "true" : "false");
     fprintf(fp, "\"async_pipeline_decode\":%s,", opt->async_pipeline_decode ? "true" : "false");
+    fprintf(fp,
+            "\"async_pipeline_mode\":\"%s\",",
+            async_pipeline_mode_name(opt->async_pipeline_mode));
     fprintf(fp,
             "\"limits\":{\"slots\":%" PRIu32 ",\"configured_slots\":%" PRIu32
             ",\"active_slots\":%" PRIu32 ",\"active_microbatch\":%" PRIu32
@@ -1765,6 +1831,7 @@ int main(int argc, char **argv) {
     ropts.serial_open = opt.serial_open;
     ropts.wavefront_decode = opt.wavefront_decode;
     ropts.async_pipeline_decode = opt.async_pipeline_decode;
+    ropts.async_pipeline_mode = opt.async_pipeline_mode;
     if (opt.profile_decode) {
         setenv("DS4_V100_PROFILE_DECODE", "1", 1);
     }

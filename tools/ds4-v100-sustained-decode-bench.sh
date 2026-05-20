@@ -18,6 +18,7 @@ log_dir=""
 profile_decode="0"
 wavefront_decode="0"
 async_pipeline_decode="0"
+async_pipeline_mode="off"
 
 usage() {
     cat <<'USAGE'
@@ -41,7 +42,9 @@ Options:
   --profile-decode          pass --profile-decode to the replay server and
                             preserve averaged stage_profile timing
   --wavefront-decode        pass --wavefront-decode to the replay server
-  --async-pipeline-decode   pass --async-pipeline-decode to the replay server
+  --async-pipeline-decode   pass preferred async pipeline mode to the server
+  --async-pipeline-mode M   off, persistent, or per-step
+  --async-pipeline-per-step pass --async-pipeline-mode per-step
   --help                    show this help
 
 Each case starts one resident replay server with:
@@ -165,7 +168,34 @@ while [ "$#" -gt 0 ]; do
             ;;
         --async-pipeline-decode)
             async_pipeline_decode="1"
+            async_pipeline_mode="per-step"
             shift
+            ;;
+        --async-pipeline-per-step)
+            async_pipeline_decode="1"
+            async_pipeline_mode="per-step"
+            shift
+            ;;
+        --async-pipeline-mode)
+            [ "$#" -ge 2 ] || fail "--async-pipeline-mode requires a value"
+            case "$2" in
+                off|false|0)
+                    async_pipeline_decode="0"
+                    async_pipeline_mode="off"
+                    ;;
+                persistent|on|true|1)
+                    async_pipeline_decode="1"
+                    async_pipeline_mode="persistent"
+                    ;;
+                per-step|per_step|step)
+                    async_pipeline_decode="1"
+                    async_pipeline_mode="per-step"
+                    ;;
+                *)
+                    fail "--async-pipeline-mode must be off, persistent, or per-step"
+                    ;;
+            esac
+            shift 2
             ;;
         --help|-h)
             usage
@@ -355,6 +385,19 @@ def add_timing(acc, resp):
         if not isinstance(vals, list):
             vals = []
         acc.setdefault(key, []).append([float(v) for v in vals])
+    async_pipeline = timing.get("async_pipeline", {})
+    if not isinstance(async_pipeline, dict):
+        async_pipeline = {}
+    for key in ("total", "setup", "host_wait", "complete"):
+        try:
+            acc.setdefault("async_pipeline_" + key, []).append(float(async_pipeline.get(key, 0.0)))
+        except Exception:
+            acc.setdefault("async_pipeline_" + key, []).append(0.0)
+    for key in ("wait_prev", "handoff", "device_sync"):
+        vals = async_pipeline.get(key, [])
+        if not isinstance(vals, list):
+            vals = []
+        acc.setdefault("async_pipeline_" + key, []).append([float(v) for v in vals])
     stage_profile = timing.get("stage_profile", {})
     if not isinstance(stage_profile, dict):
         stage_profile = {}
@@ -471,6 +514,15 @@ timing_avg = {
         "ffn": avg_arrays(timing_acc.get("stage_profile_ffn", [])),
         "hc_final": avg_arrays(timing_acc.get("stage_profile_hc_final", [])),
         "total": avg_arrays(timing_acc.get("stage_profile_total", [])),
+    },
+    "async_pipeline_ms": {
+        "total": avg(timing_acc.get("async_pipeline_total", [])),
+        "setup": avg(timing_acc.get("async_pipeline_setup", [])),
+        "host_wait": avg(timing_acc.get("async_pipeline_host_wait", [])),
+        "complete": avg(timing_acc.get("async_pipeline_complete", [])),
+        "wait_prev": avg_arrays(timing_acc.get("async_pipeline_wait_prev", [])),
+        "handoff": avg_arrays(timing_acc.get("async_pipeline_handoff", [])),
+        "device_sync": avg_arrays(timing_acc.get("async_pipeline_device_sync", [])),
     },
 }
 
@@ -722,7 +774,7 @@ load_case() {
         cmd+=(--wavefront-decode)
     fi
     if [ "$async_pipeline_decode" = "1" ]; then
-        cmd+=(--async-pipeline-decode)
+        cmd+=(--async-pipeline-mode "$async_pipeline_mode")
     fi
 
     DS4_LOCK_FILE="$case_dir/ds4.lock" "${cmd[@]}" >"$server_log" 2>&1 &
@@ -789,7 +841,8 @@ printf 'warmup_requests\t%s\n' "$warmup_requests" >>"$summary_tsv"
 printf 'profile_decode\t%s\n' "$profile_decode" >>"$summary_tsv"
 printf 'wavefront_decode\t%s\n' "$wavefront_decode" >>"$summary_tsv"
 printf 'async_pipeline_decode\t%s\n' "$async_pipeline_decode" >>"$summary_tsv"
-printf '\nctx\tslots\tpolicy\tstatus_200\tstatus_other\terrors\ttoken_match\ttoken_mismatch\tlatency_avg_ms\tlatency_p50_ms\tlatency_p95_ms\tlatency_p99_ms\telapsed_s\taggregate_generated_tokens_per_second\taggregate_continuation_tokens_per_second\tavg_continuation_response_tokens_per_second\tavg_gpu_util_percent\tmax_gpu_util_percent\n' >>"$summary_tsv"
+printf 'async_pipeline_mode\t%s\n' "$async_pipeline_mode" >>"$summary_tsv"
+printf '\nctx\tslots\tpolicy\tstatus_200\tstatus_other\terrors\ttoken_match\ttoken_mismatch\tlatency_avg_ms\tlatency_p50_ms\tlatency_p95_ms\tlatency_p99_ms\telapsed_s\taggregate_generated_tokens_per_second\taggregate_continuation_tokens_per_second\tavg_continuation_response_tokens_per_second\tavg_gpu_util_percent\tmax_gpu_util_percent\tavg_async_total_ms\tavg_async_setup_ms\tavg_async_host_wait_ms\tavg_async_complete_ms\tavg_async_wait_prev_sum_ms\tavg_async_handoff_sum_ms\tavg_async_device_sync_sum_ms\n' >>"$summary_tsv"
 
 case_index=0
 case_paths=()
@@ -825,7 +878,21 @@ with open(rpath, "r", encoding="utf-8") as f:
     d = json.load(f)
 lat = d.get("latency_ms", {})
 timing = d.get("timing_avg", {})
+async_timing = timing.get("async_pipeline_ms", {})
+if not isinstance(async_timing, dict):
+    async_timing = {}
 gpu = d.get("gpu_utilization", {})
+def sum_array(name):
+    vals = async_timing.get(name, [])
+    if not isinstance(vals, list):
+        return 0.0
+    total = 0.0
+    for v in vals:
+        try:
+            total += float(v)
+        except Exception:
+            pass
+    return total
 print("\t".join([
     ctx,
     slots,
@@ -845,6 +912,13 @@ print("\t".join([
     f"{float(timing.get('continuation_tokens_per_second', 0.0)):.6f}",
     f"{float(gpu.get('avg_gpu_util_percent', 0.0)):.3f}",
     f"{float(gpu.get('max_gpu_util_percent', 0.0)):.3f}",
+    f"{float(async_timing.get('total', 0.0)):.3f}",
+    f"{float(async_timing.get('setup', 0.0)):.3f}",
+    f"{float(async_timing.get('host_wait', 0.0)):.3f}",
+    f"{float(async_timing.get('complete', 0.0)):.3f}",
+    f"{sum_array('wait_prev'):.3f}",
+    f"{sum_array('handoff'):.3f}",
+    f"{sum_array('device_sync'):.3f}",
 ]))
 PY
 )"

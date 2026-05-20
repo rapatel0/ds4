@@ -14,6 +14,12 @@ extern "C" {
 
 typedef struct ds4_v100_replay ds4_v100_replay;
 
+typedef enum {
+    DS4_V100_REPLAY_ASYNC_PIPELINE_OFF = 0,
+    DS4_V100_REPLAY_ASYNC_PIPELINE_PERSISTENT = 1,
+    DS4_V100_REPLAY_ASYNC_PIPELINE_PER_STEP = 2,
+} ds4_v100_replay_async_pipeline_mode;
+
 typedef struct {
     const char *model_path;
     const char *pack_index_path;
@@ -26,6 +32,7 @@ typedef struct {
     bool serial_open;
     bool wavefront_decode;
     bool async_pipeline_decode;
+    ds4_v100_replay_async_pipeline_mode async_pipeline_mode;
     bool suppress_router_readback;
 } ds4_v100_replay_options;
 
@@ -56,6 +63,13 @@ typedef struct {
     double stage_hc_final_ms[DS4_V100_EXPECTED_GPUS];
     double stage_profile_total_ms[DS4_V100_EXPECTED_GPUS];
     double handoff_ms[DS4_V100_EXPECTED_GPUS - 1];
+    uint64_t async_pipeline_dispatches;
+    double async_pipeline_total_ms;
+    double async_pipeline_setup_ms;
+    double async_pipeline_host_wait_ms;
+    double async_pipeline_complete_ms;
+    double async_pipeline_worker_wait_ms[DS4_V100_EXPECTED_GPUS];
+    double async_pipeline_sync_ms[DS4_V100_EXPECTED_GPUS];
     double output_head_ms;
     double token_text_ms;
     double total_ms;

@@ -1,0 +1,17 @@
+schema	ds4_v100_sustained_decode.v1
+model	/models/DSv4-Flash-256e-fixed.gguf
+pack_index	docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv
+expected_token_hex	3136
+tokens_per_request	16
+requests_per_case	4
+warmup_requests	1
+profile_decode	0
+wavefront_decode	0
+async_pipeline_decode	1
+async_pipeline_mode	persistent
+
+ctx	slots	policy	status_200	status_other	errors	token_match	token_mismatch	latency_avg_ms	latency_p50_ms	latency_p95_ms	latency_p99_ms	elapsed_s	aggregate_generated_tokens_per_second	aggregate_continuation_tokens_per_second	avg_continuation_response_tokens_per_second	avg_gpu_util_percent	max_gpu_util_percent	avg_async_total_ms	avg_async_setup_ms	avg_async_host_wait_ms	avg_async_complete_ms	avg_async_wait_prev_sum_ms	avg_async_handoff_sum_ms	avg_async_device_sync_sum_ms
+1048576	2	sequential	4	0	0	4	0	6266.089	6265.952	6269.786	6269.882	12.533716	5.106227	4.787088	5.406920	13.825	20.000	6090.951	0.520	6082.252	7.940	20474.862	70.662	8.163
+1048576	4	sequential	4	0	0	4	0	8089.537	8089.293	8090.480	8090.598	8.091253	7.909776	7.415415	4.251431	17.847	40.000	7757.013	0.571	7749.626	6.649	22062.751	151.684	11.685
+262144	2	sequential	4	0	0	4	0	6214.325	6214.145	6232.313	6232.415	12.430254	5.148728	4.826933	5.451401	14.086	20.000	6041.850	0.565	6034.998	6.090	20368.332	64.885	6.569
+262144	4	sequential	4	0	0	4	0	7963.458	7963.400	7964.267	7964.369	7.965177	8.034975	7.532789	4.309520	19.750	40.000	7641.711	0.574	7634.204	6.683	21686.845	161.381	11.960

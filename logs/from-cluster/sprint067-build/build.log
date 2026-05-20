@@ -1,0 +1,5 @@
+make: 'tools/ds4-v100-replay' is up to date.
+make: 'tests/cuda_source_dtypes_smoke' is up to date.
+make: 'tests/cuda_v100_full_scheduler_smoke' is up to date.
+make: 'tests/cuda_v100_selected_token_smoke' is up to date.
+make: 'tests/cuda_v100_stage_wavefront_smoke' is up to date.
