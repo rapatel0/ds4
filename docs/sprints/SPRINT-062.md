@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress.
+Complete.
 
 ## Overview
 
@@ -40,3 +40,21 @@ or a focused kernel rewrite.
 - Default replay still selects token hex `3136`.
 - Timing-enabled replay or sustained benchmark emits stage/layer timing data.
 - Sprint report maps measured time to a concrete next implementation choice.
+
+## Outcome
+
+`SHIP`. The replay tool now has an explicit `--profile-decode` option that
+enables the existing synchronized decode profiler without changing default
+runtime behavior. The sustained decode benchmark forwards that option and
+preserves averaged `stage_profile_ms` arrays in each case result.
+
+Cluster evidence was captured under
+`logs/from-cluster/sprint062-profile/`. All four profiled cases returned token
+hex `3136` with no HTTP errors or token mismatches.
+
+The timing decision is to pursue an opt-in stage-wavefront execution proof next.
+The current runtime remains stage-synchronous: stage-profile totals almost
+exactly match stage-decode totals, and 4 active slots roughly double latency
+without improving aggregate tok/s. That means the next useful serving win is
+overlapping independent token/request microbatches across GPU stages, not more
+slot admission, shared-F8 cleanup, or MTP commit work first.

@@ -15,6 +15,7 @@ host="127.0.0.1"
 port_base="18220"
 sample_ms="500"
 log_dir=""
+profile_decode="0"
 
 usage() {
     cat <<'USAGE'
@@ -35,6 +36,8 @@ Options:
   --port-base N             base port for case runs, default 18220
   --sample-ms N             nvidia-smi sample period in ms, default 500
   --log-dir DIR             write benchmark artifacts
+  --profile-decode          pass --profile-decode to the replay server and
+                            preserve averaged stage_profile timing
   --help                    show this help
 
 Each case starts one resident replay server with:
@@ -147,6 +150,10 @@ while [ "$#" -gt 0 ]; do
             [ "$#" -ge 2 ] || fail "--log-dir requires a value"
             log_dir="$2"
             shift 2
+            ;;
+        --profile-decode)
+            profile_decode="1"
+            shift
             ;;
         --help|-h)
             usage
@@ -336,6 +343,14 @@ def add_timing(acc, resp):
         if not isinstance(vals, list):
             vals = []
         acc.setdefault(key, []).append([float(v) for v in vals])
+    stage_profile = timing.get("stage_profile", {})
+    if not isinstance(stage_profile, dict):
+        stage_profile = {}
+    for key in ("hc_attn", "attention", "hc_ffn", "ffn", "hc_final", "total"):
+        vals = stage_profile.get(key, [])
+        if not isinstance(vals, list):
+            vals = []
+        acc.setdefault("stage_profile_" + key, []).append([float(v) for v in vals])
 
 def avg(vals):
     return statistics.fmean(vals) if vals else 0.0
@@ -437,6 +452,14 @@ timing_avg = {
     "generated_tokens_per_second": avg(timing_acc.get("generated_tokens_per_second", [])),
     "stage_decode_ms": avg_arrays(timing_acc.get("stage_decode", [])),
     "handoff_ms": avg_arrays(timing_acc.get("handoff", [])),
+    "stage_profile_ms": {
+        "hc_attn": avg_arrays(timing_acc.get("stage_profile_hc_attn", [])),
+        "attention": avg_arrays(timing_acc.get("stage_profile_attention", [])),
+        "hc_ffn": avg_arrays(timing_acc.get("stage_profile_hc_ffn", [])),
+        "ffn": avg_arrays(timing_acc.get("stage_profile_ffn", [])),
+        "hc_final": avg_arrays(timing_acc.get("stage_profile_hc_final", [])),
+        "total": avg_arrays(timing_acc.get("stage_profile_total", [])),
+    },
 }
 
 summary = {
@@ -680,6 +703,9 @@ load_case() {
         --port "$port"
         --max-requests "$server_max_requests"
     )
+    if [ "$profile_decode" = "1" ]; then
+        cmd+=(--profile-decode)
+    fi
 
     DS4_LOCK_FILE="$case_dir/ds4.lock" "${cmd[@]}" >"$server_log" 2>&1 &
     server_pid="$!"
@@ -742,6 +768,7 @@ printf 'expected_token_hex\t%s\n' "$expected_lower" >>"$summary_tsv"
 printf 'tokens_per_request\t%s\n' "$tokens" >>"$summary_tsv"
 printf 'requests_per_case\t%s\n' "$requests" >>"$summary_tsv"
 printf 'warmup_requests\t%s\n' "$warmup_requests" >>"$summary_tsv"
+printf 'profile_decode\t%s\n' "$profile_decode" >>"$summary_tsv"
 printf '\nctx\tslots\tpolicy\tstatus_200\tstatus_other\terrors\ttoken_match\ttoken_mismatch\tlatency_avg_ms\tlatency_p50_ms\tlatency_p95_ms\tlatency_p99_ms\telapsed_s\taggregate_generated_tokens_per_second\taggregate_continuation_tokens_per_second\tavg_continuation_response_tokens_per_second\tavg_gpu_util_percent\tmax_gpu_util_percent\n' >>"$summary_tsv"
 
 case_index=0
