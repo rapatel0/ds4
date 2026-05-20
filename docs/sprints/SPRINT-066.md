@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress.
+Complete.
 
 ## Overview
 
@@ -11,6 +11,19 @@ lever: 4 active slots rose from about `3.8` generated tok/s to about `8.7`.
 The implementation still creates and joins eight worker threads for every
 token-step batch. Sprint 066 keeps the same opt-in serving contract but turns
 those workers into a persistent replay-runtime service.
+
+## Outcome
+
+`SHIP` as an opt-in implementation detail, but do not make async pipeline
+decode the default yet.
+
+Persistent workers preserve correctness and remain materially faster than the
+serial stage-synchronous path. The paired V100 matrix measured `5.132695`
+generated tok/s at 1M/2 slots and `7.942345` at 1M/4 slots, versus serial
+`3.851964` and `3.788708`. However, this is slower than Sprint 065's per-step
+worker path (`5.571149` and `8.668248`), so the next performance sprint should
+profile the persistent dispatch/handoff synchronization before treating it as a
+default-ready path.
 
 ## Goals
 
@@ -52,15 +65,16 @@ those workers into a persistent replay-runtime service.
 
 ## Definition of Done
 
-- Local object builds pass for touched C files.
-- `bash -n tools/ds4-v100-sustained-decode-bench.sh` passes.
-- `git diff --check` passes.
-- V100 build passes for `tools/ds4-v100-replay` and scheduler/token smokes.
-- Existing V100 source/full scheduler/selected-token/wavefront smokes pass.
-- Async persistent served smoke returns token hex `3136` with no request
+- [x] Local object builds pass for touched C files.
+- [x] `bash -n tools/ds4-v100-sustained-decode-bench.sh` passes.
+- [x] `git diff --check` passes.
+- [x] V100 build passes for `tools/ds4-v100-replay` and scheduler/token
+  smokes.
+- [x] Existing V100 source/full scheduler/selected-token/wavefront smokes pass.
+- [x] Async persistent served smoke returns token hex `3136` with no request
   errors.
-- Paired persistent-async vs serial V100 benchmark artifacts are archived.
-- Sprint report records whether persistent workers improve over Sprint 065.
+- [x] Paired persistent-async vs serial V100 benchmark artifacts are archived.
+- [x] Sprint report records whether persistent workers improve over Sprint 065.
 
 ## Risks
 

@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: vision
-revision: 77
+revision: 78
 ---
 
 # Vision: DS4 V100 Appliance
@@ -424,6 +424,13 @@ optimized V100 low-bit expert kernels in the actual hot path.
   opt-in because workers are still created per token-step batch; the next
   practical-use sprint should make stage workers persistent and then retest
   default-readiness.
+- Sprint 066 converted the opt-in async path to replay-owned persistent stage
+  workers and preserved correctness, but it did not improve over Sprint 065.
+  The paired V100 matrix measured persistent async at `5.132695` generated
+  tok/s for 1M/2 slots and `7.942345` for 1M/4 slots, versus same-build serial
+  `3.851964` and `3.788708`. Because those numbers are `7-15%` below Sprint
+  065's per-step worker path, async remains opt-in and the next practical-use
+  sprint should profile dispatch/handoff synchronization before defaulting it.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -480,6 +487,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 063 wavefront lane proof | Correctness proof, not a throughput run | Measured | Slot-addressable stage scheduler APIs and per-device CUDA scratch now support two-stage wavefront lane mechanics. The V100 smoke matches serial HC exactly, so the next measurement should be an opt-in served wavefront benchmark. |
 | Sprint 064 opt-in served wavefront | `3.70` generated tok/s at 1M/2 slots, `3.69` at 256K/4 slots | Measured | Served wavefront decode is correct but slower than the paired serial control (`3.86` and `3.84` generated tok/s respectively). The current single-threaded diagonal scheduler does not create useful overlap and should remain non-default. |
 | Sprint 065 opt-in async stage pipeline | `5.57` generated tok/s at 1M/2 slots, `8.67` at 1M/4 slots | Measured | One host worker per stage creates real cross-GPU overlap while preserving token hex `3136`. Four slots finally scale, with avg GPU utilization rising to about `20%`; keep opt-in until workers are persistent across token steps. |
+| Sprint 066 persistent async workers | `5.13` generated tok/s at 1M/2 slots, `7.94` at 1M/4 slots | Measured | Replay-owned persistent stage workers are correct and still faster than serial (`3.85` and `3.79` generated tok/s), but they are `7-15%` slower than Sprint 065's per-step worker path. Keep async opt-in and profile dispatch/handoff synchronization before defaulting. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -1421,6 +1429,19 @@ GPU utilization with architectural changes, and only then compare against the
   slots, and from serial `3.81` to async `8.67` at 1M/4 slots. Keep opt-in
   until the stage workers are persistent across token steps and request batches.
 
+### Sprint 066 - Persistent Async Stage Workers [complete]
+
+- **Goal**: Reuse one async pipeline worker per V100 stage across token steps
+  instead of creating and joining workers for every token-step batch.
+- **Rationale**: Sprint 065 proved per-stage host concurrency is useful but
+  left worker lifetime as an obvious overhead and default-readiness question.
+- **Outcome**: `SHIP` as opt-in, not default. Persistent workers preserved
+  token hex `3136` and beat same-build serial at 1M/2 slots (`5.13` vs `3.85`
+  generated tok/s) and 1M/4 slots (`7.94` vs `3.79`), but measured below
+  Sprint 065's per-step worker path (`5.57` and `8.67`). The next sprint should
+  profile persistent dispatch and handoff synchronization before defaulting or
+  further extending this path.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -1563,6 +1584,9 @@ GPU utilization with architectural changes, and only then compare against the
   FFN batching, persistent batch views, and higher slot-tier retesting.
 - See `docs/sprints/SPRINT-060-FOLLOWUPS.md`: shared expert batching,
   persistent batch views, and higher slot-tier retesting.
+- See `docs/sprints/SPRINT-066-FOLLOWUPS.md`: persistent async dispatch and
+  handoff profiling, plus the decision to keep async opt-in until the Sprint
+  065-to-066 regression is understood or resolved.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -1641,6 +1665,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-19 | Shipped Sprint 061 shared F8 batch and higher-slot evidence. | Shared F8 batching is correct but remains opt-in because it measured below the Sprint 060 default; persistent FFN output views remove minor allocation churn, and the 4-slot 256K run proves slots alone do not improve aggregate tok/s under the current layer-synchronous schedule. | Sprint 062+ |
 | 2026-05-20 | Shipped Sprint 064 opt-in served wavefront decode. | The served wavefront path is correct, but the paired V100 serial control is faster by about 4% across 1M/256K and 2/4-slot cases. The next sprint should not continue the same single-threaded diagonal schedule; practical throughput needs true asynchronous stage workers, MTP commit, or persistent low-bit kernels. | Sprint 065+ |
 | 2026-05-20 | Shipped Sprint 065 opt-in async stage pipeline. | True per-stage host workers raised sustained generated tok/s to `5.57` at 1M/2 slots and `8.67` at 1M/4 slots while preserving correctness. The next sprint should make the stage workers persistent and retest whether the async path is ready to become the default. | Sprint 066+ |
+| 2026-05-20 | Shipped Sprint 066 persistent async workers. | Replay-owned persistent workers preserve correctness and stay faster than serial, but measured below the Sprint 065 per-step worker path. The next sprint should profile dispatch/handoff synchronization before enabling async by default. | Sprint 067+ |
 
 ## Open Questions
 
