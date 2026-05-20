@@ -593,6 +593,38 @@ int ds4_gpu_arena_attention_decode_heads_tensor(
     return 1;
 }
 
+int ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_batch_ptrs_f32(
+        const ds4_gpu_arena *arena,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *gate,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *up,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *down,
+        uint32_t hidden,
+        uint32_t mid,
+        uint32_t n_total_experts,
+        const ds4_gpu_tensor *selected_i32,
+        const ds4_gpu_tensor *weights_f32,
+        uint32_t n_routes,
+        ds4_gpu_tensor *x_row_ptrs,
+        const ds4_gpu_tensor *const *x_rows_f32,
+        uint32_t n_tokens,
+        ds4_gpu_tensor *out_f32) {
+    (void)arena;
+    (void)gate;
+    (void)up;
+    (void)down;
+    (void)hidden;
+    (void)mid;
+    (void)n_total_experts;
+    (void)selected_i32;
+    (void)weights_f32;
+    (void)n_routes;
+    (void)x_row_ptrs;
+    (void)x_rows_f32;
+    (void)n_tokens;
+    (void)out_f32;
+    return 1;
+}
+
 int ds4_gpu_profiler_start(void) {
     return 1;
 }

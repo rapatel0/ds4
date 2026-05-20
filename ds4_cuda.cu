@@ -192,6 +192,7 @@ typedef struct {
 
 static cuda_turbomind_api g_tm_api;
 static std::mutex g_tm_api_mutex;
+static void cuda_tm_matrix_table_cache_release_all(void);
 
 struct cuda_model_range {
     const void *host_base;
@@ -1446,6 +1447,7 @@ extern "C" int ds4_gpu_init(void) {
 
 extern "C" void ds4_gpu_cleanup(void) {
     (void)cudaDeviceSynchronize();
+    cuda_tm_matrix_table_cache_release_all();
     if (g_cublas_ready) {
         (void)cublasDestroy(g_cublas);
         g_cublas_ready = 0;
@@ -3330,7 +3332,81 @@ typedef struct {
     size_t scale_bytes;
     int k_pack;
     uint32_t experts;
+    int cached_tables;
 } cuda_tm_matrix_pack;
+
+typedef struct {
+    void *arena_ptr;
+    int gpu;
+    uint64_t weight_offset;
+    uint64_t scale_offset;
+    uint64_t weight_bytes_per_expert;
+    uint64_t scale_bytes_per_expert;
+    uint32_t n;
+    uint32_t k;
+    uint32_t experts_packed;
+    uint32_t n_total_experts;
+    int k_pack;
+    int weight_stride;
+    int scale_stride;
+} cuda_tm_matrix_table_key;
+
+typedef struct {
+    cuda_tm_matrix_table_key key;
+    cuda_tm_strided_ptr *d_weights;
+    cuda_tm_strided_ptr *d_scales;
+} cuda_tm_matrix_table_cache_entry;
+
+static std::mutex g_tm_matrix_table_cache_mutex;
+static std::vector<cuda_tm_matrix_table_cache_entry> g_tm_matrix_table_cache;
+
+static int cuda_tm_matrix_table_key_equal(
+        const cuda_tm_matrix_table_key &a,
+        const cuda_tm_matrix_table_key &b) {
+    return a.arena_ptr == b.arena_ptr &&
+        a.gpu == b.gpu &&
+        a.weight_offset == b.weight_offset &&
+        a.scale_offset == b.scale_offset &&
+        a.weight_bytes_per_expert == b.weight_bytes_per_expert &&
+        a.scale_bytes_per_expert == b.scale_bytes_per_expert &&
+        a.n == b.n &&
+        a.k == b.k &&
+        a.experts_packed == b.experts_packed &&
+        a.n_total_experts == b.n_total_experts &&
+        a.k_pack == b.k_pack &&
+        a.weight_stride == b.weight_stride &&
+        a.scale_stride == b.scale_stride;
+}
+
+static void cuda_tm_matrix_table_cache_release_entry(
+        const cuda_tm_matrix_table_cache_entry &e) {
+    if (!e.d_weights && !e.d_scales) return;
+    (void)cudaSetDevice(e.key.gpu);
+    if (e.d_scales) (void)cudaFree(e.d_scales);
+    if (e.d_weights) (void)cudaFree(e.d_weights);
+}
+
+static void cuda_tm_matrix_table_cache_release_arena(const ds4_gpu_arena *arena) {
+    if (!arena) return;
+    std::lock_guard<std::mutex> lk(g_tm_matrix_table_cache_mutex);
+    for (size_t i = 0; i < g_tm_matrix_table_cache.size();) {
+        const cuda_tm_matrix_table_cache_entry &e = g_tm_matrix_table_cache[i];
+        if (e.key.arena_ptr == arena->ptr && e.key.gpu == arena->gpu) {
+            cuda_tm_matrix_table_cache_release_entry(e);
+            g_tm_matrix_table_cache.erase(g_tm_matrix_table_cache.begin() + i);
+        } else {
+            i++;
+        }
+    }
+}
+
+static void cuda_tm_matrix_table_cache_release_all(void) {
+    std::lock_guard<std::mutex> lk(g_tm_matrix_table_cache_mutex);
+    for (const cuda_tm_matrix_table_cache_entry &e : g_tm_matrix_table_cache) {
+        cuda_tm_matrix_table_cache_release_entry(e);
+    }
+    g_tm_matrix_table_cache.clear();
+}
 
 __global__ static void tm_count_routes_kernel(
         int *counts,
@@ -3448,8 +3524,10 @@ static uint64_t cuda_tm_align16(uint64_t v) {
 
 static void cuda_tm_matrix_pack_free(cuda_tm_matrix_pack *p) {
     if (!p) return;
-    if (p->d_scales) (void)cudaFree(p->d_scales);
-    if (p->d_weights) (void)cudaFree(p->d_weights);
+    if (!p->cached_tables) {
+        if (p->d_scales) (void)cudaFree(p->d_scales);
+        if (p->d_weights) (void)cudaFree(p->d_weights);
+    }
     if (p->scale_base) (void)cudaFree(p->scale_base);
     if (p->weight_base) (void)cudaFree(p->weight_base);
     memset(p, 0, sizeof(*p));
@@ -3457,8 +3535,10 @@ static void cuda_tm_matrix_pack_free(cuda_tm_matrix_pack *p) {
 
 static void cuda_tm_matrix_pack_table_free(cuda_tm_matrix_pack *p) {
     if (!p) return;
-    if (p->d_scales) (void)cudaFree(p->d_scales);
-    if (p->d_weights) (void)cudaFree(p->d_weights);
+    if (!p->cached_tables) {
+        if (p->d_scales) (void)cudaFree(p->d_scales);
+        if (p->d_weights) (void)cudaFree(p->d_weights);
+    }
     memset(p, 0, sizeof(*p));
 }
 
@@ -3487,6 +3567,38 @@ static int cuda_tm_matrix_pack_from_arena(
                 label ? label : "matrix");
         return 0;
     }
+
+    cuda_tm_matrix_table_key key = {};
+    key.arena_ptr = arena->ptr;
+    key.gpu = arena->gpu;
+    key.weight_offset = view->weight_offset;
+    key.scale_offset = view->scale_offset;
+    key.weight_bytes_per_expert = view->weight_bytes_per_expert;
+    key.scale_bytes_per_expert = view->scale_bytes_per_expert;
+    key.n = view->n;
+    key.k = view->k;
+    key.experts_packed = view->experts_packed;
+    key.n_total_experts = n_total_experts;
+    key.k_pack = view->k_pack;
+    key.weight_stride = view->weight_stride;
+    key.scale_stride = view->scale_stride;
+
+    {
+        std::lock_guard<std::mutex> lk(g_tm_matrix_table_cache_mutex);
+        for (const cuda_tm_matrix_table_cache_entry &e : g_tm_matrix_table_cache) {
+            if (cuda_tm_matrix_table_key_equal(e.key, key)) {
+                out->d_weights = e.d_weights;
+                out->d_scales = e.d_scales;
+                out->weight_bytes = (size_t)view->weight_bytes_per_expert;
+                out->scale_bytes = (size_t)view->scale_bytes_per_expert;
+                out->k_pack = view->k_pack;
+                out->experts = n_total_experts;
+                out->cached_tables = 1;
+                return 1;
+            }
+        }
+    }
+
     std::vector<cuda_tm_strided_ptr> h_weights(n_total_experts);
     std::vector<cuda_tm_strided_ptr> h_scales(n_total_experts);
     for (uint32_t expert = 0; expert < n_total_experts; expert++) {
@@ -3501,29 +3613,60 @@ static int cuda_tm_matrix_pack_from_arena(
         h_scales[expert].stride = view->scale_stride;
         h_scales[expert].pad = 0;
     }
-    if (!cuda_ok(cudaMalloc(&out->d_weights,
+    cuda_tm_strided_ptr *d_weights = nullptr;
+    cuda_tm_strided_ptr *d_scales = nullptr;
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "turbomind packed table set device") ||
+        !cuda_ok(cudaMalloc(&d_weights,
                             (size_t)n_total_experts * sizeof(cuda_tm_strided_ptr)),
                  "turbomind packed weight table alloc") ||
-        !cuda_ok(cudaMalloc(&out->d_scales,
+        !cuda_ok(cudaMalloc(&d_scales,
                             (size_t)n_total_experts * sizeof(cuda_tm_strided_ptr)),
                  "turbomind packed scale table alloc") ||
-        !cuda_ok(cudaMemcpy(out->d_weights,
+        !cuda_ok(cudaMemcpy(d_weights,
                             h_weights.data(),
                             (size_t)n_total_experts * sizeof(cuda_tm_strided_ptr),
                             cudaMemcpyHostToDevice),
                  "turbomind packed weight table upload") ||
-        !cuda_ok(cudaMemcpy(out->d_scales,
+        !cuda_ok(cudaMemcpy(d_scales,
                             h_scales.data(),
                             (size_t)n_total_experts * sizeof(cuda_tm_strided_ptr),
                             cudaMemcpyHostToDevice),
                  "turbomind packed scale table upload")) {
-        cuda_tm_matrix_pack_table_free(out);
+        if (d_scales) (void)cudaFree(d_scales);
+        if (d_weights) (void)cudaFree(d_weights);
         return 0;
     }
+
+    {
+        std::lock_guard<std::mutex> lk(g_tm_matrix_table_cache_mutex);
+        for (const cuda_tm_matrix_table_cache_entry &e : g_tm_matrix_table_cache) {
+            if (cuda_tm_matrix_table_key_equal(e.key, key)) {
+                if (d_scales) (void)cudaFree(d_scales);
+                if (d_weights) (void)cudaFree(d_weights);
+                out->d_weights = e.d_weights;
+                out->d_scales = e.d_scales;
+                out->weight_bytes = (size_t)view->weight_bytes_per_expert;
+                out->scale_bytes = (size_t)view->scale_bytes_per_expert;
+                out->k_pack = view->k_pack;
+                out->experts = n_total_experts;
+                out->cached_tables = 1;
+                return 1;
+            }
+        }
+        cuda_tm_matrix_table_cache_entry e = {};
+        e.key = key;
+        e.d_weights = d_weights;
+        e.d_scales = d_scales;
+        g_tm_matrix_table_cache.push_back(e);
+    }
+
+    out->d_weights = d_weights;
+    out->d_scales = d_scales;
     out->weight_bytes = (size_t)view->weight_bytes_per_expert;
     out->scale_bytes = (size_t)view->scale_bytes_per_expert;
     out->k_pack = view->k_pack;
     out->experts = n_total_experts;
+    out->cached_tables = 1;
     return 1;
 }
 
@@ -3865,7 +4008,7 @@ static int cuda_tm_routed_mxfp4_transient(
     return cuda_ok(cudaGetLastError(), "turbomind down scatter sum launch");
 }
 
-extern "C" int ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_f32(
+static int cuda_tm_routed_mxfp4_packed_impl(
         const ds4_gpu_arena *arena,
         const ds4_gpu_turbomind_mxfp4_matrix_view *gate,
         const ds4_gpu_turbomind_mxfp4_matrix_view *up,
@@ -3877,12 +4020,16 @@ extern "C" int ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_f32(
         const ds4_gpu_tensor *weights_f32,
         uint32_t n_routes,
         const ds4_gpu_tensor *x_f32,
+        const ds4_gpu_tensor *x_row_ptrs,
         uint32_t n_tokens,
         ds4_gpu_tensor *out_f32) {
     if (!cuda_tm_load_api()) return 1;
     if (!arena || !arena->valid || !arena->ptr || !gate || !up || !down ||
         !selected_i32 || !selected_i32->ptr || !weights_f32 || !weights_f32->ptr ||
-        !x_f32 || !x_f32->ptr || !out_f32 || !out_f32->ptr ||
+        (!x_f32 && !x_row_ptrs) ||
+        (x_f32 && !x_f32->ptr) ||
+        (x_row_ptrs && (!x_row_ptrs->ptr || x_row_ptrs->device != arena->gpu)) ||
+        !out_f32 || !out_f32->ptr ||
         hidden == 0 || mid == 0 || n_total_experts == 0 || n_routes == 0 ||
         n_tokens == 0) {
         return 1;
@@ -3902,7 +4049,8 @@ extern "C" int ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_f32(
     }
     if (selected_i32->bytes < (uint64_t)n_tokens * n_routes * sizeof(int32_t) ||
         weights_f32->bytes < (uint64_t)n_tokens * n_routes * sizeof(float) ||
-        x_f32->bytes < (uint64_t)n_tokens * hidden * sizeof(float) ||
+        (x_f32 && x_f32->bytes < (uint64_t)n_tokens * hidden * sizeof(float)) ||
+        (x_row_ptrs && x_row_ptrs->bytes < (uint64_t)n_tokens * sizeof(float *)) ||
         out_f32->bytes < (uint64_t)n_tokens * hidden * sizeof(float)) {
         return 1;
     }
@@ -3984,8 +4132,8 @@ extern "C" int ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_f32(
 
     tm_gather_f32_to_f16_kernel<<<((uint64_t)total_routes * hidden + 255u) / 256u, 256>>>(
         a_half,
-        (const float *)x_f32->ptr,
-        nullptr,
+        x_f32 ? (const float *)x_f32->ptr : nullptr,
+        x_row_ptrs ? (const float *const *)x_row_ptrs->ptr : nullptr,
         sorted_pairs,
         n_routes,
         hidden,
@@ -4046,6 +4194,90 @@ extern "C" int ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_f32(
     return cuda_ok(cudaGetLastError(), "turbomind packed down scatter sum launch") ? 0 : 1;
 }
 
+extern "C" int ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_f32(
+        const ds4_gpu_arena *arena,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *gate,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *up,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *down,
+        uint32_t hidden,
+        uint32_t mid,
+        uint32_t n_total_experts,
+        const ds4_gpu_tensor *selected_i32,
+        const ds4_gpu_tensor *weights_f32,
+        uint32_t n_routes,
+        const ds4_gpu_tensor *x_f32,
+        uint32_t n_tokens,
+        ds4_gpu_tensor *out_f32) {
+    return cuda_tm_routed_mxfp4_packed_impl(arena,
+                                           gate,
+                                           up,
+                                           down,
+                                           hidden,
+                                           mid,
+                                           n_total_experts,
+                                           selected_i32,
+                                           weights_f32,
+                                           n_routes,
+                                           x_f32,
+                                           nullptr,
+                                           n_tokens,
+                                           out_f32);
+}
+
+extern "C" int ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_batch_ptrs_f32(
+        const ds4_gpu_arena *arena,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *gate,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *up,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *down,
+        uint32_t hidden,
+        uint32_t mid,
+        uint32_t n_total_experts,
+        const ds4_gpu_tensor *selected_i32,
+        const ds4_gpu_tensor *weights_f32,
+        uint32_t n_routes,
+        ds4_gpu_tensor *x_row_ptrs,
+        const ds4_gpu_tensor *const *x_rows_f32,
+        uint32_t n_tokens,
+        ds4_gpu_tensor *out_f32) {
+    if (!arena || !x_row_ptrs || !x_rows_f32 || !x_row_ptrs->ptr ||
+        x_row_ptrs->device != arena->gpu ||
+        x_row_ptrs->bytes < (uint64_t)n_tokens * sizeof(float *) ||
+        n_tokens == 0) {
+        return 1;
+    }
+    std::vector<const float *> row_ptrs(n_tokens);
+    for (uint32_t tok = 0; tok < n_tokens; tok++) {
+        const ds4_gpu_tensor *x = x_rows_f32[tok];
+        if (!x || !x->ptr || x->device != arena->gpu ||
+            x->bytes < (uint64_t)hidden * sizeof(float)) {
+            return 1;
+        }
+        row_ptrs[tok] = (const float *)x->ptr;
+    }
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "turbomind packed batch ptr set device") ||
+        !cuda_ok(cudaMemcpy(x_row_ptrs->ptr,
+                            row_ptrs.data(),
+                            (size_t)n_tokens * sizeof(float *),
+                            cudaMemcpyHostToDevice),
+                 "turbomind packed batch row ptr upload")) {
+        return 1;
+    }
+    return cuda_tm_routed_mxfp4_packed_impl(arena,
+                                           gate,
+                                           up,
+                                           down,
+                                           hidden,
+                                           mid,
+                                           n_total_experts,
+                                           selected_i32,
+                                           weights_f32,
+                                           n_routes,
+                                           nullptr,
+                                           x_row_ptrs,
+                                           n_tokens,
+                                           out_f32);
+}
+
 extern "C" int ds4_gpu_arena_open(ds4_gpu_arena **out, int gpu, uint64_t bytes) {
     if (!out || gpu < 0) return 1;
     *out = NULL;
@@ -4088,6 +4320,7 @@ extern "C" void ds4_gpu_arena_close(ds4_gpu_arena *arena) {
     if (!arena) return;
     if (arena->ptr) {
         (void)cudaSetDevice(arena->gpu);
+        cuda_tm_matrix_table_cache_release_arena(arena);
         (void)cudaFree(arena->ptr);
     }
     free(arena);

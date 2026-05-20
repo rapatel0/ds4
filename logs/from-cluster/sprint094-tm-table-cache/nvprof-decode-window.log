@@ -1,0 +1,68 @@
+==6289== NVPROF is profiling process 6289, command: ./tools/ds4-v100-replay --model /models/DSv4-Flash-256e-fixed.gguf --appliance-dir /workspace/ds4-appliance-full-tm-s090 --ctx 1048576 --tokens 2 --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt --expected-token-hex 3136 --cuda-profiler-
+==6289== Profiling application: ./tools/ds4-v100-replay --model /models/DSv4-Flash-256e-fixed.gguf --appliance-dir /workspace/ds4-appliance-full-tm-s090 --ctx 1048576 --tokens 2 --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt --expected-token-hex 3136 --cuda-profiler-
+==6289== Profiling result:
+            Type  Time(%)      Time     Calls       Avg       Min       Max  Name
+ GPU activities:   42.46%  119.25ms      1710  69.734us  19.968us  281.95us  arena_f8_e4m3_b128_matmul_kernel(float*, unsigned char const *, float const *, unsigned int, unsigned int, unsigned int)
+                   31.46%  88.357ms       153  577.50us  1.0240us  5.4624ms  [CUDA memcpy HtoD]
+                   13.92%  39.102ms       342  114.33us  77.856us  178.75us  void turbomind::gemm::gemm_kernel<turbomind::gemm::GemmUniversal<turbomind::gemm::Sm70, turbomind::gemm::MainloopSm70<turbomind::gemm::Tiled_MMA_v2<turbomind::gemm::SM70_MMA_884, turbomind::gemm::MMA_Map<int=8, int=128, int=64, int=8, int=32, int=8, turbomind::gemm::Blocked<int=1, int=4, turbomind::gemm::Order>, int=1, bool=0>, turbomind::gemm::Order>, turbomind::gemm::sm70_s884::Operand_A<__half>, turbomind::gemm::IteratorSm70<turbomind::gemm::Striding, turbomind::cache_policy::Default>, turbomind::gemm::Transform_Default, turbomind::gemm::VoidOperand, int=1, turbomind::gemm::sm70_s884::Operand_B_Pack<turbomind::fp4_e2m1_t>, turbomind::gemm::IteratorSm70<turbomind::gemm::Striding, turbomind::cache_policy::Stream>, turbomind::gemm::Transform_HMMA_SIMT_B, turbomind::gemm::sm70_s884::Operand_V_Pack<unsigned char>, int=32, int=2, bool=1>, turbomind::gemm::Epilogue_<__half, int=8, int=128, int=8, int=128, int=128, turbomind::gemm::Rearrange<turbomind::gemm::Tiled_MMA_v2<turbomind::gemm::SM70_MMA_884, turbomind::gemm::MMA_Map<int=8, int=128, int=64, int=8, int=32, int=8, turbomind::gemm::Blocked<int=1, int=4, turbomind::gemm::Order>, int=1, bool=0>, turbomind::gemm::Order>>, turbomind::gemm::sm70_s884::Operand_C<float, turbomind::gemm::Order>, turbomind::gemm::Striding, bool=1>, turbomind::gemm::SchedulerSm70<turbomind::gemm::Order, int=8, int=128, int=64, int=64, int=1, int=0>>, turbomind::gemm::GemmParam, turbomind::gemm::EpilogueParam, turbomind::gemm::SchedulerSm70<turbomind::gemm::Order, int=8, int=128, int=64, int=64, int=1, int=0>>(turbomind::gemm::SM70_MMA_884, int=8, int=128)
+                    2.34%  6.5830ms       228  28.872us  16.608us  30.912us  matmul_f32_kernel(float*, float const *, float const *, unsigned long, unsigned long, unsigned long)
+                    1.64%  4.5977ms       228  20.165us  19.648us  20.832us  rms_norm_plain_kernel(float*, float const *, unsigned int, unsigned int, float)
+                    1.38%  3.8847ms       114  34.076us  21.952us  54.816us  attention_decode_mixed_kernel(float*, float const *, float const *, float const *, float const *, float const *, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int)
+                    1.31%  3.6905ms       228  16.186us  10.752us  25.023us  arena_bf16_matmul_kernel(float*, unsigned short const *, float const *, unsigned int, unsigned int, unsigned int)
+                    1.27%  3.5704ms       472  7.5640us  2.6560us  12.160us  rms_norm_weight_kernel(float*, float const *, float const *, unsigned int, unsigned int, float)
+                    0.81%  2.2690ms       228  9.9510us  9.5360us  13.183us  hc_split_weighted_sum_fused_kernel(float*, float*, float const *, float const *, float const *, float const *, unsigned int, unsigned int, unsigned int, unsigned int, float)
+                    0.66%  1.8476ms       114  16.206us  16.159us  17.376us  tm_prefix_offsets_kernel(int*, int*, int const *, unsigned int)
+                    0.52%  1.4510ms       114  12.727us  12.255us  13.856us  arena_f32_matmul_kernel(float*, float const *, float const *, unsigned int, unsigned int, unsigned int)
+                    0.30%  832.15us       475  1.7510us  1.5030us  6.7200us  [CUDA memcpy DtoH]
+                    0.29%  815.22us       114  7.1510us  4.7360us  15.519us  router_select_warp_topk_kernel(int*, float*, float*, float const *, int const *, float const *, int const *, int, unsigned int, unsigned int, int, int)
+                    0.26%  733.98us       228  3.2190us  2.9760us  5.3760us  hc_expand_kernel(float*, float const *, float const *, float const *, float const *, float const *, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, int)
+                    0.25%  699.72us       358  1.9540us  1.5670us  6.7520us  rope_tail_kernel(float*, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, int, float, float, float, float, float, float)
+                    0.16%  444.49us       342  1.2990us  1.0230us  2.1440us  [CUDA memset]
+                    0.15%  433.73us       114  3.8040us  3.5190us  4.8000us  head_rms_norm_kernel(float*, unsigned int, unsigned int, unsigned int, float)
+                    0.10%  275.87us       114  2.4190us  2.0150us  10.176us  compressor_store_kernel(float const *, float const *, float*, float*, void const *, unsigned long, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int)
+                    0.10%  268.10us       114  2.3510us  2.2070us  7.0400us  swiglu_kernel(float*, float const *, float const *, unsigned int, float, float)
+                    0.09%  261.28us       114  2.2910us  2.1440us  2.7840us  add_kernel(float*, float const *, float const *, unsigned int)
+                    0.09%  259.14us       114  2.2730us  2.2390us  3.1040us  tm_gather_f32_to_f16_kernel(__half*, float const *, float const * const *, int const *, unsigned int, unsigned int, unsigned int)
+                    0.09%  244.54us       114  2.1450us  1.7910us  6.8800us  tm_swiglu_half_kernel(__half*, __half const *, __half const *, float const *, unsigned int, unsigned int, float)
+                    0.08%  234.05us       114  2.0530us  2.0150us  2.6570us  tm_scatter_routes_kernel(int*, float*, int*, int*, int const *, float const *, unsigned int, unsigned int)
+                    0.08%  230.78us       114  2.0240us  1.9830us  2.5280us  tm_scatter_sum_half_to_f32_kernel(float*, __half const *, int const *, unsigned int, unsigned int, unsigned int)
+                    0.07%  190.78us       114  1.6730us  1.6310us  2.0480us  store_raw_kv_batch_kernel(float*, float const *, unsigned int, unsigned int, unsigned int, unsigned int)
+                    0.07%  188.60us       114  1.6540us  1.6000us  2.3680us  tm_count_routes_kernel(int*, int*, int const *, unsigned int, unsigned int)
+                    0.02%  50.497us        16  3.1560us  2.2720us  4.9600us  compressor_update_pool_kernel(float*, float const *, float const *, unsigned int, unsigned int)
+                    0.01%  39.456us        19  2.0760us  1.8240us  3.9040us  embed_token_hc_kernel(float*, unsigned short const *, unsigned int, unsigned int, unsigned int)
+                    0.01%  35.134us        16  2.1950us  1.6950us  6.9440us  compressor_shift_ratio4_kernel(float*, float*, unsigned int)
+                    0.01%  23.903us        16  1.4930us  1.4080us  1.7920us  f32_f16_round_kernel(float*, unsigned long)
+      API calls:   30.11%  176.61ms      3487  50.647us  2.3870us  24.931ms  cudaFree
+                   26.30%  154.24ms         4  38.561ms  37.705ms  39.825ms  cudaMallocHost
+                   25.39%  148.90ms       282  528.01us  5.3710us  88.145ms  cudaFuncGetAttributes
+                    6.51%  38.161ms       492  77.563us  6.6330us  193.72us  cudaMemcpy
+                    4.57%  26.802ms      5685  4.7140us  3.2700us  482.68us  cudaLaunchKernel
+                    2.79%  16.367ms      3464  4.7240us  2.1640us  1.4096ms  cudaMalloc
+                    0.76%  4.4507ms      5706     780ns     391ns  1.3460ms  cudaSetDevice
+                    0.70%  4.1040ms      1776  2.3100us     106ns  154.63us  cuDeviceGetAttribute
+                    0.51%  3.0095ms        83  36.259us  2.3470us  2.3273ms  cudaStreamSynchronize
+                    0.37%  2.1538ms        98  21.977us  5.5450us  406.75us  cudaMemcpyAsync
+                    0.37%  2.1536ms      5563     387ns     232ns  299.61us  cudaGetDevice
+                    0.29%  1.6860ms       342  4.9290us  2.3940us  62.962us  cudaMemset
+                    0.28%  1.6363ms         1  1.6363ms  1.6363ms  1.6363ms  cudaGetDeviceProperties
+                    0.27%  1.5556ms      5685     273ns     138ns  501.93us  cudaGetLastError
+                    0.13%  765.38us        19  40.283us  20.074us  225.63us  cudaMemcpyPeer
+                    0.12%  704.16us        98  7.1850us  1.1850us  408.57us  cudaEventRecord
+                    0.12%  691.69us       282  2.4520us     840ns  49.342us  cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags
+                    0.11%  642.27us         1  642.27us  642.27us  642.27us  cudaStreamCreateWithFlags
+                    0.08%  455.07us        88  5.1710us     862ns  47.190us  cudaFuncSetAttribute
+                    0.07%  424.21us        22  19.282us     667ns  364.70us  cudaEventCreateWithFlags
+                    0.06%  341.01us       766     445ns     118ns  13.899us  cuGetProcAddress
+                    0.03%  176.74us         1  176.74us  176.74us  176.74us  cudaGetSymbolAddress
+                    0.03%  158.55us        12  13.212us  10.064us  20.633us  cudaEventSynchronize
+                    0.03%  156.44us        19  8.2330us  3.2220us  41.532us  cudaDeviceSynchronize
+                    0.02%  101.75us        16  6.3590us  2.2940us  24.253us  cuDeviceGetName
+                    0.00%  11.352us        16     709ns     133ns  2.8590us  cuDeviceTotalMem
+                    0.00%  8.9160us        16     557ns     438ns  1.4330us  cudaDeviceGetAttribute
+                    0.00%  8.7430us         2  4.3710us  1.0750us  7.6680us  cudaEventCreate
+                    0.00%  6.3850us         2  3.1920us  1.1640us  5.2210us  cuInit
+                    0.00%  5.5710us         3  1.8570us     168ns  5.1070us  cuDeviceGetCount
+                    0.00%  4.8060us        16     300ns     114ns  1.0070us  cuDeviceGet
+                    0.00%  3.7400us        16     233ns     115ns     424ns  cuDeviceGetUuid
+                    0.00%     896ns         2     448ns     328ns     568ns  cuModuleGetLoadingMode
+                    0.00%     449ns         2     224ns     151ns     298ns  cuDriverGetVersion

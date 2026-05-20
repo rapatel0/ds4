@@ -82,6 +82,7 @@ fi
 : "${DS4_V100_ASYNC_EVENT_HANDOFF:=0}"
 : "${DS4_V100_STARTUP_WARMUP:=auto}"
 : "${DS4_V100_ENABLE_OUTPUT_HEAD_BATCH:=0}"
+: "${DS4_V100_BATCH_SHARED_F8:=1}"
 : "${DS4_V100_TURBOMIND_ROUTED_FFN:=0}"
 : "${DS4_V100_TURBOMIND_STRICT:=0}"
 : "${DS4_V100_TURBOMIND_LIB:=./build/turbomind-v100/libggml-turbomind.so}"
@@ -365,7 +366,7 @@ print_resolved() {
 }
 
 if [ "$mode" = "check" ]; then
-    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff startup_warmup=$startup_warmup appliance_dir=${DS4_V100_APPLIANCE_DIR:-none} turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN"
+    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff startup_warmup=$startup_warmup batch_shared_f8=$DS4_V100_BATCH_SHARED_F8 appliance_dir=${DS4_V100_APPLIANCE_DIR:-none} turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN"
     exit 0
 fi
 if [ "$mode" = "print" ]; then
@@ -393,6 +394,7 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_STARTUP_WARMUP=$DS4_V100_STARTUP_WARMUP"
     echo "DS4_V100_STARTUP_WARMUP_RESOLVED=$startup_warmup"
     echo "DS4_V100_ENABLE_OUTPUT_HEAD_BATCH=$DS4_V100_ENABLE_OUTPUT_HEAD_BATCH"
+    echo "DS4_V100_BATCH_SHARED_F8=$DS4_V100_BATCH_SHARED_F8"
     echo "DS4_V100_TURBOMIND_ROUTED_FFN=$DS4_V100_TURBOMIND_ROUTED_FFN"
     echo "DS4_V100_TURBOMIND_STRICT=$DS4_V100_TURBOMIND_STRICT"
     echo "DS4_V100_TURBOMIND_LIB=$DS4_V100_TURBOMIND_LIB"
@@ -409,6 +411,7 @@ mkdir -p "$DS4_V100_LOG_DIR"
 print_resolved >"$DS4_V100_LOG_DIR/command.txt"
 
 export CUDA_VISIBLE_DEVICES="$DS4_V100_CUDA_VISIBLE_DEVICES"
+export DS4_V100_BATCH_SHARED_F8
 export DS4_V100_TURBOMIND_ROUTED_FFN
 export DS4_V100_TURBOMIND_STRICT
 export DS4_V100_TURBOMIND_LIB

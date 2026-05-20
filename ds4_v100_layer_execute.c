@@ -1348,48 +1348,23 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
     }
 
     if (state->has_turbomind_routed) {
-        for (uint32_t slot = 0; slot < n_slots; slot++) {
-            ds4_gpu_tensor *selected_view =
-                ds4_gpu_tensor_view(selected_t,
-                                    (uint64_t)slot * routes * sizeof(int32_t),
-                                    (uint64_t)routes * sizeof(int32_t));
-            ds4_gpu_tensor *weights_view =
-                ds4_gpu_tensor_view(weights_t,
-                                    (uint64_t)slot * routes * sizeof(float),
-                                    (uint64_t)routes * sizeof(float));
-            ds4_gpu_tensor *routed_view = use_scratch
-                ? cfgs[0].batch_scratch->ffn_routed_out_view[slot]
-                : ds4_gpu_tensor_view(routed_out_t,
-                                      (uint64_t)slot * hidden * sizeof(float),
-                                      (uint64_t)hidden * sizeof(float));
-            if (!selected_view || !weights_view || !routed_view) {
-                if (!use_scratch) ds4_gpu_tensor_free(routed_view);
-                ds4_gpu_tensor_free(weights_view);
-                ds4_gpu_tensor_free(selected_view);
-                exec_error(err, errlen, "TurboMind FFN batch view failed");
-                goto done;
-            }
-            const int tm_rc = ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_f32(
-                cfgs[slot].arena,
+        if (ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_batch_ptrs_f32(
+                cfgs[0].arena,
                 &state->turbomind_gate_view,
                 &state->turbomind_up_view,
                 &state->turbomind_down_view,
                 hidden,
                 mid,
                 state->routed_experts,
-                selected_view,
-                weights_view,
+                selected_t,
+                weights_t,
                 routes,
-                ffn_inputs[slot],
-                1,
-                routed_view);
-            if (!use_scratch) ds4_gpu_tensor_free(routed_view);
-            ds4_gpu_tensor_free(weights_view);
-            ds4_gpu_tensor_free(selected_view);
-            if (tm_rc != 0) {
-                exec_error(err, errlen, "TurboMind routed FFN batch failed");
-                goto done;
-            }
+                input_ptrs_t,
+                ffn_inputs,
+                n_slots,
+                routed_out_t) != 0) {
+            exec_error(err, errlen, "TurboMind routed FFN batch failed");
+            goto done;
         }
     } else {
         ds4_v100_route_matrices route0;

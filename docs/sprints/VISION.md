@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: codex
-revision: 104
+revision: 105
 ---
 
 # Vision: DS4 V100 Appliance
@@ -591,6 +591,13 @@ optimized V100 low-bit expert kernels in the actual hot path.
   still needs kernel/control-path work. The first decode-window profiler pass
   shows F8 dense/projection matmul (`42.32%`), residual HtoD control copies
   (`31.68%`), and TurboMind MXFP4 GEMM (`13.90%`) as the largest GPU buckets.
+- Sprint 094 made two hot-path changes in the production appliance path:
+  TurboMind packed expert pointer tables are now cached per resident arena, and
+  the multi-slot FFN executor sends all active slots through one TurboMind
+  routed expert call per layer instead of one call per slot. The launcher now
+  enables shared F8 FFN batching by default for multi-slot appliance serving.
+  The 1M/4-slot no-client-warmup soak remains correct and improves to
+  `12.634955` generated tok/s and `11.845270` continuation tok/s.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -674,6 +681,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 091 appliance launcher smoke | served first token `3136`; `uploaded_tensors=8`; open `65.033s` | Measured | `DS4_V100_APPLIANCE_DIR` now drives the operator launcher and HTTP smoke through `--appliance-dir`, so the production service path no longer needs the source pack index for scheduler residency. Multi-slot async and MTP appliance benchmarks remain. |
 | Sprint 092 appliance 4-slot async soak | `11.256048` generated tok/s, `10.552545` continuation tok/s at 1M/4 slots | Measured | The full appliance path is correct under warm-started 4-request tensor batching (`token_match=4/4`, `tensor_batched_groups=1`, `tensor_batched_tokens=64`). Cold concurrent first requests failed during lazy CUDA tensor-cache load in the TurboMind routed FFN path, so launch must include a warmup before serving traffic. Performance is still in the low baseline range, not practical-use optimized. |
 | Sprint 093 server startup warmup + profile | `11.241074` generated tok/s, `10.538507` continuation tok/s at 1M/4 slots with `warmup_requests=0` | Measured | Server-side startup warmup now prevents cold concurrent first traffic from racing CUDA tensor-cache loading. Decode-window profiling shows F8 matmul `42.32%`, HtoD control copies `31.68%`, and TurboMind GEMM `13.90%`; targeted NCU reports one F8 matmul launch at `58.71%` SM throughput and `12.96%` DRAM throughput. Next work should reduce HtoD/control churn and dense F8 launch overhead before more TurboMind tuning. |
+| Sprint 094 grouped TurboMind and shared F8 default | `12.634955` generated tok/s, `11.845270` continuation tok/s at 1M/4 slots with `warmup_requests=0` | Measured | Caches TurboMind per-expert device pointer tables, batches routed TurboMind experts across active slots, and defaults `DS4_V100_BATCH_SHARED_F8=1`. Correctness remains `token_match=4/4`; generated tok/s improves `12.40%` over Sprint 093. HtoD copy count in the one-shot profiler drops from `801` to `153`, but large first-generation model-cache copies and F8 projection launches remain dominant. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -2044,6 +2052,24 @@ GPU utilization with architectural changes, and only then compare against the
   `aggregate_generated_tokens_per_second=11.241074`. The decode-window
   profiler points next at F8 dense/projection matmul plus HtoD control traffic.
 
+### Sprint 094 - Grouped TurboMind And Shared F8 Serving [complete]
+
+- **Goal**: Convert measured TurboMind control churn and per-slot routed expert
+  scheduling into production-path improvements.
+- **Rationale**: The appliance was already using TurboMind kernels, but the
+  multi-slot layer executor still called the routed expert path once per slot.
+  That threw away the effective-M gain from active slots and kept avoidable
+  control-table uploads in the decode window.
+- **Outcome**: `SHIP_GROUPED_TM_SHARED_F8`. TurboMind packed pointer tables are
+  cached per resident arena; the batched FFN executor now routes all active
+  slots through one TurboMind grouped call per layer; and
+  `DS4_V100_BATCH_SHARED_F8=1` is the launcher default. Cluster validation:
+  `make tools/ds4-v100-replay tests/cuda_v100_full_scheduler_smoke
+  CUDA_ARCH=sm_70 -j8`, full scheduler smoke `--slots 4` passed, and the
+  default 1M/4-slot appliance soak reports `token_match=4/4`,
+  `generated_tokens=64`, `aggregate_generated_tokens_per_second=12.634955`,
+  and `aggregate_continuation_tokens_per_second=11.845270`.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -2298,6 +2324,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 091 appliance launcher path. | The operator launcher and HTTP smoke now use `DS4_V100_APPLIANCE_DIR` and pass `--appliance-dir` into replay. The next sprint should benchmark multi-slot async serving from the appliance path and compare it to the source-index baseline. | Sprint 092+ |
 | 2026-05-20 | Shipped Sprint 092 appliance multi-slot async soak. | The full TurboMind appliance now has a warm-started 4-slot service benchmark: correctness passes and tensor batching is reported, but aggregate generated throughput is only `11.256048` tok/s. The next sprint should profile the timed batch and attack the remaining serialization/kernel-occupancy bottleneck before broader production serving work. | Sprint 093+ |
 | 2026-05-20 | Shipped Sprint 093 startup warmup and GPU profile. | Warmup now belongs to the server/launcher, not the benchmark client, and the 4-slot soak passes with `warmup_requests=0`. Decode-window profiler evidence says the next optimization should target F8 dense/projection launch shape and residual HtoD control traffic before further TurboMind work. | Sprint 094+ |
+| 2026-05-20 | Shipped Sprint 094 grouped TurboMind and shared F8 serving. | The production appliance now caches TurboMind pointer tables, batches routed experts across active slots, and defaults shared F8 batching on. This improves the 1M/4-slot appliance soak to `12.634955` generated tok/s with correctness preserved, but GPU utilization is still low enough that the next sprint should target F8 projection kernel shape and request batching/harness determinism. | Sprint 095+ |
 
 ## Open Questions
 
