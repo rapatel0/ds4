@@ -191,8 +191,11 @@ lmdeploy `turbomind` support tree under `kernels/turbomind/`.
 
 The current evidence favors TurboMind as the next routed-expert adapter target:
 it builds from the copied tree, passes grouped MXFP4 compare on DS4 gate/up and
-down shapes, and keeps the expert source format MXFP4. tc-grid remains useful
-for INT8 benchmarking and possible future quality-gated INT8 expert packs.
+down shapes, keeps the expert source format MXFP4, and now passes a DS4
+routed-output adapter smoke that packs source bytes, groups selected route rows
+by expert, applies DS4 SwiGLU/route weights, and matches the existing
+source-MXFP4 arena reference. tc-grid remains useful for INT8 benchmarking and
+possible future quality-gated INT8 expert packs.
 
 Any chosen production kernel must avoid persistent duplicate MXFP4, FP8, and
 INT8 resident packs unless the planner explicitly admits the memory cost.

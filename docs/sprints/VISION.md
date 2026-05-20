@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: codex
-revision: 93
+revision: 94
 ---
 
 # Vision: DS4 V100 Appliance
@@ -519,6 +519,13 @@ optimized V100 low-bit expert kernels in the actual hot path.
   `libggml-turbomind.so` on V100 and grouped MXFP4 compare passes on DS4
   gate/up and down shapes. This is now the preferred routed-expert adapter
   target because it keeps source MXFP4 rather than expanding experts to INT8.
+- Sprint 082 shipped the first DS4 routed-expert adapter smoke for copied
+  TurboMind. Source MXFP4 expert bytes are packed through the TurboMind C ABI,
+  selected route rows are grouped by expert, grouped gate/up/down GEMMs run on
+  V100, DS4 SwiGLU and route weights are applied, and the final routed output
+  matches the existing source-MXFP4 arena reference with `max_abs=0.00129318`
+  and `rel=0.000258549`. This makes opt-in runtime integration the next
+  kernel-side step.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -591,6 +598,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 079 routed MXFP4 row-pair probe | `9.06` default, `9.04` row-pair opt-in at 1M/4 slots | Measured | Row-pair MXFP4 gate/up/SwiGLU and down-sum kernels are correct, but generated tok/s regressed `0.22%` (`9.035946` vs `9.055694`). Keep `DS4_CUDA_MXFP4_ROUTE_ROWS2=1` opt-in and target a larger route/expert tiling or packed low-bit kernel rewrite next. |
 | Sprint 080 copied tc-grid INT8 V100 kernel proof | `7.223 TFLOP/s` at `M=128,N=2048,K=4096`; `46.391 TFLOP/s` at `M=2048,N=7168,K=7168` | Measured | Copied tc-grid `v13_rf_v6` source now builds and runs from `ds4`. It confirms high-M V100 low-bit HMMA can work, but low-M routed decode remains underfilled and INT8 would expand source MXFP4 experts. Use this as a benchmark/proof path; prioritize TurboMind MXFP4 grouped GEMM for hot-path integration. |
 | Sprint 081 copied TurboMind MXFP4 grouped GEMM proof | `0.1037-0.1454 ms` grouped DS4-shape expert GEMMs | Measured | Copied TurboMind source builds from `ds4` and grouped MXFP4 compare passes for DS4 gate/up/down shapes. Down grouped is `1.23-1.26x` faster than six single calls; gate/up grouped is roughly neutral/slower at tiny token counts. This is the preferred source-format-preserving hot-path adapter target. |
+| Sprint 082 TurboMind routed expert adapter smoke | `max_abs=0.00129318`, `rel=0.000258549` versus DS4 arena reference | Measured | The adapter now packs source MXFP4 bytes through copied TurboMind, groups selected route rows by expert, runs grouped gate/up/down, applies DS4 SwiGLU and route weights, and matches the existing routed-output reference on V100. Next step is an opt-in runtime path with 256-expert packing and sustained throughput comparison. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -2012,6 +2020,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 079 routed MXFP4 row-pair kernels as opt-in only. | Pairing adjacent rows in the routed MXFP4 kernels preserves correctness but slightly regresses sustained 1M/4-slot throughput. The next kernel attempt should stop doing row-level CTA consolidation and instead change the expert execution shape more materially. | Sprint 080+ |
 | 2026-05-20 | Shipped Sprint 080 copied tc-grid V100 INT8 kernel proof. | Candidate low-bit kernels must be copied into `ds4` and proven there before runtime use. The copied tc-grid v13 path proves high-M INT8 HMMA viability but not low-M routed decode practicality; the next kernel sprint should copy/prove TurboMind MXFP4 grouped GEMM. | Sprint 081+ |
 | 2026-05-20 | Shipped Sprint 081 copied TurboMind MXFP4 grouped GEMM proof. | The copied TurboMind tree builds from `ds4` and passes V100 grouped MXFP4 compare on DS4 gate/up/down expert shapes. Because it preserves source MXFP4 rather than expanding to INT8, the next implementation target should be a DS4 routed-expert adapter around TurboMind's grouped GEMM contract. | Sprint 082+ |
+| 2026-05-20 | Shipped Sprint 082 TurboMind routed expert adapter smoke. | The adapter now proves the end-to-end DS4 routed expert boundary around copied TurboMind: source MXFP4 pack, expert-grouped route rows, grouped gate/up/down, DS4 SwiGLU/route weights, and output parity against the current source-MXFP4 arena reference. The next sprint should wire it into runtime behind an opt-in flag and measure sustained throughput. | Sprint 083+ |
 
 ## Open Questions
 
