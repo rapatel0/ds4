@@ -23,6 +23,7 @@ extern "C" {
 #define DS4_V100_OUT_GROUPS 8u
 #define DS4_V100_OUT_GROUP_DIM 4096u
 #define DS4_V100_OUT_GROUP_RANK 1024u
+#define DS4_V100_LAYER_MAX_BATCH 8u
 
 typedef struct {
     ds4_gpu_tensor *raw_kv;
@@ -65,9 +66,44 @@ typedef int (*ds4_v100_layer_execute_checkpoint_fn)(
     size_t errlen);
 
 typedef struct {
+    uint32_t hidden;
+    uint32_t intermediate;
+    uint32_t routes;
+    uint32_t max_slots;
+
+    ds4_gpu_tensor *hc_norm[DS4_V100_LAYER_MAX_BATCH];
+    ds4_gpu_tensor *hc_mix[DS4_V100_LAYER_MAX_BATCH];
+    ds4_gpu_tensor *attn_split[DS4_V100_LAYER_MAX_BATCH];
+    ds4_gpu_tensor *ffn_split[DS4_V100_LAYER_MAX_BATCH];
+    ds4_gpu_tensor *attn_cur[DS4_V100_LAYER_MAX_BATCH];
+    ds4_gpu_tensor *attn_out[DS4_V100_LAYER_MAX_BATCH];
+    ds4_gpu_tensor *after_attn_hc[DS4_V100_LAYER_MAX_BATCH];
+    ds4_gpu_tensor *ffn_cur[DS4_V100_LAYER_MAX_BATCH];
+    ds4_gpu_tensor *ffn_norm[DS4_V100_LAYER_MAX_BATCH];
+    ds4_gpu_tensor *ffn_delta[DS4_V100_LAYER_MAX_BATCH];
+
+    ds4_gpu_tensor *ffn_router;
+    ds4_gpu_tensor *ffn_probs;
+    ds4_gpu_tensor *ffn_selected;
+    ds4_gpu_tensor *ffn_weights;
+    ds4_gpu_tensor *ffn_tokens;
+    ds4_gpu_tensor *ffn_input_batch;
+    ds4_gpu_tensor *ffn_routed_mid;
+    ds4_gpu_tensor *ffn_routed_out;
+    ds4_gpu_tensor *ffn_shared_gate;
+    ds4_gpu_tensor *ffn_shared_up;
+    ds4_gpu_tensor *ffn_shared_mid;
+    ds4_gpu_tensor *ffn_shared;
+} ds4_v100_layer_batch_scratch;
+
+void ds4_v100_layer_batch_scratch_init(ds4_v100_layer_batch_scratch *scratch);
+void ds4_v100_layer_batch_scratch_free(ds4_v100_layer_batch_scratch *scratch);
+
+typedef struct {
     const void *model_map;
     uint64_t model_size;
     ds4_gpu_arena *arena;
+    ds4_v100_layer_batch_scratch *batch_scratch;
 
     uint32_t router_token;
     uint32_t position;

@@ -187,7 +187,7 @@ expert weight bytes and must beat that extra HBM traffic.
 |---|---|
 | correctness | run active slot batch gpu0 -> gpu7; copy HC only at stage boundaries |
 | throughput | wavefront slot batches so gpu0 works on batch N while gpu1 works on N-1 |
-| batching | batch active slots inside each stage to raise effective M for grouped experts; Sprint 057 makes request coalescing deterministic, Sprint 058 removes replay-only router readback sync, while the first batched FFN slice is opt-in via `DS4_V100_BATCH_LAYER_FFN` because it regressed at two slots |
+| batching | batch active slots inside each stage to raise effective M for grouped experts; Sprint 057 makes request coalescing deterministic, Sprint 058 removes replay-only router readback sync, and Sprint 059 enables the scratch-backed multi-slot layer batch path by default with `DS4_V100_BATCH_LAYER_FFN=0` as the disable escape hatch |
 | transfer | boundary payload is `[active_slots][4][4096]`, FP16 normal or FP32 debug |
 
 ## Tensor-Parallel Version To Evaluate

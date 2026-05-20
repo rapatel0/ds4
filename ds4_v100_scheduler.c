@@ -72,6 +72,7 @@ struct ds4_v100_stage_scheduler {
     ds4_gpu_tensor *hc_a[DS4_V100_SCHED_MAX_SLOTS];
     ds4_gpu_tensor *hc_b[DS4_V100_SCHED_MAX_SLOTS];
     ds4_gpu_tensor *cur_hc[DS4_V100_SCHED_MAX_SLOTS];
+    ds4_v100_layer_batch_scratch batch_scratch;
     uint64_t uploaded_tensors;
     uint64_t uploaded_bytes;
     const void *model_map;
@@ -194,6 +195,7 @@ void ds4_v100_stage_scheduler_close(ds4_v100_stage_scheduler *sched) {
             free_layer_cache(scheduler_cache_slot(sched, layer, slot));
         }
     }
+    ds4_v100_layer_batch_scratch_free(&sched->batch_scratch);
     ds4_gpu_arena_close(sched->arena);
     ds4_pack_close(sched->pack);
     ds4_v100_context_close(sched->ctx);
@@ -637,6 +639,7 @@ int ds4_v100_stage_scheduler_open(ds4_v100_stage_scheduler **out,
     sched->indexer_top_k = opts->indexer_top_k ? opts->indexer_top_k : 1u;
     sched->fp8_kv_cache = opts->fp8_kv_cache;
     sched->suppress_router_readback = opts->suppress_router_readback;
+    ds4_v100_layer_batch_scratch_init(&sched->batch_scratch);
 
     ds4_v100_context_options ctx_opts;
     ds4_v100_context_options_init(&ctx_opts);
@@ -761,6 +764,13 @@ static int scheduler_validate_batch_args(const ds4_v100_stage_scheduler *sched,
     return 0;
 }
 
+static bool scheduler_use_layer_batch(void) {
+    const char *env = getenv("DS4_V100_BATCH_LAYER_FFN");
+    return !(env && (strcmp(env, "0") == 0 ||
+                     strcmp(env, "off") == 0 ||
+                     strcmp(env, "false") == 0));
+}
+
 int ds4_v100_stage_scheduler_decode_hc_batch(
     ds4_v100_stage_scheduler *sched,
     const uint32_t *tokens,
@@ -789,7 +799,7 @@ int ds4_v100_stage_scheduler_decode_hc_batch(
     }
 
     uint32_t executed = 0;
-    const bool use_layer_batch = getenv("DS4_V100_BATCH_LAYER_FFN") != NULL;
+    const bool use_layer_batch = scheduler_use_layer_batch();
     for (int layer = sched->stage.layer_begin; layer <= sched->stage.layer_end; layer++) {
         ds4_v100_layer_execute_config cfgs[DS4_V100_SCHED_MAX_SLOTS];
         const ds4_gpu_tensor *hidden_hc[DS4_V100_SCHED_MAX_SLOTS];
@@ -804,6 +814,7 @@ int ds4_v100_stage_scheduler_decode_hc_batch(
                 .model_map = sched->model_map,
                 .model_size = sched->model_size,
                 .arena = sched->arena,
+                .batch_scratch = use_layer_batch && n_slots > 1 ? &sched->batch_scratch : NULL,
                 .router_token = tokens[slot],
                 .position = positions[slot],
                 .decode_cache = &lc->cache,
