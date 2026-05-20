@@ -197,8 +197,12 @@ static uint64_t g_model_load_progress_next;
 static double g_model_load_progress_last;
 static int g_model_load_progress_started;
 static int g_model_load_progress_tty;
-static void *g_cuda_tmp;
-static uint64_t g_cuda_tmp_bytes;
+enum {
+    DS4_CUDA_MAX_TMP_DEVICES = 16,
+};
+
+static void *g_cuda_tmp[DS4_CUDA_MAX_TMP_DEVICES];
+static uint64_t g_cuda_tmp_bytes[DS4_CUDA_MAX_TMP_DEVICES];
 static void *g_model_stage_raw[4];
 static void *g_model_stage[4];
 static cudaEvent_t g_model_stage_event[4];
@@ -225,11 +229,21 @@ __global__ static void dequant_q8_0_to_f32_kernel(
 
 static void *cuda_tmp_alloc(uint64_t bytes, const char *what) {
     if (bytes == 0) return NULL;
-    if (g_cuda_tmp_bytes >= bytes) return g_cuda_tmp;
-    if (g_cuda_tmp) {
-        (void)cudaFree(g_cuda_tmp);
-        g_cuda_tmp = NULL;
-        g_cuda_tmp_bytes = 0;
+    int dev = 0;
+    cudaError_t dev_err = cudaGetDevice(&dev);
+    if (dev_err != cudaSuccess || dev < 0 || dev >= DS4_CUDA_MAX_TMP_DEVICES) {
+        fprintf(stderr,
+                "ds4: CUDA temp alloc failed for %s: unsupported device %d\n",
+                what ? what : "scratch",
+                dev);
+        (void)cudaGetLastError();
+        return NULL;
+    }
+    if (g_cuda_tmp_bytes[dev] >= bytes) return g_cuda_tmp[dev];
+    if (g_cuda_tmp[dev]) {
+        (void)cudaFree(g_cuda_tmp[dev]);
+        g_cuda_tmp[dev] = NULL;
+        g_cuda_tmp_bytes[dev] = 0;
     }
     void *ptr = NULL;
     cudaError_t err = cudaMalloc(&ptr, (size_t)bytes);
@@ -239,9 +253,9 @@ static void *cuda_tmp_alloc(uint64_t bytes, const char *what) {
         (void)cudaGetLastError();
         return NULL;
     }
-    g_cuda_tmp = ptr;
-    g_cuda_tmp_bytes = bytes;
-    return g_cuda_tmp;
+    g_cuda_tmp[dev] = ptr;
+    g_cuda_tmp_bytes[dev] = bytes;
+    return g_cuda_tmp[dev];
 }
 
 static int cuda_attention_score_buffer_fits(uint32_t n_comp) {
@@ -1327,10 +1341,13 @@ extern "C" void ds4_gpu_cleanup(void) {
     g_q8_f32_ranges.clear();
     g_q8_f32_by_offset.clear();
     g_q8_f32_bytes = 0;
-    if (g_cuda_tmp) {
-        (void)cudaFree(g_cuda_tmp);
-        g_cuda_tmp = NULL;
-        g_cuda_tmp_bytes = 0;
+    for (int dev = 0; dev < DS4_CUDA_MAX_TMP_DEVICES; dev++) {
+        if (g_cuda_tmp[dev]) {
+            (void)cudaSetDevice(dev);
+            (void)cudaFree(g_cuda_tmp[dev]);
+            g_cuda_tmp[dev] = NULL;
+            g_cuda_tmp_bytes[dev] = 0;
+        }
     }
     for (size_t i = 0; i < 4; i++) {
         if (g_model_stage_event[i]) {

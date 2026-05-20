@@ -120,6 +120,16 @@ int ds4_v100_stage_scheduler_decode_token_batch(
     char *err,
     size_t errlen);
 
+int ds4_v100_stage_scheduler_decode_token_slot_span(
+    ds4_v100_stage_scheduler *sched,
+    uint32_t slot_start,
+    const uint32_t *tokens,
+    const uint32_t *positions,
+    uint32_t n_slots,
+    ds4_v100_stage_scheduler_report *reports,
+    char *err,
+    size_t errlen);
+
 int ds4_v100_stage_scheduler_decode_token_checkpoints(
     ds4_v100_stage_scheduler *sched,
     uint32_t token,
@@ -141,6 +151,13 @@ int ds4_v100_stage_scheduler_handoff_batch(ds4_v100_stage_scheduler *dst,
                                            char *err,
                                            size_t errlen);
 
+int ds4_v100_stage_scheduler_handoff_slot_span(ds4_v100_stage_scheduler *dst,
+                                               const ds4_v100_stage_scheduler *src,
+                                               uint32_t slot_start,
+                                               uint32_t n_slots,
+                                               char *err,
+                                               size_t errlen);
+
 int ds4_v100_stage_scheduler_decode_hc(ds4_v100_stage_scheduler *sched,
                                        uint32_t token,
                                        uint32_t position,
@@ -150,6 +167,16 @@ int ds4_v100_stage_scheduler_decode_hc(ds4_v100_stage_scheduler *sched,
 
 int ds4_v100_stage_scheduler_decode_hc_batch(
     ds4_v100_stage_scheduler *sched,
+    const uint32_t *tokens,
+    const uint32_t *positions,
+    uint32_t n_slots,
+    ds4_v100_stage_scheduler_report *reports,
+    char *err,
+    size_t errlen);
+
+int ds4_v100_stage_scheduler_decode_hc_slot_span(
+    ds4_v100_stage_scheduler *sched,
+    uint32_t slot_start,
     const uint32_t *tokens,
     const uint32_t *positions,
     uint32_t n_slots,
@@ -170,6 +197,11 @@ int ds4_v100_stage_scheduler_decode_hc_checkpoints(
 int ds4_v100_stage_scheduler_read_hc(const ds4_v100_stage_scheduler *sched,
                                      void *dst,
                                      uint64_t bytes);
+
+int ds4_v100_stage_scheduler_read_hc_slot(const ds4_v100_stage_scheduler *sched,
+                                          uint32_t slot,
+                                          void *dst,
+                                          uint64_t bytes);
 
 int ds4_v100_stage_scheduler_read_token_embedding_f32(
     const ds4_v100_stage_scheduler *sched,

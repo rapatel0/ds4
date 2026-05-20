@@ -1,0 +1,2 @@
+ds4: CUDA loading model tensors into device cache
+cuda_v100_stage_wavefront_smoke: token0=16 token1=926 max_abs_slot0=0 max_abs_slot1=0 ok
