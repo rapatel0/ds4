@@ -3,6 +3,7 @@ set -euo pipefail
 
 model="/models/DSv4-Flash-256e-fixed.gguf"
 mtp_model="/models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf"
+appliance_dir=""
 pack_index="docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv"
 prompt_file="tests/test-vectors/prompts/short_reasoning_plain.txt"
 expected_hex="3136"
@@ -12,6 +13,7 @@ active_microbatch="4"
 queue_policy="sequential"
 tokens="16"
 requests="4"
+warmup_requests="1"
 host="127.0.0.1"
 port="18420"
 async_pipeline_mode="auto"
@@ -29,6 +31,7 @@ usage: tools/ds4-v100-appliance-soak.sh --log-dir DIR [options]
 Options:
   --model FILE              source-layout GGUF model
   --mtp-model FILE          MTP sidecar GGUF path for launcher validation
+  --appliance-dir DIR       prepacked V100 appliance directory
   --pack-index FILE         V100 pack-index.tsv
   --prompt-file FILE        prompt file
   --expected-token-hex HEX  expected first response token bytes, default 3136
@@ -38,6 +41,7 @@ Options:
   --queue-policy MODE       sequential or reject-busy, default sequential
   --tokens N                generated tokens per request, default 16
   --requests N              timed requests, default 4
+  --warmup-requests N       untimed warmup requests, default 1
   --host ADDR               bind/probe address, default 127.0.0.1
   --port N                  server port, default 18420
   --async-pipeline-mode M   off, auto, per-step, persistent, or mailbox, default auto
@@ -73,6 +77,7 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --model) model="$(need_value "$1" "${2:-}")"; shift 2 ;;
         --mtp-model) mtp_model="$(need_value "$1" "${2:-}")"; shift 2 ;;
+        --appliance-dir) appliance_dir="$(need_value "$1" "${2:-}")"; shift 2 ;;
         --pack-index|--index) pack_index="$(need_value "$1" "${2:-}")"; shift 2 ;;
         --prompt-file) prompt_file="$(need_value "$1" "${2:-}")"; shift 2 ;;
         --expected-token-hex) expected_hex="$(need_value "$1" "${2:-}")"; shift 2 ;;
@@ -82,6 +87,7 @@ while [ "$#" -gt 0 ]; do
         --queue-policy) queue_policy="$(need_value "$1" "${2:-}")"; shift 2 ;;
         --tokens) tokens="$(need_value "$1" "${2:-}")"; shift 2 ;;
         --requests) requests="$(need_value "$1" "${2:-}")"; shift 2 ;;
+        --warmup-requests) warmup_requests="$(need_value "$1" "${2:-}")"; shift 2 ;;
         --host) host="$(need_value "$1" "${2:-}")"; shift 2 ;;
         --port) port="$(need_value "$1" "${2:-}")"; shift 2 ;;
         --async-pipeline-mode) async_pipeline_mode="$(need_value "$1" "${2:-}")"; shift 2 ;;
@@ -100,10 +106,19 @@ done
 [ -x ./tools/ds4-v100-run-appliance.sh ] || fail "missing ./tools/ds4-v100-run-appliance.sh"
 [ -x ./tools/ds4-v100-replay ] || fail "missing ./tools/ds4-v100-replay"
 [ -f "$model" ] || fail "missing model $model"
-[ -f "$pack_index" ] || fail "missing pack index $pack_index"
+if [ -n "$appliance_dir" ]; then
+    [ -d "$appliance_dir" ] || fail "missing appliance directory $appliance_dir"
+    [ -f "$appliance_dir/pack-index.tsv" ] || fail "missing appliance pack index $appliance_dir/pack-index.tsv"
+    [ -f "$appliance_dir/turbomind-pack-index.tsv" ] || fail "missing appliance TurboMind index $appliance_dir/turbomind-pack-index.tsv"
+    for gpu in 0 1 2 3 4 5 6 7; do
+        [ -f "$appliance_dir/gpu${gpu}.weights" ] || fail "missing appliance shard $appliance_dir/gpu${gpu}.weights"
+    done
+else
+    [ -f "$pack_index" ] || fail "missing pack index $pack_index"
+fi
 [ -f "$prompt_file" ] || fail "missing prompt file $prompt_file"
 [ -f "$mtp_model" ] || fail "missing MTP model $mtp_model"
-for v in "$ctx" "$slots" "$active_microbatch" "$tokens" "$requests" "$port" "$sample_ms" "$require_gpus" "$reserve_mib"; do
+for v in "$ctx" "$slots" "$active_microbatch" "$tokens" "$requests" "$warmup_requests" "$port" "$sample_ms" "$require_gpus" "$reserve_mib"; do
     is_uint "$v" || fail "numeric option expected, got $v"
 done
 [ "$slots" -ge 1 ] && [ "$slots" -le 8 ] || fail "--slots must be in [1,8]"
@@ -130,14 +145,29 @@ server_log="$log_dir/server.log"
 gpu_csv="$log_dir/gpu_util.csv"
 gpu_err="$log_dir/gpu_util.err"
 
-python3 - "$prompt_file" "$tokens" >"$request_json" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], "r", encoding="utf-8", errors="ignore") as f:
-    prompt = f.read()
-print(json.dumps({"prompt": prompt, "tokens": int(sys.argv[2])}))
-PY
+awk -v tokens="$tokens" '
+BEGIN {
+    printf "{\"prompt\":\""
+}
+{
+    if (NR > 1) printf "\\n"
+    for (i = 1; i <= length($0); i++) {
+        c = substr($0, i, 1)
+        if (c == "\\") {
+            printf "\\\\"
+        } else if (c == "\"") {
+            printf "\\\""
+        } else if (c == "\t") {
+            printf "\\t"
+        } else {
+            printf "%s", c
+        }
+    }
+}
+END {
+    printf "\",\"tokens\":%s}\n", tokens
+}
+' "$prompt_file" >"$request_json"
 
 server_pid=""
 gpu_pid=""
@@ -154,15 +184,12 @@ cleanup() {
 trap cleanup EXIT
 
 if command -v nvidia-smi >/dev/null 2>&1; then
+    sample_s="$(awk -v ms="$sample_ms" 'BEGIN { s = ms / 1000.0; if (s < 0.1) s = 0.1; printf "%.3f", s }')"
     (
         while :; do
             nvidia-smi --query-gpu=timestamp,index,utilization.gpu,memory.used \
                 --format=csv,noheader,nounits >>"$gpu_csv" 2>>"$gpu_err" || true
-            sleep "$(python3 - "$sample_ms" <<'PY'
-import sys
-print(max(0.1, int(sys.argv[1]) / 1000.0))
-PY
-)"
+            sleep "$sample_s"
         done
     ) &
     gpu_pid="$!"
@@ -172,6 +199,7 @@ fi
     export DS4_V100_BIN=./tools/ds4-v100-replay
     export DS4_V100_MODEL="$model"
     export DS4_V100_MTP_MODEL="$mtp_model"
+    export DS4_V100_APPLIANCE_DIR="$appliance_dir"
     export DS4_V100_PACK_INDEX="$pack_index"
     export DS4_V100_CTX="$ctx"
     export DS4_V100_SLOTS="$slots"
@@ -185,7 +213,7 @@ fi
     export DS4_V100_CUDA_VISIBLE_DEVICES="$cuda_visible_devices"
     export DS4_V100_REQUIRE_GPUS="$require_gpus"
     export DS4_V100_RESERVE_MIB="$reserve_mib"
-    export DS4_V100_MAX_REQUESTS=$((requests + 64))
+    export DS4_V100_MAX_REQUESTS=$((requests + warmup_requests + 64))
     export DS4_V100_LOG_DIR="$log_dir/runtime"
     export DS4_V100_SERVE_MODE=base
     export DS4_V100_MTP_SERVING=off
@@ -205,133 +233,198 @@ for _ in $(seq 1 420); do
 done
 grep -q "serving http://" "$server_log" || { cat "$server_log" >&2; fail "appliance did not listen"; }
 
-python3 - "$host" "$port" "$request_json" "$requests" "$expected_hex" "$health_json" "$status_before" "$metrics_before" "$responses_json" "$status_after" "$metrics_after" "$summary_json" <<'PY'
-import http.client
-import json
-import statistics
-import sys
-import threading
-import time
-
-host, port_s, request_path, requests_s, expected_hex = sys.argv[1:6]
-health_path, status_before_path, metrics_before_path, responses_path, status_after_path, metrics_after_path, summary_path = sys.argv[6:]
-port = int(port_s)
-n_requests = int(requests_s)
-expected_hex = expected_hex.lower()
-
-with open(request_path, "rb") as f:
-    body = f.read()
-headers = {"content-type": "application/json"}
-
-def fetch(method, path, body_bytes=None, headers_in=None, timeout=900):
-    conn = http.client.HTTPConnection(host, port, timeout=timeout)
-    t0 = time.perf_counter()
-    conn.request(method, path, body_bytes, headers_in or {})
-    resp = conn.getresponse()
-    payload = resp.read()
-    elapsed_ms = (time.perf_counter() - t0) * 1000.0
-    conn.close()
-    return resp.status, payload.decode("utf-8", "replace"), elapsed_ms
-
-status, payload, _ = fetch("GET", "/health", timeout=60)
-assert status == 200, status
-with open(health_path, "w", encoding="utf-8") as f:
-    f.write(payload)
-    f.write("\n")
-
-status, payload, _ = fetch("GET", "/v100/status", timeout=60)
-assert status == 200, status
-status_before = json.loads(payload)
-with open(status_before_path, "w", encoding="utf-8") as f:
-    json.dump(status_before, f, sort_keys=True)
-    f.write("\n")
-
-status, payload, _ = fetch("GET", "/metrics", timeout=60)
-assert status == 200, status
-with open(metrics_before_path, "w", encoding="utf-8") as f:
-    f.write(payload)
-
-rows = []
-lock = threading.Lock()
-def run_one(i):
-    status, payload, elapsed_ms = fetch("POST", "/v100/selected-token", body, headers)
-    row = {"index": i, "status": status, "elapsed_ms": elapsed_ms}
-    try:
-        row["body"] = json.loads(payload)
-    except Exception as exc:
-        row["error"] = repr(exc)
-        row["raw"] = payload
-    with lock:
-        rows.append(row)
-
-threads = [threading.Thread(target=run_one, args=(i,)) for i in range(n_requests)]
-t0 = time.perf_counter()
-for t in threads:
-    t.start()
-for t in threads:
-    t.join()
-elapsed_s = max(0.0, time.perf_counter() - t0)
-rows.sort(key=lambda r: r["index"])
-
-status, payload, _ = fetch("GET", "/v100/status", timeout=60)
-assert status == 200, status
-status_after = json.loads(payload)
-with open(status_after_path, "w", encoding="utf-8") as f:
-    json.dump(status_after, f, sort_keys=True)
-    f.write("\n")
-
-status, payload, _ = fetch("GET", "/metrics", timeout=60)
-assert status == 200, status
-with open(metrics_after_path, "w", encoding="utf-8") as f:
-    f.write(payload)
-
-matches = 0
-errors = 0
-latencies = []
-generated = 0
-continuation = 0
-for row in rows:
-    latencies.append(float(row.get("elapsed_ms", 0.0)))
-    body_obj = row.get("body")
-    if row.get("status") != 200 or not isinstance(body_obj, dict):
-        errors += 1
-        continue
-    toks = body_obj.get("tokens") or []
-    first_hex = str(toks[0].get("text_hex", "")).lower() if toks else ""
-    if first_hex == expected_hex and "async_pipeline" in body_obj.get("timing_ms", {}):
-        matches += 1
-    else:
-        errors += 1
-    n_generated = int(body_obj.get("generated_tokens", 0))
-    generated += n_generated
-    continuation += max(0, n_generated - 1)
-
-with open(responses_path, "w", encoding="utf-8") as f:
-    json.dump(rows, f, sort_keys=True)
-    f.write("\n")
-
-summary = {
-    "schema": "ds4_v100_appliance_soak.v1",
-    "requests": n_requests,
-    "elapsed_s": elapsed_s,
-    "status_200": sum(1 for r in rows if r.get("status") == 200),
-    "errors": errors,
-    "token_match": matches,
-    "generated_tokens": generated,
-    "continuation_tokens": continuation,
-    "aggregate_generated_tokens_per_second": generated / elapsed_s if elapsed_s > 0 else 0.0,
-    "aggregate_continuation_tokens_per_second": continuation / elapsed_s if elapsed_s > 0 else 0.0,
-    "latency_ms_avg": statistics.fmean(latencies) if latencies else 0.0,
-    "async_pipeline_mode": status_before.get("async_pipeline_mode"),
-    "async_pipeline_decode": bool(status_before.get("async_pipeline_decode")),
-    "async_handoff": bool(status_before.get("async_handoff")),
+http_body() {
+    sed -n '/^\r\{0,1\}$/,$p' "$1" | sed '1{/^\r\{0,1\}$/d;}' >"$2"
 }
-assert matches == n_requests, summary
-with open(summary_path, "w", encoding="utf-8") as f:
-    json.dump(summary, f, sort_keys=True)
-    f.write("\n")
-print(json.dumps(summary, sort_keys=True))
-PY
+
+now_s() {
+    perl -MTime::HiRes=time -e 'printf "%.6f\n", time'
+}
+
+http_get() {
+    local path="$1"
+    local out_http="$2"
+    local out_body="$3"
+    if ! exec 3<>"/dev/tcp/$host/$port"; then
+        echo "ds4-v100-appliance-soak: GET $path failed" >&2
+        cat "$server_log" >&2
+        return 1
+    fi
+    {
+        printf 'GET %s HTTP/1.1\r\n' "$path"
+        printf 'Host: %s:%s\r\n' "$host" "$port"
+        printf 'Connection: close\r\n'
+        printf '\r\n'
+    } >&3
+    cat <&3 >"$out_http"
+    exec 3<&-
+    exec 3>&-
+    local status_line
+    status_line="$(sed -n '1p' "$out_http")"
+    case "$status_line" in
+        *" 200 "*) ;;
+        *)
+            echo "ds4-v100-appliance-soak: GET $path non-200 response: $status_line" >&2
+            cat "$out_http" >&2
+            return 1
+            ;;
+    esac
+    http_body "$out_http" "$out_body"
+}
+
+body_len="$(wc -c <"$request_json" | tr -d ' ')"
+expected_lower="$(printf '%s' "$expected_hex" | tr 'A-F' 'a-f')"
+health_http="$log_dir/health.http"
+status_before_http="$log_dir/status_before.http"
+status_after_http="$log_dir/status_after.http"
+metrics_before_http="$log_dir/metrics_before.http"
+metrics_after_http="$log_dir/metrics_after.http"
+
+http_get "/health" "$health_http" "$health_json" || fail "health request failed"
+grep -q '"status":"ok"' "$health_json" || fail "bad /health response"
+http_get "/v100/status" "$status_before_http" "$status_before" || fail "status request failed"
+http_get "/metrics" "$metrics_before_http" "$metrics_before" || fail "metrics request failed"
+
+post_request() {
+    local request_id="$1"
+    local response_prefix="${2:-response}"
+    local require_async="${3:-1}"
+    local response_http_i="$log_dir/${response_prefix}_${request_id}.http"
+    local response_json_i="$log_dir/${response_prefix}_${request_id}.json"
+    local response_row_i="$log_dir/${response_prefix}_${request_id}.row.json"
+    local start_s end_s elapsed_ms status_line got generated continuation_ms
+
+    start_s="$(now_s)"
+    if ! exec 3<>"/dev/tcp/$host/$port"; then
+        echo "ds4-v100-appliance-soak: request $request_id failed" >&2
+        cat "$server_log" >&2
+        return 1
+    fi
+    {
+        printf 'POST /v100/selected-token HTTP/1.1\r\n'
+        printf 'Host: %s:%s\r\n' "$host" "$port"
+        printf 'Content-Type: application/json\r\n'
+        printf 'Content-Length: %s\r\n' "$body_len"
+        printf 'Connection: close\r\n'
+        printf '\r\n'
+        cat "$request_json"
+    } >&3
+    cat <&3 >"$response_http_i"
+    exec 3<&-
+    exec 3>&-
+    end_s="$(now_s)"
+    elapsed_ms="$(awk -v a="$start_s" -v b="$end_s" 'BEGIN { printf "%.3f", (b - a) * 1000.0 }')"
+
+    status_line="$(sed -n '1p' "$response_http_i")"
+    case "$status_line" in
+        *" 200 "*) ;;
+        *)
+            echo "ds4-v100-appliance-soak: request $request_id non-200 response: $status_line" >&2
+            cat "$response_http_i" >&2
+            return 1
+            ;;
+    esac
+    http_body "$response_http_i" "$response_json_i"
+    got="$(grep -o '"text_hex":"[^"]*"' "$response_json_i" | sed -n '1{s/^"text_hex":"//;s/"$//;p;}')"
+    generated="$(sed -n 's/.*"generated_tokens":\([0-9][0-9]*\).*/\1/p' "$response_json_i" | sed -n '1p')"
+    continuation_ms="$(sed -n 's/.*"continuation_decode":\([0-9.][0-9.]*\).*/\1/p' "$response_json_i" | sed -n '1p')"
+    if [ "$got" != "$expected_lower" ]; then
+        echo "ds4-v100-appliance-soak: request $request_id expected $expected_hex, got ${got:-none}" >&2
+        cat "$response_json_i" >&2
+        return 1
+    fi
+    if ! is_uint "${generated:-}"; then
+        echo "ds4-v100-appliance-soak: request $request_id missing generated_tokens" >&2
+        cat "$response_json_i" >&2
+        return 1
+    fi
+    if [ "$require_async" -eq 1 ] && ! grep -q '"async_pipeline":' "$response_json_i"; then
+        echo "ds4-v100-appliance-soak: request $request_id missing async_pipeline timing" >&2
+        cat "$response_json_i" >&2
+        return 1
+    fi
+    printf '{"index":%s,"status":200,"elapsed_ms":%s,"first_hex":"%s","generated_tokens":%s,"continuation_ms":%s}\n' \
+        "$request_id" "$elapsed_ms" "$got" "$generated" "${continuation_ms:-0}" >"$response_row_i"
+}
+
+for warmup_id in $(seq 1 "$warmup_requests"); do
+    post_request "$warmup_id" "warmup" 0 || fail "warmup request $warmup_id failed"
+done
+
+request_start_s="$(now_s)"
+pids=""
+for request_id in $(seq 1 "$requests"); do
+    post_request "$request_id" "response" &
+    pids="$pids $!"
+done
+failed=0
+for pid in $pids; do
+    if ! wait "$pid"; then
+        failed=1
+    fi
+done
+request_end_s="$(now_s)"
+[ "$failed" -eq 0 ] || fail "one or more requests failed"
+
+http_get "/v100/status" "$status_after_http" "$status_after" || fail "status after request failed"
+http_get "/metrics" "$metrics_after_http" "$metrics_after" || fail "metrics after request failed"
+
+elapsed_s="$(awk -v a="$request_start_s" -v b="$request_end_s" 'BEGIN { printf "%.6f", b - a }')"
+generated_total="$(awk '
+    match($0, /"generated_tokens":[0-9]+/) {
+        v = substr($0, RSTART + 19, RLENGTH - 19)
+        sum += v
+    }
+    END { printf "%d", sum }
+' "$log_dir"/response_*.row.json)"
+continuation_total="$(awk '
+    match($0, /"generated_tokens":[0-9]+/) {
+        v = substr($0, RSTART + 19, RLENGTH - 19)
+        if (v > 1) sum += v - 1
+    }
+    END { printf "%d", sum }
+' "$log_dir"/response_*.row.json)"
+aggregate_generated_tps="$(awk -v toks="$generated_total" -v elapsed="$elapsed_s" 'BEGIN { v = 0.0; if (elapsed > 0) v = toks / elapsed; printf "%.6f", v }')"
+aggregate_continuation_tps="$(awk -v toks="$continuation_total" -v elapsed="$elapsed_s" 'BEGIN { v = 0.0; if (elapsed > 0) v = toks / elapsed; printf "%.6f", v }')"
+latency_ms_avg="$(awk '
+    match($0, /"elapsed_ms":[0-9.]+/) {
+        v = substr($0, RSTART + 13, RLENGTH - 13)
+        sum += v
+        n++
+    }
+    END { printf "%.3f", n ? sum / n : 0.0 }
+' "$log_dir"/response_*.row.json)"
+async_pipeline_mode="$(sed -n 's/.*"async_pipeline_mode":"\([^"]*\)".*/\1/p' "$status_before" | sed -n '1p')"
+async_pipeline_decode="$(sed -n 's/.*"async_pipeline_decode":\([^,}]*\).*/\1/p' "$status_before" | sed -n '1p')"
+async_handoff_status="$(sed -n 's/.*"async_handoff":\([^,}]*\).*/\1/p' "$status_before" | sed -n '1p')"
+
+{
+    printf '['
+    sep=""
+    for request_id in $(seq 1 "$requests"); do
+        row="$log_dir/response_${request_id}.row.json"
+        [ -f "$row" ] || fail "missing response row $row"
+        printf '%s' "$sep"
+        cat "$row"
+        sep=","
+    done
+    printf ']\n'
+} >"$responses_json"
+
+printf '{"aggregate_continuation_tokens_per_second":%s,"aggregate_generated_tokens_per_second":%s,"async_handoff":%s,"async_pipeline_decode":%s,"async_pipeline_mode":"%s","continuation_tokens":%s,"elapsed_s":%s,"errors":0,"generated_tokens":%s,"latency_ms_avg":%s,"requests":%s,"schema":"ds4_v100_appliance_soak.v1","status_200":%s,"token_match":%s,"warmup_requests":%s}\n' \
+    "$aggregate_continuation_tps" \
+    "$aggregate_generated_tps" \
+    "${async_handoff_status:-false}" \
+    "${async_pipeline_decode:-false}" \
+    "${async_pipeline_mode:-unknown}" \
+    "$continuation_total" \
+    "$elapsed_s" \
+    "$generated_total" \
+    "$latency_ms_avg" \
+    "$requests" \
+    "$requests" \
+    "$requests" \
+    "$warmup_requests" >"$summary_json"
 
 if [ -n "$gpu_pid" ]; then
     kill "$gpu_pid" >/dev/null 2>&1 || true

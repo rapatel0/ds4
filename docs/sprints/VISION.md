@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: codex
-revision: 102
+revision: 103
 ---
 
 # Vision: DS4 V100 Appliance
@@ -574,6 +574,14 @@ optimized V100 low-bit expert kernels in the actual hot path.
   and HTTP smoke path. `DS4_V100_APPLIANCE_DIR` now validates all shard files
   and runs replay with `--appliance-dir`; the served smoke returned first token
   `3136` while uploading only 8 appliance shard tensors.
+- Sprint 092 ran the first warm-started, 4-slot async soak from the full
+  appliance directory. The timed batch produced `64` tokens across 4 requests
+  with `token_match=4/4`, `tensor_batched_groups=1`,
+  `tensor_batched_tokens=64`, `11.256048` generated tok/s, and `10.552545`
+  continuation tok/s. A cold concurrent first-request attempt failed in the
+  TurboMind routed FFN path while CUDA tensor caches were being lazily loaded,
+  so production launch must warm the appliance before admitting concurrent
+  traffic.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -655,6 +663,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 089 appliance-backed scheduler smoke | stage-0 `gpu0.weights` `22,524,134,668` bytes; scheduler `tm_layers=1` | Measured | The scheduler now opens a bounded appliance directory without a source GGUF model map, uploads `gpu0.weights`, executes layers 0-5, and positively reports that one routed layer used the no-repack TurboMind appliance path. This is not a throughput result; full 8-GPU appliance generation and sustained decode benchmarking remain next. |
 | Sprint 090 full appliance replay | full appliance `142G`; `tm_layers=43`; replay `0.620997` generated tok/s, `9.491896` continuation tok/s | Measured | A full 8-GPU appliance was generated on k8s-local storage, all shards fit in 32 GB V100 VRAM, full scheduler smoke executed all 43 layers from `gpuN.weights`, and replay returned first token hex `3136`. This proves the format and residency contract; launcher integration and multi-slot async benchmarking remain. |
 | Sprint 091 appliance launcher smoke | served first token `3136`; `uploaded_tensors=8`; open `65.033s` | Measured | `DS4_V100_APPLIANCE_DIR` now drives the operator launcher and HTTP smoke through `--appliance-dir`, so the production service path no longer needs the source pack index for scheduler residency. Multi-slot async and MTP appliance benchmarks remain. |
+| Sprint 092 appliance 4-slot async soak | `11.256048` generated tok/s, `10.552545` continuation tok/s at 1M/4 slots | Measured | The full appliance path is correct under warm-started 4-request tensor batching (`token_match=4/4`, `tensor_batched_groups=1`, `tensor_batched_tokens=64`). Cold concurrent first requests failed during lazy CUDA tensor-cache load in the TurboMind routed FFN path, so launch must include a warmup before serving traffic. Performance is still in the low baseline range, not practical-use optimized. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -1994,6 +2003,21 @@ GPU utilization with architectural changes, and only then compare against the
   `--appliance-dir /workspace/ds4-appliance-full-tm-s090`, and the HTTP smoke
   returns first token `3136` with `uploaded_tensors=8`.
 
+### Sprint 092 - Appliance Multi-Slot Async Soak [complete]
+
+- **Goal**: Benchmark the full TurboMind appliance directory through the
+  operator-facing service path under multi-slot async load.
+- **Rationale**: Single-request correctness does not prove practical serving.
+  The appliance needs a warm-started aggregate benchmark that uses the same
+  launch contract operators will use.
+- **Outcome**: `SHIP_APPLIANCE_ASYNC_SOAK`. Added `--appliance-dir` support to
+  the soak harness, removed Python from the pod-side client, added a default
+  warmup request, and validated a 4-slot/active-microbatch-4 run on the V100
+  pod. The measured timed batch returned `token_match=4/4`,
+  `generated_tokens=64`, `tensor_batched_groups=1`,
+  `aggregate_generated_tokens_per_second=11.256048`, and
+  `aggregate_continuation_tokens_per_second=10.552545`.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -2246,6 +2270,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 089 appliance-backed scheduler smoke. | A bounded stage-0 appliance directory now runs scheduler decode on V100 without a source GGUF model map, using `gpu0.weights` and positively reporting one TurboMind-routed layer. The next step is generating the full 8-GPU appliance, running full 43-layer decode, then benchmarking aggregate tok/s. | Sprint 090+ |
 | 2026-05-20 | Shipped Sprint 090 full appliance pack and replay. | The single-directory TurboMind appliance now exists on k8s-local storage, fits all 8 V100s, executes all 43 layers with TurboMind-routed experts, and preserves first-token correctness. Next work should wire `--appliance-dir` into the launcher/service path and benchmark multi-slot async serving from this artifact. | Sprint 091+ |
 | 2026-05-20 | Shipped Sprint 091 appliance launcher path. | The operator launcher and HTTP smoke now use `DS4_V100_APPLIANCE_DIR` and pass `--appliance-dir` into replay. The next sprint should benchmark multi-slot async serving from the appliance path and compare it to the source-index baseline. | Sprint 092+ |
+| 2026-05-20 | Shipped Sprint 092 appliance multi-slot async soak. | The full TurboMind appliance now has a warm-started 4-slot service benchmark: correctness passes and tensor batching is reported, but aggregate generated throughput is only `11.256048` tok/s. The next sprint should profile the timed batch and attack the remaining serialization/kernel-occupancy bottleneck before broader production serving work. | Sprint 093+ |
 
 ## Open Questions
 
