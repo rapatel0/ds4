@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress.
+Complete.
 
 ## Overview
 
@@ -29,10 +29,18 @@ the Sprint 062 profiled sustained baseline.
 
 ## Definition of Done
 
-- Local syntax/object builds pass for touched files.
-- `git diff --check` passes.
-- V100 replay/server build passes.
-- Existing V100 source/full scheduler/selected-token smokes still pass.
-- Opt-in served wavefront benchmark returns token hex `3136` with no errors.
-- Sprint report records whether wavefront improves aggregate tok/s enough to
-  continue toward default serving.
+- [x] Local syntax/object builds pass for touched files.
+- [x] `git diff --check` passes.
+- [x] V100 replay/server build passes.
+- [x] Existing V100 source/full scheduler/selected-token smokes still pass.
+- [x] Opt-in served wavefront benchmark returns token hex `3136` with no errors.
+- [x] Sprint report records whether wavefront improves aggregate tok/s enough
+  to continue toward default serving.
+
+## Result
+
+The opt-in served wavefront path is correct but slower than the paired serial
+control on the V100 pod, so it remains non-default. The current single-threaded
+diagonal scheduler proves slot-lane ordering through the server, but it does
+not create enough real host/GPU overlap to beat the established serial
+stage schedule.

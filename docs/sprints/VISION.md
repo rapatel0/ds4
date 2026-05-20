@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: vision
-revision: 75
+revision: 76
 ---
 
 # Vision: DS4 V100 Appliance
@@ -408,6 +408,14 @@ optimized V100 low-bit expert kernels in the actual hot path.
   exactly with `max_abs_slot0=0` and `max_abs_slot1=0`. The next sprint should
   wire this into the served same-length non-MTP batch path behind an opt-in
   flag and compare against the Sprint 062 `~3.7-3.8` tok/s baseline.
+- Sprint 064 shipped the opt-in served wavefront decode path and benchmark
+  plumbing. Correctness passed through the HTTP sustained benchmark with token
+  hex `3136`, but the paired V100 serial control was faster in every tested
+  case: wavefront measured `3.703159` generated tok/s at 1M/2 slots versus
+  serial `3.855080`, and `3.694816` at 256K/4 slots versus serial `3.839727`.
+  The single-threaded diagonal schedule should stay diagnostic only; the next
+  practical-use sprint needs true asynchronous stage workers, MTP commit, or a
+  persistent low-bit kernel change rather than this wavefront ordering alone.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -462,6 +470,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 061 shared F8 batch and 4-slot retest | `3.86` generated tok/s at 1M/2 slots, `3.83` at 256K/4 slots | Measured | Shared F8 batching is correct but remains opt-in because it did not beat the per-slot shared path. Persistent output views remove minor allocation churn. Four active slots do not improve aggregate tok/s, so the next gain requires a larger execution-shape change. |
 | Sprint 062 decode timing matrix | `3.77` generated tok/s at 1M/2 slots, `3.75` at 256K/4 slots | Measured | Opt-in synchronized profiling confirms the stage-synchronous execution shape is the dominant practical blocker: summed stage-profile time matches summed stage-decode time, while 4 slots increase latency without raising aggregate throughput. |
 | Sprint 063 wavefront lane proof | Correctness proof, not a throughput run | Measured | Slot-addressable stage scheduler APIs and per-device CUDA scratch now support two-stage wavefront lane mechanics. The V100 smoke matches serial HC exactly, so the next measurement should be an opt-in served wavefront benchmark. |
+| Sprint 064 opt-in served wavefront | `3.70` generated tok/s at 1M/2 slots, `3.69` at 256K/4 slots | Measured | Served wavefront decode is correct but slower than the paired serial control (`3.86` and `3.84` generated tok/s respectively). The current single-threaded diagonal scheduler does not create useful overlap and should remain non-default. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -1351,7 +1360,7 @@ GPU utilization with architectural changes, and only then compare against the
   generated tok/s, so the next sprint should move to stage wavefronting,
   committed MTP, or profiler-led kernel rewrites.
 
-### Sprint 062 - Decode Execution-Shape Profiling And MTP/Wavefront Decision [tentative]
+### Sprint 062 - Decode Execution-Shape Profiling And MTP/Wavefront Decision [complete]
 
 - **Goal**: Add low-overhead CUDA/event timing across the decode sections, then
   implement the highest-leverage execution-shape change: committed MTP draft
@@ -1360,6 +1369,35 @@ GPU utilization with architectural changes, and only then compare against the
   active slots do not solve utilization. The next sprint must identify where
   time is actually going and change the execution shape rather than continuing
   launch-count cleanup.
+- **Outcome**: `SHIP`. Added opt-in decode profiling to replay and sustained
+  benchmarking, then measured 1M/256K and 2/4-slot cases on the V100 pod.
+  Stage-profile totals nearly matched stage-decode totals, confirming that the
+  layer-synchronous stage schedule dominates current decode time.
+
+### Sprint 063 - Stage Wavefront Slot-Lane Proof [complete]
+
+- **Goal**: Prove scheduler mechanics for independent slot lanes before wiring
+  wavefront ordering into the served path.
+- **Rationale**: Stage wavefronting could only be considered if the scheduler
+  exposed slot-addressable decode, handoff, and read APIs without corrupting
+  per-slot KV/HC state.
+- **Outcome**: `SHIP`. Added slot-span scheduler APIs and per-device CUDA temp
+  scratch. The focused V100 smoke advances two slot lanes in wavefront order
+  through two stages and matches the serial HC reference exactly.
+
+### Sprint 064 - Opt-In Served Wavefront Decode [complete]
+
+- **Goal**: Wire stage-wavefront ordering into same-length non-MTP served
+  batches behind an opt-in flag and compare against the serial baseline.
+- **Rationale**: Sprint 062 showed serialized stage time as the dominant
+  blocker, and Sprint 063 proved slot-lane mechanics. The next question was
+  whether served diagonal stage ordering alone improved aggregate tok/s.
+- **Outcome**: `SHIP` as diagnostic, not default. Added
+  `--wavefront-decode` to replay and sustained benchmarking. Correctness
+  passed, but paired V100 benchmarks showed wavefront `3.70` generated tok/s
+  at 1M/2 slots versus serial `3.86`, and wavefront `3.69` at 256K/4 slots
+  versus serial `3.84`. Do not promote this path; move to true asynchronous
+  stage workers, MTP commit, or persistent low-bit kernels.
 
 ## Parking Lot
 
@@ -1579,6 +1617,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-19 | Shipped Sprint 059 persistent layer batch scratch. | Multi-slot layer batching is now default after scratch reuse lifted two-slot generated tok/s to `3.862932`; the next bottleneck is the remaining FFN input copy and pointer-hostile routed MXFP4 batch interface. | Sprint 060+ |
 | 2026-05-19 | Shipped Sprint 060 pointer-input routed FFN batch. | The routed MXFP4 batch primitive now consumes per-slot input tensor pointers directly, lifting two-slot generated tok/s to `3.915266`; utilization remains low, so the next sprint should target shared expert batching or higher-slot scaling evidence. | Sprint 061+ |
 | 2026-05-19 | Shipped Sprint 061 shared F8 batch and higher-slot evidence. | Shared F8 batching is correct but remains opt-in because it measured below the Sprint 060 default; persistent FFN output views remove minor allocation churn, and the 4-slot 256K run proves slots alone do not improve aggregate tok/s under the current layer-synchronous schedule. | Sprint 062+ |
+| 2026-05-20 | Shipped Sprint 064 opt-in served wavefront decode. | The served wavefront path is correct, but the paired V100 serial control is faster by about 4% across 1M/256K and 2/4-slot cases. The next sprint should not continue the same single-threaded diagonal schedule; practical throughput needs true asynchronous stage workers, MTP commit, or persistent low-bit kernels. | Sprint 065+ |
 
 ## Open Questions
 

@@ -1,0 +1,15 @@
+schema	ds4_v100_sustained_decode.v1
+model	/models/DSv4-Flash-256e-fixed.gguf
+pack_index	docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv
+expected_token_hex	3136
+tokens_per_request	16
+requests_per_case	4
+warmup_requests	1
+profile_decode	0
+wavefront_decode	1
+
+ctx	slots	policy	status_200	status_other	errors	token_match	token_mismatch	latency_avg_ms	latency_p50_ms	latency_p95_ms	latency_p99_ms	elapsed_s	aggregate_generated_tokens_per_second	aggregate_continuation_tokens_per_second	avg_continuation_response_tokens_per_second	avg_gpu_util_percent	max_gpu_util_percent
+1048576	2	sequential	4	0	0	4	0	8640.618	8640.700	8642.544	8642.569	17.282540	3.703159	3.471712	3.859163	10.912	20.000
+1048576	4	sequential	4	0	0	4	0	17353.879	17353.981	17354.322	17354.360	17.355471	3.687598	3.457123	1.913580	10.464	30.000
+262144	2	sequential	4	0	0	4	0	8676.837	8676.754	8692.563	8692.630	17.355097	3.687677	3.457198	3.832928	10.939	26.000
+262144	4	sequential	4	0	0	4	0	17320.039	17320.206	17320.550	17320.566	17.321568	3.694816	3.463890	1.920656	11.597	34.000
