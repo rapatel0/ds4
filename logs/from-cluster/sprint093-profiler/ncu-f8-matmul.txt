@@ -1,0 +1,21 @@
+==PROF== Connected to process 6137 (/workspace/ds4-sprint082/tools/ds4-v100-replay)
+ds4: CUDA loading model tensors into device cache
+==PROF== Profiling "arena_f8_e4m3_b128_matmul_kernel": 0%
+==WARNING== An error was reported by the driver
+
+==WARNING== Backing up device memory in system memory. Kernel replay might be slow. Consider using "--replay-mode application" to avoid memory save-and-restore.
+....50%....100% - 9 passes
+ds4: CUDA loading model tensors 0.99 GiB cached
+{"prompt_tokens":18,"generated_tokens":1,"total_input_tokens":18,"tokens":[{"id":926,"logit":35.2499466,"text":"16","text_hex":"3136"}],"timing_ms":{"open_total":64055.098,"prompt_replay":37681.778,"continuation_decode":0.000,"output_head":5.991,"token_text":0.011,"total":37687.846,"prompt_tokens_per_second":0.477684,"continuation_tokens_per_second":0.000000,"generated_tokens_per_second":0.026534,"stage_decode":[34022.824,571.893,585.584,600.907,631.260,462.177,465.520,332.808],"stage_profile":{"hc_attn":[0.000,0.000,0.000,0.000,0.000,0.000,0.000,0.000],"attention":[0.000,0.000,0.000,0.000,0.000,0.000,0.000,0.000],"hc_ffn":[0.000,0.000,0.000,0.000,0.000,0.000,0.000,0.000],"ffn":[0.000,0.000,0.000,0.000,0.000,0.000,0.000,0.000],"hc_final":[0.000,0.000,0.000,0.000,0.000,0.000,0.000,0.000],"total":[0.000,0.000,0.000,0.000,0.000,0.000,0.000,0.000]},"handoff":[1.636,0.988,1.106,1.224,1.060,1.296,1.497],"open_stage":[64005.412,60226.777,16496.032,10915.371,36586.801,50348.053,39137.916,37881.813]},"memory":{"uploaded_tensors":8,"uploaded_bytes":156142896212,"arena_bytes":[22524134668,21494393612,21494393612,21494393612,21494393612,17922654732,17901334540,11817197824]}}
+==PROF== Disconnected from process 6137
+[6137] ds4-v100-replay@127.0.0.1
+  arena_f8_e4m3_b128_matmul_kernel(float *, const unsigned char *, const float *, unsigned int, unsigned int, unsigned int) (1024, 1, 1)x(256, 1, 1), Context 7, Stream 45, Device 0, CC 7.0
+    Section: Command line profiler metrics
+    --------------------------------------------------- ----------- ------------
+    Metric Name                                         Metric Unit Metric Value
+    --------------------------------------------------- ----------- ------------
+    dram__throughput.avg.pct_of_peak_sustained_elapsed            %        12.96
+    sm__throughput.avg.pct_of_peak_sustained_elapsed              %        58.71
+    smsp__sass_thread_inst_executed_op_hmma_pred_on.sum                  (!) n/a
+    --------------------------------------------------- ----------- ------------
+

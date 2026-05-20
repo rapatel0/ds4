@@ -592,3 +592,11 @@ int ds4_gpu_arena_attention_decode_heads_tensor(
     (void)head_dim;
     return 1;
 }
+
+int ds4_gpu_profiler_start(void) {
+    return 1;
+}
+
+int ds4_gpu_profiler_stop(void) {
+    return 1;
+}

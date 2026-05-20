@@ -80,6 +80,7 @@ fi
 : "${DS4_V100_ASYNC_PIPELINE_MODE:=off}"
 : "${DS4_V100_ASYNC_HANDOFF:=0}"
 : "${DS4_V100_ASYNC_EVENT_HANDOFF:=0}"
+: "${DS4_V100_STARTUP_WARMUP:=auto}"
 : "${DS4_V100_ENABLE_OUTPUT_HEAD_BATCH:=0}"
 : "${DS4_V100_TURBOMIND_ROUTED_FFN:=0}"
 : "${DS4_V100_TURBOMIND_STRICT:=0}"
@@ -256,6 +257,18 @@ case "$DS4_V100_ASYNC_EVENT_HANDOFF" in
     1|true|on) async_event_handoff=1 ;;
     *) fail "DS4_V100_ASYNC_EVENT_HANDOFF must be 0 or 1" ;;
 esac
+case "$DS4_V100_STARTUP_WARMUP" in
+    auto)
+        if [ "$DS4_V100_ACTIVE_MICROBATCH" -gt 1 ]; then
+            startup_warmup=1
+        else
+            startup_warmup=0
+        fi
+        ;;
+    0|false|off) startup_warmup=0 ;;
+    1|true|on) startup_warmup=1 ;;
+    *) fail "DS4_V100_STARTUP_WARMUP must be auto, 0, or 1" ;;
+esac
 case "$DS4_V100_TURBOMIND_ROUTED_FFN" in
     0|false|off) DS4_V100_TURBOMIND_ROUTED_FFN=0 ;;
     1|true|on) DS4_V100_TURBOMIND_ROUTED_FFN=1 ;;
@@ -332,6 +345,9 @@ fi
 if [ "$async_event_handoff" -eq 1 ]; then
     cmd+=(--async-event-handoff)
 fi
+if [ "$startup_warmup" -eq 1 ]; then
+    cmd+=(--startup-warmup)
+fi
 if [ "$mtp_serving_enabled" -eq 1 ]; then
     cmd+=(
         --mtp-model "$DS4_V100_MTP_MODEL"
@@ -349,7 +365,7 @@ print_resolved() {
 }
 
 if [ "$mode" = "check" ]; then
-    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff appliance_dir=${DS4_V100_APPLIANCE_DIR:-none} turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN"
+    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff startup_warmup=$startup_warmup appliance_dir=${DS4_V100_APPLIANCE_DIR:-none} turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN"
     exit 0
 fi
 if [ "$mode" = "print" ]; then
@@ -374,6 +390,8 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_ASYNC_HANDOFF_RESOLVED=$async_handoff"
     echo "DS4_V100_ASYNC_EVENT_HANDOFF=$DS4_V100_ASYNC_EVENT_HANDOFF"
     echo "DS4_V100_ASYNC_EVENT_HANDOFF_RESOLVED=$async_event_handoff"
+    echo "DS4_V100_STARTUP_WARMUP=$DS4_V100_STARTUP_WARMUP"
+    echo "DS4_V100_STARTUP_WARMUP_RESOLVED=$startup_warmup"
     echo "DS4_V100_ENABLE_OUTPUT_HEAD_BATCH=$DS4_V100_ENABLE_OUTPUT_HEAD_BATCH"
     echo "DS4_V100_TURBOMIND_ROUTED_FFN=$DS4_V100_TURBOMIND_ROUTED_FFN"
     echo "DS4_V100_TURBOMIND_STRICT=$DS4_V100_TURBOMIND_STRICT"

@@ -65,6 +65,8 @@ typedef struct {
     bool async_pipeline_decode;
     bool async_handoff;
     bool async_event_handoff;
+    bool startup_warmup;
+    bool cuda_profiler_window;
     ds4_v100_replay_async_pipeline_mode async_pipeline_mode;
 } replay_cli_options;
 
@@ -550,6 +552,8 @@ static void usage(FILE *fp) {
             "  --async-pipeline-per-step enable diagnostic per-token-step async workers\n"
             "  --async-handoff          queue HC peer handoff copies on the destination stream\n"
             "  --async-event-handoff    use CUDA events for per-step stage handoff ordering\n"
+            "  --startup-warmup        run one internal generation before listening\n"
+            "  --cuda-profiler-window  call cudaProfilerStart/Stop around generation\n"
             "  --mtp-serving MODE        off, verify, or commit, default off\n"
             "  --mtp-top-k N             MTP draft top-k to report, default 5\n"
             "  --mtp-gpu N               MTP sidecar GPU, default 7\n"
@@ -705,6 +709,10 @@ static replay_cli_options parse_options(int argc, char **argv) {
             opt.async_event_handoff = true;
             opt.async_pipeline_decode = true;
             opt.async_pipeline_mode = DS4_V100_REPLAY_ASYNC_PIPELINE_PER_STEP;
+        } else if (!strcmp(arg, "--startup-warmup")) {
+            opt.startup_warmup = true;
+        } else if (!strcmp(arg, "--cuda-profiler-window")) {
+            opt.cuda_profiler_window = true;
         } else if (!strcmp(arg, "--async-pipeline-mode")) {
             const char *v = need_arg(&i, argc, argv, arg);
             if (!strcmp(v, "off") || !strcmp(v, "false") || !strcmp(v, "0")) {
@@ -1651,6 +1659,7 @@ static void write_status_json(FILE *fp,
             async_pipeline_mode_name(opt->async_pipeline_mode));
     fprintf(fp, "\"async_handoff\":%s,", opt->async_handoff ? "true" : "false");
     fprintf(fp, "\"async_event_handoff\":%s,", opt->async_event_handoff ? "true" : "false");
+    fprintf(fp, "\"startup_warmup\":%s,", opt->startup_warmup ? "true" : "false");
     fprintf(fp,
             "\"limits\":{\"slots\":%" PRIu32 ",\"configured_slots\":%" PRIu32
             ",\"active_slots\":%" PRIu32 ",\"active_microbatch\":%" PRIu32
@@ -1752,6 +1761,9 @@ static void write_metrics_text(FILE *fp,
     fprintf(fp, "# HELP ds4_v100_active_slots Active slots scheduled concurrently by this process.\n");
     fprintf(fp, "# TYPE ds4_v100_active_slots gauge\n");
     fprintf(fp, "ds4_v100_active_slots %" PRIu32 "\n", opt->active_microbatch);
+    fprintf(fp, "# HELP ds4_v100_startup_warmup_enabled Whether the server warmed the appliance before accepting traffic.\n");
+    fprintf(fp, "# TYPE ds4_v100_startup_warmup_enabled gauge\n");
+    fprintf(fp, "ds4_v100_startup_warmup_enabled %d\n", opt->startup_warmup ? 1 : 0);
     fprintf(fp, "# HELP ds4_v100_concurrent_request_capacity Concurrent generation request capacity.\n");
     fprintf(fp, "# TYPE ds4_v100_concurrent_request_capacity gauge\n");
     fprintf(fp, "ds4_v100_concurrent_request_capacity %" PRIu32 "\n", opt->active_microbatch);
@@ -1973,9 +1985,64 @@ static void *request_worker_main(void *arg) {
     return NULL;
 }
 
+static int run_startup_warmup(const replay_cli_options *opt, ds4_v100_replay *rt) {
+    if (!opt || !rt || !opt->startup_warmup) return 0;
+    static const char warmup_prompt[] = "16";
+    char err[512] = {0};
+    ds4_tokens prompt = {0};
+    ds4_v100_replay_output output = {0};
+    ds4_v100_replay_counters counters;
+    memset(&counters, 0, sizeof(counters));
+
+    ds4_v100_replay_encode_prompt(rt, opt->system, warmup_prompt, DS4_THINK_NONE, &prompt);
+    if (prompt.len <= 0) {
+        fprintf(stderr, "ds4-v100-replay: startup warmup prompt encode failed\n");
+        ds4_tokens_free(&prompt);
+        return 1;
+    }
+    if (opt->ctx && (uint64_t)prompt.len + 1u > opt->ctx) {
+        fprintf(stderr, "ds4-v100-replay: startup warmup exceeds configured context\n");
+        ds4_tokens_free(&prompt);
+        return 1;
+    }
+
+    uint32_t n_outputs = 0;
+    const double t0 = now_ms();
+    int rc = ds4_v100_replay_generate(rt,
+                                      &prompt,
+                                      1,
+                                      &output,
+                                      1,
+                                      &n_outputs,
+                                      &counters,
+                                      err,
+                                      sizeof(err));
+    if (!rc) {
+        rc = ds4_v100_replay_reset(rt, err, sizeof(err));
+    }
+    const double total_ms = now_ms() - t0;
+    if (rc) {
+        fprintf(stderr,
+                "ds4-v100-replay: startup warmup failed: %s\n",
+                err[0] ? err : "warmup generation failed");
+    } else {
+        fprintf(stderr,
+                "ds4-v100-replay: startup warmup ok prompt_tokens=%d token=%" PRIu32
+                " total_ms=%.3f\n",
+                prompt.len,
+                n_outputs ? output.token : UINT32_MAX,
+                total_ms);
+    }
+    ds4_v100_replay_output_free(&output);
+    ds4_tokens_free(&prompt);
+    return rc;
+}
+
 static int run_server(const replay_cli_options *opt,
                       ds4_v100_replay *rt,
                       replay_mtp_service *mtp) {
+    if (run_startup_warmup(opt, rt) != 0) return 1;
+
     replay_server_state state;
     memset(&state, 0, sizeof(state));
     state.opt = opt;
@@ -2200,7 +2267,16 @@ int main(int argc, char **argv) {
     int rc = 0;
     replay_mtp_result mtp_result;
     const replay_mtp_result *mtp_json = NULL;
-    if (mtp && mtp->enabled && opt.mtp_serving == REPLAY_MTP_SERVING_COMMIT) {
+    bool profiler_active = false;
+    if (opt.cuda_profiler_window) {
+        if (!ds4_gpu_profiler_start()) {
+            fprintf(stderr, "ds4-v100-replay: cuda profiler start failed\n");
+            rc = 1;
+        } else {
+            profiler_active = true;
+        }
+    }
+    if (rc == 0 && mtp && mtp->enabled && opt.mtp_serving == REPLAY_MTP_SERVING_COMMIT) {
         if (replay_generate_mtp_commit_one_slot(mtp,
                                                 rt,
                                                 &prompt,
@@ -2217,15 +2293,15 @@ int main(int argc, char **argv) {
         } else {
             mtp_json = &mtp_result;
         }
-    } else if (ds4_v100_replay_generate(rt,
-                                        &prompt,
-                                        opt.tokens,
-                                        outputs,
-                                        opt.tokens,
-                                        &n_outputs,
-                                        &counters,
-                                        err,
-                                        sizeof(err))) {
+    } else if (rc == 0 && ds4_v100_replay_generate(rt,
+                                                   &prompt,
+                                                   opt.tokens,
+                                                   outputs,
+                                                   opt.tokens,
+                                                   &n_outputs,
+                                                   &counters,
+                                                   err,
+                                                   sizeof(err))) {
         fprintf(stderr, "ds4-v100-replay: %s\n", err[0] ? err : "generation failed");
         rc = 1;
     }
@@ -2261,6 +2337,10 @@ int main(int argc, char **argv) {
         } else {
             mtp_json = &mtp_result;
         }
+    }
+    if (profiler_active && !ds4_gpu_profiler_stop()) {
+        fprintf(stderr, "ds4-v100-replay: cuda profiler stop failed\n");
+        rc = 1;
     }
 
     if (rc == 0) {
