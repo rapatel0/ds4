@@ -82,6 +82,7 @@ fi
 : "${DS4_V100_ASYNC_HANDOFF:=0}"
 : "${DS4_V100_ASYNC_EVENT_HANDOFF:=0}"
 : "${DS4_V100_STARTUP_WARMUP:=auto}"
+: "${DS4_V100_CUDA_PROFILER_WINDOW:=0}"
 : "${DS4_V100_ENABLE_OUTPUT_HEAD_BATCH:=0}"
 : "${DS4_V100_BATCH_SHARED_F8:=1}"
 : "${DS4_V100_TURBOMIND_ROUTED_FFN:=0}"
@@ -277,6 +278,11 @@ case "$DS4_V100_STARTUP_WARMUP" in
     1|true|on) startup_warmup=1 ;;
     *) fail "DS4_V100_STARTUP_WARMUP must be auto, 0, or 1" ;;
 esac
+case "$DS4_V100_CUDA_PROFILER_WINDOW" in
+    0|false|off) cuda_profiler_window=0 ;;
+    1|true|on) cuda_profiler_window=1 ;;
+    *) fail "DS4_V100_CUDA_PROFILER_WINDOW must be 0 or 1" ;;
+esac
 microbatch_wait_us="$DS4_V100_MICROBATCH_WAIT_US"
 case "$microbatch_wait_us" in
     auto)
@@ -367,6 +373,9 @@ fi
 if [ "$startup_warmup" -eq 1 ]; then
     cmd+=(--startup-warmup)
 fi
+if [ "$cuda_profiler_window" -eq 1 ]; then
+    cmd+=(--cuda-profiler-window)
+fi
 if [ "$mtp_serving_enabled" -eq 1 ]; then
     cmd+=(
         --mtp-model "$DS4_V100_MTP_MODEL"
@@ -384,7 +393,7 @@ print_resolved() {
 }
 
 if [ "$mode" = "check" ]; then
-    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff startup_warmup=$startup_warmup batch_shared_f8=$DS4_V100_BATCH_SHARED_F8 appliance_dir=${DS4_V100_APPLIANCE_DIR:-none} turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN"
+    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff startup_warmup=$startup_warmup cuda_profiler_window=$cuda_profiler_window batch_shared_f8=$DS4_V100_BATCH_SHARED_F8 appliance_dir=${DS4_V100_APPLIANCE_DIR:-none} turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN"
     exit 0
 fi
 if [ "$mode" = "print" ]; then
@@ -413,6 +422,8 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_ASYNC_EVENT_HANDOFF_RESOLVED=$async_event_handoff"
     echo "DS4_V100_STARTUP_WARMUP=$DS4_V100_STARTUP_WARMUP"
     echo "DS4_V100_STARTUP_WARMUP_RESOLVED=$startup_warmup"
+    echo "DS4_V100_CUDA_PROFILER_WINDOW=$DS4_V100_CUDA_PROFILER_WINDOW"
+    echo "DS4_V100_CUDA_PROFILER_WINDOW_RESOLVED=$cuda_profiler_window"
     echo "DS4_V100_ENABLE_OUTPUT_HEAD_BATCH=$DS4_V100_ENABLE_OUTPUT_HEAD_BATCH"
     echo "DS4_V100_BATCH_SHARED_F8=$DS4_V100_BATCH_SHARED_F8"
     echo "DS4_V100_TURBOMIND_ROUTED_FFN=$DS4_V100_TURBOMIND_ROUTED_FFN"

@@ -378,6 +378,23 @@ static void pending_mark_done(replay_pending_generation *req, int rc, const char
     }
 }
 
+static bool server_profiler_start_if_requested(replay_server_state *state) {
+    if (!state || !state->opt || !state->opt->cuda_profiler_window) return false;
+    if (!ds4_gpu_profiler_start()) {
+        fprintf(stderr, "ds4-v100-replay: cuda profiler start failed\n");
+        return false;
+    }
+    return true;
+}
+
+static void server_profiler_stop_if_active(bool *active) {
+    if (!active || !*active) return;
+    if (!ds4_gpu_profiler_stop()) {
+        fprintf(stderr, "ds4-v100-replay: cuda profiler stop failed\n");
+    }
+    *active = false;
+}
+
 static int process_pending_generation_batch(replay_server_state *state) {
     if (!state || !state->opt || !state->rt) return 1;
     uint32_t cap = state->opt->active_microbatch ? state->opt->active_microbatch : 1;
@@ -388,6 +405,7 @@ static int process_pending_generation_batch(replay_server_state *state) {
     pending_collect_batch(state, cap, &batch);
     if (batch.count == 0) return 0;
 
+    bool profiler_active = server_profiler_start_if_requested(state);
     const uint32_t batch_tokens = batch.items[0] ? batch.items[0]->tokens : 0;
     bool can_batch = !mtp_enabled && batch.count > 1 && batch_tokens > 0 &&
                      batch_tokens <= DS4_V100_REPLAY_MAX_TOKENS;
@@ -457,6 +475,7 @@ static int process_pending_generation_batch(replay_server_state *state) {
                 }
             }
         }
+        server_profiler_stop_if_active(&profiler_active);
         return 0;
     }
 
@@ -497,6 +516,7 @@ static int process_pending_generation_batch(replay_server_state *state) {
         pending_mark_done(req, rc, err);
         pending_remove(state, req);
     }
+    server_profiler_stop_if_active(&profiler_active);
     return 0;
 }
 
