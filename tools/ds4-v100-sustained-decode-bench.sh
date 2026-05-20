@@ -20,6 +20,7 @@ profile_decode="0"
 wavefront_decode="0"
 async_pipeline_decode="0"
 async_pipeline_mode="off"
+async_handoff="0"
 mtp_serving="off"
 mtp_top_k="5"
 mtp_gpu="7"
@@ -51,6 +52,7 @@ Options:
   --async-pipeline-decode   pass preferred async pipeline mode to the server
   --async-pipeline-mode M   off, persistent, per-step, or mailbox
   --async-pipeline-per-step pass --async-pipeline-mode per-step
+  --async-handoff           queue HC peer handoff copies on the destination stream
   --mtp-serving MODE        off, verify, or commit, default off
   --mtp-top-k N             MTP draft candidates to report, default 5
   --mtp-gpu N               MTP sidecar GPU, default 7
@@ -189,6 +191,10 @@ while [ "$#" -gt 0 ]; do
         --async-pipeline-per-step)
             async_pipeline_decode="1"
             async_pipeline_mode="per-step"
+            shift
+            ;;
+        --async-handoff)
+            async_handoff="1"
             shift
             ;;
         --async-pipeline-mode)
@@ -864,6 +870,9 @@ load_case() {
     if [ "$async_pipeline_decode" = "1" ]; then
         cmd+=(--async-pipeline-mode "$async_pipeline_mode")
     fi
+    if [ "$async_handoff" = "1" ]; then
+        cmd+=(--async-handoff)
+    fi
     if [ "$mtp_serving" != "off" ]; then
         cmd+=(
             --mtp-model "$mtp_model"
@@ -939,6 +948,7 @@ printf 'profile_decode\t%s\n' "$profile_decode" >>"$summary_tsv"
 printf 'wavefront_decode\t%s\n' "$wavefront_decode" >>"$summary_tsv"
 printf 'async_pipeline_decode\t%s\n' "$async_pipeline_decode" >>"$summary_tsv"
 printf 'async_pipeline_mode\t%s\n' "$async_pipeline_mode" >>"$summary_tsv"
+printf 'async_handoff\t%s\n' "$async_handoff" >>"$summary_tsv"
 printf 'mtp_serving\t%s\n' "$mtp_serving" >>"$summary_tsv"
 printf 'mtp_top_k\t%s\n' "$mtp_top_k" >>"$summary_tsv"
 printf '\nctx\tslots\tpolicy\tmtp_serving\tstatus_200\tstatus_other\terrors\ttoken_match\ttoken_mismatch\tlatency_avg_ms\tlatency_p50_ms\tlatency_p95_ms\tlatency_p99_ms\telapsed_s\taggregate_generated_tokens_per_second\taggregate_continuation_tokens_per_second\tavg_continuation_response_tokens_per_second\tavg_gpu_util_percent\tmax_gpu_util_percent\tmtp_attempted\tmtp_accepted\tmtp_rejected\tmtp_committed\tmtp_draft_ms_avg\tmtp_draft_ms_total\tavg_async_total_ms\tavg_async_setup_ms\tavg_async_host_wait_ms\tavg_async_complete_ms\tavg_async_wait_prev_sum_ms\tavg_async_handoff_sum_ms\tavg_async_device_sync_sum_ms\n' >>"$summary_tsv"
@@ -1037,14 +1047,15 @@ PY
     done
 done
 
-python3 - "$summary_json" "$mtp_serving" "$mtp_top_k" "${case_paths[@]}" <<'PY'
+python3 - "$summary_json" "$mtp_serving" "$mtp_top_k" "$async_handoff" "${case_paths[@]}" <<'PY'
 import json
 import sys
 
 out = sys.argv[1]
 mtp_serving = sys.argv[2]
 mtp_top_k = int(sys.argv[3])
-paths = sys.argv[4:]
+async_handoff = bool(int(sys.argv[4]))
+paths = sys.argv[5:]
 rows = []
 for p in paths:
     with open(p, "r", encoding="utf-8") as f:
@@ -1053,6 +1064,7 @@ summary = {
     "schema": "ds4_v100_sustained_decode.v1",
     "mtp_serving": mtp_serving,
     "mtp_top_k": mtp_top_k,
+    "async_handoff": async_handoff,
     "cases": rows,
 }
 with open(out, "w", encoding="utf-8") as f:

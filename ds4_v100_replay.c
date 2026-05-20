@@ -97,6 +97,7 @@ void ds4_v100_replay_options_init(ds4_v100_replay_options *opts) {
     opts->suppress_router_readback = true;
     opts->wavefront_decode = false;
     opts->async_pipeline_decode = false;
+    opts->async_handoff = false;
     opts->async_pipeline_mode = DS4_V100_REPLAY_ASYNC_PIPELINE_OFF;
 }
 
@@ -371,6 +372,31 @@ static void counters_add_report(ds4_v100_replay_counters *c,
     c->stage_profile_total_ms[stage] += r->timing_total_ms;
 }
 
+static int replay_handoff_slot_span(ds4_v100_replay *rt,
+                                    int stage,
+                                    uint32_t slot_start,
+                                    uint32_t n_slots,
+                                    char *err,
+                                    size_t errlen) {
+    if (!rt || stage <= 0 || stage >= DS4_V100_EXPECTED_GPUS) {
+        return replay_error(err, errlen, "missing replay handoff endpoint");
+    }
+    if (rt->opts.async_handoff) {
+        return ds4_v100_stage_scheduler_handoff_slot_span_async(rt->scheds[stage],
+                                                               rt->scheds[stage - 1],
+                                                               slot_start,
+                                                               n_slots,
+                                                               err,
+                                                               errlen);
+    }
+    return ds4_v100_stage_scheduler_handoff_slot_span(rt->scheds[stage],
+                                                     rt->scheds[stage - 1],
+                                                     slot_start,
+                                                     n_slots,
+                                                     err,
+                                                     errlen);
+}
+
 static int replay_feed_token(ds4_v100_replay *rt,
                              uint32_t token,
                              uint32_t position,
@@ -397,10 +423,7 @@ static int replay_feed_token(ds4_v100_replay *rt,
 
     for (int stage = 1; stage < DS4_V100_EXPECTED_GPUS; stage++) {
         t0 = replay_now_ms();
-        if (ds4_v100_stage_scheduler_handoff(rt->scheds[stage],
-                                             rt->scheds[stage - 1],
-                                             err,
-                                             errlen)) {
+        if (replay_handoff_slot_span(rt, stage, 0, 1, err, errlen)) {
             return 1;
         }
         dt = replay_now_ms() - t0;
@@ -481,11 +504,7 @@ static int replay_feed_token_batch(ds4_v100_replay *rt,
 
     for (int stage = 1; stage < DS4_V100_EXPECTED_GPUS; stage++) {
         t0 = replay_now_ms();
-        if (ds4_v100_stage_scheduler_handoff_batch(rt->scheds[stage],
-                                                   rt->scheds[stage - 1],
-                                                   n_slots,
-                                                   err,
-                                                   errlen)) {
+        if (replay_handoff_slot_span(rt, stage, 0, n_slots, err, errlen)) {
             return 1;
         }
         dt = replay_now_ms() - t0;
@@ -562,12 +581,12 @@ static int replay_feed_token_batch_wavefront(ds4_v100_replay *rt,
                     return 1;
                 }
             } else {
-                if (ds4_v100_stage_scheduler_handoff_slot_span(rt->scheds[stage],
-                                                               rt->scheds[stage - 1],
-                                                               slot,
-                                                               1,
-                                                               err,
-                                                               errlen) ||
+                if (replay_handoff_slot_span(rt,
+                                             stage,
+                                             slot,
+                                             1,
+                                             err,
+                                             errlen) ||
                     ds4_v100_stage_scheduler_decode_hc_slot_span(rt->scheds[stage],
                                                                  slot,
                                                                  &tokens[slot],
@@ -729,13 +748,12 @@ static void *replay_pipeline_worker_main(void *arg) {
                     break;
                 }
             } else {
-                if (ds4_v100_stage_scheduler_handoff_slot_span(
-                        p->rt->scheds[stage],
-                        p->rt->scheds[stage - 1],
-                        slot,
-                        1,
-                        local_err,
-                        sizeof(local_err))) {
+                if (replay_handoff_slot_span(p->rt,
+                                             stage,
+                                             slot,
+                                             1,
+                                             local_err,
+                                             sizeof(local_err))) {
                     replay_pipeline_fail(p, local_err);
                     break;
                 }
@@ -1033,13 +1051,12 @@ static void *replay_mailbox_worker_main(void *arg) {
                     break;
                 }
             } else {
-                if (ds4_v100_stage_scheduler_handoff_slot_span(
-                        m->rt->scheds[stage],
-                        m->rt->scheds[stage - 1],
-                        slot,
-                        1,
-                        local_err,
-                        sizeof(local_err))) {
+                if (replay_handoff_slot_span(m->rt,
+                                             stage,
+                                             slot,
+                                             1,
+                                             local_err,
+                                             sizeof(local_err))) {
                     replay_mailbox_fail(m, local_err);
                     break;
                 }
@@ -1289,13 +1306,12 @@ static void *replay_step_pipeline_worker_main(void *arg) {
                 break;
             }
         } else {
-            if (ds4_v100_stage_scheduler_handoff_slot_span(
-                    b->rt->scheds[stage],
-                    b->rt->scheds[stage - 1],
-                    slot,
-                    1,
-                    local_err,
-                    sizeof(local_err))) {
+            if (replay_handoff_slot_span(b->rt,
+                                         stage,
+                                         slot,
+                                         1,
+                                         local_err,
+                                         sizeof(local_err))) {
                 replay_step_pipeline_fail(b, local_err);
                 break;
             }

@@ -1097,12 +1097,13 @@ int ds4_v100_stage_scheduler_handoff_batch(ds4_v100_stage_scheduler *dst,
     return ds4_v100_stage_scheduler_handoff_slot_span(dst, src, 0, n_slots, err, errlen);
 }
 
-int ds4_v100_stage_scheduler_handoff_slot_span(ds4_v100_stage_scheduler *dst,
-                                               const ds4_v100_stage_scheduler *src,
-                                               uint32_t slot_start,
-                                               uint32_t n_slots,
-                                               char *err,
-                                               size_t errlen) {
+static int scheduler_handoff_slot_span_impl(ds4_v100_stage_scheduler *dst,
+                                            const ds4_v100_stage_scheduler *src,
+                                            uint32_t slot_start,
+                                            uint32_t n_slots,
+                                            bool async_copy,
+                                            char *err,
+                                            size_t errlen) {
     if (!dst || !src) {
         return scheduler_error(err, errlen, "missing scheduler handoff endpoint");
     }
@@ -1135,13 +1136,34 @@ int ds4_v100_stage_scheduler_handoff_slot_span(ds4_v100_stage_scheduler *dst,
         if (!src->cur_hc[slot] || !dst->hc_a[slot]) {
             return scheduler_errorf(err, errlen, "missing handoff HC slot %d", (int)slot);
         }
-        if (!ds4_gpu_tensor_copy(dst->hc_a[slot], 0, src->cur_hc[slot], 0, hc_bytes)) {
+        const int ok = async_copy
+            ? ds4_gpu_tensor_copy_async(dst->hc_a[slot], 0, src->cur_hc[slot], 0, hc_bytes)
+            : ds4_gpu_tensor_copy(dst->hc_a[slot], 0, src->cur_hc[slot], 0, hc_bytes);
+        if (!ok) {
             return scheduler_errorf(err, errlen, "scheduler HC handoff copy failed for slot %d",
                                     (int)slot);
         }
         dst->cur_hc[slot] = dst->hc_a[slot];
     }
     return 0;
+}
+
+int ds4_v100_stage_scheduler_handoff_slot_span(ds4_v100_stage_scheduler *dst,
+                                               const ds4_v100_stage_scheduler *src,
+                                               uint32_t slot_start,
+                                               uint32_t n_slots,
+                                               char *err,
+                                               size_t errlen) {
+    return scheduler_handoff_slot_span_impl(dst, src, slot_start, n_slots, false, err, errlen);
+}
+
+int ds4_v100_stage_scheduler_handoff_slot_span_async(ds4_v100_stage_scheduler *dst,
+                                                     const ds4_v100_stage_scheduler *src,
+                                                     uint32_t slot_start,
+                                                     uint32_t n_slots,
+                                                     char *err,
+                                                     size_t errlen) {
+    return scheduler_handoff_slot_span_impl(dst, src, slot_start, n_slots, true, err, errlen);
 }
 
 int ds4_v100_stage_scheduler_handoff(ds4_v100_stage_scheduler *dst,

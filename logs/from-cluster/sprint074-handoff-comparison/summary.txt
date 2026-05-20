@@ -1,0 +1,9 @@
+Sprint 074 async handoff comparison
+
+mode	ctx	slots	async_handoff	gen_tok_s	cont_tok_s	avg_gpu_util	async_total_ms	async_handoff_sum_ms	delta_vs_blocking_pct
+blocking	1048576	2	0	5.553165	5.206092	14.739	5594.042	43.673	n/a
+blocking	1048576	4	0	8.605744	8.067885	19.885	7083.395	263.624	n/a
+async	1048576	2	1	5.591514	5.242044	14.633	5558.764	38.839	0.691
+async	1048576	4	1	8.738546	8.192387	19.025	6977.006	179.154	1.543
+
+Decision: async handoff is correct and slightly positive, but below the 3% threshold for changing the appliance default. Keep it opt-in and use the evidence to justify custom stream/event handoff or kernel-side work next.

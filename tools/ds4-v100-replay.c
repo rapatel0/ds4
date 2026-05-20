@@ -61,6 +61,7 @@ typedef struct {
     bool profile_decode;
     bool wavefront_decode;
     bool async_pipeline_decode;
+    bool async_handoff;
     ds4_v100_replay_async_pipeline_mode async_pipeline_mode;
 } replay_cli_options;
 
@@ -541,6 +542,7 @@ static void usage(FILE *fp) {
             "  --async-pipeline-decode   enable preferred opt-in async pipeline decode\n"
             "  --async-pipeline-mode M   off, persistent, per-step, or mailbox\n"
             "  --async-pipeline-per-step enable diagnostic per-token-step async workers\n"
+            "  --async-handoff          queue HC peer handoff copies on the destination stream\n"
             "  --mtp-serving MODE        off, verify, or commit, default off\n"
             "  --mtp-top-k N             MTP draft top-k to report, default 5\n"
             "  --mtp-gpu N               MTP sidecar GPU, default 7\n"
@@ -666,6 +668,8 @@ static replay_cli_options parse_options(int argc, char **argv) {
         } else if (!strcmp(arg, "--async-pipeline-per-step")) {
             opt.async_pipeline_decode = true;
             opt.async_pipeline_mode = DS4_V100_REPLAY_ASYNC_PIPELINE_PER_STEP;
+        } else if (!strcmp(arg, "--async-handoff")) {
+            opt.async_handoff = true;
         } else if (!strcmp(arg, "--async-pipeline-mode")) {
             const char *v = need_arg(&i, argc, argv, arg);
             if (!strcmp(v, "off") || !strcmp(v, "false") || !strcmp(v, "0")) {
@@ -1605,6 +1609,7 @@ static void write_status_json(FILE *fp,
     fprintf(fp,
             "\"async_pipeline_mode\":\"%s\",",
             async_pipeline_mode_name(opt->async_pipeline_mode));
+    fprintf(fp, "\"async_handoff\":%s,", opt->async_handoff ? "true" : "false");
     fprintf(fp,
             "\"limits\":{\"slots\":%" PRIu32 ",\"configured_slots\":%" PRIu32
             ",\"active_slots\":%" PRIu32 ",\"active_microbatch\":%" PRIu32
@@ -2083,6 +2088,7 @@ int main(int argc, char **argv) {
     ropts.serial_open = opt.serial_open;
     ropts.wavefront_decode = opt.wavefront_decode;
     ropts.async_pipeline_decode = opt.async_pipeline_decode;
+    ropts.async_handoff = opt.async_handoff;
     ropts.async_pipeline_mode = opt.async_pipeline_mode;
     if (opt.profile_decode) {
         setenv("DS4_V100_PROFILE_DECODE", "1", 1);

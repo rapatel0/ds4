@@ -15,6 +15,7 @@ requests="4"
 host="127.0.0.1"
 port="18420"
 async_pipeline_mode="auto"
+async_handoff="0"
 sample_ms="500"
 log_dir=""
 cuda_visible_devices="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
@@ -40,6 +41,7 @@ Options:
   --host ADDR               bind/probe address, default 127.0.0.1
   --port N                  server port, default 18420
   --async-pipeline-mode M   off, auto, per-step, persistent, or mailbox, default auto
+  --async-handoff           queue HC peer handoff copies on the destination stream
   --sample-ms N             nvidia-smi sample interval, default 500
   --cuda-visible-devices L  CUDA_VISIBLE_DEVICES list, default 0..7
   --require-gpus N          required visible GPU count, default 8
@@ -83,6 +85,7 @@ while [ "$#" -gt 0 ]; do
         --host) host="$(need_value "$1" "${2:-}")"; shift 2 ;;
         --port) port="$(need_value "$1" "${2:-}")"; shift 2 ;;
         --async-pipeline-mode) async_pipeline_mode="$(need_value "$1" "${2:-}")"; shift 2 ;;
+        --async-handoff) async_handoff="1"; shift ;;
         --sample-ms) sample_ms="$(need_value "$1" "${2:-}")"; shift 2 ;;
         --cuda-visible-devices) cuda_visible_devices="$(need_value "$1" "${2:-}")"; shift 2 ;;
         --require-gpus) require_gpus="$(need_value "$1" "${2:-}")"; shift 2 ;;
@@ -110,6 +113,7 @@ case "$async_pipeline_mode" in
     off|auto|per-step|per_step|persistent|mailbox|mbox) ;;
     *) fail "--async-pipeline-mode must be off, auto, per-step, persistent, or mailbox" ;;
 esac
+case "$async_handoff" in 0|1) ;; *) fail "--async-handoff must be 0 or 1" ;; esac
 
 rm -rf "$log_dir"
 mkdir -p "$log_dir/runtime"
@@ -175,6 +179,7 @@ fi
     export DS4_V100_QUEUE_POLICY="$queue_policy"
     export DS4_V100_TOKENS="$tokens"
     export DS4_V100_ASYNC_PIPELINE_MODE="$async_pipeline_mode"
+    export DS4_V100_ASYNC_HANDOFF="$async_handoff"
     export DS4_V100_HOST="$host"
     export DS4_V100_PORT="$port"
     export DS4_V100_CUDA_VISIBLE_DEVICES="$cuda_visible_devices"
@@ -319,6 +324,7 @@ summary = {
     "latency_ms_avg": statistics.fmean(latencies) if latencies else 0.0,
     "async_pipeline_mode": status_before.get("async_pipeline_mode"),
     "async_pipeline_decode": bool(status_before.get("async_pipeline_decode")),
+    "async_handoff": bool(status_before.get("async_handoff")),
 }
 assert matches == n_requests, summary
 with open(summary_path, "w", encoding="utf-8") as f:

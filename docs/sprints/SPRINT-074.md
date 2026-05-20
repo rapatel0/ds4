@@ -2,7 +2,7 @@
 
 ## Status
 
-Planned.
+Complete.
 
 ## Overview
 
@@ -66,19 +66,44 @@ end-of-stage device synchronize.
 
 ## Definition of Done
 
-- [ ] Local compile passes for changed C files.
-- [ ] Shell syntax checks pass for changed scripts.
-- [ ] `git diff --check` passes.
-- [ ] Invalid/new CLI flags behave as expected.
-- [ ] V100 build passes for `tools/ds4-v100-replay` and scheduler smokes.
-- [ ] V100 wavefront and selected-token smokes pass.
-- [ ] A short mailbox or per-step sustained smoke returns token hex `3136`
+- [x] Local compile passes for changed C files.
+- [x] Shell syntax checks pass for changed scripts.
+- [x] `git diff --check` passes.
+- [x] Invalid/new CLI flags behave as expected.
+- [x] V100 build passes for `tools/ds4-v100-replay` and scheduler smokes.
+- [x] V100 wavefront and selected-token smokes pass.
+- [x] A short mailbox or per-step sustained smoke returns token hex `3136`
   with `async_handoff=true`.
-- [ ] V100 A/B matrix records blocking vs async handoff at 1M/2 and 1M/4
+- [x] V100 A/B matrix records blocking vs async handoff at 1M/2 and 1M/4
   slots using per-step async.
-- [ ] Sprint report records timing deltas, handoff counters, and the default
+- [x] Sprint report records timing deltas, handoff counters, and the default
   decision.
-- [ ] Vision document is updated.
+- [x] Vision document is updated.
+
+## Outcome
+
+`SHIP`, but keep async handoff opt-in.
+
+The runtime now has a queued tensor-copy primitive and an opt-in
+`--async-handoff` path for HC relay. V100 correctness stayed green, and the
+per-step A/B matrix showed a small positive result:
+
+| Handoff | 1M/2 generated tok/s | 1M/4 generated tok/s | Decision |
+|---|---:|---:|---|
+| blocking | `5.553165` | `8.605744` | current default |
+| async | `5.591514` | `8.738546` | opt-in, below default threshold |
+
+Async handoff improved 1M/4 generated tok/s by `1.543%`, below the `3%`
+default-change threshold. Keep it available as an opt-in probe, but do not
+change appliance `auto`. The next sprint should target custom CUDA stream/event
+handoff or kernel-side work.
+
+Artifacts:
+
+- `logs/from-cluster/sprint074-async-handoff-smoke`
+- `logs/from-cluster/sprint074-perstep-blocking`
+- `logs/from-cluster/sprint074-perstep-async-handoff`
+- `logs/from-cluster/sprint074-handoff-comparison`
 
 ## Decision Rule
 

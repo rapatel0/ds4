@@ -77,6 +77,7 @@ fi
 : "${DS4_V100_QUEUE_POLICY:=reject-busy}"
 : "${DS4_V100_TOKENS:=2}"
 : "${DS4_V100_ASYNC_PIPELINE_MODE:=off}"
+: "${DS4_V100_ASYNC_HANDOFF:=0}"
 : "${DS4_V100_HOST:=127.0.0.1}"
 : "${DS4_V100_PORT:=18080}"
 : "${DS4_V100_CUDA_VISIBLE_DEVICES:=0,1,2,3,4,5,6,7}"
@@ -226,6 +227,11 @@ case "$DS4_V100_ASYNC_PIPELINE_MODE" in
     off|auto|per-step|per_step|persistent|mailbox|mbox) ;;
     *) fail "DS4_V100_ASYNC_PIPELINE_MODE must be off, auto, per-step, persistent, or mailbox" ;;
 esac
+case "$DS4_V100_ASYNC_HANDOFF" in
+    0|false|off) async_handoff=0 ;;
+    1|true|on) async_handoff=1 ;;
+    *) fail "DS4_V100_ASYNC_HANDOFF must be 0 or 1" ;;
+esac
 
 async_pipeline_mode="$DS4_V100_ASYNC_PIPELINE_MODE"
 case "$async_pipeline_mode" in
@@ -270,6 +276,9 @@ fi
 if [ "$async_pipeline_mode" != "off" ]; then
     cmd+=(--async-pipeline-mode "$async_pipeline_mode")
 fi
+if [ "$async_handoff" -eq 1 ]; then
+    cmd+=(--async-handoff)
+fi
 if [ "$mtp_serving_enabled" -eq 1 ]; then
     cmd+=(
         --mtp-model "$DS4_V100_MTP_MODEL"
@@ -287,7 +296,7 @@ print_resolved() {
 }
 
 if [ "$mode" = "check" ]; then
-    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode"
+    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff"
     exit 0
 fi
 if [ "$mode" = "print" ]; then
@@ -307,6 +316,8 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_TOKENS=$DS4_V100_TOKENS"
     echo "DS4_V100_ASYNC_PIPELINE_MODE=$DS4_V100_ASYNC_PIPELINE_MODE"
     echo "DS4_V100_ASYNC_PIPELINE_MODE_RESOLVED=$async_pipeline_mode"
+    echo "DS4_V100_ASYNC_HANDOFF=$DS4_V100_ASYNC_HANDOFF"
+    echo "DS4_V100_ASYNC_HANDOFF_RESOLVED=$async_handoff"
     echo "DS4_V100_HOST=$DS4_V100_HOST"
     echo "DS4_V100_PORT=$DS4_V100_PORT"
     echo "DS4_V100_CUDA_VISIBLE_DEVICES=$DS4_V100_CUDA_VISIBLE_DEVICES"
