@@ -390,37 +390,52 @@ static int grouped_attention_output(const ds4_v100_layer_state *state,
         return exec_error(err, errlen, "attention grouped output tensor is too small");
     }
 
-    for (uint32_t g = 0; g < DS4_V100_OUT_GROUPS; g++) {
+    if (!env_flag_enabled("DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A")) {
         ds4_gpu_source_row_view a_view;
-        if (source_view_rows(&state->attn_output_a,
-                             g * DS4_V100_OUT_GROUP_RANK,
-                             DS4_V100_OUT_GROUP_RANK,
-                             &a_view,
-                             err,
-                             errlen)) {
-            return 1;
+        if (source_view(&state->attn_output_a, &a_view, err, errlen)) return 1;
+        if (ds4_gpu_arena_f8_e4m3_b128_matmul_grouped_f32(
+                    cfg->arena,
+                    &a_view,
+                    heads,
+                    DS4_V100_OUT_GROUPS,
+                    DS4_V100_OUT_GROUP_RANK,
+                    DS4_V100_OUT_GROUP_DIM,
+                    low) != 0) {
+            return exec_error(err, errlen, "attention output_a grouped matmul failed");
         }
+    } else {
+        for (uint32_t g = 0; g < DS4_V100_OUT_GROUPS; g++) {
+            ds4_gpu_source_row_view a_view;
+            if (source_view_rows(&state->attn_output_a,
+                                 g * DS4_V100_OUT_GROUP_RANK,
+                                 DS4_V100_OUT_GROUP_RANK,
+                                 &a_view,
+                                 err,
+                                 errlen)) {
+                return 1;
+            }
 
-        ds4_gpu_tensor *head_view = ds4_gpu_tensor_view(
-                heads,
-                (uint64_t)g * DS4_V100_OUT_GROUP_DIM * sizeof(float),
-                (uint64_t)DS4_V100_OUT_GROUP_DIM * sizeof(float));
-        ds4_gpu_tensor *low_view = ds4_gpu_tensor_view(
-                low,
-                (uint64_t)g * DS4_V100_OUT_GROUP_RANK * sizeof(float),
-                (uint64_t)DS4_V100_OUT_GROUP_RANK * sizeof(float));
-        if (!head_view || !low_view) {
+            ds4_gpu_tensor *head_view = ds4_gpu_tensor_view(
+                    heads,
+                    (uint64_t)g * DS4_V100_OUT_GROUP_DIM * sizeof(float),
+                    (uint64_t)DS4_V100_OUT_GROUP_DIM * sizeof(float));
+            ds4_gpu_tensor *low_view = ds4_gpu_tensor_view(
+                    low,
+                    (uint64_t)g * DS4_V100_OUT_GROUP_RANK * sizeof(float),
+                    (uint64_t)DS4_V100_OUT_GROUP_RANK * sizeof(float));
+            if (!head_view || !low_view) {
+                ds4_gpu_tensor_free(low_view);
+                ds4_gpu_tensor_free(head_view);
+                return exec_error(err, errlen, "failed to create grouped output tensor views");
+            }
+            const int rc = ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena,
+                                                                 &a_view,
+                                                                 head_view,
+                                                                 low_view);
             ds4_gpu_tensor_free(low_view);
             ds4_gpu_tensor_free(head_view);
-            return exec_error(err, errlen, "failed to create grouped output tensor views");
+            if (rc != 0) return exec_error(err, errlen, "attention output_a grouped matmul failed");
         }
-        const int rc = ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena,
-                                                             &a_view,
-                                                             head_view,
-                                                             low_view);
-        ds4_gpu_tensor_free(low_view);
-        ds4_gpu_tensor_free(head_view);
-        if (rc != 0) return exec_error(err, errlen, "attention output_a grouped matmul failed");
     }
 
     ds4_gpu_source_row_view b_view;

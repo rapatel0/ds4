@@ -87,6 +87,7 @@ fi
 : "${DS4_V100_CUDA_TENSOR_POOL_MAX_MIB:=2048}"
 : "${DS4_V100_ENABLE_OUTPUT_HEAD_BATCH:=0}"
 : "${DS4_V100_BATCH_SHARED_F8:=1}"
+: "${DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A:=0}"
 : "${DS4_V100_TURBOMIND_ROUTED_FFN:=0}"
 : "${DS4_V100_TURBOMIND_STRICT:=0}"
 : "${DS4_V100_TURBOMIND_LIB:=./build/turbomind-v100/libggml-turbomind.so}"
@@ -315,6 +316,11 @@ case "$DS4_V100_TURBOMIND_ROUTED_FFN" in
     1|true|on) DS4_V100_TURBOMIND_ROUTED_FFN=1 ;;
     *) fail "DS4_V100_TURBOMIND_ROUTED_FFN must be 0 or 1" ;;
 esac
+case "$DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A" in
+    0|false|off) DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A=0 ;;
+    1|true|on) DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A=1 ;;
+    *) fail "DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A must be 0 or 1" ;;
+esac
 case "$DS4_V100_TURBOMIND_STRICT" in
     0|false|off) DS4_V100_TURBOMIND_STRICT=0 ;;
     1|true|on) DS4_V100_TURBOMIND_STRICT=1 ;;
@@ -410,7 +416,7 @@ print_resolved() {
 }
 
 if [ "$mode" = "check" ]; then
-    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff startup_warmup=$startup_warmup cuda_profiler_window=$cuda_profiler_window cuda_tensor_pool=$cuda_tensor_pool cuda_tensor_pool_max_mib=$DS4_V100_CUDA_TENSOR_POOL_MAX_MIB batch_shared_f8=$DS4_V100_BATCH_SHARED_F8 appliance_dir=${DS4_V100_APPLIANCE_DIR:-none} turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN"
+    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff startup_warmup=$startup_warmup cuda_profiler_window=$cuda_profiler_window cuda_tensor_pool=$cuda_tensor_pool cuda_tensor_pool_max_mib=$DS4_V100_CUDA_TENSOR_POOL_MAX_MIB batch_shared_f8=$DS4_V100_BATCH_SHARED_F8 disable_grouped_attn_output_a=$DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A appliance_dir=${DS4_V100_APPLIANCE_DIR:-none} turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN"
     exit 0
 fi
 if [ "$mode" = "print" ]; then
@@ -446,6 +452,7 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_CUDA_TENSOR_POOL_MAX_MIB=$DS4_V100_CUDA_TENSOR_POOL_MAX_MIB"
     echo "DS4_V100_ENABLE_OUTPUT_HEAD_BATCH=$DS4_V100_ENABLE_OUTPUT_HEAD_BATCH"
     echo "DS4_V100_BATCH_SHARED_F8=$DS4_V100_BATCH_SHARED_F8"
+    echo "DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A=$DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A"
     echo "DS4_V100_TURBOMIND_ROUTED_FFN=$DS4_V100_TURBOMIND_ROUTED_FFN"
     echo "DS4_V100_TURBOMIND_STRICT=$DS4_V100_TURBOMIND_STRICT"
     echo "DS4_V100_TURBOMIND_LIB=$DS4_V100_TURBOMIND_LIB"
@@ -463,6 +470,7 @@ print_resolved >"$DS4_V100_LOG_DIR/command.txt"
 
 export CUDA_VISIBLE_DEVICES="$DS4_V100_CUDA_VISIBLE_DEVICES"
 export DS4_V100_BATCH_SHARED_F8
+export DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A
 export DS4_V100_TURBOMIND_ROUTED_FFN
 export DS4_V100_TURBOMIND_STRICT
 export DS4_V100_TURBOMIND_LIB

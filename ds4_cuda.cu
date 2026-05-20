@@ -2780,6 +2780,38 @@ __global__ static void arena_f8_e4m3_b128_matmul_batch_kernel(
     if (threadIdx.x == 0) out[(uint64_t)tok * rows + r] = partial[0];
 }
 
+__global__ static void arena_f8_e4m3_b128_matmul_grouped_kernel(
+        float *out,
+        const uint8_t *base,
+        const float *x,
+        uint32_t groups,
+        uint32_t rows_per_group,
+        uint32_t cols_per_group,
+        uint32_t row_stride_bytes) {
+    const uint32_t r = blockIdx.x;
+    const uint32_t rows = groups * rows_per_group;
+    if (r >= rows) return;
+    const uint32_t group = r / rows_per_group;
+    const uint8_t *row = base + (uint64_t)r * row_stride_bytes;
+    const float *x_row = x + (uint64_t)group * cols_per_group;
+    float acc = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols_per_group; c += blockDim.x) {
+        const uint8_t *block = row + (uint64_t)(c / 128u) * 129ull;
+        const float scale = arena_e8m0_to_f32(block[0]);
+        const float w = arena_e4m3fn_to_f32(block[1u + (c % 128u)]) * scale;
+        acc += w * x_row[c];
+    }
+
+    __shared__ float partial[256];
+    partial[threadIdx.x] = acc;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) partial[threadIdx.x] += partial[threadIdx.x + stride];
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) out[r] = partial[0];
+}
+
 __global__ static void arena_f8_e4m3_b128_to_f16_kernel(
         __half *out,
         const uint8_t *base,
@@ -5155,6 +5187,38 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_batch_f32(
         view->cols,
         view->row_stride_bytes);
     return cuda_ok(cudaGetLastError(), "f8 source batch matmul launch") ? 0 : 1;
+}
+
+extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_grouped_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *view,
+        const ds4_gpu_tensor          *x_f32,
+        uint32_t                       groups,
+        uint32_t                       rows_per_group,
+        uint32_t                       cols_per_group,
+        ds4_gpu_tensor                *out_f32) {
+    if (!x_f32 || !out_f32 || !x_f32->ptr || !out_f32->ptr ||
+        groups == 0 || rows_per_group == 0 || cols_per_group == 0 ||
+        !cuda_f8_e4m3_b128_view_layout_ok(arena, view)) {
+        return 1;
+    }
+    const uint64_t rows = (uint64_t)groups * rows_per_group;
+    if (rows != view->rows || cols_per_group != view->cols ||
+        x_f32->bytes < (uint64_t)groups * cols_per_group * sizeof(float) ||
+        out_f32->bytes < rows * sizeof(float)) {
+        return 1;
+    }
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "f8 source grouped matmul set device")) return 1;
+    const uint8_t *base = (const uint8_t *)((const char *)arena->ptr + view->arena_offset);
+    arena_f8_e4m3_b128_matmul_grouped_kernel<<<(unsigned int)rows, 256>>>(
+        (float *)out_f32->ptr,
+        base,
+        (const float *)x_f32->ptr,
+        groups,
+        rows_per_group,
+        cols_per_group,
+        view->row_stride_bytes);
+    return cuda_ok(cudaGetLastError(), "f8 source grouped matmul launch") ? 0 : 1;
 }
 
 extern "C" int ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_batch_ptrs_f32(

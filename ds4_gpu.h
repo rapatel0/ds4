@@ -182,6 +182,14 @@ int ds4_gpu_arena_f8_e4m3_b128_matmul_batch_f32(
         const ds4_gpu_tensor          *x_f32,
         uint32_t                       n_tokens,
         ds4_gpu_tensor                *out_f32);
+int ds4_gpu_arena_f8_e4m3_b128_matmul_grouped_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *view,
+        const ds4_gpu_tensor          *x_f32,
+        uint32_t                       groups,
+        uint32_t                       rows_per_group,
+        uint32_t                       cols_per_group,
+        ds4_gpu_tensor                *out_f32);
 int ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_batch_ptrs_f32(
         const ds4_gpu_arena           *arena,
         const ds4_gpu_source_row_view *gate,
