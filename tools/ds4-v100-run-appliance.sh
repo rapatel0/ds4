@@ -190,8 +190,8 @@ esac
 mtp_serving_enabled=0
 case "$DS4_V100_MTP_SERVING" in
     off|false|0) ;;
-    verify) mtp_serving_enabled=1 ;;
-    *) fail "DS4_V100_MTP_SERVING must be off or verify" ;;
+    verify|commit) mtp_serving_enabled=1 ;;
+    *) fail "DS4_V100_MTP_SERVING must be off, verify, or commit" ;;
 esac
 
 is_uint "$DS4_V100_CTX" || fail "DS4_V100_CTX must be a positive integer"
@@ -243,7 +243,7 @@ require_exec "$DS4_V100_BIN"
 require_file "model" "$DS4_V100_MODEL"
 require_file "pack index" "$DS4_V100_PACK_INDEX"
 if [ "$mtp_serving_enabled" -eq 1 ] && [ -z "$DS4_V100_MTP_MODEL" ]; then
-    fail "DS4_V100_MTP_MODEL is required when DS4_V100_MTP_SERVING=verify"
+    fail "DS4_V100_MTP_MODEL is required when DS4_V100_MTP_SERVING=$DS4_V100_MTP_SERVING"
 fi
 if [ "$mtp_serving_enabled" -eq 1 ] || [ -n "$DS4_V100_MTP_MODEL" ]; then
     require_file "MTP model" "$DS4_V100_MTP_MODEL"
@@ -272,7 +272,7 @@ fi
 if [ "$mtp_serving_enabled" -eq 1 ]; then
     cmd+=(
         --mtp-model "$DS4_V100_MTP_MODEL"
-        --mtp-serving verify
+        --mtp-serving "$DS4_V100_MTP_SERVING"
         --mtp-top-k "$DS4_V100_MTP_TOP_K"
         --mtp-gpu "$DS4_V100_MTP_GPU"
         --mtp-reserve-mib "$DS4_V100_RESERVE_MIB"

@@ -47,6 +47,16 @@ static int replay_errorf(char *err, size_t errlen, const char *fmt, const char *
     return 1;
 }
 
+static void replay_init_counters(ds4_v100_replay *rt,
+                                 uint32_t prompt_tokens,
+                                 ds4_v100_replay_counters *c) {
+    if (!rt || !c) return;
+    memset(c, 0, sizeof(*c));
+    c->prompt_tokens = prompt_tokens;
+    c->open_total_ms = rt->open_total_ms;
+    for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) c->open_ms[i] = rt->open_ms[i];
+}
+
 static int map_model_file(ds4_v100_replay *rt, const char *path, char *err, size_t errlen) {
     rt->model_fd = open(path, O_RDONLY);
     if (rt->model_fd < 0) {
@@ -1174,6 +1184,52 @@ static int replay_select_token_slot(ds4_v100_replay *rt,
     return 0;
 }
 
+int ds4_v100_replay_begin_generation(ds4_v100_replay *rt,
+                                      uint32_t prompt_tokens,
+                                      ds4_v100_replay_counters *counters,
+                                      char *err,
+                                      size_t errlen) {
+    if (!rt || !counters) return replay_error(err, errlen, "missing V100 replay begin input");
+    if (rt->used) {
+        return replay_error(err,
+                            errlen,
+                            "V100 replay runtime is one-shot; reopen it for another prompt");
+    }
+    replay_init_counters(rt, prompt_tokens, counters);
+    return 0;
+}
+
+int ds4_v100_replay_feed_token_at_position(ds4_v100_replay *rt,
+                                            uint32_t token,
+                                            uint32_t position,
+                                            ds4_v100_replay_counters *counters,
+                                            double *bucket_ms,
+                                            char *err,
+                                            size_t errlen) {
+    if (!rt) return replay_error(err, errlen, "missing V100 replay feed input");
+    return replay_feed_token(rt, token, position, counters, bucket_ms, err, errlen);
+}
+
+int ds4_v100_replay_select_current_token(ds4_v100_replay *rt,
+                                          ds4_v100_replay_output *out,
+                                          ds4_v100_replay_counters *counters,
+                                          char *err,
+                                          size_t errlen) {
+    if (!rt || !out) return replay_error(err, errlen, "missing V100 replay select input");
+    return replay_select_token(rt, out, counters, err, errlen);
+}
+
+void ds4_v100_replay_finish_generation(ds4_v100_replay *rt,
+                                        uint32_t generated_tokens,
+                                        double total_ms,
+                                        ds4_v100_replay_counters *counters) {
+    if (counters) {
+        counters->generated_tokens = generated_tokens;
+        counters->total_ms = total_ms;
+    }
+    if (rt) rt->used = true;
+}
+
 typedef struct {
     uint32_t prompt_idx;
     uint32_t prompt_len;
@@ -1216,9 +1272,7 @@ int ds4_v100_replay_generate_batch(ds4_v100_replay *rt,
 
     ds4_v100_replay_counters local;
     ds4_v100_replay_counters *c = counters ? counters : &local;
-    memset(c, 0, sizeof(*c));
-    c->open_total_ms = rt->open_total_ms;
-    for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) c->open_ms[i] = rt->open_ms[i];
+    replay_init_counters(rt, 0, c);
 
     replay_batch_slot_plan plan[DS4_V100_SCHED_MAX_SLOTS];
     uint32_t max_prompt_len = 0;
@@ -1353,10 +1407,7 @@ int ds4_v100_replay_generate(ds4_v100_replay *rt,
 
     ds4_v100_replay_counters local;
     ds4_v100_replay_counters *c = counters ? counters : &local;
-    memset(c, 0, sizeof(*c));
-    c->prompt_tokens = (uint32_t)prompt->len;
-    c->open_total_ms = rt->open_total_ms;
-    for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) c->open_ms[i] = rt->open_ms[i];
+    replay_init_counters(rt, (uint32_t)prompt->len, c);
 
     const double total0 = replay_now_ms();
     for (int pos = 0; pos < prompt->len; pos++) {

@@ -14,6 +14,7 @@ requests="1"
 top_k="5"
 mtp_gpu="7"
 reserve_mib="4096"
+mode="verify"
 log_dir=""
 
 usage() {
@@ -29,6 +30,7 @@ Options:
   --ctx N                   KV context tokens, default 1048576
   --tokens N                generated tokens to request, default 2
   --requests N              HTTP requests to send after one upload, default 1
+  --mode MODE               MTP serving mode: verify or commit, default verify
   --top-k N                 MTP draft candidates to report, default 5
   --mtp-gpu N               MTP sidecar GPU, default 7
   --reserve-mib N           required MTP free-memory reserve, default 4096
@@ -37,8 +39,9 @@ Options:
   --log-dir DIR             write server/request/response logs
   --help                    show this help
 
-The smoke starts tools/ds4-v100-replay with --mtp-serving verify and validates
-status, metrics, first-token bytes, and exact MTP top-1 acceptance.
+The smoke starts tools/ds4-v100-replay with --mtp-serving MODE and validates
+status, metrics, first-token bytes, and exact MTP top-1 acceptance. Commit mode
+also validates that an accepted draft is counted as committed.
 USAGE
 }
 
@@ -93,6 +96,11 @@ while [ "$#" -gt 0 ]; do
             requests="$2"
             shift 2
             ;;
+        --mode)
+            [ "$#" -ge 2 ] || fail "--mode requires a value"
+            mode="$2"
+            shift 2
+            ;;
         --top-k)
             [ "$#" -ge 2 ] || fail "--top-k requires a value"
             top_k="$2"
@@ -141,6 +149,7 @@ case "$ctx" in ''|0|*[!0-9]*) fail "--ctx must be a positive integer" ;; esac
 case "$top_k" in ''|0|1|*[!0-9]*) fail "--top-k must be an integer >= 2" ;; esac
 case "$mtp_gpu" in ''|*[!0-9]*) fail "--mtp-gpu must be an integer" ;; esac
 case "$reserve_mib" in ''|*[!0-9]*) fail "--reserve-mib must be an integer" ;; esac
+case "$mode" in verify|commit) ;; *) fail "--mode must be verify or commit" ;; esac
 
 [ -n "$pack_index" ] || { usage >&2; exit 2; }
 [ -x ./tools/ds4-v100-replay ] || fail "missing executable ./tools/ds4-v100-replay"
@@ -193,7 +202,7 @@ DS4_LOCK_FILE="$work_dir/ds4.lock" ./tools/ds4-v100-replay \
     --host "$host" \
     --port "$port" \
     --max-requests "$server_max_requests" \
-    --mtp-serving verify \
+    --mtp-serving "$mode" \
     --mtp-top-k "$top_k" \
     --mtp-gpu "$mtp_gpu" \
     --mtp-reserve-mib "$reserve_mib" \
@@ -249,11 +258,15 @@ grep -q '"status":"ok"' "$health_json" || fail "bad /health response"
 
 http_get "/v100/status" "$status_http" "$status_json"
 grep -q '"service":"ds4-v100-replay"' "$status_json" || fail "missing service in status"
-grep -q '"mode":"mtp_verify_one_slot"' "$status_json" || fail "missing mtp_verify_one_slot mode"
+if [ "$mode" = "commit" ]; then
+    grep -q '"mode":"mtp_commit_one_slot"' "$status_json" || fail "missing mtp_commit_one_slot mode"
+else
+    grep -q '"mode":"mtp_verify_one_slot"' "$status_json" || fail "missing mtp_verify_one_slot mode"
+fi
 grep -q '"readiness_level":3' "$status_json" || fail "missing readiness_level=3"
 grep -q '"mtp_enabled":true' "$status_json" || fail "status should report mtp_enabled=true"
 grep -q '"speculative_serving":true' "$status_json" || fail "status should report speculative_serving=true"
-grep -q '"serving_mode":"verify"' "$status_json" || fail "status missing MTP verify mode"
+grep -q "\"serving_mode\":\"$mode\"" "$status_json" || fail "status missing MTP $mode mode"
 grep -q "\"top_k\":$top_k" "$status_json" || fail "status MTP top_k mismatch"
 
 http_get "/metrics" "$metrics_http" "$metrics_txt"
@@ -320,8 +333,19 @@ for request_id in $(seq 1 "$requests"); do
         fail "request $request_id expected $expected_hex, got ${got:-none}"
     fi
     grep -q '"mtp":{"enabled":true' "$response_json_i" || fail "response missing enabled MTP object"
+    if [ "$mode" = "commit" ]; then
+        grep -q '"commit_mode":true' "$response_json_i" || fail "response missing commit_mode=true"
+        grep -q '"commit_applied":true' "$response_json_i" || fail "response missing commit_applied=true"
+        grep -q '"commit_count":1' "$response_json_i" || fail "response commit_count mismatch"
+    else
+        grep -q '"commit_mode":false' "$response_json_i" || fail "response should report commit_mode=false"
+        grep -q '"commit_applied":false' "$response_json_i" || fail "response should report commit_applied=false"
+    fi
     grep -q '"attempted":true' "$response_json_i" || fail "response missing MTP attempted=true"
     grep -q '"accepted":true' "$response_json_i" || fail "response missing MTP accepted=true"
+    grep -q '"attempts":1' "$response_json_i" || fail "response MTP attempt count mismatch"
+    grep -q '"accepted_count":1' "$response_json_i" || fail "response MTP accepted_count mismatch"
+    grep -q '"rejected_count":0' "$response_json_i" || fail "response MTP rejected_count mismatch"
     grep -q '"committed_token":926' "$response_json_i" || fail "response committed token mismatch"
     grep -q '"target_token":1' "$response_json_i" || fail "response target token mismatch"
     grep -q '"draft_token":1' "$response_json_i" || fail "response draft token mismatch"
@@ -349,12 +373,22 @@ done
 http_get "/v100/status" "$final_status_http" "$final_status_json"
 grep -q "\"drafts\":$requests" "$final_status_json" || fail "final status drafts counter mismatch"
 grep -q "\"accepted\":$requests" "$final_status_json" || fail "final status accepted counter mismatch"
+if [ "$mode" = "commit" ]; then
+    grep -q "\"committed\":$requests" "$final_status_json" || fail "final status committed counter mismatch"
+else
+    grep -q '"committed":0' "$final_status_json" || fail "final status committed counter should be 0"
+fi
 
 http_get "/metrics" "$final_metrics_http" "$final_metrics_txt"
 grep -q "^ds4_v100_mtp_drafts_total $requests$" "$final_metrics_txt" || fail "final metrics drafts counter mismatch"
 grep -q "^ds4_v100_mtp_accepted_total $requests$" "$final_metrics_txt" || fail "final metrics accepted counter mismatch"
 grep -q '^ds4_v100_mtp_rejected_total 0$' "$final_metrics_txt" || fail "final metrics rejected counter mismatch"
+if [ "$mode" = "commit" ]; then
+    grep -q "^ds4_v100_mtp_committed_total $requests$" "$final_metrics_txt" || fail "final metrics committed counter mismatch"
+else
+    grep -q '^ds4_v100_mtp_committed_total 0$' "$final_metrics_txt" || fail "final metrics committed counter should be 0"
+fi
 
 wait "$server_pid"
 server_pid=""
-echo "ds4-v100-mtp-serving-smoke: health=ok status=ok metrics=ok requests=$requests prompt_tokens=${last_prompt_tokens:-unknown} generated_tokens=${last_generated_tokens:-unknown} first_token=${last_first_token:-unknown} first_hex=$last_hex mtp_accepted=$requests ok"
+echo "ds4-v100-mtp-serving-smoke: mode=$mode health=ok status=ok metrics=ok requests=$requests prompt_tokens=${last_prompt_tokens:-unknown} generated_tokens=${last_generated_tokens:-unknown} first_token=${last_first_token:-unknown} first_hex=$last_hex mtp_accepted=$requests ok"

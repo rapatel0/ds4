@@ -129,6 +129,31 @@ int ds4_v100_replay_generate_first_token_batch(
     char *err,
     size_t errlen);
 
+int ds4_v100_replay_begin_generation(ds4_v100_replay *rt,
+                                      uint32_t prompt_tokens,
+                                      ds4_v100_replay_counters *counters,
+                                      char *err,
+                                      size_t errlen);
+
+int ds4_v100_replay_feed_token_at_position(ds4_v100_replay *rt,
+                                            uint32_t token,
+                                            uint32_t position,
+                                            ds4_v100_replay_counters *counters,
+                                            double *bucket_ms,
+                                            char *err,
+                                            size_t errlen);
+
+int ds4_v100_replay_select_current_token(ds4_v100_replay *rt,
+                                          ds4_v100_replay_output *out,
+                                          ds4_v100_replay_counters *counters,
+                                          char *err,
+                                          size_t errlen);
+
+void ds4_v100_replay_finish_generation(ds4_v100_replay *rt,
+                                        uint32_t generated_tokens,
+                                        double total_ms,
+                                        ds4_v100_replay_counters *counters);
+
 int ds4_v100_replay_read_token_embedding_f32(ds4_v100_replay *rt,
                                              uint32_t token,
                                              float *dst,

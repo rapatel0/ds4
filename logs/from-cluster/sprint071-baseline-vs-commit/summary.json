@@ -1,0 +1,32 @@
+{
+  "attempts": 1,
+  "commit_applied": true,
+  "commit_count": 1,
+  "commit_mode": true,
+  "commit_response": "docs/sprints/drafts/SPRINT-071-MTP-COMMIT-SERVING/mtp_serving_response_1.json",
+  "commit_tokens": [
+    {
+      "id": 926,
+      "text_hex": "3136"
+    },
+    {
+      "id": 1,
+      "text_hex": "3cefbd9c656e64e296816f66e2968173656e74656e6365efbd9c3e"
+    }
+  ],
+  "status_committed": 2,
+  "status_mode": "mtp_commit_one_slot",
+  "status_serving_mode": "commit",
+  "tokens_match": true,
+  "verify_response": "docs/sprints/drafts/SPRINT-071-MTP-VERIFY-SERVING/mtp_serving_response_1.json",
+  "verify_tokens": [
+    {
+      "id": 926,
+      "text_hex": "3136"
+    },
+    {
+      "id": 1,
+      "text_hex": "3cefbd9c656e64e296816f66e2968173656e74656e6365efbd9c3e"
+    }
+  ]
+}

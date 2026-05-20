@@ -1,0 +1,5 @@
+tokens_match=True
+verify_tokens=[{'id': 926, 'text_hex': '3136'}, {'id': 1, 'text_hex': '3cefbd9c656e64e296816f66e2968173656e74656e6365efbd9c3e'}]
+commit_tokens=[{'id': 926, 'text_hex': '3136'}, {'id': 1, 'text_hex': '3cefbd9c656e64e296816f66e2968173656e74656e6365efbd9c3e'}]
+commit_mode=True commit_applied=True commit_count=1 attempts=1
+status_mode=mtp_commit_one_slot status_serving_mode=commit status_committed=2
