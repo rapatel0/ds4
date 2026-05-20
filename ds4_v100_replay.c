@@ -74,6 +74,7 @@ void ds4_v100_replay_options_init(ds4_v100_replay_options *opts) {
     opts->index_comp_cap = 64;
     opts->indexer_top_k = 512;
     opts->kv_active_slots = 1;
+    opts->suppress_router_readback = true;
 }
 
 void ds4_v100_replay_open_counters(const ds4_v100_replay *rt,
@@ -269,6 +270,7 @@ int ds4_v100_replay_open(ds4_v100_replay **out,
     sopts.indexer_top_k = opts->indexer_top_k;
     sopts.fp8_kv_cache = opts->fp8_kv_cache;
     sopts.kv_active_slots = opts->kv_active_slots ? opts->kv_active_slots : 1;
+    sopts.suppress_router_readback = opts->suppress_router_readback;
     int open_rc = opts->serial_open
         ? replay_open_stages_serial(rt, &sopts, err, errlen)
         : replay_open_stages_parallel(rt, &sopts, err, errlen);

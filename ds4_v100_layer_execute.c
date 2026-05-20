@@ -763,6 +763,7 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
     int rc = 1;
     int32_t selected[6] = {0};
     float weights[6] = {0};
+    const bool readback_routes = !cfg->suppress_router_readback;
     if (!router_t || !probs_t || !selected_t || !weights_t ||
         !routed_mid_t || !accum_a ||
         !shared_gate_t || !shared_up_t || !shared_mid_t || !shared_t) {
@@ -791,15 +792,17 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
         exec_error(err, errlen, "router select failed");
         goto done;
     }
-    if (!ds4_gpu_tensor_read(selected_t, 0, selected, sizeof(selected)) ||
-        !ds4_gpu_tensor_read(weights_t, 0, weights, sizeof(weights))) {
-        exec_error(err, errlen, "router readback failed");
-        goto done;
-    }
-    for (uint32_t route = 0; route < routes; route++) {
-        if (selected[route] < 0 || (uint32_t)selected[route] >= state->routed_experts) {
-            exec_error(err, errlen, "router selected invalid expert %d", selected[route]);
+    if (readback_routes) {
+        if (!ds4_gpu_tensor_read(selected_t, 0, selected, sizeof(selected)) ||
+            !ds4_gpu_tensor_read(weights_t, 0, weights, sizeof(weights))) {
+            exec_error(err, errlen, "router readback failed");
             goto done;
+        }
+        for (uint32_t route = 0; route < routes; route++) {
+            if (selected[route] < 0 || (uint32_t)selected[route] >= state->routed_experts) {
+                exec_error(err, errlen, "router selected invalid expert %d", selected[route]);
+                goto done;
+            }
         }
     }
 
@@ -853,9 +856,11 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
     if (report) {
         memset(report, 0, sizeof(*report));
         report->routes = routes;
-        for (uint32_t i = 0; i < routes && i < 6u; i++) {
-            report->selected_experts[i] = selected[i];
-            report->route_weights[i] = weights[i];
+        if (readback_routes) {
+            for (uint32_t i = 0; i < routes && i < 6u; i++) {
+                report->selected_experts[i] = selected[i];
+                report->route_weights[i] = weights[i];
+            }
         }
     }
     rc = 0;
@@ -954,6 +959,13 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
     int32_t tokens[DS4_V100_LAYER_MAX_BATCH] = {0};
     int32_t selected[DS4_V100_LAYER_MAX_BATCH * 6u] = {0};
     float weights[DS4_V100_LAYER_MAX_BATCH * 6u] = {0};
+    bool readback_routes = false;
+    for (uint32_t slot = 0; slot < n_slots; slot++) {
+        if (!cfgs[slot].suppress_router_readback) {
+            readback_routes = true;
+            break;
+        }
+    }
     if (!router_t || !probs_t || !selected_t || !weights_t || !tokens_t ||
         !input_batch_t || !routed_mid_t || !routed_out_t ||
         !shared_gate_t || !shared_up_t || !shared_mid_t || !shared_t) {
@@ -1015,23 +1027,25 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
         exec_error(err, errlen, "FFN batch router select failed");
         goto done;
     }
-    if (!ds4_gpu_tensor_read(selected_t,
-                             0,
-                             selected,
-                             (uint64_t)n_slots * routes * sizeof(int32_t)) ||
-        !ds4_gpu_tensor_read(weights_t,
-                             0,
-                             weights,
-                             (uint64_t)n_slots * routes * sizeof(float))) {
-        exec_error(err, errlen, "FFN batch router readback failed");
-        goto done;
-    }
-    for (uint32_t slot = 0; slot < n_slots; slot++) {
-        for (uint32_t route = 0; route < routes; route++) {
-            const int32_t expert = selected[(uint64_t)slot * routes + route];
-            if (expert < 0 || (uint32_t)expert >= state->routed_experts) {
-                exec_error(err, errlen, "FFN batch selected invalid expert %d", expert);
-                goto done;
+    if (readback_routes) {
+        if (!ds4_gpu_tensor_read(selected_t,
+                                 0,
+                                 selected,
+                                 (uint64_t)n_slots * routes * sizeof(int32_t)) ||
+            !ds4_gpu_tensor_read(weights_t,
+                                 0,
+                                 weights,
+                                 (uint64_t)n_slots * routes * sizeof(float))) {
+            exec_error(err, errlen, "FFN batch router readback failed");
+            goto done;
+        }
+        for (uint32_t slot = 0; slot < n_slots; slot++) {
+            for (uint32_t route = 0; route < routes; route++) {
+                const int32_t expert = selected[(uint64_t)slot * routes + route];
+                if (expert < 0 || (uint32_t)expert >= state->routed_experts) {
+                    exec_error(err, errlen, "FFN batch selected invalid expert %d", expert);
+                    goto done;
+                }
             }
         }
     }
@@ -1106,9 +1120,11 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
             ds4_v100_layer_execute_report *report = &reports[slot];
             memset(report, 0, sizeof(*report));
             report->routes = routes;
-            for (uint32_t i = 0; i < routes && i < 6u; i++) {
-                report->selected_experts[i] = selected[(uint64_t)slot * routes + i];
-                report->route_weights[i] = weights[(uint64_t)slot * routes + i];
+            if (readback_routes) {
+                for (uint32_t i = 0; i < routes && i < 6u; i++) {
+                    report->selected_experts[i] = selected[(uint64_t)slot * routes + i];
+                    report->route_weights[i] = weights[(uint64_t)slot * routes + i];
+                }
             }
         }
     }

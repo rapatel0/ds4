@@ -84,6 +84,7 @@ typedef struct {
 
     ds4_v100_layer_decode_cache *decode_cache;
     bool fp8_kv_cache;
+    bool suppress_router_readback;
 
     int checkpoint_layer;
     ds4_v100_layer_execute_checkpoint_fn checkpoint_fn;

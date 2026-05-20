@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-19
 last_updated_by: vision
-revision: 69
+revision: 70
 ---
 
 # Vision: DS4 V100 Appliance
@@ -367,6 +367,13 @@ optimized V100 low-bit expert kernels in the actual hot path.
   but not sufficient. An opt-in batched FFN layer slice was implemented behind
   `DS4_V100_BATCH_LAYER_FFN`, but it regressed two-slot generated tok/s to
   `3.630558`, so it remains disabled by default.
+- Sprint 058 removed replay-only router selected-expert/weight readbacks from
+  the hot path while preserving direct diagnostic defaults. Correctness still
+  selects token hex `3136`, and sustained 1M generated tok/s improved to
+  `3.583987` at one slot and `3.704572` at two slots. This confirms the
+  readback was real synchronization overhead, but the small gain and continued
+  `~11%` average GPU utilization keep the main blocker on copy-free or
+  persistent MoE/layer batching.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -415,6 +422,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 055 fused MXFP4 down+accum | `3.50` generated tok/s, `3.28` continuation tok/s | Measured | Removes another routed route launch, but improves two-slot generated tok/s by only about `0.5%` over Sprint 054; one-route cleanup is reaching diminishing returns. |
 | Sprint 056 grouped selected MXFP4 routes | `3.68` generated tok/s, `3.45` continuation tok/s | Measured | Groups all selected routes in the single-slot routed FFN path and improves two-slot generated tok/s by about `5.0%` over Sprint 055, but average GPU utilization remains about `11%` and the benchmark did not coalesce token-step groups. |
 | Sprint 057 deterministic token-step coalescing | `3.66` generated tok/s, `3.43` continuation tok/s | Measured | Server-side rendezvous makes the two-slot benchmark reliably enter the batch path (`2` groups / `4` requests / `64` tokens), but throughput is essentially flat; opt-in batched FFN regressed and remains disabled. |
+| Sprint 058 replay router readback suppression | `3.70` generated tok/s, `3.47` continuation tok/s | Measured | Removes appliance hot-path selected-expert/route-weight CPU readbacks and improves two-slot generated tok/s by about `1.15%` over Sprint 057, but utilization remains about `11%`; the next gain needs copy-free or persistent MoE batching. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -1242,16 +1250,32 @@ GPU utilization with architectural changes, and only then compare against the
   regressed. Default two-slot evidence now has `tensor_batched_groups=2`,
   generated tok/s `3.662490`, and token hex `3136`.
 
-### Sprint 058 - Persistent Grouped MoE Kernel Or Copy-Free Batch Layout [tentative]
+### Sprint 058 - Replay Router Readback Suppression [complete]
+
+- **Goal**: Remove replay-only router selected-expert and route-weight CPU
+  readbacks from the generation hot path while preserving diagnostic defaults.
+- **Rationale**: Sprint 057 proved request coalescing was honest but flat. The
+  next smallest runtime overhead was the per-layer router readback used only
+  for validation/reporting, which forced host synchronization before the routed
+  MXFP4 kernels consumed device-selected routes.
+- **Outcome**: `SHIP`. Added replay, scheduler, and layer-executor options for
+  `suppress_router_readback`, defaulted the replay appliance to suppression,
+  preserved direct scheduler/layer diagnostics, proved token hex `3136`, and
+  archived sustained artifacts under
+  `logs/from-cluster/sprint058-router-readback-suppression`. Two-slot
+  generated tok/s improved from `3.662490` to `3.704572`, so the cleanup is
+  useful but not enough to change the utilization picture.
+
+### Sprint 059 - Persistent Grouped MoE Kernel Or Copy-Free Batch Layout [tentative]
 
 - **Goal**: Replace the copy-heavy opt-in batch slice with a persistent grouped
   MoE kernel or copy-free active-slot layout that raises GPU utilization.
-- **Rationale**: Sprint 057 made request coalescing deterministic, but the
-  first batched FFN slice regressed because it only batched routed FFN after
-  per-slot setup and paid extra copy/view overhead. The next throughput step
-  needs larger expert work per launch without extra per-slot staging.
+- **Rationale**: Sprints 057 and 058 removed request-loop and readback
+  synchronization gaps without materially raising throughput. The next
+  throughput step needs larger expert work per launch without extra per-slot
+  staging.
 
-### Sprint 059 - MTP Draft Commit And Throughput Serving [tentative]
+### Sprint 060 - MTP Draft Commit And Throughput Serving [tentative]
 
 - **Goal**: Graduate MTP from one-token verify diagnostics to a committed draft
   path with rollback safety, then benchmark aggregate decode with MTP enabled.
@@ -1395,6 +1419,8 @@ GPU utilization with architectural changes, and only then compare against the
 - See `docs/sprints/SPRINT-057-FOLLOWUPS.md`: persistent grouped MoE kernels,
   removing copy overhead from the opt-in batch slice, batch-level timing
   counter semantics, and a configurable rendezvous window.
+- See `docs/sprints/SPRINT-058-FOLLOWUPS.md`: persistent or copy-free MoE
+  batching, batch FFN scratch reuse, and batch-level timing semantics.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -1467,6 +1493,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-19 | Shipped Sprint 055 fused MXFP4 routed down accumulation. | Down projection and route accumulation are now fused in the main routed expert path, preserving selected-token correctness and adding a sub-1% sustained speedup. This is a useful diminishing-returns signal: the next sprint needs grouped route execution or layer-executor batch kernels. | Sprint 056+ |
 | 2026-05-19 | Shipped Sprint 056 grouped selected-route MXFP4 execution. | The main routed FFN path now groups all selected routes and improves sustained generated tok/s by about 4-5% over Sprint 055, but GPU utilization remains near 11% and two-slot benchmark coalescing was not deterministic. The next sprint should expose active slots to the layer executor instead of continuing single-slot route fusion. | Sprint 057+ |
 | 2026-05-19 | Shipped Sprint 057 deterministic token-step coalescing. | The default server now reliably forms two-slot token-step batches, but throughput stayed flat and the first batched FFN layer slice regressed when enabled. The next sprint should focus on persistent/copy-free MoE batching rather than queue plumbing. | Sprint 058+ |
+| 2026-05-19 | Shipped Sprint 058 replay router readback suppression. | The appliance hot path no longer reads router-selected experts and weights back to CPU for generation, improving two-slot generated tok/s to `3.704572` while preserving token hex `3136`; utilization remains near `11%`, so the next sprint must attack persistent/copy-free MoE batching. | Sprint 059+ |
 
 ## Open Questions
 

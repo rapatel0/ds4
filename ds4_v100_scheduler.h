@@ -32,6 +32,7 @@ typedef struct {
     uint64_t kv_ctx_tokens;
     uint64_t kv_active_slots;
     bool fp8_kv_cache;
+    bool suppress_router_readback;
 } ds4_v100_stage_scheduler_options;
 
 typedef struct {

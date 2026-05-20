@@ -24,6 +24,7 @@ typedef struct {
     uint64_t kv_active_slots;
     bool fp8_kv_cache;
     bool serial_open;
+    bool suppress_router_readback;
 } ds4_v100_replay_options;
 
 typedef struct {

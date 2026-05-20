@@ -83,6 +83,7 @@ struct ds4_v100_stage_scheduler {
     uint32_t index_comp_cap;
     uint32_t indexer_top_k;
     bool fp8_kv_cache;
+    bool suppress_router_readback;
 };
 
 static int scheduler_error(char *err, size_t errlen, const char *msg) {
@@ -635,6 +636,7 @@ int ds4_v100_stage_scheduler_open(ds4_v100_stage_scheduler **out,
     sched->index_comp_cap = opts->index_comp_cap ? opts->index_comp_cap : 1u;
     sched->indexer_top_k = opts->indexer_top_k ? opts->indexer_top_k : 1u;
     sched->fp8_kv_cache = opts->fp8_kv_cache;
+    sched->suppress_router_readback = opts->suppress_router_readback;
 
     ds4_v100_context_options ctx_opts;
     ds4_v100_context_options_init(&ctx_opts);
@@ -806,6 +808,7 @@ int ds4_v100_stage_scheduler_decode_hc_batch(
                 .position = positions[slot],
                 .decode_cache = &lc->cache,
                 .fp8_kv_cache = sched->fp8_kv_cache,
+                .suppress_router_readback = sched->suppress_router_readback,
             };
             memset(&last[slot], 0, sizeof(last[slot]));
             hidden_hc[slot] = cur[slot];
@@ -1075,6 +1078,7 @@ int ds4_v100_stage_scheduler_decode_hc_checkpoints(
             .position = position,
             .decode_cache = &lc->cache,
             .fp8_kv_cache = sched->fp8_kv_cache,
+            .suppress_router_readback = sched->suppress_router_readback,
             .checkpoint_layer = layer,
             .checkpoint_fn = checkpoint_fn ? scheduler_layer_checkpoint : NULL,
             .checkpoint_user = &layer_checkpoint_user,
