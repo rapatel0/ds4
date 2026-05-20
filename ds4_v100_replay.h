@@ -34,6 +34,7 @@ typedef struct {
     bool wavefront_decode;
     bool async_pipeline_decode;
     bool async_handoff;
+    bool async_event_handoff;
     ds4_v100_replay_async_pipeline_mode async_pipeline_mode;
     bool suppress_router_readback;
 } ds4_v100_replay_options;

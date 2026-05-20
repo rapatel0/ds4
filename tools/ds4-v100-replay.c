@@ -62,6 +62,7 @@ typedef struct {
     bool wavefront_decode;
     bool async_pipeline_decode;
     bool async_handoff;
+    bool async_event_handoff;
     ds4_v100_replay_async_pipeline_mode async_pipeline_mode;
 } replay_cli_options;
 
@@ -543,6 +544,7 @@ static void usage(FILE *fp) {
             "  --async-pipeline-mode M   off, persistent, per-step, or mailbox\n"
             "  --async-pipeline-per-step enable diagnostic per-token-step async workers\n"
             "  --async-handoff          queue HC peer handoff copies on the destination stream\n"
+            "  --async-event-handoff    use CUDA events for per-step stage handoff ordering\n"
             "  --mtp-serving MODE        off, verify, or commit, default off\n"
             "  --mtp-top-k N             MTP draft top-k to report, default 5\n"
             "  --mtp-gpu N               MTP sidecar GPU, default 7\n"
@@ -670,6 +672,10 @@ static replay_cli_options parse_options(int argc, char **argv) {
             opt.async_pipeline_mode = DS4_V100_REPLAY_ASYNC_PIPELINE_PER_STEP;
         } else if (!strcmp(arg, "--async-handoff")) {
             opt.async_handoff = true;
+        } else if (!strcmp(arg, "--async-event-handoff")) {
+            opt.async_event_handoff = true;
+            opt.async_pipeline_decode = true;
+            opt.async_pipeline_mode = DS4_V100_REPLAY_ASYNC_PIPELINE_PER_STEP;
         } else if (!strcmp(arg, "--async-pipeline-mode")) {
             const char *v = need_arg(&i, argc, argv, arg);
             if (!strcmp(v, "off") || !strcmp(v, "false") || !strcmp(v, "0")) {
@@ -773,6 +779,11 @@ static replay_cli_options parse_options(int argc, char **argv) {
     }
     if (opt.mtp_serving != REPLAY_MTP_SERVING_OFF && opt.active_microbatch != 1) {
         fprintf(stderr, "ds4-v100-replay: --mtp-serving currently requires --active-microbatch 1\n");
+        exit(2);
+    }
+    if (opt.async_event_handoff &&
+        opt.async_pipeline_mode != DS4_V100_REPLAY_ASYNC_PIPELINE_PER_STEP) {
+        fprintf(stderr, "ds4-v100-replay: --async-event-handoff requires --async-pipeline-mode per-step\n");
         exit(2);
     }
     if (opt.prompt && opt.prompt_file) {
@@ -1610,6 +1621,7 @@ static void write_status_json(FILE *fp,
             "\"async_pipeline_mode\":\"%s\",",
             async_pipeline_mode_name(opt->async_pipeline_mode));
     fprintf(fp, "\"async_handoff\":%s,", opt->async_handoff ? "true" : "false");
+    fprintf(fp, "\"async_event_handoff\":%s,", opt->async_event_handoff ? "true" : "false");
     fprintf(fp,
             "\"limits\":{\"slots\":%" PRIu32 ",\"configured_slots\":%" PRIu32
             ",\"active_slots\":%" PRIu32 ",\"active_microbatch\":%" PRIu32
@@ -2089,6 +2101,7 @@ int main(int argc, char **argv) {
     ropts.wavefront_decode = opt.wavefront_decode;
     ropts.async_pipeline_decode = opt.async_pipeline_decode;
     ropts.async_handoff = opt.async_handoff;
+    ropts.async_event_handoff = opt.async_event_handoff;
     ropts.async_pipeline_mode = opt.async_pipeline_mode;
     if (opt.profile_decode) {
         setenv("DS4_V100_PROFILE_DECODE", "1", 1);

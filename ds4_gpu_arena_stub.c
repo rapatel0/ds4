@@ -14,6 +14,10 @@ struct ds4_gpu_arena {
     int valid;
 };
 
+struct ds4_gpu_event {
+    int gpu;
+};
+
 static int arena_range_ok(const ds4_gpu_arena *a, uint64_t offset, uint64_t bytes) {
     return a && a->valid && offset <= a->bytes && bytes <= a->bytes - offset;
 }
@@ -137,6 +141,41 @@ int ds4_gpu_device_count(void) {
 
 int ds4_gpu_set_device(int gpu) {
     return gpu >= 0;
+}
+
+ds4_gpu_event *ds4_gpu_event_create(int gpu) {
+    if (gpu < 0) return NULL;
+    ds4_gpu_event *event = (ds4_gpu_event *)calloc(1, sizeof(*event));
+    if (!event) return NULL;
+    event->gpu = gpu;
+    return event;
+}
+
+void ds4_gpu_event_free(ds4_gpu_event *event) {
+    free(event);
+}
+
+int ds4_gpu_event_record(ds4_gpu_event *event) {
+    return event != NULL;
+}
+
+int ds4_gpu_stream_wait_event(int gpu, const ds4_gpu_event *event) {
+    return gpu >= 0 && event != NULL;
+}
+
+int ds4_gpu_tensor_copy_async_after_event(ds4_gpu_tensor *dst,
+                                          uint64_t dst_offset,
+                                          const ds4_gpu_tensor *src,
+                                          uint64_t src_offset,
+                                          uint64_t bytes,
+                                          const ds4_gpu_event *event) {
+    (void)dst;
+    (void)dst_offset;
+    (void)src;
+    (void)src_offset;
+    (void)bytes;
+    (void)event;
+    return 0;
 }
 
 int ds4_gpu_arena_open(ds4_gpu_arena **out, int gpu, uint64_t bytes) {

@@ -42,6 +42,11 @@ struct ds4_gpu_tensor {
     int device;
 };
 
+struct ds4_gpu_event {
+    cudaEvent_t event;
+    int gpu;
+};
+
 struct ds4_gpu_arena {
     void *ptr;
     uint64_t bytes;
@@ -1577,6 +1582,53 @@ extern "C" int ds4_gpu_tensor_copy_async(ds4_gpu_tensor *dst, uint64_t dst_offse
                                        (size_t)bytes,
                                        0),
                    "async tensor peer copy");
+}
+
+extern "C" ds4_gpu_event *ds4_gpu_event_create(int gpu) {
+    if (gpu < 0) return NULL;
+    if (!cuda_ok(cudaSetDevice(gpu), "event create set device")) return NULL;
+    ds4_gpu_event *event = (ds4_gpu_event *)calloc(1, sizeof(*event));
+    if (!event) return NULL;
+    event->gpu = gpu;
+    cudaError_t err = cudaEventCreateWithFlags(&event->event, cudaEventDisableTiming);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "ds4: CUDA event create failed: %s\n", cudaGetErrorString(err));
+        free(event);
+        return NULL;
+    }
+    return event;
+}
+
+extern "C" void ds4_gpu_event_free(ds4_gpu_event *event) {
+    if (!event) return;
+    if (event->event) {
+        (void)cudaSetDevice(event->gpu);
+        (void)cudaEventDestroy(event->event);
+    }
+    free(event);
+}
+
+extern "C" int ds4_gpu_event_record(ds4_gpu_event *event) {
+    if (!event || !event->event) return 0;
+    if (!cuda_ok(cudaSetDevice(event->gpu), "event record set device")) return 0;
+    return cuda_ok(cudaEventRecord(event->event, 0), "event record");
+}
+
+extern "C" int ds4_gpu_stream_wait_event(int gpu, const ds4_gpu_event *event) {
+    if (gpu < 0 || !event || !event->event) return 0;
+    if (!cuda_ok(cudaSetDevice(gpu), "event wait set device")) return 0;
+    return cuda_ok(cudaStreamWaitEvent(0, event->event, 0), "event wait");
+}
+
+extern "C" int ds4_gpu_tensor_copy_async_after_event(ds4_gpu_tensor *dst,
+                                                     uint64_t dst_offset,
+                                                     const ds4_gpu_tensor *src,
+                                                     uint64_t src_offset,
+                                                     uint64_t bytes,
+                                                     const ds4_gpu_event *event) {
+    if (!dst || !src) return 0;
+    if (event && !ds4_gpu_stream_wait_event(dst->device, event)) return 0;
+    return ds4_gpu_tensor_copy_async(dst, dst_offset, src, src_offset, bytes);
 }
 
 __device__ __forceinline__ static bool top1_f32_better(float av,

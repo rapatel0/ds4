@@ -21,6 +21,7 @@ wavefront_decode="0"
 async_pipeline_decode="0"
 async_pipeline_mode="off"
 async_handoff="0"
+async_event_handoff="0"
 mtp_serving="off"
 mtp_top_k="5"
 mtp_gpu="7"
@@ -53,6 +54,7 @@ Options:
   --async-pipeline-mode M   off, persistent, per-step, or mailbox
   --async-pipeline-per-step pass --async-pipeline-mode per-step
   --async-handoff           queue HC peer handoff copies on the destination stream
+  --async-event-handoff     use CUDA events for per-step stage handoff ordering
   --mtp-serving MODE        off, verify, or commit, default off
   --mtp-top-k N             MTP draft candidates to report, default 5
   --mtp-gpu N               MTP sidecar GPU, default 7
@@ -195,6 +197,12 @@ while [ "$#" -gt 0 ]; do
             ;;
         --async-handoff)
             async_handoff="1"
+            shift
+            ;;
+        --async-event-handoff)
+            async_pipeline_decode="1"
+            async_pipeline_mode="per-step"
+            async_event_handoff="1"
             shift
             ;;
         --async-pipeline-mode)
@@ -873,6 +881,9 @@ load_case() {
     if [ "$async_handoff" = "1" ]; then
         cmd+=(--async-handoff)
     fi
+    if [ "$async_event_handoff" = "1" ]; then
+        cmd+=(--async-event-handoff)
+    fi
     if [ "$mtp_serving" != "off" ]; then
         cmd+=(
             --mtp-model "$mtp_model"
@@ -948,6 +959,7 @@ printf 'profile_decode\t%s\n' "$profile_decode" >>"$summary_tsv"
 printf 'wavefront_decode\t%s\n' "$wavefront_decode" >>"$summary_tsv"
 printf 'async_pipeline_decode\t%s\n' "$async_pipeline_decode" >>"$summary_tsv"
 printf 'async_pipeline_mode\t%s\n' "$async_pipeline_mode" >>"$summary_tsv"
+printf 'async_event_handoff\t%s\n' "$async_event_handoff" >>"$summary_tsv"
 printf 'async_handoff\t%s\n' "$async_handoff" >>"$summary_tsv"
 printf 'mtp_serving\t%s\n' "$mtp_serving" >>"$summary_tsv"
 printf 'mtp_top_k\t%s\n' "$mtp_top_k" >>"$summary_tsv"
@@ -1047,7 +1059,7 @@ PY
     done
 done
 
-python3 - "$summary_json" "$mtp_serving" "$mtp_top_k" "$async_handoff" "${case_paths[@]}" <<'PY'
+python3 - "$summary_json" "$mtp_serving" "$mtp_top_k" "$async_handoff" "$async_event_handoff" "${case_paths[@]}" <<'PY'
 import json
 import sys
 
@@ -1055,7 +1067,8 @@ out = sys.argv[1]
 mtp_serving = sys.argv[2]
 mtp_top_k = int(sys.argv[3])
 async_handoff = bool(int(sys.argv[4]))
-paths = sys.argv[5:]
+async_event_handoff = bool(int(sys.argv[5]))
+paths = sys.argv[6:]
 rows = []
 for p in paths:
     with open(p, "r", encoding="utf-8") as f:
@@ -1065,6 +1078,7 @@ summary = {
     "mtp_serving": mtp_serving,
     "mtp_top_k": mtp_top_k,
     "async_handoff": async_handoff,
+    "async_event_handoff": async_event_handoff,
     "cases": rows,
 }
 with open(out, "w", encoding="utf-8") as f:

@@ -210,6 +210,10 @@ static uint32_t g_model_view_count;
 @implementation DS4MetalTensor
 @end
 
+struct ds4_gpu_event {
+    int gpu;
+};
+
 static DS4MetalTensor *ds4_gpu_tensor_obj(ds4_gpu_tensor *tensor) {
     return (__bridge DS4MetalTensor *)tensor;
 }
@@ -3912,6 +3916,42 @@ int ds4_gpu_tensor_copy(ds4_gpu_tensor *dst, uint64_t dst_offset,
                     size:(NSUInteger)bytes];
     [blit endEncoding];
     return 1;
+}
+
+int ds4_gpu_tensor_copy_async(ds4_gpu_tensor *dst, uint64_t dst_offset,
+                              const ds4_gpu_tensor *src, uint64_t src_offset,
+                              uint64_t bytes) {
+    return ds4_gpu_tensor_copy(dst, dst_offset, src, src_offset, bytes);
+}
+
+ds4_gpu_event *ds4_gpu_event_create(int gpu) {
+    if (gpu < 0) return NULL;
+    ds4_gpu_event *event = (ds4_gpu_event *)calloc(1, sizeof(*event));
+    if (!event) return NULL;
+    event->gpu = gpu;
+    return event;
+}
+
+void ds4_gpu_event_free(ds4_gpu_event *event) {
+    free(event);
+}
+
+int ds4_gpu_event_record(ds4_gpu_event *event) {
+    return event != NULL;
+}
+
+int ds4_gpu_stream_wait_event(int gpu, const ds4_gpu_event *event) {
+    return gpu >= 0 && event != NULL;
+}
+
+int ds4_gpu_tensor_copy_async_after_event(ds4_gpu_tensor *dst,
+                                          uint64_t dst_offset,
+                                          const ds4_gpu_tensor *src,
+                                          uint64_t src_offset,
+                                          uint64_t bytes,
+                                          const ds4_gpu_event *event) {
+    (void)event;
+    return ds4_gpu_tensor_copy_async(dst, dst_offset, src, src_offset, bytes);
 }
 
 int ds4_gpu_begin_commands(void) {

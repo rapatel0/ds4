@@ -15,6 +15,7 @@
  * buffers stay device-owned across the whole prefill/decode command sequence.
  */
 typedef struct ds4_gpu_tensor ds4_gpu_tensor;
+typedef struct ds4_gpu_event ds4_gpu_event;
 
 int ds4_gpu_init(void);
 void ds4_gpu_cleanup(void);
@@ -36,6 +37,16 @@ int ds4_gpu_tensor_copy(ds4_gpu_tensor *dst, uint64_t dst_offset,
 int ds4_gpu_tensor_copy_async(ds4_gpu_tensor *dst, uint64_t dst_offset,
                               const ds4_gpu_tensor *src, uint64_t src_offset,
                               uint64_t bytes);
+ds4_gpu_event *ds4_gpu_event_create(int gpu);
+void ds4_gpu_event_free(ds4_gpu_event *event);
+int ds4_gpu_event_record(ds4_gpu_event *event);
+int ds4_gpu_stream_wait_event(int gpu, const ds4_gpu_event *event);
+int ds4_gpu_tensor_copy_async_after_event(ds4_gpu_tensor *dst,
+                                          uint64_t dst_offset,
+                                          const ds4_gpu_tensor *src,
+                                          uint64_t src_offset,
+                                          uint64_t bytes,
+                                          const ds4_gpu_event *event);
 int ds4_gpu_top1_f32_tensor(const ds4_gpu_tensor *logits,
                             uint32_t n_logits,
                             uint32_t *token,

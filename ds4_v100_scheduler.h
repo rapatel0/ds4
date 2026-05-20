@@ -165,6 +165,15 @@ int ds4_v100_stage_scheduler_handoff_slot_span_async(ds4_v100_stage_scheduler *d
                                                      char *err,
                                                      size_t errlen);
 
+int ds4_v100_stage_scheduler_handoff_slot_span_after_event_async(
+    ds4_v100_stage_scheduler *dst,
+    const ds4_v100_stage_scheduler *src,
+    uint32_t slot_start,
+    uint32_t n_slots,
+    const ds4_gpu_event *event,
+    char *err,
+    size_t errlen);
+
 int ds4_v100_stage_scheduler_decode_hc(ds4_v100_stage_scheduler *sched,
                                        uint32_t token,
                                        uint32_t position,
