@@ -1,0 +1,18 @@
+Wed May 20 12:25:18 UTC 2026
+0, Tesla V100-SXM2-32GB, 0, 0, 66.20
+1, Tesla V100-SXM2-32GB, 0, 0, 40.58
+2, Tesla V100-SXM2-32GB, 0, 0, 42.09
+3, Tesla V100-SXM2-32GB, 0, 0, 43.05
+4, Tesla V100-SXM2-32GB, 0, 0, 44.07
+5, Tesla V100-SXM2-32GB, 0, 0, 45.06
+6, Tesla V100-SXM2-32GB, 0, 0, 42.07
+7, Tesla V100-SXM2-32GB, 0, 0, 42.53
+make: 'tests/cuda_v100_tc_grid_int8_smoke' is up to date.
+tc_grid_int8_correctness M=128 N=128 K=128 max_abs=0 p99_abs=0 mean_abs=0 ok
+tc_grid_int8_bench label=v13_rf_v6_128x128x16_w4 M=128 N=2048 K=4096 iters=100 ms=0.297165 tflops=7.227 gbps=40.579 ok
+tc_grid_int8_bench label=v13_rf_v6_128x128x16_w4 M=128 N=2048 K=4096 iters=100 ms=0.297329 tflops=7.223 gbps=40.557 ok
+tc_grid_int8_bench label=v13_rf_v6_128x128x16_w4 M=256 N=2048 K=4096 iters=100 ms=0.294666 tflops=14.576 gbps=51.599 ok
+tc_grid_int8_bench label=v13_rf_v6_128x128x16_w4 M=512 N=2048 K=4096 iters=100 ms=0.299848 tflops=28.648 gbps=71.689 ok
+tc_grid_int8_bench label=v13_rf_v6_128x128x16_w4 M=1024 N=2048 K=4096 iters=100 ms=0.428657 tflops=40.078 gbps=79.501 ok
+tc_grid_int8_bench label=v13_rf_v6_128x128x16_w4 M=2048 N=2048 K=4096 iters=100 ms=0.848108 tflops=40.513 gbps=69.855 ok
+tc_grid_int8_bench label=v13_rf_v6_128x128x16_w4 M=2048 N=7168 K=7168 iters=20 ms=4.536473 tflops=46.391 gbps=37.922 ok

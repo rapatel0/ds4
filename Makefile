@@ -35,6 +35,7 @@ NVCC_ARCH_FLAGS := -arch=$(CUDA_ARCH)
 endif
 NVCCFLAGS ?= -O3 --use_fast_math $(NVCC_ARCH_FLAGS) -Xcompiler $(NATIVE_CPU_FLAG) -Xcompiler -pthread
 CUDA_LDLIBS ?= -lm -Xcompiler -pthread -L$(CUDA_HOME)/targets/sbsa-linux/lib -L$(CUDA_HOME)/lib64 -lcudart -lcublas
+TCGRID_CUDAFLAGS := --std=c++17 --expt-relaxed-constexpr --expt-extended-lambda -Ikernels/tc-grid/include -Ikernels/tc-grid/kernels
 CORE_OBJS = ds4.o ds4_cuda.o $(PACK_OBJS) $(SOURCE_FORMAT_OBJS)
 CPU_CORE_OBJS = ds4_cpu.o $(PACK_OBJS) $(SOURCE_FORMAT_OBJS)
 METAL_LDLIBS := $(LDLIBS)
@@ -352,6 +353,9 @@ tests/cuda_v100_bounded_logits_smoke.o: tests/cuda_v100_bounded_logits_smoke.c d
 tests/cuda_v100_mxfp4_moe_smoke.o: tests/cuda_v100_mxfp4_moe_smoke.c ds4_gpu.h ds4_source_formats.h
 	$(CC) $(CFLAGS) -I. -c -o $@ tests/cuda_v100_mxfp4_moe_smoke.c
 
+tests/cuda_v100_tc_grid_int8_smoke.o: tests/cuda_v100_tc_grid_int8_smoke.cu kernels/tc-grid/include/dispatch.h kernels/tc-grid/include/tc_grid.h kernels/tc-grid/kernels/v13_kernels.cuh kernels/tc-grid/kernels/mma_sm70.cuh
+	$(NVCC) $(NVCCFLAGS) $(TCGRID_CUDAFLAGS) -I. -c -o $@ tests/cuda_v100_tc_grid_int8_smoke.cu
+
 tests/cuda_v100_descriptor_bound_ffn_smoke.o: tests/cuda_v100_descriptor_bound_ffn_smoke.c ds4_gpu.h ds4_source_formats.h ds4_v100_context.h ds4_v100_layer_state.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tests/cuda_v100_descriptor_bound_ffn_smoke.c
 
@@ -443,6 +447,9 @@ tests/cuda_v100_bounded_logits_smoke:
 tests/cuda_v100_mxfp4_moe_smoke:
 	@echo "tests/cuda_v100_mxfp4_moe_smoke requires a CUDA build"
 	@exit 2
+tests/cuda_v100_tc_grid_int8_smoke:
+	@echo "tests/cuda_v100_tc_grid_int8_smoke requires a CUDA build"
+	@exit 2
 tests/cuda_v100_descriptor_bound_ffn_smoke:
 	@echo "tests/cuda_v100_descriptor_bound_ffn_smoke requires a CUDA build"
 	@exit 2
@@ -496,6 +503,8 @@ tests/cuda_v100_bounded_logits_smoke: tests/cuda_v100_bounded_logits_smoke.o ds4
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tests/cuda_v100_mxfp4_moe_smoke: tests/cuda_v100_mxfp4_moe_smoke.o ds4_cuda.o ds4_source_formats.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
+tests/cuda_v100_tc_grid_int8_smoke: tests/cuda_v100_tc_grid_int8_smoke.o
+	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tests/cuda_v100_descriptor_bound_ffn_smoke: tests/cuda_v100_descriptor_bound_ffn_smoke.o ds4_cuda.o ds4_v100_layer_state.o ds4_source_formats.o ds4_v100_context.o ds4_pack.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tests/cuda_v100_descriptor_bound_attention_smoke: tests/cuda_v100_descriptor_bound_attention_smoke.o ds4_cuda.o ds4_v100_layer_state.o ds4_source_formats.o ds4_v100_context.o ds4_pack.o
@@ -533,4 +542,4 @@ test: ds4_test
 	./ds4_test
 
 clean:
-	rm -f ds4 ds4-server ds4-bench ds4-eval ds4_cpu ds4_native ds4_server_test ds4_test *.o tests/*.o tests/cuda_long_context_smoke tests/cuda_bf16_probe tests/cuda_v100_context_smoke tests/cuda_source_dtypes_smoke tests/cuda_v100_prefill_kv_smoke tests/cuda_v100_compressor_bridge_smoke tests/cuda_v100_projection_attention_smoke tests/cuda_v100_bounded_logits_smoke tests/cuda_v100_mxfp4_moe_smoke tests/cuda_v100_descriptor_bound_ffn_smoke tests/cuda_v100_descriptor_bound_attention_smoke tests/cuda_v100_integrated_layer_smoke tests/cuda_v100_stage_scheduler_smoke tests/cuda_v100_two_stage_scheduler_smoke tests/cuda_v100_full_scheduler_smoke tests/cuda_v100_selected_token_smoke tests/cuda_v100_output_head_parity_smoke tests/cuda_v100_scheduler_checkpoint_parity_smoke tests/cuda_v100_scheduler_snapshot_smoke tests/cuda_v100_stage_wavefront_smoke tests/cuda_hc_relay_smoke tests/pack_index_smoke tests/gpu_arena_smoke tests/bf16_probe_smoke tests/v100_context_smoke tests/v100_layer_binding_smoke tests/v100_layer_state_smoke tests/source_dtypes_smoke tools/*.o tools/ds4-v100-plan tools/ds4-v100-pack tools/ds4-v100-residency-smoke tools/ds4-v100-context-smoke tools/ds4-v100-layer-descriptor-gate tools/ds4-source-oracle-vector tools/ds4-v100-mtp-sidecar-gate tools/ds4-v100-mtp-residency-smoke tools/ds4-v100-mtp-prefix-smoke tools/ds4-v100-mtp-q4k-smoke tools/ds4-v100-mtp-ffn-smoke tools/ds4-v100-mtp-attn-smoke tools/ds4-v100-mtp-logits-smoke tools/ds4-v100-mtp-forward-smoke tools/ds4-v100-mtp-verify-smoke tools/ds4-v100-replay
+	rm -f ds4 ds4-server ds4-bench ds4-eval ds4_cpu ds4_native ds4_server_test ds4_test *.o tests/*.o tests/cuda_long_context_smoke tests/cuda_bf16_probe tests/cuda_v100_context_smoke tests/cuda_source_dtypes_smoke tests/cuda_v100_prefill_kv_smoke tests/cuda_v100_compressor_bridge_smoke tests/cuda_v100_projection_attention_smoke tests/cuda_v100_bounded_logits_smoke tests/cuda_v100_mxfp4_moe_smoke tests/cuda_v100_tc_grid_int8_smoke tests/cuda_v100_descriptor_bound_ffn_smoke tests/cuda_v100_descriptor_bound_attention_smoke tests/cuda_v100_integrated_layer_smoke tests/cuda_v100_stage_scheduler_smoke tests/cuda_v100_two_stage_scheduler_smoke tests/cuda_v100_full_scheduler_smoke tests/cuda_v100_selected_token_smoke tests/cuda_v100_output_head_parity_smoke tests/cuda_v100_scheduler_checkpoint_parity_smoke tests/cuda_v100_scheduler_snapshot_smoke tests/cuda_v100_stage_wavefront_smoke tests/cuda_hc_relay_smoke tests/pack_index_smoke tests/gpu_arena_smoke tests/bf16_probe_smoke tests/v100_context_smoke tests/v100_layer_binding_smoke tests/v100_layer_state_smoke tests/source_dtypes_smoke tools/*.o tools/ds4-v100-plan tools/ds4-v100-pack tools/ds4-v100-residency-smoke tools/ds4-v100-context-smoke tools/ds4-v100-layer-descriptor-gate tools/ds4-source-oracle-vector tools/ds4-v100-mtp-sidecar-gate tools/ds4-v100-mtp-residency-smoke tools/ds4-v100-mtp-prefix-smoke tools/ds4-v100-mtp-q4k-smoke tools/ds4-v100-mtp-ffn-smoke tools/ds4-v100-mtp-attn-smoke tools/ds4-v100-mtp-logits-smoke tools/ds4-v100-mtp-forward-smoke tools/ds4-v100-mtp-verify-smoke tools/ds4-v100-replay

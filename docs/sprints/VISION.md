@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: codex
-revision: 91
+revision: 92
 ---
 
 # Vision: DS4 V100 Appliance
@@ -508,6 +508,12 @@ optimized V100 low-bit expert kernels in the actual hot path.
   tok/s from `9.055694` to `9.035946` at 1M/4 slots. Halving CTA row count is
   not enough; the next kernel sprint needs route/expert tiling, packed low-bit
   dot products, or a persistent grouped expert shape.
+- Sprint 080 changed the kernel policy from "use prior deepseek work as design
+  evidence" to "copy candidate kernel source into this repo and prove it here."
+  The copied tc-grid V100 INT8 `v13_rf_v6` path builds and runs from `ds4`,
+  reaching `46.391 TFLOP/s` on `M=2048,N=7168,K=7168`, but only `7.223
+  TFLOP/s` on `M=128,N=2048,K=4096`. Keep it as a proof/benchmark path and
+  prioritize copied TurboMind MXFP4 grouped GEMM for production routed experts.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -578,6 +584,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 077 batched output-head selection | `9.01` generated tok/s default, `8.62` with batch opt-in at 1M/4 slots | Measured | Batched row projection/top-1 is correct but slower than the per-slot device top-1 control: generated tok/s regressed `4.56%` and output-head timing rose `3.46%` (`139.750 ms` vs `135.080 ms`). Keep `DS4_V100_ENABLE_OUTPUT_HEAD_BATCH=1` opt-in and pivot back to stage/kernel costs. |
 | Sprint 078 event-ordered stage handoff | `9.16` generated tok/s at 1M/4 slots | Measured | CUDA events removed the explicit device-sync bucket and reduced handoff sum by `21.95%`, but generated tok/s improved only `0.12%` (`9.158602` vs `9.147418`). Keep `DS4_V100_ASYNC_EVENT_HANDOFF=1` opt-in and pivot to kernel-side routed MXFP4 occupancy. |
 | Sprint 079 routed MXFP4 row-pair probe | `9.06` default, `9.04` row-pair opt-in at 1M/4 slots | Measured | Row-pair MXFP4 gate/up/SwiGLU and down-sum kernels are correct, but generated tok/s regressed `0.22%` (`9.035946` vs `9.055694`). Keep `DS4_CUDA_MXFP4_ROUTE_ROWS2=1` opt-in and target a larger route/expert tiling or packed low-bit kernel rewrite next. |
+| Sprint 080 copied tc-grid INT8 V100 kernel proof | `7.223 TFLOP/s` at `M=128,N=2048,K=4096`; `46.391 TFLOP/s` at `M=2048,N=7168,K=7168` | Measured | Copied tc-grid `v13_rf_v6` source now builds and runs from `ds4`. It confirms high-M V100 low-bit HMMA can work, but low-M routed decode remains underfilled and INT8 would expand source MXFP4 experts. Use this as a benchmark/proof path; prioritize TurboMind MXFP4 grouped GEMM for hot-path integration. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -1718,6 +1725,25 @@ GPU utilization with architectural changes, and only then compare against the
   execution-shape change such as route/expert tiling, packed low-bit dot
   products, or a persistent grouped expert kernel.
 
+### Sprint 080 - Copied tc-grid V100 INT8 Kernel Proof [complete]
+
+- **Goal**: Copy candidate V100 low-bit kernel source from `~/repos/deepseek`
+  into `ds4`, build it from this repository, and prove at least one standalone
+  V100 smoke/bench.
+- **Rationale**: The appliance should not rely on external working-tree kernel
+  code or vague references to prior experiments. If tc-grid or TurboMind will
+  inform the runtime, the relevant source needs to live here and be validated
+  here.
+- **Outcome**: `SHIP_PROOF_ONLY`. Copied the tc-grid headers and sm70 kernel
+  headers into `kernels/tc-grid/`, added
+  `tests/cuda_v100_tc_grid_int8_smoke.cu`, and built/ran the copied
+  `v13_rf_v6` INT8 HMMA kernel on V100. Correctness passed with `max_abs=0`.
+  Timing reached `46.391 TFLOP/s` on the large tc-grid reference shape but only
+  `7.223 TFLOP/s` on `M=128,N=2048,K=4096`, so this is a useful proof and
+  benchmark harness, not a default model path. The next copied-source kernel
+  sprint should target TurboMind MXFP4 grouped GEMM because it better matches
+  DS4's routed expert source layout and prior utilization evidence.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -1958,6 +1984,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 077 batched output-head selection as opt-in only. | Row-batched output projection/top-1 is correct, but it is slower than the existing per-slot parallel top-1 path at 1M/4 slots. Keep output-head batching off by default and pivot away from output selection toward stage stream/event handoff, kernel-side scheduling, or routed MoE occupancy. | Sprint 078+ |
 | 2026-05-20 | Shipped Sprint 078 event-ordered stage handoff as opt-in only. | CUDA events reduce the measured handoff/sync bucket but do not materially move end-to-end throughput. Stop spending sprint budget on small host scheduling variants and move to the kernel hot path, starting with routed MXFP4 occupancy experiments. | Sprint 079+ |
 | 2026-05-20 | Shipped Sprint 079 routed MXFP4 row-pair kernels as opt-in only. | Pairing adjacent rows in the routed MXFP4 kernels preserves correctness but slightly regresses sustained 1M/4-slot throughput. The next kernel attempt should stop doing row-level CTA consolidation and instead change the expert execution shape more materially. | Sprint 080+ |
+| 2026-05-20 | Shipped Sprint 080 copied tc-grid V100 INT8 kernel proof. | Candidate low-bit kernels must be copied into `ds4` and proven there before runtime use. The copied tc-grid v13 path proves high-M INT8 HMMA viability but not low-M routed decode practicality; the next kernel sprint should copy/prove TurboMind MXFP4 grouped GEMM. | Sprint 081+ |
 
 ## Open Questions
 

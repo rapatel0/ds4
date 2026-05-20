@@ -181,6 +181,22 @@ The expert path is the main fork. MXFP4 best preserves VRAM and source
 semantics. INT8 may be easier for existing integer kernels, but it expands
 expert weight bytes and must beat that extra HBM traffic.
 
+### Copied Low-Bit Kernel Policy
+
+Prior tc-grid and TurboMind experiments in `~/repos/deepseek` are design
+evidence only until their source is copied into this repository and built from
+`ds4`. Sprint 080 starts that policy with a copied tc-grid V100 INT8
+`v13_rf_v6` smoke under `kernels/tc-grid/`. The measured shape confirms the
+expected tradeoff: it is useful once effective `M` is large, but it is not
+automatically the right model path because DS4 routed experts are source MXFP4
+and low-M decode remains underfilled.
+
+The preferred next copied-source path is TurboMind MXFP4 grouped GEMM if we can
+copy its required lmdeploy/CUTLASS support surface and prove a grouped
+gate/up/down smoke from this repository. Any chosen production kernel must
+avoid persistent duplicate MXFP4, FP8, and INT8 resident packs unless the
+planner explicitly admits the memory cost.
+
 ## Baseline Execution Schedule
 
 | Mode | Schedule |
