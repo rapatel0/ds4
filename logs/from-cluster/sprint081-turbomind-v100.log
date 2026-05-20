@@ -1,0 +1,35 @@
+Wed May 20 12:34:06 UTC 2026
+nvidia-smi:
+0, Tesla V100-SXM2-32GB, 0, 0, 42.56
+1, Tesla V100-SXM2-32GB, 0, 0, 41.08
+2, Tesla V100-SXM2-32GB, 0, 0, 42.59
+3, Tesla V100-SXM2-32GB, 0, 0, 43.55
+4, Tesla V100-SXM2-32GB, 0, 0, 44.56
+5, Tesla V100-SXM2-32GB, 0, 0, 45.06
+6, Tesla V100-SXM2-32GB, 0, 0, 42.07
+7, Tesla V100-SXM2-32GB, 0, 0, 43.03
+configure: cmake -S kernels/turbomind/ggml-turbomind -B build/turbomind-v100 -DCMAKE_CUDA_ARCHITECTURES=70 -DCMAKE_BUILD_TYPE=Release
+build: cmake --build build/turbomind-v100 --target ggml-turbomind test_ggml_turbomind_grouped_compare -j 8
+[  3%] Built target parser
+[  8%] Built target fmt
+[ 14%] Built target cuda_utils
+[ 42%] Built target core
+[ 91%] Built target gemm2
+[100%] Built target ggml-turbomind
+[  3%] Built target parser
+[  8%] Built target fmt
+[ 13%] Built target cuda_utils
+[ 40%] Built target core
+[ 88%] Built target gemm2
+[ 96%] Built target ggml-turbomind
+Consolidate compiler generated dependencies of target test_ggml_turbomind_grouped_compare
+[100%] Built target test_ggml_turbomind_grouped_compare
+run grouped compare:
+[down_decode] N=4096 K=2048 active=6 tpa=1 k_pack=0x341321 grouped_ms=0.1037 single_loop_ms=0.1307 speedup=1.261x max_abs=3.1250e-02 rel=2.3798e-07 bad=0/24576
+[down_decode] PASS
+[gate_up_decode] N=2048 K=4096 active=6 tpa=1 k_pack=0x341321 grouped_ms=0.1454 single_loop_ms=0.1294 speedup=0.890x max_abs=6.2500e-02 rel=5.6460e-07 bad=0/12288
+[gate_up_decode] PASS
+[down_prompt] N=4096 K=2048 active=6 tpa=4 k_pack=0x341321 grouped_ms=0.1057 single_loop_ms=0.1305 speedup=1.234x max_abs=6.2500e-02 rel=2.6239e-07 bad=0/98304
+[down_prompt] PASS
+[gate_up_prompt] N=2048 K=4096 active=6 tpa=4 k_pack=0x341321 grouped_ms=0.1315 single_loop_ms=0.1305 speedup=0.992x max_abs=6.2500e-02 rel=4.8738e-07 bad=0/49152
+[gate_up_prompt] PASS

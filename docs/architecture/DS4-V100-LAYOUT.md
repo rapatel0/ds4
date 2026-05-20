@@ -185,17 +185,17 @@ expert weight bytes and must beat that extra HBM traffic.
 
 Prior tc-grid and TurboMind experiments in `~/repos/deepseek` are design
 evidence only until their source is copied into this repository and built from
-`ds4`. Sprint 080 starts that policy with a copied tc-grid V100 INT8
-`v13_rf_v6` smoke under `kernels/tc-grid/`. The measured shape confirms the
-expected tradeoff: it is useful once effective `M` is large, but it is not
-automatically the right model path because DS4 routed experts are source MXFP4
-and low-M decode remains underfilled.
+`ds4`. Sprint 080 copied tc-grid's V100 INT8 `v13_rf_v6` proof under
+`kernels/tc-grid/`. Sprint 081 copied TurboMind's C ABI wrapper and required
+lmdeploy `turbomind` support tree under `kernels/turbomind/`.
 
-The preferred next copied-source path is TurboMind MXFP4 grouped GEMM if we can
-copy its required lmdeploy/CUTLASS support surface and prove a grouped
-gate/up/down smoke from this repository. Any chosen production kernel must
-avoid persistent duplicate MXFP4, FP8, and INT8 resident packs unless the
-planner explicitly admits the memory cost.
+The current evidence favors TurboMind as the next routed-expert adapter target:
+it builds from the copied tree, passes grouped MXFP4 compare on DS4 gate/up and
+down shapes, and keeps the expert source format MXFP4. tc-grid remains useful
+for INT8 benchmarking and possible future quality-gated INT8 expert packs.
+
+Any chosen production kernel must avoid persistent duplicate MXFP4, FP8, and
+INT8 resident packs unless the planner explicitly admits the memory cost.
 
 ## Baseline Execution Schedule
 
