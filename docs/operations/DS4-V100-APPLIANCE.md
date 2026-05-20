@@ -135,6 +135,7 @@ DS4_V100_PACK_INDEX=docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv
 DS4_V100_CTX=1048576
 DS4_V100_SLOTS=1
 DS4_V100_ACTIVE_MICROBATCH=1
+DS4_V100_MICROBATCH_WAIT_US=auto
 DS4_V100_QUEUE_POLICY=reject-busy
 DS4_V100_HOST=127.0.0.1
 DS4_V100_PORT=18080
@@ -146,6 +147,11 @@ DS4_V100_MTP_SERVING=off
 DS4_V100_MTP_TOP_K=5
 DS4_V100_MTP_GPU=7
 ```
+
+`DS4_V100_MICROBATCH_WAIT_US=auto` resolves to `50000` us for multi-slot
+serving and `0` for one-slot serving. Increase it only when concurrent clients
+arrive unevenly enough to split batches; decrease it for latency-sensitive
+single-request testing.
 
 Validate a config without starting the service:
 

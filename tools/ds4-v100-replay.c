@@ -50,6 +50,7 @@ typedef struct {
     uint32_t max_requests;
     uint32_t slots;
     uint32_t active_microbatch;
+    uint32_t microbatch_wait_us;
     uint32_t mtp_top_k;
     int mtp_gpu;
     int mtp_reserve_mib;
@@ -309,12 +310,16 @@ static void pending_wait_for_microbatch(replay_server_state *state,
                                         uint32_t cap,
                                         bool mtp_enabled) {
     if (!state || cap <= 1 || mtp_enabled) return;
+    const uint32_t wait_us = state->opt ? state->opt->microbatch_wait_us : 0;
+    if (wait_us == 0) return;
 
     struct timeval tv;
     gettimeofday(&tv, NULL);
     struct timespec deadline;
     deadline.tv_sec = tv.tv_sec;
-    deadline.tv_nsec = (long)tv.tv_usec * 1000L + 5000000L;
+    deadline.tv_sec += (time_t)(wait_us / 1000000u);
+    deadline.tv_nsec =
+        (long)tv.tv_usec * 1000L + (long)(wait_us % 1000000u) * 1000L;
     if (deadline.tv_nsec >= 1000000000L) {
         deadline.tv_sec += deadline.tv_nsec / 1000000000L;
         deadline.tv_nsec %= 1000000000L;
@@ -540,6 +545,7 @@ static void usage(FILE *fp) {
             "  --ctx N                   KV context tokens, default 1048576\n"
             "  --slots N                 configured admission slots, default 1\n"
             "  --active-microbatch N     active decode request slots, default 1\n"
+            "  --microbatch-wait-us N    max wait to coalesce active requests, default 5000\n"
             "  --queue-policy MODE       reject-busy or sequential, default reject-busy\n"
             "  --expected-token-hex HEX  require first generated token bytes\n"
             "  --json                    emit JSON\n"
@@ -617,6 +623,7 @@ static replay_cli_options parse_options(int argc, char **argv) {
     opt.tokens = 1;
     opt.slots = 1;
     opt.active_microbatch = 1;
+    opt.microbatch_wait_us = 5000;
     opt.system = "";
     opt.host = "127.0.0.1";
     opt.port = 8000;
@@ -675,6 +682,13 @@ static replay_cli_options parse_options(int argc, char **argv) {
                 exit(2);
             }
             opt.active_microbatch = (uint32_t)v;
+        } else if (!strcmp(arg, "--microbatch-wait-us")) {
+            uint64_t v = parse_u64_arg_allow_zero(need_arg(&i, argc, argv, arg), arg);
+            if (v > 1000000ull) {
+                fprintf(stderr, "ds4-v100-replay: --microbatch-wait-us must be <= 1000000\n");
+                exit(2);
+            }
+            opt.microbatch_wait_us = (uint32_t)v;
         } else if (!strcmp(arg, "--queue-policy")) {
             const char *v = need_arg(&i, argc, argv, arg);
             if (!strcmp(v, "reject-busy") || !strcmp(v, "reject") || !strcmp(v, "busy")) {
@@ -1660,9 +1674,11 @@ static void write_status_json(FILE *fp,
     fprintf(fp, "\"async_handoff\":%s,", opt->async_handoff ? "true" : "false");
     fprintf(fp, "\"async_event_handoff\":%s,", opt->async_event_handoff ? "true" : "false");
     fprintf(fp, "\"startup_warmup\":%s,", opt->startup_warmup ? "true" : "false");
+    fprintf(fp, "\"microbatch_wait_us\":%" PRIu32 ",", opt->microbatch_wait_us);
     fprintf(fp,
             "\"limits\":{\"slots\":%" PRIu32 ",\"configured_slots\":%" PRIu32
             ",\"active_slots\":%" PRIu32 ",\"active_microbatch\":%" PRIu32
+            ",\"microbatch_wait_us\":%" PRIu32
             ",\"concurrent_requests\":%" PRIu32
             ",\"queue_policy\":\"%s\",\"scheduler_slots_ready\":true,"
             "\"tensor_batched_slots\":%s,\"sequential_requests\":%s,"
@@ -1672,6 +1688,7 @@ static void write_status_json(FILE *fp,
             opt->slots,
             opt->active_microbatch,
             opt->active_microbatch,
+            opt->microbatch_wait_us,
             opt->active_microbatch,
             queue_policy_name(opt->queue_policy),
             opt->active_microbatch > 1 ? "true" : "false",
@@ -1758,6 +1775,9 @@ static void write_metrics_text(FILE *fp,
     fprintf(fp, "# HELP ds4_v100_active_microbatch Active decode requests supported by this process.\n");
     fprintf(fp, "# TYPE ds4_v100_active_microbatch gauge\n");
     fprintf(fp, "ds4_v100_active_microbatch %" PRIu32 "\n", opt->active_microbatch);
+    fprintf(fp, "# HELP ds4_v100_microbatch_wait_us Max microseconds the server waits to coalesce active requests.\n");
+    fprintf(fp, "# TYPE ds4_v100_microbatch_wait_us gauge\n");
+    fprintf(fp, "ds4_v100_microbatch_wait_us %" PRIu32 "\n", opt->microbatch_wait_us);
     fprintf(fp, "# HELP ds4_v100_active_slots Active slots scheduled concurrently by this process.\n");
     fprintf(fp, "# TYPE ds4_v100_active_slots gauge\n");
     fprintf(fp, "ds4_v100_active_slots %" PRIu32 "\n", opt->active_microbatch);

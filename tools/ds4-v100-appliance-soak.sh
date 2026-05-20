@@ -10,6 +10,7 @@ expected_hex="3136"
 ctx="1048576"
 slots="4"
 active_microbatch="4"
+microbatch_wait_us="auto"
 queue_policy="sequential"
 tokens="16"
 requests="4"
@@ -38,6 +39,7 @@ Options:
   --ctx N                   KV context tokens, default 1048576
   --slots N                 configured slots, default 4
   --active-microbatch N     active decode slots, default slots
+  --microbatch-wait-us N    max request coalescing wait, default auto
   --queue-policy MODE       sequential or reject-busy, default sequential
   --tokens N                generated tokens per request, default 16
   --requests N              timed requests, default 4
@@ -84,6 +86,7 @@ while [ "$#" -gt 0 ]; do
         --ctx) ctx="$(need_value "$1" "${2:-}")"; shift 2 ;;
         --slots) slots="$(need_value "$1" "${2:-}")"; active_microbatch="$slots"; shift 2 ;;
         --active-microbatch) active_microbatch="$(need_value "$1" "${2:-}")"; shift 2 ;;
+        --microbatch-wait-us) microbatch_wait_us="$(need_value "$1" "${2:-}")"; shift 2 ;;
         --queue-policy) queue_policy="$(need_value "$1" "${2:-}")"; shift 2 ;;
         --tokens) tokens="$(need_value "$1" "${2:-}")"; shift 2 ;;
         --requests) requests="$(need_value "$1" "${2:-}")"; shift 2 ;;
@@ -121,6 +124,10 @@ fi
 for v in "$ctx" "$slots" "$active_microbatch" "$tokens" "$requests" "$warmup_requests" "$port" "$sample_ms" "$require_gpus" "$reserve_mib"; do
     is_uint "$v" || fail "numeric option expected, got $v"
 done
+if [ "$microbatch_wait_us" != "auto" ]; then
+    is_uint "$microbatch_wait_us" || fail "--microbatch-wait-us must be auto or an integer"
+    [ "$microbatch_wait_us" -le 1000000 ] || fail "--microbatch-wait-us must be <= 1000000"
+fi
 [ "$slots" -ge 1 ] && [ "$slots" -le 8 ] || fail "--slots must be in [1,8]"
 [ "$active_microbatch" -ge 1 ] && [ "$active_microbatch" -le "$slots" ] || fail "--active-microbatch must be in [1,slots]"
 case "$queue_policy" in sequential|reject-busy) ;; *) fail "--queue-policy must be sequential or reject-busy" ;; esac
@@ -204,6 +211,7 @@ fi
     export DS4_V100_CTX="$ctx"
     export DS4_V100_SLOTS="$slots"
     export DS4_V100_ACTIVE_MICROBATCH="$active_microbatch"
+    export DS4_V100_MICROBATCH_WAIT_US="$microbatch_wait_us"
     export DS4_V100_QUEUE_POLICY="$queue_policy"
     export DS4_V100_TOKENS="$tokens"
     export DS4_V100_ASYNC_PIPELINE_MODE="$async_pipeline_mode"

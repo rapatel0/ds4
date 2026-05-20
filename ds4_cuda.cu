@@ -193,6 +193,8 @@ typedef struct {
 static cuda_turbomind_api g_tm_api;
 static std::mutex g_tm_api_mutex;
 static void cuda_tm_matrix_table_cache_release_all(void);
+static void cuda_f8_f16_arena_cache_release_all(void);
+static void cuda_f8_f16_arena_cache_release_arena(const ds4_gpu_arena *arena);
 
 struct cuda_model_range {
     const void *host_base;
@@ -232,6 +234,18 @@ struct cuda_q8_f32_range {
     float *device_ptr;
 };
 
+struct cuda_f8_f16_arena_range {
+    void *arena_ptr;
+    int gpu;
+    uint64_t arena_offset;
+    uint64_t byte_length;
+    uint32_t rows;
+    uint32_t cols;
+    uint32_t row_stride_bytes;
+    __half *device_ptr;
+    uint64_t bytes;
+};
+
 static std::vector<cuda_model_range> g_model_ranges;
 static std::vector<cuda_model_arena> g_model_arenas;
 static std::unordered_map<uint64_t, size_t> g_model_range_by_offset;
@@ -239,9 +253,12 @@ static std::vector<cuda_q8_f16_range> g_q8_f16_ranges;
 static std::unordered_map<uint64_t, size_t> g_q8_f16_by_offset;
 static std::vector<cuda_q8_f32_range> g_q8_f32_ranges;
 static std::unordered_map<uint64_t, size_t> g_q8_f32_by_offset;
+static std::vector<cuda_f8_f16_arena_range> g_f8_f16_arena_ranges;
+static std::mutex g_f8_f16_arena_mutex;
 static uint64_t g_model_range_bytes;
 static uint64_t g_q8_f16_bytes;
 static uint64_t g_q8_f32_bytes;
+static uint64_t g_f8_f16_arena_bytes;
 static int g_q8_f16_disabled_after_oom;
 static int g_q8_f16_budget_notice_printed;
 static uint64_t g_model_load_progress_next;
@@ -473,6 +490,40 @@ static void cuda_q8_f16_cache_release_all(void) {
     g_q8_f16_ranges.clear();
     g_q8_f16_by_offset.clear();
     g_q8_f16_bytes = 0;
+}
+
+static void cuda_f8_f16_arena_cache_release_entry(const cuda_f8_f16_arena_range &r) {
+    if (!r.device_ptr) return;
+    (void)cudaSetDevice(r.gpu);
+    (void)cudaFree(r.device_ptr);
+}
+
+static void cuda_f8_f16_arena_cache_release_arena(const ds4_gpu_arena *arena) {
+    if (!arena) return;
+    std::lock_guard<std::mutex> lk(g_f8_f16_arena_mutex);
+    for (size_t i = 0; i < g_f8_f16_arena_ranges.size();) {
+        const cuda_f8_f16_arena_range &r = g_f8_f16_arena_ranges[i];
+        if (r.arena_ptr == arena->ptr && r.gpu == arena->gpu) {
+            if (g_f8_f16_arena_bytes >= r.bytes) {
+                g_f8_f16_arena_bytes -= r.bytes;
+            } else {
+                g_f8_f16_arena_bytes = 0;
+            }
+            cuda_f8_f16_arena_cache_release_entry(r);
+            g_f8_f16_arena_ranges.erase(g_f8_f16_arena_ranges.begin() + i);
+        } else {
+            i++;
+        }
+    }
+}
+
+static void cuda_f8_f16_arena_cache_release_all(void) {
+    std::lock_guard<std::mutex> lk(g_f8_f16_arena_mutex);
+    for (const cuda_f8_f16_arena_range &r : g_f8_f16_arena_ranges) {
+        cuda_f8_f16_arena_cache_release_entry(r);
+    }
+    g_f8_f16_arena_ranges.clear();
+    g_f8_f16_arena_bytes = 0;
 }
 
 static uint64_t cuda_parse_mib_env(const char *name, int *present) {
@@ -1448,6 +1499,7 @@ extern "C" int ds4_gpu_init(void) {
 extern "C" void ds4_gpu_cleanup(void) {
     (void)cudaDeviceSynchronize();
     cuda_tm_matrix_table_cache_release_all();
+    cuda_f8_f16_arena_cache_release_all();
     if (g_cublas_ready) {
         (void)cublasDestroy(g_cublas);
         g_cublas_ready = 0;
@@ -1530,6 +1582,7 @@ extern "C" int ds4_gpu_set_device(int gpu) {
 }
 
 __global__ static void fill_f32_kernel(float *x, uint64_t n, float v);
+__global__ static void f32_to_f16_kernel(__half *out, const float *x, uint64_t n);
 __global__ static void f32_f16_round_kernel(float *x, uint64_t n);
 
 extern "C" ds4_gpu_tensor *ds4_gpu_tensor_alloc(uint64_t bytes) {
@@ -2621,6 +2674,24 @@ __global__ static void arena_f8_e4m3_b128_matmul_batch_kernel(
         __syncthreads();
     }
     if (threadIdx.x == 0) out[(uint64_t)tok * rows + r] = partial[0];
+}
+
+__global__ static void arena_f8_e4m3_b128_to_f16_kernel(
+        __half *out,
+        const uint8_t *base,
+        uint32_t rows,
+        uint32_t cols,
+        uint32_t row_stride_bytes) {
+    const uint64_t idx = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t n = (uint64_t)rows * cols;
+    if (idx >= n) return;
+    const uint32_t r = (uint32_t)(idx / cols);
+    const uint32_t c = (uint32_t)(idx - (uint64_t)r * cols);
+    const uint8_t *row = base + (uint64_t)r * row_stride_bytes;
+    const uint8_t *block = row + (uint64_t)(c / 128u) * 129ull;
+    const float scale = arena_e8m0_to_f32(block[0]);
+    const float w = arena_e4m3fn_to_f32(block[1u + (c % 128u)]) * scale;
+    out[idx] = __float2half_rn(w);
 }
 
 __global__ static void arena_f8_e4m3_b128_pair_swiglu_ptrs_kernel(
@@ -4321,6 +4392,7 @@ extern "C" void ds4_gpu_arena_close(ds4_gpu_arena *arena) {
     if (arena->ptr) {
         (void)cudaSetDevice(arena->gpu);
         cuda_tm_matrix_table_cache_release_arena(arena);
+        cuda_f8_f16_arena_cache_release_arena(arena);
         (void)cudaFree(arena->ptr);
     }
     free(arena);
@@ -4788,6 +4860,123 @@ static int cuda_f8_e4m3_b128_matmul_view_ok(const ds4_gpu_arena *arena,
     return 1;
 }
 
+static int cuda_f8_f16_arena_cache_enabled(void) {
+    const char *v = getenv("DS4_CUDA_F8_F16_CACHE");
+    return v && v[0] &&
+           strcmp(v, "0") != 0 &&
+           strcmp(v, "false") != 0 &&
+           strcmp(v, "FALSE") != 0 &&
+           strcmp(v, "off") != 0 &&
+           strcmp(v, "OFF") != 0;
+}
+
+static uint64_t cuda_f8_f16_arena_cache_reserve_bytes(void) {
+    int present = 0;
+    const uint64_t mib = cuda_parse_mib_env("DS4_CUDA_F8_F16_CACHE_RESERVE_MIB", &present);
+    return (present ? mib : 4096ull) * 1048576ull;
+}
+
+static const __half *cuda_f8_f16_arena_ptr(
+        const ds4_gpu_arena *arena,
+        const ds4_gpu_source_row_view *view,
+        const char *label) {
+    if (!cuda_f8_f16_arena_cache_enabled() ||
+        !arena || !view || !arena->ptr || view->rows == 0 || view->cols == 0) {
+        return nullptr;
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_f8_f16_arena_mutex);
+        for (const cuda_f8_f16_arena_range &r : g_f8_f16_arena_ranges) {
+            if (r.arena_ptr == arena->ptr &&
+                r.gpu == arena->gpu &&
+                r.arena_offset == view->arena_offset &&
+                r.byte_length == view->byte_length &&
+                r.rows == view->rows &&
+                r.cols == view->cols &&
+                r.row_stride_bytes == view->row_stride_bytes) {
+                return r.device_ptr;
+            }
+        }
+    }
+
+    if ((uint64_t)view->rows > UINT64_MAX / view->cols / sizeof(__half)) return nullptr;
+    const uint64_t out_bytes = (uint64_t)view->rows * view->cols * sizeof(__half);
+    size_t free_bytes = 0;
+    size_t total_bytes = 0;
+    (void)cudaMemGetInfo(&free_bytes, &total_bytes);
+    const uint64_t reserve_bytes = cuda_f8_f16_arena_cache_reserve_bytes();
+    if (free_bytes <= reserve_bytes || out_bytes > (uint64_t)free_bytes - reserve_bytes) {
+        if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE")) {
+            fprintf(stderr,
+                    "ds4: CUDA F8 fp16 arena cache skipped for %s %.2f MiB (free %.2f GiB reserve %.2f GiB)\n",
+                    label ? label : "f8",
+                    (double)out_bytes / 1048576.0,
+                    (double)free_bytes / 1073741824.0,
+                    (double)reserve_bytes / 1073741824.0);
+        }
+        return nullptr;
+    }
+
+    __half *dev = nullptr;
+    cudaError_t err = cudaMalloc(&dev, (size_t)out_bytes);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "ds4: CUDA F8 fp16 arena cache alloc failed for %s (%.2f MiB): %s\n",
+                label ? label : "f8",
+                (double)out_bytes / 1048576.0,
+                cudaGetErrorString(err));
+        (void)cudaGetLastError();
+        return nullptr;
+    }
+    const uint8_t *base = (const uint8_t *)((const char *)arena->ptr + view->arena_offset);
+    const uint64_t n = (uint64_t)view->rows * view->cols;
+    arena_f8_e4m3_b128_to_f16_kernel<<<(n + 255u) / 256u, 256>>>(
+        dev,
+        base,
+        view->rows,
+        view->cols,
+        view->row_stride_bytes);
+    if (!cuda_ok(cudaGetLastError(), "f8 fp16 arena dequant launch")) {
+        (void)cudaFree(dev);
+        return nullptr;
+    }
+
+    cuda_f8_f16_arena_range inserted = {};
+    inserted.arena_ptr = arena->ptr;
+    inserted.gpu = arena->gpu;
+    inserted.arena_offset = view->arena_offset;
+    inserted.byte_length = view->byte_length;
+    inserted.rows = view->rows;
+    inserted.cols = view->cols;
+    inserted.row_stride_bytes = view->row_stride_bytes;
+    inserted.device_ptr = dev;
+    inserted.bytes = out_bytes;
+    {
+        std::lock_guard<std::mutex> lk(g_f8_f16_arena_mutex);
+        for (const cuda_f8_f16_arena_range &r : g_f8_f16_arena_ranges) {
+            if (r.arena_ptr == inserted.arena_ptr &&
+                r.gpu == inserted.gpu &&
+                r.arena_offset == inserted.arena_offset &&
+                r.byte_length == inserted.byte_length &&
+                r.rows == inserted.rows &&
+                r.cols == inserted.cols &&
+                r.row_stride_bytes == inserted.row_stride_bytes) {
+                (void)cudaFree(dev);
+                return r.device_ptr;
+            }
+        }
+        g_f8_f16_arena_ranges.push_back(inserted);
+        g_f8_f16_arena_bytes += out_bytes;
+    }
+    if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE")) {
+        fprintf(stderr,
+                "ds4: CUDA cached F8 fp16 arena %s %.2f MiB (total %.2f GiB)\n",
+                label ? label : "f8",
+                (double)out_bytes / 1048576.0,
+                (double)g_f8_f16_arena_bytes / 1073741824.0);
+    }
+    return dev;
+}
+
 extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_f32(
         const ds4_gpu_arena           *arena,
         const ds4_gpu_source_row_view *view,
@@ -4819,6 +5008,39 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_batch_f32(
         return 1;
     }
     if (!cuda_ok(cudaSetDevice(arena->gpu), "f8 source batch matmul set device")) return 1;
+    if (g_cublas_ready && n_tokens > 1) {
+        const __half *w_f16 = cuda_f8_f16_arena_ptr(arena, view, "f8_arena_batch");
+        if (w_f16) {
+            const uint64_t xh_count = (uint64_t)n_tokens * view->cols;
+            __half *xh = (__half *)cuda_tmp_alloc(xh_count * sizeof(__half), "f8 arena f16 activations");
+            if (!xh) return 1;
+            f32_to_f16_kernel<<<(xh_count + 255u) / 256u, 256>>>(xh, (const float *)x_f32->ptr, xh_count);
+            if (!cuda_ok(cudaGetLastError(), "f8 arena f16 activation convert launch")) return 1;
+            const float alpha = 1.0f;
+            const float beta = 0.0f;
+            cublasStatus_t st = cublasGemmEx(g_cublas,
+                                             CUBLAS_OP_T,
+                                             CUBLAS_OP_N,
+                                             (int)view->rows,
+                                             (int)n_tokens,
+                                             (int)view->cols,
+                                             &alpha,
+                                             w_f16,
+                                             CUDA_R_16F,
+                                             (int)view->cols,
+                                             xh,
+                                             CUDA_R_16F,
+                                             (int)view->cols,
+                                             &beta,
+                                             out_f32->ptr,
+                                             CUDA_R_32F,
+                                             (int)view->rows,
+                                             CUDA_R_32F,
+                                             CUBLAS_GEMM_DEFAULT);
+            if (st == CUBLAS_STATUS_SUCCESS) return 0;
+            fprintf(stderr, "ds4: cuBLAS f8 arena f16 batch matmul failed: status %d\n", (int)st);
+        }
+    }
     const uint8_t *base = (const uint8_t *)((const char *)arena->ptr + view->arena_offset);
     dim3 grid(view->rows, n_tokens, 1);
     arena_f8_e4m3_b128_matmul_batch_kernel<<<grid, 256>>>(

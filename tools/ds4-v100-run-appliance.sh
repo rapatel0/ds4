@@ -75,6 +75,7 @@ fi
 : "${DS4_V100_CTX:=1048576}"
 : "${DS4_V100_SLOTS:=1}"
 : "${DS4_V100_ACTIVE_MICROBATCH:=1}"
+: "${DS4_V100_MICROBATCH_WAIT_US:=auto}"
 : "${DS4_V100_QUEUE_POLICY:=reject-busy}"
 : "${DS4_V100_TOKENS:=2}"
 : "${DS4_V100_ASYNC_PIPELINE_MODE:=off}"
@@ -219,6 +220,9 @@ esac
 is_uint "$DS4_V100_CTX" || fail "DS4_V100_CTX must be a positive integer"
 is_uint "$DS4_V100_SLOTS" || fail "DS4_V100_SLOTS must be a positive integer"
 is_uint "$DS4_V100_ACTIVE_MICROBATCH" || fail "DS4_V100_ACTIVE_MICROBATCH must be a positive integer"
+if [ "$DS4_V100_MICROBATCH_WAIT_US" != "auto" ]; then
+    is_uint "$DS4_V100_MICROBATCH_WAIT_US" || fail "DS4_V100_MICROBATCH_WAIT_US must be auto or an integer"
+fi
 is_uint "$DS4_V100_TOKENS" || fail "DS4_V100_TOKENS must be a positive integer"
 is_uint "$DS4_V100_PORT" || fail "DS4_V100_PORT must be a positive integer"
 is_uint "$DS4_V100_REQUIRE_GPUS" || fail "DS4_V100_REQUIRE_GPUS must be an integer"
@@ -231,6 +235,9 @@ is_uint "$DS4_V100_MTP_GPU" || fail "DS4_V100_MTP_GPU must be an integer"
 [ "$DS4_V100_SLOTS" -ge 1 ] && [ "$DS4_V100_SLOTS" -le 8 ] || fail "DS4_V100_SLOTS must be between 1 and 8"
 [ "$DS4_V100_ACTIVE_MICROBATCH" -ge 1 ] || fail "DS4_V100_ACTIVE_MICROBATCH must be positive"
 [ "$DS4_V100_ACTIVE_MICROBATCH" -le "$DS4_V100_SLOTS" ] || fail "DS4_V100_ACTIVE_MICROBATCH must be in [1,DS4_V100_SLOTS]"
+if [ "$DS4_V100_MICROBATCH_WAIT_US" != "auto" ]; then
+    [ "$DS4_V100_MICROBATCH_WAIT_US" -le 1000000 ] || fail "DS4_V100_MICROBATCH_WAIT_US must be <= 1000000"
+fi
 [ "$DS4_V100_TOKENS" -ge 1 ] || fail "DS4_V100_TOKENS must be positive"
 [ "$DS4_V100_TOKENS" -le 64 ] || fail "DS4_V100_TOKENS must be <= 64"
 [ "$DS4_V100_MTP_TOP_K" -ge 2 ] && [ "$DS4_V100_MTP_TOP_K" -le 16 ] || fail "DS4_V100_MTP_TOP_K must be between 2 and 16"
@@ -269,6 +276,16 @@ case "$DS4_V100_STARTUP_WARMUP" in
     0|false|off) startup_warmup=0 ;;
     1|true|on) startup_warmup=1 ;;
     *) fail "DS4_V100_STARTUP_WARMUP must be auto, 0, or 1" ;;
+esac
+microbatch_wait_us="$DS4_V100_MICROBATCH_WAIT_US"
+case "$microbatch_wait_us" in
+    auto)
+        if [ "$DS4_V100_ACTIVE_MICROBATCH" -gt 1 ]; then
+            microbatch_wait_us=50000
+        else
+            microbatch_wait_us=0
+        fi
+        ;;
 esac
 case "$DS4_V100_TURBOMIND_ROUTED_FFN" in
     0|false|off) DS4_V100_TURBOMIND_ROUTED_FFN=0 ;;
@@ -324,6 +341,7 @@ cmd=(
     --ctx "$DS4_V100_CTX"
     --slots "$DS4_V100_SLOTS"
     --active-microbatch "$DS4_V100_ACTIVE_MICROBATCH"
+    --microbatch-wait-us "$microbatch_wait_us"
     --queue-policy "$DS4_V100_QUEUE_POLICY"
     --tokens "$DS4_V100_TOKENS"
     --host "$DS4_V100_HOST"
@@ -366,7 +384,7 @@ print_resolved() {
 }
 
 if [ "$mode" = "check" ]; then
-    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff startup_warmup=$startup_warmup batch_shared_f8=$DS4_V100_BATCH_SHARED_F8 appliance_dir=${DS4_V100_APPLIANCE_DIR:-none} turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN"
+    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff startup_warmup=$startup_warmup batch_shared_f8=$DS4_V100_BATCH_SHARED_F8 appliance_dir=${DS4_V100_APPLIANCE_DIR:-none} turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN"
     exit 0
 fi
 if [ "$mode" = "print" ]; then
@@ -383,6 +401,8 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_CTX=$DS4_V100_CTX"
     echo "DS4_V100_SLOTS=$DS4_V100_SLOTS"
     echo "DS4_V100_ACTIVE_MICROBATCH=$DS4_V100_ACTIVE_MICROBATCH"
+    echo "DS4_V100_MICROBATCH_WAIT_US=$DS4_V100_MICROBATCH_WAIT_US"
+    echo "DS4_V100_MICROBATCH_WAIT_US_RESOLVED=$microbatch_wait_us"
     echo "DS4_V100_QUEUE_POLICY=$DS4_V100_QUEUE_POLICY"
     echo "DS4_V100_TOKENS=$DS4_V100_TOKENS"
     echo "DS4_V100_ASYNC_PIPELINE_MODE=$DS4_V100_ASYNC_PIPELINE_MODE"

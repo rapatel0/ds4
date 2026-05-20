@@ -1,0 +1,9 @@
+[{"index":1,"status":200,"elapsed_ms":7462.110,"first_hex":"3136","generated_tokens":16,"continuation_ms":3068.230}
+,{"index":2,"status":200,"elapsed_ms":7458.573,"first_hex":"3136","generated_tokens":16,"continuation_ms":3068.230}
+,{"index":3,"status":200,"elapsed_ms":7464.352,"first_hex":"3136","generated_tokens":16,"continuation_ms":3068.230}
+,{"index":4,"status":200,"elapsed_ms":7458.214,"first_hex":"3136","generated_tokens":16,"continuation_ms":3068.230}
+,{"index":5,"status":200,"elapsed_ms":7460.429,"first_hex":"3136","generated_tokens":16,"continuation_ms":3068.230}
+,{"index":6,"status":200,"elapsed_ms":7467.647,"first_hex":"3136","generated_tokens":16,"continuation_ms":3068.230}
+,{"index":7,"status":200,"elapsed_ms":7457.965,"first_hex":"3136","generated_tokens":16,"continuation_ms":3068.230}
+,{"index":8,"status":200,"elapsed_ms":7457.852,"first_hex":"3136","generated_tokens":16,"continuation_ms":3068.230}
+]
