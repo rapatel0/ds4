@@ -87,7 +87,7 @@ typedef struct {
     ds4_gpu_tensor *ffn_selected;
     ds4_gpu_tensor *ffn_weights;
     ds4_gpu_tensor *ffn_tokens;
-    ds4_gpu_tensor *ffn_input_batch;
+    ds4_gpu_tensor *ffn_input_ptrs;
     ds4_gpu_tensor *ffn_routed_mid;
     ds4_gpu_tensor *ffn_routed_out;
     ds4_gpu_tensor *ffn_shared_gate;

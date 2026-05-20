@@ -77,7 +77,7 @@ void ds4_v100_layer_batch_scratch_free(ds4_v100_layer_batch_scratch *scratch) {
     ds4_gpu_tensor_free(scratch->ffn_shared_gate);
     ds4_gpu_tensor_free(scratch->ffn_routed_out);
     ds4_gpu_tensor_free(scratch->ffn_routed_mid);
-    ds4_gpu_tensor_free(scratch->ffn_input_batch);
+    ds4_gpu_tensor_free(scratch->ffn_input_ptrs);
     ds4_gpu_tensor_free(scratch->ffn_tokens);
     ds4_gpu_tensor_free(scratch->ffn_weights);
     ds4_gpu_tensor_free(scratch->ffn_selected);
@@ -196,11 +196,11 @@ static int ensure_batch_scratch(ds4_v100_layer_batch_scratch *scratch,
                           err,
                           errlen,
                           "batch ffn_tokens") ||
-        alloc_tensor_slot(&scratch->ffn_input_batch,
-                          max_slots * hidden_bytes,
+        alloc_tensor_slot(&scratch->ffn_input_ptrs,
+                          max_slots * sizeof(void *),
                           err,
                           errlen,
-                          "batch ffn_input_batch") ||
+                          "batch ffn_input_ptrs") ||
         alloc_tensor_slot(&scratch->ffn_routed_mid,
                           max_slots * routes * mid_bytes,
                           err,
@@ -1149,8 +1149,8 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
         : ds4_gpu_tensor_alloc((uint64_t)n_slots * routes * sizeof(float));
     ds4_gpu_tensor *tokens_t = use_scratch ? cfgs[0].batch_scratch->ffn_tokens
         : ds4_gpu_tensor_alloc((uint64_t)n_slots * sizeof(int32_t));
-    ds4_gpu_tensor *input_batch_t = use_scratch ? cfgs[0].batch_scratch->ffn_input_batch
-        : ds4_gpu_tensor_alloc((uint64_t)n_slots * hidden * sizeof(float));
+    ds4_gpu_tensor *input_ptrs_t = use_scratch ? cfgs[0].batch_scratch->ffn_input_ptrs
+        : ds4_gpu_tensor_alloc((uint64_t)n_slots * sizeof(void *));
     ds4_gpu_tensor *routed_mid_t = use_scratch ? cfgs[0].batch_scratch->ffn_routed_mid
         : ds4_gpu_tensor_alloc((uint64_t)n_slots * routes * mid * sizeof(float));
     ds4_gpu_tensor *routed_out_t = use_scratch ? cfgs[0].batch_scratch->ffn_routed_out
@@ -1175,8 +1175,8 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
             break;
         }
     }
-    if (!router_t || !probs_t || !selected_t || !weights_t || !tokens_t ||
-        !input_batch_t || !routed_mid_t || !routed_out_t ||
+    if (!router_t || !probs_t || !selected_t || !weights_t || !tokens_t || !input_ptrs_t ||
+        !routed_mid_t || !routed_out_t ||
         !shared_gate_t || !shared_up_t || !shared_mid_t || !shared_t) {
         exec_error(err, errlen, "failed to allocate FFN batch tensors");
         goto done;
@@ -1184,14 +1184,6 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
 
     for (uint32_t slot = 0; slot < n_slots; slot++) {
         tokens[slot] = (int32_t)cfgs[slot].router_token;
-        if (!ds4_gpu_tensor_copy(input_batch_t,
-                                 (uint64_t)slot * hidden * sizeof(float),
-                                 ffn_inputs[slot],
-                                 0,
-                                 (uint64_t)hidden * sizeof(float))) {
-            exec_error(err, errlen, "FFN batch input copy failed");
-            goto done;
-        }
         ds4_gpu_tensor *router_view =
             ds4_gpu_tensor_view(router_t,
                                 (uint64_t)slot * 256u * sizeof(float),
@@ -1270,7 +1262,7 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
         exec_error(err, errlen, "routed gate/up MXFP4 layouts differ");
         goto done;
     }
-    if (ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_batch_f32(
+    if (ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_batch_ptrs_f32(
             cfgs[0].arena,
             state->routed_gate_binding.shard_offset,
             state->routed_gate_binding.byte_length,
@@ -1288,7 +1280,8 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
             selected_t,
             weights_t,
             routes,
-            input_batch_t,
+            input_ptrs_t,
+            ffn_inputs,
             n_slots,
             routed_mid_t,
             routed_out_t) != 0) {
@@ -1348,7 +1341,7 @@ done:
         ds4_gpu_tensor_free(shared_gate_t);
         ds4_gpu_tensor_free(routed_out_t);
         ds4_gpu_tensor_free(routed_mid_t);
-        ds4_gpu_tensor_free(input_batch_t);
+        ds4_gpu_tensor_free(input_ptrs_t);
         ds4_gpu_tensor_free(tokens_t);
         ds4_gpu_tensor_free(weights_t);
         ds4_gpu_tensor_free(selected_t);

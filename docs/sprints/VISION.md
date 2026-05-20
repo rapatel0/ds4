@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-19
 last_updated_by: vision
-revision: 71
+revision: 72
 ---
 
 # Vision: DS4 V100 Appliance
@@ -380,6 +380,12 @@ optimized V100 low-bit expert kernels in the actual hot path.
   generated tok/s improved to `3.862932` with `3.621499` continuation tok/s.
   The remaining hot-path gap is the per-slot FFN input copy and low-occupancy
   routed MXFP4 execution; average GPU utilization is still about `11%`.
+- Sprint 060 removed the routed FFN per-slot input copy by adding a
+  pointer-input grouped MXFP4 batch primitive. Correctness still selects token
+  hex `3136`, and sustained 1M two-slot generated tok/s improved to `3.915266`
+  with `3.670562` continuation tok/s. GPU utilization remains low at about
+  `12%`, so the next blocker is shared expert batching, remaining CPU/view
+  overhead, or higher-slot scaling rather than routed input staging.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -430,6 +436,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 057 deterministic token-step coalescing | `3.66` generated tok/s, `3.43` continuation tok/s | Measured | Server-side rendezvous makes the two-slot benchmark reliably enter the batch path (`2` groups / `4` requests / `64` tokens), but throughput is essentially flat; opt-in batched FFN regressed and remains disabled. |
 | Sprint 058 replay router readback suppression | `3.70` generated tok/s, `3.47` continuation tok/s | Measured | Removes appliance hot-path selected-expert/route-weight CPU readbacks and improves two-slot generated tok/s by about `1.15%` over Sprint 057, but utilization remains about `11%`; the next gain needs copy-free or persistent MoE batching. |
 | Sprint 059 persistent layer batch scratch | `3.86` generated tok/s, `3.62` continuation tok/s | Measured | Reuses scheduler-owned scratch across multi-slot layer batches and enables the path by default, improving two-slot generated tok/s by about `4.27%` over Sprint 058; utilization remains about `11%`. |
+| Sprint 060 pointer-input routed FFN batch | `3.92` generated tok/s, `3.67` continuation tok/s | Measured | Removes the routed FFN per-slot input copy by passing per-slot input tensor pointers into the grouped MXFP4 batch kernel; two-slot generated tok/s improves another `1.35%`, but utilization remains about `12%`. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -1288,7 +1295,7 @@ GPU utilization with architectural changes, and only then compare against the
   Two-slot generated tok/s improved from Sprint 058's `3.704572` to
   `3.862932`, while token hex stayed `3136`.
 
-### Sprint 060 - Pointer-Input Routed FFN Batch [tentative]
+### Sprint 060 - Pointer-Input Routed FFN Batch [complete]
 
 - **Goal**: Remove or reduce the remaining per-slot FFN input copy before
   routed MXFP4 batch execution.
@@ -1296,8 +1303,23 @@ GPU utilization with architectural changes, and only then compare against the
   churn, but `execute_ffn_delta_batch` still copies every slot into
   `input_batch_t`. The next throughput step should either use a one-launch
   gather or a pointer-input routed MXFP4 primitive.
+- **Outcome**: `SHIP`. Added
+  `ds4_gpu_arena_mxfp4_routed_swiglu_down_sum_batch_ptrs_f32`, extended the
+  focused MXFP4 smoke with separate per-slot input tensors, removed
+  `ffn_input_batch` from layer scratch, and passed the full two-slot scheduler
+  smoke after moving the pointer table into stage-owned scratch. Two-slot
+  generated tok/s improved from `3.862932` to `3.915266`.
 
-### Sprint 061 - MTP Draft Commit And Throughput Serving [tentative]
+### Sprint 061 - Shared Expert Batch Or Higher-Slot Retest [tentative]
+
+- **Goal**: Decide whether the next practical gain comes from batching shared
+  F8 expert work, persisting remaining batch views, or scaling the now-default
+  batch path to 4/8 slots at shorter contexts.
+- **Rationale**: Routed input staging is no longer the bottleneck. The next
+  measured limit is still low utilization with per-slot shared expert work and
+  likely small-kernel overhead.
+
+### Sprint 062 - MTP Draft Commit And Throughput Serving [tentative]
 
 - **Goal**: Graduate MTP from one-token verify diagnostics to a committed draft
   path with rollback safety, then benchmark aggregate decode with MTP enabled.
@@ -1445,6 +1467,8 @@ GPU utilization with architectural changes, and only then compare against the
   batching, batch FFN scratch reuse, and batch-level timing semantics.
 - See `docs/sprints/SPRINT-059-FOLLOWUPS.md`: pointer-input or gather-based
   FFN batching, persistent batch views, and higher slot-tier retesting.
+- See `docs/sprints/SPRINT-060-FOLLOWUPS.md`: shared expert batching,
+  persistent batch views, and higher slot-tier retesting.
 - See `docs/sprints/SPRINT-001-DEFERRED.md`: q2/q4 fallback, SSD/host-backed
   offload, INT8 default-layout questions, F8 KV mode, and broad TurboMind or
   tc-grid kernel import as conditional paths rather than default strategy.
@@ -1519,6 +1543,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-19 | Shipped Sprint 057 deterministic token-step coalescing. | The default server now reliably forms two-slot token-step batches, but throughput stayed flat and the first batched FFN layer slice regressed when enabled. The next sprint should focus on persistent/copy-free MoE batching rather than queue plumbing. | Sprint 058+ |
 | 2026-05-19 | Shipped Sprint 058 replay router readback suppression. | The appliance hot path no longer reads router-selected experts and weights back to CPU for generation, improving two-slot generated tok/s to `3.704572` while preserving token hex `3136`; utilization remains near `11%`, so the next sprint must attack persistent/copy-free MoE batching. | Sprint 059+ |
 | 2026-05-19 | Shipped Sprint 059 persistent layer batch scratch. | Multi-slot layer batching is now default after scratch reuse lifted two-slot generated tok/s to `3.862932`; the next bottleneck is the remaining FFN input copy and pointer-hostile routed MXFP4 batch interface. | Sprint 060+ |
+| 2026-05-19 | Shipped Sprint 060 pointer-input routed FFN batch. | The routed MXFP4 batch primitive now consumes per-slot input tensor pointers directly, lifting two-slot generated tok/s to `3.915266`; utilization remains low, so the next sprint should target shared expert batching or higher-slot scaling evidence. | Sprint 061+ |
 
 ## Open Questions
 

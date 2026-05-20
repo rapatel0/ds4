@@ -109,7 +109,7 @@ Kernel names below are kernel families, not final C symbol names.
 | 10 | HC attention post | uses HC attention control state | F32 | F32 small tensors | included in step 1 | DS4 HC post kernel | FP16 HC |
 | 11 | FFN RMSNorm | `ffn_norm [4096]` | F32 | F32 | 0.016 MiB | DS4 RMSNorm kernel | FP16 FFN input |
 | 12 | router | `ffn_gate_inp [4096 x 256]`, optional bias `[256]`, hash `tid2eid [6 x 129280]` on layers 0-2 | F32; I32 hash metadata | F32/I32 | about 4.0 MiB; hash table adds about 3.0 MiB on layers 0-2 | small dense + top-k/router kernel; replay hot path keeps selected ids/weights on device after Sprint 058 | expert ids/weights |
-| 13 | routed gate/up experts | two tensors `[4096 x 2048 x 256]` | MXFP4 / FP4 expert source expected | source MXFP4 grouped pack first | about 2176 MiB MXFP4; about 4096 MiB INT8 candidate | Sprint 056 grouped selected-route MXFP4 gate+up+SwiGLU kernel | FP16/FP32 expert mid scratch |
+| 13 | routed gate/up experts | two tensors `[4096 x 2048 x 256]` | MXFP4 / FP4 expert source expected | source MXFP4 grouped pack first | about 2176 MiB MXFP4; about 4096 MiB INT8 candidate | Sprint 060 pointer-input grouped selected-route MXFP4 gate+up+SwiGLU kernel | FP16/FP32 expert mid scratch |
 | 14 | SwiGLU | routed mid `[active_routes x 2048]` | activation only | FP16/FP32 internal | scratch only | fused into grouped routed gate/up for MXFP4 path | FP16/FP32 expert mid scratch |
 | 15 | routed down experts | `[2048 x 4096 x 256]` | MXFP4 / FP4 expert source expected | same expert pack | about 1088 MiB MXFP4; about 2048 MiB INT8 candidate | Sprint 056 grouped selected-route MXFP4 down-sum kernel | FP16/FP32 routed output |
 | 16 | shared expert | gate/up `[4096 x 2048]`, down `[2048 x 4096]` | F8_E4M3_B128 | source FP8 dense pack first | about 24.2 MiB | safe dense/shared-expert kernel | FP16 shared output |
@@ -187,7 +187,7 @@ expert weight bytes and must beat that extra HBM traffic.
 |---|---|
 | correctness | run active slot batch gpu0 -> gpu7; copy HC only at stage boundaries |
 | throughput | wavefront slot batches so gpu0 works on batch N while gpu1 works on N-1 |
-| batching | batch active slots inside each stage to raise effective M for grouped experts; Sprint 057 makes request coalescing deterministic, Sprint 058 removes replay-only router readback sync, and Sprint 059 enables the scratch-backed multi-slot layer batch path by default with `DS4_V100_BATCH_LAYER_FFN=0` as the disable escape hatch |
+| batching | batch active slots inside each stage to raise effective M for grouped experts; Sprint 057 makes request coalescing deterministic, Sprint 058 removes replay-only router readback sync, Sprint 059 enables scratch-backed multi-slot layer batching by default, and Sprint 060 removes the routed FFN input-copy staging with a pointer-input MXFP4 batch primitive |
 | transfer | boundary payload is `[active_slots][4][4096]`, FP16 normal or FP32 debug |
 
 ## Tensor-Parallel Version To Evaluate
