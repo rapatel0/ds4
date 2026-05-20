@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: codex
-revision: 101
+revision: 102
 ---
 
 # Vision: DS4 V100 Appliance
@@ -570,6 +570,10 @@ optimized V100 low-bit expert kernels in the actual hot path.
   residency with TurboMind-packed experts inside those shard files, runs all
   43 layers with `tm_layers=43`, and preserves the official first token
   `3136` in replay.
+- Sprint 091 wired that appliance directory into the operator-facing launcher
+  and HTTP smoke path. `DS4_V100_APPLIANCE_DIR` now validates all shard files
+  and runs replay with `--appliance-dir`; the served smoke returned first token
+  `3136` while uploading only 8 appliance shard tensors.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -650,6 +654,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 087 appliance-packed TurboMind experts | `packed_api max_abs=5.91128e-07`, `rel=0.000493098`, `PASS` | Measured | TurboMind experts now live in the appliance `gpuN.weights` file rather than a separate sidecar file, and the DS4 CUDA API can execute directly from those prepacked resident spans without repacking. Scheduler binding is the next step. |
 | Sprint 089 appliance-backed scheduler smoke | stage-0 `gpu0.weights` `22,524,134,668` bytes; scheduler `tm_layers=1` | Measured | The scheduler now opens a bounded appliance directory without a source GGUF model map, uploads `gpu0.weights`, executes layers 0-5, and positively reports that one routed layer used the no-repack TurboMind appliance path. This is not a throughput result; full 8-GPU appliance generation and sustained decode benchmarking remain next. |
 | Sprint 090 full appliance replay | full appliance `142G`; `tm_layers=43`; replay `0.620997` generated tok/s, `9.491896` continuation tok/s | Measured | A full 8-GPU appliance was generated on k8s-local storage, all shards fit in 32 GB V100 VRAM, full scheduler smoke executed all 43 layers from `gpuN.weights`, and replay returned first token hex `3136`. This proves the format and residency contract; launcher integration and multi-slot async benchmarking remain. |
+| Sprint 091 appliance launcher smoke | served first token `3136`; `uploaded_tensors=8`; open `65.033s` | Measured | `DS4_V100_APPLIANCE_DIR` now drives the operator launcher and HTTP smoke through `--appliance-dir`, so the production service path no longer needs the source pack index for scheduler residency. Multi-slot async and MTP appliance benchmarks remain. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -1975,6 +1980,20 @@ GPU utilization with architectural changes, and only then compare against the
   `uploaded_bytes=156142896212`, `generated_tokens_per_second=0.620997`, and
   `continuation_tokens_per_second=9.491896`.
 
+### Sprint 091 - Appliance Directory Launcher Path [complete]
+
+- **Goal**: Make the operator launcher and HTTP smoke use the full appliance
+  directory created in Sprint 090.
+- **Rationale**: A manual replay command is not enough for practical use. The
+  service launcher needs a first-class appliance directory config so operators
+  do not fall back to source-layout scheduler residency by accident.
+- **Outcome**: `SHIP_APPLIANCE_LAUNCHER_PATH`. Added
+  `DS4_V100_APPLIANCE_DIR` validation to the launcher, added
+  `--appliance-dir` support to the HTTP smoke, updated the env example, and
+  validated the served path on V100. The launcher print-command emits
+  `--appliance-dir /workspace/ds4-appliance-full-tm-s090`, and the HTTP smoke
+  returns first token `3136` with `uploaded_tensors=8`.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -2226,6 +2245,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 088 scheduler-bound TurboMind appliance runtime. | Context/layer/scheduler code can now bind TurboMind metadata, map/upload appliance `gpuN.weights`, use shard offsets for control tensors, and dispatch routed experts through the no-repack TurboMind API. V100 compile validation passes for scheduler smoke targets; the next step is V100 execution and throughput measurement on a full or bounded appliance directory. | Sprint 089+ |
 | 2026-05-20 | Shipped Sprint 089 appliance-backed scheduler smoke. | A bounded stage-0 appliance directory now runs scheduler decode on V100 without a source GGUF model map, using `gpu0.weights` and positively reporting one TurboMind-routed layer. The next step is generating the full 8-GPU appliance, running full 43-layer decode, then benchmarking aggregate tok/s. | Sprint 090+ |
 | 2026-05-20 | Shipped Sprint 090 full appliance pack and replay. | The single-directory TurboMind appliance now exists on k8s-local storage, fits all 8 V100s, executes all 43 layers with TurboMind-routed experts, and preserves first-token correctness. Next work should wire `--appliance-dir` into the launcher/service path and benchmark multi-slot async serving from this artifact. | Sprint 091+ |
+| 2026-05-20 | Shipped Sprint 091 appliance launcher path. | The operator launcher and HTTP smoke now use `DS4_V100_APPLIANCE_DIR` and pass `--appliance-dir` into replay. The next sprint should benchmark multi-slot async serving from the appliance path and compare it to the source-index baseline. | Sprint 092+ |
 
 ## Open Questions
 

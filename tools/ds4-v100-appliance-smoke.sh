@@ -3,6 +3,7 @@ set -u
 
 model="/models/DSv4-Flash-256e-fixed.gguf"
 pack_index=""
+appliance_dir=""
 prompt_file="tests/test-vectors/prompts/short_reasoning_plain.txt"
 expected_hex="3136"
 host="127.0.0.1"
@@ -17,11 +18,12 @@ log_dir=""
 
 usage() {
     cat <<'USAGE'
-usage: tools/ds4-v100-appliance-smoke.sh --pack-index FILE [options]
+usage: tools/ds4-v100-appliance-smoke.sh [--pack-index FILE | --appliance-dir DIR] [options]
 
 Options:
   --model FILE              source-layout GGUF model
   --pack-index FILE         V100 pack-index.tsv
+  --appliance-dir DIR       directory containing pack-index.tsv, turbomind-pack-index.tsv, and gpuN.weights
   --prompt-file FILE        prompt file
   --expected-token-hex HEX  expected first response token bytes, default 3136
     --ctx N                   KV context tokens, default 1048576
@@ -48,6 +50,11 @@ while [ "$#" -gt 0 ]; do
         --pack-index|--index)
             [ "$#" -ge 2 ] || { echo "ds4-v100-appliance-smoke: --pack-index requires a value" >&2; exit 2; }
             pack_index="$2"
+            shift 2
+            ;;
+        --appliance-dir)
+            [ "$#" -ge 2 ] || { echo "ds4-v100-appliance-smoke: --appliance-dir requires a value" >&2; exit 2; }
+            appliance_dir="$2"
             shift 2
             ;;
         --prompt-file)
@@ -117,8 +124,12 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-if [ -z "$pack_index" ]; then
+if [ -z "$pack_index" ] && [ -z "$appliance_dir" ]; then
     usage >&2
+    exit 2
+fi
+if [ -n "$pack_index" ] && [ -n "$appliance_dir" ]; then
+    echo "ds4-v100-appliance-smoke: use either --pack-index or --appliance-dir, not both" >&2
     exit 2
 fi
 if [ ! -x ./tools/ds4-v100-replay ]; then
@@ -206,19 +217,26 @@ trap cleanup EXIT
 
 server_max_requests=$((requests + 2))
 
-DS4_LOCK_FILE="$work_dir/ds4.lock" ./tools/ds4-v100-replay \
-    --serve \
-    --model "$model" \
-    --index "$pack_index" \
-    --ctx "$ctx" \
-    --host "$host" \
-    --port "$port" \
-    --slots "$slots" \
-    --active-microbatch "$active_microbatch" \
-    --queue-policy "$queue_policy" \
-    --tokens "$tokens" \
-    --max-requests "$server_max_requests" \
-    >"$server_log" 2>&1 &
+server_cmd=(
+    ./tools/ds4-v100-replay
+    --serve
+    --model "$model"
+    --ctx "$ctx"
+    --host "$host"
+    --port "$port"
+    --slots "$slots"
+    --active-microbatch "$active_microbatch"
+    --queue-policy "$queue_policy"
+    --tokens "$tokens"
+    --max-requests "$server_max_requests"
+)
+if [ -n "$appliance_dir" ]; then
+    server_cmd+=(--appliance-dir "$appliance_dir")
+else
+    server_cmd+=(--index "$pack_index")
+fi
+
+DS4_LOCK_FILE="$work_dir/ds4.lock" "${server_cmd[@]}" >"$server_log" 2>&1 &
 server_pid=$!
 
 for _ in $(seq 1 420); do

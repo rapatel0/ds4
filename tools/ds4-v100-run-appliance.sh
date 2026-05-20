@@ -70,6 +70,7 @@ fi
 : "${DS4_V100_BIN:=./tools/ds4-v100-replay}"
 : "${DS4_V100_MODEL:=/models/DSv4-Flash-256e-fixed.gguf}"
 : "${DS4_V100_MTP_MODEL:=/models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf}"
+: "${DS4_V100_APPLIANCE_DIR:=}"
 : "${DS4_V100_PACK_INDEX:=docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv}"
 : "${DS4_V100_CTX:=1048576}"
 : "${DS4_V100_SLOTS:=1}"
@@ -106,6 +107,19 @@ require_file() {
     local label="$1"
     local path="$2"
     if [ -f "$path" ]; then
+        return 0
+    fi
+    if [ "$allow_missing" -eq 1 ]; then
+        warn "missing $label $path"
+        return 0
+    fi
+    fail "missing $label $path"
+}
+
+require_dir() {
+    local label="$1"
+    local path="$2"
+    if [ -d "$path" ]; then
         return 0
     fi
     if [ "$allow_missing" -eq 1 ]; then
@@ -271,7 +285,16 @@ fi
 
 require_exec "$DS4_V100_BIN"
 require_file "model" "$DS4_V100_MODEL"
-require_file "pack index" "$DS4_V100_PACK_INDEX"
+if [ -n "$DS4_V100_APPLIANCE_DIR" ]; then
+    require_dir "appliance directory" "$DS4_V100_APPLIANCE_DIR"
+    require_file "appliance pack index" "$DS4_V100_APPLIANCE_DIR/pack-index.tsv"
+    require_file "appliance TurboMind index" "$DS4_V100_APPLIANCE_DIR/turbomind-pack-index.tsv"
+    for gpu in 0 1 2 3 4 5 6 7; do
+        require_file "appliance gpu${gpu} shard" "$DS4_V100_APPLIANCE_DIR/gpu${gpu}.weights"
+    done
+else
+    require_file "pack index" "$DS4_V100_PACK_INDEX"
+fi
 if [ "$mtp_serving_enabled" -eq 1 ] && [ -z "$DS4_V100_MTP_MODEL" ]; then
     fail "DS4_V100_MTP_MODEL is required when DS4_V100_MTP_SERVING=$DS4_V100_MTP_SERVING"
 fi
@@ -284,7 +307,6 @@ cmd=(
     "$DS4_V100_BIN"
     --serve
     --model "$DS4_V100_MODEL"
-    --index "$DS4_V100_PACK_INDEX"
     --ctx "$DS4_V100_CTX"
     --slots "$DS4_V100_SLOTS"
     --active-microbatch "$DS4_V100_ACTIVE_MICROBATCH"
@@ -293,6 +315,11 @@ cmd=(
     --host "$DS4_V100_HOST"
     --port "$DS4_V100_PORT"
 )
+if [ -n "$DS4_V100_APPLIANCE_DIR" ]; then
+    cmd+=(--appliance-dir "$DS4_V100_APPLIANCE_DIR")
+else
+    cmd+=(--index "$DS4_V100_PACK_INDEX")
+fi
 if [ "$DS4_V100_MAX_REQUESTS" -gt 0 ]; then
     cmd+=(--max-requests "$DS4_V100_MAX_REQUESTS")
 fi
@@ -322,7 +349,7 @@ print_resolved() {
 }
 
 if [ "$mode" = "check" ]; then
-    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN"
+    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff appliance_dir=${DS4_V100_APPLIANCE_DIR:-none} turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN"
     exit 0
 fi
 if [ "$mode" = "print" ]; then
@@ -334,6 +361,7 @@ mkdir -p "$DS4_V100_LOG_DIR"
 {
     echo "DS4_V100_MODEL=$DS4_V100_MODEL"
     echo "DS4_V100_MTP_MODEL=$DS4_V100_MTP_MODEL"
+    echo "DS4_V100_APPLIANCE_DIR=$DS4_V100_APPLIANCE_DIR"
     echo "DS4_V100_PACK_INDEX=$DS4_V100_PACK_INDEX"
     echo "DS4_V100_CTX=$DS4_V100_CTX"
     echo "DS4_V100_SLOTS=$DS4_V100_SLOTS"
