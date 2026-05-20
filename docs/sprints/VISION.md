@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: vision
-revision: 80
+revision: 81
 ---
 
 # Vision: DS4 V100 Appliance
@@ -444,6 +444,12 @@ optimized V100 low-bit expert kernels in the actual hot path.
   examples now use a practical 4-slot sequential profile, and the V100 launcher
   smoke proved `/v100/status` reports `async_pipeline_mode="per-step"` while
   generation still returns token hex `3136`.
+- Sprint 069 added a reusable appliance soak harness and ran the practical
+  4-slot, 1M-context launcher profile. The launched appliance returned `4/4`
+  token matches with `async_pipeline_mode="per-step"`, `7.518610` aggregate
+  generated tok/s, and `7.048697` continuation tok/s. The deployment path is now
+  repeatably validated; the next throughput gain must come from MTP draft commit
+  or lower-overhead inter-stage handoff rather than more launcher plumbing.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -503,6 +509,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 066 persistent async workers | `5.13` generated tok/s at 1M/2 slots, `7.94` at 1M/4 slots | Measured | Replay-owned persistent stage workers are correct and still faster than serial (`3.85` and `3.79` generated tok/s), but they are `7-15%` slower than Sprint 065's per-step worker path. Keep async opt-in and profile dispatch/handoff synchronization before defaulting. |
 | Sprint 067 async A/B dispatch | `5.58` generated tok/s at 1M/2 slots, `8.62` at 1M/4 slots | Measured | Same-binary A/B confirms per-step async beats persistent by `7-9%`. Timing counters show persistent saves setup but loses more in wait-for-previous-slot accumulation, so `--async-pipeline-decode` now selects per-step. |
 | Sprint 068 appliance async serving profile | 4-slot per-step async deployment path | Measured | The launcher now resolves `DS4_V100_ASYNC_PIPELINE_MODE=auto` to per-step for multi-slot practical serving. V100 loopback smoke through `ds4-v100-run-appliance.sh` reports `async_pipeline_mode=per-step` and returns token hex `3136`. |
+| Sprint 069 appliance launcher soak | `7.52` generated tok/s, `7.05` continuation tok/s at 1M/4 slots | Measured | Reusable launcher soak validates health/status/metrics and concurrent generation through `ds4-v100-run-appliance.sh`, with `4/4` token matches and async timing present in responses. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -1483,6 +1490,17 @@ GPU utilization with architectural changes, and only then compare against the
   proved status reports `async_pipeline_mode=per-step` and generation returns
   token hex `3136` with async timing in the response.
 
+### Sprint 069 - Appliance Launcher Soak Harness [complete]
+
+- **Goal**: Turn the ad hoc launcher smoke into a reusable appliance soak
+  harness and run the practical 4-slot profile through it.
+- **Rationale**: Sprint 068 wired the config path, but practical use needs a
+  repeatable operator-facing validation command.
+- **Outcome**: `SHIP`. Added `tools/ds4-v100-appliance-soak.sh` and archived a
+  V100 4-slot, 1M-context run through the launcher: `4/4` token matches,
+  `async_pipeline_mode=per-step`, `7.518610` generated tok/s, and `7.048697`
+  continuation tok/s.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -1712,6 +1730,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 066 persistent async workers. | Replay-owned persistent workers preserve correctness and stay faster than serial, but measured below the Sprint 065 per-step worker path. The next sprint should profile dispatch/handoff synchronization before enabling async by default. | Sprint 067+ |
 | 2026-05-20 | Shipped Sprint 067 async A/B dispatch profiling. | Same-binary V100 evidence confirms per-step async is the preferred opt-in path and explains the persistent-worker regression as global wakeup/wait accumulation. The next sprint should wire the preferred mode into the appliance deployment path. | Sprint 068+ |
 | 2026-05-20 | Shipped Sprint 068 appliance async serving profile. | The measured per-step async path is now selected by `DS4_V100_ASYNC_PIPELINE_MODE=auto` for multi-slot appliance deployments, and the launcher smoke proves status plus generation correctness. The next blocker is a longer launched-appliance soak and the next throughput lever: MTP commit or stream/event handoff. | Sprint 069+ |
+| 2026-05-20 | Shipped Sprint 069 appliance launcher soak harness. | Practical 4-slot serving is now repeatably validated through the launcher with health/status/metrics and generation artifacts. The next throughput gain must come from MTP draft commit or lower-overhead inter-stage handoff. | Sprint 070+ |
 
 ## Open Questions
 
