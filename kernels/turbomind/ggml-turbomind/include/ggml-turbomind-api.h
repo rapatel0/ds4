@@ -185,6 +185,27 @@ int ggml_turbomind_mul_mat_grouped(
     void*              D,
     void*              stream  /* cudaStream_t */);
 
+/**
+ * Same as ggml_turbomind_mul_mat_grouped(), but the caller supplies the known
+ * total routed-row count. This avoids the compatibility entrypoint's
+ * synchronous device-to-host read of expert_offsets[num_experts].
+ */
+int ggml_turbomind_mul_mat_grouped_total_tokens(
+    const void*        A,
+    const int*         token_indices,    // may be NULL
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,    // may be NULL for FP16
+    int                ggml_type,
+    int                N,
+    int                K,
+    int                group_size,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
 // ============================================================================
 // Single-expert mul-mat (convenience for non-grouped cases like dense layers)
 // ============================================================================

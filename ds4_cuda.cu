@@ -177,6 +177,9 @@ typedef int  (*tm_pfn_pack_weight)(const void *, int, int, int, int, void *, voi
 typedef int  (*tm_pfn_mul_mat_grouped)(const void *, const int *, const int *, int,
                                        const void * const *, const void * const *,
                                        int, int, int, int, int, void *, void *);
+typedef int  (*tm_pfn_mul_mat_grouped_total_tokens)(const void *, const int *, const int *, int, int,
+                                                    const void * const *, const void * const *,
+                                                    int, int, int, int, int, void *, void *);
 
 typedef struct {
     void *handle;
@@ -186,6 +189,7 @@ typedef struct {
     tm_pfn_packed_bytes packed_bytes;
     tm_pfn_pack_weight pack_weight;
     tm_pfn_mul_mat_grouped mul_mat_grouped;
+    tm_pfn_mul_mat_grouped_total_tokens mul_mat_grouped_total_tokens;
     int attempted;
     int available;
     int warned;
@@ -673,6 +677,9 @@ static int cuda_tm_load_api(void) {
         (tm_pfn_pack_weight)dlsym(g_tm_api.handle, "ggml_turbomind_pack_weight_expert");
     g_tm_api.mul_mat_grouped =
         (tm_pfn_mul_mat_grouped)dlsym(g_tm_api.handle, "ggml_turbomind_mul_mat_grouped");
+    g_tm_api.mul_mat_grouped_total_tokens =
+        (tm_pfn_mul_mat_grouped_total_tokens)dlsym(
+            g_tm_api.handle, "ggml_turbomind_mul_mat_grouped_total_tokens");
     if (!g_tm_api.api_version || !g_tm_api.init || !g_tm_api.shutdown ||
         !g_tm_api.packed_bytes || !g_tm_api.pack_weight || !g_tm_api.mul_mat_grouped) {
         fprintf(stderr, "ds4: TurboMind library is missing required C ABI symbols\n");
@@ -3784,6 +3791,30 @@ static uint64_t cuda_tm_align16(uint64_t v) {
     return (v + 15ull) & ~15ull;
 }
 
+static int cuda_tm_route_validation_sync_enabled(void) {
+    return cuda_env_flag_enabled("DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC") ||
+           cuda_env_flag_enabled("DS4_V100_TURBOMIND_VALIDATE_ROUTES") ||
+           cuda_env_flag_enabled("DS4_V100_TURBOMIND_STRICT");
+}
+
+static int cuda_tm_total_tokens_abi_enabled(void) {
+    if (!g_tm_api.mul_mat_grouped_total_tokens) return 0;
+    const char *disable = getenv("DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS");
+    if (!disable || !disable[0]) return 0;
+    return !cuda_env_flag_enabled("DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS");
+}
+
+static int cuda_tm_checked_total_routes(
+        uint32_t n_tokens,
+        uint32_t n_routes,
+        uint32_t *out_total_routes) {
+    if (!out_total_routes) return 0;
+    const uint64_t total = (uint64_t)n_tokens * (uint64_t)n_routes;
+    if (total == 0 || total > (uint64_t)INT_MAX) return 0;
+    *out_total_routes = (uint32_t)total;
+    return 1;
+}
+
 static void cuda_tm_matrix_pack_free(cuda_tm_matrix_pack *p) {
     if (!p) return;
     if (!p->cached_tables) {
@@ -4039,26 +4070,46 @@ static int cuda_tm_grouped_matmul(
         const __half *a,
         const int *offsets,
         const cuda_tm_matrix_pack *pack,
+        uint32_t total_routes,
         uint32_t n_total_experts,
         int n,
         int k,
         __half *d,
         const char *label) {
     if (!pack || !pack->d_weights || !pack->d_scales) return 0;
-    const int rc = g_tm_api.mul_mat_grouped(
-        a,
-        nullptr,
-        offsets,
-        (int)n_total_experts,
-        (const void * const *)pack->d_weights,
-        (const void * const *)pack->d_scales,
-        GGML_TM_DTYPE_MXFP4,
-        n,
-        k,
-        DS4_SRC_MXFP4_BLOCK_ELEMS,
-        pack->k_pack,
-        d,
-        nullptr);
+    int rc = 0;
+    if (cuda_tm_total_tokens_abi_enabled()) {
+        rc = g_tm_api.mul_mat_grouped_total_tokens(
+            a,
+            nullptr,
+            offsets,
+            (int)n_total_experts,
+            (int)total_routes,
+            (const void * const *)pack->d_weights,
+            (const void * const *)pack->d_scales,
+            GGML_TM_DTYPE_MXFP4,
+            n,
+            k,
+            DS4_SRC_MXFP4_BLOCK_ELEMS,
+            pack->k_pack,
+            d,
+            nullptr);
+    } else {
+        rc = g_tm_api.mul_mat_grouped(
+            a,
+            nullptr,
+            offsets,
+            (int)n_total_experts,
+            (const void * const *)pack->d_weights,
+            (const void * const *)pack->d_scales,
+            GGML_TM_DTYPE_MXFP4,
+            n,
+            k,
+            DS4_SRC_MXFP4_BLOCK_ELEMS,
+            pack->k_pack,
+            d,
+            nullptr);
+    }
     if (rc != 0) {
         fprintf(stderr,
                 "ds4: TurboMind grouped %s GEMM failed: rc=%d\n",
@@ -4099,8 +4150,8 @@ static int cuda_tm_routed_mxfp4_transient(
         return 0;
     }
 
-    const uint32_t total_routes = n_tokens * n_routes;
-    if (total_routes == 0 || total_routes > INT_MAX ||
+    uint32_t total_routes = 0;
+    if (!cuda_tm_checked_total_routes(n_tokens, n_routes, &total_routes) ||
         n_total_experts > INT_MAX || hidden > INT_MAX || mid > INT_MAX) {
         cuda_tm_warn_once("unsupported routed shape");
         return 0;
@@ -4210,7 +4261,8 @@ static int cuda_tm_routed_mxfp4_transient(
         return 0;
     }
     int ok = cuda_tm_grouped_matmul(
-        a_half, offsets, &gate_pack, n_total_experts, (int)mid, (int)hidden, gate_out, "gate");
+        a_half, offsets, &gate_pack, total_routes, n_total_experts, (int)mid, (int)hidden,
+        gate_out, "gate");
     cuda_tm_matrix_pack_free(&gate_pack);
     if (!ok) return 0;
 
@@ -4225,7 +4277,8 @@ static int cuda_tm_routed_mxfp4_transient(
         return 0;
     }
     ok = cuda_tm_grouped_matmul(
-        a_half, offsets, &up_pack, n_total_experts, (int)mid, (int)hidden, up_out, "up");
+        a_half, offsets, &up_pack, total_routes, n_total_experts, (int)mid, (int)hidden,
+        up_out, "up");
     cuda_tm_matrix_pack_free(&up_pack);
     if (!ok) return 0;
 
@@ -4250,7 +4303,8 @@ static int cuda_tm_routed_mxfp4_transient(
         return 0;
     }
     ok = cuda_tm_grouped_matmul(
-        mid_half, offsets, &down_pack, n_total_experts, (int)hidden, (int)mid, down_routes, "down");
+        mid_half, offsets, &down_pack, total_routes, n_total_experts, (int)hidden, (int)mid,
+        down_routes, "down");
     cuda_tm_matrix_pack_free(&down_pack);
     if (!ok) return 0;
 
@@ -4304,8 +4358,8 @@ static int cuda_tm_routed_mxfp4_packed_impl(
         down->experts_packed < n_total_experts) {
         return 1;
     }
-    const uint32_t total_routes = n_tokens * n_routes;
-    if (total_routes == 0 || total_routes > INT_MAX ||
+    uint32_t total_routes = 0;
+    if (!cuda_tm_checked_total_routes(n_tokens, n_routes, &total_routes) ||
         n_total_experts > INT_MAX || hidden > INT_MAX || mid > INT_MAX) {
         return 1;
     }
@@ -4385,12 +4439,14 @@ static int cuda_tm_routed_mxfp4_packed_impl(
         total_routes,
         n_total_experts);
     if (!cuda_ok(cudaGetLastError(), "turbomind packed scatter routes launch")) return 1;
-    int h_bad = 0;
-    if (!cuda_ok(cudaMemcpy(&h_bad, bad, sizeof(h_bad), cudaMemcpyDeviceToHost),
-                 "turbomind packed route validation read")) {
-        return 1;
+    if (cuda_tm_route_validation_sync_enabled()) {
+        int h_bad = 0;
+        if (!cuda_ok(cudaMemcpy(&h_bad, bad, sizeof(h_bad), cudaMemcpyDeviceToHost),
+                     "turbomind packed route validation read")) {
+            return 1;
+        }
+        if (h_bad) return 1;
     }
-    if (h_bad) return 1;
 
     tm_gather_f32_to_f16_kernel<<<((uint64_t)total_routes * hidden + 255u) / 256u, 256>>>(
         a_half,
@@ -4414,10 +4470,12 @@ static int cuda_tm_routed_mxfp4_packed_impl(
         return 1;
     }
     int ok = cuda_tm_grouped_matmul(
-        a_half, offsets, &gate_pack, n_total_experts, (int)mid, (int)hidden, gate_out, "packed gate");
+        a_half, offsets, &gate_pack, total_routes, n_total_experts, (int)mid, (int)hidden,
+        gate_out, "packed gate");
     if (ok) {
         ok = cuda_tm_grouped_matmul(
-            a_half, offsets, &up_pack, n_total_experts, (int)mid, (int)hidden, up_out, "packed up");
+            a_half, offsets, &up_pack, total_routes, n_total_experts, (int)mid, (int)hidden,
+            up_out, "packed up");
     }
     if (ok) {
         tm_swiglu_half_kernel<<<((uint64_t)total_routes * mid + 255u) / 256u, 256>>>(
@@ -4432,7 +4490,7 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     }
     if (ok) {
         ok = cuda_tm_grouped_matmul(
-            mid_half, offsets, &down_pack, n_total_experts, (int)hidden, (int)mid,
+            mid_half, offsets, &down_pack, total_routes, n_total_experts, (int)hidden, (int)mid,
             down_routes, "packed down");
     }
     cuda_tm_matrix_pack_table_free(&down_pack);

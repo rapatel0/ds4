@@ -141,6 +141,8 @@ DS4_V100_CUDA_PROFILER_WINDOW=0
 DS4_V100_CUDA_TENSOR_POOL=auto
 DS4_V100_CUDA_TENSOR_POOL_MAX_MIB=2048
 DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A=0
+DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS=1
+DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC=0
 DS4_V100_HOST=127.0.0.1
 DS4_V100_PORT=18080
 DS4_V100_CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
@@ -169,6 +171,15 @@ telemetry.
 
 `DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A=1` restores the older attention
 output-A path that launches one F8 matmul per output group. Leave it `0` for
+normal serving.
+
+`DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS=1` keeps the older TurboMind grouped
+GEMM ABI that synchronously reads the routed row count from device. Sprint 100
+added an opt-in no-readback ABI, but V100 A/B testing showed the wait moved to
+existing device synchronizations and the old ABI was faster. Set this to `0`
+only for focused profiling probes.
+`DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC=1` adds the older per-layer route
+validation readback for focused debugging. Leave route validation sync `0` for
 normal serving.
 
 Validate a config without starting the service:
