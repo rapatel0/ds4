@@ -1,0 +1,9 @@
+Sprint 072 MTP throughput comparison
+
+mode	gen_tok_s	cont_tok_s	lat_avg_ms	avg_gpu_util	mtp_attempted	mtp_accepted	mtp_committed	delta_gen_vs_off_pct
+off	0.788607	0.394304	2535.818	10.301	0	0	0
+verify	0.774126	0.387063	2583.175	10.201	4	4	0	-1.836
+commit	0.777308	0.388654	2572.592	10.093	4	4	4	-1.433
+default_off_smoke	0.573570	0.286785	3486.439	7.625	0	0	0
+
+Decision: exact MTP commit is correctness-positive but not throughput-positive on this fixture; pivot next to stage/kernel throughput unless a separate acceptance study justifies recursive or skip-verify MTP.

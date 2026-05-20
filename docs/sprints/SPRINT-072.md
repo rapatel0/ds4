@@ -2,7 +2,7 @@
 
 ## Status
 
-Planned.
+Complete.
 
 ## Overview
 
@@ -59,16 +59,49 @@ cluster, and update the vision with the next throughput decision.
 
 ## Definition of Done
 
-- [ ] `bash -n tools/ds4-v100-sustained-decode-bench.sh` passes.
-- [ ] Local object compile is unaffected.
-- [ ] `git diff --check` passes.
-- [ ] V100 build passes for `tools/ds4-v100-replay`.
-- [ ] Non-MTP sustained bench still runs with the default `--mtp-serving off`.
-- [ ] V100 verify and commit sustained bench cases run with one slot and report
+- [x] `bash -n tools/ds4-v100-sustained-decode-bench.sh` passes.
+- [x] Local object compile is unaffected.
+- [x] `git diff --check` passes.
+- [x] V100 build passes for `tools/ds4-v100-replay`.
+- [x] Non-MTP sustained bench still runs with the default `--mtp-serving off`.
+- [x] V100 verify and commit sustained bench cases run with one slot and report
   MTP counters.
-- [ ] TSV/JSON artifacts compare off, verify, and commit throughput.
-- [ ] Sprint report records the measured decision.
-- [ ] Vision document is updated.
+- [x] TSV/JSON artifacts compare off, verify, and commit throughput.
+- [x] Sprint report records the measured decision.
+- [x] Vision document is updated.
+
+## Outcome
+
+`SHIP`, with a throughput decision to pivot away from more exact-verify MTP
+work for the next optimization sprint.
+
+The sustained benchmark now supports `--mtp-serving off|verify|commit`, forwards
+the sidecar model and placement flags, records client-side MTP attempts,
+accepts, rejects, commits, draft timing, and merges server status snapshots into
+case JSON.
+
+Cluster evidence on the V100 pod used the same 1M-context, one-slot,
+two-token, four-request fixture for `off`, `verify`, and `commit`:
+
+| Mode | Generated tok/s | Continuation tok/s | Avg latency ms | MTP attempted | MTP accepted | MTP committed |
+|---|---:|---:|---:|---:|---:|---:|
+| off | `0.788607` | `0.394304` | `2535.818` | `0` | `0` | `0` |
+| verify | `0.774126` | `0.387063` | `2583.175` | `4` | `4` | `0` |
+| commit | `0.777308` | `0.388654` | `2572.592` | `4` | `4` | `4` |
+
+Exact commit is correctness-positive: every measured draft was accepted and
+committed, and the one-slot commit path mutates serving state safely. It is not
+throughput-positive on this fixture because the target verifier token is still
+computed and the MTP sidecar adds work. The next high-throughput sprint should
+return to stage/kernel throughput before pursuing recursive or skip-verify MTP.
+
+Artifacts:
+
+- `logs/from-cluster/sprint072-mtp-off`
+- `logs/from-cluster/sprint072-mtp-verify`
+- `logs/from-cluster/sprint072-mtp-commit`
+- `logs/from-cluster/sprint072-mtp-default-off`
+- `logs/from-cluster/sprint072-mtp-comparison`
 
 ## Risks
 

@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: vision
-revision: 83
+revision: 84
 ---
 
 # Vision: DS4 V100 Appliance
@@ -462,6 +462,13 @@ optimized V100 low-bit expert kernels in the actual hot path.
   verify-mode target baseline token sequence `[926, 1]`. This proves safe
   state mutation for accepted MTP drafts, but it is not yet a throughput win
   because target verification still runs.
+- Sprint 072 measured the exact-commit throughput gate on V100. On the same
+  1M-context, one-slot, two-token fixture, `off` measured `0.788607` generated
+  tok/s, `verify` measured `0.774126`, and `commit` measured `0.777308` while
+  committing `4/4` accepted drafts. Exact commit is correct and observable, but
+  it is not throughput-positive because target verification still computes the
+  verifier token; the next practical lever should return to stage/kernel
+  throughput before recursive or skip-verify MTP.
 - `docs/architecture/DS4-V100-LAYOUT.md` is the architecture anchor for
   sharding, memory layout, kernel selection, tensor-parallel alternatives, and
   context/slot assumptions. Sprint plans should reference it instead of
@@ -524,6 +531,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 069 appliance launcher soak | `7.52` generated tok/s, `7.05` continuation tok/s at 1M/4 slots | Measured | Reusable launcher soak validates health/status/metrics and concurrent generation through `ds4-v100-run-appliance.sh`, with `4/4` token matches and async timing present in responses. |
 | Sprint 070 persistent MTP forward runtime | `4.56-4.80 ms` MTP draft time, `3/3` accepted drafts | Measured | MTP forward scratch is now resident and reused across requests, with scratch/run counters exposed in serving JSON. Timing stayed flat versus Sprint 045, so the next practical MTP gain requires true draft commit. |
 | Sprint 071 exact MTP commit serving | `2/2` accepted and committed drafts, sequence `[926, 1]` matches verify baseline | Measured | Commit mode now mutates the generation path by emitting accepted MTP drafts after exact target verification. This closes the state-contract gap but does not yet improve throughput because verification still computes the target token. |
+| Sprint 072 MTP commit throughput gate | `0.789` off, `0.774` verify, `0.777` commit generated tok/s at 1M/1 slot | Measured | Commit accepted and committed `4/4` drafts, but exact commit was `1.43%` slower than off because the target verifier token still runs. MTP remains correct; near-term throughput work should pivot back to stage/kernel scheduling. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -1541,6 +1549,20 @@ GPU utilization with architectural changes, and only then compare against the
   accepts `2/2` drafts, reports `mtp.committed=2`, and matches the verify
   baseline token sequence `[926, 1]`.
 
+### Sprint 072 - MTP Commit Throughput Decision Gate [complete]
+
+- **Goal**: Measure `off`, `verify`, and `commit` MTP serving modes with the
+  same sustained decode fixture and decide whether exact commit should remain
+  the next performance lever.
+- **Rationale**: Sprint 071 proved safe state mutation, but exact verification
+  still computes the target token. The project needed V100 throughput evidence
+  before investing in recursive or skip-verify MTP.
+- **Outcome**: `PIVOT`. The sustained benchmark now accepts MTP serving flags
+  and reports MTP counters/timing. V100 evidence showed `commit` accepted and
+  committed `4/4` measured drafts, but generated tok/s was `0.777308` versus
+  `0.788607` for MTP off. Exact commit is correct but not throughput-positive,
+  so the next sprint should return to stage/kernel throughput.
+
 ## Parking Lot
 
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
@@ -1773,6 +1795,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Shipped Sprint 069 appliance launcher soak harness. | Practical 4-slot serving is now repeatably validated through the launcher with health/status/metrics and generation artifacts. The next throughput gain must come from MTP draft commit or lower-overhead inter-stage handoff. | Sprint 070+ |
 | 2026-05-20 | Shipped Sprint 070 persistent MTP forward runtime. | MTP forward now reuses resident scratch and serving JSON proves sequential `forward_run_count`, but draft timing remains near `4.6 ms`. The next useful MTP work is true one-slot commit into target replay state, not more scratch allocation cleanup. | Sprint 071+ |
 | 2026-05-20 | Shipped Sprint 071 exact MTP commit serving. | MTP can now mutate the one-slot generation path by emitting accepted drafts after exact verification, and V100 evidence proves the committed sequence matches the target baseline. The next decision is whether commit-mode throughput justifies safe skip-verify/recursive MTP work or whether optimization should return to stage/kernel scheduling. | Sprint 072+ |
+| 2026-05-20 | Shipped Sprint 072 MTP commit throughput gate. | Exact commit accepted and committed all measured drafts, but the same-fixture V100 benchmark was slightly slower than MTP off because target verification still runs. Keep MTP commit as a correctness feature and pivot practical throughput back to stage/kernel scheduling before recursive or skip-verify MTP. | Sprint 073+ |
 
 ## Open Questions
 
