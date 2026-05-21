@@ -641,6 +641,29 @@ static int grouped_attention_output(const ds4_v100_layer_state *state,
     return 0;
 }
 
+static int grouped_attention_output_b(const ds4_v100_layer_state *state,
+                                      const ds4_v100_layer_execute_config *cfg,
+                                      const ds4_gpu_tensor *low,
+                                      ds4_gpu_tensor *out,
+                                      char *err,
+                                      size_t errlen) {
+    if (state->attn_output_b.rows != state->hidden_size ||
+        state->attn_output_b.cols != DS4_V100_OUT_GROUPS * DS4_V100_OUT_GROUP_RANK) {
+        return exec_error(err, errlen, "attention output_b dimensions do not match DS4");
+    }
+    if (!low || !out ||
+        ds4_gpu_tensor_bytes(low) < (uint64_t)DS4_V100_OUT_GROUPS * DS4_V100_OUT_GROUP_RANK * sizeof(float) ||
+        ds4_gpu_tensor_bytes(out) < (uint64_t)state->hidden_size * sizeof(float)) {
+        return exec_error(err, errlen, "attention output_b tensor is too small");
+    }
+    ds4_gpu_source_row_view b_view;
+    if (source_view(&state->attn_output_b, &b_view, err, errlen)) return 1;
+    if (ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena, &b_view, low, out) != 0) {
+        return exec_error(err, errlen, "attention output_b matmul failed");
+    }
+    return 0;
+}
+
 static int grouped_attention_output_a(const ds4_v100_layer_state *state,
                                       const ds4_v100_layer_execute_config *cfg,
                                       const ds4_gpu_tensor *heads,
@@ -1321,6 +1344,10 @@ static int execute_attention_output_batch(const ds4_v100_layer_state *state,
     }
 
     const bool use_scratch = cfgs[0].batch_scratch != NULL;
+    const bool batch_output_a =
+        use_scratch &&
+        n_slots == 16u &&
+        env_flag_enabled("DS4_V100_BATCH_ATTN_OUTPUT_A");
     const bool batch_output_b =
         use_scratch &&
         n_slots == 16u &&
@@ -1543,7 +1570,8 @@ static int execute_attention_output_batch(const ds4_v100_layer_state *state,
                                     cfgs[slot].position,
                                     state,
                                     true) ||
-            (batch_output_b
+            (!batch_output_a &&
+             (batch_output_b
                 ? grouped_attention_output_a(state,
                                              &cfgs[slot],
                                              heads_view,
@@ -1556,7 +1584,7 @@ static int execute_attention_output_batch(const ds4_v100_layer_state *state,
                                            low_view,
                                            attn_out[slot],
                                            err,
-                                           errlen))) {
+                                           errlen)))) {
             if (err && err[0] == '\0') exec_error(err, errlen, "attention batch slot failed");
             if (!use_scratch) {
                 ds4_gpu_tensor_free(low_view);
@@ -1576,6 +1604,23 @@ static int execute_attention_output_batch(const ds4_v100_layer_state *state,
         }
     }
 
+    if (batch_output_a) {
+        ds4_gpu_source_row_view a_view;
+        if (source_view(&state->attn_output_a, &a_view, err, errlen) ||
+            ds4_gpu_arena_f8_e4m3_b128_matmul_grouped_batch_f32(
+                    cfgs[0].arena,
+                    &a_view,
+                    heads_batch,
+                    n_slots,
+                    DS4_V100_OUT_GROUPS,
+                    DS4_V100_OUT_GROUP_RANK,
+                    DS4_V100_OUT_GROUP_DIM,
+                    low_batch) != 0) {
+            exec_error(err, errlen, "attention output_a grouped batch matmul failed");
+            goto done;
+        }
+    }
+
     if (batch_output_b) {
         ds4_gpu_source_row_view b_view;
         if (source_view(&state->attn_output_b, &b_view, err, errlen) ||
@@ -1586,6 +1631,17 @@ static int execute_attention_output_batch(const ds4_v100_layer_state *state,
                                                         cfgs[0].batch_scratch->attn_out_batch) != 0) {
             exec_error(err, errlen, "attention output_b batch matmul failed");
             goto done;
+        }
+    } else if (batch_output_a) {
+        for (uint32_t slot = 0; slot < n_slots; slot++) {
+            if (grouped_attention_output_b(state,
+                                           &cfgs[slot],
+                                           cfgs[0].batch_scratch->attn_low_view[slot],
+                                           attn_out[slot],
+                                           err,
+                                           errlen)) {
+                goto done;
+            }
         }
     }
 

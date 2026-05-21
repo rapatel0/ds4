@@ -251,6 +251,101 @@ done_host:
     free(payload);
 }
 
+static void run_grouped_output_a_case(void) {
+    enum {
+        TOKENS = 16,
+        GROUPS = 8,
+        ROWS_PER_GROUP = 1024,
+        COLS_PER_GROUP = 4096,
+        ROWS = GROUPS * ROWS_PER_GROUP,
+        INPUT_COLS = GROUPS * COLS_PER_GROUP,
+    };
+    const uint64_t row_bytes = ds4_src_f8_e4m3_b128_row_bytes(COLS_PER_GROUP);
+    const uint64_t matrix_bytes = (uint64_t)ROWS * row_bytes;
+    uint8_t *payload = (uint8_t *)malloc((size_t)matrix_bytes);
+    float *x = (float *)malloc((uint64_t)TOKENS * INPUT_COLS * sizeof(float));
+    float *scalar = (float *)malloc((uint64_t)TOKENS * ROWS * sizeof(float));
+    float *hmma = (float *)malloc((uint64_t)TOKENS * ROWS * sizeof(float));
+    check(payload && x && scalar && hmma, "grouped output-a host buffers allocate");
+    if (!payload || !x || !scalar || !hmma) goto done_host;
+
+    for (uint32_t r = 0; r < ROWS; r++) {
+        fill_f8_row(payload + (uint64_t)r * row_bytes, COLS_PER_GROUP, r, 11);
+    }
+    fill_x(x, TOKENS, INPUT_COLS, 13);
+
+    ds4_gpu_arena *arena = NULL;
+    ds4_gpu_tensor *x_t = NULL;
+    ds4_gpu_tensor *scalar_t = NULL;
+    ds4_gpu_tensor *hmma_t = NULL;
+
+    check(ds4_gpu_arena_open(&arena, 0, matrix_bytes) == 0, "grouped output-a arena open");
+    if (!arena) goto done_gpu;
+    check(ds4_gpu_arena_upload(arena, 0, payload, matrix_bytes) == 0,
+          "grouped output-a arena upload");
+
+    ds4_gpu_source_row_view view = {
+        .arena_offset = 0,
+        .byte_length = matrix_bytes,
+        .rows = ROWS,
+        .cols = COLS_PER_GROUP,
+        .row_stride_bytes = (uint32_t)row_bytes,
+    };
+
+    x_t = ds4_gpu_tensor_alloc((uint64_t)TOKENS * INPUT_COLS * sizeof(float));
+    scalar_t = ds4_gpu_tensor_alloc((uint64_t)TOKENS * ROWS * sizeof(float));
+    hmma_t = ds4_gpu_tensor_alloc((uint64_t)TOKENS * ROWS * sizeof(float));
+    check(x_t && scalar_t && hmma_t, "grouped output-a device tensors allocate");
+    if (x_t && scalar_t && hmma_t) {
+        check(ds4_gpu_tensor_write(x_t, 0, x, (uint64_t)TOKENS * INPUT_COLS * sizeof(float)),
+              "grouped output-a x upload");
+        unsetenv("DS4_CUDA_F8_F16_CACHE");
+        setenv("DS4_CUDA_F8_ROWPAIR", "1", 1);
+        setenv("DS4_CUDA_F8_HMMA_GROUPED_ATTN_O_BATCH", "0", 1);
+        check(ds4_gpu_arena_f8_e4m3_b128_matmul_grouped_batch_f32(arena,
+                                                                  &view,
+                                                                  x_t,
+                                                                  TOKENS,
+                                                                  GROUPS,
+                                                                  ROWS_PER_GROUP,
+                                                                  COLS_PER_GROUP,
+                                                                  scalar_t) == 0,
+              "grouped output-a scalar batch");
+        setenv("DS4_CUDA_F8_HMMA_GROUPED_ATTN_O_BATCH", "1", 1);
+        check(ds4_gpu_arena_f8_e4m3_b128_matmul_grouped_batch_f32(arena,
+                                                                  &view,
+                                                                  x_t,
+                                                                  TOKENS,
+                                                                  GROUPS,
+                                                                  ROWS_PER_GROUP,
+                                                                  COLS_PER_GROUP,
+                                                                  hmma_t) == 0,
+              "grouped output-a hmma batch");
+        check(ds4_gpu_tensor_read(scalar_t,
+                                  0,
+                                  scalar,
+                                  (uint64_t)TOKENS * ROWS * sizeof(float)),
+              "grouped output-a scalar read");
+        check(ds4_gpu_tensor_read(hmma_t,
+                                  0,
+                                  hmma,
+                                  (uint64_t)TOKENS * ROWS * sizeof(float)),
+              "grouped output-a hmma read");
+        check(compare_outputs(scalar, hmma, TOKENS, ROWS, "grouped output-a"), "grouped output-a");
+    }
+
+done_gpu:
+    ds4_gpu_tensor_free(hmma_t);
+    ds4_gpu_tensor_free(scalar_t);
+    ds4_gpu_tensor_free(x_t);
+    ds4_gpu_arena_close(arena);
+done_host:
+    free(hmma);
+    free(scalar);
+    free(x);
+    free(payload);
+}
+
 int main(void) {
     if (ds4_gpu_device_count() < 1) {
         fprintf(stderr, "cuda_f8_hmma_attn_batch_smoke: no CUDA devices visible\n");
@@ -261,6 +356,7 @@ int main(void) {
     run_ptr_case(512, 4096, "kv ptr-table", 3);
     run_contiguous_case(32768, 1024, "q_b contiguous", 5);
     run_contiguous_case(4096, 8192, "output_b contiguous", 7);
+    run_grouped_output_a_case();
 
     if (failures) return 1;
     puts("cuda_f8_hmma_attn_batch_smoke: ok");

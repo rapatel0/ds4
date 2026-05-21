@@ -10,9 +10,10 @@ concurrent requests into one tensor batch by resolving launcher `auto`
 microbatch wait to 200 ms at `active_microbatch >= 16`. The current
 production-auto repeat remains `43.534061` generated tok/s. Sprint 123 found
 correct opt-in shared-FFN fusions up to `43.887206`. Sprint 124 added a
-correct opt-in TurboMind route-row reduce path and measured up to `43.822500`,
-but neither sprint promoted a new default because the gains stayed inside the
-observed run band and below the promotion bar.
+correct opt-in TurboMind route-row reduce path and measured up to `43.822500`.
+Sprint 125 added a correct grouped-batch attention output-A probe and measured
+up to `43.640921`. None of Sprints 123-125 promoted a new default because the
+gains stayed inside the observed run band and below the promotion bar.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
@@ -25,6 +26,8 @@ because it gives up too much stage overlap.
 |---|---:|---:|---:|---:|---|
 | Sprint 123 best opt-in shared FFN fusion | 262,144 | 16 | `43.887206` | `41.144256` | 16/16 token match |
 | Sprint 124 route-row reduce opt-in | 262,144 | 16 | `43.822500` | `41.083593` | 16/16 token match |
+| Sprint 125 output-A rows2 batch opt-in | 262,144 | 16 | `43.640921` | `40.913364` | 16/16 token match |
+| Sprint 125 output-A HMMA plus output-B batch opt-in | 262,144 | 16 | `43.245208` | `40.542383` | 16/16 token match |
 | Sprint 124 same-binary control repeat | 262,144 | 16 | `43.517862` | `40.797995` | 16/16 token match |
 | Sprint 123 shared-down-add plus scalar shared-pair fusion | 262,144 | 16 | `43.812630` | `41.074340` | 16/16 token match |
 | Sprint 123 same-binary fused-add control | 262,144 | 16 | `43.070728` | `40.378807` | 16/16 token match |
@@ -85,6 +88,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 122 | 16-slot profile, 16-token HMMA admission, async chunk probes, and rendezvous stabilization | Correct; best `43.730215`, production-auto `43.534061`, one 16-request tensor batch after 200 ms auto wait; chunked tensor scheduling regressed (`28.876459` at chunk 2, `18.447169` at chunk 4, `13.315378` at chunk 16) | Shipped 16-slot auto rendezvous; kept chunk/output-B/shared-down probes opt-in/off |
 | 123 | Production-path shared FFN fusion A/B | Correct; scalar shared-pair fusion reached `43.887206`, fused shared-down-add reached `43.539555`, and combined scalar+down-add reached `43.812630` at 16-slot/256K | Kept opt-in/off; launch/epilogue fusion alone is not enough |
 | 124 | TurboMind route-row reduce replacing packed output clear plus atomic scatter-add | Correct; first candidate reached `43.822500`, but the repeat was `42.998450` vs `43.517862` control repeat at 16-slot/256K | Kept opt-in/off; routed-FFN tail fusion alone is not enough |
+| 125 | Batched grouped attention output-A probe | Correct; output-A rows2 batching reached `43.640921`, rows2 A+B reached `43.619996`, and HMMA A+B reached `43.245208` vs `43.503005` control at 16-slot/256K | Kept opt-in/off; another single projection boundary is too small |
 
 ## Sprint 106 Profile Takeaway
 

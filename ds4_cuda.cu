@@ -3522,6 +3522,106 @@ __global__ static void arena_f8_e4m3_b128_matmul_batch_hmma_attn_kernel(
 #endif
 }
 
+__global__ static void arena_f8_e4m3_b128_matmul_grouped_batch_hmma_ds4_attn_o_kernel(
+        float *out,
+        const uint8_t *base,
+        const float *x,
+        uint32_t row_stride_bytes,
+        uint32_t n_tokens) {
+#if __CUDA_ARCH__ >= 700
+    namespace wmma = nvcuda::wmma;
+    enum {
+        DS4_GROUPS = 8,
+        DS4_ROWS_PER_GROUP = 1024,
+        DS4_COLS_PER_GROUP = 4096,
+        DS4_ROWS = DS4_GROUPS * DS4_ROWS_PER_GROUP,
+        DS4_INPUT_COLS = DS4_GROUPS * DS4_COLS_PER_GROUP,
+        WARPS_PER_BLOCK = 4,
+        TILE_M = 16,
+        TILE_N = 16,
+        TILE_K = 16,
+        ROWS_PER_BLOCK = WARPS_PER_BLOCK * TILE_N,
+    };
+
+    const uint32_t tid = threadIdx.x;
+    const uint32_t warp = tid >> 5u;
+    if (warp >= WARPS_PER_BLOCK) return;
+
+    const uint32_t row_block = blockIdx.x * ROWS_PER_BLOCK;
+    const uint32_t group = row_block / DS4_ROWS_PER_GROUP;
+
+    __shared__ __half a_sh[TILE_M * TILE_K];
+    __shared__ __half b_sh[WARPS_PER_BLOCK * TILE_K * TILE_N];
+    __shared__ float c_sh[WARPS_PER_BLOCK * TILE_M * TILE_N];
+
+    wmma::fragment<wmma::matrix_a, TILE_M, TILE_N, TILE_K, __half, wmma::row_major> a_frag;
+    wmma::fragment<wmma::matrix_b, TILE_M, TILE_N, TILE_K, __half, wmma::col_major> b_frag;
+    wmma::fragment<wmma::accumulator, TILE_M, TILE_N, TILE_K, float> c_frag;
+    wmma::fill_fragment(c_frag, 0.0f);
+
+    for (uint32_t k0 = 0; k0 < DS4_COLS_PER_GROUP; k0 += TILE_K) {
+        for (uint32_t i = tid; i < TILE_M * TILE_K; i += blockDim.x) {
+            const uint32_t token = i >> 4u;
+            const uint32_t k = i & 15u;
+            float v = 0.0f;
+            if (token < n_tokens && group < DS4_GROUPS) {
+                v = x[(uint64_t)token * DS4_INPUT_COLS +
+                      (uint64_t)group * DS4_COLS_PER_GROUP +
+                      k0 + k];
+            }
+            a_sh[i] = __float2half_rn(v);
+        }
+
+        for (uint32_t i = tid; i < WARPS_PER_BLOCK * TILE_K * TILE_N; i += blockDim.x) {
+            const uint32_t wtile = i >> 8u;
+            const uint32_t local = i & 255u;
+            const uint32_t out_col = local >> 4u;
+            const uint32_t k = local & 15u;
+            const uint32_t row = row_block + wtile * TILE_N + out_col;
+            float w = 0.0f;
+            if (row < DS4_ROWS) {
+                const uint32_t col = k0 + k;
+                const uint8_t *row_base = base + (uint64_t)row * row_stride_bytes;
+                const uint8_t *block = row_base + (uint64_t)(col >> 7u) * 129ull;
+                w = arena_e4m3fn_to_f32(block[1u + (col & 127u)]) *
+                    arena_e8m0_to_f32(block[0]);
+            }
+            b_sh[i] = __float2half_rn(w);
+        }
+        __syncthreads();
+
+        wmma::load_matrix_sync(a_frag, a_sh, TILE_K);
+        wmma::load_matrix_sync(b_frag, b_sh + warp * TILE_K * TILE_N, TILE_K);
+        wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+        __syncthreads();
+    }
+
+    wmma::store_matrix_sync(c_sh + warp * TILE_M * TILE_N,
+                            c_frag,
+                            TILE_N,
+                            wmma::mem_row_major);
+    __syncthreads();
+
+    for (uint32_t i = tid; i < WARPS_PER_BLOCK * TILE_M * TILE_N; i += blockDim.x) {
+        const uint32_t wtile = i >> 8u;
+        const uint32_t local = i & 255u;
+        const uint32_t token = local >> 4u;
+        const uint32_t out_col = local & 15u;
+        const uint32_t row = row_block + wtile * TILE_N + out_col;
+        if (token < n_tokens && row < DS4_ROWS) {
+            out[(uint64_t)token * DS4_ROWS + row] =
+                c_sh[wtile * TILE_M * TILE_N + local];
+        }
+    }
+#else
+    (void)out;
+    (void)base;
+    (void)x;
+    (void)row_stride_bytes;
+    (void)n_tokens;
+#endif
+}
+
 __global__ static void arena_f8_e4m3_b128_matmul_ptrs_kernel(
         float *out,
         const uint8_t *base,
@@ -3750,6 +3850,50 @@ __global__ static void arena_f8_e4m3_b128_matmul_grouped_rows2_kernel(
     if (threadIdx.x == 0) {
         out[r0] = acc0;
         if (have_r1) out[r1] = acc1;
+    }
+}
+
+__global__ static void arena_f8_e4m3_b128_matmul_grouped_batch_rows2_kernel(
+        float *out,
+        const uint8_t *base,
+        const float *x,
+        uint32_t groups,
+        uint32_t rows_per_group,
+        uint32_t cols_per_group,
+        uint32_t row_stride_bytes) {
+    const uint32_t r0 = blockIdx.x * 2u;
+    const uint32_t r1 = r0 + 1u;
+    const uint32_t tok = blockIdx.y;
+    const uint32_t rows = groups * rows_per_group;
+    if (r0 >= rows) return;
+    const int have_r1 = r1 < rows;
+    const uint32_t group0 = r0 / rows_per_group;
+    const uint32_t group1 = have_r1 ? r1 / rows_per_group : group0;
+    const uint8_t *row0 = base + (uint64_t)r0 * row_stride_bytes;
+    const uint8_t *row1 = have_r1 ? base + (uint64_t)r1 * row_stride_bytes : row0;
+    const float *x_base = x + (uint64_t)tok * groups * cols_per_group;
+    const float *x0 = x_base + (uint64_t)group0 * cols_per_group;
+    const float *x1 = x_base + (uint64_t)group1 * cols_per_group;
+    const uint64_t out_base = (uint64_t)tok * rows;
+    float acc0 = 0.0f;
+    float acc1 = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols_per_group; c += blockDim.x) {
+        const uint64_t block_offset = (uint64_t)(c >> 7u) * 129ull;
+        const uint32_t block_lane = c & 127u;
+        const uint8_t *block0 = row0 + block_offset;
+        const float scale0 = arena_e8m0_to_f32(block0[0]);
+        acc0 += arena_e4m3fn_to_f32(block0[1u + block_lane]) * scale0 * x0[c];
+        if (have_r1) {
+            const uint8_t *block1 = row1 + block_offset;
+            const float scale1 = arena_e8m0_to_f32(block1[0]);
+            acc1 += arena_e4m3fn_to_f32(block1[1u + block_lane]) * scale1 * x1[c];
+        }
+    }
+
+    arena_block_sum2_256_f32(&acc0, &acc1);
+    if (threadIdx.x == 0) {
+        out[out_base + r0] = acc0;
+        if (have_r1) out[out_base + r1] = acc1;
     }
 }
 
@@ -6960,6 +7104,10 @@ static int cuda_f8_hmma_attn_batch_enabled(void) {
     return cuda_env_flag_enabled("DS4_CUDA_F8_HMMA_ATTN_BATCH");
 }
 
+static int cuda_f8_hmma_grouped_attn_o_batch_enabled(void) {
+    return cuda_env_flag_enabled("DS4_CUDA_F8_HMMA_GROUPED_ATTN_O_BATCH");
+}
+
 static int cuda_f8_hmma_single_enabled(void) {
     return cuda_env_flag_enabled("DS4_CUDA_F8_HMMA_SINGLE");
 }
@@ -6974,6 +7122,17 @@ static int cuda_f8_hmma_attn_batch_shape_ok(uint32_t rows, uint32_t cols, uint32
            (rows == 512u && cols == 4096u) ||
            (rows == 32768u && cols == 1024u) ||
            (rows == 4096u && cols == 8192u);
+}
+
+static int cuda_f8_hmma_grouped_attn_o_batch_shape_ok(
+        uint32_t groups,
+        uint32_t rows_per_group,
+        uint32_t cols_per_group,
+        uint32_t n_tokens) {
+    return groups == 8u &&
+           rows_per_group == 1024u &&
+           cols_per_group == 4096u &&
+           n_tokens == 16u;
 }
 
 static uint64_t cuda_f8_f16_arena_cache_reserve_bytes(void) {
@@ -7485,6 +7644,62 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_grouped_f32(
             view->row_stride_bytes);
     }
     return cuda_ok(cudaGetLastError(), "f8 source grouped matmul launch") ? 0 : 1;
+}
+
+extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_grouped_batch_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *view,
+        const ds4_gpu_tensor          *x_f32,
+        uint32_t                       n_tokens,
+        uint32_t                       groups,
+        uint32_t                       rows_per_group,
+        uint32_t                       cols_per_group,
+        ds4_gpu_tensor                *out_f32) {
+    if (!x_f32 || !out_f32 || !x_f32->ptr || !out_f32->ptr ||
+        n_tokens == 0 || groups == 0 || rows_per_group == 0 || cols_per_group == 0 ||
+        !cuda_f8_e4m3_b128_view_layout_ok(arena, view)) {
+        return 1;
+    }
+    const uint64_t rows = (uint64_t)groups * rows_per_group;
+    const uint64_t input_cols = (uint64_t)groups * cols_per_group;
+    if (rows != view->rows || cols_per_group != view->cols ||
+        x_f32->device != arena->gpu ||
+        out_f32->device != arena->gpu ||
+        x_f32->bytes < (uint64_t)n_tokens * input_cols * sizeof(float) ||
+        out_f32->bytes < (uint64_t)n_tokens * rows * sizeof(float)) {
+        return 1;
+    }
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "f8 source grouped batch matmul set device")) return 1;
+    const uint8_t *base = (const uint8_t *)((const char *)arena->ptr + view->arena_offset);
+    if (cuda_f8_hmma_grouped_attn_o_batch_enabled() &&
+        cuda_f8_hmma_grouped_attn_o_batch_shape_ok(groups,
+                                                   rows_per_group,
+                                                   cols_per_group,
+                                                   n_tokens)) {
+        cuda_f8_shape_trace("grouped_batch", "hmma_ds4_attn_o", arena->gpu,
+                            (uint32_t)rows, view->cols, n_tokens,
+                            groups, rows_per_group, cols_per_group);
+        arena_f8_e4m3_b128_matmul_grouped_batch_hmma_ds4_attn_o_kernel<<<128u, 128>>>(
+            (float *)out_f32->ptr,
+            base,
+            (const float *)x_f32->ptr,
+            view->row_stride_bytes,
+            n_tokens);
+    } else {
+        cuda_f8_shape_trace("grouped_batch", "rows2", arena->gpu,
+                            (uint32_t)rows, view->cols, n_tokens,
+                            groups, rows_per_group, cols_per_group);
+        dim3 grid((unsigned int)((rows + 1u) / 2u), n_tokens, 1);
+        arena_f8_e4m3_b128_matmul_grouped_batch_rows2_kernel<<<grid, 256>>>(
+            (float *)out_f32->ptr,
+            base,
+            (const float *)x_f32->ptr,
+            groups,
+            rows_per_group,
+            cols_per_group,
+            view->row_stride_bytes);
+    }
+    return cuda_ok(cudaGetLastError(), "f8 source grouped batch matmul launch") ? 0 : 1;
 }
 
 extern "C" int ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_batch_ptrs_f32(

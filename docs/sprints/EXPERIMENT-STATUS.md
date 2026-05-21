@@ -16,7 +16,10 @@ Sprint 123 tested production-path shared-FFN fusion candidates. They were
 correct, but stayed opt-in because the best measured candidate did not clear
 the promotion bar. Sprint 124 tested a TurboMind route-row reduce that removes
 the packed output clear plus atomic scatter-add; it is correct, but also stayed
-opt-in because repeat A/B stayed inside run noise.
+opt-in because repeat A/B stayed inside run noise. Sprint 125 tested batched
+grouped attention output-A; the rows2 variant was correct and slightly faster,
+but the gain was about `0.3%`, and the HMMA variant regressed, so defaults are
+unchanged.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
@@ -70,6 +73,7 @@ to slightly worse.
 | 122 | 16-slot profile, HMMA admission, async chunk probes, and 16-slot rendezvous policy | Correct; best `43.730215`, production-auto `43.534061`, one 16-request tensor batch after 200 ms auto wait; chunked tensor scheduling regressed (`28.876459` at chunk 2, `18.447169` at chunk 4, `13.315378` at chunk 16) | Ship 16-slot auto rendezvous; keep chunk/output-B probes opt-in/off |
 | 123 | Production-path shared FFN fusion A/B | Correct; scalar shared-pair fusion reached `43.887206`, fused shared-down-add reached `43.539555`, and combined scalar+down-add reached `43.812630` at 16-slot/256K | Keep opt-in/off; small shared-FFN launch/epilogue fusion is not enough |
 | 124 | TurboMind route-row reduce | Correct; first candidate reached `43.822500`, but repeat was `42.998450` vs `43.517862` control repeat at 16-slot/256K | Keep opt-in/off; final routed scatter fusion is not enough |
+| 125 | Batched grouped attention output-A | Correct; rows2 output-A batching reached `43.640921`, rows2 A+B reached `43.619996`, and HMMA A+B reached `43.245208` vs `43.503005` control at 16-slot/256K | Keep opt-in/off; single projection batching is too small |
 
 ## Remaining
 
@@ -86,7 +90,8 @@ to slightly worse.
     throughput, and Sprint 118 showed naive single-token WMMA is much slower.
     Sprint 123 showed shared-down-add epilogue fusion is also only a small
     opt-in gain, and Sprint 124 showed the packed TurboMind route-row reduce is
-    correct but not a promoted throughput win.
+    correct but not a promoted throughput win. Sprint 125 showed batched
+    grouped attention output-A is also correct but below the promotion bar.
     The useful version needs packed decode, activation staging, MMA, and
     epilogue work in one tensor-core-oriented kernel with useful tile fill.
     Sprint 122 further showed that merely chunking slots to feed wider kernels
@@ -128,6 +133,8 @@ DS4_V100_F8_SHARED_DOWN_ADD=1
 DS4_V100_BATCH_ATTN_OUTPUT_B=1
 DS4_V100_ASYNC_SLOT_CHUNK=2
 DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE=1
+DS4_V100_BATCH_ATTN_OUTPUT_A=1
+DS4_V100_CUDA_F8_HMMA_GROUPED_ATTN_O_BATCH=1
 ```
 
 The fused gate/up path is default-enabled for appliances that contain fused

@@ -143,9 +143,11 @@ DS4_V100_CUDA_TENSOR_POOL_MAX_MIB=2048
 DS4_V100_CUDA_F8_ROWPAIR=1
 DS4_V100_CUDA_F8_HMMA_PAIR_SWIGLU=1
 DS4_V100_CUDA_F8_HMMA_ATTN_BATCH=1
+DS4_V100_CUDA_F8_HMMA_GROUPED_ATTN_O_BATCH=0
 DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE=0
 DS4_V100_F8_SHARED_DOWN_ADD=0
 DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A=0
+DS4_V100_BATCH_ATTN_OUTPUT_A=0
 DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS=1
 DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC=0
 DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE=0
@@ -190,6 +192,12 @@ shared gate/up SwiGLU and batched attention-projection paths. Leave
 `DS4_V100_F8_SHARED_DOWN_ADD=0` for normal serving; Sprint 123 validated those
 per-slot/shared-down-add fusion probes but did not promote them because the
 throughput gain was below the acceptance bar.
+
+`DS4_V100_BATCH_ATTN_OUTPUT_A=1` and
+`DS4_V100_CUDA_F8_HMMA_GROUPED_ATTN_O_BATCH=1` enable the Sprint 125 grouped
+16-slot attention output-A batch probe. Pair them with
+`DS4_V100_BATCH_ATTN_OUTPUT_B=1` when testing the full deferred output-A/output-B
+candidate. Keep them `0` for normal serving until V100 A/B accepts them.
 
 `DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A=1` restores the older attention
 output-A path that launches one F8 matmul per output group. Leave it `0` for
