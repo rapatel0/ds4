@@ -205,6 +205,7 @@ typedef struct {
     tm_pfn_mul_mat_grouped mul_mat_grouped;
     tm_pfn_mul_mat_grouped_total_tokens mul_mat_grouped_total_tokens;
     tm_pfn_mul_mat_grouped_gated_silu_total_tokens mul_mat_grouped_gated_silu_total_tokens;
+    tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_96;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m64;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m64_s3;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m64_s4;
@@ -1051,6 +1052,9 @@ static int cuda_tm_load_api(void) {
     g_tm_api.mul_mat_grouped_gated_silu_total_tokens =
         (tm_pfn_mul_mat_grouped_gated_silu_total_tokens)dlsym(
             g_tm_api.handle, "ggml_turbomind_mul_mat_grouped_gated_silu_total_tokens");
+    g_tm_api.ds4_mxfp4_gated_silu_96 =
+        (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_96");
     g_tm_api.ds4_mxfp4_gated_silu_768_m64 =
         (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m64");
@@ -5928,6 +5932,93 @@ static int cuda_tm_gated_silu_enabled(void) {
            cuda_env_flag_enabled("DS4_V100_TURBOMIND_GATED_SILU");
 }
 
+enum {
+    DS4_CUDA_TM_ROUTED_EXECUTOR_OFF = 0,
+    DS4_CUDA_TM_ROUTED_EXECUTOR_AUTO = 1,
+    DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED96 = 2,
+    DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED768 = 3
+};
+
+static int cuda_tm_routed_executor_mode(void) {
+    const char *mode = getenv("DS4_V100_TURBOMIND_ROUTED_EXECUTOR");
+    if (!mode || !mode[0] ||
+        strcmp(mode, "0") == 0 ||
+        strcmp(mode, "false") == 0 ||
+        strcmp(mode, "False") == 0 ||
+        strcmp(mode, "FALSE") == 0 ||
+        strcmp(mode, "off") == 0 ||
+        strcmp(mode, "Off") == 0 ||
+        strcmp(mode, "OFF") == 0 ||
+        strcmp(mode, "none") == 0) {
+        return DS4_CUDA_TM_ROUTED_EXECUTOR_OFF;
+    }
+    if (strcmp(mode, "auto") == 0 ||
+        strcmp(mode, "1") == 0 ||
+        strcmp(mode, "true") == 0 ||
+        strcmp(mode, "on") == 0) {
+        return DS4_CUDA_TM_ROUTED_EXECUTOR_AUTO;
+    }
+    if (strcmp(mode, "fixed96") == 0 ||
+        strcmp(mode, "chain96") == 0 ||
+        strcmp(mode, "ffn96") == 0 ||
+        strcmp(mode, "96") == 0) {
+        return DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED96;
+    }
+    if (strcmp(mode, "fixed768") == 0 ||
+        strcmp(mode, "chain768") == 0 ||
+        strcmp(mode, "ffn768") == 0 ||
+        strcmp(mode, "768") == 0) {
+        return DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED768;
+    }
+    return DS4_CUDA_TM_ROUTED_EXECUTOR_OFF;
+}
+
+static const char *cuda_tm_routed_executor_mode_name(int mode) {
+    switch (mode) {
+        case DS4_CUDA_TM_ROUTED_EXECUTOR_AUTO: return "auto";
+        case DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED96: return "fixed96";
+        case DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED768: return "fixed768";
+        default: return "off";
+    }
+}
+
+static int cuda_tm_routed_executor_verbose_enabled(void) {
+    return cuda_env_flag_enabled("DS4_V100_TURBOMIND_ROUTED_EXECUTOR_VERBOSE");
+}
+
+static void cuda_tm_routed_executor_log_active_once(
+        int mode,
+        uint32_t total_routes,
+        uint32_t active_experts,
+        uint32_t max_routes_per_expert) {
+    if (!cuda_tm_routed_executor_verbose_enabled()) return;
+    static int printed96 = 0;
+    static int printed768 = 0;
+    int *printed = total_routes == 96u ? &printed96 :
+                   total_routes == 768u ? &printed768 : nullptr;
+    if (printed && *printed) return;
+    if (printed) *printed = 1;
+    fprintf(stderr,
+            "ds4: TurboMind routed executor %s shape total_routes=%u active_experts=%u max_routes_per_expert=%u\n",
+            cuda_tm_routed_executor_mode_name(mode),
+            total_routes,
+            active_experts,
+            max_routes_per_expert);
+}
+
+static void cuda_tm_routed_executor_log_selected_once(uint32_t total_routes) {
+    if (!cuda_tm_routed_executor_verbose_enabled()) return;
+    static int printed96 = 0;
+    static int printed768 = 0;
+    int *printed = total_routes == 96u ? &printed96 :
+                   total_routes == 768u ? &printed768 : nullptr;
+    if (printed && *printed) return;
+    if (printed) *printed = 1;
+    fprintf(stderr,
+            "ds4: TurboMind routed executor selected fixed gate_up total_routes=%u\n",
+            total_routes);
+}
+
 static tm_pfn_ds4_mxfp4_gated_silu cuda_tm_ds4_gated_silu_768_probe(
         const int *token_indices,
         uint32_t total_routes,
@@ -6030,6 +6121,37 @@ static tm_pfn_ds4_mxfp4_gated_silu cuda_tm_ds4_gated_silu_768_probe(
     return g_tm_api.ds4_mxfp4_gated_silu_768_m128 ?
         g_tm_api.ds4_mxfp4_gated_silu_768_m128 :
         g_tm_api.ds4_mxfp4_gated_silu_768_m64;
+}
+
+static tm_pfn_ds4_mxfp4_gated_silu cuda_tm_routed_executor_gated_silu_probe(
+        const int *token_indices,
+        uint32_t total_routes,
+        uint32_t n_total_experts,
+        int fused_n,
+        int k) {
+    const int mode = cuda_tm_routed_executor_mode();
+    if (mode == DS4_CUDA_TM_ROUTED_EXECUTOR_OFF ||
+        token_indices ||
+        n_total_experts != 6u ||
+        k != 4096) {
+        return nullptr;
+    }
+    if (total_routes == 96u &&
+        (mode == DS4_CUDA_TM_ROUTED_EXECUTOR_AUTO ||
+         mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED96)) {
+        if (fused_n != 4096) return nullptr;
+        return g_tm_api.ds4_mxfp4_gated_silu_96;
+    }
+    if (total_routes == 768u &&
+        (mode == DS4_CUDA_TM_ROUTED_EXECUTOR_AUTO ||
+         mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED768)) {
+        return cuda_tm_ds4_gated_silu_768_probe(token_indices,
+                                                total_routes,
+                                                n_total_experts,
+                                                fused_n,
+                                                k);
+    }
+    return nullptr;
 }
 
 static tm_pfn_ds4_mxfp4_gated_silu cuda_tm_ds4_down_768_probe(
@@ -6712,7 +6834,11 @@ static int cuda_tm_grouped_gated_silu_matmul(
         return 0;
     }
     tm_pfn_ds4_mxfp4_gated_silu ds4_probe =
-        cuda_tm_ds4_gated_silu_768_probe(token_indices, total_routes, n_total_experts, fused_n, k);
+        cuda_tm_routed_executor_gated_silu_probe(token_indices, total_routes, n_total_experts, fused_n, k);
+    if (!ds4_probe) {
+        ds4_probe =
+            cuda_tm_ds4_gated_silu_768_probe(token_indices, total_routes, n_total_experts, fused_n, k);
+    }
     if (ds4_probe) {
         const int probe_rc = ds4_probe(
             a,
@@ -6725,6 +6851,7 @@ static int cuda_tm_grouped_gated_silu_matmul(
             d,
             nullptr);
         if (probe_rc == 0) {
+            cuda_tm_routed_executor_log_selected_once(total_routes);
             return cuda_ok(cudaGetLastError(), label ? label : "turbomind DS4 gated-SiLU probe");
         }
     }
@@ -7066,6 +7193,20 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     int use_compact_schedule =
         group_pipeline_requested ||
         (cuda_tm_compact_schedule_enabled() && total_routes < n_total_experts);
+    const int routed_executor_mode = cuda_tm_routed_executor_mode();
+    const int routed_executor_requested =
+        routed_executor_mode != DS4_CUDA_TM_ROUTED_EXECUTOR_OFF &&
+        fused_gate_up &&
+        use_gated_silu &&
+        !use_indexed_a;
+    const int routed_executor_candidate_shape =
+        routed_executor_requested &&
+        ((total_routes == 96u &&
+          (routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_AUTO ||
+           routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED96)) ||
+         (total_routes == 768u &&
+          (routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_AUTO ||
+           routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED768)));
     const uint32_t tm_group_capacity =
         use_compact_schedule
             ? (group_pipeline_requested ? group_pipeline_stream_limit : total_routes)
@@ -7195,7 +7336,7 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     }
     uint32_t tm_prof_active_experts = 0;
     uint32_t tm_prof_max_routes_per_expert = 0;
-    if (tm_prof.enabled || group_pipeline_auto_groups) {
+    if (tm_prof.enabled || group_pipeline_auto_groups || (routed_executor_candidate_shape && use_compact_schedule)) {
         uint32_t observed_active_experts = 0;
         uint32_t observed_max_routes_per_expert = 0;
         std::vector<int> h_offsets((size_t)n_total_experts + 1u);
@@ -7215,6 +7356,15 @@ static int cuda_tm_routed_mxfp4_packed_impl(
             if (tm_prof.enabled) {
                 tm_prof_active_experts = observed_active_experts;
                 tm_prof_max_routes_per_expert = observed_max_routes_per_expert;
+            }
+            if (routed_executor_candidate_shape && use_compact_schedule &&
+                observed_active_experts > 0 &&
+                observed_active_experts <= tm_group_capacity) {
+                tm_group_count = observed_active_experts;
+                cuda_tm_routed_executor_log_active_once(routed_executor_mode,
+                                                        total_routes,
+                                                        observed_active_experts,
+                                                        observed_max_routes_per_expert);
             }
             if (group_pipeline_auto_groups) {
                 if (observed_active_experts == 0) {

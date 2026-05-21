@@ -168,6 +168,18 @@ was correct but measured `59.450666` / `55.734999` with zero captures, and the
 thread-local capture variant measured `59.367233` / `55.656781` with zero
 captures. The graph flag remains diagnostic-only; real graph replay would
 require threading an explicit stream through the routed-FFN executor.
+Sprint 158 added `DS4_V100_TURBOMIND_ROUTED_EXECUTOR` and a guarded fixed96
+routed gate_up executor for the 16-slot/256K product shape. Full 43-layer
+scheduler smoke proved the intended fused-kernel shape is legal
+(`total_routes=96`, six compact active experts, 16 routes per expert) and
+selected the fixed gate_up kernel. Served 16-slot/256K A/B was correct but did
+not select fixed96 because the HTTP path is currently reaching the routed FFN
+as one request at a time (`total_routes=6`). The final guard avoids overhead on
+that served shape: control measured `46.113721` generated / `43.231614`
+continuation tok/s and guarded fixed96 measured `46.167311` / `43.281854`.
+The flag remains explicit opt-in. The next material issue is served batch
+formation for `>=256K`, or a topology path that makes the executor dense
+without relying on current HTTP coalescing.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
@@ -222,6 +234,8 @@ current topology because it gives up too much stage overlap.
 | Sprint 135 same-context control | 131,072 | 16 | `45.780913` | `42.919606` | 16/16 token match |
 | Sprint 128 gated compact + route-row-reduce opt-in | 262,144 | 16 | `46.394722` | `43.495052` | 16/16 token match |
 | Sprint 128 gated compact opt-in | 262,144 | 16 | `46.328184` | `43.432672` | 16/16 token match |
+| Sprint 158 guarded fixed96 served path | 262,144 | 16 | `46.167311` | `43.281854` | 16/16 token match, fixed96 not selected in HTTP path |
+| Sprint 158 same-binary control | 262,144 | 16 | `46.113721` | `43.231614` | 16/16 token match |
 | Sprint 128 compact launcher default on fused appliance | 262,144 | 16 | `45.888778` | `43.020729` | 16/16 token match |
 | Sprint 129 default dispatch control | 262,144 | 16 | `45.840691` | `42.975648` | 16/16 token match |
 | Sprint 129 reuse dispatch probe | 262,144 | 16 | `45.813841` | `42.950476` | 16/16 token match |

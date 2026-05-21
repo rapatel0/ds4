@@ -10,15 +10,24 @@ aggregate throughput remains about `61` generated tok/s. The practical vision
 target remains roughly `1k-2k` aggregate tok/s, so the remaining gap is still
 the routed expert execution model.
 
-Latest committed checkpoint before the current work:
+Latest committed checkpoint before Sprint 158:
 
 ```text
-43f71f5 turbomind: validate exact group pipeline
+7640fcc turbomind: add graph replay diagnostic
 ```
 
-Current uncommitted Sprint 157 work adds an experimental CUDA Graph replay path
-around the TurboMind routed-FFN core. It builds and passes scheduler smoke, but
-served V100 capture is not working yet.
+Current Sprint 158 work adds an opt-in routed-FFN executor selector:
+`DS4_V100_TURBOMIND_ROUTED_EXECUTOR=off|auto|fixed96|fixed768`. The implemented
+`fixed96` path is deliberately guarded: it only runs when the compacted shape
+is legal for the existing TurboMind 96-route fixed kernel.
+
+Key result: the full scheduler can present the intended 16-slot/256K shape
+(`total_routes=96`, six active compact groups), and the fixed96 gate_up kernel
+is selected and correct. The HTTP served path, however, still reaches the FFN
+as one request at a time (`total_routes=6`), so the fixed96 kernel is not
+selected during the real served A/B. This makes request coalescing / served
+batch formation the next blocking issue before fused 96-route kernels can move
+production throughput.
 
 ## Current Topline
 
@@ -29,7 +38,38 @@ served V100 capture is not working yet.
 | Best 64K run | 64K | 64 | `57.322945` | `53.740261` | Correct, Sprint 136 |
 | Best 128K run | 128K | 32 | `52.840889` | `49.538334` | Correct, Sprint 135 |
 | Best 256K run | 256K | 16 | `46.394722` | `43.495052` | Correct, Sprint 128 opt-in stack |
+| Sprint 158 served control | 256K | 16 | `46.113721` | `43.231614` | Correct, 16/16 |
+| Sprint 158 fixed96 guarded | 256K | 16 | `46.167311` | `43.281854` | Correct, 16/16, fixed96 not selected in served path |
 | Best 1M run | 1M | 4 | `21.771077` | `20.410385` | Correct, Sprint 119 |
+
+## Sprint 158 Status
+
+Implemented:
+
+- `DS4_V100_TURBOMIND_ROUTED_EXECUTOR`.
+- `DS4_V100_TURBOMIND_ROUTED_EXECUTOR_VERBOSE`.
+- TurboMind ABI lookup for `ggml_turbomind_ds4_mxfp4_gated_silu_96`.
+- Guarded fixed96 dispatch after compact active-expert inspection.
+- Shape guard tightened so served single-request `total_routes=6` pays no
+  active-group readback and falls through to the existing generic path.
+
+Validation:
+
+| Test | Result |
+|---|---|
+| V100 build: `ds4_cuda.o`, `tools/ds4-v100-replay`, `tests/cuda_v100_full_scheduler_smoke` | Pass |
+| Launcher `--check` with `DS4_V100_TURBOMIND_ROUTED_EXECUTOR=fixed96` | Pass |
+| Full 43-layer 16-slot/256K smoke, executor off | Pass |
+| Full 43-layer 16-slot/256K smoke, fixed96 | Pass, selected fixed gate_up |
+| Served 16-slot/256K control | `46.113721` generated / `43.231614` decode tok/s |
+| Served 16-slot/256K fixed96 guarded | `46.167311` generated / `43.281854` decode tok/s |
+
+Important diagnostic:
+
+```text
+full scheduler: total_routes=96 active_experts=6 max_routes_per_expert=16
+served HTTP:    total_routes=6  active_experts=6 max_routes_per_expert=1
+```
 
 ## Sprint 157 Status
 

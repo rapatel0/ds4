@@ -2,6 +2,41 @@
 
 Date: 2026-05-21
 
+## Sprint 158 Update
+
+Sprint 158 added a DS4-specific routed-FFN executor selector:
+`DS4_V100_TURBOMIND_ROUTED_EXECUTOR=off|auto|fixed96|fixed768`, plus verbose
+shape logging. The first implemented executor is `fixed96`, which uses the
+existing TurboMind `ggml_turbomind_ds4_mxfp4_gated_silu_96` path only when the
+runtime presents `total_routes=96` and active-expert compaction yields exactly
+six groups.
+
+Validation on the V100 pod passed:
+
+- sm70 build for `ds4_cuda.o`, `tools/ds4-v100-replay`, and
+  `tests/cuda_v100_full_scheduler_smoke`;
+- full 43-layer 16-slot/256K smoke with executor off;
+- full 43-layer 16-slot/256K smoke with `fixed96`, which logged
+  `total_routes=96 active_experts=6 max_routes_per_expert=16` and selected the
+  fixed gate_up kernel.
+
+Served A/B at the product tier was correct but did not exercise the fixed96
+kernel. Control measured `46.113721` generated / `43.231614` continuation tok/s.
+The guarded fixed96 run measured `46.167311` / `43.281854`, with `16/16` token
+match, but the server log had no fixed96 selection because the HTTP path is
+currently reaching the routed FFN as `total_routes=6` per request. An earlier
+unguarded fixed96 run regressed to `45.010403` / `42.197253` because it paid a
+host active-expert readback on that six-route shape; the final guard removes
+that overhead.
+
+Decision: keep `DS4_V100_TURBOMIND_ROUTED_EXECUTOR` explicit opt-in and do not
+promote it as a default. The useful finding is architectural: the scheduler
+smoke can create the 96-route fused-kernel shape, but the real HTTP serving
+path is not coalescing concurrent requests into that shape before the routed
+FFN. The next material sprint should either fix served batch formation for
+`>=256K` or pivot to TP/EP topology work that makes the per-layer executor
+denser without relying on current HTTP coalescing.
+
 ## Sprint 157 Update
 
 Sprint 157 added an opt-in CUDA Graph replay probe around the post-router

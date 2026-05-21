@@ -195,6 +195,14 @@ optimized V100 low-bit expert kernels in the actual hot path.
   hardcoding six groups is unsafe for arbitrary traffic. The safe auto-group
   implementation passed full scheduler smoke but regressed served throughput,
   confirming that host-side stream orchestration is not the material path.
+  Sprint 157 then showed wrapper-level CUDA Graph replay cannot capture the
+  current legacy-default-stream routed-FFN path. Sprint 158 added a guarded
+  `DS4_V100_TURBOMIND_ROUTED_EXECUTOR=fixed96` selector and proved the full
+  scheduler can select the fixed 96-route gate_up kernel at 16-slot/256K, but
+  HTTP serving still reaches routed FFN as `total_routes=6` per request, so
+  fixed96 is neutral in served A/B. This makes served batch formation at
+  `>=256K`, or TP/EP topology that creates denser executor shapes without
+  relying on current HTTP coalescing, the next practical blocker.
   Dispatch-policy tuning, dispatch bypass, final scatter fusion, wrapper-level
   activation compaction, separate tail-vectorization, atomic epilogue reduce,
   simple slot widening, fixed-shape gate/down probes, basic gate/up launch
@@ -2738,6 +2746,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-21 | Completed Sprint 153 bounded TP pack contract. | `tools/ds4-v100-appliance-pack --emit-tp-split` now emits split TP TurboMind expert rows for gate/up and down, and the V100 context binder accepts those TP descriptors while keeping normal owner-GPU checks fail-closed. A layer-3, six-expert GPU0/GPU3 bounded pack passed partial context smoke. The real 2-GPU NV2 proxy measured `1.157x` total-with-copy speedup at 768 routes but `0.912x` at 1536 routes, so TP should stay scoped to a one-layer 128-slot/32K prototype. | Sprint 154+ |
 | 2026-05-21 | Completed Sprint 154 fused routed-FFN boundary validation. | The down-reduce epilogue is correct but not a throughput lever. Served A/B was flat at 128-slot/32K (`59.509317` vs `59.502747` generated tok/s) and slightly slower at 256-slot/16K (`60.642962` vs `60.671924`). A synchronized profile kept gate/up and down GEMMs as the dominant buckets, so stage-count tuning and epilogue-only down-reduce fusion are both exhausted. | Sprint 155+ |
 | 2026-05-21 | Completed Sprint 155 stream-per-expert routed-FFN pipeline. | The opt-in `DS4_V100_TURBOMIND_GROUP_PIPELINE=1` path now executes the production non-interleaved fused gate/up pack as per-group gate/up, SwiGLU, and down chains on CUDA streams. A profiled V100 smoke proved `group_pipeline_calls=6`, but served A/B regressed at both 128-slot/32K and 256-slot/16K, so this remains diagnostic-only. Next work should remove launch/stream overhead with a persistent routed-FFN boundary or continue the bounded one-layer 2-way TP prototype. | Sprint 156+ |
+| 2026-05-21 | Completed Sprint 158 guarded routed executor. | `DS4_V100_TURBOMIND_ROUTED_EXECUTOR=fixed96` now selects the existing fixed 96-route TurboMind gate_up kernel when compacted active experts make the shape legal. Full 43-layer 16-slot/256K smoke selected the fixed kernel and passed. Served 16-slot/256K A/B was neutral (`46.167311` / `43.281854` generated/continuation tok/s versus `46.113721` / `43.231614` control) because HTTP serving exposed `total_routes=6`, not 96. The next sprint should fix served batch formation for `>=256K` or pursue TP/EP topology that creates denser executor shapes. | Sprint 159+ |
 
 ## Open Questions
 

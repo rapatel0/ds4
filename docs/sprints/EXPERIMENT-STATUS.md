@@ -147,6 +147,15 @@ slower than control (`59.450666` / `55.734999` generated/decode tok/s with
 global capture, `59.367233` / `55.656781` with thread-local capture, both with
 zero captures). Graph replay remains diagnostic-only unless the routed-FFN
 executor is rewritten around an explicit stream.
+Sprint 158 added `DS4_V100_TURBOMIND_ROUTED_EXECUTOR` with a guarded fixed96
+gate_up executor. The full 43-layer 16-slot/256K scheduler smoke selected the
+fixed kernel at `total_routes=96`, but the HTTP served path reached routed FFN
+as `total_routes=6` per request, so fixed96 did not fire in served A/B. The
+guarded opt-in was neutral (`46.167311` generated / `43.281854` continuation
+tok/s) versus control (`46.113721` / `43.231614`) with `16/16` token match.
+This keeps fixed96 as an executor probe and shifts the next experiment toward
+served batch formation at `>=256K` or TP/EP topology that creates denser
+executor shapes.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
