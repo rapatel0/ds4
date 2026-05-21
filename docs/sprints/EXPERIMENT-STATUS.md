@@ -115,7 +115,9 @@ pairs, but not an immediate 8-way scheduler rewrite. Sprint 150 built that
 speedup and `1.28x` total-with-copy speedup at 768 routes, but the 1536-route
 shape was neutral to slower after copies (`0.85-0.94x`). TP is therefore a
 targeted 128-slot/32K candidate, not a blanket fix for the current 256-slot
-ceiling.
+ceiling. Sprint 151 added full-vs-split correctness to the same proxy. With
+finite MXFP4 fixtures, both clean NV2 pairs pass at 768 and 1536 routes with
+`rel ~= 2.46e-04`, `bad=0`, and max absolute difference `6.1035e-05`.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|

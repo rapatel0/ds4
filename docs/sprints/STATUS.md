@@ -116,7 +116,10 @@ Sprint 150 built that bounded 2-GPU TP proxy. On clean NV2 pairs, the
 `1.28x` total speedup after conservative input/output copies. The 1536-route
 shape is neutral to slower after copies (`0.85-0.94x`), so TP is a candidate
 for the 128-slot/32K tier first, not a broad replacement for the 256-slot/16K
-ceiling.
+ceiling. Sprint 151 added the missing correctness gate: finite MXFP4 fixtures
+now compare full one-GPU down output against the sum of the two TP partials.
+Both clean NV2 pairs pass at 768 and 1536 routes with `rel ~= 2.46e-04`,
+`bad=0`, and max absolute difference `6.1035e-05`.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched

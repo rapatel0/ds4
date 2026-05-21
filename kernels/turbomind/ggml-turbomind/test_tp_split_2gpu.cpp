@@ -112,7 +112,7 @@ static std::vector<Case> parse_cases_from_env() {
 
 static void make_mxfp4_fixture(std::vector<block_mxfp4> & blocks, int N, int K, uint32_t seed) {
     std::mt19937 rng(seed);
-    std::uniform_int_distribution<int> e_dist(123, 130);
+    std::uniform_int_distribution<int> e_dist(116, 122);
     std::uniform_int_distribution<int> q_dist(0, 255);
     blocks.resize((size_t) N * (K / 32));
     for (block_mxfp4 & b : blocks) {
@@ -310,6 +310,63 @@ static double elapsed_ms(cudaEvent_t start, cudaEvent_t stop) {
     float ms = 0.0f;
     CHECK_CUDA(cudaEventElapsedTime(&ms, start, stop));
     return (double)ms;
+}
+
+static int compare_tp_sum(const std::vector<__half> & full,
+                          const std::vector<__half> & half0,
+                          const std::vector<__half> & half1,
+                          int tokens_per_active,
+                          int total_tokens) {
+    if (full.size() != half0.size() || full.size() != half1.size()) {
+        fprintf(stderr,
+                "[tp_split_2gpu tpa=%d] correctness FAIL size mismatch full=%zu half0=%zu half1=%zu\n",
+                tokens_per_active, full.size(), half0.size(), half1.size());
+        return 1;
+    }
+
+    double sum_abs = 0.0;
+    double sum_ref = 0.0;
+    float max_abs = 0.0f;
+    int bad = 0;
+    int nan = 0;
+    constexpr float abs_tol = 16.0f;
+    constexpr float rel_elem_tol = 0.05f;
+    constexpr double rel_tol = 0.01;
+    constexpr double bad_frac_tol = 0.001;
+
+    for (size_t i = 0; i < full.size(); ++i) {
+        const float ref = __half2float(full[i]);
+        const float got = __half2float(half0[i]) + __half2float(half1[i]);
+        if (!std::isfinite(ref) || !std::isfinite(got)) {
+            nan++;
+            bad++;
+            continue;
+        }
+        const float diff = fabsf(got - ref);
+        const float elem_tol = std::max(abs_tol, rel_elem_tol * fabsf(ref));
+        max_abs = std::max(max_abs, diff);
+        sum_abs += (double)diff;
+        sum_ref += (double)fabsf(ref);
+        if (diff > elem_tol) {
+            bad++;
+        }
+    }
+
+    const double rel = sum_ref > 0.0 ? sum_abs / sum_ref : 0.0;
+    const double bad_frac = full.empty() ? 0.0 : (double)bad / (double)full.size();
+    const bool fail = nan != 0 || rel > rel_tol || bad_frac > bad_frac_tol;
+    fprintf(stderr,
+            "[tp_split_2gpu tpa=%d] correctness total_routes=%d values=%zu max_abs=%.4e rel=%.4e bad=%d bad_frac=%.4e nan=%d status=%s\n",
+            tokens_per_active,
+            total_tokens,
+            full.size(),
+            max_abs,
+            rel,
+            bad,
+            bad_frac,
+            nan,
+            fail ? "FAIL" : "PASS");
+    return fail ? 1 : 0;
 }
 
 static int run_case(void * lib, const Case & c) {
@@ -547,6 +604,15 @@ static int run_case(void * lib, const Case & c) {
             a_mib,
             out_mib);
 
+    std::vector<__half> h_full((size_t) total_tokens * hidden);
+    std::vector<__half> h_half0((size_t) total_tokens * hidden);
+    std::vector<__half> h_half1((size_t) total_tokens * hidden);
+    CHECK_CUDA(cudaSetDevice(dev0));
+    CHECK_CUDA(cudaMemcpy(h_full.data(), full.d_down, h_full.size() * sizeof(__half), cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(h_half0.data(), s0.d_down, h_half0.size() * sizeof(__half), cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(h_half1.data(), d_recv, h_half1.size() * sizeof(__half), cudaMemcpyDeviceToHost));
+    const int correctness_rc = compare_tp_sum(h_full, h_half0, h_half1, c.tokens_per_active, total_tokens);
+
     CHECK_CUDA(cudaSetDevice(dev0));
     CHECK_CUDA(cudaEventDestroy(full_start));
     CHECK_CUDA(cudaEventDestroy(full_stop));
@@ -570,7 +636,7 @@ static int run_case(void * lib, const Case & c) {
     }
 
     sh();
-    return 0;
+    return correctness_rc;
 }
 
 int main(int argc, char ** argv) {

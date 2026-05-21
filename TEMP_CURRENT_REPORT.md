@@ -28,6 +28,13 @@ speedup is only `1.29-1.46x` and total-with-copy is slower (`0.85-0.94x`).
 This narrows TP to an opt-in 128-slot/32K candidate unless we keep hidden state
 replicated across TP ranks or overlap the payloads better.
 
+The 2-GPU TP proxy now has a correctness gate. With finite synthetic MXFP4
+fixtures, `full_down` matches `half0_down + half1_down` on both clean NV2
+pairs for 768 and 1536 routes (`rel ~= 2.46e-04`, `bad=0`, max abs
+`6.1035e-05`). The decomposition is correct; the remaining issue is whether a
+production scheduler can keep the 768-route payload movement overlapped enough
+to preserve the measured speedup.
+
 ## Short Answer
 
 We have a correct, deployed 8x V100 DS4-Flash appliance path, but we are still
@@ -136,6 +143,8 @@ Tensor parallel variants:
   NV1 in about `0.52 ms`, and SYS in about `1.3 ms`.
 - The real 2-GPU proxy shows 768-route total-with-copy speedup of about
   `1.28x` on NV2 pairs, but 1536-route total-with-copy is neutral to slower.
+- The TP split correctness gate passes for 768 and 1536 routes on clean NV2
+  pairs, so the split itself is not the blocker.
 - My current read is that 2-way TP is worth prototyping only for the
   128-slot/32K route shape first, while 8-way expert parallelism is probably
   underfilled because the compact served shape currently has only 6 active

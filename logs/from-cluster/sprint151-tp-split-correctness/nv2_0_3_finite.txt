@@ -1,0 +1,4 @@
+[tp_split_2gpu tpa=128] gpu_pair=0,3 routes=768 full_ms=1.1553 half0_ms=0.5840 half1_ms=0.6167 concurrent_compute_ms=0.6167 compute_speedup=1.873x total_with_copy_ms=0.9022 total_with_copy_speedup=1.281x input_payload_mib=6.00 output_payload_mib=6.00
+[tp_split_2gpu tpa=128] correctness total_routes=768 values=3145728 max_abs=6.1035e-05 rel=2.4696e-04 bad=0 bad_frac=0.0000e+00 nan=0 status=PASS
+[tp_split_2gpu tpa=256] gpu_pair=0,3 routes=1536 full_ms=1.3707 half0_ms=0.9415 half1_ms=0.9235 concurrent_compute_ms=0.9415 compute_speedup=1.456x total_with_copy_ms=1.4803 total_with_copy_speedup=0.926x input_payload_mib=12.00 output_payload_mib=12.00
+[tp_split_2gpu tpa=256] correctness total_routes=1536 values=6291456 max_abs=6.1035e-05 rel=2.4622e-04 bad=0 bad_frac=0.0000e+00 nan=0 status=PASS

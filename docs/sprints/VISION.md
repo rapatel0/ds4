@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: sprint-execute
-revision: 151
+revision: 152
 ---
 
 # Vision: DS4 V100 Appliance
@@ -166,7 +166,9 @@ optimized V100 low-bit expert kernels in the actual hot path.
   and `1.29-1.31 ms` over SYS. Sprint 150 then ran a real two-GPU TP proxy:
   clean NV2 pairs show about `1.28x` total-with-copy speedup at 768 routes but
   `0.85-0.94x` at 1536 routes, so TP is a targeted 128-slot/32K candidate, not
-  a broad 256-slot/16K solution yet.
+  a broad 256-slot/16K solution yet. Sprint 151 added the missing correctness
+  gate: full one-GPU down output matches the sum of the two TP partials at 768
+  and 1536 routes on clean NV2 pairs, with `rel ~= 2.46e-04` and `bad=0`.
   Dispatch-policy tuning, dispatch bypass, final scatter fusion, wrapper-level
   activation compaction, separate tail-vectorization, atomic epilogue reduce,
   simple slot widening, fixed-shape gate/down probes, and basic gate/up launch
@@ -2704,6 +2706,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-21 | Completed Sprint 148 stage-4 fused gate/up software-pipeline probe. | A true stage-count software-pipeline variant of the fused MXFP4 gate/up+gated-SiLU kernel was implemented and tested. The 768-route `m128_s4` probe improved the isolated benchmark (`0.5811 ms` vs `0.6033 ms` for `m128`) and passed full 43-layer smoke, but served A/B was only `60.049057` generated / `56.295991` continuation tok/s versus `59.865668` / `56.124063` control, and full-scheduler profiles did not show a reliable gate/up bucket reduction. Keep stage-4 probes opt-in; the next material path is a larger routed-FFN executor boundary or a TP/EP microbenchmark. | Sprint 149+ |
 | 2026-05-21 | Completed Sprint 149 TP split and P2P topology probe. | The TurboMind harness now measures a 2-way split of the DS4 routed-FFN middle dimension and a P2P reduce-payload proxy. Ideal 2-way compute speedup is `1.858x` at 768 routes and `1.468x` at 1536 routes before communication; 12 MiB hidden payloads take about `0.26 ms` over NV2, `0.52 ms` over NV1, and `1.29-1.31 ms` over SYS. This supports a bounded 2-GPU TP prototype on NV2 pairs, not an immediate 8-way rewrite. | Sprint 150+ |
 | 2026-05-21 | Completed Sprint 150 two-GPU TP split probe. | The first real two-GPU routed-FFN TP proxy runs the two `1024`-wide halves concurrently on NV2 pairs and includes conservative input/output payload copies. It is positive at 768 routes (`~1.28x` total speedup on pairs `0,3` and `4,7`) but neutral to slower at 1536 routes (`0.85-0.94x`). Next TP work should be a one-stage correctness prototype for 128-slot/32K before any scheduler-wide change. | Sprint 151+ |
+| 2026-05-21 | Completed Sprint 151 two-GPU TP correctness gate. | The TP split proxy now compares full one-GPU routed-FFN output against the FP32 sum of both TP partial outputs. Finite MXFP4 fixtures pass on clean NV2 pairs at both 768 and 1536 routes with `rel ~= 2.46e-04`, `bad=0`, and max absolute difference `6.1035e-05`. The split math is valid; remaining TP risk is production scheduling and payload overlap. | Sprint 152+ |
 
 ## Open Questions
 
