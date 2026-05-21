@@ -1,0 +1,2 @@
+[tp_split_2gpu tpa=16] gpu_pair=4,7 routes=96 full_ms=0.2920 half0_ms=0.1596 half1_ms=0.1595 concurrent_compute_ms=0.1596 compute_speedup=1.830x total_with_copy_ms=0.2203 total_with_copy_speedup=1.325x input_payload_mib=0.75 output_payload_mib=0.75
+[tp_split_2gpu tpa=16] correctness total_routes=96 values=393216 max_abs=5.7220e-05 rel=2.4726e-04 bad=0 bad_frac=0.0000e+00 nan=0 status=PASS
