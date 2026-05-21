@@ -229,6 +229,31 @@ int ggml_turbomind_mul_mat_grouped_gated_silu_total_tokens(
     void*              D,
     void*              stream  /* cudaStream_t */);
 
+/**
+ * DS4/V100 fixed-shape probe for the compact routed gate/up path.
+ *
+ * This is intentionally narrow and experimental:
+ *   - MXFP4 weights only
+ *   - interleaved gate/up packed rows
+ *   - K = 4096, N = 4096, group_size = 32
+ *   - total_tokens = 96, num_experts = 6
+ *   - output D is fp16 [96, 2048]
+ *
+ * It bypasses the generic TurboMind dispatch search and launches one fixed
+ * SM70 kernel shape. Callers should treat non-zero return as "probe not
+ * available" and fall back to ggml_turbomind_mul_mat_grouped_gated_silu_total_tokens.
+ */
+int ggml_turbomind_ds4_mxfp4_gated_silu_96(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
 // ============================================================================
 // Single-expert mul-mat (convenience for non-grouped cases like dense layers)
 // ============================================================================

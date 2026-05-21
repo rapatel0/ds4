@@ -47,9 +47,11 @@ measured the interleaved gated path at `0.1776 ms` vs `0.2889 ms` for separate
 gate+up, a `1.626x` isolated speedup. Sprint 133 then corrected the benchmark
 to use compact active-expert grouping like the served runtime; at that topology
 gated-SiLU was `0.1740 ms` vs `0.1895 ms` separate gate+up, only `1.089x`.
-These results keep pointing the next implementation at lower-level packed
-MXFP4 mainloop or served scheduling work rather than another launch-boundary or
-wrapper data-movement tweak.
+Sprint 134 added a fixed-shape DS4 ABI that directly launches the matching SM70
+MXFP4 gated kernel; it was bit-identical and neutral at `0.1746 ms` vs
+`0.1746 ms` generic gated. These results keep pointing the next implementation
+at lower-level packed MXFP4 dataflow or served scheduling work rather than
+another launch-boundary, dispatch, or wrapper data-movement tweak.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
@@ -112,6 +114,7 @@ to slightly worse.
 | 131 | TurboMind indexed-A routed activation probe | Correct; avoids route-expanded activation materialization for gate/up, passed full 43-layer smokes, and served at `45.789937` vs `45.663281` control | Keep indexed-A opt-in; wrapper-level activation compaction is not enough |
 | 132 | Production-shaped TurboMind gate/up benchmark | Correct; added env-selectable cases and the served-profile 96-route case, where gated-SiLU measured `0.1776 ms` vs `0.2889 ms` separate gate+up | Use as the 1-GPU V100 acceptance harness for lower-level routed-expert kernel work |
 | 133 | Compact-group gate/up benchmark correction | Correct; compact 96-route gated-SiLU measured `0.1740 ms`, while compact separate gate+up was `0.1895 ms`; sparse256 overstated fusion benefit at `1.534x` | Use compact mode as the acceptance baseline; sparse-group wins do not predict served default wins |
+| 134 | Fixed-shape compact gate/up ABI probe | Correct; direct fixed SM70 launch was bit-identical to generic gated and measured `0.1746 ms` vs `0.1746 ms` | Do not promote; dispatch bypass is not the missing lever |
 
 ## Remaining
 
@@ -141,10 +144,11 @@ to slightly worse.
     inside run noise. Sprint 132 showed the existing interleaved gated gate/up
     primitive is `1.626x` faster than separate gate/up at the sparse 96-route
     standalone shape, but Sprint 133 showed the served compact topology shrinks
-    that to `1.089x`. The useful version therefore needs either a lower-level
-    packed decode/activation staging/MMA/epilogue specialization that beats
-    the compact `0.1740 ms` baseline, or a scheduler that keeps expert work
-    larger than the current compact microshape.
+    that to `1.089x`. Sprint 134 showed direct fixed-shape dispatch is neutral.
+    The useful version therefore needs either a lower-level packed
+    decode/activation staging/MMA/epilogue specialization that beats the compact
+    `0.1740 ms` baseline, or a scheduler that keeps expert work larger than the
+    current compact microshape.
     Sprint 122 further showed that merely chunking slots to feed wider kernels
     loses too much stage overlap, so the fusion target must match the per-slot
     served topology or replace it with an overlapped scheduler.

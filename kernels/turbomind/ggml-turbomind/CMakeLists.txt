@@ -152,6 +152,7 @@ endforeach()
 add_library(ggml-turbomind SHARED
     api.cc
     ggml-turbomind-deinterleave.cu
+    ggml-turbomind-ds4-probe.cu
     ${LMDEPLOY_SRC}/turbomind/kernels/gpt_kernels.cu
 )
 

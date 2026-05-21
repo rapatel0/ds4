@@ -35,9 +35,12 @@ benchmark to the production 96-route shape from the served profile; the
 interleaved gated path passed at `0.1776 ms` vs `0.2889 ms` for separate
 gate+up, a `1.626x` isolated speedup. Sprint 133 corrected that benchmark to
 also use the served compact active-expert topology; compact 96-route gated-SiLU
-is `0.1740 ms` vs `0.1895 ms` separate gate+up, only `1.089x`. The next target
-is therefore not another gate/up launch fusion; any DS4-only kernel probe must
-beat the compact `0.1740 ms` gated baseline.
+is `0.1740 ms` vs `0.1895 ms` separate gate+up, only `1.089x`. Sprint 134
+added a fixed-shape DS4 ABI probe that bypasses generic dispatch and directly
+launches the matching SM70 MXFP4 gated kernel; it was bit-identical and exactly
+neutral at `0.1746 ms` vs `0.1746 ms` generic gated. The next target is
+therefore not dispatch bypass or gate/up launch fusion; it must change kernel
+math/dataflow or scheduling shape.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
@@ -136,6 +139,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 131 | TurboMind indexed-A routed activation probe | Correct; full 43-layer smokes passed with indexed-A off/on, and served A/B was `45.789937` vs `45.663281` control | Keep indexed-A opt-in; wrapper-level activation compaction is correct but not a promotion-level win |
 | 132 | Production-shaped TurboMind gate/up benchmark | Correct; historical 6/24/48-route cases still pass, and the 96-route served-profile case shows gated-SiLU at `0.1776 ms` vs `0.2889 ms` separate gate+up | Use this as the benchmark harness for any lower-level SM70 mainloop probe; no appliance default change |
 | 133 | Compact-group gate/up benchmark correction | Correct; at 96 routes, sparse256 gated is `0.2128 ms` while compact gated is `0.1740 ms`, and compact separate gate+up is already `0.1895 ms` | Future probes must beat compact gated, not sparse grouped overhead |
+| 134 | Fixed-shape compact gate/up ABI probe | Correct; direct fixed SM70 launch was bit-identical and `0.1746 ms` vs `0.1746 ms` generic gated | Do not promote; generic TurboMind already selects this effective path |
 
 ## Sprint 106 Profile Takeaway
 

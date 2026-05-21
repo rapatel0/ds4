@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: codex
-revision: 136
+revision: 137
 ---
 
 # Vision: DS4 V100 Appliance
@@ -109,15 +109,18 @@ optimized V100 low-bit expert kernels in the actual hot path.
   gate+up, a `1.626x` isolated speedup. Sprint 133 corrected that benchmark to
   the served compact active-expert topology: compact gated-SiLU was
   `0.1740 ms` versus `0.1895 ms` separate gate+up, only `1.089x`.
-  Dispatch-policy tuning, final scatter fusion, wrapper-level activation
-  compaction, and basic gate/up launch fusion are therefore not the missing
-  throughput lever. The project remains far below the practical serving target,
-  so the next meaningful step is still larger execution-boundary work: a narrow
-  DS4-only persistent grouped routed-expert pipeline that software-pipelines
-  packed MXFP4 dequant, gate/up HMMA, gated activation, down HMMA, and
-  weighted scatter/reduce for the current 16-slot compact routed shape, or
-  scheduling work that makes expert microbatches larger than the compact
-  per-layer shape.
+  Sprint 134 then added a fixed-shape DS4 ABI that bypasses generic dispatch
+  and directly launches the matching SM70 MXFP4 gated kernel; it was
+  bit-identical and neutral at `0.1746 ms` versus `0.1746 ms` generic gated.
+  Dispatch-policy tuning, dispatch bypass, final scatter fusion, wrapper-level
+  activation compaction, and basic gate/up launch fusion are therefore not the
+  missing throughput lever. The project remains far below the practical serving
+  target, so the next meaningful step is still larger execution-boundary work:
+  a narrow DS4-only persistent grouped routed-expert pipeline that
+  software-pipelines packed MXFP4 dequant, gate/up HMMA, gated activation, down
+  HMMA, and weighted scatter/reduce for the current 16-slot compact routed
+  shape, or scheduling work that makes expert microbatches larger than the
+  compact per-layer shape.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation
