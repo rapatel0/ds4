@@ -4,17 +4,24 @@ Last updated: 2026-05-21
 
 ## Topline
 
-Current 8-slot default throughput is the Sprint 111 fused TurboMind gate/up
-appliance, the Sprint 115 shared gate/up SwiGLU HMMA path, the Sprint 116
-batched attention-projection F8 HMMA path for active 4/8-slot batches, and
-Sprint 119 event-ordered handoff for multi-slot per-step serving. Sprint 121
-adds a 16-slot 256K throughput mode that better fills Volta HMMA token tiles.
-Sprint 114 shared-down HMMA remains opt-in: combined pair+down set an 8-slot
-best in that sprint but regressed 4-slot/1M. Sprint 117 and 118 showed scalar
-per-slot fusion and naive single-token WMMA are not enough.
+Current production throughput mode is the Sprint 121 16-slot/256K appliance
+with the Sprint 122 rendezvous fix. The runtime now reliably coalesces 16
+concurrent requests into one tensor batch by resolving launcher `auto`
+microbatch wait to 200 ms at `active_microbatch >= 16`. The best observed
+16-slot result is `43.730215` generated tok/s; the current production-auto
+repeat is `43.534061`.
+
+The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
+Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
+attention-projection F8 HMMA for active 4/8-slot batches, and Sprint 119
+event-ordered handoff for multi-slot per-step serving. Sprint 122 confirms that
+chunking slots to expose wider batch kernels is slower in the current topology
+because it gives up too much stage overlap.
 
 | Mode | Context | Slots | Generated tok/s | Continuation tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
+| Sprint 122 production-auto 16-slot throughput mode | 262,144 | 16 | `43.534061` | `40.813182` | 16/16 token match |
+| Sprint 122 best observed 16-slot candidate | 262,144 | 16 | `43.730215` | `40.997076` | 16/16 token match |
 | Sprint 121 16-slot throughput mode | 262,144 | 16 | `43.659461` | `40.930745` | 16/16 token match |
 | Sprint 121 same-binary 8-slot control | 262,144 | 8 | `34.445844` | `32.292979` | 8/8 token match |
 | Sprint 120 current default repeat | 262,144 | 8 | `34.490294` | `32.334651` | 8/8 token match |
@@ -67,6 +74,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 119 | Event-ordered stage handoff | Correct; `34.433252` vs `33.379839` at 8-slot/256K and `21.771077` vs `21.566859` at 4-slot/1M | Shipped/default as `DS4_V100_ASYNC_EVENT_HANDOFF=auto` |
 | 120 | Single shared gate/up/SwiGLU row-pair probe | Correct; `34.380968` row-pair vs `34.490294` default and `34.689964` scalar single-fusion at 8-slot/256K | Kept opt-in/off; row-pair compaction does not beat the default |
 | 121 | 16-slot 256K throughput mode | Correct; `43.659461` at 16-slot/256K vs `34.445844` same-binary 8-slot control | Shipped as admitted 256K mode with context-aware launcher guard |
+| 122 | 16-slot profile, 16-token HMMA admission, async chunk probes, and rendezvous stabilization | Correct; best `43.730215`, production-auto `43.534061`, one 16-request tensor batch after 200 ms auto wait; chunked tensor scheduling regressed (`28.876459` at chunk 2, `18.447169` at chunk 4, `13.315378` at chunk 16) | Shipped 16-slot auto rendezvous; kept chunk/output-B/shared-down probes opt-in/off |
 
 ## Sprint 106 Profile Takeaway
 

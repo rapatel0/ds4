@@ -35,7 +35,7 @@ int main(void) {
     enum {
         ROWS = 4096,
         COLS = 2048,
-        TOKENS = 8,
+        TOKENS = 16,
     };
 
     if (ds4_gpu_device_count() < 1) {

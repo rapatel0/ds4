@@ -155,10 +155,10 @@ DS4_V100_MTP_TOP_K=5
 DS4_V100_MTP_GPU=7
 ```
 
-`DS4_V100_MICROBATCH_WAIT_US=auto` resolves to `50000` us for multi-slot
-serving and `0` for one-slot serving. Increase it only when concurrent clients
-arrive unevenly enough to split batches; decrease it for latency-sensitive
-single-request testing.
+`DS4_V100_MICROBATCH_WAIT_US=auto` resolves to `0` for one-slot serving,
+`50000` us for 2-15 active slots, and `200000` us for 16 active slots. The
+16-slot wait prevents split request batches in throughput serving; decrease it
+only for latency-sensitive tests where accepting lower aggregate tok/s is fine.
 
 For throughput serving, `ctx=262144` now admits up to 16 slots. The launcher
 keeps the long-context tier memory-safe by rejecting slot counts above the
@@ -300,6 +300,10 @@ When `active_microbatch` is `M`, limits report `active_slots`,
 `active_microbatch`, and `concurrent_requests` as `M`. If `M > 1`,
 `tensor_batched_slots` reports `true`; the `tensor_batched_*` counters increase
 only when same-token-count non-MTP requests actually coalesce into a batch.
+With `DS4_V100_MICROBATCH_WAIT_US=auto`, the launcher resolves the rendezvous
+window to `50000` us for ordinary multi-slot serving and `200000` us for
+`active_microbatch >= 16`, which keeps the 16-slot/256K throughput profile from
+splitting into two 8-request batches.
 
 Expected metrics include:
 

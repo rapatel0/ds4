@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: codex
-revision: 124
+revision: 125
 ---
 
 # Vision: DS4 V100 Appliance
@@ -66,12 +66,16 @@ optimized V100 low-bit expert kernels in the actual hot path.
   gate/up/SwiGLU probe, but it did not beat the default. Sprint 121 raised the
   active-slot ceiling to 16 for the 256K tier and measured `43.659461`
   generated tok/s with `16/16` token matches, versus `34.445844` for the
-  same-binary 8-slot control. The project remains far below the practical
-  serving target, but this result confirms that exposing more active rows to
-  the existing HMMA/TurboMind paths is useful. The next meaningful step needs
-  profile-guided larger execution-boundary work: deeper TurboMind expert
-  scheduling, persistent grouped expert execution, or a real SM70
-  software-pipelined F8 shared-FFN/attention-output kernel.
+  same-binary 8-slot control. Sprint 122 stabilized that mode by making launcher
+  `auto` rendezvous wait 200 ms at 16 active slots; production-auto now reaches
+  `43.534061` generated tok/s with one 16-request tensor batch, and the best
+  observed candidate reached `43.730215`. Sprint 122 also showed that chunking
+  slots to feed wider batch kernels regresses because it loses stage overlap.
+  The project remains far below the practical serving target, so the next
+  meaningful step needs profile-guided larger execution-boundary work: deeper
+  TurboMind expert scheduling, persistent grouped expert execution, or a real
+  SM70 software-pipelined F8 shared-FFN/attention-output kernel that preserves
+  the current served topology.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation
@@ -2576,6 +2580,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-21 | Shipped Sprint 119 event-ordered stage handoff. | `DS4_V100_ASYNC_EVENT_HANDOFF=auto` now enables CUDA event-ordered handoff for multi-slot per-step serving. It raised 8-slot/256K to `34.433252` generated tok/s and 4-slot/1M to `21.771077`, with token matches preserved. | Sprint 120+ |
 | 2026-05-21 | Completed Sprint 120 single shared gate/up/SwiGLU row-pair probe. | The new opt-in row-pair single-fusion kernel is correct, but measured below the current default (`34.380968` vs `34.490294`). Do not promote; proceed to a real SM70 pipelined F8 mainloop or deeper TurboMind expert scheduling. | Sprint 121+ |
 | 2026-05-21 | Shipped Sprint 121 16-slot 256K throughput mode. | The runtime and wrappers now admit 16 active slots for 256K serving, with context-aware guards preventing unsafe 16-slot long-context launch. Full 16-slot scheduler correctness passes at 256K, and served throughput improved to `43.659461` generated tok/s with `16/16` token matches. The next sprint should profile this mode and target a real SM70 pipelined F8 mainloop or deeper TurboMind expert scheduling. | Sprint 122+ |
+| 2026-05-21 | Shipped Sprint 122 16-slot rendezvous stabilization. | The 16-slot profile confirmed the served hot path still feeds F8 wrappers as `n_tokens=1`; async slot chunking exposes wider batch kernels but regresses end-to-end throughput by losing stage overlap. The launcher now resolves `DS4_V100_MICROBATCH_WAIT_US=auto` to 200 ms at 16 active slots, producing one 16-request tensor batch and `43.534061` generated tok/s by default; best observed candidate was `43.730215`. Next work should focus on a software-pipelined hot-path kernel or TurboMind expert scheduler change that improves the per-slot topology instead of synthetic wide-batch probes. | Sprint 123+ |
 
 ## Open Questions
 

@@ -74,7 +74,7 @@ static int compare_outputs(const float *scalar,
 }
 
 static void run_ptr_case(uint32_t rows, uint32_t cols, const char *label, uint32_t salt) {
-    enum { TOKENS = 8 };
+    enum { TOKENS = 16 };
     const uint64_t row_bytes = ds4_src_f8_e4m3_b128_row_bytes(cols);
     const uint64_t matrix_bytes = (uint64_t)rows * row_bytes;
     uint8_t *payload = (uint8_t *)malloc((size_t)matrix_bytes);
@@ -171,7 +171,7 @@ done_host:
 }
 
 static void run_contiguous_case(uint32_t rows, uint32_t cols, const char *label, uint32_t salt) {
-    enum { TOKENS = 8 };
+    enum { TOKENS = 16 };
     const uint64_t row_bytes = ds4_src_f8_e4m3_b128_row_bytes(cols);
     const uint64_t matrix_bytes = (uint64_t)rows * row_bytes;
     uint8_t *payload = (uint8_t *)malloc((size_t)matrix_bytes);
@@ -260,6 +260,7 @@ int main(void) {
     run_ptr_case(1024, 4096, "q_a ptr-table", 1);
     run_ptr_case(512, 4096, "kv ptr-table", 3);
     run_contiguous_case(32768, 1024, "q_b contiguous", 5);
+    run_contiguous_case(4096, 8192, "output_b contiguous", 7);
 
     if (failures) return 1;
     puts("cuda_f8_hmma_attn_batch_smoke: ok");

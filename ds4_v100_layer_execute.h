@@ -80,6 +80,7 @@ typedef struct {
     ds4_gpu_tensor *attn_split[DS4_V100_LAYER_MAX_BATCH];
     ds4_gpu_tensor *ffn_split[DS4_V100_LAYER_MAX_BATCH];
     ds4_gpu_tensor *attn_cur[DS4_V100_LAYER_MAX_BATCH];
+    ds4_gpu_tensor *attn_out_batch;
     ds4_gpu_tensor *attn_out[DS4_V100_LAYER_MAX_BATCH];
     ds4_gpu_tensor *after_attn_hc[DS4_V100_LAYER_MAX_BATCH];
     ds4_gpu_tensor *ffn_cur[DS4_V100_LAYER_MAX_BATCH];

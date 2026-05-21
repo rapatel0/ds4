@@ -14,6 +14,7 @@
 /TODO.md
 /gguf/
 logs/security/
+logs/from-cluster/**/nvprof*.log
 tests/v100_context_smoke
 tests/v100_layer_state_smoke
 *.o

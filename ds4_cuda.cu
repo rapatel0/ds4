@@ -6722,7 +6722,7 @@ static int cuda_f8_hmma_shared_down_enabled(void) {
 static int cuda_f8_hmma_shared_down_shape_ok(uint32_t rows, uint32_t cols, uint32_t n_tokens) {
     return rows == 4096u &&
            cols == 2048u &&
-           (n_tokens == 4u || n_tokens == 8u);
+           (n_tokens == 4u || n_tokens == 8u || n_tokens == 16u);
 }
 
 static int cuda_f8_hmma_pair_swiglu_enabled(void) {
@@ -6736,7 +6736,7 @@ static int cuda_f8_pair_swiglu_single_rows2_enabled(void) {
 static int cuda_f8_hmma_pair_swiglu_shape_ok(uint32_t rows, uint32_t cols, uint32_t n_tokens) {
     return rows == 2048u &&
            cols == 4096u &&
-           (n_tokens == 4u || n_tokens == 8u);
+           (n_tokens == 4u || n_tokens == 8u || n_tokens == 16u);
 }
 
 static int cuda_f8_hmma_attn_batch_enabled(void) {
@@ -6752,10 +6752,11 @@ static int cuda_f8_hmma_single_shape_ok(uint32_t rows, uint32_t cols) {
 }
 
 static int cuda_f8_hmma_attn_batch_shape_ok(uint32_t rows, uint32_t cols, uint32_t n_tokens) {
-    if (n_tokens != 4u && n_tokens != 8u) return 0;
+    if (n_tokens != 4u && n_tokens != 8u && n_tokens != 16u) return 0;
     return (rows == 1024u && cols == 4096u) ||
            (rows == 512u && cols == 4096u) ||
-           (rows == 32768u && cols == 1024u);
+           (rows == 32768u && cols == 1024u) ||
+           (rows == 4096u && cols == 8192u);
 }
 
 static uint64_t cuda_f8_f16_arena_cache_reserve_bytes(void) {

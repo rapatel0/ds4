@@ -10,11 +10,12 @@ the Sprint 111 fused TurboMind gate/up appliance plus the Sprint 115 shared
 gate/up SwiGLU F8 HMMA path, Sprint 116 batched attention-projection F8 HMMA
 path for active 4/8-slot batches, and Sprint 119 event-ordered handoff for
 multi-slot per-step serving. Sprint 121 adds an admitted 16-slot 256K
-throughput mode.
+throughput mode. Sprint 122 stabilizes 16-slot request coalescing by resolving
+launcher `auto` microbatch wait to 200 ms at 16 active slots.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
-| Throughput serving target | 262,144 | 16 | `43.659461` | `43.659461` | 16/16 token match |
+| Throughput serving target | 262,144 | 16 | `43.730215` | `43.534061` | 16/16 token match |
 | 8-slot compatibility target | 262,144 | 8 | `34.689964` | `34.490294` | 8/8 token match |
 | Long-context target | 1,048,576 | 4 | `21.771077` | `21.771077` | 4/4 token match |
 
@@ -61,6 +62,7 @@ to slightly worse.
 | 119 | Event-ordered stage handoff for per-step multi-slot serving | Correct; `34.433252` vs `33.379839` at 8-slot/256K and `21.771077` vs `21.566859` at 4-slot/1M | Shipped/default as `DS4_V100_ASYNC_EVENT_HANDOFF=auto` |
 | 120 | Single-token shared gate/up/SwiGLU row-pair fusion | Correct; current default repeat was `34.490294`, scalar single fusion was `34.689964`, and row-pair single fusion was `34.380968` at 8-slot/256K | Keep opt-in/off; row-pair compaction is not the missing kernel lever |
 | 121 | 16-slot 256K throughput mode | Correct; `43.659461` at 16-slot/256K vs `34.445844` same-binary 8-slot control | Keep as admitted 256K throughput mode; reject unsafe 16-slot long-context configs |
+| 122 | 16-slot profile, HMMA admission, async chunk probes, and 16-slot rendezvous policy | Correct; best `43.730215`, production-auto `43.534061`, one 16-request tensor batch after 200 ms auto wait; chunked tensor scheduling regressed (`28.876459` at chunk 2, `18.447169` at chunk 4, `13.315378` at chunk 16) | Ship 16-slot auto rendezvous; keep chunk/output-B probes opt-in/off |
 
 ## Remaining
 
@@ -77,6 +79,9 @@ to slightly worse.
     throughput, and Sprint 118 showed naive single-token WMMA is much slower.
     The useful version needs packed decode, activation staging, MMA, and
     epilogue work in one tensor-core-oriented kernel with useful tile fill.
+    Sprint 122 further showed that merely chunking slots to feed wider kernels
+    loses too much stage overlap, so the fusion target must match the per-slot
+    served topology or replace it with an overlapped scheduler.
 - Decide whether the next production step is a deeper TurboMind adapter change
   or a lower-level CUTLASS/TurboMind-inspired persistent kernel probe.
 
@@ -91,8 +96,10 @@ The default launcher now keeps `DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=0`,
 `DS4_V100_ASYNC_EVENT_HANDOFF=auto` enables event-ordered handoff for
 multi-slot per-step serving and resolves off for one-slot latency configs.
 `ctx=262144` can now admit 16 slots; the launcher rejects 16-slot 1M configs
-before allocation. The opt-in diagnostic paths can be enabled, or defaults
-rolled back, with:
+before allocation. `DS4_V100_MICROBATCH_WAIT_US=auto` resolves to 200 ms when
+`DS4_V100_ACTIVE_MICROBATCH >= 16` so bursty 16-slot clients form one tensor
+batch. The opt-in diagnostic paths can be enabled, or defaults rolled back,
+with:
 
 ```text
 DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=1
@@ -107,6 +114,8 @@ DS4_V100_CUDA_F8_HMMA_SINGLE=1
 DS4_V100_TURBOMIND_FUSED_GATE_UP=0
 DS4_V100_ASYNC_EVENT_HANDOFF=0
 DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE_ROWS2=1
+DS4_V100_BATCH_ATTN_OUTPUT_B=1
+DS4_V100_ASYNC_SLOT_CHUNK=2
 ```
 
 The fused gate/up path is default-enabled for appliances that contain fused

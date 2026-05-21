@@ -1345,7 +1345,7 @@ static void replay_step_pipeline_mark_done(replay_step_pipeline_batch *b,
 }
 
 static uint32_t replay_async_slot_chunk(const replay_step_pipeline_batch *b) {
-    if (!b || b->event_handoff) return 1;
+    if (!b) return 1;
     const char *env = getenv("DS4_V100_ASYNC_SLOT_CHUNK");
     if (!env || !env[0]) env = getenv("DS4_ASYNC_SLOT_CHUNK");
     if (!env || !env[0]) return 1;
@@ -1427,11 +1427,14 @@ static void *replay_step_pipeline_worker_main(void *arg) {
             }
         }
         if (b->event_handoff) {
-            ds4_gpu_event *ready_event = b->rt->stage_ready[stage][slot];
-            if (!ready_event || !ds4_gpu_event_record(ready_event)) {
-                replay_step_pipeline_fail(b, "async per-step pipeline event record failed");
-                break;
+            for (uint32_t rel = 0; rel < chunk; rel++) {
+                ds4_gpu_event *ready_event = b->rt->stage_ready[stage][slot + rel];
+                if (!ready_event || !ds4_gpu_event_record(ready_event)) {
+                    replay_step_pipeline_fail(b, "async per-step pipeline event record failed");
+                    break;
+                }
             }
+            if (b->failed) break;
         } else {
             const double sync0 = replay_now_ms();
             if (!ds4_gpu_set_device(stage) || !ds4_gpu_synchronize()) {

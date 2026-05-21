@@ -2131,8 +2131,9 @@ static int run_server(const replay_cli_options *opt,
         pthread_cond_destroy(&state.pending_cv);
         return 2;
     }
+    const int backlog = opt->active_microbatch > 64u ? (int)opt->active_microbatch : 64;
     if (bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
-        listen(listen_fd, 8) != 0) {
+        listen(listen_fd, backlog) != 0) {
         perror("ds4-v100-replay: bind/listen");
         close(listen_fd);
         pthread_mutex_destroy(&state.queue_mu);
