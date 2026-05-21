@@ -12,8 +12,9 @@ the fixed-shape gate/up probe itself only contributes about `0.1%` end-to-end.
 The runtime now reliably coalesces
 high-slot concurrent requests into one tensor batch by resolving launcher
 `auto` microbatch wait to 200 ms at `active_microbatch >= 16`. The best current
-served result is `60.130047` generated tok/s at 128-slot/32K; the current
-256K production-auto repeat remains `43.534061` generated tok/s. Sprint 123 found
+served result is Sprint 145's `61.065087` generated tok/s at 256-slot/16K;
+the best 32K result remains `60.130047`, and the current 256K production-auto
+repeat remains `43.534061` generated tok/s. Sprint 123 found
 correct opt-in shared-FFN fusions up to `43.887206`. Sprint 124 added a
 correct opt-in TurboMind route-row reduce path and measured up to `43.822500`.
 Sprint 125 added a correct grouped-batch attention output-A probe and measured
@@ -83,7 +84,12 @@ aggregate generated rates separately. Sprint 144 added explicit SM70 MXFP4
 full 43-layer smoke; the standalone down probe was slightly faster
 (`0.2896 ms` vs `0.2936 ms`), but served A/B regressed to `59.791839`
 generated tok/s versus `59.993301` control, and gate `m64n256` also regressed
-to `59.797232`. The probes remain explicit opt-ins only.
+to `59.797232`. The probes remain explicit opt-ins only. Sprint 145 admitted a
+guarded 256-slot/16K short-context tier after planner and full-scheduler
+validation. It served correctly at `61.065087` generated tok/s and
+`57.248519` continuation/decode tok/s with `256/256` token match, but the
+decode gain over the 128-slot/16K control was only about 2%, so slot widening
+is now a ceiling-expansion tactic rather than the main throughput lever.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
@@ -95,6 +101,9 @@ current topology because it gives up too much stage overlap.
 
 | Mode | Context | Slots | Generated tok/s | Continuation tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
+| Sprint 145 256-slot 16K throughput ceiling | 16,384 | 256 | `61.065087` | `57.248519` | 256/256 token match |
+| Sprint 145 192-slot 16K midpoint | 16,384 | 192 | `60.700926` | `56.907118` | 192/192 token match |
+| Sprint 145 128-slot 16K control | 16,384 | 128 | `59.860493` | `56.119213` | 128/128 token match |
 | Sprint 139 gated m128 auto probe | 32,768 | 128 | `60.130047` | `56.371919` | 128/128 token match |
 | Sprint 140 gated down-probe-off control | 32,768 | 128 | `60.129772` | `56.371661` | 128/128 token match |
 | Sprint 141 scalar route-row reduce repeat | 32,768 | 128 | `60.112248` | `56.355232` | 128/128 token match |
@@ -213,6 +222,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 142 | TurboMind down-epilogue reduce probe | Correct; full 43-layer 128-slot smoke passed and served A/B was `60.041003` vs `59.987105` control | Keep off by default; atomic epilogue fusion proves the integration boundary but is not a material throughput win |
 | 143 | Prefill/decode metric split | Correct; V100 one-request smoke reported aggregate prompt `6.841274`, generated `0.760142`, continuation `0.380071`, and response-local prompt/decode rates | Ship benchmark visibility change; no runtime default change |
 | 144 | SM70 MXFP4 m64n256 tile probe | Correct; full 43-layer smoke passed, but served 128-slot/32K A/B regressed: control `59.993301`, down `m64n256` `59.791839`, gate `m64n256` `59.797232` | Keep explicit opt-in only; larger routed-FFN executor work is still the next lever |
+| 145 | 256-slot 16K short-context admission | Correct; planner worst GPU was `29.07 GiB / 32.00 GiB` including reserve, full 43-layer smoke passed, and served 16K runs reached `59.860493` at 128 slots, `60.700926` at 192 slots, and `61.065087` at 256 slots | Ship guarded 256-slot admission for `ctx <= 16K`; simple slot widening is now mostly exhausted |
 
 ## Sprint 106 Profile Takeaway
 

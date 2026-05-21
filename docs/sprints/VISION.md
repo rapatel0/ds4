@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: codex
-revision: 145
+revision: 146
 ---
 
 # Vision: DS4 V100 Appliance
@@ -142,12 +142,20 @@ optimized V100 low-bit expert kernels in the actual hot path.
   GEMM epilogue for the exact 768-route high-slot shape. It passed full
   43-layer smoke and served correctly at `60.041003` generated tok/s versus
   `59.987105` same-binary control, but the improvement is only run-noise
-  positive, so it also remains opt-in and default-off.
+  positive, so it also remains opt-in and default-off. Sprint 143 added
+  explicit prompt/prefill versus continuation/decode metrics to the benchmark
+  harnesses. Sprint 144 tested a wider-N SM70 MXFP4 tile and kept it opt-in
+  after served 128-slot/32K A/B regressed. Sprint 145 widened the
+  short-context admission ceiling to 256 slots at 16K after planner and
+  full-scheduler validation. It served correctly at `61.065087` generated
+  tok/s and `57.248519` continuation/decode tok/s, but only improved decode by
+  about 2% over the 128-slot/16K control.
   Dispatch-policy tuning, dispatch bypass, final scatter fusion, wrapper-level
   activation compaction, separate tail-vectorization, atomic epilogue reduce,
-  and basic gate/up launch fusion are therefore not the missing throughput
-  lever. The project remains far below the practical serving target, so the
-  next meaningful step is still larger execution-boundary work:
+  simple slot widening, and basic gate/up launch fusion are therefore not the
+  missing throughput lever. The project remains far below the practical
+  serving target, so the next meaningful step is still larger
+  execution-boundary work:
   a narrow DS4-only persistent grouped routed-expert pipeline that
   software-pipelines packed MXFP4 dequant, gate/up HMMA, gated activation, down
   HMMA, and weighted scatter/reduce for the current compact routed shape, or
@@ -2672,6 +2680,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-21 | Completed Sprint 142 TurboMind down-epilogue reduce probe. | The fixed-shape down GEMM epilogue can apply route weights and atomically accumulate directly into token rows, and full 43-layer 128-slot smoke passed. Served A/B was only run-noise positive (`60.041003` vs `59.987105`), so it remains opt-in/default-off. | Sprint 143+ |
 | 2026-05-21 | Shipped Sprint 143 prefill/decode metric split. | The benchmark harnesses now report aggregate prompt/prefill, generated, and continuation/decode tok/s separately. This is now the required visibility layer for served A/B decisions because aggregate generated tok/s can hide whether a change helps prompt replay or decode. | Sprint 144+ |
 | 2026-05-21 | Completed Sprint 144 SM70 MXFP4 m64n256 tile probe. | The wider-N tile passed standalone correctness and full 43-layer smoke, with a small isolated down improvement (`0.2896 ms` vs `0.2936 ms`), but served 128-slot/32K A/B regressed for both down `m64n256` (`59.791839`) and gate `m64n256` (`59.797232`) versus control (`59.993301`). Keep it opt-in; the next throughput step must be a larger routed-FFN executor or scheduler boundary. | Sprint 145+ |
+| 2026-05-21 | Shipped Sprint 145 256-slot 16K admission. | The planner fits 256 slots at 16K with worst GPU `29.07 GiB / 32.00 GiB` including reserve, full 43-layer smoke passed, and served A/B reached `61.065087` generated tok/s / `57.248519` continuation tok/s with `256/256` token match. The 128/192/256 slot curve is nearly flat, so this is a guarded ceiling rather than the main route to practical throughput. | Sprint 146+ |
 
 ## Open Questions
 

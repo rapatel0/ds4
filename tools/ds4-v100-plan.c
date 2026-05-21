@@ -42,7 +42,7 @@ enum {
     DS4_N_INDEXER_HEAD     = 64,
     DS4_N_INDEXER_HEAD_DIM = 128,
     DS4_N_HC               = 4,
-    DS4_PLAN_MAX_SLOTS     = 128,
+    DS4_PLAN_MAX_SLOTS     = 256,
 };
 
 typedef struct {
@@ -566,8 +566,8 @@ static void compute_plan_worst(const options *opt,
 }
 
 static void print_planner_json(const options *opt) {
-    static const uint64_t tiers[] = { 131072ULL, 262144ULL, 524288ULL, 1048576ULL };
-    static const uint32_t target_slots[] = { 1, 2, 4, 8, 16 };
+    static const uint64_t tiers[] = { 16384ULL, 32768ULL, 65536ULL, 131072ULL, 262144ULL, 524288ULL, 1048576ULL };
+    static const uint32_t target_slots[] = { 1, 2, 4, 8, 16, 32, 64, 128, 256 };
 
     uint64_t worst = 0;
     uint32_t worst_gpu = 0;
@@ -747,7 +747,7 @@ static void run_planner(const options *opt) {
     printf("\nAdmission by context tier, F16 KV\n");
     printf("| Context | Max admitted slots | Worst-GPU planned total at max |\n");
     printf("|---:|---:|---:|\n");
-    const uint64_t tiers[] = { 32768ULL, 65536ULL, 131072ULL, 262144ULL, 524288ULL, 1048576ULL };
+    const uint64_t tiers[] = { 16384ULL, 32768ULL, 65536ULL, 131072ULL, 262144ULL, 524288ULL, 1048576ULL };
     for (uint32_t i = 0; i < sizeof(tiers) / sizeof(tiers[0]); i++) {
         uint64_t tier_worst = 0;
         const uint32_t slots = admitted_slots_for_ctx(opt, tiers[i], &tier_worst);

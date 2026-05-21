@@ -267,10 +267,10 @@ is_uint "$DS4_V100_MTP_TOP_K" || fail "DS4_V100_MTP_TOP_K must be an integer"
 is_uint "$DS4_V100_MTP_GPU" || fail "DS4_V100_MTP_GPU must be an integer"
 
 [ "$DS4_V100_CTX" -ge 1 ] || fail "DS4_V100_CTX must be positive"
-[ "$DS4_V100_SLOTS" -ge 1 ] && [ "$DS4_V100_SLOTS" -le 128 ] || fail "DS4_V100_SLOTS must be between 1 and 128"
+[ "$DS4_V100_SLOTS" -ge 1 ] && [ "$DS4_V100_SLOTS" -le 256 ] || fail "DS4_V100_SLOTS must be between 1 and 256"
 [ "$DS4_V100_ACTIVE_MICROBATCH" -ge 1 ] || fail "DS4_V100_ACTIVE_MICROBATCH must be positive"
 [ "$DS4_V100_ACTIVE_MICROBATCH" -le "$DS4_V100_SLOTS" ] || fail "DS4_V100_ACTIVE_MICROBATCH must be in [1,DS4_V100_SLOTS]"
-ctx_slot_cap=128
+ctx_slot_cap=256
 if [ "$DS4_V100_CTX" -gt 524288 ]; then
     ctx_slot_cap=7
 elif [ "$DS4_V100_CTX" -gt 262144 ]; then
@@ -281,6 +281,8 @@ elif [ "$DS4_V100_CTX" -gt 65536 ]; then
     ctx_slot_cap=32
 elif [ "$DS4_V100_CTX" -gt 32768 ]; then
     ctx_slot_cap=64
+elif [ "$DS4_V100_CTX" -gt 16384 ]; then
+    ctx_slot_cap=128
 fi
 [ "$DS4_V100_SLOTS" -le "$ctx_slot_cap" ] || fail "DS4_V100_SLOTS=$DS4_V100_SLOTS exceeds ctx=$DS4_V100_CTX admission cap $ctx_slot_cap"
 if [ "$DS4_V100_MICROBATCH_WAIT_US" != "auto" ]; then

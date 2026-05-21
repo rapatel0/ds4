@@ -83,10 +83,16 @@ sustained decode, and aggregate throughput harnesses so future experiments can
 separate prompt replay, continuation decode, and aggregate generated rates.
 Sprint 144 added explicit SM70 MXFP4 `m64n256` probes for the 768-route
 gate/up and down shapes. Both were correct, but served 128-slot/32K A/B
-regressed versus control, so they remain opt-in test hooks only.
+regressed versus control, so they remain opt-in test hooks only. Sprint 145
+added a guarded 256-slot/16K admission tier. It passed planner, full 43-layer
+smoke, and served correctness, reaching `61.065087` generated tok/s and
+`57.248519` continuation/decode tok/s. The lift over the 128-slot/16K control
+was only about 2%, so the practical ceiling is now clearly a routed-expert
+execution problem rather than a simple slot-count problem.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
+| Short-context ceiling target | 16,384 | 256 | `61.065087` | opt-in | 256/256 token match |
 | Short-context max-throughput target | 32,768 | 128 | `60.130047` | opt-in | 128/128 token match |
 | Short-context high-throughput target | 65,536 | 64 | `57.322945` | opt-in | 64/64 token match |
 | Short-context throughput target | 131,072 | 32 | `52.840889` | opt-in | 32/32 token match |
@@ -105,6 +111,7 @@ to slightly worse.
 - Selected-token oracle for the official short prompt, expected text hex
   `3136`, selected token id `926`.
 - HTTP served soak benchmarks at:
+  - `ctx=16384`, `slots=128/192/256`, matching active microbatch, 16 generated tokens.
   - `ctx=32768`, `slots=128`, `active_microbatch=128`, 16 generated tokens.
   - `ctx=65536`, `slots=64`, `active_microbatch=64`, 16 generated tokens.
   - `ctx=131072`, `slots=32`, `active_microbatch=32`, 16 generated tokens.
@@ -163,6 +170,7 @@ to slightly worse.
 | 142 | TurboMind down-epilogue reduce probe | Correct; full 43-layer 128-slot smoke passed and served A/B was `60.041003` vs `59.987105` same-binary control | Keep off by default; the atomic epilogue reduce is correct but not a material throughput win |
 | 143 | Prefill/decode metric split | Correct; one-request V100 smoke emitted aggregate prompt, generated, and continuation tok/s plus response-local prompt/decode rates | Ship benchmark visibility change; use split metrics in future A/B decisions |
 | 144 | SM70 MXFP4 m64n256 tile probe | Correct; standalone down improved slightly (`0.2896 ms` vs `0.2936 ms`), but served A/B regressed: control `59.993301`, down `m64n256` `59.791839`, gate `m64n256` `59.797232` | Keep opt-in only; do not promote individual tile tweaks without served wins |
+| 145 | 256-slot 16K short-context admission | Correct; planner worst GPU was `29.07 GiB / 32.00 GiB` including reserve, full 43-layer smoke passed, and served 16K runs reached `59.860493` at 128 slots, `60.700926` at 192 slots, and `61.065087` at 256 slots | Ship guarded 256-slot admission for `ctx <= 16K`; simple slot widening is now mostly exhausted |
 
 ## Remaining
 
@@ -198,9 +206,10 @@ to slightly worse.
     `0.1740 ms` baseline, or a scheduler that keeps expert work larger than the
     current compact microshape. Sprints 135-136 confirm that wider served
     scheduling does help: 32-slot 128K reached `52.840889`, 64-slot 64K
-    reached `57.322945`, and 128-slot 32K reached `59.598172`, but the
-    marginal gain is shrinking and all remain far below the practical vision
-    target. Sprint 138 set the next kernel acceptance target: beat the compact
+    reached `57.322945`, 128-slot 32K reached `59.598172`, and 256-slot 16K
+    reached `61.065087`, but the marginal gain is shrinking and all remain far
+    below the practical vision target. Sprint 138 set the next kernel
+    acceptance target: beat the compact
     768-route fused gate_up baseline of about `0.638 ms`. Sprint 139 beat that
     target in isolation with a fixed m128 gated-SiLU probe at `0.5999 ms`, but
     served A/B only moved from `60.061899` to `60.130047`, so gate/up-only
@@ -211,7 +220,9 @@ to slightly worse.
     the same band as control. Sprint 142 moved that reduce into the down GEMM
     epilogue, but the served result was only `60.041003` vs `59.987105`
     control. Even a correct weighted-reduce epilogue is too small in this
-    atomic form.
+    atomic form. Sprint 145 confirms that widening to 256 slots at 16K is
+    memory-safe and correct, but only moves continuation/decode throughput by
+    about 2% versus the 128-slot/16K control.
     Sprint 122 further showed that merely chunking slots to feed wider kernels
     loses too much stage overlap, so the fusion target must match the per-slot
     served topology or replace it with an overlapped scheduler.
