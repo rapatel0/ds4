@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: codex
-revision: 130
+revision: 131
 ---
 
 # Vision: DS4 V100 Appliance
@@ -90,13 +90,18 @@ optimized V100 low-bit expert kernels in the actual hot path.
   interleaved fused gate/up appliance pack. It passed standalone, stage, full
   43-layer, profile, and served A/B validation; the routed profile dropped from
   `28.242 ms` to `26.734 ms` by removing standalone SwiGLU, and the served
-  A/B moved from `43.691032` to `43.933293` generated tok/s. The project
-  remains far below the practical serving target, so the next meaningful step
-  is no longer another small launch fusion. It needs larger execution-boundary
-  work: a persistent grouped routed-expert pipeline that software-pipelines
-  packed MXFP4 dequant, gate/up HMMA, gated activation, down HMMA, and weighted
-  scatter/reduce, or a real SM70 software-pipelined F8 shared-FFN/attention-
-  output kernel that preserves the current served topology.
+  A/B moved from `43.691032` to `43.933293` generated tok/s. Sprint 128 then
+  compacted the packed TurboMind grouped schedule so the gate/up and down GEMMs
+  see at most `total_routes` groups instead of the full 256-expert schedule.
+  That is now a launcher default: the existing fused appliance reached
+  `45.888778` generated tok/s, and the interleaved gated appliance with compact
+  plus route-row-reduce opt-in reached `46.394722`. The project remains far
+  below the practical serving target, so the next meaningful step is still
+  larger execution-boundary work: a persistent grouped routed-expert pipeline
+  that software-pipelines packed MXFP4 dequant, gate/up HMMA, gated activation,
+  down HMMA, and weighted scatter/reduce, or a real SM70 software-pipelined F8
+  shared-FFN/attention-output kernel that preserves the current served
+  topology.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation

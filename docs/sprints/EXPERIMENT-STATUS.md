@@ -27,11 +27,15 @@ Sprint 127 added an opt-in TurboMind gated-SiLU ABI and an interleaved
 gate/up appliance pack. The path is correct, removes the standalone SwiGLU
 profile bucket, and measured `43.933293` generated tok/s, but it is still a
 small end-to-end change rather than the persistent expert pipeline needed for
-the vision target.
+the vision target. Sprint 128 added compact active-expert scheduling for the
+packed TurboMind path, promoted it as the launcher default, and raised the
+existing fused appliance default to `45.888778` generated tok/s. The best
+Sprint 128 opt-in stack, interleaved gated appliance plus compact schedule plus
+route-row-reduce, reached `46.394722` generated tok/s.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
-| Throughput serving target | 262,144 | 16 | `43.933293` | `43.453309` | 16/16 token match |
+| Throughput serving target | 262,144 | 16 | `46.394722` | `45.888778` | 16/16 token match |
 | 8-slot compatibility target | 262,144 | 8 | `34.689964` | `34.490294` | 8/8 token match |
 | Long-context target | 1,048,576 | 4 | `21.771077` | `21.771077` | 4/4 token match |
 
@@ -84,19 +88,21 @@ to slightly worse.
 | 125 | Batched grouped attention output-A | Correct; rows2 output-A batching reached `43.640921`, rows2 A+B reached `43.619996`, and HMMA A+B reached `43.245208` vs `43.503005` control at 16-slot/256K | Keep opt-in/off; single projection batching is too small |
 | 126 | Routed-expert stage profiler | Correct; full 43-layer profile showed gate/up `47.0%`, down `23.4%`, route build `16.8%`, gather `3.7%`, SwiGLU `3.2%`, scatter `4.6%` of profiled routed-FFN time; no-profile served sanity was `43.453309` | Ship default-off diagnostic; use it to target larger TurboMind/persistent expert work |
 | 127 | TurboMind gated-SiLU interleaved pack | Correct; standalone gated grouped path was `1.47x-1.55x` faster than separate gate/up, full 43-layer gated profile removed standalone SwiGLU and reduced profiled routed-FFN total from `28.242 ms` to `26.734 ms`; served A/B was `43.933293` vs `43.691032` control | Keep opt-in/off; confirms format-aware epilogue fusion, but does not materially change the topline |
+| 128 | TurboMind compact active-expert schedule | Correct; full smokes passed on both the interleaved gated and existing fused appliances, compact served A/B was `46.328184` vs `43.879880`, compact+route-row-reduce reached `46.394722`, and the fused-appliance launcher default reached `45.888778` | Ship/default as `DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1`; keep gated-SiLU and route-row-reduce opt-in |
 
 ## Remaining
 
-- Close the throughput gap. The current best `~44` tok/s aggregate is far below the
+- Close the throughput gap. The current best `~46` tok/s aggregate is far below the
   `~1k-2k` practical target discussed in the vision.
 - Improve GPU utilization. The latest profile says the bottleneck is device
   kernel shape/occupancy, not disk, host RAM, or bulk PCIe/NVLink traffic.
 - Attack larger hot-path buckets instead of small host-side route plumbing:
   - TurboMind MXFP4 expert occupancy and route-expanded activation layout.
   - Persistent/grouped expert execution beyond the shipped Sprint 111 fused
-    gate_up launch reduction and Sprint 127 gated-SiLU epilogue fusion.
-    Sprint 127 proved the interleaved format and gated epilogue path, but the
-    served delta was only `43.933293` vs `43.691032` control.
+    gate_up launch reduction, Sprint 127 gated-SiLU epilogue fusion, and
+    Sprint 128 compact active-expert scheduling. Sprint 128 is the first recent
+    routed-expert scheduler change to clear the run band, but the topline is
+    still two orders of magnitude below the vision target.
   - A larger software-pipelined F8/attention-output/FFN rewrite. Sprint 117
     showed scalar per-slot shared-FFN fusion removes calls but does not improve
     throughput, and Sprint 118 showed naive single-token WMMA is much slower.
@@ -117,6 +123,7 @@ to slightly worse.
 The default launcher now keeps `DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=0`,
 `DS4_V100_CUDA_F8_ROW4=0`, `DS4_V100_CUDA_F8_WARP_SCALE=0`, and
 `DS4_V100_FFN_DIRECT_DELTA=0`, while
+`DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1`,
 `DS4_V100_CUDA_F8_HMMA_PAIR_SWIGLU=1`,
 `DS4_V100_ENABLE_BATCH_ATTN_PROJ=1`, and
 `DS4_V100_CUDA_F8_HMMA_ATTN_BATCH=1` are default.
@@ -149,6 +156,7 @@ DS4_V100_BATCH_ATTN_OUTPUT_A=1
 DS4_V100_CUDA_F8_HMMA_GROUPED_ATTN_O_BATCH=1
 DS4_V100_TURBOMIND_PROFILE=1
 DS4_V100_TURBOMIND_GATED_SILU=1
+DS4_V100_TURBOMIND_COMPACT_SCHEDULE=0
 ```
 
 The fused gate/up path is default-enabled for appliances that contain fused
@@ -157,3 +165,6 @@ only when the appliance also contains separate gate/up tensors. The gated-SiLU
 path additionally requires an appliance packed with `--fuse-gate-up-interleaved`
 and the Sprint 127 TurboMind ABI; do not enable it against the Sprint 111
 `[all gate][all up]` fused pack.
+Compact scheduling is default-on after Sprint 128; set
+`DS4_V100_TURBOMIND_COMPACT_SCHEDULE=0` only to roll back to the old 256-expert
+grouped schedule.

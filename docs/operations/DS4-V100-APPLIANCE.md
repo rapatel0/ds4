@@ -152,6 +152,7 @@ DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS=1
 DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC=0
 DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE=0
 DS4_V100_TURBOMIND_GATED_SILU=0
+DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1
 DS4_V100_TURBOMIND_PROFILE=0
 DS4_V100_HOST=127.0.0.1
 DS4_V100_PORT=18080
@@ -224,6 +225,12 @@ same-binary V100 A/B clears the promotion bar.
 epilogue path. It requires an appliance packed with
 `--fuse-gate-up-interleaved`; leave it `0` for existing fused gate/up
 appliances whose rows are laid out as `[all gate][all up]`.
+
+`DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1` enables the Sprint 128 compact
+active-expert schedule. It keeps the existing sorted route rows but presents
+at most `total_routes` grouped entries to TurboMind instead of the full
+256-expert schedule. This is the default after Sprint 128; set it to `0` to
+roll back to the full 256-expert grouped schedule.
 
 `DS4_V100_TURBOMIND_PROFILE=1` is a Sprint 126 diagnostic for the production
 routed-expert path. It prints per-GPU CUDA-event totals for route build,

@@ -5589,6 +5589,74 @@ __global__ static void tm_reduce_sum_weighted_half_to_f32_by_pair_kernel(
     out[idx] = acc;
 }
 
+__global__ static void tm_build_compact_schedule_kernel(
+        int *compact_offsets,
+        cuda_tm_strided_ptr *compact_gate_weights,
+        cuda_tm_strided_ptr *compact_gate_scales,
+        cuda_tm_strided_ptr *compact_up_weights,
+        cuda_tm_strided_ptr *compact_up_scales,
+        cuda_tm_strided_ptr *compact_gate_up_weights,
+        cuda_tm_strided_ptr *compact_gate_up_scales,
+        cuda_tm_strided_ptr *compact_down_weights,
+        cuda_tm_strided_ptr *compact_down_scales,
+        const cuda_tm_strided_ptr *gate_weights,
+        const cuda_tm_strided_ptr *gate_scales,
+        const cuda_tm_strided_ptr *up_weights,
+        const cuda_tm_strided_ptr *up_scales,
+        const cuda_tm_strided_ptr *gate_up_weights,
+        const cuda_tm_strided_ptr *gate_up_scales,
+        const cuda_tm_strided_ptr *down_weights,
+        const cuda_tm_strided_ptr *down_scales,
+        const int *offsets,
+        uint32_t n_total_experts,
+        uint32_t compact_groups,
+        int *bad) {
+    if (blockIdx.x != 0 || threadIdx.x != 0) return;
+    if (bad) *bad = 0;
+    if (!compact_offsets || !offsets || compact_groups == 0) {
+        if (bad) *bad = 1;
+        return;
+    }
+
+    uint32_t dst = 0;
+    compact_offsets[0] = 0;
+    for (uint32_t expert = 0; expert < n_total_experts; expert++) {
+        const int beg = offsets[expert];
+        const int end = offsets[expert + 1u];
+        if (end <= beg) continue;
+        if (dst >= compact_groups) {
+            if (bad) *bad = 1;
+            return;
+        }
+        compact_offsets[dst] = beg;
+        compact_offsets[dst + 1u] = end;
+        if (compact_gate_weights && gate_weights) compact_gate_weights[dst] = gate_weights[expert];
+        if (compact_gate_scales && gate_scales) compact_gate_scales[dst] = gate_scales[expert];
+        if (compact_up_weights && up_weights) compact_up_weights[dst] = up_weights[expert];
+        if (compact_up_scales && up_scales) compact_up_scales[dst] = up_scales[expert];
+        if (compact_gate_up_weights && gate_up_weights) compact_gate_up_weights[dst] = gate_up_weights[expert];
+        if (compact_gate_up_scales && gate_up_scales) compact_gate_up_scales[dst] = gate_up_scales[expert];
+        if (compact_down_weights && down_weights) compact_down_weights[dst] = down_weights[expert];
+        if (compact_down_scales && down_scales) compact_down_scales[dst] = down_scales[expert];
+        dst++;
+    }
+    if (dst == 0) {
+        if (bad) *bad = 1;
+        return;
+    }
+    for (uint32_t j = dst; j < compact_groups; j++) {
+        compact_offsets[j + 1u] = compact_offsets[dst];
+        if (compact_gate_weights && gate_weights) compact_gate_weights[j] = compact_gate_weights[0];
+        if (compact_gate_scales && gate_scales) compact_gate_scales[j] = compact_gate_scales[0];
+        if (compact_up_weights && up_weights) compact_up_weights[j] = compact_up_weights[0];
+        if (compact_up_scales && up_scales) compact_up_scales[j] = compact_up_scales[0];
+        if (compact_gate_up_weights && gate_up_weights) compact_gate_up_weights[j] = compact_gate_up_weights[0];
+        if (compact_gate_up_scales && gate_up_scales) compact_gate_up_scales[j] = compact_gate_up_scales[0];
+        if (compact_down_weights && down_weights) compact_down_weights[j] = compact_down_weights[0];
+        if (compact_down_scales && down_scales) compact_down_scales[j] = compact_down_scales[0];
+    }
+}
+
 static uint64_t cuda_tm_align16(uint64_t v) {
     return (v + 15ull) & ~15ull;
 }
@@ -5609,6 +5677,10 @@ static int cuda_tm_total_tokens_abi_enabled(void) {
 static int cuda_tm_gated_silu_enabled(void) {
     return g_tm_api.mul_mat_grouped_gated_silu_total_tokens &&
            cuda_env_flag_enabled("DS4_V100_TURBOMIND_GATED_SILU");
+}
+
+static int cuda_tm_compact_schedule_enabled(void) {
+    return cuda_env_flag_enabled("DS4_V100_TURBOMIND_COMPACT_SCHEDULE");
 }
 
 static int cuda_tm_small_route_build_enabled(void) {
@@ -6306,6 +6378,9 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     tm_prof.begin(arena->gpu);
 
     const int use_route_row_reduce = cuda_tm_route_row_reduce_enabled();
+    const int use_compact_schedule =
+        cuda_tm_compact_schedule_enabled() && total_routes < n_total_experts;
+    const uint32_t tm_group_count = use_compact_schedule ? total_routes : n_total_experts;
     uint64_t scratch_bytes = 0;
     const uint64_t counts_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     scratch_bytes += (uint64_t)n_total_experts * sizeof(int);
@@ -6323,6 +6398,42 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     scratch_bytes += (uint64_t)total_routes * sizeof(float);
     const uint64_t bad_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     scratch_bytes += sizeof(int);
+    const uint64_t compact_offsets_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
+    if (use_compact_schedule) {
+        scratch_bytes += (uint64_t)(tm_group_count + 1u) * sizeof(int);
+    }
+    const uint64_t compact_gate_weights_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
+    if (use_compact_schedule && !fused_gate_up) {
+        scratch_bytes += (uint64_t)tm_group_count * sizeof(cuda_tm_strided_ptr);
+    }
+    const uint64_t compact_gate_scales_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
+    if (use_compact_schedule && !fused_gate_up) {
+        scratch_bytes += (uint64_t)tm_group_count * sizeof(cuda_tm_strided_ptr);
+    }
+    const uint64_t compact_up_weights_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
+    if (use_compact_schedule && !fused_gate_up) {
+        scratch_bytes += (uint64_t)tm_group_count * sizeof(cuda_tm_strided_ptr);
+    }
+    const uint64_t compact_up_scales_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
+    if (use_compact_schedule && !fused_gate_up) {
+        scratch_bytes += (uint64_t)tm_group_count * sizeof(cuda_tm_strided_ptr);
+    }
+    const uint64_t compact_gate_up_weights_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
+    if (use_compact_schedule && fused_gate_up) {
+        scratch_bytes += (uint64_t)tm_group_count * sizeof(cuda_tm_strided_ptr);
+    }
+    const uint64_t compact_gate_up_scales_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
+    if (use_compact_schedule && fused_gate_up) {
+        scratch_bytes += (uint64_t)tm_group_count * sizeof(cuda_tm_strided_ptr);
+    }
+    const uint64_t compact_down_weights_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
+    if (use_compact_schedule) {
+        scratch_bytes += (uint64_t)tm_group_count * sizeof(cuda_tm_strided_ptr);
+    }
+    const uint64_t compact_down_scales_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
+    if (use_compact_schedule) {
+        scratch_bytes += (uint64_t)tm_group_count * sizeof(cuda_tm_strided_ptr);
+    }
     const uint64_t a_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     scratch_bytes += (uint64_t)total_routes * hidden * sizeof(__half);
     const uint64_t gate_out_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
@@ -6348,6 +6459,23 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     int *pair_rows = use_route_row_reduce ? (int *)(scratch + pair_rows_off) : nullptr;
     float *sorted_weights = (float *)(scratch + sorted_weights_off);
     int *bad = (int *)(scratch + bad_off);
+    int *compact_offsets = use_compact_schedule ? (int *)(scratch + compact_offsets_off) : nullptr;
+    cuda_tm_strided_ptr *compact_gate_weights =
+        (use_compact_schedule && !fused_gate_up) ? (cuda_tm_strided_ptr *)(scratch + compact_gate_weights_off) : nullptr;
+    cuda_tm_strided_ptr *compact_gate_scales =
+        (use_compact_schedule && !fused_gate_up) ? (cuda_tm_strided_ptr *)(scratch + compact_gate_scales_off) : nullptr;
+    cuda_tm_strided_ptr *compact_up_weights =
+        (use_compact_schedule && !fused_gate_up) ? (cuda_tm_strided_ptr *)(scratch + compact_up_weights_off) : nullptr;
+    cuda_tm_strided_ptr *compact_up_scales =
+        (use_compact_schedule && !fused_gate_up) ? (cuda_tm_strided_ptr *)(scratch + compact_up_scales_off) : nullptr;
+    cuda_tm_strided_ptr *compact_gate_up_weights =
+        (use_compact_schedule && fused_gate_up) ? (cuda_tm_strided_ptr *)(scratch + compact_gate_up_weights_off) : nullptr;
+    cuda_tm_strided_ptr *compact_gate_up_scales =
+        (use_compact_schedule && fused_gate_up) ? (cuda_tm_strided_ptr *)(scratch + compact_gate_up_scales_off) : nullptr;
+    cuda_tm_strided_ptr *compact_down_weights =
+        use_compact_schedule ? (cuda_tm_strided_ptr *)(scratch + compact_down_weights_off) : nullptr;
+    cuda_tm_strided_ptr *compact_down_scales =
+        use_compact_schedule ? (cuda_tm_strided_ptr *)(scratch + compact_down_scales_off) : nullptr;
     __half *a_half = (__half *)(scratch + a_off);
     __half *gate_out = use_gated_silu ? nullptr : (__half *)(scratch + gate_out_off);
     __half *up_out = fused_gate_up ? nullptr : (__half *)(scratch + up_out_off);
@@ -6425,22 +6553,98 @@ static int cuda_tm_routed_mxfp4_packed_impl(
         cuda_tm_matrix_pack_table_free(&down_pack);
         return 1;
     }
+    cuda_tm_matrix_pack gate_run_pack = gate_pack;
+    cuda_tm_matrix_pack up_run_pack = up_pack;
+    cuda_tm_matrix_pack gate_up_run_pack = gate_up_pack;
+    cuda_tm_matrix_pack down_run_pack = down_pack;
+    int *gemm_offsets = offsets;
+    uint32_t gemm_group_count = n_total_experts;
+    if (use_compact_schedule) {
+        tm_build_compact_schedule_kernel<<<1, 1>>>(
+            compact_offsets,
+            compact_gate_weights,
+            compact_gate_scales,
+            compact_up_weights,
+            compact_up_scales,
+            compact_gate_up_weights,
+            compact_gate_up_scales,
+            compact_down_weights,
+            compact_down_scales,
+            gate_pack.d_weights,
+            gate_pack.d_scales,
+            up_pack.d_weights,
+            up_pack.d_scales,
+            gate_up_pack.d_weights,
+            gate_up_pack.d_scales,
+            down_pack.d_weights,
+            down_pack.d_scales,
+            offsets,
+            n_total_experts,
+            tm_group_count,
+            bad);
+        if (!cuda_ok(cudaGetLastError(), "turbomind compact schedule launch")) {
+            cuda_tm_matrix_pack_table_free(&gate_up_pack);
+            cuda_tm_matrix_pack_table_free(&gate_pack);
+            cuda_tm_matrix_pack_table_free(&up_pack);
+            cuda_tm_matrix_pack_table_free(&down_pack);
+            return 1;
+        }
+        if (cuda_tm_route_validation_sync_enabled()) {
+            int h_bad = 0;
+            if (!cuda_ok(cudaMemcpy(&h_bad, bad, sizeof(h_bad), cudaMemcpyDeviceToHost),
+                         "turbomind compact schedule validation read")) {
+                cuda_tm_matrix_pack_table_free(&gate_up_pack);
+                cuda_tm_matrix_pack_table_free(&gate_pack);
+                cuda_tm_matrix_pack_table_free(&up_pack);
+                cuda_tm_matrix_pack_table_free(&down_pack);
+                return 1;
+            }
+            if (h_bad) {
+                cuda_tm_matrix_pack_table_free(&gate_up_pack);
+                cuda_tm_matrix_pack_table_free(&gate_pack);
+                cuda_tm_matrix_pack_table_free(&up_pack);
+                cuda_tm_matrix_pack_table_free(&down_pack);
+                return 1;
+            }
+        }
+        if (fused_gate_up) {
+            gate_up_run_pack.d_weights = compact_gate_up_weights;
+            gate_up_run_pack.d_scales = compact_gate_up_scales;
+            gate_up_run_pack.experts = tm_group_count;
+            gate_up_run_pack.cached_tables = 1;
+        } else {
+            gate_run_pack.d_weights = compact_gate_weights;
+            gate_run_pack.d_scales = compact_gate_scales;
+            gate_run_pack.experts = tm_group_count;
+            gate_run_pack.cached_tables = 1;
+            up_run_pack.d_weights = compact_up_weights;
+            up_run_pack.d_scales = compact_up_scales;
+            up_run_pack.experts = tm_group_count;
+            up_run_pack.cached_tables = 1;
+        }
+        down_run_pack.d_weights = compact_down_weights;
+        down_run_pack.d_scales = compact_down_scales;
+        down_run_pack.experts = tm_group_count;
+        down_run_pack.cached_tables = 1;
+        gemm_offsets = compact_offsets;
+        gemm_group_count = tm_group_count;
+    }
     int ok = 1;
     if (fused_gate_up) {
         ok = use_gated_silu
             ? cuda_tm_grouped_gated_silu_matmul(
-                  a_half, offsets, &gate_up_pack, total_routes, n_total_experts,
+                  a_half, gemm_offsets, &gate_up_run_pack, total_routes, gemm_group_count,
                   (int)fused_n_u64, (int)hidden, mid_half, "packed gate_up")
             : cuda_tm_grouped_matmul(
-                  a_half, offsets, &gate_up_pack, total_routes, n_total_experts,
+                  a_half, gemm_offsets, &gate_up_run_pack, total_routes, gemm_group_count,
                   (int)fused_n_u64, (int)hidden, gate_out, "packed gate_up");
     } else {
         ok = cuda_tm_grouped_matmul(
-            a_half, offsets, &gate_pack, total_routes, n_total_experts, (int)mid, (int)hidden,
+            a_half, gemm_offsets, &gate_run_pack, total_routes, gemm_group_count, (int)mid, (int)hidden,
             gate_out, "packed gate");
         if (ok) {
             ok = cuda_tm_grouped_matmul(
-                a_half, offsets, &up_pack, total_routes, n_total_experts, (int)mid, (int)hidden,
+                a_half, gemm_offsets, &up_run_pack, total_routes, gemm_group_count, (int)mid, (int)hidden,
                 up_out, "packed up");
         }
     }
@@ -6469,7 +6673,7 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     }
     if (ok) {
         ok = cuda_tm_grouped_matmul(
-            mid_half, offsets, &down_pack, total_routes, n_total_experts, (int)hidden, (int)mid,
+            mid_half, gemm_offsets, &down_run_pack, total_routes, gemm_group_count, (int)hidden, (int)mid,
             down_routes, "packed down");
     }
     if (ok) tm_prof.mark(&tm_prof.down_ms);

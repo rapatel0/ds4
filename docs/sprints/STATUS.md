@@ -17,20 +17,27 @@ stage profiler and confirmed the current binary still serves at `43.453309`
 generated tok/s with `16/16` token match. Sprint 127 added an opt-in
 TurboMind gated-SiLU path with interleaved fused gate/up packs. It removed the
 standalone SwiGLU bucket from the routed-expert profile and measured
-`43.933293` generated tok/s with `16/16` token match. None of Sprints 123-127
-promoted a new throughput default because the measured changes stayed inside
-the observed run band, were diagnostic-only, or require a new offline pack
-variant.
+`43.933293` generated tok/s with `16/16` token match. Sprint 128 compacted the
+packed TurboMind grouped schedule from 256 experts to at most `total_routes`
+groups and promoted that path as the launcher default after same-binary A/B
+reached `45.888778` generated tok/s on the existing fused appliance and
+`46.394722` on the interleaved gated appliance with route-row-reduce opt-in.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
 attention-projection F8 HMMA for active 4/8-slot batches, and Sprint 119
-event-ordered handoff for multi-slot per-step serving. Sprint 122 confirms that
-chunking slots to expose wider batch kernels is slower in the current topology
-because it gives up too much stage overlap.
+event-ordered handoff for multi-slot per-step serving. Sprint 128 adds compact
+TurboMind expert scheduling as a default routed-FFN optimization. Sprint 122
+confirms that chunking slots to expose wider batch kernels is slower in the
+current topology because it gives up too much stage overlap.
 
 | Mode | Context | Slots | Generated tok/s | Continuation tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
+| Sprint 128 gated compact + route-row-reduce opt-in | 262,144 | 16 | `46.394722` | `43.495052` | 16/16 token match |
+| Sprint 128 gated compact opt-in | 262,144 | 16 | `46.328184` | `43.432672` | 16/16 token match |
+| Sprint 128 compact launcher default on fused appliance | 262,144 | 16 | `45.888778` | `43.020729` | 16/16 token match |
+| Sprint 128 compact explicit on fused appliance | 262,144 | 16 | `45.747461` | `42.888244` | 16/16 token match |
+| Sprint 128 gated compact-off same-binary control | 262,144 | 16 | `43.879880` | `41.137387` | 16/16 token match |
 | Sprint 127 interleaved gated-SiLU opt-in | 262,144 | 16 | `43.933293` | `41.187462` | 16/16 token match |
 | Sprint 123 best opt-in shared FFN fusion | 262,144 | 16 | `43.887206` | `41.144256` | 16/16 token match |
 | Sprint 127 same-binary fused gate/up control | 262,144 | 16 | `43.691032` | `40.960343` | 16/16 token match |
@@ -101,6 +108,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 125 | Batched grouped attention output-A probe | Correct; output-A rows2 batching reached `43.640921`, rows2 A+B reached `43.619996`, and HMMA A+B reached `43.245208` vs `43.503005` control at 16-slot/256K | Kept opt-in/off; another single projection boundary is too small |
 | 126 | Production routed-expert stage profiler | Correct; full 43-layer profile showed fused gate/up at `47.0%`, down at `23.4%`, route build at `16.8%`, and SwiGLU at only `3.2%` of profiled routed-FFN time; no-profile served sanity was `43.453309` generated tok/s | Shipped default-off diagnostic; next target should be TurboMind gated epilogue/interleaved pack or deeper persistent routed-expert pipeline |
 | 127 | TurboMind gated-SiLU epilogue with interleaved fused gate/up appliance pack | Correct; standalone grouped test showed `1.47x-1.55x` speedup vs separate gate/up, full 43-layer gated profile removed standalone SwiGLU and dropped profiled routed-FFN total from `28.242 ms` to `26.734 ms`, served A/B was `43.933293` vs `43.691032` control | Keep opt-in/off; format and epilogue fusion are valid, but the next material step is a persistent routed-expert pipeline |
+| 128 | TurboMind compact active-expert schedule | Correct; compact schedule passed full 43-layer smokes on both the interleaved gated and existing fused appliances, improved served A/B from `43.879880` to `46.328184` on the gated appliance, and the launcher-default fused appliance reached `45.888778` | Shipped/default as `DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1`; keep gated-SiLU and route-row-reduce opt-in |
 
 ## Sprint 106 Profile Takeaway
 
