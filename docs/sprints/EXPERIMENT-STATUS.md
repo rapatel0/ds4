@@ -13,7 +13,7 @@ multi-slot per-step serving.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
-| Throughput serving target | 262,144 | 8 | `34.433252` | `34.433252` | 8/8 token match |
+| Throughput serving target | 262,144 | 8 | `34.689964` | `34.490294` | 8/8 token match |
 | Long-context target | 1,048,576 | 4 | `21.771077` | `21.771077` | 4/4 token match |
 
 The older `20.249531` long-context result used the Sprint 108 small-route build
@@ -56,6 +56,7 @@ to slightly worse.
 | 117 | F8 shape trace, async chunk probe, and per-slot shared gate/up/SwiGLU fusion | Trace showed the fast served path is per-slot stage-pipelined; `DS4_V100_ASYNC_SLOT_CHUNK=4` was correct but only `11.483646`; single shared pair-SwiGLU was correct at `33.562643` vs `33.697698` default | Keep opt-in/off; next fusion must be software-pipelined/HMMA, not just scalar launch reduction |
 | 118 | Single-token HMMA for the hot `4096 x 8192` F8 projection | Correct and traced as `plain/hmma_single`, but `16.083451` vs `33.502249` same-binary control at 8-slot/256K | Keep opt-in/off; do not broaden single-token WMMA |
 | 119 | Event-ordered stage handoff for per-step multi-slot serving | Correct; `34.433252` vs `33.379839` at 8-slot/256K and `21.771077` vs `21.566859` at 4-slot/1M | Shipped/default as `DS4_V100_ASYNC_EVENT_HANDOFF=auto` |
+| 120 | Single-token shared gate/up/SwiGLU row-pair fusion | Correct; current default repeat was `34.490294`, scalar single fusion was `34.689964`, and row-pair single fusion was `34.380968` at 8-slot/256K | Keep opt-in/off; row-pair compaction is not the missing kernel lever |
 
 ## Remaining
 
@@ -99,6 +100,7 @@ DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE=1
 DS4_V100_CUDA_F8_HMMA_SINGLE=1
 DS4_V100_TURBOMIND_FUSED_GATE_UP=0
 DS4_V100_ASYNC_EVENT_HANDOFF=0
+DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE_ROWS2=1
 ```
 
 The fused gate/up path is default-enabled for appliances that contain fused

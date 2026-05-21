@@ -3894,6 +3894,72 @@ __global__ static void arena_f8_e4m3_b128_pair_swiglu_kernel(
     }
 }
 
+__global__ static void arena_f8_e4m3_b128_pair_swiglu_rows2_kernel(
+        float *out,
+        const uint8_t *gate_base,
+        const uint8_t *up_base,
+        const float *x,
+        uint32_t rows,
+        uint32_t cols,
+        uint32_t gate_row_stride_bytes,
+        uint32_t up_row_stride_bytes,
+        float clamp,
+        float weight) {
+    const uint32_t r0 = blockIdx.x * 2u;
+    const uint32_t r1 = r0 + 1u;
+    if (r0 >= rows || !x) return;
+    const int have_r1 = r1 < rows;
+    const uint8_t *gate_row0 = gate_base + (uint64_t)r0 * gate_row_stride_bytes;
+    const uint8_t *up_row0 = up_base + (uint64_t)r0 * up_row_stride_bytes;
+    const uint8_t *gate_row1 = have_r1 ? gate_base + (uint64_t)r1 * gate_row_stride_bytes : gate_row0;
+    const uint8_t *up_row1 = have_r1 ? up_base + (uint64_t)r1 * up_row_stride_bytes : up_row0;
+    float gate_acc0 = 0.0f;
+    float up_acc0 = 0.0f;
+    float gate_acc1 = 0.0f;
+    float up_acc1 = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        const uint64_t block_offset = (uint64_t)(c >> 7u) * 129ull;
+        const uint32_t lane = c & 127u;
+        const float xv = x[c];
+        const uint8_t *gate_block0 = gate_row0 + block_offset;
+        const uint8_t *up_block0 = up_row0 + block_offset;
+        gate_acc0 += arena_e4m3fn_to_f32(gate_block0[1u + lane]) *
+                     arena_e8m0_to_f32(gate_block0[0]) * xv;
+        up_acc0 += arena_e4m3fn_to_f32(up_block0[1u + lane]) *
+                   arena_e8m0_to_f32(up_block0[0]) * xv;
+        if (have_r1) {
+            const uint8_t *gate_block1 = gate_row1 + block_offset;
+            const uint8_t *up_block1 = up_row1 + block_offset;
+            gate_acc1 += arena_e4m3fn_to_f32(gate_block1[1u + lane]) *
+                         arena_e8m0_to_f32(gate_block1[0]) * xv;
+            up_acc1 += arena_e4m3fn_to_f32(up_block1[1u + lane]) *
+                       arena_e8m0_to_f32(up_block1[0]) * xv;
+        }
+    }
+
+    arena_block_sum4_256_f32(&gate_acc0, &up_acc0, &gate_acc1, &up_acc1);
+    if (threadIdx.x == 0) {
+        float g0 = gate_acc0;
+        float u0 = up_acc0;
+        if (clamp > 1.0e-6f) {
+            g0 = fminf(g0, clamp);
+            u0 = fminf(fmaxf(u0, -clamp), clamp);
+        }
+        const float s0 = g0 / (1.0f + expf(-g0));
+        out[r0] = s0 * u0 * weight;
+        if (have_r1) {
+            float g1 = gate_acc1;
+            float u1 = up_acc1;
+            if (clamp > 1.0e-6f) {
+                g1 = fminf(g1, clamp);
+                u1 = fminf(fmaxf(u1, -clamp), clamp);
+            }
+            const float s1 = g1 / (1.0f + expf(-g1));
+            out[r1] = s1 * u1 * weight;
+        }
+    }
+}
+
 __global__ static void arena_f8_e4m3_b128_pair_swiglu_ptr_table_hmma_kernel(
         float *out,
         const uint8_t *gate_base,
@@ -6663,6 +6729,10 @@ static int cuda_f8_hmma_pair_swiglu_enabled(void) {
     return cuda_env_flag_enabled("DS4_CUDA_F8_HMMA_PAIR_SWIGLU");
 }
 
+static int cuda_f8_pair_swiglu_single_rows2_enabled(void) {
+    return cuda_env_flag_enabled("DS4_CUDA_F8_PAIR_SWIGLU_SINGLE_ROWS2");
+}
+
 static int cuda_f8_hmma_pair_swiglu_shape_ok(uint32_t rows, uint32_t cols, uint32_t n_tokens) {
     return rows == 2048u &&
            cols == 4096u &&
@@ -7202,19 +7272,35 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_f32(
         (const uint8_t *)((const char *)arena->ptr + gate->arena_offset);
     const uint8_t *up_base =
         (const uint8_t *)((const char *)arena->ptr + up->arena_offset);
-    cuda_f8_shape_trace("pair_swiglu_single", "scalar", arena->gpu,
-                        gate->rows, gate->cols, 1u, 0, 0, 0);
-    arena_f8_e4m3_b128_pair_swiglu_kernel<<<gate->rows, 256>>>(
-        (float *)out_f32->ptr,
-        gate_base,
-        up_base,
-        (const float *)x_f32->ptr,
-        gate->rows,
-        gate->cols,
-        gate->row_stride_bytes,
-        up->row_stride_bytes,
-        clamp,
-        weight);
+    if (cuda_f8_pair_swiglu_single_rows2_enabled() && gate->rows > 1u) {
+        cuda_f8_shape_trace("pair_swiglu_single", "rows2", arena->gpu,
+                            gate->rows, gate->cols, 1u, 0, 0, 0);
+        arena_f8_e4m3_b128_pair_swiglu_rows2_kernel<<<(gate->rows + 1u) / 2u, 256>>>(
+            (float *)out_f32->ptr,
+            gate_base,
+            up_base,
+            (const float *)x_f32->ptr,
+            gate->rows,
+            gate->cols,
+            gate->row_stride_bytes,
+            up->row_stride_bytes,
+            clamp,
+            weight);
+    } else {
+        cuda_f8_shape_trace("pair_swiglu_single", "scalar", arena->gpu,
+                            gate->rows, gate->cols, 1u, 0, 0, 0);
+        arena_f8_e4m3_b128_pair_swiglu_kernel<<<gate->rows, 256>>>(
+            (float *)out_f32->ptr,
+            gate_base,
+            up_base,
+            (const float *)x_f32->ptr,
+            gate->rows,
+            gate->cols,
+            gate->row_stride_bytes,
+            up->row_stride_bytes,
+            clamp,
+            weight);
+    }
     return cuda_ok(cudaGetLastError(), "f8 source pair swiglu launch") ? 0 : 1;
 }
 

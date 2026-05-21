@@ -160,6 +160,59 @@ int main(void) {
                     hmma[max_i]);
             failures++;
         }
+
+        unsetenv("DS4_CUDA_F8_PAIR_SWIGLU_SINGLE_ROWS2");
+        check(ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_f32(arena,
+                                                          &gate,
+                                                          &up,
+                                                          x_rows[0],
+                                                          scalar_t,
+                                                          10.0f,
+                                                          1.0f) == 0,
+              "single scalar pair swiglu");
+        setenv("DS4_CUDA_F8_PAIR_SWIGLU_SINGLE_ROWS2", "1", 1);
+        check(ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_f32(arena,
+                                                          &gate,
+                                                          &up,
+                                                          x_rows[0],
+                                                          hmma_t,
+                                                          10.0f,
+                                                          1.0f) == 0,
+              "single rows2 pair swiglu");
+        check(ds4_gpu_tensor_read(scalar_t,
+                                  0,
+                                  scalar,
+                                  ROWS * sizeof(float)),
+              "single scalar output read");
+        check(ds4_gpu_tensor_read(hmma_t,
+                                  0,
+                                  hmma,
+                                  ROWS * sizeof(float)),
+              "single rows2 output read");
+
+        max_abs = 0.0f;
+        max_rel = 0.0f;
+        max_i = 0;
+        for (uint64_t i = 0; i < ROWS; i++) {
+            const float diff = fabsf(hmma[i] - scalar[i]);
+            const float denom = fmaxf(fabsf(scalar[i]), 1.0e-6f);
+            const float rel = diff / denom;
+            if (diff > max_abs) {
+                max_abs = diff;
+                max_rel = rel;
+                max_i = i;
+            }
+        }
+        if (max_abs > 0.10f && max_rel > 0.10f) {
+            fprintf(stderr,
+                    "cuda_f8_hmma_pair_swiglu_smoke: single rows2 max diff %.8g rel %.8g at row %llu scalar %.8g rows2 %.8g\n",
+                    max_abs,
+                    max_rel,
+                    (unsigned long long)max_i,
+                    scalar[max_i],
+                    hmma[max_i]);
+            failures++;
+        }
     }
 
     ds4_gpu_tensor_free(hmma_t);

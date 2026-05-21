@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: codex
-revision: 122
+revision: 123
 ---
 
 # Vision: DS4 V100 Appliance
@@ -62,10 +62,12 @@ optimized V100 low-bit expert kernels in the actual hot path.
   and naive single-token WMMA are not viable throughput levers. Sprint 119
   shipped event-ordered handoff as the multi-slot per-step default, raising the
   measured 8-slot/256K appliance target to `34.433252` and 4-slot/1M to
-  `21.771077`. The project remains far below the practical serving target. The
-  next meaningful step needs profile-guided larger execution-boundary work:
-  deeper TurboMind expert scheduling, persistent grouped expert execution, or a
-  real SM70 software-pipelined F8 shared-FFN/attention-output kernel.
+  `21.771077`. Sprint 120 implemented a row-pair per-slot shared
+  gate/up/SwiGLU probe, but it did not beat the default. The project remains
+  far below the practical serving target. The next meaningful step needs
+  profile-guided larger execution-boundary work: deeper TurboMind expert
+  scheduling, persistent grouped expert execution, or a real SM70
+  software-pipelined F8 shared-FFN/attention-output kernel.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation
@@ -2567,6 +2569,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-21 | Completed Sprint 117 F8 trace and scalar single-slot fusion probes. | The served path is per-slot stage-pipelined; async slot chunking and scalar shared pair-SwiGLU fusion were correct but not faster. The next fusion must be software-pipelined and tensor-core-oriented. | Sprint 118+ |
 | 2026-05-21 | Completed Sprint 118 single-token HMMA probe. | The hot `4096 x 8192` single-token HMMA path was correct but regressed badly (`16.083451` vs `33.502249`), confirming that naive WMMA wastes too much of the token tile. | Sprint 119+ |
 | 2026-05-21 | Shipped Sprint 119 event-ordered stage handoff. | `DS4_V100_ASYNC_EVENT_HANDOFF=auto` now enables CUDA event-ordered handoff for multi-slot per-step serving. It raised 8-slot/256K to `34.433252` generated tok/s and 4-slot/1M to `21.771077`, with token matches preserved. | Sprint 120+ |
+| 2026-05-21 | Completed Sprint 120 single shared gate/up/SwiGLU row-pair probe. | The new opt-in row-pair single-fusion kernel is correct, but measured below the current default (`34.380968` vs `34.490294`). Do not promote; proceed to a real SM70 pipelined F8 mainloop or deeper TurboMind expert scheduling. | Sprint 121+ |
 
 ## Open Questions
 
