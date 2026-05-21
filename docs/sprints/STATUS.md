@@ -150,7 +150,15 @@ tok/s versus `59.394915` / `55.682733` control, and 256-slot/16K was
 `60.308689` / `56.539396` versus `60.648138` / `56.857630` control. The flag
 remains diagnostic-only; the next material FFN path must remove launches/stream
 joins with a persistent fused boundary or continue the bounded 2-way TP
-prototype.
+prototype. Sprint 156 retested that path with the exact observed six active
+expert groups. The manual six-group diagnostic was slightly positive at
+128-slot/32K (`59.645848` generated / `55.917982` continuation tok/s versus
+`59.516392` / `55.796618` control) and at 256-slot/16K (`60.675527` /
+`56.883307` versus `60.442968` / `56.665283` control), but hardcoding six
+groups is not safe for arbitrary serving traffic. A safe auto-group mode was
+implemented and passed full scheduler smoke, but its host active-group readback
+regressed served throughput. The group pipeline therefore remains diagnostic;
+the next material path is still a persistent/larger fused routed-FFN executor.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
@@ -165,12 +173,18 @@ current topology because it gives up too much stage overlap.
 | Sprint 146 256-slot 16K control repeat | 16,384 | 256 | `61.223893` | `57.397400` | 256/256 token match |
 | Sprint 146 gate `m128_1536` opt-in | 16,384 | 256 | `61.204203` | `57.378940` | 256/256 token match |
 | Sprint 145 256-slot 16K throughput ceiling | 16,384 | 256 | `61.065087` | `57.248519` | 256/256 token match |
+| Sprint 156 six-group pipeline diagnostic | 16,384 | 256 | `60.675527` | `56.883307` | 256/256 token match |
+| Sprint 156 same-binary control | 16,384 | 256 | `60.442968` | `56.665283` | 256/256 token match |
+| Sprint 156 safe auto-group diagnostic | 16,384 | 256 | `60.232265` | `56.467748` | 256/256 token match |
 | Sprint 154 256-slot 16K down-reduce control | 16,384 | 256 | `60.671924` | `56.879929` | 256/256 token match |
 | Sprint 154 256-slot 16K down-reduce opt-in | 16,384 | 256 | `60.642962` | `56.852777` | 256/256 token match |
 | Sprint 155 active group-pipeline opt-in | 16,384 | 256 | `60.308689` | `56.539396` | 256/256 token match |
 | Sprint 145 192-slot 16K midpoint | 16,384 | 192 | `60.700926` | `56.907118` | 192/192 token match |
 | Sprint 145 128-slot 16K control | 16,384 | 128 | `59.860493` | `56.119213` | 128/128 token match |
 | Sprint 139 gated m128 auto probe | 32,768 | 128 | `60.130047` | `56.371919` | 128/128 token match |
+| Sprint 156 six-group pipeline diagnostic | 32,768 | 128 | `59.645848` | `55.917982` | 128/128 token match |
+| Sprint 156 same-binary control | 32,768 | 128 | `59.516392` | `55.796618` | 128/128 token match |
+| Sprint 156 safe auto-group diagnostic | 32,768 | 128 | `58.988662` | `55.301871` | 128/128 token match |
 | Sprint 154 128-slot 32K down-reduce opt-in | 32,768 | 128 | `59.509317` | `55.789985` | 128/128 token match |
 | Sprint 154 128-slot 32K down-reduce control | 32,768 | 128 | `59.502747` | `55.783825` | 128/128 token match |
 | Sprint 148 gate `m128_s4` opt-in | 32,768 | 128 | `60.049057` | `56.295991` | 128/128 token match |

@@ -6165,6 +6165,10 @@ static int cuda_tm_group_pipeline_enabled(void) {
     return cuda_env_flag_enabled("DS4_V100_TURBOMIND_GROUP_PIPELINE");
 }
 
+static int cuda_tm_group_pipeline_auto_groups_enabled(void) {
+    return cuda_env_flag_enabled("DS4_V100_TURBOMIND_GROUP_PIPELINE_AUTO_GROUPS");
+}
+
 static uint32_t cuda_tm_group_pipeline_stream_limit(void) {
     const char *v = getenv("DS4_V100_TURBOMIND_GROUP_PIPELINE_STREAMS");
     if (!v || !v[0]) return DS4_CUDA_TM_PIPE_MAX_STREAMS;
@@ -7011,17 +7015,20 @@ static int cuda_tm_routed_mxfp4_packed_impl(
 
     const int use_route_row_reduce = cuda_tm_route_row_reduce_enabled();
     const int use_indexed_a = cuda_tm_indexed_a_enabled();
-    const int group_pipeline_requested =
+    int group_pipeline_requested =
         fused_gate_up && !use_indexed_a && cuda_tm_group_pipeline_enabled();
     const uint32_t group_pipeline_stream_limit =
         group_pipeline_requested ? cuda_tm_group_pipeline_stream_limit() : 0u;
-    const int use_compact_schedule =
+    const int group_pipeline_auto_groups =
+        group_pipeline_requested && cuda_tm_group_pipeline_auto_groups_enabled();
+    int use_compact_schedule =
         group_pipeline_requested ||
         (cuda_tm_compact_schedule_enabled() && total_routes < n_total_experts);
-    const uint32_t tm_group_count =
+    const uint32_t tm_group_capacity =
         use_compact_schedule
             ? (group_pipeline_requested ? group_pipeline_stream_limit : total_routes)
             : n_total_experts;
+    uint32_t tm_group_count = tm_group_capacity;
     uint64_t scratch_bytes = 0;
     const uint64_t counts_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     scratch_bytes += (uint64_t)n_total_experts * sizeof(int);
@@ -7045,39 +7052,39 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     scratch_bytes += sizeof(int);
     const uint64_t compact_offsets_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     if (use_compact_schedule) {
-        scratch_bytes += (uint64_t)(tm_group_count + 1u) * sizeof(int);
+        scratch_bytes += (uint64_t)(tm_group_capacity + 1u) * sizeof(int);
     }
     const uint64_t compact_gate_weights_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     if (use_compact_schedule && !fused_gate_up) {
-        scratch_bytes += (uint64_t)tm_group_count * sizeof(cuda_tm_strided_ptr);
+        scratch_bytes += (uint64_t)tm_group_capacity * sizeof(cuda_tm_strided_ptr);
     }
     const uint64_t compact_gate_scales_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     if (use_compact_schedule && !fused_gate_up) {
-        scratch_bytes += (uint64_t)tm_group_count * sizeof(cuda_tm_strided_ptr);
+        scratch_bytes += (uint64_t)tm_group_capacity * sizeof(cuda_tm_strided_ptr);
     }
     const uint64_t compact_up_weights_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     if (use_compact_schedule && !fused_gate_up) {
-        scratch_bytes += (uint64_t)tm_group_count * sizeof(cuda_tm_strided_ptr);
+        scratch_bytes += (uint64_t)tm_group_capacity * sizeof(cuda_tm_strided_ptr);
     }
     const uint64_t compact_up_scales_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     if (use_compact_schedule && !fused_gate_up) {
-        scratch_bytes += (uint64_t)tm_group_count * sizeof(cuda_tm_strided_ptr);
+        scratch_bytes += (uint64_t)tm_group_capacity * sizeof(cuda_tm_strided_ptr);
     }
     const uint64_t compact_gate_up_weights_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     if (use_compact_schedule && fused_gate_up) {
-        scratch_bytes += (uint64_t)tm_group_count * sizeof(cuda_tm_strided_ptr);
+        scratch_bytes += (uint64_t)tm_group_capacity * sizeof(cuda_tm_strided_ptr);
     }
     const uint64_t compact_gate_up_scales_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     if (use_compact_schedule && fused_gate_up) {
-        scratch_bytes += (uint64_t)tm_group_count * sizeof(cuda_tm_strided_ptr);
+        scratch_bytes += (uint64_t)tm_group_capacity * sizeof(cuda_tm_strided_ptr);
     }
     const uint64_t compact_down_weights_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     if (use_compact_schedule) {
-        scratch_bytes += (uint64_t)tm_group_count * sizeof(cuda_tm_strided_ptr);
+        scratch_bytes += (uint64_t)tm_group_capacity * sizeof(cuda_tm_strided_ptr);
     }
     const uint64_t compact_down_scales_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     if (use_compact_schedule) {
-        scratch_bytes += (uint64_t)tm_group_count * sizeof(cuda_tm_strided_ptr);
+        scratch_bytes += (uint64_t)tm_group_capacity * sizeof(cuda_tm_strided_ptr);
     }
     const uint64_t a_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     scratch_bytes += (uint64_t)(use_indexed_a ? n_tokens : total_routes) * hidden * sizeof(__half);
@@ -7146,7 +7153,9 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     }
     uint32_t tm_prof_active_experts = 0;
     uint32_t tm_prof_max_routes_per_expert = 0;
-    if (tm_prof.enabled) {
+    if (tm_prof.enabled || group_pipeline_auto_groups) {
+        uint32_t observed_active_experts = 0;
+        uint32_t observed_max_routes_per_expert = 0;
         std::vector<int> h_offsets((size_t)n_total_experts + 1u);
         if (cudaMemcpy(h_offsets.data(),
                        offsets,
@@ -7155,14 +7164,38 @@ static int cuda_tm_routed_mxfp4_packed_impl(
             for (uint32_t e = 0; e < n_total_experts; e++) {
                 const int count = h_offsets[e + 1u] - h_offsets[e];
                 if (count > 0) {
-                    tm_prof_active_experts++;
-                    if ((uint32_t)count > tm_prof_max_routes_per_expert) {
-                        tm_prof_max_routes_per_expert = (uint32_t)count;
+                    observed_active_experts++;
+                    if ((uint32_t)count > observed_max_routes_per_expert) {
+                        observed_max_routes_per_expert = (uint32_t)count;
                     }
+                }
+            }
+            if (tm_prof.enabled) {
+                tm_prof_active_experts = observed_active_experts;
+                tm_prof_max_routes_per_expert = observed_max_routes_per_expert;
+            }
+            if (group_pipeline_auto_groups) {
+                if (observed_active_experts == 0) {
+                    group_pipeline_requested = 0;
+                    use_compact_schedule = 0;
+                    tm_group_count = n_total_experts;
+                } else if (observed_active_experts <= group_pipeline_stream_limit) {
+                    tm_group_count = observed_active_experts;
+                } else {
+                    cuda_tm_warn_once("TurboMind group pipeline active experts exceed stream limit; falling back");
+                    group_pipeline_requested = 0;
+                    use_compact_schedule = 0;
+                    tm_group_count = n_total_experts;
                 }
             }
         } else {
             (void)cudaGetLastError();
+            if (group_pipeline_auto_groups) {
+                cuda_tm_warn_once("TurboMind group pipeline active-group read failed; falling back");
+                group_pipeline_requested = 0;
+                use_compact_schedule = 0;
+                tm_group_count = n_total_experts;
+            }
         }
     }
     if (cuda_tm_route_validation_sync_enabled()) {

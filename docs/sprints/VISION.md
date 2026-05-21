@@ -189,7 +189,12 @@ optimized V100 low-bit expert kernels in the actual hot path.
   served A/B regressed at both high-slot shapes: `59.125703` vs `59.394915`
   generated tok/s at 128-slot/32K and `60.308689` vs `60.648138` at
   256-slot/16K. Host-orchestrated per-expert streams therefore stay
-  diagnostic-only.
+  diagnostic-only. Sprint 156 retested the same path with the exact observed
+  six active expert groups. The manual six-group diagnostic was slightly
+  positive (`60.675527` vs `60.442968` generated tok/s at 256-slot/16K), but
+  hardcoding six groups is unsafe for arbitrary traffic. The safe auto-group
+  implementation passed full scheduler smoke but regressed served throughput,
+  confirming that host-side stream orchestration is not the material path.
   Dispatch-policy tuning, dispatch bypass, final scatter fusion, wrapper-level
   activation compaction, separate tail-vectorization, atomic epilogue reduce,
   simple slot widening, fixed-shape gate/down probes, basic gate/up launch

@@ -1,0 +1,15 @@
+ds4: CUDA loading model tensors into device cache
+ds4: failed to open TurboMind library ./build/turbomind-v100/libggml-turbomind.so: ./build/turbomind-v100/libggml-turbomind.so: cannot open shared object file: No such file or directory
+cuda_v100_full_scheduler_smoke: stage 0 decode batch
+cuda_v100_full_scheduler_smoke: stage 0 executed assigned layers
+cuda_v100_full_scheduler_smoke: stage 1 executed assigned layers
+cuda_v100_full_scheduler_smoke: stage 2 executed assigned layers
+cuda_v100_full_scheduler_smoke: stage 3 executed assigned layers
+cuda_v100_full_scheduler_smoke: stage 4 executed assigned layers
+cuda_v100_full_scheduler_smoke: stage 5 executed assigned layers
+cuda_v100_full_scheduler_smoke: stage 6 executed assigned layers
+cuda_v100_full_scheduler_smoke: stage 7 executed assigned layers
+cuda_v100_full_scheduler_smoke: full scheduler executed 43 layers
+cuda_v100_full_scheduler_smoke: full scheduler reached final layer
+cuda_v100_full_scheduler_smoke: full appliance smoke used expected TurboMind routed layers
+cuda_v100_full_scheduler_smoke: full scheduler HC all zero

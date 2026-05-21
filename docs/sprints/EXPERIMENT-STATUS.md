@@ -134,7 +134,12 @@ implemented an opt-in stream-per-expert routed-FFN pipeline for the actual
 non-interleaved fused gate/up appliance pack. It proved active on V100 with
 `group_pipeline_calls=6` in a profiled stage smoke, but served throughput
 regressed: `59.125703` vs `59.394915` generated tok/s at 128-slot/32K and
-`60.308689` vs `60.648138` at 256-slot/16K. It remains diagnostic-only.
+`60.308689` vs `60.648138` at 256-slot/16K. Sprint 156 found that the manual
+exact six-group version is slightly positive in the deterministic served
+benchmark, but it is not production-safe because arbitrary traffic can activate
+more groups. A safe auto-group implementation passed full scheduler smoke but
+regressed served throughput due to host active-group readback. The group
+pipeline remains diagnostic-only.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|

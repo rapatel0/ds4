@@ -2,6 +2,26 @@
 
 Date: 2026-05-21
 
+## Sprint 156 Update
+
+Sprint 156 re-tested the routed-FFN stream pipeline with the correct active
+group count. The manual exact six-group diagnostic is slightly positive but
+not production-safe: 128-slot/32K improved from `59.516392` generated /
+`55.796618` decode tok/s to `59.645848` / `55.917982`, and 256-slot/16K
+improved from `60.442968` / `56.665283` to `60.675527` / `56.883307`.
+
+I added `DS4_V100_TURBOMIND_GROUP_PIPELINE_AUTO_GROUPS=1` to make active-group
+selection safe by reading compact route offsets and falling back if active
+groups exceed the stream limit. That path is correct, but the host readback is
+too expensive: 128-slot/32K fell to `58.988662` generated / `55.301871` decode
+tok/s, and 256-slot/16K fell to `60.232265` / `56.467748`.
+
+Decision: do not promote the host-orchestrated group pipeline. Keep it as a
+diagnostic. The next material path is a persistent or larger fused routed-FFN
+executor that removes host stream orchestration and extra launch/join overhead.
+The bounded 2-way TP prototype remains a separate narrow experiment, not a
+broad topology answer.
+
 ## Latest Update
 
 Sprint 155 implemented and tested an actual opt-in routed-FFN

@@ -120,6 +120,9 @@ fi
 : "${DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE:=0}"
 : "${DS4_V100_TURBOMIND_DISPATCH_POLICY:=default}"
 : "${DS4_V100_TURBOMIND_ALLOW_UNSAFE_MEASURE:=0}"
+: "${DS4_V100_TURBOMIND_GROUP_PIPELINE:=0}"
+: "${DS4_V100_TURBOMIND_GROUP_PIPELINE_STREAMS:=8}"
+: "${DS4_V100_TURBOMIND_GROUP_PIPELINE_AUTO_GROUPS:=0}"
 : "${DS4_V100_TURBOMIND_PROFILE:=0}"
 : "${DS4_V100_TURBOMIND_LIB:=./build/turbomind-v100/libggml-turbomind.so}"
 : "${DS4_V100_HOST:=127.0.0.1}"
@@ -495,6 +498,21 @@ case "$DS4_V100_TURBOMIND_DISPATCH_POLICY" in
         ;;
     *) fail "DS4_V100_TURBOMIND_DISPATCH_POLICY must be default, measure, reuse, or append" ;;
 esac
+case "$DS4_V100_TURBOMIND_GROUP_PIPELINE" in
+    0|false|off) DS4_V100_TURBOMIND_GROUP_PIPELINE=0 ;;
+    1|true|on) DS4_V100_TURBOMIND_GROUP_PIPELINE=1 ;;
+    *) fail "DS4_V100_TURBOMIND_GROUP_PIPELINE must be 0 or 1" ;;
+esac
+is_uint "$DS4_V100_TURBOMIND_GROUP_PIPELINE_STREAMS" ||
+    fail "DS4_V100_TURBOMIND_GROUP_PIPELINE_STREAMS must be an integer"
+[ "$DS4_V100_TURBOMIND_GROUP_PIPELINE_STREAMS" -ge 1 ] &&
+    [ "$DS4_V100_TURBOMIND_GROUP_PIPELINE_STREAMS" -le 8 ] ||
+    fail "DS4_V100_TURBOMIND_GROUP_PIPELINE_STREAMS must be in [1,8]"
+case "$DS4_V100_TURBOMIND_GROUP_PIPELINE_AUTO_GROUPS" in
+    0|false|off) DS4_V100_TURBOMIND_GROUP_PIPELINE_AUTO_GROUPS=0 ;;
+    1|true|on) DS4_V100_TURBOMIND_GROUP_PIPELINE_AUTO_GROUPS=1 ;;
+    *) fail "DS4_V100_TURBOMIND_GROUP_PIPELINE_AUTO_GROUPS must be 0 or 1" ;;
+esac
 case "$DS4_V100_TURBOMIND_PROFILE" in
     0|false|off) DS4_V100_TURBOMIND_PROFILE=0 ;;
     1|true|on) DS4_V100_TURBOMIND_PROFILE=1 ;;
@@ -601,7 +619,7 @@ print_resolved() {
 }
 
 if [ "$mode" = "check" ]; then
-    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff startup_warmup=$startup_warmup cuda_profiler_window=$cuda_profiler_window cuda_tensor_pool=$cuda_tensor_pool cuda_tensor_pool_max_mib=$DS4_V100_CUDA_TENSOR_POOL_MAX_MIB cuda_f8_rowpair=$DS4_V100_CUDA_F8_ROWPAIR cuda_f8_row4=$DS4_V100_CUDA_F8_ROW4 cuda_f8_warp_scale=$DS4_V100_CUDA_F8_WARP_SCALE cuda_f8_grouped_ds4_fast=$DS4_V100_CUDA_F8_GROUPED_DS4_FAST cuda_f8_hmma_shared_down=$DS4_V100_CUDA_F8_HMMA_SHARED_DOWN cuda_f8_hmma_pair_swiglu=$DS4_V100_CUDA_F8_HMMA_PAIR_SWIGLU cuda_f8_hmma_attn_batch=$DS4_V100_CUDA_F8_HMMA_ATTN_BATCH cuda_f8_hmma_grouped_attn_o_batch=$DS4_V100_CUDA_F8_HMMA_GROUPED_ATTN_O_BATCH cuda_f8_hmma_single=$DS4_V100_CUDA_F8_HMMA_SINGLE cuda_f8_pair_swiglu_single=$DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE cuda_f8_pair_swiglu_single_rows2=$DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE_ROWS2 f8_shared_down_add=$DS4_V100_F8_SHARED_DOWN_ADD batch_attn_proj=$DS4_V100_ENABLE_BATCH_ATTN_PROJ batch_attn_output_a=$DS4_V100_BATCH_ATTN_OUTPUT_A batch_attn_output_b=$DS4_V100_BATCH_ATTN_OUTPUT_B batch_shared_f8=$DS4_V100_BATCH_SHARED_F8 ffn_direct_delta=$DS4_V100_FFN_DIRECT_DELTA disable_grouped_attn_output_a=$DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A appliance_dir=${DS4_V100_APPLIANCE_DIR:-none} turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN disable_turbomind_total_tokens=$DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS turbomind_route_validate_sync=$DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC turbomind_small_route_build=$DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD turbomind_route_row_reduce=$DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE turbomind_route_row_reduce_h2=$DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE_H2 turbomind_indexed_a=$DS4_V100_TURBOMIND_INDEXED_A turbomind_fused_gate_up=$DS4_V100_TURBOMIND_FUSED_GATE_UP turbomind_gated_silu=$DS4_V100_TURBOMIND_GATED_SILU turbomind_compact_schedule=$DS4_V100_TURBOMIND_COMPACT_SCHEDULE turbomind_gate_up_probe=$DS4_V100_TURBOMIND_GATE_UP_PROBE turbomind_down_probe=$DS4_V100_TURBOMIND_DOWN_PROBE turbomind_down_reduce_epilogue=$DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE turbomind_dispatch_policy=$DS4_V100_TURBOMIND_DISPATCH_POLICY turbomind_allow_unsafe_measure=$DS4_V100_TURBOMIND_ALLOW_UNSAFE_MEASURE turbomind_profile=$DS4_V100_TURBOMIND_PROFILE"
+    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff startup_warmup=$startup_warmup cuda_profiler_window=$cuda_profiler_window cuda_tensor_pool=$cuda_tensor_pool cuda_tensor_pool_max_mib=$DS4_V100_CUDA_TENSOR_POOL_MAX_MIB cuda_f8_rowpair=$DS4_V100_CUDA_F8_ROWPAIR cuda_f8_row4=$DS4_V100_CUDA_F8_ROW4 cuda_f8_warp_scale=$DS4_V100_CUDA_F8_WARP_SCALE cuda_f8_grouped_ds4_fast=$DS4_V100_CUDA_F8_GROUPED_DS4_FAST cuda_f8_hmma_shared_down=$DS4_V100_CUDA_F8_HMMA_SHARED_DOWN cuda_f8_hmma_pair_swiglu=$DS4_V100_CUDA_F8_HMMA_PAIR_SWIGLU cuda_f8_hmma_attn_batch=$DS4_V100_CUDA_F8_HMMA_ATTN_BATCH cuda_f8_hmma_grouped_attn_o_batch=$DS4_V100_CUDA_F8_HMMA_GROUPED_ATTN_O_BATCH cuda_f8_hmma_single=$DS4_V100_CUDA_F8_HMMA_SINGLE cuda_f8_pair_swiglu_single=$DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE cuda_f8_pair_swiglu_single_rows2=$DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE_ROWS2 f8_shared_down_add=$DS4_V100_F8_SHARED_DOWN_ADD batch_attn_proj=$DS4_V100_ENABLE_BATCH_ATTN_PROJ batch_attn_output_a=$DS4_V100_BATCH_ATTN_OUTPUT_A batch_attn_output_b=$DS4_V100_BATCH_ATTN_OUTPUT_B batch_shared_f8=$DS4_V100_BATCH_SHARED_F8 ffn_direct_delta=$DS4_V100_FFN_DIRECT_DELTA disable_grouped_attn_output_a=$DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A appliance_dir=${DS4_V100_APPLIANCE_DIR:-none} turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN disable_turbomind_total_tokens=$DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS turbomind_route_validate_sync=$DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC turbomind_small_route_build=$DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD turbomind_route_row_reduce=$DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE turbomind_route_row_reduce_h2=$DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE_H2 turbomind_indexed_a=$DS4_V100_TURBOMIND_INDEXED_A turbomind_fused_gate_up=$DS4_V100_TURBOMIND_FUSED_GATE_UP turbomind_gated_silu=$DS4_V100_TURBOMIND_GATED_SILU turbomind_compact_schedule=$DS4_V100_TURBOMIND_COMPACT_SCHEDULE turbomind_gate_up_probe=$DS4_V100_TURBOMIND_GATE_UP_PROBE turbomind_down_probe=$DS4_V100_TURBOMIND_DOWN_PROBE turbomind_down_reduce_epilogue=$DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE turbomind_dispatch_policy=$DS4_V100_TURBOMIND_DISPATCH_POLICY turbomind_allow_unsafe_measure=$DS4_V100_TURBOMIND_ALLOW_UNSAFE_MEASURE turbomind_group_pipeline=$DS4_V100_TURBOMIND_GROUP_PIPELINE turbomind_group_pipeline_streams=$DS4_V100_TURBOMIND_GROUP_PIPELINE_STREAMS turbomind_group_pipeline_auto_groups=$DS4_V100_TURBOMIND_GROUP_PIPELINE_AUTO_GROUPS turbomind_profile=$DS4_V100_TURBOMIND_PROFILE"
     exit 0
 fi
 if [ "$mode" = "print" ]; then
@@ -670,6 +688,9 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE=$DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE"
     echo "DS4_V100_TURBOMIND_DISPATCH_POLICY=$DS4_V100_TURBOMIND_DISPATCH_POLICY"
     echo "DS4_V100_TURBOMIND_ALLOW_UNSAFE_MEASURE=$DS4_V100_TURBOMIND_ALLOW_UNSAFE_MEASURE"
+    echo "DS4_V100_TURBOMIND_GROUP_PIPELINE=$DS4_V100_TURBOMIND_GROUP_PIPELINE"
+    echo "DS4_V100_TURBOMIND_GROUP_PIPELINE_STREAMS=$DS4_V100_TURBOMIND_GROUP_PIPELINE_STREAMS"
+    echo "DS4_V100_TURBOMIND_GROUP_PIPELINE_AUTO_GROUPS=$DS4_V100_TURBOMIND_GROUP_PIPELINE_AUTO_GROUPS"
     echo "DS4_V100_TURBOMIND_PROFILE=$DS4_V100_TURBOMIND_PROFILE"
     echo "DS4_V100_TURBOMIND_LIB=$DS4_V100_TURBOMIND_LIB"
     echo "DS4_V100_HOST=$DS4_V100_HOST"
@@ -704,6 +725,9 @@ export DS4_V100_TURBOMIND_DOWN_PROBE
 export DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE
 export DS4_V100_TURBOMIND_DISPATCH_POLICY
 export DS4_V100_TURBOMIND_ALLOW_UNSAFE_MEASURE
+export DS4_V100_TURBOMIND_GROUP_PIPELINE
+export DS4_V100_TURBOMIND_GROUP_PIPELINE_STREAMS
+export DS4_V100_TURBOMIND_GROUP_PIPELINE_AUTO_GROUPS
 export DS4_V100_TURBOMIND_PROFILE
 export DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE
 export DS4_CUDA_F8_PAIR_SWIGLU_SINGLE_ROWS2="$DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE_ROWS2"
