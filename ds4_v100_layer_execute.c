@@ -115,6 +115,8 @@ void ds4_v100_layer_batch_scratch_free(ds4_v100_layer_batch_scratch *scratch) {
     ds4_gpu_tensor_free(scratch->ffn_selected);
     ds4_gpu_tensor_free(scratch->ffn_probs);
     ds4_gpu_tensor_free(scratch->ffn_router);
+    ds4_gpu_tensor_free(scratch->ffn_delta_batch);
+    ds4_gpu_tensor_free(scratch->ffn_norm_batch);
     memset(scratch, 0, sizeof(*scratch));
 }
 
@@ -148,6 +150,8 @@ static int ensure_batch_scratch(ds4_v100_layer_batch_scratch *scratch,
         scratch->kv_width == kv_width &&
         scratch->out_rank == out_rank &&
         scratch->max_slots == DS4_V100_LAYER_MAX_BATCH &&
+        scratch->ffn_norm_batch &&
+        scratch->ffn_delta_batch &&
         scratch->ffn_shared) {
         return 0;
     }
@@ -198,24 +202,24 @@ static int ensure_batch_scratch(ds4_v100_layer_batch_scratch *scratch,
                               hidden_bytes,
                               err,
                               errlen,
-                              "batch ffn_cur") ||
-            alloc_tensor_slot(&scratch->ffn_norm[slot],
-                              hidden_bytes,
-                              err,
-                              errlen,
-                              "batch ffn_norm") ||
-            alloc_tensor_slot(&scratch->ffn_delta[slot],
-                              hidden_bytes,
-                              err,
-                              errlen,
-                              "batch ffn_delta")) {
+                              "batch ffn_cur")) {
             ds4_v100_layer_batch_scratch_free(scratch);
             return 1;
         }
     }
 
     const uint64_t max_slots = DS4_V100_LAYER_MAX_BATCH;
-    if (alloc_tensor_slot(&scratch->ffn_router,
+    if (alloc_tensor_slot(&scratch->ffn_norm_batch,
+                          max_slots * hidden_bytes,
+                          err,
+                          errlen,
+                          "batch ffn_norm_batch") ||
+        alloc_tensor_slot(&scratch->ffn_delta_batch,
+                          max_slots * hidden_bytes,
+                          err,
+                          errlen,
+                          "batch ffn_delta_batch") ||
+        alloc_tensor_slot(&scratch->ffn_router,
                           max_slots * 256u * sizeof(float),
                           err,
                           errlen,
@@ -343,6 +347,14 @@ static int ensure_batch_scratch(ds4_v100_layer_batch_scratch *scratch,
     scratch->out_rank = out_rank;
     scratch->max_slots = DS4_V100_LAYER_MAX_BATCH;
     for (uint32_t slot = 0; slot < DS4_V100_LAYER_MAX_BATCH; slot++) {
+        scratch->ffn_norm[slot] =
+            ds4_gpu_tensor_view(scratch->ffn_norm_batch,
+                                (uint64_t)slot * hidden_bytes,
+                                hidden_bytes);
+        scratch->ffn_delta[slot] =
+            ds4_gpu_tensor_view(scratch->ffn_delta_batch,
+                                (uint64_t)slot * hidden_bytes,
+                                hidden_bytes);
         scratch->ffn_routed_out_view[slot] =
             ds4_gpu_tensor_view(scratch->ffn_routed_out,
                                 (uint64_t)slot * hidden_bytes,
@@ -375,7 +387,9 @@ static int ensure_batch_scratch(ds4_v100_layer_batch_scratch *scratch,
             ds4_gpu_tensor_view(scratch->attn_low_batch,
                                 (uint64_t)slot * out_rank_bytes,
                                 out_rank_bytes);
-        if (!scratch->ffn_routed_out_view[slot] ||
+        if (!scratch->ffn_norm[slot] ||
+            !scratch->ffn_delta[slot] ||
+            !scratch->ffn_routed_out_view[slot] ||
             !scratch->ffn_shared_batch_view[slot] ||
             !scratch->attn_norm_view[slot] ||
             !scratch->attn_q_a_norm_view[slot] ||
@@ -414,6 +428,59 @@ static bool has_turbomind_separate_gate_up(const ds4_v100_layer_state *state) {
     return state &&
            state->turbomind_gate_view.experts_packed != 0 &&
            state->turbomind_up_view.experts_packed != 0;
+}
+
+static bool ffn_inputs_match_scratch_norm(
+        const ds4_v100_layer_batch_scratch *scratch,
+        const ds4_gpu_tensor *const *ffn_inputs,
+        uint32_t n_slots) {
+    if (!scratch || !ffn_inputs || n_slots == 0 || n_slots > DS4_V100_LAYER_MAX_BATCH) {
+        return false;
+    }
+    for (uint32_t slot = 0; slot < n_slots; slot++) {
+        if (ffn_inputs[slot] != scratch->ffn_norm[slot]) return false;
+    }
+    return true;
+}
+
+static bool ffn_outputs_match_scratch_delta(
+        const ds4_v100_layer_batch_scratch *scratch,
+        ds4_gpu_tensor *const *ffn_deltas,
+        uint32_t n_slots) {
+    if (!scratch || !ffn_deltas || n_slots == 0 || n_slots > DS4_V100_LAYER_MAX_BATCH) {
+        return false;
+    }
+    for (uint32_t slot = 0; slot < n_slots; slot++) {
+        if (ffn_deltas[slot] != scratch->ffn_delta[slot]) return false;
+    }
+    return true;
+}
+
+static int ensure_cached_ffn_input_ptrs(
+        ds4_v100_layer_batch_scratch *scratch,
+        const ds4_gpu_tensor *const *ffn_inputs,
+        uint32_t n_slots,
+        uint64_t min_row_bytes,
+        char *err,
+        size_t errlen) {
+    if (!scratch || !scratch->ffn_input_ptrs || !ffn_inputs) {
+        return exec_error(err, errlen, "missing FFN input pointer scratch");
+    }
+    if (scratch->ffn_input_ptrs_valid &&
+        scratch->ffn_input_ptrs_slots == n_slots &&
+        scratch->ffn_input_ptrs_min_row_bytes >= min_row_bytes) {
+        return 0;
+    }
+    if (!ds4_gpu_tensor_write_f32_row_ptrs(scratch->ffn_input_ptrs,
+                                           ffn_inputs,
+                                           n_slots,
+                                           min_row_bytes)) {
+        return exec_error(err, errlen, "FFN input pointer table upload failed");
+    }
+    scratch->ffn_input_ptrs_valid = 1;
+    scratch->ffn_input_ptrs_slots = n_slots;
+    scratch->ffn_input_ptrs_min_row_bytes = min_row_bytes;
+    return 0;
 }
 
 static double monotonic_ms(void) {
@@ -1833,7 +1900,31 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
         }
     }
 
-    if (state->has_turbomind_routed) {
+    const uint64_t ffn_input_min_bytes = (uint64_t)hidden * sizeof(float);
+    const bool use_cached_input_ptrs =
+        use_scratch &&
+        input_ptrs_t == cfgs[0].batch_scratch->ffn_input_ptrs &&
+        ffn_inputs_match_scratch_norm(cfgs[0].batch_scratch, ffn_inputs, n_slots);
+    if (use_cached_input_ptrs &&
+        ensure_cached_ffn_input_ptrs(cfgs[0].batch_scratch,
+                                     ffn_inputs,
+                                     n_slots,
+                                     ffn_input_min_bytes,
+                                     err,
+                                     errlen)) {
+        goto done;
+    }
+
+    const bool use_direct_delta =
+        env_flag_enabled("DS4_V100_FFN_DIRECT_DELTA") &&
+        batch_shared_f8 &&
+        state->has_turbomind_routed &&
+        use_scratch &&
+        use_cached_input_ptrs &&
+        ffn_outputs_match_scratch_delta(cfgs[0].batch_scratch, ffn_deltas, n_slots) &&
+        cfgs[0].batch_scratch->ffn_norm_batch &&
+        cfgs[0].batch_scratch->ffn_delta_batch;
+    if (use_direct_delta) {
         const bool use_fused_gate_up =
             state->has_turbomind_fused_gate_up &&
             env_flag_default_enabled("DS4_V100_TURBOMIND_FUSED_GATE_UP");
@@ -1842,8 +1933,25 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
                        "TurboMind fused gate_up disabled but no separate gate/up tensors are bound");
             goto done;
         }
+        if (ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_batch_ptr_table_f32(
+                cfgs[0].arena,
+                &shared_gate_v,
+                &shared_up_v,
+                input_ptrs_t,
+                n_slots,
+                shared_mid_batch_t,
+                10.0f,
+                1.0f) != 0 ||
+            ds4_gpu_arena_f8_e4m3_b128_matmul_batch_f32(cfgs[0].arena,
+                                                        &shared_down_v,
+                                                        shared_mid_batch_t,
+                                                        n_slots,
+                                                        cfgs[0].batch_scratch->ffn_delta_batch) != 0) {
+            exec_error(err, errlen, "shared FFN direct-delta batch failed");
+            goto done;
+        }
         const int tm_rc = use_fused_gate_up
-            ? ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_batch_ptrs_f32(
+            ? ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_accum_f32(
                   cfgs[0].arena,
                   &state->turbomind_gate_up_view,
                   &state->turbomind_down_view,
@@ -1853,11 +1961,10 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
                   selected_t,
                   weights_t,
                   routes,
-                  input_ptrs_t,
-                  ffn_inputs,
+                  cfgs[0].batch_scratch->ffn_norm_batch,
                   n_slots,
-                  routed_out_t)
-            : ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_batch_ptrs_f32(
+                  cfgs[0].batch_scratch->ffn_delta_batch)
+            : ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_accum_f32(
                   cfgs[0].arena,
                   &state->turbomind_gate_view,
                   &state->turbomind_up_view,
@@ -1868,10 +1975,87 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
                   selected_t,
                   weights_t,
                   routes,
-                  input_ptrs_t,
-                  ffn_inputs,
+                  cfgs[0].batch_scratch->ffn_norm_batch,
                   n_slots,
-                  routed_out_t);
+                  cfgs[0].batch_scratch->ffn_delta_batch);
+        if (tm_rc != 0) {
+            exec_error(err, errlen, "TurboMind routed FFN direct-delta batch failed");
+            goto done;
+        }
+        goto fill_reports;
+    }
+
+    if (state->has_turbomind_routed) {
+        const bool use_fused_gate_up =
+            state->has_turbomind_fused_gate_up &&
+            env_flag_default_enabled("DS4_V100_TURBOMIND_FUSED_GATE_UP");
+        if (!use_fused_gate_up && !has_turbomind_separate_gate_up(state)) {
+            exec_error(err, errlen,
+                       "TurboMind fused gate_up disabled but no separate gate/up tensors are bound");
+            goto done;
+        }
+        int tm_rc = 1;
+        if (use_cached_input_ptrs) {
+            tm_rc = use_fused_gate_up
+                ? ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_batch_ptr_table_f32(
+                      cfgs[0].arena,
+                      &state->turbomind_gate_up_view,
+                      &state->turbomind_down_view,
+                      hidden,
+                      mid,
+                      state->routed_experts,
+                      selected_t,
+                      weights_t,
+                      routes,
+                      input_ptrs_t,
+                      n_slots,
+                      routed_out_t)
+                : ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_batch_ptr_table_f32(
+                      cfgs[0].arena,
+                      &state->turbomind_gate_view,
+                      &state->turbomind_up_view,
+                      &state->turbomind_down_view,
+                      hidden,
+                      mid,
+                      state->routed_experts,
+                      selected_t,
+                      weights_t,
+                      routes,
+                      input_ptrs_t,
+                      n_slots,
+                      routed_out_t);
+        } else {
+            tm_rc = use_fused_gate_up
+                ? ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_batch_ptrs_f32(
+                      cfgs[0].arena,
+                      &state->turbomind_gate_up_view,
+                      &state->turbomind_down_view,
+                      hidden,
+                      mid,
+                      state->routed_experts,
+                      selected_t,
+                      weights_t,
+                      routes,
+                      input_ptrs_t,
+                      ffn_inputs,
+                      n_slots,
+                      routed_out_t)
+                : ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_batch_ptrs_f32(
+                      cfgs[0].arena,
+                      &state->turbomind_gate_view,
+                      &state->turbomind_up_view,
+                      &state->turbomind_down_view,
+                      hidden,
+                      mid,
+                      state->routed_experts,
+                      selected_t,
+                      weights_t,
+                      routes,
+                      input_ptrs_t,
+                      ffn_inputs,
+                      n_slots,
+                      routed_out_t);
+        }
         if (tm_rc != 0) {
             exec_error(err, errlen, "TurboMind routed FFN batch failed");
             goto done;
@@ -2006,6 +2190,7 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
         }
     }
 
+fill_reports:
     if (reports) {
         for (uint32_t slot = 0; slot < n_slots; slot++) {
             ds4_v100_layer_execute_report *report = &reports[slot];

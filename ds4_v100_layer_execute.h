@@ -85,6 +85,8 @@ typedef struct {
     ds4_gpu_tensor *ffn_cur[DS4_V100_LAYER_MAX_BATCH];
     ds4_gpu_tensor *ffn_norm[DS4_V100_LAYER_MAX_BATCH];
     ds4_gpu_tensor *ffn_delta[DS4_V100_LAYER_MAX_BATCH];
+    ds4_gpu_tensor *ffn_norm_batch;
+    ds4_gpu_tensor *ffn_delta_batch;
 
     ds4_gpu_tensor *ffn_router;
     ds4_gpu_tensor *ffn_probs;
@@ -92,6 +94,9 @@ typedef struct {
     ds4_gpu_tensor *ffn_weights;
     ds4_gpu_tensor *ffn_tokens;
     ds4_gpu_tensor *ffn_input_ptrs;
+    uint32_t ffn_input_ptrs_valid;
+    uint32_t ffn_input_ptrs_slots;
+    uint64_t ffn_input_ptrs_min_row_bytes;
     ds4_gpu_tensor *ffn_routed_mid;
     ds4_gpu_tensor *ffn_routed_out;
     ds4_gpu_tensor *ffn_routed_out_view[DS4_V100_LAYER_MAX_BATCH];

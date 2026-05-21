@@ -333,6 +333,34 @@ int ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_batch_ptrs_f32(
         const ds4_gpu_tensor *const *x_rows_f32,
         uint32_t n_tokens,
         ds4_gpu_tensor *out_f32);
+int ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_batch_ptr_table_f32(
+        const ds4_gpu_arena *arena,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *gate,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *up,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *down,
+        uint32_t hidden,
+        uint32_t mid,
+        uint32_t n_total_experts,
+        const ds4_gpu_tensor *selected_i32,
+        const ds4_gpu_tensor *weights_f32,
+        uint32_t n_routes,
+        const ds4_gpu_tensor *x_row_ptrs,
+        uint32_t n_tokens,
+        ds4_gpu_tensor *out_f32);
+int ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_accum_f32(
+        const ds4_gpu_arena *arena,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *gate,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *up,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *down,
+        uint32_t hidden,
+        uint32_t mid,
+        uint32_t n_total_experts,
+        const ds4_gpu_tensor *selected_i32,
+        const ds4_gpu_tensor *weights_f32,
+        uint32_t n_routes,
+        const ds4_gpu_tensor *x_f32,
+        uint32_t n_tokens,
+        ds4_gpu_tensor *out_f32);
 int ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_f32(
         const ds4_gpu_arena *arena,
         const ds4_gpu_turbomind_mxfp4_matrix_view *gate_up,
@@ -358,6 +386,32 @@ int ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_batch_ptrs_f32(
         uint32_t n_routes,
         ds4_gpu_tensor *x_row_ptrs,
         const ds4_gpu_tensor *const *x_rows_f32,
+        uint32_t n_tokens,
+        ds4_gpu_tensor *out_f32);
+int ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_batch_ptr_table_f32(
+        const ds4_gpu_arena *arena,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *gate_up,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *down,
+        uint32_t hidden,
+        uint32_t mid,
+        uint32_t n_total_experts,
+        const ds4_gpu_tensor *selected_i32,
+        const ds4_gpu_tensor *weights_f32,
+        uint32_t n_routes,
+        const ds4_gpu_tensor *x_row_ptrs,
+        uint32_t n_tokens,
+        ds4_gpu_tensor *out_f32);
+int ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_accum_f32(
+        const ds4_gpu_arena *arena,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *gate_up,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *down,
+        uint32_t hidden,
+        uint32_t mid,
+        uint32_t n_total_experts,
+        const ds4_gpu_tensor *selected_i32,
+        const ds4_gpu_tensor *weights_f32,
+        uint32_t n_routes,
+        const ds4_gpu_tensor *x_f32,
         uint32_t n_tokens,
         ds4_gpu_tensor *out_f32);
 int ds4_gpu_arena_q8_0_matmul_f32(

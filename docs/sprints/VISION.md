@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: codex
-revision: 117
+revision: 118
 ---
 
 # Vision: DS4 V100 Appliance
@@ -48,6 +48,13 @@ optimized V100 low-bit expert kernels in the actual hot path.
   correctness, and improves the 8-slot/256K served target from `31.312694` to
   `33.430971` generated tok/s in a same-binary A/B. The fused 4-slot/1M sanity
   run reached `21.403909` generated tok/s.
+- Sprints 112-113 tested narrower hot-path cleanup around the fused appliance.
+  F8 warp-scale hoisting and direct FFN-delta accumulation both passed
+  correctness but regressed the primary 8-slot/256K A/B, so they remain opt-in.
+  The current default 8-slot/256K topline is `33.589285` generated tok/s, still
+  far below the practical serving target. The next meaningful step needs a
+  larger kernel-shape change: persistent/tiled F8 projections or deeper
+  TurboMind expert scheduling, not another small host-boundary cleanup.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation

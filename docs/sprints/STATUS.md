@@ -7,11 +7,14 @@ Last updated: 2026-05-20
 Current best 8-slot throughput is the Sprint 111 fused TurboMind gate/up
 appliance path. It turns each layer's separate gate and up expert GEMMs into one
 offline-packed `gate_up` grouped GEMM and keeps the same per-GPU VRAM footprint
-as the previous appliance.
+as the previous appliance. Sprint 113 repeated the default path at
+`33.589285` generated tok/s while rejecting direct FFN-delta accumulation as a
+default because it was slightly slower.
 
 | Mode | Context | Slots | Generated tok/s | Continuation tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
-| Production fused gate_up appliance | 262,144 | 8 | `33.484099` | `31.391343` | 8/8 token match |
+| Production fused gate_up appliance | 262,144 | 8 | `33.589285` | `31.489955` | 8/8 token match |
+| Direct FFN delta opt-in | 262,144 | 8 | `33.360404` | `31.275379` | 8/8 token match |
 | Same-binary separate gate/up control | 262,144 | 8 | `31.312694` | `29.355651` | 8/8 token match |
 | Production fused gate_up appliance | 1,048,576 | 4 | `21.403909` | `20.066165` | 4/4 token match |
 | Small-route opt-in | 1,048,576 | 4 | `20.249531` | `18.983935` | 4/4 token match |
@@ -33,6 +36,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 110 | TurboMind fused gate+up grouped-GEMM probe | Correct; `1.504x`, `1.532x`, and `1.462x` faster at 6, 24, and 48 total routes | Proceed to appliance implementation |
 | 111 | Production fused TurboMind gate_up appliance | Correct; 8-slot/256K improved to `33.430971` from `31.312694` same-binary separate control | Shipped/default for fused packs |
 | 112 | Fused appliance profile plus F8 warp-scale probe | Profile showed F8 row-pair/grouped kernels at `54.58%` GPU time; warp-scale was correct but regressed 8-slot/256K to `29.009399` vs `33.484099` control | Kept opt-in/off |
+| 113 | Direct FFN delta accumulation and cached FFN input ptr table | Correct, but `33.360404` vs `33.589285` control at 8-slot/256K | Kept opt-in/off |
 
 ## Sprint 106 Profile Takeaway
 
@@ -142,15 +146,26 @@ variant:
 - same-binary 8-slot/256K A/B regressed from `33.484099` to `29.009399`
   generated tok/s, so `DS4_V100_CUDA_F8_WARP_SCALE=0` remains the default.
 
+Sprint 113 tests direct FFN delta accumulation:
+
+- batch scratch now exposes contiguous FFN norm/delta tensors with stable
+  per-slot views;
+- TurboMind routed FFN wrappers can consume an existing device pointer table;
+- TurboMind routed FFN wrappers can accumulate into an existing output tensor;
+- selected-token correctness passed with `DS4_V100_FFN_DIRECT_DELTA=1`;
+- same-binary 8-slot/256K A/B was `33.360404` generated tok/s with direct delta
+  versus `33.589285` control, so `DS4_V100_FFN_DIRECT_DELTA=0` remains the
+  default.
+
 ## Next Target
 
 The next target needs to change a larger execution boundary. Fused gate/up
 removed one large grouped GEMM launch per routed layer, but aggregate throughput
-is still only about `33.5` tok/s, far below the practical serving target. The
-fused profile says F8 projections are now the largest bucket, but Sprint 112
-shows tiny scalar F8 scale tweaks can regress. The next sprint should focus on
-either a real CUTLASS/TurboMind-style tiled F8 projection path or deeper
-TurboMind expert scheduling that raises tensor-core occupancy.
+is still only about `33.6` tok/s, far below the practical serving target. The
+fused profile says F8 projections are now the largest bucket, and Sprints 112
+and 113 show that tiny scalar/host-boundary tweaks can regress. The next sprint
+should focus on a real CUTLASS/TurboMind-style tiled F8 projection path or
+deeper TurboMind expert scheduling that raises tensor-core occupancy.
 
 The concise current status is also tracked in
 `docs/sprints/EXPERIMENT-STATUS.md`.

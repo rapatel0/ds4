@@ -6,13 +6,13 @@ Last updated: 2026-05-20
 
 The appliance is correct and served on the 8x V100 node, but it is not yet in
 the practical throughput range from the vision. The current default is the
-Sprint 111 fused TurboMind gate/up appliance path; Sprint 112 repeated that
-default at `33.484099` generated tok/s in the same binary used for the rejected
-F8 warp-scale probe.
+Sprint 111 fused TurboMind gate/up appliance path; Sprint 113 repeated that
+default at `33.589285` generated tok/s in the same binary used for the rejected
+direct FFN-delta probe.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
-| Throughput serving target | 262,144 | 8 | `33.484099` | `33.484099` | 8/8 token match |
+| Throughput serving target | 262,144 | 8 | `33.589285` | `33.589285` | 8/8 token match |
 | Long-context target | 1,048,576 | 4 | `21.403909` | `21.403909` | 4/4 token match |
 
 The older `20.249531` long-context result used the Sprint 108 small-route build
@@ -48,6 +48,7 @@ to slightly worse.
 | 110 | TurboMind fused gate/up grouped-GEMM probe | Correct; fused gate_up was `1.46x-1.53x` faster than separate gate and up calls | Proceed to appliance implementation |
 | 111 | Production fused TurboMind gate_up appliance | Correct; `33.430971` fused vs `31.312694` same-binary separate control at 8-slot/256K; `21.403909` at 4-slot/1M | Shipped/default for fused packs |
 | 112 | Fused appliance profile and F8 warp-scale probe | F8 row-pair/grouped kernels were `54.58%` GPU time; warp-scale was correct but `29.009399` vs `33.484099` control at 8-slot/256K | Kept opt-in/off |
+| 113 | Direct FFN delta accumulation | Correct; `33.360404` direct delta vs `33.589285` control at 8-slot/256K | Kept opt-in/off |
 
 ## Remaining
 
@@ -60,20 +61,22 @@ to slightly worse.
   - Persistent/grouped expert execution beyond the shipped Sprint 111 fused
     gate_up launch reduction.
   - A real tiled/persistent F8 projection rewrite. The Sprint 112 warp-scale
-    probe shows that very small scalar F8 scale-hoisting changes can regress.
+    probe and Sprint 113 direct-delta probe show that very small scalar or
+    host-boundary changes can regress.
 - Decide whether the next production step is a deeper TurboMind adapter change
   or a lower-level CUTLASS/TurboMind-inspired persistent kernel probe.
 
 ## Operator Status
 
 The default launcher now keeps `DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=0`,
-`DS4_V100_CUDA_F8_ROW4=0`, and `DS4_V100_CUDA_F8_WARP_SCALE=0`. The opt-in
-diagnostic paths can be enabled with:
+`DS4_V100_CUDA_F8_ROW4=0`, `DS4_V100_CUDA_F8_WARP_SCALE=0`, and
+`DS4_V100_FFN_DIRECT_DELTA=0`. The opt-in diagnostic paths can be enabled with:
 
 ```text
 DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=1
 DS4_V100_CUDA_F8_ROW4=1
 DS4_V100_CUDA_F8_WARP_SCALE=1
+DS4_V100_FFN_DIRECT_DELTA=1
 DS4_V100_TURBOMIND_FUSED_GATE_UP=0
 ```
 
