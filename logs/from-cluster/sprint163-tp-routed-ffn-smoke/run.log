@@ -1,0 +1,15 @@
+# build
+make: 'tests/cuda_v100_tp_routed_ffn_smoke' is up to date.
+make: 'tests/v100_layer_state_smoke' is up to date.
+# layer-state no-tp control
+v100_layer_state_smoke: layer=3 stage=0 gpu=0 class=ratio_128 router=bias hidden=4096 q=32768 kv=512 ratio=128 comp=512 index_q=0 mid=2048 experts=256 ffn_span=15356173824 attn_span=11904047616 ok
+# layer-state tp descriptors
+v100_layer_state_smoke: layer=3 stage=0 gpu=0 class=ratio_128 router=bias hidden=4096 q=32768 kv=512 ratio=128 comp=512 index_q=0 mid=2048 experts=256 ffn_span=15356173824 attn_span=11904047616 ok
+# tp smoke tokens=16
+ds4: CUDA backend initialized on Tesla V100-SXM2-32GB (sm_70)
+cuda_v100_tp_routed_ffn_smoke: layer=3 pair=0,3 tokens=16 routes=96 values=65536 max_abs=1.34401e-06 rel=0.000278022 bad=0 bad_frac=0 ref_ms=2.1191 owner_ms=1.1647 peer_ms=1.1656 copy_in_ms=0.0260 copy_out_ms=0.0102 sum_ms=0.0164 total_ms=1.2330 speedup=1.719x owner_bytes=5133828096 peer_bytes=1711276032
+cuda_v100_tp_routed_ffn_smoke: PASS
+# tp smoke tokens=1
+ds4: CUDA backend initialized on Tesla V100-SXM2-32GB (sm_70)
+cuda_v100_tp_routed_ffn_smoke: layer=3 pair=0,3 tokens=1 routes=6 values=4096 max_abs=9.16421e-07 rel=0.000276278 bad=0 bad_frac=0 ref_ms=0.2071 owner_ms=0.1454 peer_ms=0.1452 copy_in_ms=0.0150 copy_out_ms=0.0057 sum_ms=0.0126 total_ms=0.1946 speedup=1.064x owner_bytes=5133828096 peer_bytes=1711276032
+cuda_v100_tp_routed_ffn_smoke: PASS

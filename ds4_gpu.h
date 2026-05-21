@@ -20,6 +20,7 @@ typedef struct ds4_gpu_event ds4_gpu_event;
 int ds4_gpu_init(void);
 void ds4_gpu_cleanup(void);
 int ds4_gpu_set_device(int gpu);
+int ds4_gpu_enable_peer_access(int gpu_a, int gpu_b);
 
 ds4_gpu_tensor *ds4_gpu_tensor_alloc(uint64_t bytes);
 ds4_gpu_tensor *ds4_gpu_tensor_alloc_managed(uint64_t bytes);

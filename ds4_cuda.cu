@@ -2141,6 +2141,32 @@ extern "C" int ds4_gpu_set_device(int gpu) {
     return cuda_ok(cudaSetDevice(gpu), "set device");
 }
 
+extern "C" int ds4_gpu_enable_peer_access(int gpu_a, int gpu_b) {
+    if (gpu_a < 0 || gpu_b < 0 || gpu_a == gpu_b) return 0;
+    int can_ab = 0;
+    int can_ba = 0;
+    if (!cuda_ok(cudaDeviceCanAccessPeer(&can_ab, gpu_a, gpu_b),
+                 "peer access query") ||
+        !cuda_ok(cudaDeviceCanAccessPeer(&can_ba, gpu_b, gpu_a),
+                 "peer access reverse query")) {
+        return 0;
+    }
+    if (!can_ab || !can_ba) return 0;
+    if (!cuda_ok(cudaSetDevice(gpu_a), "peer access set device a")) return 0;
+    cudaError_t err = cudaDeviceEnablePeerAccess(gpu_b, 0);
+    if (err != cudaSuccess && err != cudaErrorPeerAccessAlreadyEnabled) {
+        return cuda_ok(err, "enable peer access a->b");
+    }
+    if (err == cudaErrorPeerAccessAlreadyEnabled) (void)cudaGetLastError();
+    if (!cuda_ok(cudaSetDevice(gpu_b), "peer access set device b")) return 0;
+    err = cudaDeviceEnablePeerAccess(gpu_a, 0);
+    if (err != cudaSuccess && err != cudaErrorPeerAccessAlreadyEnabled) {
+        return cuda_ok(err, "enable peer access b->a");
+    }
+    if (err == cudaErrorPeerAccessAlreadyEnabled) (void)cudaGetLastError();
+    return 1;
+}
+
 __global__ static void fill_f32_kernel(float *x, uint64_t n, float v);
 __global__ static void f32_to_f16_kernel(__half *out, const float *x, uint64_t n);
 __global__ static void f32_f16_round_kernel(float *x, uint64_t n);

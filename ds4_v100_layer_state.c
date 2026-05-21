@@ -177,7 +177,7 @@ static ds4_gpu_turbomind_mxfp4_matrix_view tm_gpu_view(
     v.experts_packed = b->experts_packed;
     v.experts_total = b->experts_total;
     if (b->runtime_layout &&
-        !strcmp(b->runtime_layout, "turbomind_mxfp4_grouped_gate_up_interleaved")) {
+        strstr(b->runtime_layout, "turbomind_mxfp4_grouped_gate_up_interleaved")) {
         v.flags |= DS4_GPU_TURBOMIND_MXFP4_GATE_UP_INTERLEAVED;
     }
     return v;
@@ -256,6 +256,32 @@ static int bind_routed_expert_tensors(ds4_v100_layer_state *out,
     int d = ds4_v100_context_require_layer_turbomind_binding(
         ctx, layer_id, "ffn_down_exps.weight", &out->turbomind_down_binding,
         tm_err, sizeof(tm_err));
+    ds4_v100_turbomind_binding tp_gu[2];
+    ds4_v100_turbomind_binding tp_d[2];
+    memset(tp_gu, 0, sizeof(tp_gu));
+    memset(tp_d, 0, sizeof(tp_d));
+    char tp_err[256];
+    memset(tp_err, 0, sizeof(tp_err));
+    const int tp_gu0 = ds4_v100_context_require_layer_turbomind_binding(
+        ctx, layer_id, "ffn_gate_up_exps.tp0.weight", &tp_gu[0],
+        tp_err, sizeof(tp_err));
+    const int tp_gu1 = ds4_v100_context_require_layer_turbomind_binding(
+        ctx, layer_id, "ffn_gate_up_exps.tp1.weight", &tp_gu[1],
+        tp_err, sizeof(tp_err));
+    const int tp_d0 = ds4_v100_context_require_layer_turbomind_binding(
+        ctx, layer_id, "ffn_down_exps.tp0.weight", &tp_d[0],
+        tp_err, sizeof(tp_err));
+    const int tp_d1 = ds4_v100_context_require_layer_turbomind_binding(
+        ctx, layer_id, "ffn_down_exps.tp1.weight", &tp_d[1],
+        tp_err, sizeof(tp_err));
+    const bool has_full_tp2 = !tp_gu0 && !tp_gu1 && !tp_d0 && !tp_d1;
+    const bool has_partial_tp2 =
+        (!tp_gu0 || !tp_gu1 || !tp_d0 || !tp_d1) && !has_full_tp2;
+    if (has_partial_tp2) {
+        return state_error(err, errlen,
+                           "partial TurboMind TP2 routed expert binding for layer %d",
+                           layer_id);
+    }
     const bool has_separate_gate_up = !g && !u;
     const bool has_partial_separate_gate_up = (!g) != (!u);
     const bool has_fused_gate_up = !gu;
@@ -305,6 +331,16 @@ static int bind_routed_expert_tensors(ds4_v100_layer_state *out,
             return 1;
         }
         out->turbomind_down_view = tm_gpu_view(&out->turbomind_down_binding);
+        if (has_full_tp2) {
+            out->has_turbomind_tp2_routed = true;
+            out->turbomind_tp2_peer_gpu = tp_gu[1].owning_gpu;
+            for (uint32_t half = 0; half < 2; half++) {
+                out->turbomind_tp2_gate_up_binding[half] = tp_gu[half];
+                out->turbomind_tp2_down_binding[half] = tp_d[half];
+                out->turbomind_tp2_gate_up_view[half] = tm_gpu_view(&tp_gu[half]);
+                out->turbomind_tp2_down_view[half] = tm_gpu_view(&tp_d[half]);
+            }
+        }
         return 0;
     }
 
@@ -614,6 +650,37 @@ int ds4_v100_layer_state_init(ds4_v100_layer_state *out,
         out->routed_down_binding.shape[0] != out->intermediate_size ||
         out->routed_down_binding.shape[1] != out->hidden_size) {
         return state_error(err, errlen, "routed expert dimensions do not match router/shared dims");
+    }
+    if (out->has_turbomind_tp2_routed) {
+        const uint32_t half_mid = out->intermediate_size / 2u;
+        if ((out->intermediate_size % 2u) != 0) {
+            return state_error(err, errlen, "TP2 requires even intermediate size");
+        }
+        if (out->turbomind_tp2_gate_up_binding[0].owning_gpu != out->owning_gpu ||
+            out->turbomind_tp2_down_binding[0].owning_gpu != out->owning_gpu ||
+            out->turbomind_tp2_gate_up_binding[1].owning_gpu ==
+                out->owning_gpu ||
+            out->turbomind_tp2_down_binding[1].owning_gpu !=
+                out->turbomind_tp2_gate_up_binding[1].owning_gpu) {
+            return state_error(err, errlen, "TP2 routed owner/peer GPU layout is invalid");
+        }
+        for (uint32_t half = 0; half < 2; half++) {
+            const ds4_gpu_turbomind_mxfp4_matrix_view *gu =
+                &out->turbomind_tp2_gate_up_view[half];
+            const ds4_gpu_turbomind_mxfp4_matrix_view *dw =
+                &out->turbomind_tp2_down_view[half];
+            if (gu->n != out->intermediate_size ||
+                gu->k != out->hidden_size ||
+                dw->n != out->hidden_size ||
+                dw->k != half_mid ||
+                gu->experts_total != out->routed_experts ||
+                dw->experts_total != out->routed_experts ||
+                (gu->flags & DS4_GPU_TURBOMIND_MXFP4_GATE_UP_INTERLEAVED) == 0) {
+                return state_error(err, errlen,
+                                   "TP2 routed expert dimensions do not match DS4 FFN dims");
+            }
+        }
+        out->turbomind_tp2_peer_gpu = out->turbomind_tp2_gate_up_binding[1].owning_gpu;
     }
     if (out->shared_up.cols != out->hidden_size ||
         out->shared_up.rows != out->intermediate_size ||

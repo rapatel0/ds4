@@ -216,6 +216,22 @@ optimized V100 low-bit expert kernels in the actual hot path.
   HMMA, and weighted scatter/reduce for the current compact routed shape, or a
   bounded one-stage 2-GPU TP routed-FFN prototype on NV2 pairs for the
   128-slot/32K tier.
+- Sprint 159-162 narrowed the serving bottleneck further. Wider slot admission
+  at 256K did not beat the 16-slot practical tier, async slot chunking exposed
+  wider route shapes but destroyed stage overlap, and small-route fixed
+  executors were rejected after a wedged final validation. Sprint 162 then
+  showed the existing two-GPU TP proxy is positive at practical route counts:
+  `1.260x` total-with-copy at 6 routes and about `1.328x` at 96 routes.
+- Sprint 163 shipped the first production-shaped TP routed-FFN primitive. A new
+  all-256-expert layer-3 TP split pack was generated, layer-state now binds
+  optional TP2 descriptors, and `tests/cuda_v100_tp_routed_ffn_smoke` compares
+  real owner+peer TP execution against the existing single-GPU routed FFN path.
+  The `gpu0 <-> gpu3` NV2 pair passed correctness with `rel ~= 2.78e-04` and
+  `bad=0`. The 16-token/96-route shape improved from `2.1191 ms` reference to
+  `1.2330 ms` total TP (`1.719x`), while the 1-token/6-route shape improved
+  only from `0.2071 ms` to `0.1946 ms` (`1.064x`). TP is therefore validated as
+  a real runtime primitive, but serving integration should be guarded and
+  layer-local before any broad topology rewrite.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation
