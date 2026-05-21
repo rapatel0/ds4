@@ -174,11 +174,12 @@ The high-slot wait prevents split request batches in throughput serving;
 decrease it only for latency-sensitive tests where accepting lower aggregate
 tok/s is fine.
 
-For throughput serving, `ctx=65536` now admits up to 64 slots, `ctx=131072`
-admits up to 32 slots, and `ctx=262144` remains capped at 16 slots. The
-launcher keeps the long-context tier memory-safe by rejecting slot counts above
-the planner-backed context cap, including 16-slot `ctx=1048576` configs,
-32-slot `ctx=262144` configs, and 64-slot `ctx=131072` configs.
+For throughput serving, `ctx=32768` now admits up to 128 slots, `ctx=65536`
+admits up to 64 slots, `ctx=131072` admits up to 32 slots, and `ctx=262144`
+remains capped at 16 slots. The launcher keeps the long-context tier
+memory-safe by rejecting slot counts above the planner-backed context cap,
+including 16-slot `ctx=1048576` configs, 32-slot `ctx=262144` configs,
+64-slot `ctx=131072` configs, and 128-slot `ctx=65536` configs.
 
 Set `DS4_V100_CUDA_PROFILER_WINDOW=1` only under `nvprof` or Nsight tooling.
 It starts/stops the CUDA profiler around generation batches after startup
@@ -369,8 +370,8 @@ When `active_microbatch` is `M`, limits report `active_slots`,
 only when same-token-count non-MTP requests actually coalesce into a batch.
 With `DS4_V100_MICROBATCH_WAIT_US=auto`, the launcher resolves the rendezvous
 window to `50000` us for ordinary multi-slot serving and `200000` us for
-`active_microbatch >= 16`, which keeps the 16-slot/256K throughput profile from
-splitting into two 8-request batches.
+`active_microbatch >= 16`, which keeps high-slot throughput profiles from
+splitting into smaller request batches.
 
 Expected metrics include:
 

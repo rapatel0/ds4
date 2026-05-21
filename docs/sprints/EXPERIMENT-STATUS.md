@@ -54,14 +54,16 @@ scheduling shape instead of changing another wrapper boundary: 32-slot 128K
 passed full scheduler smoke and served at `52.840889` generated tok/s versus
 `45.780913` for the same-context 16-slot control. Sprint 136 then admitted
 64 slots at 64K and reached `57.322945` generated tok/s versus `52.884400` for
-the same-context 32-slot control. These results keep pointing the next
-implementation at lower-level packed MXFP4 dataflow or wider served scheduling
-work rather than another launch-boundary, dispatch, or wrapper data-movement
-tweak.
+the same-context 32-slot control. Sprint 137 admitted 128 slots at 32K and
+reached `59.598172` generated tok/s versus `57.170428` for the same-context
+64-slot control. These results keep pointing the next implementation at
+lower-level packed MXFP4 dataflow rather than another launch-boundary,
+dispatch, wrapper data-movement tweak, or simple admission-width change.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
-| Short-context max-throughput target | 65,536 | 64 | `57.322945` | opt-in | 64/64 token match |
+| Short-context max-throughput target | 32,768 | 128 | `59.598172` | opt-in | 128/128 token match |
+| Short-context high-throughput target | 65,536 | 64 | `57.322945` | opt-in | 64/64 token match |
 | Short-context throughput target | 131,072 | 32 | `52.840889` | opt-in | 32/32 token match |
 | Throughput serving target | 262,144 | 16 | `46.394722` | `45.888778` | 16/16 token match |
 | 8-slot compatibility target | 262,144 | 8 | `34.689964` | `34.490294` | 8/8 token match |
@@ -78,6 +80,7 @@ to slightly worse.
 - Selected-token oracle for the official short prompt, expected text hex
   `3136`, selected token id `926`.
 - HTTP served soak benchmarks at:
+  - `ctx=32768`, `slots=128`, `active_microbatch=128`, 16 generated tokens.
   - `ctx=65536`, `slots=64`, `active_microbatch=64`, 16 generated tokens.
   - `ctx=131072`, `slots=32`, `active_microbatch=32`, 16 generated tokens.
   - `ctx=262144`, `slots=8`, `active_microbatch=8`, 16 generated tokens.
@@ -127,10 +130,11 @@ to slightly worse.
 | 134 | Fixed-shape compact gate/up ABI probe | Correct; direct fixed SM70 launch was bit-identical to generic gated and measured `0.1746 ms` vs `0.1746 ms` | Do not promote; dispatch bypass is not the missing lever |
 | 135 | 32-slot 128K throughput admission | Correct; full 43-layer smoke passed, and 32-slot 128K served at `52.840889` vs `45.780913` same-context 16-slot control | Ship as explicit short-context throughput mode; evaluate 64-slot short context and deeper software-pipelined expert kernels next |
 | 136 | 64-slot 64K throughput admission | Correct; full 43-layer smoke passed, and 64-slot 64K served at `57.322945` vs `52.884400` same-context 32-slot control | Ship as explicit short-context throughput mode; slot scaling helps but shows diminishing returns |
+| 137 | 128-slot 32K throughput admission | Correct; full 43-layer smoke passed, status/metrics confirmed 128-slot serving, and 128-slot 32K served at `59.598172` vs `57.170428` same-context 64-slot control | Ship as explicit short-context throughput mode; simple slot widening is now mostly exhausted |
 
 ## Remaining
 
-- Close the throughput gap. The current best `~57` tok/s aggregate is far below the
+- Close the throughput gap. The current best `~60` tok/s aggregate is far below the
   `~1k-2k` practical target discussed in the vision.
 - Improve GPU utilization. The latest profile says the bottleneck is device
   kernel shape/occupancy, not disk, host RAM, or bulk PCIe/NVLink traffic.
@@ -161,8 +165,10 @@ to slightly worse.
     decode/activation staging/MMA/epilogue specialization that beats the compact
     `0.1740 ms` baseline, or a scheduler that keeps expert work larger than the
     current compact microshape. Sprints 135-136 confirm that wider served
-    scheduling does help: 32-slot 128K reached `52.840889`, and 64-slot 64K
-    reached `57.322945`, but both remain far below the practical vision target.
+    scheduling does help: 32-slot 128K reached `52.840889`, 64-slot 64K
+    reached `57.322945`, and 128-slot 32K reached `59.598172`, but the
+    marginal gain is shrinking and all remain far below the practical vision
+    target.
     Sprint 122 further showed that merely chunking slots to feed wider kernels
     loses too much stage overlap, so the fusion target must match the per-slot
     served topology or replace it with an overlapped scheduler.
@@ -180,9 +186,9 @@ The default launcher now keeps `DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=0`,
 `DS4_V100_CUDA_F8_HMMA_ATTN_BATCH=1` are default.
 `DS4_V100_ASYNC_EVENT_HANDOFF=auto` enables event-ordered handoff for
 multi-slot per-step serving and resolves off for one-slot latency configs.
-`ctx=65536` can now admit 64 slots, `ctx=131072` can admit 32 slots, and
-`ctx=262144` remains capped at 16 slots; the launcher rejects over-cap configs
-before allocation.
+`ctx=32768` can now admit 128 slots, `ctx=65536` can admit 64 slots,
+`ctx=131072` can admit 32 slots, and `ctx=262144` remains capped at 16 slots;
+the launcher rejects over-cap configs before allocation.
 `DS4_V100_MICROBATCH_WAIT_US=auto` resolves to 200 ms when
 `DS4_V100_ACTIVE_MICROBATCH >= 16` so bursty high-slot clients form one tensor
 batch. The opt-in diagnostic paths can be enabled, or defaults rolled back,
