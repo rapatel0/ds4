@@ -27,8 +27,11 @@ Sprint 129 exposed TurboMind dispatch policy selection, rejected unsafe
 neutral at `45.813841` vs `45.840691` default. Sprint 130 reran the closest
 existing routed-FFN epilogue-fusion analogue on the current fused appliance:
 compact control was `45.837745`, while compact plus route-row-reduce was
-`45.660765`, so route-row-reduce remains opt-in and the next target is a
-DS4-specific packed MXFP4 software-pipelined routed gate/up probe.
+`45.660765`, so route-row-reduce remains opt-in. Sprint 131 added a correct
+opt-in TurboMind indexed-A path that avoids route-expanded FP16 activations for
+gate/up GEMMs, but served A/B was only `45.789937` vs `45.663281` control, so
+it also remains opt-in. The next target is still a DS4-specific packed MXFP4
+software-pipelined routed gate/up probe.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
@@ -44,9 +47,11 @@ current topology because it gives up too much stage overlap.
 | Sprint 128 gated compact opt-in | 262,144 | 16 | `46.328184` | `43.432672` | 16/16 token match |
 | Sprint 128 compact launcher default on fused appliance | 262,144 | 16 | `45.888778` | `43.020729` | 16/16 token match |
 | Sprint 129 default dispatch control | 262,144 | 16 | `45.840691` | `42.975648` | 16/16 token match |
-| Sprint 130 compact fused control repeat | 262,144 | 16 | `45.837745` | `42.972886` | 16/16 token match |
-| Sprint 130 compact fused route-row-reduce repeat | 262,144 | 16 | `45.660765` | `42.806967` | 16/16 token match |
 | Sprint 129 reuse dispatch probe | 262,144 | 16 | `45.813841` | `42.950476` | 16/16 token match |
+| Sprint 130 compact fused control repeat | 262,144 | 16 | `45.837745` | `42.972886` | 16/16 token match |
+| Sprint 131 compact fused indexed-A opt-in | 262,144 | 16 | `45.789937` | `42.928066` | 16/16 token match |
+| Sprint 130 compact fused route-row-reduce repeat | 262,144 | 16 | `45.660765` | `42.806967` | 16/16 token match |
+| Sprint 131 compact fused control repeat | 262,144 | 16 | `45.663281` | `42.809326` | 16/16 token match |
 | Sprint 128 compact explicit on fused appliance | 262,144 | 16 | `45.747461` | `42.888244` | 16/16 token match |
 | Sprint 128 gated compact-off same-binary control | 262,144 | 16 | `43.879880` | `41.137387` | 16/16 token match |
 | Sprint 127 interleaved gated-SiLU opt-in | 262,144 | 16 | `43.933293` | `41.187462` | 16/16 token match |
@@ -122,6 +127,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 128 | TurboMind compact active-expert schedule | Correct; compact schedule passed full 43-layer smokes on both the interleaved gated and existing fused appliances, improved served A/B from `43.879880` to `46.328184` on the gated appliance, and the launcher-default fused appliance reached `45.888778` | Shipped/default as `DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1`; keep gated-SiLU and route-row-reduce opt-in |
 | 129 | TurboMind dispatch policy probe | Correct for `default` and `reuse`; full scheduler `measure` aborted inside TurboMind's measurer, while served `reuse` was `45.813841` vs `45.840691` default | Keep default dispatch; guard unsafe measure/append; move to DS4-specific persistent routed-FFN |
 | 130 | Routed FFN software-pipeline targeting | Correctness held; compact fused route-row-reduce repeated at `45.660765` vs `45.837745` control, confirming final scatter/reduce fusion is not the lever | Keep route-row-reduce opt-in; next code should target the packed MXFP4 gate/up mainloop with DS4-specific software pipelining |
+| 131 | TurboMind indexed-A routed activation probe | Correct; full 43-layer smokes passed with indexed-A off/on, and served A/B was `45.789937` vs `45.663281` control | Keep indexed-A opt-in; wrapper-level activation compaction is correct but not a promotion-level win |
 
 ## Sprint 106 Profile Takeaway
 

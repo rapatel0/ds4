@@ -5370,12 +5370,14 @@ __global__ static void tm_prefix_offsets_kernel(
 
 __global__ static void tm_scatter_routes_kernel(
         int *sorted_pairs,
+        int *sorted_tokens,
         float *sorted_weights,
         int *pair_rows,
         int *bad,
         int *cursors,
         const int32_t *selected,
         const float *weights,
+        uint32_t n_routes,
         uint32_t total_routes,
         uint32_t n_total_experts) {
     const uint32_t pair = blockIdx.x * blockDim.x + threadIdx.x;
@@ -5387,6 +5389,7 @@ __global__ static void tm_scatter_routes_kernel(
     }
     const int row = atomicAdd(&cursors[(uint32_t)e], 1);
     sorted_pairs[row] = (int)pair;
+    if (sorted_tokens) sorted_tokens[row] = (int)(pair / n_routes);
     sorted_weights[row] = weights[pair];
     if (pair_rows) pair_rows[pair] = row;
 }
@@ -5396,11 +5399,13 @@ __global__ static void tm_build_routes_small_kernel(
         int *cursors,
         int *offsets,
         int *sorted_pairs,
+        int *sorted_tokens,
         float *sorted_weights,
         int *pair_rows,
         int *bad,
         const int32_t *selected,
         const float *weights,
+        uint32_t n_routes,
         uint32_t total_routes,
         uint32_t n_total_experts) {
     const uint32_t tid = threadIdx.x;
@@ -5440,9 +5445,25 @@ __global__ static void tm_build_routes_small_kernel(
         if (e < 0 || (uint32_t)e >= n_total_experts) return;
         const int row = atomicAdd(&cursors[(uint32_t)e], 1);
         sorted_pairs[row] = (int)tid;
+        if (sorted_tokens) sorted_tokens[row] = (int)(tid / n_routes);
         sorted_weights[row] = weights[tid];
         if (pair_rows) pair_rows[tid] = row;
     }
+}
+
+__global__ static void tm_cast_f32_rows_to_f16_kernel(
+        __half *out,
+        const float *x,
+        const float *const *x_row_ptrs,
+        uint32_t hidden,
+        uint32_t n_tokens) {
+    const uint64_t idx = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t n = (uint64_t)n_tokens * hidden;
+    if (idx >= n) return;
+    const uint32_t row = (uint32_t)(idx / hidden);
+    const uint32_t col = (uint32_t)(idx - (uint64_t)row * hidden);
+    const float *src = x_row_ptrs ? x_row_ptrs[row] : x + (uint64_t)row * hidden;
+    out[idx] = __float2half_rn(src[col]);
 }
 
 __global__ static void tm_gather_f32_to_f16_kernel(
@@ -5697,6 +5718,10 @@ static int cuda_tm_route_row_reduce_enabled(void) {
     return cuda_env_flag_enabled("DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE");
 }
 
+static int cuda_tm_indexed_a_enabled(void) {
+    return cuda_env_flag_enabled("DS4_V100_TURBOMIND_INDEXED_A");
+}
+
 static int cuda_tm_use_small_route_build(uint32_t total_routes, uint32_t n_total_experts) {
     return cuda_tm_small_route_build_enabled() &&
            total_routes <= 128u &&
@@ -5708,11 +5733,13 @@ static int cuda_tm_build_routes(
         int *cursors,
         int *offsets,
         int *sorted_pairs,
+        int *sorted_tokens,
         float *sorted_weights,
         int *pair_rows,
         int *bad,
         const int32_t *selected,
         const float *weights,
+        uint32_t n_routes,
         uint32_t total_routes,
         uint32_t n_total_experts,
         const char *label) {
@@ -5722,11 +5749,13 @@ static int cuda_tm_build_routes(
             cursors,
             offsets,
             sorted_pairs,
+            sorted_tokens,
             sorted_weights,
             pair_rows,
             bad,
             selected,
             weights,
+            n_routes,
             total_routes,
             n_total_experts);
         return cuda_ok(cudaGetLastError(), label ? label : "turbomind small route build launch");
@@ -5748,12 +5777,14 @@ static int cuda_tm_build_routes(
     if (!cuda_ok(cudaGetLastError(), "turbomind prefix routes launch")) return 0;
     tm_scatter_routes_kernel<<<(total_routes + 255u) / 256u, 256>>>(
         sorted_pairs,
+        sorted_tokens,
         sorted_weights,
         pair_rows,
         bad,
         cursors,
         selected,
         weights,
+        n_routes,
         total_routes,
         n_total_experts);
     return cuda_ok(cudaGetLastError(), "turbomind scatter routes launch");
@@ -6023,6 +6054,7 @@ static int cuda_tm_pack_matrix(
 
 static int cuda_tm_grouped_matmul(
         const __half *a,
+        const int *token_indices,
         const int *offsets,
         const cuda_tm_matrix_pack *pack,
         uint32_t total_routes,
@@ -6036,7 +6068,7 @@ static int cuda_tm_grouped_matmul(
     if (cuda_tm_total_tokens_abi_enabled()) {
         rc = g_tm_api.mul_mat_grouped_total_tokens(
             a,
-            nullptr,
+            token_indices,
             offsets,
             (int)n_total_experts,
             (int)total_routes,
@@ -6052,7 +6084,7 @@ static int cuda_tm_grouped_matmul(
     } else {
         rc = g_tm_api.mul_mat_grouped(
             a,
-            nullptr,
+            token_indices,
             offsets,
             (int)n_total_experts,
             (const void * const *)pack->d_weights,
@@ -6077,6 +6109,7 @@ static int cuda_tm_grouped_matmul(
 
 static int cuda_tm_grouped_gated_silu_matmul(
         const __half *a,
+        const int *token_indices,
         const int *offsets,
         const cuda_tm_matrix_pack *pack,
         uint32_t total_routes,
@@ -6091,7 +6124,7 @@ static int cuda_tm_grouped_gated_silu_matmul(
     }
     const int rc = g_tm_api.mul_mat_grouped_gated_silu_total_tokens(
         a,
-        nullptr,
+        token_indices,
         offsets,
         (int)n_total_experts,
         (int)total_routes,
@@ -6194,11 +6227,13 @@ static int cuda_tm_routed_mxfp4_transient(
                               cursors,
                               offsets,
                               sorted_pairs,
+                              nullptr,
                               sorted_weights,
                               nullptr,
                               bad,
                               (const int32_t *)selected_i32->ptr,
                               (const float *)weights_f32->ptr,
+                              n_routes,
                               total_routes,
                               n_total_experts,
                               "turbomind route build launch")) {
@@ -6245,7 +6280,7 @@ static int cuda_tm_routed_mxfp4_transient(
         return 0;
     }
     int ok = cuda_tm_grouped_matmul(
-        a_half, offsets, &gate_pack, total_routes, n_total_experts, (int)mid, (int)hidden,
+        a_half, nullptr, offsets, &gate_pack, total_routes, n_total_experts, (int)mid, (int)hidden,
         gate_out, "gate");
     cuda_tm_matrix_pack_free(&gate_pack);
     if (!ok) return 0;
@@ -6261,7 +6296,7 @@ static int cuda_tm_routed_mxfp4_transient(
         return 0;
     }
     ok = cuda_tm_grouped_matmul(
-        a_half, offsets, &up_pack, total_routes, n_total_experts, (int)mid, (int)hidden,
+        a_half, nullptr, offsets, &up_pack, total_routes, n_total_experts, (int)mid, (int)hidden,
         up_out, "up");
     cuda_tm_matrix_pack_free(&up_pack);
     if (!ok) return 0;
@@ -6287,7 +6322,7 @@ static int cuda_tm_routed_mxfp4_transient(
         return 0;
     }
     ok = cuda_tm_grouped_matmul(
-        mid_half, offsets, &down_pack, total_routes, n_total_experts, (int)hidden, (int)mid,
+        mid_half, nullptr, offsets, &down_pack, total_routes, n_total_experts, (int)hidden, (int)mid,
         down_routes, "down");
     cuda_tm_matrix_pack_free(&down_pack);
     if (!ok) return 0;
@@ -6378,6 +6413,7 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     tm_prof.begin(arena->gpu);
 
     const int use_route_row_reduce = cuda_tm_route_row_reduce_enabled();
+    const int use_indexed_a = cuda_tm_indexed_a_enabled();
     const int use_compact_schedule =
         cuda_tm_compact_schedule_enabled() && total_routes < n_total_experts;
     const uint32_t tm_group_count = use_compact_schedule ? total_routes : n_total_experts;
@@ -6390,6 +6426,10 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     scratch_bytes += (uint64_t)(n_total_experts + 1u) * sizeof(int);
     const uint64_t sorted_pairs_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     scratch_bytes += (uint64_t)total_routes * sizeof(int);
+    const uint64_t sorted_tokens_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
+    if (use_indexed_a) {
+        scratch_bytes += (uint64_t)total_routes * sizeof(int);
+    }
     const uint64_t pair_rows_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     if (use_route_row_reduce) {
         scratch_bytes += (uint64_t)total_routes * sizeof(int);
@@ -6435,7 +6475,7 @@ static int cuda_tm_routed_mxfp4_packed_impl(
         scratch_bytes += (uint64_t)tm_group_count * sizeof(cuda_tm_strided_ptr);
     }
     const uint64_t a_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
-    scratch_bytes += (uint64_t)total_routes * hidden * sizeof(__half);
+    scratch_bytes += (uint64_t)(use_indexed_a ? n_tokens : total_routes) * hidden * sizeof(__half);
     const uint64_t gate_out_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     if (!use_gated_silu) {
         scratch_bytes += (uint64_t)total_routes * mid * (fused_gate_up ? 2u : 1u) * sizeof(__half);
@@ -6456,6 +6496,7 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     int *cursors = (int *)(scratch + cursors_off);
     int *offsets = (int *)(scratch + offsets_off);
     int *sorted_pairs = (int *)(scratch + sorted_pairs_off);
+    int *sorted_tokens = use_indexed_a ? (int *)(scratch + sorted_tokens_off) : nullptr;
     int *pair_rows = use_route_row_reduce ? (int *)(scratch + pair_rows_off) : nullptr;
     float *sorted_weights = (float *)(scratch + sorted_weights_off);
     int *bad = (int *)(scratch + bad_off);
@@ -6486,11 +6527,13 @@ static int cuda_tm_routed_mxfp4_packed_impl(
                               cursors,
                               offsets,
                               sorted_pairs,
+                              sorted_tokens,
                               sorted_weights,
                               pair_rows,
                               bad,
                               (const int32_t *)selected_i32->ptr,
                               (const float *)weights_f32->ptr,
+                              n_routes,
                               total_routes,
                               n_total_experts,
                               "turbomind packed route build launch")) {
@@ -6527,14 +6570,23 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     }
     tm_prof.mark(&tm_prof.route_ms);
 
-    tm_gather_f32_to_f16_kernel<<<((uint64_t)total_routes * hidden + 255u) / 256u, 256>>>(
-        a_half,
-        x_f32 ? (const float *)x_f32->ptr : nullptr,
-        x_row_ptrs ? (const float *const *)x_row_ptrs->ptr : nullptr,
-        sorted_pairs,
-        n_routes,
-        hidden,
-        total_routes);
+    if (use_indexed_a) {
+        tm_cast_f32_rows_to_f16_kernel<<<((uint64_t)n_tokens * hidden + 255u) / 256u, 256>>>(
+            a_half,
+            x_f32 ? (const float *)x_f32->ptr : nullptr,
+            x_row_ptrs ? (const float *const *)x_row_ptrs->ptr : nullptr,
+            hidden,
+            n_tokens);
+    } else {
+        tm_gather_f32_to_f16_kernel<<<((uint64_t)total_routes * hidden + 255u) / 256u, 256>>>(
+            a_half,
+            x_f32 ? (const float *)x_f32->ptr : nullptr,
+            x_row_ptrs ? (const float *const *)x_row_ptrs->ptr : nullptr,
+            sorted_pairs,
+            n_routes,
+            hidden,
+            total_routes);
+    }
     if (!cuda_ok(cudaGetLastError(), "turbomind packed gather activations launch")) return 1;
     tm_prof.mark(&tm_prof.gather_ms);
 
@@ -6633,18 +6685,18 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     if (fused_gate_up) {
         ok = use_gated_silu
             ? cuda_tm_grouped_gated_silu_matmul(
-                  a_half, gemm_offsets, &gate_up_run_pack, total_routes, gemm_group_count,
+                  a_half, sorted_tokens, gemm_offsets, &gate_up_run_pack, total_routes, gemm_group_count,
                   (int)fused_n_u64, (int)hidden, mid_half, "packed gate_up")
             : cuda_tm_grouped_matmul(
-                  a_half, gemm_offsets, &gate_up_run_pack, total_routes, gemm_group_count,
+                  a_half, sorted_tokens, gemm_offsets, &gate_up_run_pack, total_routes, gemm_group_count,
                   (int)fused_n_u64, (int)hidden, gate_out, "packed gate_up");
     } else {
         ok = cuda_tm_grouped_matmul(
-            a_half, gemm_offsets, &gate_run_pack, total_routes, gemm_group_count, (int)mid, (int)hidden,
+            a_half, sorted_tokens, gemm_offsets, &gate_run_pack, total_routes, gemm_group_count, (int)mid, (int)hidden,
             gate_out, "packed gate");
         if (ok) {
             ok = cuda_tm_grouped_matmul(
-                a_half, gemm_offsets, &up_run_pack, total_routes, gemm_group_count, (int)mid, (int)hidden,
+                a_half, sorted_tokens, gemm_offsets, &up_run_pack, total_routes, gemm_group_count, (int)mid, (int)hidden,
                 up_out, "packed up");
         }
     }
@@ -6673,7 +6725,7 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     }
     if (ok) {
         ok = cuda_tm_grouped_matmul(
-            mid_half, gemm_offsets, &down_run_pack, total_routes, gemm_group_count, (int)hidden, (int)mid,
+            mid_half, nullptr, gemm_offsets, &down_run_pack, total_routes, gemm_group_count, (int)hidden, (int)mid,
             down_routes, "packed down");
     }
     if (ok) tm_prof.mark(&tm_prof.down_ms);

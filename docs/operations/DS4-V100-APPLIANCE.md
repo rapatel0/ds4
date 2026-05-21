@@ -151,6 +151,7 @@ DS4_V100_BATCH_ATTN_OUTPUT_A=0
 DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS=1
 DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC=0
 DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE=0
+DS4_V100_TURBOMIND_INDEXED_A=0
 DS4_V100_TURBOMIND_GATED_SILU=0
 DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1
 DS4_V100_TURBOMIND_DISPATCH_POLICY=default
@@ -222,6 +223,12 @@ keeps a token/route to sorted-row map during TurboMind route compaction and
 uses that map to replace the packed output clear plus atomic scatter-add with a
 deterministic per-token reduce. Keep it `0` for normal serving until the
 same-binary V100 A/B clears the promotion bar.
+
+`DS4_V100_TURBOMIND_INDEXED_A=1` is a Sprint 131 routed-FFN probe. It passes
+compact token indices into TurboMind gate/up GEMMs and stores one FP16
+activation row per active token instead of route-expanding activations. Down
+GEMM remains route-expanded. Keep it `0` until V100 correctness and throughput
+A/B accepts it.
 
 `DS4_V100_TURBOMIND_GATED_SILU=1` enables the Sprint 127 TurboMind gated-SiLU
 epilogue path. It requires an appliance packed with

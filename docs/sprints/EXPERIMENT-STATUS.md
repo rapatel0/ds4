@@ -38,9 +38,12 @@ generated tok/s, and TurboMind `measure` hit a full-appliance measurer fatal,
 so dispatch-policy tuning is not the next throughput lever. Sprint 130 reran
 the route-row-reduce tail fusion against the current compact fused appliance:
 control was `45.837745` generated tok/s and route-row-reduce was `45.660765`,
-both with 16/16 token match. That keeps the tail fusion opt-in and points the
+both with 16/16 token match. Sprint 131 then added an opt-in TurboMind
+indexed-A path that uses compact token indices for gate/up and avoids
+route-expanded activation scratch. It was correct, but measured `45.789937`
+vs `45.663281` control, so it remains opt-in. These results keep pointing the
 next implementation at a DS4-specific software-pipelined packed MXFP4 gate/up
-mainloop rather than another launch-boundary tweak.
+mainloop rather than another launch-boundary or wrapper data-movement tweak.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
@@ -100,6 +103,7 @@ to slightly worse.
 | 128 | TurboMind compact active-expert schedule | Correct; full smokes passed on both the interleaved gated and existing fused appliances, compact served A/B was `46.328184` vs `43.879880`, compact+route-row-reduce reached `46.394722`, and the fused-appliance launcher default reached `45.888778` | Ship/default as `DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1`; keep gated-SiLU and route-row-reduce opt-in |
 | 129 | TurboMind dispatch policy probe | Correct for `default` and `reuse`; `reuse` served at `45.813841` vs `45.840691` default, while unsafe `measure` aborted the full scheduler in TurboMind's measurer | Keep `default`; block `measure`/`append` unless `DS4_V100_TURBOMIND_ALLOW_UNSAFE_MEASURE=1`; move to persistent routed-FFN work |
 | 130 | Routed FFN software-pipeline targeting | Correct; route-row-reduce repeated at `45.660765` vs `45.837745` compact fused control, and TurboMind/tc-grid review points to packed MXFP4 load/dequant/HMMA pipelining as the useful fusion boundary | Keep route-row-reduce opt-in; implement a guarded DS4-specific routed gate/up software-pipeline probe |
+| 131 | TurboMind indexed-A routed activation probe | Correct; avoids route-expanded activation materialization for gate/up, passed full 43-layer smokes, and served at `45.789937` vs `45.663281` control | Keep indexed-A opt-in; wrapper-level activation compaction is not enough |
 
 ## Remaining
 
@@ -124,9 +128,11 @@ to slightly worse.
     Sprint 129 showed TurboMind dispatch policy tuning is either neutral
     (`reuse`) or unsafe in the full appliance path (`measure`).
     Sprint 130 repeated the current route-row-reduce tail fusion and found it
-    slightly slower than the compact fused control, so the useful version needs
-    packed decode, activation staging, MMA, and
-    epilogue work in one tensor-core-oriented kernel with useful tile fill.
+    slightly slower than the compact fused control. Sprint 131 reduced
+    gate/up activation materialization with TurboMind indexed-A, but remained
+    inside run noise. The useful version therefore needs packed decode,
+    activation staging, MMA, and epilogue work in one tensor-core-oriented
+    kernel with useful tile fill.
     Sprint 122 further showed that merely chunking slots to feed wider kernels
     loses too much stage overlap, so the fusion target must match the per-slot
     served topology or replace it with an overlapped scheduler.
@@ -167,6 +173,7 @@ DS4_V100_F8_SHARED_DOWN_ADD=1
 DS4_V100_BATCH_ATTN_OUTPUT_B=1
 DS4_V100_ASYNC_SLOT_CHUNK=2
 DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE=1
+DS4_V100_TURBOMIND_INDEXED_A=1
 DS4_V100_BATCH_ATTN_OUTPUT_A=1
 DS4_V100_CUDA_F8_HMMA_GROUPED_ATTN_O_BATCH=1
 DS4_V100_TURBOMIND_PROFILE=1
