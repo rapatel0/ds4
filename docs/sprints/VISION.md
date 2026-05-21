@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: sprint-execute
-revision: 149
+revision: 150
 ---
 
 # Vision: DS4 V100 Appliance
@@ -155,7 +155,15 @@ optimized V100 low-bit expert kernels in the actual hot path.
   `0.9651 ms` generic gated), but served A/B was flat to slightly worse:
   `61.204203` generated tok/s and `57.378940` continuation/decode tok/s versus
   `61.223893` and `57.397400` control. The 1536-route probes stay explicit
-  opt-ins and are not selected by `auto`.
+  opt-ins and are not selected by `auto`. Sprint 147 extended the down-reduce
+  epilogue to the 1536-route shape and passed full-scheduler smoke. Sprint 148
+  tested a deeper stage-count software-pipeline variant of the fused MXFP4
+  gate/up+gated-SiLU kernel; it improved the isolated 768-route probe but did
+  not move served throughput or NCU counters materially. Sprint 149 measured a
+  2-way TP split proxy for the routed FFN: the ideal compute speedup is
+  `1.858x` at 768 routes and `1.468x` at 1536 routes before communication, and
+  a 12 MiB hidden payload takes about `0.26 ms` over NV2, `0.52 ms` over NV1,
+  and `1.29-1.31 ms` over SYS.
   Dispatch-policy tuning, dispatch bypass, final scatter fusion, wrapper-level
   activation compaction, separate tail-vectorization, atomic epilogue reduce,
   simple slot widening, fixed-shape gate/down probes, and basic gate/up launch
@@ -165,9 +173,8 @@ optimized V100 low-bit expert kernels in the actual hot path.
   execution-boundary work:
   a narrow DS4-only persistent grouped routed-expert pipeline that
   software-pipelines packed MXFP4 dequant, gate/up HMMA, gated activation, down
-  HMMA, and weighted scatter/reduce for the current compact routed shape, or
-  scheduling work that makes expert microbatches larger than the compact
-  per-layer shape.
+  HMMA, and weighted scatter/reduce for the current compact routed shape, or a
+  bounded 2-GPU TP routed-FFN prototype on NV2 pairs.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation
@@ -2691,6 +2698,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-21 | Completed Sprint 146 1536-route fixed-shape probe. | The 1536-route gate/up and down probes are correct and explicit opt-ins. Gate `m128_1536` improved the standalone compact 256-slot shape (`0.9435 ms` vs `0.9651 ms` generic gated), but served 256-slot/16K A/B was flat to slightly worse: `61.204203` generated / `57.378940` continuation tok/s versus `61.223893` / `57.397400` control. Keep 1536 probes out of `auto`; larger software-pipelined routed-FFN work remains the main path. | Sprint 147+ |
 | 2026-05-21 | Completed Sprint 147 1536-route down-reduce checkpoint. | The down GEMM route-weighted F32 accumulation epilogue now covers the 1536-route compact shape and passed full 43-layer 256-slot smoke. Served A/B was deferred after the strategy pivot toward larger fused-kernel work, so this remains an explicit diagnostic path only. | Sprint 148+ |
 | 2026-05-21 | Completed Sprint 148 stage-4 fused gate/up software-pipeline probe. | A true stage-count software-pipeline variant of the fused MXFP4 gate/up+gated-SiLU kernel was implemented and tested. The 768-route `m128_s4` probe improved the isolated benchmark (`0.5811 ms` vs `0.6033 ms` for `m128`) and passed full 43-layer smoke, but served A/B was only `60.049057` generated / `56.295991` continuation tok/s versus `59.865668` / `56.124063` control, and full-scheduler profiles did not show a reliable gate/up bucket reduction. Keep stage-4 probes opt-in; the next material path is a larger routed-FFN executor boundary or a TP/EP microbenchmark. | Sprint 149+ |
+| 2026-05-21 | Completed Sprint 149 TP split and P2P topology probe. | The TurboMind harness now measures a 2-way split of the DS4 routed-FFN middle dimension and a P2P reduce-payload proxy. Ideal 2-way compute speedup is `1.858x` at 768 routes and `1.468x` at 1536 routes before communication; 12 MiB hidden payloads take about `0.26 ms` over NV2, `0.52 ms` over NV1, and `1.29-1.31 ms` over SYS. This supports a bounded 2-GPU TP prototype on NV2 pairs, not an immediate 8-way rewrite. | Sprint 150+ |
 
 ## Open Questions
 

@@ -104,6 +104,13 @@ software pipelining in the fused MXFP4 gate/up+gated-SiLU kernel. The
 only `60.049057` generated / `56.295991` continuation tok/s versus
 `59.865668` / `56.124063` control. The profile did not show a reliable
 gate/up bucket reduction, so stage-4 probes remain explicit opt-ins.
+Sprint 149 then measured the first TP topology proxy. Splitting the routed-FFN
+middle dimension from `2048` into two `1024` halves shows ideal 2-way compute
+speedups of `1.858x` at 768 routes and `1.468x` at 1536 routes before
+communication. P2P payload timing shows placement matters: a 12 MiB hidden
+payload moves in about `0.26 ms` over NV2, `0.52 ms` over NV1, and
+`1.29-1.31 ms` over SYS. This justifies a bounded 2-GPU TP prototype on NV2
+pairs, but not an immediate 8-way scheduler rewrite.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|

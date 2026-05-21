@@ -106,6 +106,43 @@ static void make_fused_interleaved_fixture(std::vector<block_mxfp4> & fused,
     }
 }
 
+static void slice_rows_fixture(std::vector<block_mxfp4> & out,
+                               const std::vector<block_mxfp4> & src,
+                               int src_N,
+                               int K,
+                               int row_begin,
+                               int row_count) {
+    const int blocks_per_row = K / 32;
+    out.resize((size_t) row_count * blocks_per_row);
+    for (int row = 0; row < row_count; ++row) {
+        const size_t src_off = (size_t) (row_begin + row) * blocks_per_row;
+        const size_t dst_off = (size_t) row * blocks_per_row;
+        std::copy(src.begin() + src_off,
+                  src.begin() + src_off + blocks_per_row,
+                  out.begin() + dst_off);
+    }
+    (void)src_N;
+}
+
+static void slice_cols_fixture(std::vector<block_mxfp4> & out,
+                               const std::vector<block_mxfp4> & src,
+                               int N,
+                               int src_K,
+                               int col_begin,
+                               int col_count) {
+    const int src_blocks_per_row = src_K / 32;
+    const int dst_blocks_per_row = col_count / 32;
+    const int col_block_begin = col_begin / 32;
+    out.resize((size_t) N * dst_blocks_per_row);
+    for (int row = 0; row < N; ++row) {
+        const size_t src_off = (size_t) row * src_blocks_per_row + col_block_begin;
+        const size_t dst_off = (size_t) row * dst_blocks_per_row;
+        std::copy(src.begin() + src_off,
+                  src.begin() + src_off + dst_blocks_per_row,
+                  out.begin() + dst_off);
+    }
+}
+
 static float elapsed_ms(cudaEvent_t start, cudaEvent_t stop) {
     float ms = 0.0f;
     CHECK_CUDA(cudaEventElapsedTime(&ms, start, stop));
@@ -302,10 +339,13 @@ static int run_case(void * lib, const Case & c) {
     constexpr int ggml_type = GGML_TM_DTYPE_MXFP4;
     constexpr int group_size = 32;
     const bool compact_groups = env_flag("DS4_TURBOMIND_GATE_UP_COMPACT_GROUPS", false);
+    const bool run_tp_split = env_flag("DS4_TURBOMIND_GATE_UP_TP_SPLIT", false);
     const int num_experts = compact_groups ? 6 : 256;
     constexpr int K = 4096;
     constexpr int N = 2048;
     constexpr int fused_N = 2 * N;
+    constexpr int tp_N = N / 2;
+    constexpr int tp_fused_N = 2 * tp_N;
     const std::vector<int> active = compact_groups
         ? std::vector<int>{0, 1, 2, 3, 4, 5}
         : std::vector<int>{0, 17, 42, 87, 173, 255};
@@ -403,12 +443,30 @@ static int run_case(void * lib, const Case & c) {
     std::vector<std::vector<block_mxfp4>> down(active.size());
     std::vector<std::vector<block_mxfp4>> fused(active.size());
     std::vector<std::vector<block_mxfp4>> fused_interleaved(active.size());
+    std::vector<std::vector<block_mxfp4>> gated_half0(active.size());
+    std::vector<std::vector<block_mxfp4>> gated_half1(active.size());
+    std::vector<std::vector<block_mxfp4>> down_half0(active.size());
+    std::vector<std::vector<block_mxfp4>> down_half1(active.size());
     for (size_t i = 0; i < active.size(); ++i) {
         make_mxfp4_fixture(gate[i], N, K, 0x47000000u + (uint32_t)i * 101u);
         make_mxfp4_fixture(up[i],   N, K, 0x55000000u + (uint32_t)i * 131u);
         make_mxfp4_fixture(down[i], K, N, 0x63000000u + (uint32_t)i * 137u);
         make_fused_fixture(fused[i], gate[i], up[i], N, K);
         make_fused_interleaved_fixture(fused_interleaved[i], gate[i], up[i], N, K);
+        if (run_tp_split) {
+            std::vector<block_mxfp4> gate0;
+            std::vector<block_mxfp4> gate1;
+            std::vector<block_mxfp4> up0;
+            std::vector<block_mxfp4> up1;
+            slice_rows_fixture(gate0, gate[i], N, K, 0, tp_N);
+            slice_rows_fixture(gate1, gate[i], N, K, tp_N, tp_N);
+            slice_rows_fixture(up0, up[i], N, K, 0, tp_N);
+            slice_rows_fixture(up1, up[i], N, K, tp_N, tp_N);
+            make_fused_interleaved_fixture(gated_half0[i], gate0, up0, tp_N, K);
+            make_fused_interleaved_fixture(gated_half1[i], gate1, up1, tp_N, K);
+            slice_cols_fixture(down_half0[i], down[i], K, N, 0, tp_N);
+            slice_cols_fixture(down_half1[i], down[i], K, N, tp_N, tp_N);
+        }
     }
 
     PackedExperts gate_packed;
@@ -416,6 +474,10 @@ static int run_case(void * lib, const Case & c) {
     PackedExperts down_packed;
     PackedExperts fused_packed;
     PackedExperts gated_packed;
+    PackedExperts gated_half0_packed;
+    PackedExperts gated_half1_packed;
+    PackedExperts down_half0_packed;
+    PackedExperts down_half1_packed;
     if (pack_fixture_set(pb, pw, ggml_type, N, K, group_size, num_experts, active, gate, gate_packed) != 0 ||
         pack_fixture_set(pb, pw, ggml_type, N, K, group_size, num_experts, active, up, up_packed) != 0 ||
         pack_fixture_set(pb, pw, ggml_type, K, N, group_size, num_experts, active, down, down_packed) != 0 ||
@@ -426,6 +488,28 @@ static int run_case(void * lib, const Case & c) {
         free_packed(down_packed);
         free_packed(fused_packed);
         free_packed(gated_packed);
+        sh();
+        return 3;
+    }
+    if (run_tp_split &&
+        (pack_fixture_set(pb, pw, ggml_type, tp_fused_N, K, group_size,
+                          num_experts, active, gated_half0, gated_half0_packed) != 0 ||
+         pack_fixture_set(pb, pw, ggml_type, tp_fused_N, K, group_size,
+                          num_experts, active, gated_half1, gated_half1_packed) != 0 ||
+         pack_fixture_set(pb, pw, ggml_type, K, tp_N, group_size,
+                          num_experts, active, down_half0, down_half0_packed) != 0 ||
+         pack_fixture_set(pb, pw, ggml_type, K, tp_N, group_size,
+                          num_experts, active, down_half1, down_half1_packed) != 0)) {
+        fprintf(stderr, "[gate_up_fusion] TP split pack failed\n");
+        free_packed(gate_packed);
+        free_packed(up_packed);
+        free_packed(down_packed);
+        free_packed(fused_packed);
+        free_packed(gated_packed);
+        free_packed(gated_half0_packed);
+        free_packed(gated_half1_packed);
+        free_packed(down_half0_packed);
+        free_packed(down_half1_packed);
         sh();
         return 3;
     }
@@ -476,6 +560,10 @@ static int run_case(void * lib, const Case & c) {
     __half * d_probe = nullptr;
     __half * d_down = nullptr;
     __half * d_down_probe = nullptr;
+    __half * d_tp_gated0 = nullptr;
+    __half * d_tp_gated1 = nullptr;
+    __half * d_tp_down0 = nullptr;
+    __half * d_tp_down1 = nullptr;
     CHECK_CUDA(cudaMalloc(&d_A, h_A.size() * sizeof(__half)));
     CHECK_CUDA(cudaMalloc(&d_down_A, h_down_A.size() * sizeof(__half)));
     CHECK_CUDA(cudaMalloc(&d_gate, (size_t) total_tokens * N * sizeof(__half)));
@@ -489,6 +577,12 @@ static int run_case(void * lib, const Case & c) {
     if (run_down_probe) {
         CHECK_CUDA(cudaMalloc(&d_down_probe, (size_t) total_tokens * K * sizeof(__half)));
     }
+    if (run_tp_split) {
+        CHECK_CUDA(cudaMalloc(&d_tp_gated0, (size_t) total_tokens * tp_N * sizeof(__half)));
+        CHECK_CUDA(cudaMalloc(&d_tp_gated1, (size_t) total_tokens * tp_N * sizeof(__half)));
+        CHECK_CUDA(cudaMalloc(&d_tp_down0, (size_t) total_tokens * K * sizeof(__half)));
+        CHECK_CUDA(cudaMalloc(&d_tp_down1, (size_t) total_tokens * K * sizeof(__half)));
+    }
     CHECK_CUDA(cudaMemcpy(d_A, h_A.data(), h_A.size() * sizeof(__half), cudaMemcpyHostToDevice));
     CHECK_CUDA(cudaMemcpy(d_down_A, h_down_A.data(), h_down_A.size() * sizeof(__half), cudaMemcpyHostToDevice));
     CHECK_CUDA(cudaMemset(d_gate, 0, (size_t) total_tokens * N * sizeof(__half)));
@@ -501,6 +595,12 @@ static int run_case(void * lib, const Case & c) {
     }
     if (run_down_probe) {
         CHECK_CUDA(cudaMemset(d_down_probe, 0, (size_t) total_tokens * K * sizeof(__half)));
+    }
+    if (run_tp_split) {
+        CHECK_CUDA(cudaMemset(d_tp_gated0, 0, (size_t) total_tokens * tp_N * sizeof(__half)));
+        CHECK_CUDA(cudaMemset(d_tp_gated1, 0, (size_t) total_tokens * tp_N * sizeof(__half)));
+        CHECK_CUDA(cudaMemset(d_tp_down0, 0, (size_t) total_tokens * K * sizeof(__half)));
+        CHECK_CUDA(cudaMemset(d_tp_down1, 0, (size_t) total_tokens * K * sizeof(__half)));
     }
 
     const int warmup_iters = env_int("DS4_TURBOMIND_GATE_UP_WARMUP_ITERS", 3, 0, 1000);
@@ -573,6 +673,44 @@ static int run_case(void * lib, const Case & c) {
                 return 7;
             }
         }
+        if (run_tp_split) {
+            rc = mmgs(d_A, nullptr, d_offsets, num_experts, total_tokens,
+                      (const void * const *) gated_half0_packed.d_w_table,
+                      (const void * const *) gated_half0_packed.d_s_table,
+                      ggml_type, tp_fused_N, K, group_size,
+                      gated_half0_packed.k_pack, d_tp_gated0, nullptr);
+            if (rc != 0) {
+                fprintf(stderr, "[gate_up_fusion] tp half0 gated warmup rc=%d\n", rc);
+                return 7;
+            }
+            rc = mmgt(d_tp_gated0, nullptr, d_offsets, num_experts, total_tokens,
+                      (const void * const *) down_half0_packed.d_w_table,
+                      (const void * const *) down_half0_packed.d_s_table,
+                      ggml_type, K, tp_N, group_size,
+                      down_half0_packed.k_pack, d_tp_down0, nullptr);
+            if (rc != 0) {
+                fprintf(stderr, "[gate_up_fusion] tp half0 down warmup rc=%d\n", rc);
+                return 7;
+            }
+            rc = mmgs(d_A, nullptr, d_offsets, num_experts, total_tokens,
+                      (const void * const *) gated_half1_packed.d_w_table,
+                      (const void * const *) gated_half1_packed.d_s_table,
+                      ggml_type, tp_fused_N, K, group_size,
+                      gated_half1_packed.k_pack, d_tp_gated1, nullptr);
+            if (rc != 0) {
+                fprintf(stderr, "[gate_up_fusion] tp half1 gated warmup rc=%d\n", rc);
+                return 7;
+            }
+            rc = mmgt(d_tp_gated1, nullptr, d_offsets, num_experts, total_tokens,
+                      (const void * const *) down_half1_packed.d_w_table,
+                      (const void * const *) down_half1_packed.d_s_table,
+                      ggml_type, K, tp_N, group_size,
+                      down_half1_packed.k_pack, d_tp_down1, nullptr);
+            if (rc != 0) {
+                fprintf(stderr, "[gate_up_fusion] tp half1 down warmup rc=%d\n", rc);
+                return 7;
+            }
+        }
     }
     CHECK_CUDA(cudaDeviceSynchronize());
 
@@ -588,6 +726,12 @@ static int run_case(void * lib, const Case & c) {
     cudaEvent_t down_stop = nullptr;
     cudaEvent_t down_probe_start = nullptr;
     cudaEvent_t down_probe_stop = nullptr;
+    cudaEvent_t tp_half0_start = nullptr;
+    cudaEvent_t tp_half0_stop = nullptr;
+    cudaEvent_t tp_half1_start = nullptr;
+    cudaEvent_t tp_half1_stop = nullptr;
+    cudaEvent_t tp_pair_start = nullptr;
+    cudaEvent_t tp_pair_stop = nullptr;
     CHECK_CUDA(cudaEventCreate(&sep_start));
     CHECK_CUDA(cudaEventCreate(&sep_stop));
     CHECK_CUDA(cudaEventCreate(&fused_start));
@@ -603,6 +747,14 @@ static int run_case(void * lib, const Case & c) {
     if (run_down_probe) {
         CHECK_CUDA(cudaEventCreate(&down_probe_start));
         CHECK_CUDA(cudaEventCreate(&down_probe_stop));
+    }
+    if (run_tp_split) {
+        CHECK_CUDA(cudaEventCreate(&tp_half0_start));
+        CHECK_CUDA(cudaEventCreate(&tp_half0_stop));
+        CHECK_CUDA(cudaEventCreate(&tp_half1_start));
+        CHECK_CUDA(cudaEventCreate(&tp_half1_stop));
+        CHECK_CUDA(cudaEventCreate(&tp_pair_start));
+        CHECK_CUDA(cudaEventCreate(&tp_pair_stop));
     }
 
     CHECK_CUDA(cudaEventRecord(sep_start, nullptr));
@@ -701,6 +853,86 @@ static int run_case(void * lib, const Case & c) {
         CHECK_CUDA(cudaEventSynchronize(down_probe_stop));
     }
 
+    if (run_tp_split) {
+        CHECK_CUDA(cudaEventRecord(tp_half0_start, nullptr));
+        for (int iter = 0; iter < bench_iters; ++iter) {
+            rc = mmgs(d_A, nullptr, d_offsets, num_experts, total_tokens,
+                      (const void * const *) gated_half0_packed.d_w_table,
+                      (const void * const *) gated_half0_packed.d_s_table,
+                      ggml_type, tp_fused_N, K, group_size,
+                      gated_half0_packed.k_pack, d_tp_gated0, nullptr);
+            if (rc != 0) {
+                fprintf(stderr, "[gate_up_fusion] tp half0 gated rc=%d\n", rc);
+                return 10;
+            }
+            rc = mmgt(d_tp_gated0, nullptr, d_offsets, num_experts, total_tokens,
+                      (const void * const *) down_half0_packed.d_w_table,
+                      (const void * const *) down_half0_packed.d_s_table,
+                      ggml_type, K, tp_N, group_size,
+                      down_half0_packed.k_pack, d_tp_down0, nullptr);
+            if (rc != 0) {
+                fprintf(stderr, "[gate_up_fusion] tp half0 down rc=%d\n", rc);
+                return 10;
+            }
+        }
+        CHECK_CUDA(cudaEventRecord(tp_half0_stop, nullptr));
+        CHECK_CUDA(cudaEventSynchronize(tp_half0_stop));
+
+        CHECK_CUDA(cudaEventRecord(tp_half1_start, nullptr));
+        for (int iter = 0; iter < bench_iters; ++iter) {
+            rc = mmgs(d_A, nullptr, d_offsets, num_experts, total_tokens,
+                      (const void * const *) gated_half1_packed.d_w_table,
+                      (const void * const *) gated_half1_packed.d_s_table,
+                      ggml_type, tp_fused_N, K, group_size,
+                      gated_half1_packed.k_pack, d_tp_gated1, nullptr);
+            if (rc != 0) {
+                fprintf(stderr, "[gate_up_fusion] tp half1 gated rc=%d\n", rc);
+                return 10;
+            }
+            rc = mmgt(d_tp_gated1, nullptr, d_offsets, num_experts, total_tokens,
+                      (const void * const *) down_half1_packed.d_w_table,
+                      (const void * const *) down_half1_packed.d_s_table,
+                      ggml_type, K, tp_N, group_size,
+                      down_half1_packed.k_pack, d_tp_down1, nullptr);
+            if (rc != 0) {
+                fprintf(stderr, "[gate_up_fusion] tp half1 down rc=%d\n", rc);
+                return 10;
+            }
+        }
+        CHECK_CUDA(cudaEventRecord(tp_half1_stop, nullptr));
+        CHECK_CUDA(cudaEventSynchronize(tp_half1_stop));
+
+        CHECK_CUDA(cudaEventRecord(tp_pair_start, nullptr));
+        for (int iter = 0; iter < bench_iters; ++iter) {
+            rc = mmgs(d_A, nullptr, d_offsets, num_experts, total_tokens,
+                      (const void * const *) gated_half0_packed.d_w_table,
+                      (const void * const *) gated_half0_packed.d_s_table,
+                      ggml_type, tp_fused_N, K, group_size,
+                      gated_half0_packed.k_pack, d_tp_gated0, nullptr);
+            if (rc != 0) return 10;
+            rc = mmgt(d_tp_gated0, nullptr, d_offsets, num_experts, total_tokens,
+                      (const void * const *) down_half0_packed.d_w_table,
+                      (const void * const *) down_half0_packed.d_s_table,
+                      ggml_type, K, tp_N, group_size,
+                      down_half0_packed.k_pack, d_tp_down0, nullptr);
+            if (rc != 0) return 10;
+            rc = mmgs(d_A, nullptr, d_offsets, num_experts, total_tokens,
+                      (const void * const *) gated_half1_packed.d_w_table,
+                      (const void * const *) gated_half1_packed.d_s_table,
+                      ggml_type, tp_fused_N, K, group_size,
+                      gated_half1_packed.k_pack, d_tp_gated1, nullptr);
+            if (rc != 0) return 10;
+            rc = mmgt(d_tp_gated1, nullptr, d_offsets, num_experts, total_tokens,
+                      (const void * const *) down_half1_packed.d_w_table,
+                      (const void * const *) down_half1_packed.d_s_table,
+                      ggml_type, K, tp_N, group_size,
+                      down_half1_packed.k_pack, d_tp_down1, nullptr);
+            if (rc != 0) return 10;
+        }
+        CHECK_CUDA(cudaEventRecord(tp_pair_stop, nullptr));
+        CHECK_CUDA(cudaEventSynchronize(tp_pair_stop));
+    }
+
     const float separate_ms = elapsed_ms(sep_start, sep_stop) / (float) bench_iters;
     const float fused_ms = elapsed_ms(fused_start, fused_stop) / (float) bench_iters;
     const float gated_ms = elapsed_ms(gated_start, gated_stop) / (float) bench_iters;
@@ -708,6 +940,12 @@ static int run_case(void * lib, const Case & c) {
     const float down_ms = elapsed_ms(down_start, down_stop) / (float) bench_iters;
     const float down_probe_ms =
         run_down_probe ? elapsed_ms(down_probe_start, down_probe_stop) / (float) bench_iters : 0.0f;
+    const float tp_half0_ms =
+        run_tp_split ? elapsed_ms(tp_half0_start, tp_half0_stop) / (float) bench_iters : 0.0f;
+    const float tp_half1_ms =
+        run_tp_split ? elapsed_ms(tp_half1_start, tp_half1_stop) / (float) bench_iters : 0.0f;
+    const float tp_pair_seq_ms =
+        run_tp_split ? elapsed_ms(tp_pair_start, tp_pair_stop) / (float) bench_iters : 0.0f;
     CHECK_CUDA(cudaEventDestroy(sep_start));
     CHECK_CUDA(cudaEventDestroy(sep_stop));
     CHECK_CUDA(cudaEventDestroy(fused_start));
@@ -723,6 +961,14 @@ static int run_case(void * lib, const Case & c) {
     if (run_down_probe) {
         CHECK_CUDA(cudaEventDestroy(down_probe_start));
         CHECK_CUDA(cudaEventDestroy(down_probe_stop));
+    }
+    if (run_tp_split) {
+        CHECK_CUDA(cudaEventDestroy(tp_half0_start));
+        CHECK_CUDA(cudaEventDestroy(tp_half0_stop));
+        CHECK_CUDA(cudaEventDestroy(tp_half1_start));
+        CHECK_CUDA(cudaEventDestroy(tp_half1_stop));
+        CHECK_CUDA(cudaEventDestroy(tp_pair_start));
+        CHECK_CUDA(cudaEventDestroy(tp_pair_stop));
     }
 
     std::vector<__half> h_gate((size_t) total_tokens * N);
@@ -831,12 +1077,40 @@ static int run_case(void * lib, const Case & c) {
             probe_max_abs, probe_rel, probe_bad, values_per_half,
             down_probe_max_abs, down_probe_rel, down_probe_bad, h_down.size(),
             gate_packed.k_pack, fused_packed.k_pack, gated_packed.k_pack, down_packed.k_pack);
+    if (run_tp_split) {
+        const float full_routed_ms = gated_ms + down_ms;
+        const float tp2_ideal_compute_ms = std::max(tp_half0_ms, tp_half1_ms);
+        const float tp2_ideal_speedup =
+            tp2_ideal_compute_ms > 0.0f ? full_routed_ms / tp2_ideal_compute_ms : 0.0f;
+        const float tp2_seq_speedup =
+            tp_pair_seq_ms > 0.0f ? full_routed_ms / tp_pair_seq_ms : 0.0f;
+        const float reduce_f16_mib =
+            (float)((double)total_tokens * (double)K * (double)sizeof(__half) / (1024.0 * 1024.0));
+        const float reduce_f32_mib =
+            (float)((double)total_tokens * (double)K * (double)sizeof(float) / (1024.0 * 1024.0));
+        fprintf(stderr,
+                "[gate_up_fusion tpa=%d] tp2_mid_split full_routed_ms=%.4f half0_ms=%.4f half1_ms=%.4f pair_seq_ms=%.4f ideal_compute_ms=%.4f ideal_compute_speedup=%.3fx seq_speedup=%.3fx reduce_payload_f16_mib=%.2f reduce_payload_f32_mib=%.2f\n",
+                c.tokens_per_active,
+                full_routed_ms,
+                tp_half0_ms,
+                tp_half1_ms,
+                tp_pair_seq_ms,
+                tp2_ideal_compute_ms,
+                tp2_ideal_speedup,
+                tp2_seq_speedup,
+                reduce_f16_mib,
+                reduce_f32_mib);
+    }
 
     free_packed(gate_packed);
     free_packed(up_packed);
     free_packed(down_packed);
     free_packed(fused_packed);
     free_packed(gated_packed);
+    free_packed(gated_half0_packed);
+    free_packed(gated_half1_packed);
+    free_packed(down_half0_packed);
+    free_packed(down_half1_packed);
     CHECK_CUDA(cudaFree(d_offsets));
     CHECK_CUDA(cudaFree(d_A));
     CHECK_CUDA(cudaFree(d_down_A));
@@ -847,6 +1121,10 @@ static int run_case(void * lib, const Case & c) {
     if (d_probe) CHECK_CUDA(cudaFree(d_probe));
     CHECK_CUDA(cudaFree(d_down));
     if (d_down_probe) CHECK_CUDA(cudaFree(d_down_probe));
+    if (d_tp_gated0) CHECK_CUDA(cudaFree(d_tp_gated0));
+    if (d_tp_gated1) CHECK_CUDA(cudaFree(d_tp_gated1));
+    if (d_tp_down0) CHECK_CUDA(cudaFree(d_tp_down0));
+    if (d_tp_down1) CHECK_CUDA(cudaFree(d_tp_down1));
     sh();
 
     if (bad != 0 || gated_bad != 0 || probe_bad != 0 ||

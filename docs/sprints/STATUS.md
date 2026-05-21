@@ -105,7 +105,12 @@ kernel. The 768-route `m128_s4` probe improved the isolated gate/up benchmark
 served A/B was only run-noise positive (`60.049057` generated and `56.295991`
 continuation/decode tok/s versus `59.865668` and `56.124063` control), and the
 profile did not show a reliable gate/up bucket reduction. Stage-4 probes remain
-explicit opt-ins.
+explicit opt-ins. Sprint 149 added a TP split benchmark and a P2P reduce-payload
+proxy. The 2-way FFN middle-dimension split shows ideal compute speedups of
+`1.858x` at 768 routes and `1.468x` at 1536 routes before communication.
+Peer-copy measurements show a 12 MiB hidden payload takes about `0.26 ms` over
+NV2, `0.52 ms` over NV1, and `1.29-1.31 ms` over SYS, so a TP prototype should
+start with NV2 pairs and stay bounded before any scheduler-wide rewrite.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched

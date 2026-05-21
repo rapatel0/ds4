@@ -9,9 +9,17 @@ pipeline variant on the fused MXFP4 gate/up+gated-SiLU kernel. The 768-route
 `m128_s4` probe improved the isolated benchmark (`0.5811 ms` vs `0.6033 ms`
 for `m128`) and passed full 43-layer smoke, but served A/B was only
 `60.049057` generated / `56.295991` decode tok/s versus `59.865668` /
-`56.124063` control. The full-scheduler profile did not show a reliable
-gate/up bucket reduction. I would keep it opt-in and move the main effort to a
-larger routed-FFN executor boundary or a TP/EP microbenchmark.
+`56.124063` control. A targeted NCU pass then showed essentially identical
+kernel time, SM throughput, DRAM throughput, and HMMA instruction count between
+`m128` and `m128_s4`, so the stage-4 path should stay opt-in.
+
+I also added a TP split probe. Splitting the DS4 routed-FFN middle dimension
+from `2048` into two `1024` halves gives an ideal 2-way compute speedup of
+`1.858x` at 768 routes and `1.468x` at 1536 routes before communication.
+Peer-copy payload timing on the node shows 12 MiB hidden-state payloads move in
+about `0.26 ms` over NV2, `0.52 ms` over NV1, and `1.29-1.31 ms` over SYS.
+That makes 2-way TP worth a bounded prototype on NV2 pairs, but it is not a
+credible direct path from `~61 tok/s` to `1k+ tok/s` by itself.
 
 ## Short Answer
 
@@ -95,28 +103,33 @@ Batched decode / multislots:
 
 Software pipelining:
 
-- Partly explored, but not fully implemented as a new DS4 persistent executor.
+- Tested as a stage-count variant inside the fused TurboMind MXFP4
+  gate/up+gated-SiLU kernel.
+- The isolated 768-route `m128_s4` path improved, but served throughput and NCU
+  counters did not show a material end-to-end gain.
 - TurboMind's SM70 MXFP4 kernels already use the relevant style internally:
   packed low-bit load, dequant/staging, and Volta HMMA.
 - We have not yet written a new end-to-end DS4-only persistent routed-FFN kernel
   that software-pipelines gate/up, activation, down, and reduce as one larger
   unit.
-- Sprint 147 is currently starting a smaller step in that direction: extending
-  the down+weighted-reduce epilogue to the 1536-route/256-slot shape. This can
-  remove a large `down_routes` materialization plus follow-up scatter read, but
-  it is still not the full persistent executor.
+- Sprint 147 extended the down+weighted-reduce epilogue to the
+  1536-route/256-slot shape and passed full-scheduler smoke, but served A/B was
+  deferred after the strategy pivot.
 
 Tensor parallel variants:
 
-- Not yet implemented or benchmarked.
+- Not yet implemented in the production scheduler, but now measured with a
+  standalone TP split proxy.
 - Current runtime is layer-scheduled across the 8 V100s: each GPU owns
   contiguous layers and KV for those layers, and only HC state crosses device
   boundaries.
-- We have discussed tensor/expert-parallel layouts, but no true tensor-parallel
-  runtime variant has been built or tested yet.
-- My current read is that tensor/expert parallelism may be necessary for a
-  large jump, but it is also a larger architecture change than the current
-  appliance path.
+- The TP split proxy shows ideal 2-way FFN compute speedups of `1.858x` at
+  768 routes and `1.468x` at 1536 routes before communication.
+- The P2P proxy shows placement matters: NV2 moves 12 MiB in about `0.26 ms`,
+  NV1 in about `0.52 ms`, and SYS in about `1.3 ms`.
+- My current read is that 2-way TP is worth prototyping on NV2 pairs, while
+  8-way expert parallelism is probably underfilled because the compact served
+  shape currently has only 6 active expert groups.
 
 ## What The Experiments Show So Far
 
@@ -136,12 +149,10 @@ Tensor parallel variants:
 
 ## Time Estimate
 
-For the current Sprint 147 down-reduce extension: likely hours to one day to
-finish correctness and served A/B.
-
-For a credible next performance step, such as a DS4-only persistent routed-FFN
-prototype: I would budget 1-2 focused weeks for a serious prototype and V100
-A/B cycle, assuming no major correctness surprises.
+For a credible next performance step, such as a bounded 2-GPU routed-FFN TP
+prototype or a DS4-only persistent routed-FFN prototype: I would budget
+1-2 focused weeks for a serious prototype and V100 A/B cycle, assuming no
+major correctness surprises.
 
 For the original practical target of `1k-2k` aggregate tok/s: I would budget
 4-8+ weeks of focused kernel and scheduler work, and I do not think it is
@@ -151,10 +162,10 @@ measured, but it is still over an order of magnitude away from that target.
 
 ## Immediate Next Step
 
-Finish Sprint 147:
+Prototype the smallest production-relevant 2-way TP routed-FFN path:
 
-- validate the 1536-route down-reduce epilogue on the full 43-layer scheduler;
-- run served 256-slot/16K A/B with prefill and decode split;
-- keep it opt-in unless decode throughput moves materially;
-- if it is neutral, stop tuning individual GEMM/epilogue variants and move to a
-  larger persistent routed-FFN or tensor/expert-parallel experiment.
+- constrain placement to NV2 pairs first;
+- split the `2048` intermediate dimension across two GPUs;
+- overlap half-FFN compute with the hidden payload exchange/reduce;
+- validate against the current layer-owned FFN output for one stage before
+  attempting a scheduler-wide change.

@@ -1,0 +1,36 @@
+== routes=768 bpv=2 ==
+[p2p_reduce_proxy] devices=8 routes=768 hidden=4096 bytes_per_value=2 payload_mib=6.00 warmup=10 iters=100
+[p2p_reduce_proxy] src=0 dst=1 peer_access=1 copy_ms=0.2608 payload_gbps=24.13
+[p2p_reduce_proxy] src=0 dst=3 peer_access=1 copy_ms=0.1317 payload_gbps=47.78
+[p2p_reduce_proxy] src=0 dst=4 peer_access=1 copy_ms=0.1317 payload_gbps=47.79
+[p2p_reduce_proxy] src=0 dst=5 peer_access=1 copy_ms=0.6386 payload_gbps=9.85
+[p2p_reduce_proxy] src=4 dst=5 peer_access=1 copy_ms=0.2608 payload_gbps=24.12
+[p2p_reduce_proxy] src=4 dst=7 peer_access=1 copy_ms=0.1317 payload_gbps=47.78
+[p2p_reduce_proxy] src=3 dst=7 peer_access=1 copy_ms=0.2608 payload_gbps=24.13
+== routes=768 bpv=4 ==
+[p2p_reduce_proxy] devices=8 routes=768 hidden=4096 bytes_per_value=4 payload_mib=12.00 warmup=10 iters=100
+[p2p_reduce_proxy] src=0 dst=1 peer_access=1 copy_ms=0.5204 payload_gbps=24.18
+[p2p_reduce_proxy] src=0 dst=3 peer_access=1 copy_ms=0.2617 payload_gbps=48.08
+[p2p_reduce_proxy] src=0 dst=4 peer_access=1 copy_ms=0.2618 payload_gbps=48.07
+[p2p_reduce_proxy] src=0 dst=5 peer_access=1 copy_ms=1.3138 payload_gbps=9.58
+[p2p_reduce_proxy] src=4 dst=5 peer_access=1 copy_ms=0.5207 payload_gbps=24.16
+[p2p_reduce_proxy] src=4 dst=7 peer_access=1 copy_ms=0.2616 payload_gbps=48.10
+[p2p_reduce_proxy] src=3 dst=7 peer_access=1 copy_ms=0.5205 payload_gbps=24.17
+== routes=1536 bpv=2 ==
+[p2p_reduce_proxy] devices=8 routes=1536 hidden=4096 bytes_per_value=2 payload_mib=12.00 warmup=10 iters=100
+[p2p_reduce_proxy] src=0 dst=1 peer_access=1 copy_ms=0.5203 payload_gbps=24.19
+[p2p_reduce_proxy] src=0 dst=3 peer_access=1 copy_ms=0.2615 payload_gbps=48.13
+[p2p_reduce_proxy] src=0 dst=4 peer_access=1 copy_ms=0.2615 payload_gbps=48.12
+[p2p_reduce_proxy] src=0 dst=5 peer_access=1 copy_ms=1.2904 payload_gbps=9.75
+[p2p_reduce_proxy] src=4 dst=5 peer_access=1 copy_ms=0.5207 payload_gbps=24.17
+[p2p_reduce_proxy] src=4 dst=7 peer_access=1 copy_ms=0.2616 payload_gbps=48.10
+[p2p_reduce_proxy] src=3 dst=7 peer_access=1 copy_ms=0.5206 payload_gbps=24.17
+== routes=1536 bpv=4 ==
+[p2p_reduce_proxy] devices=8 routes=1536 hidden=4096 bytes_per_value=4 payload_mib=24.00 warmup=10 iters=100
+[p2p_reduce_proxy] src=0 dst=1 peer_access=1 copy_ms=1.0388 payload_gbps=24.23
+[p2p_reduce_proxy] src=0 dst=3 peer_access=1 copy_ms=0.5210 payload_gbps=48.30
+[p2p_reduce_proxy] src=0 dst=4 peer_access=1 copy_ms=0.5210 payload_gbps=48.30
+[p2p_reduce_proxy] src=0 dst=5 peer_access=1 copy_ms=2.5683 payload_gbps=9.80
+[p2p_reduce_proxy] src=4 dst=5 peer_access=1 copy_ms=1.0391 payload_gbps=24.22
+[p2p_reduce_proxy] src=4 dst=7 peer_access=1 copy_ms=0.5211 payload_gbps=48.29
+[p2p_reduce_proxy] src=3 dst=7 peer_access=1 copy_ms=1.0390 payload_gbps=24.22
