@@ -1344,21 +1344,41 @@ static void replay_step_pipeline_mark_done(replay_step_pipeline_batch *b,
     pthread_mutex_unlock(&b->mu);
 }
 
+static uint32_t replay_async_slot_chunk(const replay_step_pipeline_batch *b) {
+    if (!b || b->event_handoff) return 1;
+    const char *env = getenv("DS4_V100_ASYNC_SLOT_CHUNK");
+    if (!env || !env[0]) env = getenv("DS4_ASYNC_SLOT_CHUNK");
+    if (!env || !env[0]) return 1;
+    char *end = NULL;
+    unsigned long v = strtoul(env, &end, 10);
+    if (end == env || *end != '\0' || v == 0) return 1;
+    if (v > DS4_V100_SCHED_MAX_SLOTS) v = DS4_V100_SCHED_MAX_SLOTS;
+    return (uint32_t)v;
+}
+
 static void *replay_step_pipeline_worker_main(void *arg) {
     replay_step_pipeline_worker *w = (replay_step_pipeline_worker *)arg;
     if (!w || !w->batch) return NULL;
     replay_step_pipeline_batch *b = w->batch;
     const int stage = w->stage;
     char local_err[512] = {0};
+    const uint32_t slot_chunk = replay_async_slot_chunk(b);
 
-    for (uint32_t slot = 0; slot < b->n_slots; slot++) {
+    for (uint32_t slot = 0; slot < b->n_slots; slot += slot_chunk) {
+        uint32_t chunk = slot_chunk;
+        if (chunk > b->n_slots - slot) chunk = b->n_slots - slot;
         const double wait0 = replay_now_ms();
-        const bool prev_ready = replay_step_pipeline_wait_prev(b, stage, slot);
+        bool prev_ready = true;
+        for (uint32_t rel = 0; rel < chunk; rel++) {
+            if (!replay_step_pipeline_wait_prev(b, stage, slot + rel)) {
+                prev_ready = false;
+                break;
+            }
+        }
         b->worker_wait_ms[stage] += replay_now_ms() - wait0;
         if (!prev_ready) break;
 
-        ds4_v100_stage_scheduler_report report;
-        memset(&report, 0, sizeof(report));
+        memset(&b->reports[stage][slot], 0, chunk * sizeof(b->reports[stage][slot]));
         double t0 = replay_now_ms();
         if (stage == 0) {
             if (ds4_v100_stage_scheduler_decode_token_slot_span(
@@ -1366,8 +1386,8 @@ static void *replay_step_pipeline_worker_main(void *arg) {
                     slot,
                     &b->tokens[slot],
                     &b->positions[slot],
-                    1,
-                    &report,
+                    chunk,
+                    &b->reports[stage][slot],
                     local_err,
                     sizeof(local_err))) {
                 replay_step_pipeline_fail(b, local_err);
@@ -1384,7 +1404,7 @@ static void *replay_step_pipeline_worker_main(void *arg) {
             if (replay_handoff_slot_span_after_event(b->rt,
                                                      stage,
                                                      slot,
-                                                     1,
+                                                     chunk,
                                                      prev_event,
                                                      local_err,
                                                      sizeof(local_err))) {
@@ -1398,8 +1418,8 @@ static void *replay_step_pipeline_worker_main(void *arg) {
                     slot,
                     &b->tokens[slot],
                     &b->positions[slot],
-                    1,
-                    &report,
+                    chunk,
+                    &b->reports[stage][slot],
                     local_err,
                     sizeof(local_err))) {
                 replay_step_pipeline_fail(b, local_err);
@@ -1421,8 +1441,9 @@ static void *replay_step_pipeline_worker_main(void *arg) {
             b->sync_ms[stage] += replay_now_ms() - sync0;
         }
         b->stage_decode_ms[stage] += replay_now_ms() - t0;
-        b->reports[stage][slot] = report;
-        replay_step_pipeline_mark_done(b, stage, slot);
+        for (uint32_t rel = 0; rel < chunk; rel++) {
+            replay_step_pipeline_mark_done(b, stage, slot + rel);
+        }
     }
     return NULL;
 }

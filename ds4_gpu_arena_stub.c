@@ -425,6 +425,24 @@ int ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_batch_ptr_table_f32(
     return 1;
 }
 
+int ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *gate,
+        const ds4_gpu_source_row_view *up,
+        const ds4_gpu_tensor          *x_f32,
+        ds4_gpu_tensor                *out_f32,
+        float                          clamp,
+        float                          weight) {
+    (void)arena;
+    (void)gate;
+    (void)up;
+    (void)x_f32;
+    (void)out_f32;
+    (void)clamp;
+    (void)weight;
+    return 1;
+}
+
 int ds4_gpu_arena_mxfp4_matmul_f32(
         const ds4_gpu_arena           *arena,
         const ds4_gpu_source_row_view *view,

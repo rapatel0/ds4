@@ -8,11 +8,14 @@ Current default throughput is the Sprint 111 fused TurboMind gate/up appliance,
 the Sprint 115 shared gate/up SwiGLU HMMA path, and the Sprint 116 batched
 attention-projection F8 HMMA path for active 4/8-slot batches. Sprint 114
 shared-down HMMA remains opt-in: combined pair+down set an 8-slot best in that
-sprint but regressed 4-slot/1M.
+sprint but regressed 4-slot/1M. Sprint 117 traced the fast served path and
+tested per-slot shared gate/up/SwiGLU fusion, but did not promote it.
 
 | Mode | Context | Slots | Generated tok/s | Continuation tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
 | Batched attention projection F8 HMMA default | 262,144 | 8 | `33.697698` | `31.591592` | 8/8 token match |
+| Per-slot shared pair-SwiGLU opt-in | 262,144 | 8 | `33.562643` | `31.464978` | 8/8 token match |
+| Async slot chunk 4 opt-in | 262,144 | 8 | `11.483646` | `10.765918` | 8/8 token match |
 | Promoted launcher default repeat | 262,144 | 8 | `33.540586` | `31.444300` | 8/8 token match |
 | Pair-SwiGLU F8 HMMA default | 262,144 | 8 | `33.578236` | `31.479596` | 8/8 token match |
 | Pair+down F8 HMMA opt-in | 262,144 | 8 | `33.674684` | `31.570016` | 8/8 token match |
@@ -48,6 +51,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 114 | DS4-shaped shared-down F8 HMMA batch kernel | Correct; `33.550415` vs `33.397763` control at 8-slot/256K and `21.396331` vs `21.365610` at 4-slot/1M | Kept opt-in/off |
 | 115 | DS4-shaped shared gate/up SwiGLU F8 HMMA kernel | Correct; `33.578236` vs `33.292541` control at 8-slot/256K and `21.455638` vs `21.430420` at 4-slot/1M | Shipped/default |
 | 116 | DS4-shaped attention projection F8 HMMA batch kernel | Correct; `33.697698` vs `33.380614` control at 8-slot/256K and `21.469010` vs `21.333447` at 4-slot/1M | Shipped/default for active 4/8-slot batches |
+| 117 | F8 wrapper shape trace and per-slot shared gate/up/SwiGLU fusion | Correct; trace showed the fast path is per-slot stage-pipelined, chunk-4 batching dropped to `11.483646`, and scalar shared-pair fusion reached `33.562643` | Kept opt-in/off; next target should be software-pipelined/Tensor-Core fusion |
 
 ## Sprint 106 Profile Takeaway
 

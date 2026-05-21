@@ -269,6 +269,7 @@ static std::vector<cuda_f8_f16_arena_range> g_f8_f16_arena_ranges;
 static std::vector<cuda_tensor_pool_entry> g_tensor_pool;
 static std::mutex g_f8_f16_arena_mutex;
 static std::mutex g_tensor_pool_mutex;
+static std::mutex g_f8_shape_trace_mutex;
 static uint64_t g_model_range_bytes;
 static uint64_t g_q8_f16_bytes;
 static uint64_t g_q8_f32_bytes;
@@ -563,6 +564,119 @@ static int cuda_env_flag_enabled(const char *name) {
            strcmp(env, "off") != 0 &&
            strcmp(env, "Off") != 0 &&
            strcmp(env, "OFF") != 0;
+}
+
+struct cuda_f8_shape_trace_entry {
+    const char *kind;
+    const char *path;
+    int gpu;
+    uint32_t rows;
+    uint32_t cols;
+    uint32_t n_tokens;
+    uint32_t groups;
+    uint32_t rows_per_group;
+    uint32_t cols_per_group;
+    uint64_t calls;
+};
+
+static std::vector<cuda_f8_shape_trace_entry> g_f8_shape_trace_entries;
+static int g_f8_shape_trace_registered;
+static int g_f8_shape_trace_enabled_cached = -1;
+
+static int cuda_f8_shape_trace_enabled(void) {
+    if (g_f8_shape_trace_enabled_cached < 0) {
+        g_f8_shape_trace_enabled_cached =
+            cuda_env_flag_enabled("DS4_CUDA_F8_TRACE_SHAPES") ? 1 : 0;
+    }
+    return g_f8_shape_trace_enabled_cached;
+}
+
+static void cuda_f8_shape_trace_dump(void) {
+    std::lock_guard<std::mutex> lk(g_f8_shape_trace_mutex);
+    if (g_f8_shape_trace_entries.empty()) return;
+    fprintf(stderr,
+            "ds4: f8_shape_trace_summary begin entries=%zu\n",
+            g_f8_shape_trace_entries.size());
+    for (const cuda_f8_shape_trace_entry &e : g_f8_shape_trace_entries) {
+        fprintf(stderr,
+                "ds4: f8_shape_trace kind=%s path=%s gpu=%d rows=%u cols=%u n_tokens=%u groups=%u rows_per_group=%u cols_per_group=%u calls=%llu\n",
+                e.kind ? e.kind : "?",
+                e.path ? e.path : "?",
+                e.gpu,
+                e.rows,
+                e.cols,
+                e.n_tokens,
+                e.groups,
+                e.rows_per_group,
+                e.cols_per_group,
+                (unsigned long long)e.calls);
+    }
+    fprintf(stderr, "ds4: f8_shape_trace_summary end\n");
+}
+
+static int cuda_f8_shape_trace_log_now(uint64_t calls) {
+    return calls != 0 && (calls == 1 || ((calls & (calls - 1)) == 0));
+}
+
+static void cuda_f8_shape_trace(const char *kind,
+                                const char *path,
+                                int gpu,
+                                uint32_t rows,
+                                uint32_t cols,
+                                uint32_t n_tokens,
+                                uint32_t groups,
+                                uint32_t rows_per_group,
+                                uint32_t cols_per_group) {
+    if (!cuda_f8_shape_trace_enabled()) return;
+    std::lock_guard<std::mutex> lk(g_f8_shape_trace_mutex);
+    if (!g_f8_shape_trace_registered) {
+        atexit(cuda_f8_shape_trace_dump);
+        g_f8_shape_trace_registered = 1;
+    }
+    cuda_f8_shape_trace_entry *entry = NULL;
+    for (cuda_f8_shape_trace_entry &e : g_f8_shape_trace_entries) {
+        if (e.gpu == gpu &&
+            e.rows == rows &&
+            e.cols == cols &&
+            e.n_tokens == n_tokens &&
+            e.groups == groups &&
+            e.rows_per_group == rows_per_group &&
+            e.cols_per_group == cols_per_group &&
+            strcmp(e.kind ? e.kind : "", kind ? kind : "") == 0 &&
+            strcmp(e.path ? e.path : "", path ? path : "") == 0) {
+            entry = &e;
+            break;
+        }
+    }
+    if (!entry) {
+        cuda_f8_shape_trace_entry e = {};
+        e.kind = kind;
+        e.path = path;
+        e.gpu = gpu;
+        e.rows = rows;
+        e.cols = cols;
+        e.n_tokens = n_tokens;
+        e.groups = groups;
+        e.rows_per_group = rows_per_group;
+        e.cols_per_group = cols_per_group;
+        g_f8_shape_trace_entries.push_back(e);
+        entry = &g_f8_shape_trace_entries.back();
+    }
+    entry->calls++;
+    if (cuda_f8_shape_trace_log_now(entry->calls)) {
+        fprintf(stderr,
+                "ds4: f8_shape_trace kind=%s path=%s gpu=%d rows=%u cols=%u n_tokens=%u groups=%u rows_per_group=%u cols_per_group=%u calls=%llu\n",
+                entry->kind ? entry->kind : "?",
+                entry->path ? entry->path : "?",
+                entry->gpu,
+                entry->rows,
+                entry->cols,
+                entry->n_tokens,
+                entry->groups,
+                entry->rows_per_group,
+                entry->cols_per_group,
+                (unsigned long long)entry->calls);
+    }
 }
 
 static int cuda_tensor_pool_enabled(void) {
@@ -3739,6 +3853,47 @@ __global__ static void arena_f8_e4m3_b128_pair_swiglu_ptrs_kernel(
     }
 }
 
+__global__ static void arena_f8_e4m3_b128_pair_swiglu_kernel(
+        float *out,
+        const uint8_t *gate_base,
+        const uint8_t *up_base,
+        const float *x,
+        uint32_t rows,
+        uint32_t cols,
+        uint32_t gate_row_stride_bytes,
+        uint32_t up_row_stride_bytes,
+        float clamp,
+        float weight) {
+    const uint32_t r = blockIdx.x;
+    if (r >= rows || !x) return;
+    const uint8_t *gate_row = gate_base + (uint64_t)r * gate_row_stride_bytes;
+    const uint8_t *up_row = up_base + (uint64_t)r * up_row_stride_bytes;
+    float gate_acc = 0.0f;
+    float up_acc = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        const uint8_t *gate_block = gate_row + (uint64_t)(c / 128u) * 129ull;
+        const uint8_t *up_block = up_row + (uint64_t)(c / 128u) * 129ull;
+        const uint32_t lane = c % 128u;
+        const float xv = x[c];
+        gate_acc += arena_e4m3fn_to_f32(gate_block[1u + lane]) *
+                    arena_e8m0_to_f32(gate_block[0]) * xv;
+        up_acc += arena_e4m3fn_to_f32(up_block[1u + lane]) *
+                  arena_e8m0_to_f32(up_block[0]) * xv;
+    }
+
+    arena_block_sum2_256_f32(&gate_acc, &up_acc);
+    if (threadIdx.x == 0) {
+        float g = gate_acc;
+        float u = up_acc;
+        if (clamp > 1.0e-6f) {
+            g = fminf(g, clamp);
+            u = fminf(fmaxf(u, -clamp), clamp);
+        }
+        const float s = g / (1.0f + expf(-g));
+        out[r] = s * u * weight;
+    }
+}
+
 __global__ static void arena_f8_e4m3_b128_pair_swiglu_ptr_table_hmma_kernel(
         float *out,
         const uint8_t *gate_base,
@@ -6643,6 +6798,8 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_f32(
     if (cuda_f8_row4_enabled() &&
         cuda_f8_rowpair_enabled() &&
         cuda_f8_row4_shape_ok(view->rows, view->cols)) {
+        cuda_f8_shape_trace("plain", "rows4", arena->gpu,
+                            view->rows, view->cols, 1u, 0, 0, 0);
         arena_f8_e4m3_b128_matmul_rows4_kernel<<<(view->rows + 3u) / 4u, 256>>>(
             (float *)out_f32->ptr,
             base,
@@ -6652,6 +6809,8 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_f32(
             view->row_stride_bytes);
     } else if (cuda_f8_rowpair_enabled() && view->rows > 1u) {
         if (cuda_f8_warp_scale_enabled()) {
+            cuda_f8_shape_trace("plain", "rows2_warp_scale", arena->gpu,
+                                view->rows, view->cols, 1u, 0, 0, 0);
             arena_f8_e4m3_b128_matmul_rows2_warp_scale_kernel<<<(view->rows + 1u) / 2u, 256>>>(
                 (float *)out_f32->ptr,
                 base,
@@ -6660,6 +6819,8 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_f32(
                 view->cols,
                 view->row_stride_bytes);
         } else {
+            cuda_f8_shape_trace("plain", "rows2", arena->gpu,
+                                view->rows, view->cols, 1u, 0, 0, 0);
             arena_f8_e4m3_b128_matmul_rows2_kernel<<<(view->rows + 1u) / 2u, 256>>>(
                 (float *)out_f32->ptr,
                 base,
@@ -6669,6 +6830,8 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_f32(
                 view->row_stride_bytes);
         }
     } else {
+        cuda_f8_shape_trace("plain", "rows1", arena->gpu,
+                            view->rows, view->cols, 1u, 0, 0, 0);
         arena_f8_e4m3_b128_matmul_kernel<<<view->rows, 256>>>(
             (float *)out_f32->ptr,
             base,
@@ -6728,12 +6891,18 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_batch_f32(
                                              (int)view->rows,
                                              CUDA_R_32F,
                                              CUBLAS_GEMM_DEFAULT);
-            if (st == CUBLAS_STATUS_SUCCESS) return 0;
+            if (st == CUBLAS_STATUS_SUCCESS) {
+                cuda_f8_shape_trace("batch", "cublas_f16", arena->gpu,
+                                    view->rows, view->cols, n_tokens, 0, 0, 0);
+                return 0;
+            }
             fprintf(stderr, "ds4: cuBLAS f8 arena f16 batch matmul failed: status %d\n", (int)st);
         }
     }
     const uint8_t *base = (const uint8_t *)((const char *)arena->ptr + view->arena_offset);
     if (use_hmma_attn_batch) {
+        cuda_f8_shape_trace("batch", "hmma_attn", arena->gpu,
+                            view->rows, view->cols, n_tokens, 0, 0, 0);
         dim3 grid((view->rows + 63u) / 64u, 1, 1);
         arena_f8_e4m3_b128_matmul_batch_hmma_attn_kernel<<<grid, 128>>>(
             (float *)out_f32->ptr,
@@ -6744,6 +6913,8 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_batch_f32(
             view->row_stride_bytes,
             n_tokens);
     } else if (use_hmma_shared_down) {
+        cuda_f8_shape_trace("batch", "hmma_shared_down", arena->gpu,
+                            view->rows, view->cols, n_tokens, 0, 0, 0);
         dim3 grid((view->rows + 63u) / 64u, 1, 1);
         arena_f8_e4m3_b128_matmul_batch_hmma_shared_down_kernel<<<grid, 128>>>(
             (float *)out_f32->ptr,
@@ -6752,6 +6923,8 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_batch_f32(
             view->row_stride_bytes,
             n_tokens);
     } else if (cuda_f8_rowpair_enabled() && view->rows > 1u) {
+        cuda_f8_shape_trace("batch", "rows2", arena->gpu,
+                            view->rows, view->cols, n_tokens, 0, 0, 0);
         dim3 grid((view->rows + 1u) / 2u, n_tokens, 1);
         arena_f8_e4m3_b128_matmul_batch_rows2_kernel<<<grid, 256>>>(
             (float *)out_f32->ptr,
@@ -6761,6 +6934,8 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_batch_f32(
             view->cols,
             view->row_stride_bytes);
     } else {
+        cuda_f8_shape_trace("batch", "rows1", arena->gpu,
+                            view->rows, view->cols, n_tokens, 0, 0, 0);
         dim3 grid(view->rows, n_tokens, 1);
         arena_f8_e4m3_b128_matmul_batch_kernel<<<grid, 256>>>(
             (float *)out_f32->ptr,
@@ -6791,6 +6966,8 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_batch_ptr_table_f32(
     const uint8_t *base = (const uint8_t *)((const char *)arena->ptr + view->arena_offset);
     if (cuda_f8_hmma_attn_batch_enabled() &&
         cuda_f8_hmma_attn_batch_shape_ok(view->rows, view->cols, n_tokens)) {
+        cuda_f8_shape_trace("ptr_table", "hmma_attn", arena->gpu,
+                            view->rows, view->cols, n_tokens, 0, 0, 0);
         dim3 grid((view->rows + 63u) / 64u, 1, 1);
         arena_f8_e4m3_b128_matmul_ptr_table_hmma_attn_kernel<<<grid, 128>>>(
             (float *)out_f32->ptr,
@@ -6801,6 +6978,8 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_batch_ptr_table_f32(
             view->row_stride_bytes,
             n_tokens);
     } else if (cuda_f8_rowpair_enabled() && view->rows > 1u) {
+        cuda_f8_shape_trace("ptr_table", "rows2", arena->gpu,
+                            view->rows, view->cols, n_tokens, 0, 0, 0);
         dim3 grid((view->rows + 1u) / 2u, n_tokens, 1);
         arena_f8_e4m3_b128_matmul_ptrs_rows2_kernel<<<grid, 256>>>(
             (float *)out_f32->ptr,
@@ -6810,6 +6989,8 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_batch_ptr_table_f32(
             view->cols,
             view->row_stride_bytes);
     } else {
+        cuda_f8_shape_trace("ptr_table", "rows1", arena->gpu,
+                            view->rows, view->cols, n_tokens, 0, 0, 0);
         dim3 grid(view->rows, n_tokens, 1);
         arena_f8_e4m3_b128_matmul_ptrs_kernel<<<grid, 256>>>(
             (float *)out_f32->ptr,
@@ -6848,12 +7029,18 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_grouped_f32(
         cuda_f8_row4_shape_ok(rows, cols_per_group)) {
         if (cuda_f8_grouped_ds4_fast_enabled() &&
             groups == 8u && rows_per_group == 1024u && cols_per_group == 4096u) {
+            cuda_f8_shape_trace("grouped", "rows4_ds4_attn_o", arena->gpu,
+                                (uint32_t)rows, view->cols, 1u,
+                                groups, rows_per_group, cols_per_group);
             arena_f8_e4m3_b128_matmul_grouped_rows4_ds4_attn_o_kernel<<<2048u, 256>>>(
                 (float *)out_f32->ptr,
                 base,
                 (const float *)x_f32->ptr,
                 view->row_stride_bytes);
         } else {
+            cuda_f8_shape_trace("grouped", "rows4", arena->gpu,
+                                (uint32_t)rows, view->cols, 1u,
+                                groups, rows_per_group, cols_per_group);
             arena_f8_e4m3_b128_matmul_grouped_rows4_kernel<<<(unsigned int)((rows + 3u) / 4u), 256>>>(
                 (float *)out_f32->ptr,
                 base,
@@ -6867,12 +7054,18 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_grouped_f32(
         if (cuda_f8_grouped_ds4_fast_enabled() &&
             groups == 8u && rows_per_group == 1024u && cols_per_group == 4096u) {
             if (cuda_f8_warp_scale_enabled()) {
+                cuda_f8_shape_trace("grouped", "rows2_ds4_attn_o_warp_scale", arena->gpu,
+                                    (uint32_t)rows, view->cols, 1u,
+                                    groups, rows_per_group, cols_per_group);
                 arena_f8_e4m3_b128_matmul_grouped_rows2_ds4_attn_o_warp_scale_kernel<<<4096u, 256>>>(
                     (float *)out_f32->ptr,
                     base,
                     (const float *)x_f32->ptr,
                     view->row_stride_bytes);
             } else {
+                cuda_f8_shape_trace("grouped", "rows2_ds4_attn_o", arena->gpu,
+                                    (uint32_t)rows, view->cols, 1u,
+                                    groups, rows_per_group, cols_per_group);
                 arena_f8_e4m3_b128_matmul_grouped_rows2_ds4_attn_o_kernel<<<4096u, 256>>>(
                     (float *)out_f32->ptr,
                     base,
@@ -6880,6 +7073,9 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_grouped_f32(
                     view->row_stride_bytes);
             }
         } else {
+            cuda_f8_shape_trace("grouped", "rows2", arena->gpu,
+                                (uint32_t)rows, view->cols, 1u,
+                                groups, rows_per_group, cols_per_group);
             arena_f8_e4m3_b128_matmul_grouped_rows2_kernel<<<(unsigned int)((rows + 1u) / 2u), 256>>>(
                 (float *)out_f32->ptr,
                 base,
@@ -6887,9 +7083,12 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_grouped_f32(
                 groups,
                 rows_per_group,
                 cols_per_group,
-                view->row_stride_bytes);
+            view->row_stride_bytes);
         }
     } else {
+        cuda_f8_shape_trace("grouped", "rows1", arena->gpu,
+                            (uint32_t)rows, view->cols, 1u,
+                            groups, rows_per_group, cols_per_group);
         arena_f8_e4m3_b128_matmul_grouped_kernel<<<(unsigned int)rows, 256>>>(
             (float *)out_f32->ptr,
             base,
@@ -6943,6 +7142,8 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_batch_ptrs_f32(
         (const uint8_t *)((const char *)arena->ptr + gate->arena_offset);
     const uint8_t *up_base =
         (const uint8_t *)((const char *)arena->ptr + up->arena_offset);
+    cuda_f8_shape_trace("pair_swiglu_ptrs", "scalar", arena->gpu,
+                        gate->rows, gate->cols, n_tokens, 0, 0, 0);
     dim3 grid(gate->rows, n_tokens, 1);
     arena_f8_e4m3_b128_pair_swiglu_ptrs_kernel<<<grid, 256>>>(
         (float *)out_f32->ptr,
@@ -6956,6 +7157,44 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_batch_ptrs_f32(
         clamp,
         weight);
     return cuda_ok(cudaGetLastError(), "f8 source pair ptr swiglu launch") ? 0 : 1;
+}
+
+extern "C" int ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *gate,
+        const ds4_gpu_source_row_view *up,
+        const ds4_gpu_tensor          *x_f32,
+        ds4_gpu_tensor                *out_f32,
+        float                          clamp,
+        float                          weight) {
+    if (!gate || !up || !x_f32 || !out_f32 ||
+        !x_f32->ptr || !out_f32->ptr ||
+        gate->rows != up->rows || gate->cols != up->cols ||
+        !cuda_f8_e4m3_b128_view_layout_ok(arena, gate) ||
+        !cuda_f8_e4m3_b128_view_layout_ok(arena, up) ||
+        x_f32->bytes < (uint64_t)gate->cols * sizeof(float) ||
+        out_f32->bytes < (uint64_t)gate->rows * sizeof(float)) {
+        return 1;
+    }
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "f8 source pair swiglu set device")) return 1;
+    const uint8_t *gate_base =
+        (const uint8_t *)((const char *)arena->ptr + gate->arena_offset);
+    const uint8_t *up_base =
+        (const uint8_t *)((const char *)arena->ptr + up->arena_offset);
+    cuda_f8_shape_trace("pair_swiglu_single", "scalar", arena->gpu,
+                        gate->rows, gate->cols, 1u, 0, 0, 0);
+    arena_f8_e4m3_b128_pair_swiglu_kernel<<<gate->rows, 256>>>(
+        (float *)out_f32->ptr,
+        gate_base,
+        up_base,
+        (const float *)x_f32->ptr,
+        gate->rows,
+        gate->cols,
+        gate->row_stride_bytes,
+        up->row_stride_bytes,
+        clamp,
+        weight);
+    return cuda_ok(cudaGetLastError(), "f8 source pair swiglu launch") ? 0 : 1;
 }
 
 extern "C" int ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_batch_ptr_table_f32(
@@ -6984,6 +7223,8 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_batch_ptr_table_f32(
         (const uint8_t *)((const char *)arena->ptr + up->arena_offset);
     if (cuda_f8_hmma_pair_swiglu_enabled() &&
         cuda_f8_hmma_pair_swiglu_shape_ok(gate->rows, gate->cols, n_tokens)) {
+        cuda_f8_shape_trace("pair_swiglu_ptr_table", "hmma", arena->gpu,
+                            gate->rows, gate->cols, n_tokens, 0, 0, 0);
         dim3 grid((gate->rows + 63u) / 64u, 1, 1);
         arena_f8_e4m3_b128_pair_swiglu_ptr_table_hmma_kernel<<<grid, 128>>>(
             (float *)out_f32->ptr,
@@ -6996,6 +7237,8 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_batch_ptr_table_f32(
             clamp,
             weight);
     } else {
+        cuda_f8_shape_trace("pair_swiglu_ptr_table", "scalar", arena->gpu,
+                            gate->rows, gate->cols, n_tokens, 0, 0, 0);
         dim3 grid(gate->rows, n_tokens, 1);
         arena_f8_e4m3_b128_pair_swiglu_ptrs_kernel<<<grid, 256>>>(
             (float *)out_f32->ptr,

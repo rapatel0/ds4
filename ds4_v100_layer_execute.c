@@ -1541,14 +1541,18 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
         return 1;
     }
 
+    const bool use_single_shared_pair =
+        env_flag_enabled("DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE");
     ds4_gpu_tensor *router_t = ds4_gpu_tensor_alloc(256u * sizeof(float));
     ds4_gpu_tensor *probs_t = ds4_gpu_tensor_alloc(256u * sizeof(float));
     ds4_gpu_tensor *selected_t = ds4_gpu_tensor_alloc(6u * sizeof(int32_t));
     ds4_gpu_tensor *weights_t = ds4_gpu_tensor_alloc(6u * sizeof(float));
     ds4_gpu_tensor *routed_mid_t = ds4_gpu_tensor_alloc((uint64_t)routes * mid * sizeof(float));
     ds4_gpu_tensor *accum_a = ds4_gpu_tensor_alloc((uint64_t)hidden * sizeof(float));
-    ds4_gpu_tensor *shared_gate_t = ds4_gpu_tensor_alloc((uint64_t)mid * sizeof(float));
-    ds4_gpu_tensor *shared_up_t = ds4_gpu_tensor_alloc((uint64_t)mid * sizeof(float));
+    ds4_gpu_tensor *shared_gate_t = use_single_shared_pair ? NULL
+        : ds4_gpu_tensor_alloc((uint64_t)mid * sizeof(float));
+    ds4_gpu_tensor *shared_up_t = use_single_shared_pair ? NULL
+        : ds4_gpu_tensor_alloc((uint64_t)mid * sizeof(float));
     ds4_gpu_tensor *shared_mid_t = ds4_gpu_tensor_alloc((uint64_t)mid * sizeof(float));
     ds4_gpu_tensor *shared_t = ds4_gpu_tensor_alloc((uint64_t)hidden * sizeof(float));
 
@@ -1558,7 +1562,8 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
     const bool readback_routes = !cfg->suppress_router_readback;
     if (!router_t || !probs_t || !selected_t || !weights_t ||
         !routed_mid_t || !accum_a ||
-        !shared_gate_t || !shared_up_t || !shared_mid_t || !shared_t) {
+        (!use_single_shared_pair && (!shared_gate_t || !shared_up_t)) ||
+        !shared_mid_t || !shared_t) {
         exec_error(err, errlen, "failed to allocate FFN executor tensors");
         goto done;
     }
@@ -1679,11 +1684,39 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
 
     ds4_gpu_tensor *accum = accum_a;
 
-    if (ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena, &shared_gate_v, ffn_input, shared_gate_t) != 0 ||
-        ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena, &shared_up_v, ffn_input, shared_up_t) != 0 ||
-        !ds4_gpu_swiglu_tensor(shared_mid_t, shared_gate_t, shared_up_t, mid, 10.0f, 1.0f) ||
-        ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena, &shared_down_v, shared_mid_t, shared_t) != 0 ||
-        !ds4_gpu_add_tensor(ffn_delta, accum, shared_t, hidden)) {
+    const int shared_rc = use_single_shared_pair
+        ? (ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_f32(cfg->arena,
+                                                       &shared_gate_v,
+                                                       &shared_up_v,
+                                                       ffn_input,
+                                                       shared_mid_t,
+                                                       10.0f,
+                                                       1.0f) != 0 ||
+           ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena,
+                                                 &shared_down_v,
+                                                 shared_mid_t,
+                                                 shared_t) != 0 ||
+           !ds4_gpu_add_tensor(ffn_delta, accum, shared_t, hidden))
+        : (ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena,
+                                                 &shared_gate_v,
+                                                 ffn_input,
+                                                 shared_gate_t) != 0 ||
+           ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena,
+                                                 &shared_up_v,
+                                                 ffn_input,
+                                                 shared_up_t) != 0 ||
+           !ds4_gpu_swiglu_tensor(shared_mid_t,
+                                  shared_gate_t,
+                                  shared_up_t,
+                                  mid,
+                                  10.0f,
+                                  1.0f) ||
+           ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena,
+                                                 &shared_down_v,
+                                                 shared_mid_t,
+                                                 shared_t) != 0 ||
+           !ds4_gpu_add_tensor(ffn_delta, accum, shared_t, hidden));
+    if (shared_rc) {
         exec_error(err, errlen, "shared FFN failed");
         goto done;
     }
@@ -1788,6 +1821,8 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
         return 1;
     }
     const bool batch_shared_f8 = env_flag_enabled("DS4_V100_BATCH_SHARED_F8");
+    const bool use_single_shared_pair =
+        env_flag_enabled("DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE");
     ds4_gpu_tensor *router_t = use_scratch ? cfgs[0].batch_scratch->ffn_router
         : ds4_gpu_tensor_alloc((uint64_t)n_slots * 256u * sizeof(float));
     ds4_gpu_tensor *probs_t = use_scratch ? cfgs[0].batch_scratch->ffn_probs
@@ -2167,26 +2202,38 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
                 exec_error(err, errlen, "FFN batch routed output view failed");
                 goto done;
             }
-            const int shared_rc =
-                ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfgs[slot].arena,
-                                                      &shared_gate_v,
-                                                      ffn_inputs[slot],
-                                                      shared_gate_t) != 0 ||
-                ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfgs[slot].arena,
-                                                      &shared_up_v,
-                                                      ffn_inputs[slot],
-                                                      shared_up_t) != 0 ||
-                !ds4_gpu_swiglu_tensor(shared_mid_t,
-                                       shared_gate_t,
-                                       shared_up_t,
-                                       mid,
-                                       10.0f,
-                                       1.0f) ||
-                ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfgs[slot].arena,
-                                                      &shared_down_v,
-                                                      shared_mid_t,
-                                                      shared_t) != 0 ||
-                !ds4_gpu_add_tensor(ffn_deltas[slot], routed_view, shared_t, hidden);
+            const int shared_rc = use_single_shared_pair
+                ? (ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_f32(cfgs[slot].arena,
+                                                               &shared_gate_v,
+                                                               &shared_up_v,
+                                                               ffn_inputs[slot],
+                                                               shared_mid_t,
+                                                               10.0f,
+                                                               1.0f) != 0 ||
+                   ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfgs[slot].arena,
+                                                         &shared_down_v,
+                                                         shared_mid_t,
+                                                         shared_t) != 0 ||
+                   !ds4_gpu_add_tensor(ffn_deltas[slot], routed_view, shared_t, hidden))
+                : (ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfgs[slot].arena,
+                                                         &shared_gate_v,
+                                                         ffn_inputs[slot],
+                                                         shared_gate_t) != 0 ||
+                   ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfgs[slot].arena,
+                                                         &shared_up_v,
+                                                         ffn_inputs[slot],
+                                                         shared_up_t) != 0 ||
+                   !ds4_gpu_swiglu_tensor(shared_mid_t,
+                                          shared_gate_t,
+                                          shared_up_t,
+                                          mid,
+                                          10.0f,
+                                          1.0f) ||
+                   ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfgs[slot].arena,
+                                                         &shared_down_v,
+                                                         shared_mid_t,
+                                                         shared_t) != 0 ||
+                   !ds4_gpu_add_tensor(ffn_deltas[slot], routed_view, shared_t, hidden));
             if (!use_scratch) ds4_gpu_tensor_free(routed_view);
             if (shared_rc) {
                 exec_error(err, errlen, "shared FFN batch slot %u failed", slot);

@@ -5,10 +5,11 @@ Last updated: 2026-05-21
 ## Topline
 
 The appliance is correct and served on the 8x V100 node, but it is not yet in
-the practical throughput range from the vision. The current default is the
+the practical throughput range from the vision. The current default remains the
 Sprint 111 fused TurboMind gate/up appliance plus the Sprint 115 shared
 gate/up SwiGLU F8 HMMA path plus the Sprint 116 batched attention-projection
-F8 HMMA path for active 4/8-slot batches.
+F8 HMMA path for active 4/8-slot batches. Sprint 117 traced the current served
+path and tested a per-slot shared-FFN fusion, but did not promote it.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
@@ -52,6 +53,7 @@ to slightly worse.
 | 114 | Shared-down F8 HMMA batch kernel | Correct; `33.550415` HMMA vs `33.397763` control at 8-slot/256K, and `21.396331` vs `21.365610` at 4-slot/1M | Kept opt-in/off |
 | 115 | Shared gate/up SwiGLU F8 HMMA batch kernel | Correct; `33.578236` HMMA vs `33.292541` control at 8-slot/256K, and `21.455638` vs `21.430420` at 4-slot/1M | Shipped/default |
 | 116 | Batched attention projection F8 HMMA kernel | Correct; `33.697698` HMMA batch vs `33.380614` control at 8-slot/256K, and `21.469010` vs `21.333447` at 4-slot/1M | Shipped/default for 4/8-slot batches |
+| 117 | F8 shape trace, async chunk probe, and per-slot shared gate/up/SwiGLU fusion | Trace showed the fast served path is per-slot stage-pipelined; `DS4_V100_ASYNC_SLOT_CHUNK=4` was correct but only `11.483646`; single shared pair-SwiGLU was correct at `33.562643` vs `33.697698` default | Keep opt-in/off; next fusion must be software-pipelined/HMMA, not just scalar launch reduction |
 
 ## Remaining
 
@@ -63,10 +65,10 @@ to slightly worse.
   - TurboMind MXFP4 expert occupancy and route-expanded activation layout.
   - Persistent/grouped expert execution beyond the shipped Sprint 111 fused
     gate_up launch reduction.
-  - A larger fused F8/attention-output rewrite. Sprint 116 shipped attention
-    projection HMMA batching, but the latest profile before it still showed
-    ungrouped F8 row-pair matmuls, grouped attention-output, and TurboMind
-    experts as the meaningful device buckets.
+  - A larger software-pipelined F8/attention-output/FFN rewrite. Sprint 117
+    showed scalar per-slot shared-FFN fusion removes calls but does not improve
+    throughput; the useful version needs packed decode, activation staging,
+    MMA, and epilogue work in one tensor-core-oriented kernel.
 - Decide whether the next production step is a deeper TurboMind adapter change
   or a lower-level CUTLASS/TurboMind-inspired persistent kernel probe.
 
@@ -88,6 +90,7 @@ DS4_V100_CUDA_F8_HMMA_SHARED_DOWN=1
 DS4_V100_ENABLE_BATCH_ATTN_PROJ=0
 DS4_V100_CUDA_F8_HMMA_ATTN_BATCH=0
 DS4_V100_FFN_DIRECT_DELTA=1
+DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE=1
 DS4_V100_TURBOMIND_FUSED_GATE_UP=0
 ```
 
