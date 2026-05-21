@@ -151,6 +151,7 @@ DS4_V100_BATCH_ATTN_OUTPUT_A=0
 DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS=1
 DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC=0
 DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE=0
+DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE_H2=0
 DS4_V100_TURBOMIND_INDEXED_A=0
 DS4_V100_TURBOMIND_GATED_SILU=0
 DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1
@@ -229,6 +230,11 @@ keeps a token/route to sorted-row map during TurboMind route compaction and
 uses that map to replace the packed output clear plus atomic scatter-add with a
 deterministic per-token reduce. Keep it `0` for normal serving until the
 same-binary V100 A/B clears the promotion bar.
+
+`DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE_H2=1` is a Sprint 141 variant of that
+probe. It uses a half2-vectorized by-pair reduce when
+`DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE=1`. Keep it `0` for normal serving;
+128-slot served A/B was neutral against both control and the scalar reduce.
 
 `DS4_V100_TURBOMIND_INDEXED_A=1` is a Sprint 131 routed-FFN probe. It passes
 compact token indices into TurboMind gate/up GEMMs and stores one FP16

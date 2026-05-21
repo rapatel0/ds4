@@ -70,7 +70,10 @@ production effect is tiny. Sprint 140 applied the same fixed-shape strategy to
 the 768-route down projection. It improved the isolated down benchmark
 (`0.3026 ms` vs `0.3272 ms`) and passed full 43-layer smoke, but served A/B was
 slower with the probe enabled (`60.038469` vs `60.129772`), so it remains
-default-off.
+default-off. Sprint 141 added a half2-vectorized route-row-reduce tail variant.
+It passed full 43-layer 128-slot smoke, but 128-slot served A/B stayed neutral:
+control `60.108232`, scalar route-row reduce `60.112248`, and half2 route-row
+reduce `60.104512`, all with `128/128` token match.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
@@ -146,6 +149,7 @@ to slightly worse.
 | 138 | Wide compact TurboMind gate/up benchmark | Correct; 192/384/768 route compact cases pass, with 768-route fused gate_up at `0.6379 ms` and gated-SiLU at `0.6481 ms` | Use as the software-pipelined MXFP4 expert acceptance baseline |
 | 139 | Fixed-shape 128-slot gate/up probe | Correct; m128 measured `0.5999 ms` vs `0.6480 ms` generic gated in isolation, full 43-layer 128-slot smoke passed, and served gated A/B was `60.130047` vs `60.061899` probe-off | Keep exact-guard auto path; move next work to a larger routed-FFN boundary |
 | 140 | Fixed-shape 128-slot down probe | Correct; fixed down measured `0.3026 ms` vs `0.3272 ms` generic and full 43-layer smoke passed, but served A/B was `60.038469` vs `60.129772` down-probe-off | Keep off by default; target down epilogue plus weighted reduce or persistent routed FFN next |
+| 141 | Half2 route-row reduce tail probe | Correct; full 43-layer 128-slot smoke passed, but half2 route-row reduce was `60.104512` vs scalar route-row reduce `60.112248` and control `60.108232` | Keep off by default; separate tail vectorization does not move served throughput |
 
 ## Remaining
 
@@ -189,7 +193,10 @@ to slightly worse.
     served A/B only moved from `60.061899` to `60.130047`, so gate/up-only
     specialization is not enough. Sprint 140 repeated the experiment for down:
     the isolated fixed down probe improved to `0.3026 ms`, but served A/B
-    regressed from `60.129772` to `60.038469`.
+    regressed from `60.129772` to `60.038469`. Sprint 141 vectorized the
+    separate route-row reduce tail with half2, but the 128-slot A/B stayed in
+    the same band as control, so even a better standalone tail kernel is too
+    small.
     Sprint 122 further showed that merely chunking slots to feed wider kernels
     loses too much stage overlap, so the fusion target must match the per-slot
     served topology or replace it with an overlapped scheduler.
@@ -234,6 +241,7 @@ DS4_V100_F8_SHARED_DOWN_ADD=1
 DS4_V100_BATCH_ATTN_OUTPUT_B=1
 DS4_V100_ASYNC_SLOT_CHUNK=2
 DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE=1
+DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE_H2=1
 DS4_V100_TURBOMIND_INDEXED_A=1
 DS4_V100_BATCH_ATTN_OUTPUT_A=1
 DS4_V100_CUDA_F8_HMMA_GROUPED_ATTN_O_BATCH=1
@@ -260,3 +268,6 @@ path.
 The fixed-shape m128 down probe is available after Sprint 140, but stays
 default-off because served A/B was slower than generic TurboMind. Set
 `DS4_V100_TURBOMIND_DOWN_PROBE=auto` only for focused diagnostics.
+`DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE_H2=1` is available after Sprint 141, but
+stays default-off because served A/B was neutral against both scalar
+route-row-reduce and control.

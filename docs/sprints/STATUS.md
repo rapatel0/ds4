@@ -66,7 +66,12 @@ tok/s on the 128-slot/32K gated appliance, but same-binary probe-off was
 that fixed-shape strategy for the 768-route down projection. The down probe was
 correct and faster in isolation (`0.3026 ms` vs `0.3272 ms`), but served A/B
 was slower with it enabled (`60.038469` vs `60.129772`), so it remains opt-in
-and default-off.
+and default-off. Sprint 141 added an opt-in half2-vectorized variant of the
+route-row reduce tail. It passed the full 43-layer 128-slot smoke, but served
+A/B stayed neutral: control was `60.108232`, scalar route-row reduce was
+`60.112248`, and half2 route-row reduce was `60.104512`, all with `128/128`
+token match. Tail-kernel vectorization is therefore not the missing throughput
+lever.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
@@ -80,6 +85,11 @@ current topology because it gives up too much stage overlap.
 |---|---:|---:|---:|---:|---|
 | Sprint 139 gated m128 auto probe | 32,768 | 128 | `60.130047` | `56.371919` | 128/128 token match |
 | Sprint 140 gated down-probe-off control | 32,768 | 128 | `60.129772` | `56.371661` | 128/128 token match |
+| Sprint 141 scalar route-row reduce repeat | 32,768 | 128 | `60.112248` | `56.355232` | 128/128 token match |
+| Sprint 141 control repeat | 32,768 | 128 | `60.108232` | `56.351468` | 128/128 token match |
+| Sprint 141 half2 route-row reduce | 32,768 | 128 | `60.104512` | `56.347980` | 128/128 token match |
+| Sprint 141 indexed-A repeat | 32,768 | 128 | `60.056960` | `56.303400` | 128/128 token match |
+| Sprint 141 route-row reduce earlier repeat | 32,768 | 128 | `60.022743` | `56.271322` | 128/128 token match |
 | Sprint 140 gated down-probe-auto candidate | 32,768 | 128 | `60.038469` | `56.286064` | 128/128 token match |
 | Sprint 139 gated probe-off control | 32,768 | 128 | `60.061899` | `56.308030` | 128/128 token match |
 | Sprint 137 128-slot 32K throughput mode | 32,768 | 128 | `59.598172` | `55.873286` | 128/128 token match |
@@ -182,6 +192,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 138 | Wide compact TurboMind gate/up benchmark | Correct; default compact benchmark now covers up to 768 routed rows, where fused gate_up is `0.6379 ms` and gated-SiLU is `0.6481 ms` | Use `0.638 ms` as the acceptance target for the next packed MXFP4 software-pipelined kernel probe |
 | 139 | Fixed-shape 128-slot gate/up probe | Correct; the 768-route m128 probe measured `0.5999 ms` vs `0.6480 ms` generic gated in isolation, passed full 43-layer 128-slot smoke, and served at `60.130047` vs `60.061899` probe-off | Keep guarded auto selection, but do not treat gate/up-only fusion as the remaining major lever |
 | 140 | Fixed-shape 128-slot down probe | Correct; down m128 measured `0.3026 ms` vs `0.3272 ms` generic in isolation and full 43-layer smoke passed, but served A/B was `60.038469` vs `60.129772` down-probe-off | Keep down probe opt-in/off; move to down epilogue plus weighted reduce or a persistent routed-FFN executor |
+| 141 | Half2 route-row reduce tail probe | Correct; full 43-layer 128-slot smoke passed, but 128-slot served A/B was neutral: half2 route-row reduce `60.104512`, scalar route-row reduce `60.112248`, control `60.108232` | Keep half2 reduce opt-in/off; separate tail-kernel vectorization is not enough |
 
 ## Sprint 106 Profile Takeaway
 

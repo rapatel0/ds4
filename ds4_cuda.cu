@@ -5602,6 +5602,35 @@ __global__ static void tm_reduce_sum_half_to_f32_by_pair_kernel(
     out[idx] = acc;
 }
 
+__global__ static void tm_reduce_sum_half2_to_f32_by_pair_kernel(
+        float *out,
+        const __half *routes,
+        const int *pair_rows,
+        uint32_t n_routes,
+        uint32_t hidden,
+        uint32_t n_tokens,
+        int accumulate_out) {
+    const uint32_t hidden2 = hidden >> 1;
+    const uint64_t idx = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t n = (uint64_t)n_tokens * hidden2;
+    if (idx >= n) return;
+    const uint32_t tok = (uint32_t)(idx / hidden2);
+    const uint32_t col2 = (uint32_t)(idx - (uint64_t)tok * hidden2);
+    const uint32_t col = col2 << 1;
+    const uint64_t out_base = (uint64_t)tok * hidden + col;
+    float acc0 = accumulate_out ? out[out_base] : 0.0f;
+    float acc1 = accumulate_out ? out[out_base + 1u] : 0.0f;
+    const uint32_t pair_base = tok * n_routes;
+    for (uint32_t route = 0; route < n_routes; route++) {
+        const uint32_t row = (uint32_t)pair_rows[pair_base + route];
+        const __half2 h = *reinterpret_cast<const __half2 *>(routes + (uint64_t)row * hidden + col);
+        acc0 += __half2float(__low2half(h));
+        acc1 += __half2float(__high2half(h));
+    }
+    out[out_base] = acc0;
+    out[out_base + 1u] = acc1;
+}
+
 __global__ static void tm_reduce_sum_weighted_half_to_f32_by_pair_kernel(
         float *out,
         const __half *routes,
@@ -5623,6 +5652,37 @@ __global__ static void tm_reduce_sum_weighted_half_to_f32_by_pair_kernel(
         acc += __half2float(routes[(uint64_t)row * hidden + col]) * weights[row];
     }
     out[idx] = acc;
+}
+
+__global__ static void tm_reduce_sum_weighted_half2_to_f32_by_pair_kernel(
+        float *out,
+        const __half *routes,
+        const float *weights,
+        const int *pair_rows,
+        uint32_t n_routes,
+        uint32_t hidden,
+        uint32_t n_tokens,
+        int accumulate_out) {
+    const uint32_t hidden2 = hidden >> 1;
+    const uint64_t idx = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t n = (uint64_t)n_tokens * hidden2;
+    if (idx >= n) return;
+    const uint32_t tok = (uint32_t)(idx / hidden2);
+    const uint32_t col2 = (uint32_t)(idx - (uint64_t)tok * hidden2);
+    const uint32_t col = col2 << 1;
+    const uint64_t out_base = (uint64_t)tok * hidden + col;
+    float acc0 = accumulate_out ? out[out_base] : 0.0f;
+    float acc1 = accumulate_out ? out[out_base + 1u] : 0.0f;
+    const uint32_t pair_base = tok * n_routes;
+    for (uint32_t route = 0; route < n_routes; route++) {
+        const uint32_t row = (uint32_t)pair_rows[pair_base + route];
+        const float w = weights[row];
+        const __half2 h = *reinterpret_cast<const __half2 *>(routes + (uint64_t)row * hidden + col);
+        acc0 += __half2float(__low2half(h)) * w;
+        acc1 += __half2float(__high2half(h)) * w;
+    }
+    out[out_base] = acc0;
+    out[out_base + 1u] = acc1;
 }
 
 __global__ static void tm_build_compact_schedule_kernel(
@@ -5800,6 +5860,10 @@ static int cuda_tm_small_route_build_enabled(void) {
 
 static int cuda_tm_route_row_reduce_enabled(void) {
     return cuda_env_flag_enabled("DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE");
+}
+
+static int cuda_tm_route_row_reduce_half2_enabled(void) {
+    return cuda_env_flag_enabled("DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE_H2");
 }
 
 static int cuda_tm_indexed_a_enabled(void) {
@@ -6854,7 +6918,28 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     if (!ok) return 1;
 
     if (use_route_row_reduce) {
-        if (use_gated_silu) {
+        const int use_half2_reduce =
+            cuda_tm_route_row_reduce_half2_enabled() && ((hidden & 1u) == 0u);
+        if (use_half2_reduce && use_gated_silu) {
+            tm_reduce_sum_weighted_half2_to_f32_by_pair_kernel<<<((uint64_t)n_tokens * (hidden >> 1) + 255u) / 256u, 256>>>(
+                (float *)out_f32->ptr,
+                down_routes,
+                sorted_weights,
+                pair_rows,
+                n_routes,
+                hidden,
+                n_tokens,
+                accumulate_out);
+        } else if (use_half2_reduce) {
+            tm_reduce_sum_half2_to_f32_by_pair_kernel<<<((uint64_t)n_tokens * (hidden >> 1) + 255u) / 256u, 256>>>(
+                (float *)out_f32->ptr,
+                down_routes,
+                pair_rows,
+                n_routes,
+                hidden,
+                n_tokens,
+                accumulate_out);
+        } else if (use_gated_silu) {
             tm_reduce_sum_weighted_half_to_f32_by_pair_kernel<<<((uint64_t)n_tokens * hidden + 255u) / 256u, 256>>>(
                 (float *)out_f32->ptr,
                 down_routes,
