@@ -123,6 +123,21 @@ static int env_int(const char *name, int fallback, int lo, int hi) {
     return (int)parsed;
 }
 
+static bool env_flag(const char *name, bool fallback) {
+    const char *v = std::getenv(name);
+    if (!v || !v[0]) return fallback;
+    if (std::strcmp(v, "1") == 0 || std::strcmp(v, "true") == 0 || std::strcmp(v, "on") == 0) {
+        return true;
+    }
+    if (std::strcmp(v, "0") == 0 || std::strcmp(v, "false") == 0 || std::strcmp(v, "off") == 0) {
+        return false;
+    }
+    fprintf(stderr,
+            "[gate_up_fusion] ignoring invalid %s=%s, expected 0/1/true/false/on/off\n",
+            name, v);
+    return fallback;
+}
+
 static std::vector<Case> parse_cases_from_env() {
     const char *v = std::getenv("DS4_TURBOMIND_GATE_UP_CASES");
     if (!v || !v[0]) {
@@ -259,11 +274,14 @@ static int run_case(void * lib, const Case & c) {
 
     constexpr int ggml_type = GGML_TM_DTYPE_MXFP4;
     constexpr int group_size = 32;
-    constexpr int num_experts = 256;
+    const bool compact_groups = env_flag("DS4_TURBOMIND_GATE_UP_COMPACT_GROUPS", false);
+    const int num_experts = compact_groups ? 6 : 256;
     constexpr int K = 4096;
     constexpr int N = 2048;
     constexpr int fused_N = 2 * N;
-    const std::vector<int> active = {0, 17, 42, 87, 173, 255};
+    const std::vector<int> active = compact_groups
+        ? std::vector<int>{0, 1, 2, 3, 4, 5}
+        : std::vector<int>{0, 17, 42, 87, 173, 255};
     const int total_tokens = (int) active.size() * c.tokens_per_active;
 
     std::vector<std::vector<block_mxfp4>> gate(active.size());
@@ -345,8 +363,9 @@ static int run_case(void * lib, const Case & c) {
     const int warmup_iters = env_int("DS4_TURBOMIND_GATE_UP_WARMUP_ITERS", 3, 0, 1000);
     const int bench_iters = env_int("DS4_TURBOMIND_GATE_UP_BENCH_ITERS", 30, 1, 10000);
     fprintf(stderr,
-            "[gate_up_fusion tpa=%d] shape active=%zu total_routes=%d max_routes_per_expert=%d warmup_iters=%d bench_iters=%d\n",
-            c.tokens_per_active, active.size(), total_tokens, c.tokens_per_active,
+            "[gate_up_fusion tpa=%d] shape group_mode=%s groups=%d active=%zu total_routes=%d max_routes_per_expert=%d warmup_iters=%d bench_iters=%d\n",
+            c.tokens_per_active, compact_groups ? "compact" : "sparse256",
+            num_experts, active.size(), total_tokens, c.tokens_per_active,
             warmup_iters, bench_iters);
     int rc = 0;
 

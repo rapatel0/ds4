@@ -44,9 +44,12 @@ route-expanded activation scratch. It was correct, but measured `45.789937`
 vs `45.663281` control, so it remains opt-in. Sprint 132 extended the
 standalone TurboMind gate/up benchmark to the production 96-route shape and
 measured the interleaved gated path at `0.1776 ms` vs `0.2889 ms` for separate
-gate+up, a `1.626x` isolated speedup. These results keep pointing the next
-implementation at lower-level packed MXFP4 mainloop/scheduling work rather
-than another launch-boundary or wrapper data-movement tweak.
+gate+up, a `1.626x` isolated speedup. Sprint 133 then corrected the benchmark
+to use compact active-expert grouping like the served runtime; at that topology
+gated-SiLU was `0.1740 ms` vs `0.1895 ms` separate gate+up, only `1.089x`.
+These results keep pointing the next implementation at lower-level packed
+MXFP4 mainloop or served scheduling work rather than another launch-boundary or
+wrapper data-movement tweak.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
@@ -108,6 +111,7 @@ to slightly worse.
 | 130 | Routed FFN software-pipeline targeting | Correct; route-row-reduce repeated at `45.660765` vs `45.837745` compact fused control, and TurboMind/tc-grid review points to packed MXFP4 load/dequant/HMMA pipelining as the useful fusion boundary | Keep route-row-reduce opt-in; implement a guarded DS4-specific routed gate/up software-pipeline probe |
 | 131 | TurboMind indexed-A routed activation probe | Correct; avoids route-expanded activation materialization for gate/up, passed full 43-layer smokes, and served at `45.789937` vs `45.663281` control | Keep indexed-A opt-in; wrapper-level activation compaction is not enough |
 | 132 | Production-shaped TurboMind gate/up benchmark | Correct; added env-selectable cases and the served-profile 96-route case, where gated-SiLU measured `0.1776 ms` vs `0.2889 ms` separate gate+up | Use as the 1-GPU V100 acceptance harness for lower-level routed-expert kernel work |
+| 133 | Compact-group gate/up benchmark correction | Correct; compact 96-route gated-SiLU measured `0.1740 ms`, while compact separate gate+up was `0.1895 ms`; sparse256 overstated fusion benefit at `1.534x` | Use compact mode as the acceptance baseline; sparse-group wins do not predict served default wins |
 
 ## Remaining
 
@@ -135,11 +139,12 @@ to slightly worse.
     slightly slower than the compact fused control. Sprint 131 reduced
     gate/up activation materialization with TurboMind indexed-A, but remained
     inside run noise. Sprint 132 showed the existing interleaved gated gate/up
-    primitive is already `1.626x` faster than separate gate/up at the
-    production 96-route standalone shape. The useful version therefore needs
-    either a lower-level packed decode/activation staging/MMA/epilogue
-    specialization with better tile fill, or a scheduler that keeps that fast
-    primitive fed in the served topology.
+    primitive is `1.626x` faster than separate gate/up at the sparse 96-route
+    standalone shape, but Sprint 133 showed the served compact topology shrinks
+    that to `1.089x`. The useful version therefore needs either a lower-level
+    packed decode/activation staging/MMA/epilogue specialization that beats
+    the compact `0.1740 ms` baseline, or a scheduler that keeps expert work
+    larger than the current compact microshape.
     Sprint 122 further showed that merely chunking slots to feed wider kernels
     loses too much stage overlap, so the fusion target must match the per-slot
     served topology or replace it with an overlapped scheduler.
