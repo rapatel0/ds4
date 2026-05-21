@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: codex
-revision: 126
+revision: 127
 ---
 
 # Vision: DS4 V100 Appliance
@@ -74,12 +74,16 @@ optimized V100 low-bit expert kernels in the actual hot path.
   Sprint 123 added an opt-in fused shared-down-add F8 epilogue and re-tested
   per-slot shared gate/up/SwiGLU fusion at 16 slots. The path stayed correct
   and reached `43.887206` generated tok/s in the best opt-in run, but the gain
-  did not clear the promotion bar, so production defaults are unchanged. The
-  project remains far below the practical serving target, so the next
-  meaningful step needs profile-guided larger execution-boundary work: deeper
-  TurboMind expert scheduling, persistent grouped expert execution, or a real
-  SM70 software-pipelined F8 shared-FFN/attention-output kernel that preserves
-  the current served topology.
+  did not clear the promotion bar, so production defaults are unchanged.
+  Sprint 124 then added a correct opt-in TurboMind route-row reduce that
+  replaces the packed output clear plus atomic scatter-add; it reached
+  `43.822500` in the first candidate run but repeated at `42.998450` versus a
+  `43.517862` control repeat, so it also remains opt-in. The project remains
+  far below the practical serving target, so the next meaningful step needs
+  profile-guided larger execution-boundary work: deeper TurboMind expert
+  scheduling, persistent grouped expert execution, or a real SM70
+  software-pipelined F8 shared-FFN/attention-output kernel that preserves the
+  current served topology.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation

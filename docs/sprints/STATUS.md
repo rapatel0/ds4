@@ -9,8 +9,10 @@ with the Sprint 122 rendezvous fix. The runtime now reliably coalesces 16
 concurrent requests into one tensor batch by resolving launcher `auto`
 microbatch wait to 200 ms at `active_microbatch >= 16`. The current
 production-auto repeat remains `43.534061` generated tok/s. Sprint 123 found
-correct opt-in shared-FFN fusions up to `43.887206`, but did not promote them
-because the gain was inside the observed run band and below the promotion bar.
+correct opt-in shared-FFN fusions up to `43.887206`. Sprint 124 added a
+correct opt-in TurboMind route-row reduce path and measured up to `43.822500`,
+but neither sprint promoted a new default because the gains stayed inside the
+observed run band and below the promotion bar.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
@@ -22,6 +24,8 @@ because it gives up too much stage overlap.
 | Mode | Context | Slots | Generated tok/s | Continuation tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
 | Sprint 123 best opt-in shared FFN fusion | 262,144 | 16 | `43.887206` | `41.144256` | 16/16 token match |
+| Sprint 124 route-row reduce opt-in | 262,144 | 16 | `43.822500` | `41.083593` | 16/16 token match |
+| Sprint 124 same-binary control repeat | 262,144 | 16 | `43.517862` | `40.797995` | 16/16 token match |
 | Sprint 123 shared-down-add plus scalar shared-pair fusion | 262,144 | 16 | `43.812630` | `41.074340` | 16/16 token match |
 | Sprint 123 same-binary fused-add control | 262,144 | 16 | `43.070728` | `40.378807` | 16/16 token match |
 | Sprint 122 production-auto 16-slot throughput mode | 262,144 | 16 | `43.534061` | `40.813182` | 16/16 token match |
@@ -80,6 +84,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 121 | 16-slot 256K throughput mode | Correct; `43.659461` at 16-slot/256K vs `34.445844` same-binary 8-slot control | Shipped as admitted 256K mode with context-aware launcher guard |
 | 122 | 16-slot profile, 16-token HMMA admission, async chunk probes, and rendezvous stabilization | Correct; best `43.730215`, production-auto `43.534061`, one 16-request tensor batch after 200 ms auto wait; chunked tensor scheduling regressed (`28.876459` at chunk 2, `18.447169` at chunk 4, `13.315378` at chunk 16) | Shipped 16-slot auto rendezvous; kept chunk/output-B/shared-down probes opt-in/off |
 | 123 | Production-path shared FFN fusion A/B | Correct; scalar shared-pair fusion reached `43.887206`, fused shared-down-add reached `43.539555`, and combined scalar+down-add reached `43.812630` at 16-slot/256K | Kept opt-in/off; launch/epilogue fusion alone is not enough |
+| 124 | TurboMind route-row reduce replacing packed output clear plus atomic scatter-add | Correct; first candidate reached `43.822500`, but the repeat was `42.998450` vs `43.517862` control repeat at 16-slot/256K | Kept opt-in/off; routed-FFN tail fusion alone is not enough |
 
 ## Sprint 106 Profile Takeaway
 
@@ -240,10 +245,12 @@ Sprint 116 ships a DS4-shaped batched attention projection F8 HMMA path:
 
 The next target still needs to change a larger execution boundary. Sprint 123
 showed that per-slot shared-FFN launch/epilogue fusion is correct but too small
-to move the practical target materially; aggregate throughput is still only
-about `44` tok/s, far below the practical serving target. The next sprint
-should attack TurboMind route-row compaction/persistent grouped expert
-execution or a broader CUTLASS/TurboMind-inspired software-pipelined FFN kernel
+to move the practical target materially, and Sprint 124 showed that removing
+the packed TurboMind output clear plus atomic scatter-add is also too small.
+Aggregate throughput is still only about `44` tok/s, far below the practical
+serving target. The next sprint should attack either the full TurboMind routed
+expert boundary with route-aware activation staging and persistent/grouped
+execution, or a broader CUTLASS/TurboMind-inspired software-pipelined F8 kernel
 that fuses decode, staging, MMA, activation, and epilogue work without giving
 up the current per-step stage overlap.
 

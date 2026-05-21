@@ -5019,6 +5019,7 @@ __global__ static void tm_prefix_offsets_kernel(
 __global__ static void tm_scatter_routes_kernel(
         int *sorted_pairs,
         float *sorted_weights,
+        int *pair_rows,
         int *bad,
         int *cursors,
         const int32_t *selected,
@@ -5035,6 +5036,7 @@ __global__ static void tm_scatter_routes_kernel(
     const int row = atomicAdd(&cursors[(uint32_t)e], 1);
     sorted_pairs[row] = (int)pair;
     sorted_weights[row] = weights[pair];
+    if (pair_rows) pair_rows[pair] = row;
 }
 
 __global__ static void tm_build_routes_small_kernel(
@@ -5043,6 +5045,7 @@ __global__ static void tm_build_routes_small_kernel(
         int *offsets,
         int *sorted_pairs,
         float *sorted_weights,
+        int *pair_rows,
         int *bad,
         const int32_t *selected,
         const float *weights,
@@ -5086,6 +5089,7 @@ __global__ static void tm_build_routes_small_kernel(
         const int row = atomicAdd(&cursors[(uint32_t)e], 1);
         sorted_pairs[row] = (int)tid;
         sorted_weights[row] = weights[tid];
+        if (pair_rows) pair_rows[tid] = row;
     }
 }
 
@@ -5170,6 +5174,28 @@ __global__ static void tm_scatter_sum_half_to_f32_kernel(
     atomicAdd(out + (uint64_t)tok * hidden + col, __half2float(routes[idx]));
 }
 
+__global__ static void tm_reduce_sum_half_to_f32_by_pair_kernel(
+        float *out,
+        const __half *routes,
+        const int *pair_rows,
+        uint32_t n_routes,
+        uint32_t hidden,
+        uint32_t n_tokens,
+        int accumulate_out) {
+    const uint64_t idx = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t n = (uint64_t)n_tokens * hidden;
+    if (idx >= n) return;
+    const uint32_t tok = (uint32_t)(idx / hidden);
+    const uint32_t col = (uint32_t)(idx - (uint64_t)tok * hidden);
+    float acc = accumulate_out ? out[idx] : 0.0f;
+    const uint32_t pair_base = tok * n_routes;
+    for (uint32_t route = 0; route < n_routes; route++) {
+        const uint32_t row = (uint32_t)pair_rows[pair_base + route];
+        acc += __half2float(routes[(uint64_t)row * hidden + col]);
+    }
+    out[idx] = acc;
+}
+
 static uint64_t cuda_tm_align16(uint64_t v) {
     return (v + 15ull) & ~15ull;
 }
@@ -5197,6 +5223,10 @@ static int cuda_tm_small_route_build_enabled(void) {
     return cuda_env_flag_enabled("DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD");
 }
 
+static int cuda_tm_route_row_reduce_enabled(void) {
+    return cuda_env_flag_enabled("DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE");
+}
+
 static int cuda_tm_use_small_route_build(uint32_t total_routes, uint32_t n_total_experts) {
     return cuda_tm_small_route_build_enabled() &&
            total_routes <= 128u &&
@@ -5209,6 +5239,7 @@ static int cuda_tm_build_routes(
         int *offsets,
         int *sorted_pairs,
         float *sorted_weights,
+        int *pair_rows,
         int *bad,
         const int32_t *selected,
         const float *weights,
@@ -5222,6 +5253,7 @@ static int cuda_tm_build_routes(
             offsets,
             sorted_pairs,
             sorted_weights,
+            pair_rows,
             bad,
             selected,
             weights,
@@ -5247,6 +5279,7 @@ static int cuda_tm_build_routes(
     tm_scatter_routes_kernel<<<(total_routes + 255u) / 256u, 256>>>(
         sorted_pairs,
         sorted_weights,
+        pair_rows,
         bad,
         cursors,
         selected,
@@ -5653,6 +5686,7 @@ static int cuda_tm_routed_mxfp4_transient(
                               offsets,
                               sorted_pairs,
                               sorted_weights,
+                              nullptr,
                               bad,
                               (const int32_t *)selected_i32->ptr,
                               (const float *)weights_f32->ptr,
@@ -5824,6 +5858,7 @@ static int cuda_tm_routed_mxfp4_packed_impl(
         return 1;
     }
 
+    const int use_route_row_reduce = cuda_tm_route_row_reduce_enabled();
     uint64_t scratch_bytes = 0;
     const uint64_t counts_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     scratch_bytes += (uint64_t)n_total_experts * sizeof(int);
@@ -5833,6 +5868,10 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     scratch_bytes += (uint64_t)(n_total_experts + 1u) * sizeof(int);
     const uint64_t sorted_pairs_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     scratch_bytes += (uint64_t)total_routes * sizeof(int);
+    const uint64_t pair_rows_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
+    if (use_route_row_reduce) {
+        scratch_bytes += (uint64_t)total_routes * sizeof(int);
+    }
     const uint64_t sorted_weights_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     scratch_bytes += (uint64_t)total_routes * sizeof(float);
     const uint64_t bad_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
@@ -5857,6 +5896,7 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     int *cursors = (int *)(scratch + cursors_off);
     int *offsets = (int *)(scratch + offsets_off);
     int *sorted_pairs = (int *)(scratch + sorted_pairs_off);
+    int *pair_rows = use_route_row_reduce ? (int *)(scratch + pair_rows_off) : nullptr;
     float *sorted_weights = (float *)(scratch + sorted_weights_off);
     int *bad = (int *)(scratch + bad_off);
     __half *a_half = (__half *)(scratch + a_off);
@@ -5870,6 +5910,7 @@ static int cuda_tm_routed_mxfp4_packed_impl(
                               offsets,
                               sorted_pairs,
                               sorted_weights,
+                              pair_rows,
                               bad,
                               (const int32_t *)selected_i32->ptr,
                               (const float *)weights_f32->ptr,
@@ -5958,6 +5999,18 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     cuda_tm_matrix_pack_table_free(&up_pack);
     cuda_tm_matrix_pack_table_free(&gate_pack);
     if (!ok) return 1;
+
+    if (use_route_row_reduce) {
+        tm_reduce_sum_half_to_f32_by_pair_kernel<<<((uint64_t)n_tokens * hidden + 255u) / 256u, 256>>>(
+            (float *)out_f32->ptr,
+            down_routes,
+            pair_rows,
+            n_routes,
+            hidden,
+            n_tokens,
+            accumulate_out);
+        return cuda_ok(cudaGetLastError(), "turbomind packed route-row reduce launch") ? 0 : 1;
+    }
 
     if (!accumulate_out) {
         if (!cuda_ok(cudaMemset(out_f32->ptr,

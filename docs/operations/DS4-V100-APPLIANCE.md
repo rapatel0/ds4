@@ -148,6 +148,7 @@ DS4_V100_F8_SHARED_DOWN_ADD=0
 DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A=0
 DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS=1
 DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC=0
+DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE=0
 DS4_V100_HOST=127.0.0.1
 DS4_V100_PORT=18080
 DS4_V100_CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
@@ -202,6 +203,12 @@ only for focused profiling probes.
 `DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC=1` adds the older per-layer route
 validation readback for focused debugging. Leave route validation sync `0` for
 normal serving.
+
+`DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE=1` is a Sprint 124 routed-FFN probe. It
+keeps a token/route to sorted-row map during TurboMind route compaction and
+uses that map to replace the packed output clear plus atomic scatter-add with a
+deterministic per-token reduce. Keep it `0` for normal serving until the
+same-binary V100 A/B clears the promotion bar.
 
 Validate a config without starting the service:
 

@@ -14,7 +14,9 @@ throughput mode. Sprint 122 stabilizes 16-slot request coalescing by resolving
 launcher `auto` microbatch wait to 200 ms at 16 active slots.
 Sprint 123 tested production-path shared-FFN fusion candidates. They were
 correct, but stayed opt-in because the best measured candidate did not clear
-the promotion bar.
+the promotion bar. Sprint 124 tested a TurboMind route-row reduce that removes
+the packed output clear plus atomic scatter-add; it is correct, but also stayed
+opt-in because repeat A/B stayed inside run noise.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
@@ -67,6 +69,7 @@ to slightly worse.
 | 121 | 16-slot 256K throughput mode | Correct; `43.659461` at 16-slot/256K vs `34.445844` same-binary 8-slot control | Keep as admitted 256K throughput mode; reject unsafe 16-slot long-context configs |
 | 122 | 16-slot profile, HMMA admission, async chunk probes, and 16-slot rendezvous policy | Correct; best `43.730215`, production-auto `43.534061`, one 16-request tensor batch after 200 ms auto wait; chunked tensor scheduling regressed (`28.876459` at chunk 2, `18.447169` at chunk 4, `13.315378` at chunk 16) | Ship 16-slot auto rendezvous; keep chunk/output-B probes opt-in/off |
 | 123 | Production-path shared FFN fusion A/B | Correct; scalar shared-pair fusion reached `43.887206`, fused shared-down-add reached `43.539555`, and combined scalar+down-add reached `43.812630` at 16-slot/256K | Keep opt-in/off; small shared-FFN launch/epilogue fusion is not enough |
+| 124 | TurboMind route-row reduce | Correct; first candidate reached `43.822500`, but repeat was `42.998450` vs `43.517862` control repeat at 16-slot/256K | Keep opt-in/off; final routed scatter fusion is not enough |
 
 ## Remaining
 
@@ -82,7 +85,8 @@ to slightly worse.
     showed scalar per-slot shared-FFN fusion removes calls but does not improve
     throughput, and Sprint 118 showed naive single-token WMMA is much slower.
     Sprint 123 showed shared-down-add epilogue fusion is also only a small
-    opt-in gain.
+    opt-in gain, and Sprint 124 showed the packed TurboMind route-row reduce is
+    correct but not a promoted throughput win.
     The useful version needs packed decode, activation staging, MMA, and
     epilogue work in one tensor-core-oriented kernel with useful tile fill.
     Sprint 122 further showed that merely chunking slots to feed wider kernels
@@ -123,6 +127,7 @@ DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE_ROWS2=1
 DS4_V100_F8_SHARED_DOWN_ADD=1
 DS4_V100_BATCH_ATTN_OUTPUT_B=1
 DS4_V100_ASYNC_SLOT_CHUNK=2
+DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE=1
 ```
 
 The fused gate/up path is default-enabled for appliances that contain fused
