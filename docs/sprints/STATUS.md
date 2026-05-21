@@ -12,8 +12,11 @@ production-auto repeat remains `43.534061` generated tok/s. Sprint 123 found
 correct opt-in shared-FFN fusions up to `43.887206`. Sprint 124 added a
 correct opt-in TurboMind route-row reduce path and measured up to `43.822500`.
 Sprint 125 added a correct grouped-batch attention output-A probe and measured
-up to `43.640921`. None of Sprints 123-125 promoted a new default because the
-gains stayed inside the observed run band and below the promotion bar.
+up to `43.640921`. Sprint 126 added a default-off production routed-expert
+stage profiler and confirmed the current binary still serves at `43.453309`
+generated tok/s with `16/16` token match. None of Sprints 123-126 promoted a
+new throughput default because the measured changes stayed inside the observed
+run band or were diagnostic-only.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
@@ -25,6 +28,7 @@ because it gives up too much stage overlap.
 | Mode | Context | Slots | Generated tok/s | Continuation tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
 | Sprint 123 best opt-in shared FFN fusion | 262,144 | 16 | `43.887206` | `41.144256` | 16/16 token match |
+| Sprint 126 no-profile same-binary sanity | 262,144 | 16 | `43.453309` | `40.737477` | 16/16 token match |
 | Sprint 124 route-row reduce opt-in | 262,144 | 16 | `43.822500` | `41.083593` | 16/16 token match |
 | Sprint 125 output-A rows2 batch opt-in | 262,144 | 16 | `43.640921` | `40.913364` | 16/16 token match |
 | Sprint 125 output-A HMMA plus output-B batch opt-in | 262,144 | 16 | `43.245208` | `40.542383` | 16/16 token match |
@@ -89,6 +93,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 123 | Production-path shared FFN fusion A/B | Correct; scalar shared-pair fusion reached `43.887206`, fused shared-down-add reached `43.539555`, and combined scalar+down-add reached `43.812630` at 16-slot/256K | Kept opt-in/off; launch/epilogue fusion alone is not enough |
 | 124 | TurboMind route-row reduce replacing packed output clear plus atomic scatter-add | Correct; first candidate reached `43.822500`, but the repeat was `42.998450` vs `43.517862` control repeat at 16-slot/256K | Kept opt-in/off; routed-FFN tail fusion alone is not enough |
 | 125 | Batched grouped attention output-A probe | Correct; output-A rows2 batching reached `43.640921`, rows2 A+B reached `43.619996`, and HMMA A+B reached `43.245208` vs `43.503005` control at 16-slot/256K | Kept opt-in/off; another single projection boundary is too small |
+| 126 | Production routed-expert stage profiler | Correct; full 43-layer profile showed fused gate/up at `47.0%`, down at `23.4%`, route build at `16.8%`, and SwiGLU at only `3.2%` of profiled routed-FFN time; no-profile served sanity was `43.453309` generated tok/s | Shipped default-off diagnostic; next target should be TurboMind gated epilogue/interleaved pack or deeper persistent routed-expert pipeline |
 
 ## Sprint 106 Profile Takeaway
 

@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: codex
-revision: 128
+revision: 129
 ---
 
 # Vision: DS4 V100 Appliance
@@ -81,12 +81,16 @@ optimized V100 low-bit expert kernels in the actual hot path.
   `43.517862` control repeat, so it also remains opt-in. Sprint 125 added
   batched grouped attention output-A. The rows2 path was correct and reached
   `43.640921` versus a `43.503005` control, while the fixed HMMA grouped
-  output-A path regressed to `43.245208`; defaults remain unchanged. The
-  project remains far below the practical serving target, so the next
-  meaningful step needs profile-guided larger execution-boundary work: deeper
-  TurboMind expert scheduling, persistent grouped expert execution, or a real
-  SM70 software-pipelined F8 shared-FFN/attention-output kernel that preserves
-  the current served topology.
+  output-A path regressed to `43.245208`; defaults remain unchanged. Sprint 126
+  added a default-off routed-expert stage profiler and revalidated the current
+  binary at `43.453309` generated tok/s with `16/16` token match. The 43-layer
+  profile showed fused gate/up at `47.0%`, down at `23.4%`, route build at
+  `16.8%`, and standalone SwiGLU at only `3.2%` of profiled routed-FFN time.
+  The project remains far below the practical serving target, so the next
+  meaningful step needs larger execution-boundary work: TurboMind gated-SiLU
+  with interleaved fused packs as a bounded next step, then deeper persistent
+  grouped expert execution or a real SM70 software-pipelined F8
+  shared-FFN/attention-output kernel that preserves the current served topology.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation

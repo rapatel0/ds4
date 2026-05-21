@@ -151,6 +151,7 @@ DS4_V100_BATCH_ATTN_OUTPUT_A=0
 DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS=1
 DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC=0
 DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE=0
+DS4_V100_TURBOMIND_PROFILE=0
 DS4_V100_HOST=127.0.0.1
 DS4_V100_PORT=18080
 DS4_V100_CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
@@ -217,6 +218,12 @@ keeps a token/route to sorted-row map during TurboMind route compaction and
 uses that map to replace the packed output clear plus atomic scatter-add with a
 deterministic per-token reduce. Keep it `0` for normal serving until the
 same-binary V100 A/B clears the promotion bar.
+
+`DS4_V100_TURBOMIND_PROFILE=1` is a Sprint 126 diagnostic for the production
+routed-expert path. It prints per-GPU CUDA-event totals for route build,
+activation gather, fused gate/up GEMM, SwiGLU, down GEMM, and final
+scatter/reduce. It synchronizes between those stages, so do not use its tok/s
+as a production number.
 
 Validate a config without starting the service:
 
