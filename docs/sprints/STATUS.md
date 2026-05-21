@@ -5,14 +5,17 @@ Last updated: 2026-05-21
 ## Topline
 
 Current default throughput is the Sprint 111 fused TurboMind gate/up appliance,
-the Sprint 115 shared gate/up SwiGLU HMMA path, and the Sprint 116 batched
-attention-projection F8 HMMA path for active 4/8-slot batches. Sprint 114
-shared-down HMMA remains opt-in: combined pair+down set an 8-slot best in that
-sprint but regressed 4-slot/1M. Sprint 117 traced the fast served path and
-tested per-slot shared gate/up/SwiGLU fusion, but did not promote it.
+the Sprint 115 shared gate/up SwiGLU HMMA path, the Sprint 116 batched
+attention-projection F8 HMMA path for active 4/8-slot batches, and Sprint 119
+event-ordered handoff for multi-slot per-step serving. Sprint 114 shared-down
+HMMA remains opt-in: combined pair+down set an 8-slot best in that sprint but
+regressed 4-slot/1M. Sprint 117 and 118 showed scalar per-slot fusion and
+naive single-token WMMA are not enough.
 
 | Mode | Context | Slots | Generated tok/s | Continuation tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
+| Event-ordered handoff default | 262,144 | 8 | `34.433252` | `32.281173` | 8/8 token match |
+| Event-ordered handoff default | 1,048,576 | 4 | `21.771077` | `20.410385` | 4/4 token match |
 | Batched attention projection F8 HMMA default | 262,144 | 8 | `33.697698` | `31.591592` | 8/8 token match |
 | Single-token HMMA opt-in | 262,144 | 8 | `16.083451` | `15.078235` | 8/8 token match |
 | Sprint 118 same-binary control | 262,144 | 8 | `33.502249` | `31.408359` | 8/8 token match |
@@ -55,6 +58,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 116 | DS4-shaped attention projection F8 HMMA batch kernel | Correct; `33.697698` vs `33.380614` control at 8-slot/256K and `21.469010` vs `21.333447` at 4-slot/1M | Shipped/default for active 4/8-slot batches |
 | 117 | F8 wrapper shape trace and per-slot shared gate/up/SwiGLU fusion | Correct; trace showed the fast path is per-slot stage-pipelined, chunk-4 batching dropped to `11.483646`, and scalar shared-pair fusion reached `33.562643` | Kept opt-in/off; next target should be software-pipelined/Tensor-Core fusion |
 | 118 | Single-token HMMA for the hot `4096 x 8192` F8 projection | Correct and traced, but regressed to `16.083451` vs `33.502249` same-binary control | Kept opt-in/off; naive n=1 WMMA is not viable |
+| 119 | Event-ordered stage handoff | Correct; `34.433252` vs `33.379839` at 8-slot/256K and `21.771077` vs `21.566859` at 4-slot/1M | Shipped/default as `DS4_V100_ASYNC_EVENT_HANDOFF=auto` |
 
 ## Sprint 106 Profile Takeaway
 

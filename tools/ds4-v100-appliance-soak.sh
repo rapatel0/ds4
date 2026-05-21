@@ -19,6 +19,7 @@ host="127.0.0.1"
 port="18420"
 async_pipeline_mode="auto"
 async_handoff="0"
+async_event_handoff="${DS4_V100_ASYNC_EVENT_HANDOFF:-auto}"
 sample_ms="500"
 log_dir=""
 cuda_visible_devices="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
@@ -49,6 +50,7 @@ Options:
   --port N                  server port, default 18420
   --async-pipeline-mode M   off, auto, per-step, persistent, or mailbox, default auto
   --async-handoff           queue HC peer handoff copies on the destination stream
+  --async-event-handoff M   auto, 0, or 1, default auto
   --sample-ms N             nvidia-smi sample interval, default 500
   --cuda-visible-devices L  CUDA_VISIBLE_DEVICES list, default 0..7
   --require-gpus N          required visible GPU count, default 8
@@ -96,6 +98,7 @@ while [ "$#" -gt 0 ]; do
         --port) port="$(need_value "$1" "${2:-}")"; shift 2 ;;
         --async-pipeline-mode) async_pipeline_mode="$(need_value "$1" "${2:-}")"; shift 2 ;;
         --async-handoff) async_handoff="1"; shift ;;
+        --async-event-handoff) async_event_handoff="$(need_value "$1" "${2:-}")"; shift 2 ;;
         --sample-ms) sample_ms="$(need_value "$1" "${2:-}")"; shift 2 ;;
         --cuda-visible-devices) cuda_visible_devices="$(need_value "$1" "${2:-}")"; shift 2 ;;
         --require-gpus) require_gpus="$(need_value "$1" "${2:-}")"; shift 2 ;;
@@ -137,6 +140,10 @@ case "$async_pipeline_mode" in
     *) fail "--async-pipeline-mode must be off, auto, per-step, persistent, or mailbox" ;;
 esac
 case "$async_handoff" in 0|1) ;; *) fail "--async-handoff must be 0 or 1" ;; esac
+case "$async_event_handoff" in
+    auto|0|1|false|true|off|on) ;;
+    *) fail "--async-event-handoff must be auto, 0, or 1" ;;
+esac
 
 rm -rf "$log_dir"
 mkdir -p "$log_dir/runtime"
@@ -217,6 +224,7 @@ fi
     export DS4_V100_TOKENS="$tokens"
     export DS4_V100_ASYNC_PIPELINE_MODE="$async_pipeline_mode"
     export DS4_V100_ASYNC_HANDOFF="$async_handoff"
+    export DS4_V100_ASYNC_EVENT_HANDOFF="$async_event_handoff"
     export DS4_V100_HOST="$host"
     export DS4_V100_PORT="$port"
     export DS4_V100_CUDA_VISIBLE_DEVICES="$cuda_visible_devices"
@@ -406,6 +414,7 @@ latency_ms_avg="$(awk '
 async_pipeline_mode="$(sed -n 's/.*"async_pipeline_mode":"\([^"]*\)".*/\1/p' "$status_before" | sed -n '1p')"
 async_pipeline_decode="$(sed -n 's/.*"async_pipeline_decode":\([^,}]*\).*/\1/p' "$status_before" | sed -n '1p')"
 async_handoff_status="$(sed -n 's/.*"async_handoff":\([^,}]*\).*/\1/p' "$status_before" | sed -n '1p')"
+async_event_handoff_status="$(sed -n 's/.*"async_event_handoff":\([^,}]*\).*/\1/p' "$status_before" | sed -n '1p')"
 
 {
     printf '['
@@ -420,9 +429,10 @@ async_handoff_status="$(sed -n 's/.*"async_handoff":\([^,}]*\).*/\1/p' "$status_
     printf ']\n'
 } >"$responses_json"
 
-printf '{"aggregate_continuation_tokens_per_second":%s,"aggregate_generated_tokens_per_second":%s,"async_handoff":%s,"async_pipeline_decode":%s,"async_pipeline_mode":"%s","continuation_tokens":%s,"elapsed_s":%s,"errors":0,"generated_tokens":%s,"latency_ms_avg":%s,"requests":%s,"schema":"ds4_v100_appliance_soak.v1","status_200":%s,"token_match":%s,"warmup_requests":%s}\n' \
+printf '{"aggregate_continuation_tokens_per_second":%s,"aggregate_generated_tokens_per_second":%s,"async_event_handoff":%s,"async_handoff":%s,"async_pipeline_decode":%s,"async_pipeline_mode":"%s","continuation_tokens":%s,"elapsed_s":%s,"errors":0,"generated_tokens":%s,"latency_ms_avg":%s,"requests":%s,"schema":"ds4_v100_appliance_soak.v1","status_200":%s,"token_match":%s,"warmup_requests":%s}\n' \
     "$aggregate_continuation_tps" \
     "$aggregate_generated_tps" \
+    "${async_event_handoff_status:-false}" \
     "${async_handoff_status:-false}" \
     "${async_pipeline_decode:-false}" \
     "${async_pipeline_mode:-unknown}" \

@@ -80,7 +80,7 @@ fi
 : "${DS4_V100_TOKENS:=2}"
 : "${DS4_V100_ASYNC_PIPELINE_MODE:=off}"
 : "${DS4_V100_ASYNC_HANDOFF:=0}"
-: "${DS4_V100_ASYNC_EVENT_HANDOFF:=0}"
+: "${DS4_V100_ASYNC_EVENT_HANDOFF:=auto}"
 : "${DS4_V100_STARTUP_WARMUP:=auto}"
 : "${DS4_V100_CUDA_PROFILER_WINDOW:=0}"
 : "${DS4_V100_CUDA_TENSOR_POOL:=auto}"
@@ -283,9 +283,9 @@ case "$DS4_V100_ASYNC_HANDOFF" in
     *) fail "DS4_V100_ASYNC_HANDOFF must be 0 or 1" ;;
 esac
 case "$DS4_V100_ASYNC_EVENT_HANDOFF" in
-    0|false|off) async_event_handoff=0 ;;
-    1|true|on) async_event_handoff=1 ;;
-    *) fail "DS4_V100_ASYNC_EVENT_HANDOFF must be 0 or 1" ;;
+    0|false|off|auto) ;;
+    1|true|on) ;;
+    *) fail "DS4_V100_ASYNC_EVENT_HANDOFF must be auto, 0, or 1" ;;
 esac
 case "$DS4_V100_STARTUP_WARMUP" in
     auto)
@@ -398,6 +398,17 @@ case "$async_pipeline_mode" in
             async_pipeline_mode="off"
         fi
         ;;
+esac
+case "$DS4_V100_ASYNC_EVENT_HANDOFF" in
+    auto)
+        if [ "$async_pipeline_mode" = "per-step" ] && [ "$DS4_V100_ACTIVE_MICROBATCH" -gt 1 ]; then
+            async_event_handoff=1
+        else
+            async_event_handoff=0
+        fi
+        ;;
+    0|false|off) async_event_handoff=0 ;;
+    1|true|on) async_event_handoff=1 ;;
 esac
 if [ "$async_event_handoff" -eq 1 ] && [ "$async_pipeline_mode" != "per-step" ]; then
     fail "DS4_V100_ASYNC_EVENT_HANDOFF requires resolved async pipeline mode per-step"

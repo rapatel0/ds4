@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: codex
-revision: 121
+revision: 122
 ---
 
 # Vision: DS4 V100 Appliance
@@ -58,10 +58,14 @@ optimized V100 low-bit expert kernels in the actual hot path.
   combined pair+down opt-in reached `33.674684`, but it is not the default.
   Sprint 116 then shipped batched attention-projection F8 HMMA for active
   4/8-slot batches, improving same-binary 8-slot/256K to `33.697698` and
-  4-slot/1M to `21.469010`. The project remains far below the practical
-  serving target. The next meaningful step needs profile-guided larger
-  execution-boundary work: deeper TurboMind expert scheduling, persistent
-  grouped expert execution, or broader attention-output/FFN fusion.
+  4-slot/1M to `21.469010`. Sprints 117-118 showed scalar single-slot fusion
+  and naive single-token WMMA are not viable throughput levers. Sprint 119
+  shipped event-ordered handoff as the multi-slot per-step default, raising the
+  measured 8-slot/256K appliance target to `34.433252` and 4-slot/1M to
+  `21.771077`. The project remains far below the practical serving target. The
+  next meaningful step needs profile-guided larger execution-boundary work:
+  deeper TurboMind expert scheduling, persistent grouped expert execution, or a
+  real SM70 software-pipelined F8 shared-FFN/attention-output kernel.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation
@@ -2556,6 +2560,13 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-20 | Completed Sprint 110 TurboMind fused gate/up probe. | A standalone DS4-shaped MXFP4 grouped-GEMM benchmark showed fused gate_up is `1.46x-1.53x` faster than separate gate and up calls at 6, 24, and 48 routed rows, with exact output parity. Proceed to the production appliance implementation behind a rollback knob. | Sprint 111+ |
 | 2026-05-20 | Shipped Sprint 111 production fused TurboMind gate_up. | The appliance packer now emits fused `ffn_gate_up_exps.weight`, the runtime selects it by default with `DS4_V100_TURBOMIND_FUSED_GATE_UP=1`, and the full fused appliance passes scheduler plus selected-token correctness. Served 8-slot/256K improved from `31.312694` to `33.430971` generated tok/s in same-binary A/B, and 4-slot/1M reached `21.403909`. The next sprint should profile the fused served path and target persistent/grouped expert execution or fused downstream scheduling. | Sprint 112+ |
 | 2026-05-20 | Completed Sprint 112 fused-profile and F8 warp-scale probe. | The fused appliance profile shows F8 row-pair plus DS4 grouped attention-output kernels now dominate at `54.58%` of GPU time. A guarded warp-broadcast E8M0 scale variant preserved correctness but regressed 8-slot/256K throughput from `33.484099` to `29.009399` generated tok/s, so it remains off by default. The next sprint should avoid tiny scalar F8 tweaks and instead target a larger tiled/persistent F8 projection path or deeper TurboMind expert scheduling. | Sprint 113+ |
+| 2026-05-21 | Completed Sprint 113 direct FFN delta probe. | Direct shared-FFN delta accumulation preserved correctness but measured below the fused appliance control, so it remains opt-in. Larger execution-shape work is still needed. | Sprint 114+ |
+| 2026-05-21 | Completed Sprint 114 shared-down F8 HMMA probe. | The DS4-shaped shared-down HMMA kernel was correct and slightly positive alone, but pair+down regressed the 4-slot/1M tier. Keep shared-down HMMA opt-in. | Sprint 115+ |
+| 2026-05-21 | Shipped Sprint 115 shared gate/up SwiGLU F8 HMMA. | The DS4-shaped shared gate/up SwiGLU HMMA batch path improved both measured tiers and is now a launcher default. Combined pair+down remains opt-in because of the long-context regression. | Sprint 116+ |
+| 2026-05-21 | Shipped Sprint 116 batched attention projection F8 HMMA. | Batched q_a, kv_latent, and q_b projections now default for active 4/8-slot batches, improving the 8-slot/256K tier to `33.697698` and 4-slot/1M to `21.469010`. | Sprint 117+ |
+| 2026-05-21 | Completed Sprint 117 F8 trace and scalar single-slot fusion probes. | The served path is per-slot stage-pipelined; async slot chunking and scalar shared pair-SwiGLU fusion were correct but not faster. The next fusion must be software-pipelined and tensor-core-oriented. | Sprint 118+ |
+| 2026-05-21 | Completed Sprint 118 single-token HMMA probe. | The hot `4096 x 8192` single-token HMMA path was correct but regressed badly (`16.083451` vs `33.502249`), confirming that naive WMMA wastes too much of the token tile. | Sprint 119+ |
+| 2026-05-21 | Shipped Sprint 119 event-ordered stage handoff. | `DS4_V100_ASYNC_EVENT_HANDOFF=auto` now enables CUDA event-ordered handoff for multi-slot per-step serving. It raised 8-slot/256K to `34.433252` generated tok/s and 4-slot/1M to `21.771077`, with token matches preserved. | Sprint 120+ |
 
 ## Open Questions
 
