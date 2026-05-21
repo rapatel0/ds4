@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: codex
-revision: 132
+revision: 133
 ---
 
 # Vision: DS4 V100 Appliance
@@ -98,8 +98,11 @@ optimized V100 low-bit expert kernels in the actual hot path.
   plus route-row-reduce opt-in reached `46.394722`. Sprint 129 then exposed
   TurboMind dispatch policy selection. The safe `reuse` policy was neutral at
   `45.813841` versus a `45.840691` default control, and unsafe `measure`
-  aborted the full scheduler inside TurboMind's measurer, so dispatch-policy
-  tuning is not the missing throughput lever. The project remains far below the
+  aborted the full scheduler inside TurboMind's measurer. Sprint 130 repeated
+  the closest existing FFN epilogue-fusion analogue on the current compact
+  fused appliance: route-row-reduce was `45.660765` versus a `45.837745`
+  control, both correct. Dispatch-policy tuning and final scatter fusion are
+  therefore not the missing throughput lever. The project remains far below the
   practical serving target, so the next meaningful step is still larger
   execution-boundary work: a narrow DS4-only persistent grouped routed-expert
   pipeline that software-pipelines packed MXFP4 dequant, gate/up HMMA, gated

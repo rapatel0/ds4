@@ -35,7 +35,12 @@ route-row-reduce, reached `46.394722` generated tok/s. Sprint 129 exposed
 TurboMind dispatch policy selection and tested the safe `reuse` policy against
 the default compact path. `reuse` was neutral at `45.813841` vs `45.840691`
 generated tok/s, and TurboMind `measure` hit a full-appliance measurer fatal,
-so dispatch-policy tuning is not the next throughput lever.
+so dispatch-policy tuning is not the next throughput lever. Sprint 130 reran
+the route-row-reduce tail fusion against the current compact fused appliance:
+control was `45.837745` generated tok/s and route-row-reduce was `45.660765`,
+both with 16/16 token match. That keeps the tail fusion opt-in and points the
+next implementation at a DS4-specific software-pipelined packed MXFP4 gate/up
+mainloop rather than another launch-boundary tweak.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
@@ -94,6 +99,7 @@ to slightly worse.
 | 127 | TurboMind gated-SiLU interleaved pack | Correct; standalone gated grouped path was `1.47x-1.55x` faster than separate gate/up, full 43-layer gated profile removed standalone SwiGLU and reduced profiled routed-FFN total from `28.242 ms` to `26.734 ms`; served A/B was `43.933293` vs `43.691032` control | Keep opt-in/off; confirms format-aware epilogue fusion, but does not materially change the topline |
 | 128 | TurboMind compact active-expert schedule | Correct; full smokes passed on both the interleaved gated and existing fused appliances, compact served A/B was `46.328184` vs `43.879880`, compact+route-row-reduce reached `46.394722`, and the fused-appliance launcher default reached `45.888778` | Ship/default as `DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1`; keep gated-SiLU and route-row-reduce opt-in |
 | 129 | TurboMind dispatch policy probe | Correct for `default` and `reuse`; `reuse` served at `45.813841` vs `45.840691` default, while unsafe `measure` aborted the full scheduler in TurboMind's measurer | Keep `default`; block `measure`/`append` unless `DS4_V100_TURBOMIND_ALLOW_UNSAFE_MEASURE=1`; move to persistent routed-FFN work |
+| 130 | Routed FFN software-pipeline targeting | Correct; route-row-reduce repeated at `45.660765` vs `45.837745` compact fused control, and TurboMind/tc-grid review points to packed MXFP4 load/dequant/HMMA pipelining as the useful fusion boundary | Keep route-row-reduce opt-in; implement a guarded DS4-specific routed gate/up software-pipeline probe |
 
 ## Remaining
 
@@ -117,7 +123,9 @@ to slightly worse.
     grouped attention output-A is also correct but below the promotion bar.
     Sprint 129 showed TurboMind dispatch policy tuning is either neutral
     (`reuse`) or unsafe in the full appliance path (`measure`).
-    The useful version needs packed decode, activation staging, MMA, and
+    Sprint 130 repeated the current route-row-reduce tail fusion and found it
+    slightly slower than the compact fused control, so the useful version needs
+    packed decode, activation staging, MMA, and
     epilogue work in one tensor-core-oriented kernel with useful tile fill.
     Sprint 122 further showed that merely chunking slots to feed wider kernels
     loses too much stage overlap, so the fusion target must match the per-slot
