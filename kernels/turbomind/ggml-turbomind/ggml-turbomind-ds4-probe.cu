@@ -55,7 +55,7 @@ ProbeKernelM128 *probe_kernel_m128()
 }
 
 template<class Kernel>
-int launch_ds4_mxfp4_gated_silu(
+int launch_ds4_mxfp4_matmul(
     Kernel*             kernel,
     const void*        A,
     const int*         expert_offsets,
@@ -64,6 +64,9 @@ int launch_ds4_mxfp4_gated_silu(
     const void* const* weights_packed,
     const void* const* scales_packed,
     int                k_pack_value,
+    int                n,
+    int                k,
+    bool               gated_silu,
     void*              D,
     void*              barriers,
     size_t             barriers_size,
@@ -75,8 +78,6 @@ int launch_ds4_mxfp4_gated_silu(
     if (!A || !expert_offsets || !weights_packed || !scales_packed || !D) return 1;
     if (!kernel || num_experts != 6 || total_tokens <= 0) return 2;
 
-    constexpr int K = 4096;
-    constexpr int N = 4096;
     constexpr int group_size = 32;
 
     cudaStream_t stream = (cudaStream_t)stream_v;
@@ -92,7 +93,7 @@ int launch_ds4_mxfp4_gated_silu(
 
     tmg::Operation op{};
     op.dispatch  = tmg::DispatchPolicy::kDefault;
-    op.epilogue  = tmg::Epilogue::kGatedSilu;
+    op.epilogue  = gated_silu ? tmg::Epilogue::kGatedSilu : tmg::Epilogue::kNone;
     op.quant_a   = tmg::QuantDesc{tmg::QuantType::kNone, 0};
     op.quant_b   = tmg::QuantDesc{tmg::QuantType::kK, group_size};
     op.batch_dim = 0;
@@ -101,8 +102,8 @@ int launch_ds4_mxfp4_gated_silu(
     Adesc.type    = turbomind::kHalf;
     Adesc.order   = tmg::Order::kRowMajor;
     Adesc.rows    = total_tokens;
-    Adesc.cols    = K;
-    Adesc.ld      = K;
+    Adesc.cols    = k;
+    Adesc.ld      = k;
     Adesc.pack    = 0;
     Adesc.num     = num_experts;
     Adesc.offsets = const_cast<int*>(expert_offsets);
@@ -121,8 +122,8 @@ int launch_ds4_mxfp4_gated_silu(
     tmg::MatrixLayout Bdesc{};
     Bdesc.type    = turbomind::kFloat4_e2m1;
     Bdesc.order   = conv_w->order;
-    Bdesc.rows    = N;
-    Bdesc.cols    = K;
+    Bdesc.rows    = n;
+    Bdesc.cols    = k;
     Bdesc.ld      = 0;
     Bdesc.pack    = (tmg::Pack)((uint32_t)k_pack_value & 0xFFFu);
     Bdesc.num     = num_experts;
@@ -139,8 +140,8 @@ int launch_ds4_mxfp4_gated_silu(
     tmg::MatrixLayout Vdesc{};
     Vdesc.type    = turbomind::kUint8;
     Vdesc.order   = conv_s->order;
-    Vdesc.rows    = N;
-    Vdesc.cols    = K / group_size;
+    Vdesc.rows    = n;
+    Vdesc.cols    = k / group_size;
     Vdesc.ld      = 0;
     Vdesc.pack    = (tmg::Pack)v_pack_raw;
     Vdesc.num     = num_experts;
@@ -153,8 +154,8 @@ int launch_ds4_mxfp4_gated_silu(
     Ddesc.type    = turbomind::kHalf;
     Ddesc.order   = tmg::Order::kRowMajor;
     Ddesc.rows    = total_tokens;
-    Ddesc.cols    = N;
-    Ddesc.ld      = N / 2;
+    Ddesc.cols    = n;
+    Ddesc.ld      = gated_silu ? n / 2 : n;
     Ddesc.pack    = 0;
     Ddesc.num     = num_experts;
     Ddesc.offsets = const_cast<int*>(expert_offsets);
@@ -183,6 +184,44 @@ int launch_ds4_mxfp4_gated_silu(
         1,
         workspace,
         stream);
+}
+
+template<class Kernel>
+int launch_ds4_mxfp4_gated_silu(
+    Kernel*             kernel,
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream_v)
+{
+    return launch_ds4_mxfp4_matmul(kernel,
+                                   A,
+                                   expert_offsets,
+                                   num_experts,
+                                   total_tokens,
+                                   weights_packed,
+                                   scales_packed,
+                                   k_pack_value,
+                                   4096,
+                                   4096,
+                                   true,
+                                   D,
+                                   barriers,
+                                   barriers_size,
+                                   partials,
+                                   partials_size,
+                                   flags,
+                                   stream_v);
 }
 
 }  // namespace
@@ -287,4 +326,41 @@ int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128_launch(
                                        partials_size,
                                        flags,
                                        stream_v);
+}
+
+int ggml_turbomind_ds4_mxfp4_down_768_m128_launch(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream_v)
+{
+    if (total_tokens != 768) return 2;
+    return launch_ds4_mxfp4_matmul(probe_kernel_m128(),
+                                   A,
+                                   expert_offsets,
+                                   num_experts,
+                                   total_tokens,
+                                   weights_packed,
+                                   scales_packed,
+                                   k_pack_value,
+                                   4096,
+                                   2048,
+                                   false,
+                                   D,
+                                   barriers,
+                                   barriers_size,
+                                   partials,
+                                   partials_size,
+                                   flags,
+                                   stream_v);
 }

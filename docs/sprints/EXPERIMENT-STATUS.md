@@ -66,7 +66,11 @@ fixed-shape 768-route m128 gated-SiLU probe, wired it into the appliance under
 exact guards, and validated the interleaved gated appliance at `60.130047`
 generated tok/s for 128-slot/32K. The isolated kernel result improved to
 `0.5999 ms`, but the served probe-off control was `60.061899`, so the
-production effect is tiny.
+production effect is tiny. Sprint 140 applied the same fixed-shape strategy to
+the 768-route down projection. It improved the isolated down benchmark
+(`0.3026 ms` vs `0.3272 ms`) and passed full 43-layer smoke, but served A/B was
+slower with the probe enabled (`60.038469` vs `60.129772`), so it remains
+default-off.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
@@ -141,6 +145,7 @@ to slightly worse.
 | 137 | 128-slot 32K throughput admission | Correct; full 43-layer smoke passed, status/metrics confirmed 128-slot serving, and 128-slot 32K served at `59.598172` vs `57.170428` same-context 64-slot control | Ship as explicit short-context throughput mode; simple slot widening is now mostly exhausted |
 | 138 | Wide compact TurboMind gate/up benchmark | Correct; 192/384/768 route compact cases pass, with 768-route fused gate_up at `0.6379 ms` and gated-SiLU at `0.6481 ms` | Use as the software-pipelined MXFP4 expert acceptance baseline |
 | 139 | Fixed-shape 128-slot gate/up probe | Correct; m128 measured `0.5999 ms` vs `0.6480 ms` generic gated in isolation, full 43-layer 128-slot smoke passed, and served gated A/B was `60.130047` vs `60.061899` probe-off | Keep exact-guard auto path; move next work to a larger routed-FFN boundary |
+| 140 | Fixed-shape 128-slot down probe | Correct; fixed down measured `0.3026 ms` vs `0.3272 ms` generic and full 43-layer smoke passed, but served A/B was `60.038469` vs `60.129772` down-probe-off | Keep off by default; target down epilogue plus weighted reduce or persistent routed FFN next |
 
 ## Remaining
 
@@ -182,7 +187,9 @@ to slightly worse.
     768-route fused gate_up baseline of about `0.638 ms`. Sprint 139 beat that
     target in isolation with a fixed m128 gated-SiLU probe at `0.5999 ms`, but
     served A/B only moved from `60.061899` to `60.130047`, so gate/up-only
-    specialization is not enough.
+    specialization is not enough. Sprint 140 repeated the experiment for down:
+    the isolated fixed down probe improved to `0.3026 ms`, but served A/B
+    regressed from `60.129772` to `60.038469`.
     Sprint 122 further showed that merely chunking slots to feed wider kernels
     loses too much stage overlap, so the fusion target must match the per-slot
     served topology or replace it with an overlapped scheduler.
@@ -196,6 +203,7 @@ The default launcher now keeps `DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=0`,
 `DS4_V100_FFN_DIRECT_DELTA=0`, while
 `DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1`,
 `DS4_V100_TURBOMIND_GATE_UP_PROBE=auto`,
+`DS4_V100_TURBOMIND_DOWN_PROBE=off`,
 `DS4_V100_CUDA_F8_HMMA_PAIR_SWIGLU=1`,
 `DS4_V100_ENABLE_BATCH_ATTN_PROJ=1`, and
 `DS4_V100_CUDA_F8_HMMA_ATTN_BATCH=1` are default.
@@ -233,6 +241,7 @@ DS4_V100_TURBOMIND_PROFILE=1
 DS4_V100_TURBOMIND_GATED_SILU=1
 DS4_V100_TURBOMIND_COMPACT_SCHEDULE=0
 DS4_V100_TURBOMIND_GATE_UP_PROBE=off
+DS4_V100_TURBOMIND_DOWN_PROBE=auto
 ```
 
 The fused gate/up path is default-enabled for appliances that contain fused
@@ -248,3 +257,6 @@ The fixed-shape m128 gate/up probe is default-auto after Sprint 139, but only
 selects on the exact interleaved gated 768-route compact shape. Set
 `DS4_V100_TURBOMIND_GATE_UP_PROBE=off` to force the generic TurboMind gated
 path.
+The fixed-shape m128 down probe is available after Sprint 140, but stays
+default-off because served A/B was slower than generic TurboMind. Set
+`DS4_V100_TURBOMIND_DOWN_PROBE=auto` only for focused diagnostics.

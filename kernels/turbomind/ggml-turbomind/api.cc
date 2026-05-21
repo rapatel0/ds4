@@ -91,6 +91,21 @@ extern int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128_launch(
     size_t             partials_size,
     int*               flags,
     void*              stream);
+extern int ggml_turbomind_ds4_mxfp4_down_768_m128_launch(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream);
 
 // ============================================================================
 // Visibility helper
@@ -1187,6 +1202,30 @@ extern "C" GGML_TM_EXPORT int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128(
     void*              stream_v)
 {
     return launch_ds4_probe_with_state(ggml_turbomind_ds4_mxfp4_gated_silu_768_m128_launch,
+                                       768,
+                                       A,
+                                       expert_offsets,
+                                       num_experts,
+                                       total_tokens,
+                                       weights_packed,
+                                       scales_packed,
+                                       k_pack_value,
+                                       D,
+                                       stream_v);
+}
+
+extern "C" GGML_TM_EXPORT int ggml_turbomind_ds4_mxfp4_down_768_m128(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream_v)
+{
+    return launch_ds4_probe_with_state(ggml_turbomind_ds4_mxfp4_down_768_m128_launch,
                                        768,
                                        A,
                                        expert_offsets,

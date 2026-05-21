@@ -155,6 +155,7 @@ DS4_V100_TURBOMIND_INDEXED_A=0
 DS4_V100_TURBOMIND_GATED_SILU=0
 DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1
 DS4_V100_TURBOMIND_GATE_UP_PROBE=auto
+DS4_V100_TURBOMIND_DOWN_PROBE=off
 DS4_V100_TURBOMIND_DISPATCH_POLICY=default
 DS4_V100_TURBOMIND_ALLOW_UNSAFE_MEASURE=0
 DS4_V100_TURBOMIND_PROFILE=0
@@ -251,6 +252,12 @@ DS4/V100 m128 compact gated-SiLU kernel when all production guards match:
 interleaved gated-SiLU pack, route-expanded activations, six compact groups,
 and 768 routed rows. Set it to `off` to force generic TurboMind, or `m64` for
 the slower comparison probe.
+
+`DS4_V100_TURBOMIND_DOWN_PROBE=auto` selects the fixed-shape DS4/V100 m128
+compact down kernel when all production guards match: route-expanded
+activations, six compact groups, 768 routed rows, `N=4096`, and `K=2048`.
+Sprint 140 keeps it off by default because served A/B was slower than generic
+TurboMind despite the isolated microbenchmark win.
 
 `DS4_V100_TURBOMIND_DISPATCH_POLICY` selects TurboMind's grouped GEMM launch
 policy. `default` keeps the normal heuristic/cache path. `reuse` requests a

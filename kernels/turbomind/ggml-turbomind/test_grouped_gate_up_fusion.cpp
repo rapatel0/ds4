@@ -272,6 +272,8 @@ static int run_case(void * lib, const Case & c) {
         dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m64");
     auto probe768_m128 = (pfn_ds4_mxfp4_gated_silu_96)
         dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m128");
+    auto down_probe768_m128 = (pfn_ds4_mxfp4_gated_silu_96)
+        dlsym(lib, "ggml_turbomind_ds4_mxfp4_down_768_m128");
     if (!in || !sh || !pb || !pw || !mmgt || !mmgs) {
         fprintf(stderr, "[gate_up_fusion] dlsym failed\n");
         return 1;
@@ -308,28 +310,39 @@ static int run_case(void * lib, const Case & c) {
         }
     }
     const bool run_probe = probe != nullptr;
+    const char *down_probe_mode = std::getenv("DS4_TURBOMIND_DOWN_PROBE");
+    const bool run_down_probe =
+        compact_groups &&
+        total_tokens == 768 &&
+        down_probe768_m128 &&
+        (!down_probe_mode || std::strcmp(down_probe_mode, "off") != 0);
 
     std::vector<std::vector<block_mxfp4>> gate(active.size());
     std::vector<std::vector<block_mxfp4>> up(active.size());
+    std::vector<std::vector<block_mxfp4>> down(active.size());
     std::vector<std::vector<block_mxfp4>> fused(active.size());
     std::vector<std::vector<block_mxfp4>> fused_interleaved(active.size());
     for (size_t i = 0; i < active.size(); ++i) {
         make_mxfp4_fixture(gate[i], N, K, 0x47000000u + (uint32_t)i * 101u);
         make_mxfp4_fixture(up[i],   N, K, 0x55000000u + (uint32_t)i * 131u);
+        make_mxfp4_fixture(down[i], K, N, 0x63000000u + (uint32_t)i * 137u);
         make_fused_fixture(fused[i], gate[i], up[i], N, K);
         make_fused_interleaved_fixture(fused_interleaved[i], gate[i], up[i], N, K);
     }
 
     PackedExperts gate_packed;
     PackedExperts up_packed;
+    PackedExperts down_packed;
     PackedExperts fused_packed;
     PackedExperts gated_packed;
     if (pack_fixture_set(pb, pw, ggml_type, N, K, group_size, num_experts, active, gate, gate_packed) != 0 ||
         pack_fixture_set(pb, pw, ggml_type, N, K, group_size, num_experts, active, up, up_packed) != 0 ||
+        pack_fixture_set(pb, pw, ggml_type, K, N, group_size, num_experts, active, down, down_packed) != 0 ||
         pack_fixture_set(pb, pw, ggml_type, fused_N, K, group_size, num_experts, active, fused, fused_packed) != 0 ||
         pack_fixture_set(pb, pw, ggml_type, fused_N, K, group_size, num_experts, active, fused_interleaved, gated_packed) != 0) {
         free_packed(gate_packed);
         free_packed(up_packed);
+        free_packed(down_packed);
         free_packed(fused_packed);
         free_packed(gated_packed);
         sh();
@@ -368,28 +381,45 @@ static int run_case(void * lib, const Case & c) {
     for (__half & v : h_A) {
         v = __float2half(ad(rng));
     }
+    std::vector<__half> h_down_A((size_t) total_tokens * N);
+    for (__half & v : h_down_A) {
+        v = __float2half(0.1f * ad(rng));
+    }
 
     __half * d_A = nullptr;
+    __half * d_down_A = nullptr;
     __half * d_gate = nullptr;
     __half * d_up = nullptr;
     __half * d_fused = nullptr;
     __half * d_gated = nullptr;
     __half * d_probe = nullptr;
+    __half * d_down = nullptr;
+    __half * d_down_probe = nullptr;
     CHECK_CUDA(cudaMalloc(&d_A, h_A.size() * sizeof(__half)));
+    CHECK_CUDA(cudaMalloc(&d_down_A, h_down_A.size() * sizeof(__half)));
     CHECK_CUDA(cudaMalloc(&d_gate, (size_t) total_tokens * N * sizeof(__half)));
     CHECK_CUDA(cudaMalloc(&d_up, (size_t) total_tokens * N * sizeof(__half)));
     CHECK_CUDA(cudaMalloc(&d_fused, (size_t) total_tokens * fused_N * sizeof(__half)));
     CHECK_CUDA(cudaMalloc(&d_gated, (size_t) total_tokens * N * sizeof(__half)));
+    CHECK_CUDA(cudaMalloc(&d_down, (size_t) total_tokens * K * sizeof(__half)));
     if (run_probe) {
         CHECK_CUDA(cudaMalloc(&d_probe, (size_t) total_tokens * N * sizeof(__half)));
     }
+    if (run_down_probe) {
+        CHECK_CUDA(cudaMalloc(&d_down_probe, (size_t) total_tokens * K * sizeof(__half)));
+    }
     CHECK_CUDA(cudaMemcpy(d_A, h_A.data(), h_A.size() * sizeof(__half), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_down_A, h_down_A.data(), h_down_A.size() * sizeof(__half), cudaMemcpyHostToDevice));
     CHECK_CUDA(cudaMemset(d_gate, 0, (size_t) total_tokens * N * sizeof(__half)));
     CHECK_CUDA(cudaMemset(d_up, 0, (size_t) total_tokens * N * sizeof(__half)));
     CHECK_CUDA(cudaMemset(d_fused, 0, (size_t) total_tokens * fused_N * sizeof(__half)));
     CHECK_CUDA(cudaMemset(d_gated, 0, (size_t) total_tokens * N * sizeof(__half)));
+    CHECK_CUDA(cudaMemset(d_down, 0, (size_t) total_tokens * K * sizeof(__half)));
     if (run_probe) {
         CHECK_CUDA(cudaMemset(d_probe, 0, (size_t) total_tokens * N * sizeof(__half)));
+    }
+    if (run_down_probe) {
+        CHECK_CUDA(cudaMemset(d_down_probe, 0, (size_t) total_tokens * K * sizeof(__half)));
     }
 
     const int warmup_iters = env_int("DS4_TURBOMIND_GATE_UP_WARMUP_ITERS", 3, 0, 1000);
@@ -444,6 +474,24 @@ static int run_case(void * lib, const Case & c) {
                 return 7;
             }
         }
+        rc = mmgt(d_down_A, nullptr, d_offsets, num_experts, total_tokens,
+                  (const void * const *) down_packed.d_w_table,
+                  (const void * const *) down_packed.d_s_table,
+                  ggml_type, K, N, group_size, down_packed.k_pack, d_down, nullptr);
+        if (rc != 0) {
+            fprintf(stderr, "[gate_up_fusion] down warmup rc=%d\n", rc);
+            return 7;
+        }
+        if (run_down_probe) {
+            rc = down_probe768_m128(d_down_A, d_offsets, num_experts, total_tokens,
+                                    (const void * const *) down_packed.d_w_table,
+                                    (const void * const *) down_packed.d_s_table,
+                                    down_packed.k_pack, d_down_probe, nullptr);
+            if (rc != 0) {
+                fprintf(stderr, "[gate_up_fusion] down probe warmup rc=%d\n", rc);
+                return 7;
+            }
+        }
     }
     CHECK_CUDA(cudaDeviceSynchronize());
 
@@ -455,6 +503,10 @@ static int run_case(void * lib, const Case & c) {
     cudaEvent_t gated_stop = nullptr;
     cudaEvent_t probe_start = nullptr;
     cudaEvent_t probe_stop = nullptr;
+    cudaEvent_t down_start = nullptr;
+    cudaEvent_t down_stop = nullptr;
+    cudaEvent_t down_probe_start = nullptr;
+    cudaEvent_t down_probe_stop = nullptr;
     CHECK_CUDA(cudaEventCreate(&sep_start));
     CHECK_CUDA(cudaEventCreate(&sep_stop));
     CHECK_CUDA(cudaEventCreate(&fused_start));
@@ -464,6 +516,12 @@ static int run_case(void * lib, const Case & c) {
     if (run_probe) {
         CHECK_CUDA(cudaEventCreate(&probe_start));
         CHECK_CUDA(cudaEventCreate(&probe_stop));
+    }
+    CHECK_CUDA(cudaEventCreate(&down_start));
+    CHECK_CUDA(cudaEventCreate(&down_stop));
+    if (run_down_probe) {
+        CHECK_CUDA(cudaEventCreate(&down_probe_start));
+        CHECK_CUDA(cudaEventCreate(&down_probe_stop));
     }
 
     CHECK_CUDA(cudaEventRecord(sep_start, nullptr));
@@ -532,10 +590,43 @@ static int run_case(void * lib, const Case & c) {
         CHECK_CUDA(cudaEventSynchronize(probe_stop));
     }
 
+    CHECK_CUDA(cudaEventRecord(down_start, nullptr));
+    for (int iter = 0; iter < bench_iters; ++iter) {
+        rc = mmgt(d_down_A, nullptr, d_offsets, num_experts, total_tokens,
+                  (const void * const *) down_packed.d_w_table,
+                  (const void * const *) down_packed.d_s_table,
+                  ggml_type, K, N, group_size, down_packed.k_pack, d_down, nullptr);
+        if (rc != 0) {
+            fprintf(stderr, "[gate_up_fusion] down rc=%d\n", rc);
+            return 10;
+        }
+    }
+    CHECK_CUDA(cudaEventRecord(down_stop, nullptr));
+    CHECK_CUDA(cudaEventSynchronize(down_stop));
+
+    if (run_down_probe) {
+        CHECK_CUDA(cudaEventRecord(down_probe_start, nullptr));
+        for (int iter = 0; iter < bench_iters; ++iter) {
+            rc = down_probe768_m128(d_down_A, d_offsets, num_experts, total_tokens,
+                                    (const void * const *) down_packed.d_w_table,
+                                    (const void * const *) down_packed.d_s_table,
+                                    down_packed.k_pack, d_down_probe, nullptr);
+            if (rc != 0) {
+                fprintf(stderr, "[gate_up_fusion] down probe rc=%d\n", rc);
+                return 10;
+            }
+        }
+        CHECK_CUDA(cudaEventRecord(down_probe_stop, nullptr));
+        CHECK_CUDA(cudaEventSynchronize(down_probe_stop));
+    }
+
     const float separate_ms = elapsed_ms(sep_start, sep_stop) / (float) bench_iters;
     const float fused_ms = elapsed_ms(fused_start, fused_stop) / (float) bench_iters;
     const float gated_ms = elapsed_ms(gated_start, gated_stop) / (float) bench_iters;
     const float probe_ms = run_probe ? elapsed_ms(probe_start, probe_stop) / (float) bench_iters : 0.0f;
+    const float down_ms = elapsed_ms(down_start, down_stop) / (float) bench_iters;
+    const float down_probe_ms =
+        run_down_probe ? elapsed_ms(down_probe_start, down_probe_stop) / (float) bench_iters : 0.0f;
     CHECK_CUDA(cudaEventDestroy(sep_start));
     CHECK_CUDA(cudaEventDestroy(sep_stop));
     CHECK_CUDA(cudaEventDestroy(fused_start));
@@ -546,18 +637,30 @@ static int run_case(void * lib, const Case & c) {
         CHECK_CUDA(cudaEventDestroy(probe_start));
         CHECK_CUDA(cudaEventDestroy(probe_stop));
     }
+    CHECK_CUDA(cudaEventDestroy(down_start));
+    CHECK_CUDA(cudaEventDestroy(down_stop));
+    if (run_down_probe) {
+        CHECK_CUDA(cudaEventDestroy(down_probe_start));
+        CHECK_CUDA(cudaEventDestroy(down_probe_stop));
+    }
 
     std::vector<__half> h_gate((size_t) total_tokens * N);
     std::vector<__half> h_up((size_t) total_tokens * N);
     std::vector<__half> h_fused((size_t) total_tokens * fused_N);
     std::vector<__half> h_gated((size_t) total_tokens * N);
     std::vector<__half> h_probe(run_probe ? (size_t) total_tokens * N : 0);
+    std::vector<__half> h_down((size_t) total_tokens * K);
+    std::vector<__half> h_down_probe(run_down_probe ? (size_t) total_tokens * K : 0);
     CHECK_CUDA(cudaMemcpy(h_gate.data(), d_gate, h_gate.size() * sizeof(__half), cudaMemcpyDeviceToHost));
     CHECK_CUDA(cudaMemcpy(h_up.data(), d_up, h_up.size() * sizeof(__half), cudaMemcpyDeviceToHost));
     CHECK_CUDA(cudaMemcpy(h_fused.data(), d_fused, h_fused.size() * sizeof(__half), cudaMemcpyDeviceToHost));
     CHECK_CUDA(cudaMemcpy(h_gated.data(), d_gated, h_gated.size() * sizeof(__half), cudaMemcpyDeviceToHost));
     if (run_probe) {
         CHECK_CUDA(cudaMemcpy(h_probe.data(), d_probe, h_probe.size() * sizeof(__half), cudaMemcpyDeviceToHost));
+    }
+    CHECK_CUDA(cudaMemcpy(h_down.data(), d_down, h_down.size() * sizeof(__half), cudaMemcpyDeviceToHost));
+    if (run_down_probe) {
+        CHECK_CUDA(cudaMemcpy(h_down_probe.data(), d_down_probe, h_down_probe.size() * sizeof(__half), cudaMemcpyDeviceToHost));
     }
 
     float max_abs_gate = 0.0f;
@@ -570,9 +673,13 @@ static int run_case(void * lib, const Case & c) {
     float probe_max_abs = 0.0f;
     float probe_sum_abs = 0.0f;
     float probe_sum_ref = 0.0f;
+    float down_probe_max_abs = 0.0f;
+    float down_probe_sum_abs = 0.0f;
+    float down_probe_sum_ref = 0.0f;
     int bad = 0;
     int gated_bad = 0;
     int probe_bad = 0;
+    int down_probe_bad = 0;
     constexpr float gated_abs_tol = 16.0f;
     const size_t values_per_half = (size_t) total_tokens * N;
     for (int row = 0; row < total_tokens; ++row) {
@@ -618,33 +725,56 @@ static int run_case(void * lib, const Case & c) {
     const float rel = sum_ref > 0 ? sum_abs / sum_ref : 0.0f;
     const float gated_rel = gated_sum_ref > 0 ? gated_sum_abs / gated_sum_ref : 0.0f;
     const float probe_rel = probe_sum_ref > 0 ? probe_sum_abs / probe_sum_ref : 0.0f;
+    if (run_down_probe) {
+        for (size_t i = 0; i < h_down.size(); ++i) {
+            const float ref = __half2float(h_down[i]);
+            const float got = __half2float(h_down_probe[i]);
+            const float d = fabsf(got - ref);
+            down_probe_max_abs = std::max(down_probe_max_abs, d);
+            down_probe_sum_abs += d;
+            down_probe_sum_ref += fabsf(ref);
+            if (!std::isfinite(got) || d > 0.25f) {
+                down_probe_bad++;
+            }
+        }
+    }
+    const float down_probe_rel = down_probe_sum_ref > 0 ? down_probe_sum_abs / down_probe_sum_ref : 0.0f;
     fprintf(stderr,
-            "[gate_up_fusion tpa=%d] total_routes=%d active=%zu separate_ms=%.4f fused_ms=%.4f gated_ms=%.4f probe_label=%s probe_ms=%.4f fused_speedup=%.3fx gated_speedup=%.3fx probe_vs_gated=%.3fx max_abs_gate=%.4e max_abs_up=%.4e rel=%.4e bad=%d/%zu gated_max_abs=%.4e gated_abs_tol=%.1f gated_rel=%.4e gated_bad=%d/%zu probe_max_abs=%.4e probe_rel=%.4e probe_bad=%d/%zu k_pack_sep=0x%x k_pack_fused=0x%x k_pack_gated=0x%x\n",
+            "[gate_up_fusion tpa=%d] total_routes=%d active=%zu separate_ms=%.4f fused_ms=%.4f gated_ms=%.4f probe_label=%s probe_ms=%.4f down_ms=%.4f down_probe_ms=%.4f fused_speedup=%.3fx gated_speedup=%.3fx probe_vs_gated=%.3fx down_probe_vs_generic=%.3fx max_abs_gate=%.4e max_abs_up=%.4e rel=%.4e bad=%d/%zu gated_max_abs=%.4e gated_abs_tol=%.1f gated_rel=%.4e gated_bad=%d/%zu probe_max_abs=%.4e probe_rel=%.4e probe_bad=%d/%zu down_probe_max_abs=%.4e down_probe_rel=%.4e down_probe_bad=%d/%zu k_pack_sep=0x%x k_pack_fused=0x%x k_pack_gated=0x%x k_pack_down=0x%x\n",
             c.tokens_per_active, total_tokens, active.size(),
-            separate_ms, fused_ms, gated_ms, probe_label, probe_ms,
+            separate_ms, fused_ms, gated_ms, probe_label, probe_ms, down_ms, down_probe_ms,
             separate_ms / fused_ms, separate_ms / gated_ms, run_probe ? gated_ms / probe_ms : 0.0f,
+            run_down_probe ? down_ms / down_probe_ms : 0.0f,
             max_abs_gate, max_abs_up, rel, bad, 2 * values_per_half,
             gated_max_abs, gated_abs_tol, gated_rel, gated_bad, values_per_half,
             probe_max_abs, probe_rel, probe_bad, values_per_half,
-            gate_packed.k_pack, fused_packed.k_pack, gated_packed.k_pack);
+            down_probe_max_abs, down_probe_rel, down_probe_bad, h_down.size(),
+            gate_packed.k_pack, fused_packed.k_pack, gated_packed.k_pack, down_packed.k_pack);
 
     free_packed(gate_packed);
     free_packed(up_packed);
+    free_packed(down_packed);
     free_packed(fused_packed);
     free_packed(gated_packed);
     CHECK_CUDA(cudaFree(d_offsets));
     CHECK_CUDA(cudaFree(d_A));
+    CHECK_CUDA(cudaFree(d_down_A));
     CHECK_CUDA(cudaFree(d_gate));
     CHECK_CUDA(cudaFree(d_up));
     CHECK_CUDA(cudaFree(d_fused));
     CHECK_CUDA(cudaFree(d_gated));
     if (d_probe) CHECK_CUDA(cudaFree(d_probe));
+    CHECK_CUDA(cudaFree(d_down));
+    if (d_down_probe) CHECK_CUDA(cudaFree(d_down_probe));
     sh();
 
     if (bad != 0 || gated_bad != 0 || probe_bad != 0 ||
+        down_probe_bad != 0 ||
         rel > 1e-3f || gated_rel > 1e-3f ||
         (run_probe && probe_rel > 1e-3f) ||
-        max_abs_gate > 0.25f || max_abs_up > 0.25f || gated_max_abs > gated_abs_tol) {
+        (run_down_probe && down_probe_rel > 1e-3f) ||
+        max_abs_gate > 0.25f || max_abs_up > 0.25f || gated_max_abs > gated_abs_tol ||
+        (run_down_probe && down_probe_max_abs > 0.25f)) {
         fprintf(stderr, "[gate_up_fusion tpa=%d] FAIL\n", c.tokens_per_active);
         return 11;
     }

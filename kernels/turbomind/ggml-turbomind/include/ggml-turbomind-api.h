@@ -281,6 +281,21 @@ int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128(
     void*              D,
     void*              stream  /* cudaStream_t */);
 
+/**
+ * Fixed-shape DS4/V100 probe for the 128-slot compact routed down projection.
+ * Uses MXFP4 down expert rows with total_tokens = 768, N = 4096, K = 2048.
+ */
+int ggml_turbomind_ds4_mxfp4_down_768_m128(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
 // ============================================================================
 // Single-expert mul-mat (convenience for non-grouped cases like dense layers)
 // ============================================================================
