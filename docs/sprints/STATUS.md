@@ -126,7 +126,14 @@ measured `0.5809 ms`, `0.5863 ms`, and `0.5794 ms`; at 1536 routes,
 `m128_1536`, `m128_s3_1536`, and `m128_s4_1536` measured `0.8743 ms`,
 `0.8821 ms`, and `0.8774 ms`. NCU fixed-probe counters were also neutral, with
 identical HMMA instruction counts. Stage-count tuning inside the existing
-fused gate/up GEMM is now exhausted as a material lever.
+fused gate/up GEMM is now exhausted as a material lever. Sprint 153 added a
+bounded 2-way TP appliance-pack contract and context binding for split
+TurboMind expert descriptors. A layer-3, six-expert pack emitted 8 TurboMind
+rows across GPU0 and GPU3 and passed partial context binding. The real 2-GPU
+NV2 proxy remains positive only at the 768-route shape (`1.157x`
+total-with-copy on pair `0,3` in this run) and slower at 1536 routes
+(`0.912x`), so TP remains a narrow 128-slot/32K prototype candidate rather
+than a broad topology replacement.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
@@ -429,10 +436,11 @@ bypass, tile probes, fixed-shape 768/1536-route probes, and simple slot widening
 are correct but too small to close the practical serving gap. Aggregate
 throughput is now about `61` tok/s at 256-slot/16K and about `46` tok/s at
 16-slot/256K, far below the practical serving target. After the Sprint 152
-stage-count sweep, the next sprint should avoid more gate/up-only stage tuning
-and instead attack either the full TurboMind routed expert boundary with
-route-aware activation staging and persistent/grouped execution, or the bounded
-2-way TP routed-FFN path for the 128-slot/32K tier.
+stage-count sweep and Sprint 153 TP pack-contract checkpoint, the next sprint
+should avoid more gate/up-only stage tuning and either attack the full
+TurboMind routed expert boundary with route-aware activation staging and
+persistent/grouped execution, or build the narrow one-layer 2-way TP routed-FFN
+runtime path for the 128-slot/32K tier.
 
 The concise current status is also tracked in
 `docs/sprints/EXPERIMENT-STATUS.md`.

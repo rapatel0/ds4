@@ -118,6 +118,13 @@ targeted 128-slot/32K candidate, not a blanket fix for the current 256-slot
 ceiling. Sprint 151 added full-vs-split correctness to the same proxy. With
 finite MXFP4 fixtures, both clean NV2 pairs pass at 768 and 1536 routes with
 `rel ~= 2.46e-04`, `bad=0`, and max absolute difference `6.1035e-05`.
+Sprint 152 completed the 2/3/4-stage fused gate/up software-pipeline sweep and
+found stage count neutral. Sprint 153 then added a bounded TP appliance-pack
+contract: `--emit-tp-split` emits split gate/up and down TurboMind descriptors,
+the context binder accepts those TP expert rows, and a layer-3 GPU0/GPU3
+bounded pack passed partial context smoke. The real two-GPU NV2 proxy measured
+`1.157x` total-with-copy speedup at 768 routes but `0.912x` at 1536 routes, so
+TP remains a narrow 128-slot/32K candidate only.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
@@ -207,6 +214,7 @@ to slightly worse.
 | 150 | Two-GPU TP split timing proxy | Correct; 768-route NV2 total-with-copy speedup was about `1.28x`, while 1536 routes were neutral to slower (`0.85-0.94x`) | Candidate only for 128-slot/32K first |
 | 151 | Two-GPU TP correctness gate | Correct; full one-GPU routed-FFN output matches FP32 sum of TP partial outputs with `rel ~= 2.46e-04`, `bad=0` | Split math is valid; remaining risk is production scheduling and payload overlap |
 | 152 | 2/3/4-stage fused gate/up software-pipeline sweep | Correct; 768-route `m128/m128_s3/m128_s4` measured `0.5809/0.5863/0.5794 ms`, 1536-route `m128_1536/m128_s3_1536/m128_s4_1536` measured `0.8743/0.8821/0.8774 ms`, and NCU fixed-probe HMMA counts were identical | Do not spend more effort on gate/up stage count; next fusion must cover a larger routed-FFN boundary or use bounded TP |
+| 153 | Bounded TP pack contract | Correct; `--emit-tp-split` emitted `ffn_gate_up_exps.tp{0,1}` and `ffn_down_exps.tp{0,1}` rows across GPU0/GPU3, partial context binding passed, and the real two-GPU NV2 proxy was `1.157x` total-with-copy at 768 routes but `0.912x` at 1536 routes | Keep TP scoped to a one-layer 128-slot/32K prototype; default runtime remains layer-sharded |
 
 ## Remaining
 
@@ -268,7 +276,9 @@ to slightly worse.
     Sprint 152 broadened that into a 2/3/4-stage sweep and found the fixed
     probes neutral at both 768 and 1536 routes, with identical HMMA counts in
     NCU. Stage count inside the existing fused gate/up kernel is therefore
-    exhausted.
+    exhausted. Sprint 153 added a bounded TP pack contract and proved the split
+    descriptors can be emitted and bound, but the latest two-GPU proxy remains
+    positive only for the 768-route shape.
     Sprint 122 further showed that merely chunking slots to feed wider kernels
     loses too much stage overlap, so the fusion target must match the per-slot
     served topology or replace it with an overlapped scheduler.
@@ -357,3 +367,7 @@ run band.
 Stage-3 fused gate/up probes are available after Sprint 152 for diagnostics
 with explicit modes such as `m128_s3`, `m64_s3`, and `m128_s3_1536`. They are
 not selected by `auto` because the 2/3/4-stage sweep stayed neutral.
+The TP split pack path is available after Sprint 153 through
+`tools/ds4-v100-appliance-pack --emit-tp-split`. It is a bounded prototype
+format only; no launcher or production scheduler path selects TP expert rows by
+default.

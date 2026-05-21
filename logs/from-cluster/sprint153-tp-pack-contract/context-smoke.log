@@ -1,0 +1,73 @@
+ds4_v100_context_report
+expected_gpus	8
+mode	0
+policy	bf16_fp8_fp4_are_not_native_v100_tensor_core_formats
+policy	production_dense_gemm_target_fp16_hmma_with_fp32_accumulation
+kv_ctx_tokens	0
+kv_active_slots	1
+tensor_count	8
+pack_tensor_count	0
+turbomind_tensor_count	8
+exec_count	f32_control	0
+exec_count	f16_hmma_after_convert	0
+exec_count	lowbit_kernel	8
+exec_count	diagnostic_only	0
+exec_count	unsupported	0
+layer_class_count	swa_only	2
+layer_class_count	ratio_4	21
+layer_class_count	ratio_128	20
+stage	gpu	layers	arena_bytes	scratch_bytes	relay_f16_bytes	relay_f32_debug_bytes	kv_arena_bytes	kv_raw_swa_offset	kv_raw_swa_bytes	kv_compressed_attn_offset	kv_compressed_attn_bytes	kv_indexer_offset	kv_indexer_bytes	kv_compression_state_offset	kv_compression_state_bytes	planned_kv_bytes	reserve_bytes	device_total_bytes
+0	0	0-5	173801472	0	65536	0	0	0	0	0	0	0	0	0	0	0	2147483648	0
+1	1	6-11	0	0	65536	0	0	0	0	0	0	0	0	0	0	0	2147483648	0
+2	2	12-17	0	0	65536	0	0	0	0	0	0	0	0	0	0	0	2147483648	0
+3	3	18-23	40108032	0	65536	0	0	0	0	0	0	0	0	0	0	0	2147483648	0
+4	4	24-29	0	0	65536	0	0	0	0	0	0	0	0	0	0	0	2147483648	0
+5	5	30-34	0	0	65536	0	0	0	0	0	0	0	0	0	0	0	2147483648	0
+6	6	35-39	0	0	65536	0	0	0	0	0	0	0	0	0	0	0	2147483648	0
+7	7	40-42	0	0	65536	0	0	0	0	0	0	0	0	0	0	0	2147483648	0
+layer_kv_view	layer	stage	class	raw_swa_offset	raw_swa_bytes	compressed_attn_offset	compressed_attn_bytes	indexer_kv_offset	indexer_kv_bytes	attn_state_kv_offset	attn_state_kv_bytes	attn_state_score_offset	attn_state_score_bytes	indexer_state_kv_offset	indexer_state_kv_bytes	indexer_state_score_offset	indexer_state_score_bytes	total_bytes
+layer_kv_view	0	0	swa_only	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	1	0	swa_only	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	2	0	ratio_4	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	3	0	ratio_128	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	4	0	ratio_4	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	5	0	ratio_128	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	6	1	ratio_4	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	7	1	ratio_128	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	8	1	ratio_4	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	9	1	ratio_128	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	10	1	ratio_4	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	11	1	ratio_128	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	12	2	ratio_4	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	13	2	ratio_128	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	14	2	ratio_4	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	15	2	ratio_128	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	16	2	ratio_4	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	17	2	ratio_128	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	18	3	ratio_4	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	19	3	ratio_128	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	20	3	ratio_4	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	21	3	ratio_128	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	22	3	ratio_4	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	23	3	ratio_128	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	24	4	ratio_4	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	25	4	ratio_128	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	26	4	ratio_4	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	27	4	ratio_128	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	28	4	ratio_4	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	29	4	ratio_128	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	30	5	ratio_4	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	31	5	ratio_128	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	32	5	ratio_4	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	33	5	ratio_128	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	34	5	ratio_4	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	35	6	ratio_128	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	36	6	ratio_4	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	37	6	ratio_128	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	38	6	ratio_4	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	39	6	ratio_128	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	40	7	ratio_4	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	41	7	ratio_128	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_kv_view	42	7	ratio_4	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+layer_skeleton_result	SKIPPED_PARTIAL
+context_smoke_result	OK

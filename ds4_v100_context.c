@@ -716,7 +716,19 @@ static bool is_routed_expert_id(const char *id) {
            (strstr(id, ".ffn_gate_exps.weight") ||
             strstr(id, ".ffn_up_exps.weight") ||
             strstr(id, ".ffn_gate_up_exps.weight") ||
+            strstr(id, ".ffn_gate_up_exps.tp0.weight") ||
+            strstr(id, ".ffn_gate_up_exps.tp1.weight") ||
+            strstr(id, ".ffn_down_exps.tp0.weight") ||
+            strstr(id, ".ffn_down_exps.tp1.weight") ||
             strstr(id, ".ffn_down_exps.weight"));
+}
+
+static bool is_tp_routed_expert_id(const char *id) {
+    return id &&
+           (strstr(id, ".ffn_gate_up_exps.tp0.weight") ||
+            strstr(id, ".ffn_gate_up_exps.tp1.weight") ||
+            strstr(id, ".ffn_down_exps.tp0.weight") ||
+            strstr(id, ".ffn_down_exps.tp1.weight"));
 }
 
 static int bind_tm_pack_entry(const ds4_tm_pack_entry *e, void *ud) {
@@ -731,7 +743,8 @@ static int bind_tm_pack_entry(const ds4_tm_pack_entry *e, void *ud) {
         return v100_error(state->err, state->errlen, "%s has invalid TurboMind layer id %d",
                           e->semantic_tensor_id, e->layer_id);
     }
-    if (ds4_v100_stage_for_layer(e->layer_id) != e->owning_gpu) {
+    if (!is_tp_routed_expert_id(e->semantic_tensor_id) &&
+        ds4_v100_stage_for_layer(e->layer_id) != e->owning_gpu) {
         return v100_error(state->err, state->errlen,
                           "%s TurboMind owner gpu %d does not match layer %d stage %d",
                           e->semantic_tensor_id, e->owning_gpu, e->layer_id,

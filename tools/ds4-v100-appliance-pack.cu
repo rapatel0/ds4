@@ -57,6 +57,7 @@ struct options {
     bool fuse_gate_up = false;
     bool fuse_gate_up_interleaved = false;
     bool keep_separate_gate_up = false;
+    bool emit_tp_split = false;
 };
 
 struct shape3 {
@@ -142,6 +143,7 @@ static void usage(FILE *fp) {
                  "  --fuse-gate-up           Emit fused gate_up routed expert tensors\n"
                  "  --fuse-gate-up-interleaved Emit fused gate_up rows as [gate0,up0,...]\n"
                  "  --keep-separate-gate-up  With --fuse-gate-up, also emit separate gate/up tensors\n"
+                 "  --emit-tp-split          Emit experimental 2-way TP half-mid routed expert tensors\n"
                  "  --skip-non-experts       Bounded validation: do not copy non-selected tensors\n"
                  "\n"
                  "Without bounded options this emits one production-shaped appliance directory:\n"
@@ -185,6 +187,8 @@ static void parse_args(int argc, char **argv, options *opt) {
             opt->fuse_gate_up_interleaved = true;
         } else if (!std::strcmp(a, "--keep-separate-gate-up")) {
             opt->keep_separate_gate_up = true;
+        } else if (!std::strcmp(a, "--emit-tp-split")) {
+            opt->emit_tp_split = true;
         } else if (!std::strcmp(a, "--skip-non-experts")) {
             opt->skip_non_experts = true;
         } else if (!std::strcmp(a, "-h") || !std::strcmp(a, "--help")) {
@@ -287,6 +291,17 @@ static bool is_gate_expert(const ds4_pack_entry *e) {
 static bool is_up_expert(const ds4_pack_entry *e) {
     return e && e->semantic_tensor_id &&
            std::strstr(e->semantic_tensor_id, ".ffn_up_exps.weight");
+}
+
+static bool is_down_expert(const ds4_pack_entry *e) {
+    return e && e->semantic_tensor_id &&
+           std::strstr(e->semantic_tensor_id, ".ffn_down_exps.weight");
+}
+
+static uint32_t tp_peer_for_gpu(uint32_t gpu) {
+    static const uint32_t peer[MAX_GPUS] = {3, 2, 1, 0, 7, 6, 5, 4};
+    if (gpu >= MAX_GPUS) die("TP peer requested for invalid GPU");
+    return peer[gpu];
 }
 
 static void read_exact(FILE *fp, uint64_t off, void *dst, size_t bytes, const char *label) {
@@ -740,6 +755,380 @@ static void emit_fused_gate_up_turbomind_tensor(pack_state *st, const ds4_pack_e
     (void)cudaFree(d_src);
 }
 
+static void emit_tp_split_turbomind_tensors(pack_state *st, const ds4_pack_entry *gate) {
+    if (!st || !st->pack || !gate || !is_gate_expert(gate)) {
+        die("invalid TP split request");
+    }
+    if (std::strcmp(gate->source_dtype, "mxfp4") != 0) {
+        die("TP split gate tensor is not mxfp4");
+    }
+
+    const char *gate_needle = "ffn_gate_exps.weight";
+    const size_t gate_pos = std::string(gate->semantic_tensor_id).find(gate_needle);
+    if (gate_pos == std::string::npos) die("cannot derive TP paired tensor ids");
+
+    std::string up_semantic(gate->semantic_tensor_id);
+    up_semantic.replace(gate_pos, std::strlen(gate_needle), "ffn_up_exps.weight");
+    std::string down_semantic(gate->semantic_tensor_id);
+    down_semantic.replace(gate_pos, std::strlen(gate_needle), "ffn_down_exps.weight");
+
+    ds4_pack_entry up;
+    ds4_pack_entry down;
+    if (ds4_pack_lookup(st->pack, up_semantic.c_str(), &up) ||
+        ds4_pack_lookup(st->pack, down_semantic.c_str(), &down)) {
+        die("missing TP split paired up/down tensor");
+    }
+    if (!is_up_expert(&up) || !is_down_expert(&down) ||
+        std::strcmp(up.source_dtype, "mxfp4") ||
+        std::strcmp(down.source_dtype, "mxfp4")) {
+        die("TP split paired tensors must be MXFP4 routed experts");
+    }
+    if (gate->owning_gpu != up.owning_gpu ||
+        gate->owning_gpu != down.owning_gpu ||
+        gate->layer_id != up.layer_id ||
+        gate->layer_id != down.layer_id) {
+        die("TP split paired tensors are not layer/gpu compatible");
+    }
+
+    shape3 gate_shape;
+    shape3 down_shape;
+    if (!parse_shape3(gate->source_shape, &gate_shape) ||
+        !parse_shape3(down.source_shape, &down_shape)) {
+        die("cannot parse TP split source shape");
+    }
+    if (std::strcmp(gate->source_shape, up.source_shape) != 0 ||
+        gate_shape.n == 0 ||
+        (gate_shape.n % 2u) != 0 ||
+        down_shape.k != gate_shape.n ||
+        down_shape.n != gate_shape.k ||
+        down_shape.experts != gate_shape.experts) {
+        die("TP split shapes are not compatible");
+    }
+
+    const uint32_t owner_gpu = (uint32_t)gate->owning_gpu;
+    const uint32_t peer_gpu = tp_peer_for_gpu(owner_gpu);
+    if (peer_gpu >= st->opt.gpus) die("TP split peer exceeds configured GPU count");
+
+    const uint32_t half_n = gate_shape.n / 2u;
+    const uint64_t gate_row_bytes = ds4_src_mxfp4_row_bytes(gate_shape.k);
+    const uint64_t gate_expert_stride = gate_row_bytes * gate_shape.n;
+    const uint64_t down_row_bytes = ds4_src_mxfp4_row_bytes(down_shape.k);
+    const uint64_t down_half_row_bytes = ds4_src_mxfp4_row_bytes(half_n);
+    const uint64_t down_expert_stride = down_row_bytes * down_shape.n;
+    const uint64_t down_half_expert_stride = down_half_row_bytes * down_shape.n;
+    if (!gate_row_bytes || !down_row_bytes || !down_half_row_bytes ||
+        gate->byte_length / gate_expert_stride < gate_shape.experts ||
+        up.byte_length / gate_expert_stride < gate_shape.experts ||
+        down.byte_length / down_expert_stride < down_shape.experts) {
+        die("TP split expert stride does not match source byte length");
+    }
+
+    const uint32_t experts_to_pack =
+        st->opt.expert_limit && st->opt.expert_limit < gate_shape.experts ?
+        st->opt.expert_limit : gate_shape.experts;
+
+    for (uint32_t half = 0; half < 2u; half++) {
+        const uint32_t target_gpu = half == 0 ? owner_gpu : peer_gpu;
+        const uint32_t row_begin = half * half_n;
+        const uint32_t fused_n = half_n * 2u;
+        size_t weight_bytes = 0;
+        size_t scale_bytes = 0;
+        if (st->api.packed_bytes(GGML_TM_DTYPE_MXFP4,
+                                 (int)fused_n,
+                                 (int)gate_shape.k,
+                                 DS4_SRC_MXFP4_BLOCK_ELEMS,
+                                 &weight_bytes,
+                                 &scale_bytes) != 0 ||
+            !weight_bytes || !scale_bytes) {
+            die("TurboMind TP gate_up packed_bytes failed");
+        }
+
+        const uint64_t fused_expert_stride = (uint64_t)fused_n * gate_row_bytes;
+        uint8_t *d_src = nullptr;
+        uint8_t *d_weight = nullptr;
+        uint8_t *d_scale = nullptr;
+        if (!cuda_ok(cudaMalloc(&d_src, (size_t)fused_expert_stride), "TP gate_up source alloc") ||
+            !cuda_ok(cudaMalloc(&d_weight, weight_bytes), "TP gate_up weight alloc") ||
+            !cuda_ok(cudaMalloc(&d_scale, scale_bytes), "TP gate_up scale alloc")) {
+            std::exit(1);
+        }
+
+        std::vector<uint8_t> host_gate((size_t)gate_expert_stride);
+        std::vector<uint8_t> host_up((size_t)gate_expert_stride);
+        std::vector<uint8_t> host_fused((size_t)fused_expert_stride);
+        std::vector<uint8_t> host_weight(weight_bytes);
+        std::vector<uint8_t> host_scale(scale_bytes);
+
+        st->cursor[target_gpu] = align_up(st->cursor[target_gpu], st->opt.alignment);
+        const uint64_t weight_offset = st->cursor[target_gpu];
+        const uint64_t weight_total = (uint64_t)experts_to_pack * weight_bytes;
+        if (weight_total > UINT64_MAX - st->cursor[target_gpu]) die("TP gate_up weight offset overflow");
+        st->cursor[target_gpu] += weight_total;
+        st->cursor[target_gpu] = align_up(st->cursor[target_gpu], st->opt.alignment);
+        const uint64_t scale_offset = st->cursor[target_gpu];
+        const uint64_t scale_total = (uint64_t)experts_to_pack * scale_bytes;
+        if (scale_total > UINT64_MAX - st->cursor[target_gpu]) die("TP gate_up scale offset overflow");
+        st->cursor[target_gpu] += scale_total;
+
+        int expected_k_pack = 0;
+        for (uint32_t expert = 0; expert < experts_to_pack; expert++) {
+            read_exact(st->source,
+                       gate->source_offset + (uint64_t)expert * gate_expert_stride,
+                       host_gate.data(),
+                       host_gate.size(),
+                       gate->source_name);
+            read_exact(st->source,
+                       up.source_offset + (uint64_t)expert * gate_expert_stride,
+                       host_up.data(),
+                       host_up.size(),
+                       up.source_name);
+            for (uint32_t row = 0; row < half_n; row++) {
+                const uint32_t src_row = row_begin + row;
+                std::memcpy(host_fused.data() + (uint64_t)(2u * row) * gate_row_bytes,
+                            host_gate.data() + (uint64_t)src_row * gate_row_bytes,
+                            gate_row_bytes);
+                std::memcpy(host_fused.data() + (uint64_t)(2u * row + 1u) * gate_row_bytes,
+                            host_up.data() + (uint64_t)src_row * gate_row_bytes,
+                            gate_row_bytes);
+            }
+            if (!cuda_ok(cudaMemcpy(d_src,
+                                    host_fused.data(),
+                                    host_fused.size(),
+                                    cudaMemcpyHostToDevice),
+                         "TP gate_up source upload")) {
+                std::exit(1);
+            }
+            int k_pack = 0;
+            if (st->api.pack_weight(d_src,
+                                    GGML_TM_DTYPE_MXFP4,
+                                    (int)fused_n,
+                                    (int)gate_shape.k,
+                                    DS4_SRC_MXFP4_BLOCK_ELEMS,
+                                    d_weight,
+                                    d_scale,
+                                    &k_pack,
+                                    nullptr) != 0) {
+                die("TurboMind TP gate_up pack_weight_expert failed");
+            }
+            if (expert == 0) expected_k_pack = k_pack;
+            else if (k_pack != expected_k_pack) die("TurboMind TP gate_up k_pack changed");
+            if (!cuda_ok(cudaMemcpy(host_weight.data(), d_weight, weight_bytes, cudaMemcpyDeviceToHost),
+                         "TP gate_up packed weight download") ||
+                !cuda_ok(cudaMemcpy(host_scale.data(), d_scale, scale_bytes, cudaMemcpyDeviceToHost),
+                         "TP gate_up packed scale download")) {
+                std::exit(1);
+            }
+            write_exact(st->gpu_files[target_gpu],
+                        weight_offset + (uint64_t)expert * weight_bytes,
+                        host_weight.data(),
+                        host_weight.size(),
+                        gate->semantic_tensor_id);
+            write_exact(st->gpu_files[target_gpu],
+                        scale_offset + (uint64_t)expert * scale_bytes,
+                        host_scale.data(),
+                        host_scale.size(),
+                        gate->semantic_tensor_id);
+        }
+
+        std::string semantic(gate->semantic_tensor_id);
+        semantic.replace(gate_pos,
+                         std::strlen(gate_needle),
+                         half == 0 ? "ffn_gate_up_exps.tp0.weight" : "ffn_gate_up_exps.tp1.weight");
+        std::string source_name(gate->source_name);
+        source_name += "+";
+        source_name += up.source_name;
+        source_name += half == 0 ? ":tp0" : ":tp1";
+        char shape_buf[64];
+        std::snprintf(shape_buf, sizeof(shape_buf), "[%ux%ux%u]", gate_shape.k, fused_n, gate_shape.experts);
+        std::fprintf(st->tm_index,
+                     "%s\t%s\tmxfp4\t%s\tturbomind_mxfp4_grouped_gate_up_interleaved_tp2\t%u\t%d\t"
+                     "turbomind_mxfp4_grouped_gated_silu_sm70_tp2\t%u\t%u\t%u\t%u\t%zu\t%zu\t%d\t%d\t%d\t"
+                     "gpu%u.weights\t%" PRIu64 "\t%" PRIu64 "\t%s\t%" PRIu64 "\t%" PRIu64
+                     "\tpending\t%d\n",
+                     semantic.c_str(),
+                     source_name.c_str(),
+                     shape_buf,
+                     target_gpu,
+                     gate->layer_id,
+                     fused_n,
+                     gate_shape.k,
+                     experts_to_pack,
+                     gate_shape.experts,
+                     weight_bytes,
+                     scale_bytes,
+                     expected_k_pack,
+                     (int)gate_shape.k * 32,
+                     (int)fused_n,
+                     target_gpu,
+                     weight_offset,
+                     scale_offset,
+                     gate->shard_file,
+                     gate->shard_offset,
+                     fused_expert_stride * (uint64_t)gate_shape.experts,
+                     GGML_TURBOMIND_API_VERSION);
+        st->tm_rows++;
+        st->tm_weight_bytes += weight_total;
+        st->tm_scale_bytes += scale_total;
+        std::fprintf(stderr,
+                     "appliance packed %s experts=%u/%u gpu=%u half=%u fused_N=%u weight_offset=%" PRIu64
+                     " scale_offset=%" PRIu64 " k_pack=0x%x\n",
+                     semantic.c_str(),
+                     experts_to_pack,
+                     gate_shape.experts,
+                     target_gpu,
+                     half,
+                     fused_n,
+                     weight_offset,
+                     scale_offset,
+                     expected_k_pack);
+        (void)cudaFree(d_scale);
+        (void)cudaFree(d_weight);
+        (void)cudaFree(d_src);
+
+        size_t down_weight_bytes = 0;
+        size_t down_scale_bytes = 0;
+        if (st->api.packed_bytes(GGML_TM_DTYPE_MXFP4,
+                                 (int)down_shape.n,
+                                 (int)half_n,
+                                 DS4_SRC_MXFP4_BLOCK_ELEMS,
+                                 &down_weight_bytes,
+                                 &down_scale_bytes) != 0 ||
+            !down_weight_bytes || !down_scale_bytes) {
+            die("TurboMind TP down packed_bytes failed");
+        }
+        uint8_t *d_down_src = nullptr;
+        uint8_t *d_down_weight = nullptr;
+        uint8_t *d_down_scale = nullptr;
+        if (!cuda_ok(cudaMalloc(&d_down_src, (size_t)down_half_expert_stride), "TP down source alloc") ||
+            !cuda_ok(cudaMalloc(&d_down_weight, down_weight_bytes), "TP down weight alloc") ||
+            !cuda_ok(cudaMalloc(&d_down_scale, down_scale_bytes), "TP down scale alloc")) {
+            std::exit(1);
+        }
+        std::vector<uint8_t> host_down((size_t)down_expert_stride);
+        std::vector<uint8_t> host_down_half((size_t)down_half_expert_stride);
+        std::vector<uint8_t> host_down_weight(down_weight_bytes);
+        std::vector<uint8_t> host_down_scale(down_scale_bytes);
+
+        st->cursor[target_gpu] = align_up(st->cursor[target_gpu], st->opt.alignment);
+        const uint64_t down_weight_offset = st->cursor[target_gpu];
+        const uint64_t down_weight_total = (uint64_t)experts_to_pack * down_weight_bytes;
+        if (down_weight_total > UINT64_MAX - st->cursor[target_gpu]) die("TP down weight offset overflow");
+        st->cursor[target_gpu] += down_weight_total;
+        st->cursor[target_gpu] = align_up(st->cursor[target_gpu], st->opt.alignment);
+        const uint64_t down_scale_offset = st->cursor[target_gpu];
+        const uint64_t down_scale_total = (uint64_t)experts_to_pack * down_scale_bytes;
+        if (down_scale_total > UINT64_MAX - st->cursor[target_gpu]) die("TP down scale offset overflow");
+        st->cursor[target_gpu] += down_scale_total;
+
+        expected_k_pack = 0;
+        for (uint32_t expert = 0; expert < experts_to_pack; expert++) {
+            read_exact(st->source,
+                       down.source_offset + (uint64_t)expert * down_expert_stride,
+                       host_down.data(),
+                       host_down.size(),
+                       down.source_name);
+            for (uint32_t row = 0; row < down_shape.n; row++) {
+                std::memcpy(host_down_half.data() + (uint64_t)row * down_half_row_bytes,
+                            host_down.data() + (uint64_t)row * down_row_bytes + (uint64_t)half * down_half_row_bytes,
+                            down_half_row_bytes);
+            }
+            if (!cuda_ok(cudaMemcpy(d_down_src,
+                                    host_down_half.data(),
+                                    host_down_half.size(),
+                                    cudaMemcpyHostToDevice),
+                         "TP down source upload")) {
+                std::exit(1);
+            }
+            int k_pack = 0;
+            if (st->api.pack_weight(d_down_src,
+                                    GGML_TM_DTYPE_MXFP4,
+                                    (int)down_shape.n,
+                                    (int)half_n,
+                                    DS4_SRC_MXFP4_BLOCK_ELEMS,
+                                    d_down_weight,
+                                    d_down_scale,
+                                    &k_pack,
+                                    nullptr) != 0) {
+                die("TurboMind TP down pack_weight_expert failed");
+            }
+            if (expert == 0) expected_k_pack = k_pack;
+            else if (k_pack != expected_k_pack) die("TurboMind TP down k_pack changed");
+            if (!cuda_ok(cudaMemcpy(host_down_weight.data(), d_down_weight, down_weight_bytes, cudaMemcpyDeviceToHost),
+                         "TP down packed weight download") ||
+                !cuda_ok(cudaMemcpy(host_down_scale.data(), d_down_scale, down_scale_bytes, cudaMemcpyDeviceToHost),
+                         "TP down packed scale download")) {
+                std::exit(1);
+            }
+            write_exact(st->gpu_files[target_gpu],
+                        down_weight_offset + (uint64_t)expert * down_weight_bytes,
+                        host_down_weight.data(),
+                        host_down_weight.size(),
+                        down.semantic_tensor_id);
+            write_exact(st->gpu_files[target_gpu],
+                        down_scale_offset + (uint64_t)expert * down_scale_bytes,
+                        host_down_scale.data(),
+                        host_down_scale.size(),
+                        down.semantic_tensor_id);
+        }
+
+        std::string down_tp_semantic(down.semantic_tensor_id);
+        const char *down_needle = "ffn_down_exps.weight";
+        const size_t down_pos = down_tp_semantic.find(down_needle);
+        if (down_pos == std::string::npos) die("cannot derive TP down semantic id");
+        down_tp_semantic.replace(down_pos,
+                                 std::strlen(down_needle),
+                                 half == 0 ? "ffn_down_exps.tp0.weight" : "ffn_down_exps.tp1.weight");
+        std::string down_source_name(down.source_name);
+        down_source_name += half == 0 ? ":tp0" : ":tp1";
+        std::snprintf(shape_buf, sizeof(shape_buf), "[%ux%ux%u]", half_n, down_shape.n, down_shape.experts);
+        std::fprintf(st->tm_index,
+                     "%s\t%s\tmxfp4\t%s\tturbomind_mxfp4_grouped_tp2\t%u\t%d\t"
+                     "turbomind_mxfp4_grouped_sm70_tp2\t%u\t%u\t%u\t%u\t%zu\t%zu\t%d\t%d\t%d\t"
+                     "gpu%u.weights\t%" PRIu64 "\t%" PRIu64 "\t%s\t%" PRIu64 "\t%" PRIu64
+                     "\tpending\t%d\n",
+                     down_tp_semantic.c_str(),
+                     down_source_name.c_str(),
+                     shape_buf,
+                     target_gpu,
+                     down.layer_id,
+                     down_shape.n,
+                     half_n,
+                     experts_to_pack,
+                     down_shape.experts,
+                     down_weight_bytes,
+                     down_scale_bytes,
+                     expected_k_pack,
+                     (int)half_n * 32,
+                     (int)down_shape.n,
+                     target_gpu,
+                     down_weight_offset,
+                     down_scale_offset,
+                     down.shard_file,
+                     down.shard_offset,
+                     down_half_expert_stride * (uint64_t)down_shape.experts,
+                     GGML_TURBOMIND_API_VERSION);
+        st->tm_rows++;
+        st->tm_weight_bytes += down_weight_total;
+        st->tm_scale_bytes += down_scale_total;
+        std::fprintf(stderr,
+                     "appliance packed %s experts=%u/%u gpu=%u half=%u N=%u K=%u weight_offset=%" PRIu64
+                     " scale_offset=%" PRIu64 " k_pack=0x%x\n",
+                     down_tp_semantic.c_str(),
+                     experts_to_pack,
+                     down_shape.experts,
+                     target_gpu,
+                     half,
+                     down_shape.n,
+                     half_n,
+                     down_weight_offset,
+                     down_scale_offset,
+                     expected_k_pack);
+        (void)cudaFree(d_down_scale);
+        (void)cudaFree(d_down_weight);
+        (void)cudaFree(d_down_src);
+    }
+}
+
 static int emit_entry_cb(const ds4_pack_entry *e, void *ud) {
     pack_state *st = (pack_state *)ud;
     if (e->owning_gpu < 0 || e->owning_gpu >= (int)st->opt.gpus) {
@@ -764,7 +1153,13 @@ static int emit_entry_cb(const ds4_pack_entry *e, void *ud) {
         }
         if (st->opt.fuse_gate_up && is_gate_expert(e)) {
             emit_fused_gate_up_turbomind_tensor(st, e);
+            if (st->opt.emit_tp_split) {
+                emit_tp_split_turbomind_tensors(st, e);
+            }
             if (!st->opt.keep_separate_gate_up) return 0;
+        }
+        if (!st->opt.fuse_gate_up && st->opt.emit_tp_split && is_gate_expert(e)) {
+            emit_tp_split_turbomind_tensors(st, e);
         }
         if (st->opt.fuse_gate_up && is_up_expert(e) && !st->opt.keep_separate_gate_up) {
             st->skipped_rows++;

@@ -169,6 +169,15 @@ optimized V100 low-bit expert kernels in the actual hot path.
   a broad 256-slot/16K solution yet. Sprint 151 added the missing correctness
   gate: full one-GPU down output matches the sum of the two TP partials at 768
   and 1536 routes on clean NV2 pairs, with `rel ~= 2.46e-04` and `bad=0`.
+  Sprint 152 completed the stage-count software-pipeline sweep and found
+  2/3/4-stage gate/up fixed probes neutral at both 768 and 1536 routes.
+  Sprint 153 then added the bounded TP appliance-pack contract:
+  `--emit-tp-split` can emit split gate/up and down TurboMind descriptors,
+  context binding accepts the TP rows, and a layer-3 GPU0/GPU3 bounded pack
+  passed partial context smoke. The latest real 2-GPU NV2 proxy remains
+  positive at 768 routes (`1.157x` total-with-copy) and slower at 1536 routes
+  (`0.912x`), so TP is still a narrow one-layer 128-slot/32K candidate, not a
+  production topology replacement.
   Dispatch-policy tuning, dispatch bypass, final scatter fusion, wrapper-level
   activation compaction, separate tail-vectorization, atomic epilogue reduce,
   simple slot widening, fixed-shape gate/down probes, and basic gate/up launch
@@ -2708,6 +2717,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-21 | Completed Sprint 150 two-GPU TP split probe. | The first real two-GPU routed-FFN TP proxy runs the two `1024`-wide halves concurrently on NV2 pairs and includes conservative input/output payload copies. It is positive at 768 routes (`~1.28x` total speedup on pairs `0,3` and `4,7`) but neutral to slower at 1536 routes (`0.85-0.94x`). Next TP work should be a one-stage correctness prototype for 128-slot/32K before any scheduler-wide change. | Sprint 151+ |
 | 2026-05-21 | Completed Sprint 151 two-GPU TP correctness gate. | The TP split proxy now compares full one-GPU routed-FFN output against the FP32 sum of both TP partial outputs. Finite MXFP4 fixtures pass on clean NV2 pairs at both 768 and 1536 routes with `rel ~= 2.46e-04`, `bad=0`, and max absolute difference `6.1035e-05`. The split math is valid; remaining TP risk is production scheduling and payload overlap. | Sprint 152+ |
 | 2026-05-21 | Completed Sprint 152 fused gate/up software-pipeline sweep. | The fused MXFP4 gate/up+gated-SiLU probe now has 3-stage variants, so the 2/3/4-stage question was tested directly. At 768 routes, `m128`, `m128_s3`, and `m128_s4` measured `0.5809`, `0.5863`, and `0.5794 ms`; at 1536 routes, `m128_1536`, `m128_s3_1536`, and `m128_s4_1536` measured `0.8743`, `0.8821`, and `0.8774 ms`. NCU fixed-probe counters were also neutral with identical HMMA counts, so stage-count tuning inside the existing gate/up kernel is exhausted. The next material implementation should either fuse the larger routed-FFN boundary or prototype bounded 2-way TP for 128-slot/32K. | Sprint 153+ |
+| 2026-05-21 | Completed Sprint 153 bounded TP pack contract. | `tools/ds4-v100-appliance-pack --emit-tp-split` now emits split TP TurboMind expert rows for gate/up and down, and the V100 context binder accepts those TP descriptors while keeping normal owner-GPU checks fail-closed. A layer-3, six-expert GPU0/GPU3 bounded pack passed partial context smoke. The real 2-GPU NV2 proxy measured `1.157x` total-with-copy speedup at 768 routes but `0.912x` at 1536 routes, so TP should stay scoped to a one-layer 128-slot/32K prototype. | Sprint 154+ |
 
 ## Open Questions
 

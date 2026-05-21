@@ -4,6 +4,21 @@ Date: 2026-05-21
 
 ## Latest Update
 
+I also moved the tensor-parallel idea one step closer to a real appliance
+contract. `tools/ds4-v100-appliance-pack --emit-tp-split` now emits bounded
+2-way MXFP4 routed-FFN splits for gate/up and down, and the V100 context binder
+accepts those TP expert descriptors while still enforcing normal layer-owner
+rules for non-TP tensors. A layer-3, six-expert bounded pack emitted 8
+TurboMind descriptors, split `tp1` onto GPU3 from GPU0, and passed context
+binding with `turbomind_tensor_count=8`.
+
+The fresh TP evidence is narrow but useful. On the real 2-GPU proxy using NV2
+pair `0,3`, 768 routes measured `0.9769 ms` full one-GPU, `0.5612 ms`
+concurrent half compute, and `0.8446 ms` total with conservative input/output
+copies, for `1.157x` total speedup. At 1536 routes, total-with-copy was slower:
+`1.4264 ms` versus `1.3002 ms` full one-GPU. This keeps 2-way TP as a bounded
+128-slot/32K candidate only; it is not a broad 256-slot/16K topology answer.
+
 I broadened the fused MXFP4 gate/up+gated-SiLU software-pipeline test into a
 2/3/4-stage sweep. The result is now clear: deeper staging inside this single
 fused GEMM is not a material lever. At 768 routed rows, `m128`, `m128_s3`, and
@@ -148,7 +163,8 @@ Software pipelining:
 Tensor parallel variants:
 
 - Not yet implemented in the production scheduler, but now measured with a
-  standalone TP split proxy.
+  standalone TP split proxy and represented in a bounded appliance pack
+  contract.
 - Current runtime is layer-scheduled across the 8 V100s: each GPU owns
   contiguous layers and KV for those layers, and only HC state crosses device
   boundaries.
@@ -157,9 +173,12 @@ Tensor parallel variants:
 - The P2P proxy shows placement matters: NV2 moves 12 MiB in about `0.26 ms`,
   NV1 in about `0.52 ms`, and SYS in about `1.3 ms`.
 - The real 2-GPU proxy shows 768-route total-with-copy speedup of about
-  `1.28x` on NV2 pairs, but 1536-route total-with-copy is neutral to slower.
+  `1.16x-1.28x` on NV2 pairs depending on run, but 1536-route total-with-copy
+  is neutral to slower.
 - The TP split correctness gate passes for 768 and 1536 routes on clean NV2
   pairs, so the split itself is not the blocker.
+- The bounded TP appliance pack emits `ffn_gate_up_exps.tp{0,1}` and
+  `ffn_down_exps.tp{0,1}` rows and passes partial context binding.
 - My current read is that 2-way TP is worth prototyping only for the
   128-slot/32K route shape first, while 8-way expert parallelism is probably
   underfilled because the compact served shape currently has only 6 active
@@ -201,5 +220,5 @@ implementation should choose one larger boundary:
 
 - a true routed-FFN fused/persistent executor that combines gate/up, activation,
   down, and route-weighted reduce; or
-- the smallest production-relevant 2-way TP routed-FFN path, constrained to NV2
-  pairs and the 128-slot/32K tier first.
+- the smallest production-relevant 2-way TP routed-FFN path, constrained to one
+  routed layer on NV2 pairs and the 128-slot/32K tier first.

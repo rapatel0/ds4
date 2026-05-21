@@ -13,6 +13,8 @@ static void usage(FILE *fp) {
             "\n"
             "Options:\n"
             "  --pack-index PATH          Pack index TSV to bind descriptors\n"
+            "  --tm-index PATH            TurboMind pack index TSV to bind descriptors\n"
+            "  --allow-partial            Skip full layer-skeleton validation for bounded packs\n"
             "  --slots N                  Relay active-slot capacity (default 1)\n"
             "  --scratch-bytes N          Scratch budget per GPU\n"
             "  --reserve-mib N            Reserve floor per GPU (default 2048)\n"
@@ -46,6 +48,7 @@ static int next_arg(int *i, int argc, char **argv, const char **out) {
 int main(int argc, char **argv) {
     ds4_v100_context_options opts;
     ds4_v100_context_options_init(&opts);
+    bool allow_partial = false;
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
@@ -60,6 +63,14 @@ int main(int argc, char **argv) {
                 return 2;
             }
             opts.pack_index_path = val;
+        } else if (!strcmp(arg, "--tm-index")) {
+            if (next_arg(&i, argc, argv, &val)) {
+                fprintf(stderr, "missing value for %s\n", arg);
+                return 2;
+            }
+            opts.turbomind_pack_index_path = val;
+        } else if (!strcmp(arg, "--allow-partial")) {
+            allow_partial = true;
         } else if (!strcmp(arg, "--slots")) {
             if (next_arg(&i, argc, argv, &val) || parse_u64(val, &n) || n == 0) {
                 fprintf(stderr, "bad value for %s\n", arg);
@@ -138,13 +149,17 @@ int main(int argc, char **argv) {
         return 1;
     }
     ds4_v100_context_print_report(ctx, stdout);
-    fprintf(stdout, "layer_skeleton_begin\n");
-    if (ds4_v100_context_validate_layer_skeleton(ctx, stdout, err, sizeof(err))) {
-        fprintf(stderr, "layer_skeleton\tFAIL\t%s\n", err);
-        ds4_v100_context_close(ctx);
-        return 1;
+    if (allow_partial) {
+        fprintf(stdout, "layer_skeleton_result\tSKIPPED_PARTIAL\n");
+    } else {
+        fprintf(stdout, "layer_skeleton_begin\n");
+        if (ds4_v100_context_validate_layer_skeleton(ctx, stdout, err, sizeof(err))) {
+            fprintf(stderr, "layer_skeleton\tFAIL\t%s\n", err);
+            ds4_v100_context_close(ctx);
+            return 1;
+        }
+        fprintf(stdout, "layer_skeleton_result\tOK\n");
     }
-    fprintf(stdout, "layer_skeleton_result\tOK\n");
     fprintf(stdout, "context_smoke_result\tOK\n");
     ds4_v100_context_close(ctx);
     return 0;

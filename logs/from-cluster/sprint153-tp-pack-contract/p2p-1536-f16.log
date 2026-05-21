@@ -1,0 +1,8 @@
+[p2p_reduce_proxy] devices=8 routes=1536 hidden=4096 bytes_per_value=2 payload_mib=12.00 warmup=20 iters=200
+[p2p_reduce_proxy] src=0 dst=1 peer_access=1 copy_ms=0.5204 payload_gbps=24.18
+[p2p_reduce_proxy] src=0 dst=3 peer_access=1 copy_ms=0.2614 payload_gbps=48.13
+[p2p_reduce_proxy] src=0 dst=4 peer_access=1 copy_ms=0.2614 payload_gbps=48.13
+[p2p_reduce_proxy] src=0 dst=5 peer_access=1 copy_ms=1.3028 payload_gbps=9.66
+[p2p_reduce_proxy] src=4 dst=5 peer_access=1 copy_ms=0.5206 payload_gbps=24.17
+[p2p_reduce_proxy] src=4 dst=7 peer_access=1 copy_ms=0.2616 payload_gbps=48.10
+[p2p_reduce_proxy] src=3 dst=7 peer_access=1 copy_ms=0.5205 payload_gbps=24.17

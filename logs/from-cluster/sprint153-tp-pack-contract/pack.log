@@ -1,0 +1,17 @@
+appliance packed blk.3.ffn_down_exps.weight experts=6/256 gpu=0 weight_offset=0 scale_offset=25165824 k_pack=0x341321
+appliance packed blk.3.ffn_gate_up_exps.weight experts=6/256 gpu=0 fused_N=4096 interleaved=1 weight_offset=26738688 scale_offset=77070336 k_pack=0x341321
+appliance packed blk.3.ffn_gate_up_exps.tp0.weight experts=6/256 gpu=0 half=0 fused_N=2048 weight_offset=80216064 scale_offset=105381888 k_pack=0x341321
+appliance packed blk.3.ffn_down_exps.tp0.weight experts=6/256 gpu=0 half=0 N=4096 K=1024 weight_offset=106954752 scale_offset=119537664 k_pack=0x341321
+appliance packed blk.3.ffn_gate_up_exps.tp1.weight experts=6/256 gpu=3 half=1 fused_N=2048 weight_offset=0 scale_offset=25165824 k_pack=0x341321
+appliance packed blk.3.ffn_down_exps.tp1.weight experts=6/256 gpu=3 half=1 N=4096 K=1024 weight_offset=26738688 scale_offset=39321600 k_pack=0x341321
+appliance packed blk.3.ffn_gate_exps.weight experts=6/256 gpu=0 weight_offset=120324096 scale_offset=145489920 k_pack=0x341321
+appliance packed blk.3.ffn_up_exps.weight experts=6/256 gpu=0 weight_offset=147062784 scale_offset=172228608 k_pack=0x341321
+ds4-v100-appliance-pack: wrote /workspace/ds4-tp-split-pack-s153 source_rows=0 tm_rows=8 skipped_rows=1325 source_bytes=0 tm_weight_bytes=201326592 tm_scale_bytes=12582912
+ds4-v100-appliance-pack: gpu0.weights bytes=173801472
+ds4-v100-appliance-pack: gpu1.weights bytes=0
+ds4-v100-appliance-pack: gpu2.weights bytes=0
+ds4-v100-appliance-pack: gpu3.weights bytes=40108032
+ds4-v100-appliance-pack: gpu4.weights bytes=0
+ds4-v100-appliance-pack: gpu5.weights bytes=0
+ds4-v100-appliance-pack: gpu6.weights bytes=0
+ds4-v100-appliance-pack: gpu7.weights bytes=0
