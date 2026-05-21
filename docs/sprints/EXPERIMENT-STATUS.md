@@ -31,7 +31,11 @@ the vision target. Sprint 128 added compact active-expert scheduling for the
 packed TurboMind path, promoted it as the launcher default, and raised the
 existing fused appliance default to `45.888778` generated tok/s. The best
 Sprint 128 opt-in stack, interleaved gated appliance plus compact schedule plus
-route-row-reduce, reached `46.394722` generated tok/s.
+route-row-reduce, reached `46.394722` generated tok/s. Sprint 129 exposed
+TurboMind dispatch policy selection and tested the safe `reuse` policy against
+the default compact path. `reuse` was neutral at `45.813841` vs `45.840691`
+generated tok/s, and TurboMind `measure` hit a full-appliance measurer fatal,
+so dispatch-policy tuning is not the next throughput lever.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
@@ -89,6 +93,7 @@ to slightly worse.
 | 126 | Routed-expert stage profiler | Correct; full 43-layer profile showed gate/up `47.0%`, down `23.4%`, route build `16.8%`, gather `3.7%`, SwiGLU `3.2%`, scatter `4.6%` of profiled routed-FFN time; no-profile served sanity was `43.453309` | Ship default-off diagnostic; use it to target larger TurboMind/persistent expert work |
 | 127 | TurboMind gated-SiLU interleaved pack | Correct; standalone gated grouped path was `1.47x-1.55x` faster than separate gate/up, full 43-layer gated profile removed standalone SwiGLU and reduced profiled routed-FFN total from `28.242 ms` to `26.734 ms`; served A/B was `43.933293` vs `43.691032` control | Keep opt-in/off; confirms format-aware epilogue fusion, but does not materially change the topline |
 | 128 | TurboMind compact active-expert schedule | Correct; full smokes passed on both the interleaved gated and existing fused appliances, compact served A/B was `46.328184` vs `43.879880`, compact+route-row-reduce reached `46.394722`, and the fused-appliance launcher default reached `45.888778` | Ship/default as `DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1`; keep gated-SiLU and route-row-reduce opt-in |
+| 129 | TurboMind dispatch policy probe | Correct for `default` and `reuse`; `reuse` served at `45.813841` vs `45.840691` default, while unsafe `measure` aborted the full scheduler in TurboMind's measurer | Keep `default`; block `measure`/`append` unless `DS4_V100_TURBOMIND_ALLOW_UNSAFE_MEASURE=1`; move to persistent routed-FFN work |
 
 ## Remaining
 
@@ -110,6 +115,8 @@ to slightly worse.
     opt-in gain, and Sprint 124 showed the packed TurboMind route-row reduce is
     correct but not a promoted throughput win. Sprint 125 showed batched
     grouped attention output-A is also correct but below the promotion bar.
+    Sprint 129 showed TurboMind dispatch policy tuning is either neutral
+    (`reuse`) or unsafe in the full appliance path (`measure`).
     The useful version needs packed decode, activation staging, MMA, and
     epilogue work in one tensor-core-oriented kernel with useful tile fill.
     Sprint 122 further showed that merely chunking slots to feed wider kernels

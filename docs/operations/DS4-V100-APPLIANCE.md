@@ -153,6 +153,8 @@ DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC=0
 DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE=0
 DS4_V100_TURBOMIND_GATED_SILU=0
 DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1
+DS4_V100_TURBOMIND_DISPATCH_POLICY=default
+DS4_V100_TURBOMIND_ALLOW_UNSAFE_MEASURE=0
 DS4_V100_TURBOMIND_PROFILE=0
 DS4_V100_HOST=127.0.0.1
 DS4_V100_PORT=18080
@@ -231,6 +233,14 @@ active-expert schedule. It keeps the existing sorted route rows but presents
 at most `total_routes` grouped entries to TurboMind instead of the full
 256-expert schedule. This is the default after Sprint 128; set it to `0` to
 roll back to the full 256-expert grouped schedule.
+
+`DS4_V100_TURBOMIND_DISPATCH_POLICY` selects TurboMind's grouped GEMM launch
+policy. `default` keeps the normal heuristic/cache path. `reuse` requests a
+cache lookup before falling back to the heuristic path. `measure` and `append`
+exercise TurboMind's in-process measurer and are blocked by the launcher unless
+`DS4_V100_TURBOMIND_ALLOW_UNSAFE_MEASURE=1`; Sprint 129 showed the full
+appliance path can hit a TurboMind measurer invalid-argument fatal, so those
+policies are diagnostics only.
 
 `DS4_V100_TURBOMIND_PROFILE=1` is a Sprint 126 diagnostic for the production
 routed-expert path. It prints per-GPU CUDA-event totals for route build,

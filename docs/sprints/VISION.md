@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: codex
-revision: 131
+revision: 132
 ---
 
 # Vision: DS4 V100 Appliance
@@ -95,13 +95,17 @@ optimized V100 low-bit expert kernels in the actual hot path.
   see at most `total_routes` groups instead of the full 256-expert schedule.
   That is now a launcher default: the existing fused appliance reached
   `45.888778` generated tok/s, and the interleaved gated appliance with compact
-  plus route-row-reduce opt-in reached `46.394722`. The project remains far
-  below the practical serving target, so the next meaningful step is still
-  larger execution-boundary work: a persistent grouped routed-expert pipeline
-  that software-pipelines packed MXFP4 dequant, gate/up HMMA, gated activation,
-  down HMMA, and weighted scatter/reduce, or a real SM70 software-pipelined F8
-  shared-FFN/attention-output kernel that preserves the current served
-  topology.
+  plus route-row-reduce opt-in reached `46.394722`. Sprint 129 then exposed
+  TurboMind dispatch policy selection. The safe `reuse` policy was neutral at
+  `45.813841` versus a `45.840691` default control, and unsafe `measure`
+  aborted the full scheduler inside TurboMind's measurer, so dispatch-policy
+  tuning is not the missing throughput lever. The project remains far below the
+  practical serving target, so the next meaningful step is still larger
+  execution-boundary work: a narrow DS4-only persistent grouped routed-expert
+  pipeline that software-pipelines packed MXFP4 dequant, gate/up HMMA, gated
+  activation, down HMMA, and weighted scatter/reduce for the current 16-slot
+  compact routed shape, or a real SM70 software-pipelined F8
+  shared-FFN/attention-output kernel that preserves the current served topology.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation

@@ -30,6 +30,7 @@
 #include <cuda_bf16.h>
 #include <cstdio>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 #include <mutex>
@@ -125,6 +126,35 @@ inline int bits_per_weight(int ggml_type) {
 // callers can pass it back at mul-mat time without storing turbomind types.
 inline int encode_pack(uint32_t p) { return (int)p; }
 inline tmg::Pack decode_pack(int p) { return (tmg::Pack)(uint32_t)p; }
+
+inline bool allow_unsafe_measure_dispatch() {
+    const char * allow = std::getenv("DS4_V100_TURBOMIND_ALLOW_UNSAFE_MEASURE");
+    return allow && (std::strcmp(allow, "1") == 0 ||
+                     std::strcmp(allow, "true") == 0 ||
+                     std::strcmp(allow, "on") == 0);
+}
+
+inline tmg::DispatchPolicy dispatch_policy_from_env() {
+    const char * policy = std::getenv("DS4_V100_TURBOMIND_DISPATCH_POLICY");
+    if (!policy || !policy[0]) {
+        policy = std::getenv("GGML_TURBOMIND_DISPATCH_POLICY");
+    }
+    if (!policy || !policy[0] || std::strcmp(policy, "default") == 0) {
+        return tmg::DispatchPolicy::kDefault;
+    }
+    if (std::strcmp(policy, "measure") == 0) {
+        return allow_unsafe_measure_dispatch() ?
+            tmg::DispatchPolicy::kMeasure : tmg::DispatchPolicy::kDefault;
+    }
+    if (std::strcmp(policy, "reuse") == 0) {
+        return tmg::DispatchPolicy::kReuse;
+    }
+    if (std::strcmp(policy, "append") == 0) {
+        return allow_unsafe_measure_dispatch() ?
+            tmg::DispatchPolicy::kAppend : tmg::DispatchPolicy::kDefault;
+    }
+    return tmg::DispatchPolicy::kDefault;
+}
 
 }  // namespace
 
@@ -468,7 +498,7 @@ extern "C" GGML_TM_EXPORT int ggml_turbomind_mul_mat(
     workspace.flags           = s->d_flags;
 
     tmg::Operation op{};
-    op.dispatch  = tmg::DispatchPolicy::kDefault;
+    op.dispatch  = dispatch_policy_from_env();
     op.epilogue  = tmg::Epilogue::kNone;
     op.quant_a   = tmg::QuantDesc{tmg::QuantType::kNone, 0};
     if (ggml_type == GGML_TM_DTYPE_FP16) {
@@ -626,7 +656,7 @@ extern "C" GGML_TM_EXPORT int ggml_turbomind_mul_mat_grouped(
     workspace.flags           = s->d_flags;
 
     tmg::Operation op{};
-    op.dispatch  = tmg::DispatchPolicy::kDefault;
+    op.dispatch  = dispatch_policy_from_env();
     op.epilogue  = tmg::Epilogue::kNone;
     op.quant_a   = tmg::QuantDesc{tmg::QuantType::kNone, 0};
     op.quant_b   = (ggml_type == GGML_TM_DTYPE_FP16)
@@ -766,7 +796,7 @@ extern "C" GGML_TM_EXPORT int ggml_turbomind_mul_mat_grouped_total_tokens(
     workspace.flags           = s->d_flags;
 
     tmg::Operation op{};
-    op.dispatch  = tmg::DispatchPolicy::kDefault;
+    op.dispatch  = dispatch_policy_from_env();
     op.epilogue  = tmg::Epilogue::kNone;
     op.quant_a   = tmg::QuantDesc{tmg::QuantType::kNone, 0};
     op.quant_b   = (ggml_type == GGML_TM_DTYPE_FP16)
@@ -896,7 +926,7 @@ extern "C" GGML_TM_EXPORT int ggml_turbomind_mul_mat_grouped_gated_silu_total_to
     workspace.flags           = s->d_flags;
 
     tmg::Operation op{};
-    op.dispatch  = tmg::DispatchPolicy::kDefault;
+    op.dispatch  = dispatch_policy_from_env();
     op.epilogue  = tmg::Epilogue::kGatedSilu;
     op.quant_a   = tmg::QuantDesc{tmg::QuantType::kNone, 0};
     op.quant_b   = (ggml_type == GGML_TM_DTYPE_FP16)
