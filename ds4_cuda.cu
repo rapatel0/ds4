@@ -3055,6 +3055,100 @@ __global__ static void arena_f8_e4m3_b128_matmul_batch_rows2_kernel(
     }
 }
 
+__global__ static void arena_f8_e4m3_b128_matmul_batch_hmma_shared_down_kernel(
+        float *out,
+        const uint8_t *base,
+        const float *x,
+        uint32_t row_stride_bytes,
+        uint32_t n_tokens) {
+#if __CUDA_ARCH__ >= 700
+    namespace wmma = nvcuda::wmma;
+    enum {
+        DS4_ROWS = 4096,
+        DS4_COLS = 2048,
+        WARPS_PER_BLOCK = 4,
+        TILE_M = 16,
+        TILE_N = 16,
+        TILE_K = 16,
+        ROWS_PER_BLOCK = WARPS_PER_BLOCK * TILE_N,
+    };
+
+    const uint32_t tid = threadIdx.x;
+    const uint32_t warp = tid >> 5u;
+    if (warp >= WARPS_PER_BLOCK) return;
+
+    const uint32_t row_block = blockIdx.x * ROWS_PER_BLOCK;
+
+    __shared__ __half a_sh[TILE_M * TILE_K];
+    __shared__ __half b_sh[WARPS_PER_BLOCK * TILE_K * TILE_N];
+    __shared__ float c_sh[WARPS_PER_BLOCK * TILE_M * TILE_N];
+
+    wmma::fragment<wmma::matrix_a, TILE_M, TILE_N, TILE_K, __half, wmma::row_major> a_frag;
+    wmma::fragment<wmma::matrix_b, TILE_M, TILE_N, TILE_K, __half, wmma::col_major> b_frag;
+    wmma::fragment<wmma::accumulator, TILE_M, TILE_N, TILE_K, float> c_frag;
+    wmma::fill_fragment(c_frag, 0.0f);
+
+    for (uint32_t k0 = 0; k0 < DS4_COLS; k0 += TILE_K) {
+        for (uint32_t i = tid; i < TILE_M * TILE_K; i += blockDim.x) {
+            const uint32_t token = i >> 4u;
+            const uint32_t k = i & 15u;
+            float v = 0.0f;
+            if (token < n_tokens) {
+                v = x[(uint64_t)token * DS4_COLS + k0 + k];
+            }
+            a_sh[i] = __float2half_rn(v);
+        }
+
+        for (uint32_t i = tid; i < WARPS_PER_BLOCK * TILE_K * TILE_N; i += blockDim.x) {
+            const uint32_t wtile = i >> 8u;
+            const uint32_t local = i & 255u;
+            const uint32_t out_col = local >> 4u;
+            const uint32_t k = local & 15u;
+            const uint32_t row = row_block + wtile * TILE_N + out_col;
+            float w = 0.0f;
+            if (row < DS4_ROWS) {
+                const uint32_t col = k0 + k;
+                const uint8_t *row_base = base + (uint64_t)row * row_stride_bytes;
+                const uint8_t *block = row_base + (uint64_t)(col >> 7u) * 129ull;
+                w = arena_e4m3fn_to_f32(block[1u + (col & 127u)]) *
+                    arena_e8m0_to_f32(block[0]);
+            }
+            b_sh[i] = __float2half_rn(w);
+        }
+        __syncthreads();
+
+        wmma::load_matrix_sync(a_frag, a_sh, TILE_K);
+        wmma::load_matrix_sync(b_frag, b_sh + warp * TILE_K * TILE_N, TILE_K);
+        wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+        __syncthreads();
+    }
+
+    wmma::store_matrix_sync(c_sh + warp * TILE_M * TILE_N,
+                            c_frag,
+                            TILE_N,
+                            wmma::mem_row_major);
+    __syncthreads();
+
+    for (uint32_t i = tid; i < WARPS_PER_BLOCK * TILE_M * TILE_N; i += blockDim.x) {
+        const uint32_t wtile = i >> 8u;
+        const uint32_t local = i & 255u;
+        const uint32_t token = local >> 4u;
+        const uint32_t out_col = local & 15u;
+        const uint32_t row = row_block + wtile * TILE_N + out_col;
+        if (token < n_tokens && row < DS4_ROWS) {
+            out[(uint64_t)token * DS4_ROWS + row] =
+                c_sh[wtile * TILE_M * TILE_N + local];
+        }
+    }
+#else
+    (void)out;
+    (void)base;
+    (void)x;
+    (void)row_stride_bytes;
+    (void)n_tokens;
+#endif
+}
+
 __global__ static void arena_f8_e4m3_b128_matmul_ptrs_kernel(
         float *out,
         const uint8_t *base,
@@ -6072,6 +6166,16 @@ static int cuda_f8_grouped_ds4_fast_enabled(void) {
             strcmp(v, "OFF") != 0);
 }
 
+static int cuda_f8_hmma_shared_down_enabled(void) {
+    return cuda_env_flag_enabled("DS4_CUDA_F8_HMMA_SHARED_DOWN");
+}
+
+static int cuda_f8_hmma_shared_down_shape_ok(uint32_t rows, uint32_t cols, uint32_t n_tokens) {
+    return rows == 4096u &&
+           cols == 2048u &&
+           (n_tokens == 4u || n_tokens == 8u);
+}
+
 static uint64_t cuda_f8_f16_arena_cache_reserve_bytes(void) {
     int present = 0;
     const uint64_t mib = cuda_parse_mib_env("DS4_CUDA_F8_F16_CACHE_RESERVE_MIB", &present);
@@ -6240,7 +6344,10 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_batch_f32(
         return 1;
     }
     if (!cuda_ok(cudaSetDevice(arena->gpu), "f8 source batch matmul set device")) return 1;
-    if (g_cublas_ready && n_tokens > 1) {
+    const int use_hmma_shared_down =
+        cuda_f8_hmma_shared_down_enabled() &&
+        cuda_f8_hmma_shared_down_shape_ok(view->rows, view->cols, n_tokens);
+    if (!use_hmma_shared_down && g_cublas_ready && n_tokens > 1) {
         const __half *w_f16 = cuda_f8_f16_arena_ptr(arena, view, "f8_arena_batch");
         if (w_f16) {
             const uint64_t xh_count = (uint64_t)n_tokens * view->cols;
@@ -6274,7 +6381,15 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_batch_f32(
         }
     }
     const uint8_t *base = (const uint8_t *)((const char *)arena->ptr + view->arena_offset);
-    if (cuda_f8_rowpair_enabled() && view->rows > 1u) {
+    if (use_hmma_shared_down) {
+        dim3 grid((view->rows + 63u) / 64u, 1, 1);
+        arena_f8_e4m3_b128_matmul_batch_hmma_shared_down_kernel<<<grid, 128>>>(
+            (float *)out_f32->ptr,
+            base,
+            (const float *)x_f32->ptr,
+            view->row_stride_bytes,
+            n_tokens);
+    } else if (cuda_f8_rowpair_enabled() && view->rows > 1u) {
         dim3 grid((view->rows + 1u) / 2u, n_tokens, 1);
         arena_f8_e4m3_b128_matmul_batch_rows2_kernel<<<grid, 256>>>(
             (float *)out_f32->ptr,

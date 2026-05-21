@@ -6,9 +6,9 @@ Last updated: 2026-05-20
 
 The appliance is correct and served on the 8x V100 node, but it is not yet in
 the practical throughput range from the vision. The current default is the
-Sprint 111 fused TurboMind gate/up appliance path; Sprint 113 repeated that
-default at `33.589285` generated tok/s in the same binary used for the rejected
-direct FFN-delta probe.
+Sprint 111 fused TurboMind gate/up appliance path; Sprint 114 added a guarded
+shared-down F8 HMMA path that is correct and slightly faster in its own A/B,
+but the delta is inside run noise and below the Sprint 113 best repeat.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
@@ -49,6 +49,7 @@ to slightly worse.
 | 111 | Production fused TurboMind gate_up appliance | Correct; `33.430971` fused vs `31.312694` same-binary separate control at 8-slot/256K; `21.403909` at 4-slot/1M | Shipped/default for fused packs |
 | 112 | Fused appliance profile and F8 warp-scale probe | F8 row-pair/grouped kernels were `54.58%` GPU time; warp-scale was correct but `29.009399` vs `33.484099` control at 8-slot/256K | Kept opt-in/off |
 | 113 | Direct FFN delta accumulation | Correct; `33.360404` direct delta vs `33.589285` control at 8-slot/256K | Kept opt-in/off |
+| 114 | Shared-down F8 HMMA batch kernel | Correct; `33.550415` HMMA vs `33.397763` control at 8-slot/256K, and `21.396331` vs `21.365610` at 4-slot/1M | Kept opt-in/off |
 
 ## Remaining
 
@@ -60,9 +61,9 @@ to slightly worse.
   - TurboMind MXFP4 expert occupancy and route-expanded activation layout.
   - Persistent/grouped expert execution beyond the shipped Sprint 111 fused
     gate_up launch reduction.
-  - A real tiled/persistent F8 projection rewrite. The Sprint 112 warp-scale
-    probe and Sprint 113 direct-delta probe show that very small scalar or
-    host-boundary changes can regress.
+  - A larger fused F8 FFN rewrite. The Sprint 112 warp-scale probe,
+    Sprint 113 direct-delta probe, and Sprint 114 small-M HMMA shared-down
+    probe show that isolated single-boundary changes are not enough.
 - Decide whether the next production step is a deeper TurboMind adapter change
   or a lower-level CUTLASS/TurboMind-inspired persistent kernel probe.
 
@@ -76,6 +77,7 @@ The default launcher now keeps `DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=0`,
 DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=1
 DS4_V100_CUDA_F8_ROW4=1
 DS4_V100_CUDA_F8_WARP_SCALE=1
+DS4_V100_CUDA_F8_HMMA_SHARED_DOWN=1
 DS4_V100_FFN_DIRECT_DELTA=1
 DS4_V100_TURBOMIND_FUSED_GATE_UP=0
 ```

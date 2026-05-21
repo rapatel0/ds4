@@ -4,19 +4,22 @@ Last updated: 2026-05-20
 
 ## Topline
 
-Current best 8-slot throughput is the Sprint 111 fused TurboMind gate/up
+Current best 8-slot throughput is still the Sprint 111 fused TurboMind gate/up
 appliance path. It turns each layer's separate gate and up expert GEMMs into one
 offline-packed `gate_up` grouped GEMM and keeps the same per-GPU VRAM footprint
-as the previous appliance. Sprint 113 repeated the default path at
-`33.589285` generated tok/s while rejecting direct FFN-delta accumulation as a
-default because it was slightly slower.
+as the previous appliance. Sprint 114 added a guarded Volta HMMA path for the
+shared-down F8 batch projection; it is correct and slightly faster in its own
+same-binary run, but the gain is inside run noise and below the Sprint 113
+default repeat, so it remains opt-in.
 
 | Mode | Context | Slots | Generated tok/s | Continuation tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
 | Production fused gate_up appliance | 262,144 | 8 | `33.589285` | `31.489955` | 8/8 token match |
+| Shared-down F8 HMMA opt-in | 262,144 | 8 | `33.550415` | `31.453514` | 8/8 token match |
 | Direct FFN delta opt-in | 262,144 | 8 | `33.360404` | `31.275379` | 8/8 token match |
 | Same-binary separate gate/up control | 262,144 | 8 | `31.312694` | `29.355651` | 8/8 token match |
 | Production fused gate_up appliance | 1,048,576 | 4 | `21.403909` | `20.066165` | 4/4 token match |
+| Shared-down F8 HMMA opt-in | 1,048,576 | 4 | `21.396331` | `20.059061` | 4/4 token match |
 | Small-route opt-in | 1,048,576 | 4 | `20.249531` | `18.983935` | 4/4 token match |
 
 The last pre-Sprint107 committed baseline was Sprint 104 at `31.451185`
@@ -37,6 +40,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 111 | Production fused TurboMind gate_up appliance | Correct; 8-slot/256K improved to `33.430971` from `31.312694` same-binary separate control | Shipped/default for fused packs |
 | 112 | Fused appliance profile plus F8 warp-scale probe | Profile showed F8 row-pair/grouped kernels at `54.58%` GPU time; warp-scale was correct but regressed 8-slot/256K to `29.009399` vs `33.484099` control | Kept opt-in/off |
 | 113 | Direct FFN delta accumulation and cached FFN input ptr table | Correct, but `33.360404` vs `33.589285` control at 8-slot/256K | Kept opt-in/off |
+| 114 | DS4-shaped shared-down F8 HMMA batch kernel | Correct; `33.550415` vs `33.397763` control at 8-slot/256K and `21.396331` vs `21.365610` at 4-slot/1M | Kept opt-in/off |
 
 ## Sprint 106 Profile Takeaway
 
@@ -157,15 +161,25 @@ Sprint 113 tests direct FFN delta accumulation:
   versus `33.589285` control, so `DS4_V100_FFN_DIRECT_DELTA=0` remains the
   default.
 
+Sprint 114 tests a DS4-shaped shared-down F8 HMMA batch kernel:
+
+- the kernel is guarded by `DS4_CUDA_F8_HMMA_SHARED_DOWN=1`;
+- it only dispatches for `rows=4096`, `cols=2048`, and `n_tokens=4/8`;
+- focused target-shape smoke passed against the existing scalar F8 path;
+- full scheduler and selected-token smokes passed with the fused appliance;
+- same-binary A/B showed small positive deltas, but not enough to promote:
+  `33.550415` vs `33.397763` at 8-slot/256K and `21.396331` vs `21.365610`
+  at 4-slot/1M.
+
 ## Next Target
 
 The next target needs to change a larger execution boundary. Fused gate/up
 removed one large grouped GEMM launch per routed layer, but aggregate throughput
 is still only about `33.6` tok/s, far below the practical serving target. The
-fused profile says F8 projections are now the largest bucket, and Sprints 112
-and 113 show that tiny scalar/host-boundary tweaks can regress. The next sprint
-should focus on a real CUTLASS/TurboMind-style tiled F8 projection path or
-deeper TurboMind expert scheduling that raises tensor-core occupancy.
+Sprint 114 HMMA probe shows that a naive small-M WMMA tile is not enough by
+itself. The next sprint should either fuse a larger F8 FFN region
+(gate/up/SwiGLU/down) or deepen TurboMind expert scheduling so the kernel owns
+more work per launch and raises tensor-core occupancy.
 
 The concise current status is also tracked in
 `docs/sprints/EXPERIMENT-STATUS.md`.

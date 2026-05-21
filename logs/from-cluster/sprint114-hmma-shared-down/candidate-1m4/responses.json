@@ -1,0 +1,5 @@
+[{"index":1,"status":200,"elapsed_ms":2950.902,"first_hex":"3136","generated_tokens":16,"continuation_ms":1250.042}
+,{"index":2,"status":200,"elapsed_ms":2947.352,"first_hex":"3136","generated_tokens":16,"continuation_ms":1250.042}
+,{"index":3,"status":200,"elapsed_ms":2950.104,"first_hex":"3136","generated_tokens":16,"continuation_ms":1250.042}
+,{"index":4,"status":200,"elapsed_ms":2948.700,"first_hex":"3136","generated_tokens":16,"continuation_ms":1250.042}
+]

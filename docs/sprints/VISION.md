@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-20
 last_updated_by: codex
-revision: 118
+revision: 119
 ---
 
 # Vision: DS4 V100 Appliance
@@ -48,13 +48,16 @@ optimized V100 low-bit expert kernels in the actual hot path.
   correctness, and improves the 8-slot/256K served target from `31.312694` to
   `33.430971` generated tok/s in a same-binary A/B. The fused 4-slot/1M sanity
   run reached `21.403909` generated tok/s.
-- Sprints 112-113 tested narrower hot-path cleanup around the fused appliance.
+- Sprints 112-114 tested narrower hot-path cleanup around the fused appliance.
   F8 warp-scale hoisting and direct FFN-delta accumulation both passed
   correctness but regressed the primary 8-slot/256K A/B, so they remain opt-in.
-  The current default 8-slot/256K topline is `33.589285` generated tok/s, still
-  far below the practical serving target. The next meaningful step needs a
-  larger kernel-shape change: persistent/tiled F8 projections or deeper
-  TurboMind expert scheduling, not another small host-boundary cleanup.
+  The Sprint 114 shared-down F8 HMMA path also passes correctness and is
+  slightly positive in its own A/B (`33.550415` vs `33.397763`), but the gain is
+  inside run noise and below the current default repeat. The default 8-slot/256K
+  topline remains `33.589285` generated tok/s, still far below the practical
+  serving target. The next meaningful step needs a larger fused F8 FFN region
+  or deeper TurboMind expert scheduling, not another isolated single-boundary
+  cleanup.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation
@@ -745,6 +748,9 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 109 F8 row4 CTA probe | `30.998275` row4 vs `31.380225` row2 control at 256K/8 slots | Measured | Four-output-row CTAs preserve correctness but lose throughput, likely from register pressure and occupancy loss. Row4 remains off by default. |
 | Sprint 110 TurboMind fused gate+up probe | `1.46x-1.53x` faster than separate gate/up grouped calls | Measured | A DS4-shaped fused `N=4096` gate_up MXFP4 grouped GEMM exactly matches separate gate/up outputs and clears the production implementation gate. |
 | Sprint 111 production fused TurboMind gate_up | `33.430971` fused vs `31.312694` separate control at 256K/8 slots; `21.403909` at 1M/4 slots | Measured | Adds offline fused `ffn_gate_up_exps.weight` packing and a fused CUDA routed-FFN path. Full scheduler correctness passes with `tm_layers=43`; selected-token smoke returns token id `926`, hex `3136`. This is the current best observed served throughput. |
+| Sprint 112 F8 warp-scale probe | `29.009399` opt-in vs `33.484099` control at 256K/8 slots | Measured | Warp-broadcast E8M0 scale loading is correct but substantially slower in the fused appliance path. Keep it off. |
+| Sprint 113 direct FFN delta accumulation | `33.360404` opt-in vs `33.589285` control at 256K/8 slots | Measured | Direct shared/routed accumulation into the final FFN delta buffer is correct but slightly slower. Keep it off. |
+| Sprint 114 shared-down F8 HMMA probe | `33.550415` opt-in vs `33.397763` control at 256K/8 slots; `21.396331` vs `21.365610` at 1M/4 slots | Measured | A DS4-shaped Volta WMMA kernel for `tokens x 2048` by `4096 x 2048` shared-down F8 is correct and marginally faster in-run, but the delta is too small and below the default best. Keep it opt-in and use the result to justify larger fused F8 FFN work. |
 | Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
 | Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
