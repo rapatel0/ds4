@@ -26,6 +26,11 @@ using ProbeConfigM64 = Config_MXF4<kColMajor, 0>::Type<
     turbomind::cache_policy::Default,
     turbomind::cache_policy::Stream,
     2, true, 1, 32, 32, 128>;
+using ProbeConfigM64S4 = Config_MXF4<kColMajor, 0>::Type<
+    64, 128, 32, 1, 4, 1,
+    turbomind::cache_policy::Default,
+    turbomind::cache_policy::Stream,
+    4, true, 1, 32, 32, 128>;
 using ProbeConfigM64N256 = Config_MXF4<kColMajor, 0>::Type<
     64, 256, 32, 1, 4, 1,
     turbomind::cache_policy::Default,
@@ -36,11 +41,18 @@ using ProbeConfigM128 = Config_MXF4<kColMajor, 0>::Type<
     turbomind::cache_policy::Default,
     turbomind::cache_policy::Default,
     2, true, 1, 32, 64, 128>;
+using ProbeConfigM128S4 = Config_MXF4<kColMajor, 0>::Type<
+    128, 128, 16, 2, 2, 1,
+    turbomind::cache_policy::Default,
+    turbomind::cache_policy::Default,
+    4, true, 1, 32, 64, 128>;
 
 using ProbeKernelM16 = KernelImpl<typename ProbeConfigM16::Kernel>;
 using ProbeKernelM64 = KernelImpl<typename ProbeConfigM64::Kernel>;
+using ProbeKernelM64S4 = KernelImpl<typename ProbeConfigM64S4::Kernel>;
 using ProbeKernelM64N256 = KernelImpl<typename ProbeConfigM64N256::Kernel>;
 using ProbeKernelM128 = KernelImpl<typename ProbeConfigM128::Kernel>;
+using ProbeKernelM128S4 = KernelImpl<typename ProbeConfigM128S4::Kernel>;
 
 ProbeKernelM16 *probe_kernel_m16()
 {
@@ -54,6 +66,12 @@ ProbeKernelM64 *probe_kernel_m64()
     return kernel;
 }
 
+ProbeKernelM64S4 *probe_kernel_m64_s4()
+{
+    static ProbeKernelM64S4 *kernel = new ProbeKernelM64S4();
+    return kernel;
+}
+
 ProbeKernelM64N256 *probe_kernel_m64n256()
 {
     static ProbeKernelM64N256 *kernel = new ProbeKernelM64N256();
@@ -63,6 +81,12 @@ ProbeKernelM64N256 *probe_kernel_m64n256()
 ProbeKernelM128 *probe_kernel_m128()
 {
     static ProbeKernelM128 *kernel = new ProbeKernelM128();
+    return kernel;
+}
+
+ProbeKernelM128S4 *probe_kernel_m128_s4()
+{
+    static ProbeKernelM128S4 *kernel = new ProbeKernelM128S4();
     return kernel;
 }
 
@@ -222,7 +246,11 @@ int launch_ds4_mxfp4_down_reduce_epilogue(
         !sorted_pairs || !route_weights) {
         return 1;
     }
-    if (num_experts != 6 || total_tokens != 768 || n_routes <= 0) return 2;
+    if (num_experts != 6 ||
+        (total_tokens != 768 && total_tokens != 1536) ||
+        n_routes <= 0) {
+        return 2;
+    }
 
     constexpr int n = 4096;
     constexpr int k = 2048;
@@ -442,6 +470,40 @@ int ggml_turbomind_ds4_mxfp4_gated_silu_768_m64_launch(
                                        stream_v);
 }
 
+int ggml_turbomind_ds4_mxfp4_gated_silu_768_m64_s4_launch(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream_v)
+{
+    if (total_tokens != 768) return 2;
+    return launch_ds4_mxfp4_gated_silu(probe_kernel_m64_s4(),
+                                       A,
+                                       expert_offsets,
+                                       num_experts,
+                                       total_tokens,
+                                       weights_packed,
+                                       scales_packed,
+                                       k_pack_value,
+                                       D,
+                                       barriers,
+                                       barriers_size,
+                                       partials,
+                                       partials_size,
+                                       flags,
+                                       stream_v);
+}
+
 int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128_launch(
     const void*        A,
     const int*         expert_offsets,
@@ -476,6 +538,40 @@ int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128_launch(
                                        stream_v);
 }
 
+int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128_s4_launch(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream_v)
+{
+    if (total_tokens != 768) return 2;
+    return launch_ds4_mxfp4_gated_silu(probe_kernel_m128_s4(),
+                                       A,
+                                       expert_offsets,
+                                       num_experts,
+                                       total_tokens,
+                                       weights_packed,
+                                       scales_packed,
+                                       k_pack_value,
+                                       D,
+                                       barriers,
+                                       barriers_size,
+                                       partials,
+                                       partials_size,
+                                       flags,
+                                       stream_v);
+}
+
 int ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128_launch(
     const void*        A,
     const int*         expert_offsets,
@@ -494,6 +590,74 @@ int ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128_launch(
 {
     if (total_tokens != 1536) return 2;
     return launch_ds4_mxfp4_gated_silu(probe_kernel_m128(),
+                                       A,
+                                       expert_offsets,
+                                       num_experts,
+                                       total_tokens,
+                                       weights_packed,
+                                       scales_packed,
+                                       k_pack_value,
+                                       D,
+                                       barriers,
+                                       barriers_size,
+                                       partials,
+                                       partials_size,
+                                       flags,
+                                       stream_v);
+}
+
+int ggml_turbomind_ds4_mxfp4_gated_silu_1536_m64_s4_launch(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream_v)
+{
+    if (total_tokens != 1536) return 2;
+    return launch_ds4_mxfp4_gated_silu(probe_kernel_m64_s4(),
+                                       A,
+                                       expert_offsets,
+                                       num_experts,
+                                       total_tokens,
+                                       weights_packed,
+                                       scales_packed,
+                                       k_pack_value,
+                                       D,
+                                       barriers,
+                                       barriers_size,
+                                       partials,
+                                       partials_size,
+                                       flags,
+                                       stream_v);
+}
+
+int ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128_s4_launch(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream_v)
+{
+    if (total_tokens != 1536) return 2;
+    return launch_ds4_mxfp4_gated_silu(probe_kernel_m128_s4(),
                                        A,
                                        expert_offsets,
                                        num_experts,
@@ -675,6 +839,47 @@ int ggml_turbomind_ds4_mxfp4_down_768_m128_reduce_launch(
     void*              stream_v)
 {
     if (total_tokens != 768) return 2;
+    (void)probe_kernel_m128();
+    return launch_ds4_mxfp4_down_reduce_epilogue<typename ProbeConfigM128::Kernel>(
+        A,
+        expert_offsets,
+        num_experts,
+        total_tokens,
+        weights_packed,
+        scales_packed,
+        k_pack_value,
+        route_out,
+        sorted_pairs,
+        route_weights,
+        n_routes,
+        barriers,
+        barriers_size,
+        partials,
+        partials_size,
+        flags,
+        stream_v);
+}
+
+int ggml_turbomind_ds4_mxfp4_down_1536_m128_reduce_launch(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    float*             route_out,
+    const int*         sorted_pairs,
+    const float*       route_weights,
+    int                n_routes,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream_v)
+{
+    if (total_tokens != 1536) return 2;
     (void)probe_kernel_m128();
     return launch_ds4_mxfp4_down_reduce_epilogue<typename ProbeConfigM128::Kernel>(
         A,

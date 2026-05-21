@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-21
-last_updated_by: codex
-revision: 147
+last_updated_by: sprint-execute
+revision: 149
 ---
 
 # Vision: DS4 V100 Appliance
@@ -2689,6 +2689,8 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-21 | Completed Sprint 144 SM70 MXFP4 m64n256 tile probe. | The wider-N tile passed standalone correctness and full 43-layer smoke, with a small isolated down improvement (`0.2896 ms` vs `0.2936 ms`), but served 128-slot/32K A/B regressed for both down `m64n256` (`59.791839`) and gate `m64n256` (`59.797232`) versus control (`59.993301`). Keep it opt-in; the next throughput step must be a larger routed-FFN executor or scheduler boundary. | Sprint 145+ |
 | 2026-05-21 | Shipped Sprint 145 256-slot 16K admission. | The planner fits 256 slots at 16K with worst GPU `29.07 GiB / 32.00 GiB` including reserve, full 43-layer smoke passed, and served A/B reached `61.065087` generated tok/s / `57.248519` continuation tok/s with `256/256` token match. The 128/192/256 slot curve is nearly flat, so this is a guarded ceiling rather than the main route to practical throughput. | Sprint 146+ |
 | 2026-05-21 | Completed Sprint 146 1536-route fixed-shape probe. | The 1536-route gate/up and down probes are correct and explicit opt-ins. Gate `m128_1536` improved the standalone compact 256-slot shape (`0.9435 ms` vs `0.9651 ms` generic gated), but served 256-slot/16K A/B was flat to slightly worse: `61.204203` generated / `57.378940` continuation tok/s versus `61.223893` / `57.397400` control. Keep 1536 probes out of `auto`; larger software-pipelined routed-FFN work remains the main path. | Sprint 147+ |
+| 2026-05-21 | Completed Sprint 147 1536-route down-reduce checkpoint. | The down GEMM route-weighted F32 accumulation epilogue now covers the 1536-route compact shape and passed full 43-layer 256-slot smoke. Served A/B was deferred after the strategy pivot toward larger fused-kernel work, so this remains an explicit diagnostic path only. | Sprint 148+ |
+| 2026-05-21 | Completed Sprint 148 stage-4 fused gate/up software-pipeline probe. | A true stage-count software-pipeline variant of the fused MXFP4 gate/up+gated-SiLU kernel was implemented and tested. The 768-route `m128_s4` probe improved the isolated benchmark (`0.5811 ms` vs `0.6033 ms` for `m128`) and passed full 43-layer smoke, but served A/B was only `60.049057` generated / `56.295991` continuation tok/s versus `59.865668` / `56.124063` control, and full-scheduler profiles did not show a reliable gate/up bucket reduction. Keep stage-4 probes opt-in; the next material path is a larger routed-FFN executor boundary or a TP/EP microbenchmark. | Sprint 149+ |
 
 ## Open Questions
 

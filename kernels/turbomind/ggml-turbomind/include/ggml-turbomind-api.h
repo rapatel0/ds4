@@ -270,7 +270,29 @@ int ggml_turbomind_ds4_mxfp4_gated_silu_768_m64(
     void*              D,
     void*              stream  /* cudaStream_t */);
 
+int ggml_turbomind_ds4_mxfp4_gated_silu_768_m64_s4(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
 int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
+int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128_s4(
     const void*        A,
     const int*         expert_offsets,
     int                num_experts,
@@ -286,6 +308,28 @@ int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128(
  * total_tokens = 1536, N = 4096, K = 4096.
  */
 int ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
+int ggml_turbomind_ds4_mxfp4_gated_silu_1536_m64_s4(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
+int ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128_s4(
     const void*        A,
     const int*         expert_offsets,
     int                num_experts,
@@ -355,6 +399,24 @@ int ggml_turbomind_ds4_mxfp4_down_768_m64n256(
  * 128-slot compact routed shape: total_tokens = 768, N = 4096, K = 2048.
  */
 int ggml_turbomind_ds4_mxfp4_down_768_m128_reduce(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    float*             route_out,
+    const int*         sorted_pairs,
+    const float*       route_weights,
+    int                n_routes,
+    void*              stream  /* cudaStream_t */);
+
+/**
+ * Same DS4/V100 down projection route-reduce epilogue for the 256-slot
+ * compact routed shape: total_tokens = 1536, N = 4096, K = 2048.
+ */
+int ggml_turbomind_ds4_mxfp4_down_1536_m128_reduce(
     const void*        A,
     const int*         expert_offsets,
     int                num_experts,

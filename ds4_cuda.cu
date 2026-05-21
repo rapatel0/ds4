@@ -206,13 +206,18 @@ typedef struct {
     tm_pfn_mul_mat_grouped_total_tokens mul_mat_grouped_total_tokens;
     tm_pfn_mul_mat_grouped_gated_silu_total_tokens mul_mat_grouped_gated_silu_total_tokens;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m64;
+    tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m64_s4;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m128;
+    tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m128_s4;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_1536_m128;
+    tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_1536_m64_s4;
+    tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_1536_m128_s4;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m64n256;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_down_768_m128;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_down_1536_m128;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_down_768_m64n256;
     tm_pfn_ds4_mxfp4_down_reduce ds4_mxfp4_down_768_m128_reduce;
+    tm_pfn_ds4_mxfp4_down_reduce ds4_mxfp4_down_1536_m128_reduce;
     int attempted;
     int available;
     int warned;
@@ -1018,12 +1023,24 @@ static int cuda_tm_load_api(void) {
     g_tm_api.ds4_mxfp4_gated_silu_768_m64 =
         (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m64");
+    g_tm_api.ds4_mxfp4_gated_silu_768_m64_s4 =
+        (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m64_s4");
     g_tm_api.ds4_mxfp4_gated_silu_768_m128 =
         (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m128");
+    g_tm_api.ds4_mxfp4_gated_silu_768_m128_s4 =
+        (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m128_s4");
     g_tm_api.ds4_mxfp4_gated_silu_1536_m128 =
         (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128");
+    g_tm_api.ds4_mxfp4_gated_silu_1536_m64_s4 =
+        (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_1536_m64_s4");
+    g_tm_api.ds4_mxfp4_gated_silu_1536_m128_s4 =
+        (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128_s4");
     g_tm_api.ds4_mxfp4_gated_silu_768_m64n256 =
         (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m64n256");
@@ -1039,6 +1056,9 @@ static int cuda_tm_load_api(void) {
     g_tm_api.ds4_mxfp4_down_768_m128_reduce =
         (tm_pfn_ds4_mxfp4_down_reduce)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_down_768_m128_reduce");
+    g_tm_api.ds4_mxfp4_down_1536_m128_reduce =
+        (tm_pfn_ds4_mxfp4_down_reduce)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_down_1536_m128_reduce");
     if (!g_tm_api.api_version || !g_tm_api.init || !g_tm_api.shutdown ||
         !g_tm_api.packed_bytes || !g_tm_api.pack_weight || !g_tm_api.mul_mat_grouped) {
         fprintf(stderr, "ds4: TurboMind library is missing required C ABI symbols\n");
@@ -5828,11 +5848,35 @@ static tm_pfn_ds4_mxfp4_gated_silu cuda_tm_ds4_gated_silu_768_probe(
         if (strcmp(mode, "m64") == 0) {
             return shape768 ? g_tm_api.ds4_mxfp4_gated_silu_768_m64 : nullptr;
         }
+        if (strcmp(mode, "m64_s4") == 0 || strcmp(mode, "m64s4") == 0) {
+            if (shape1536) {
+                return g_tm_api.ds4_mxfp4_gated_silu_1536_m64_s4;
+            }
+            return g_tm_api.ds4_mxfp4_gated_silu_768_m64_s4;
+        }
         if (strcmp(mode, "m64n256") == 0 || strcmp(mode, "n256") == 0) {
             return shape768 ? g_tm_api.ds4_mxfp4_gated_silu_768_m64n256 : nullptr;
         }
         if (strcmp(mode, "m128_1536") == 0 || strcmp(mode, "1536_m128") == 0) {
             return shape1536 ? g_tm_api.ds4_mxfp4_gated_silu_1536_m128 : nullptr;
+        }
+        if (strcmp(mode, "m128_s4") == 0 || strcmp(mode, "m128s4") == 0) {
+            if (shape1536) {
+                return g_tm_api.ds4_mxfp4_gated_silu_1536_m128_s4;
+            }
+            return g_tm_api.ds4_mxfp4_gated_silu_768_m128_s4;
+        }
+        if (strcmp(mode, "m128_s4_1536") == 0 ||
+            strcmp(mode, "m128s4_1536") == 0 ||
+            strcmp(mode, "1536_m128_s4") == 0 ||
+            strcmp(mode, "1536_m128s4") == 0) {
+            return shape1536 ? g_tm_api.ds4_mxfp4_gated_silu_1536_m128_s4 : nullptr;
+        }
+        if (strcmp(mode, "m64_s4_1536") == 0 ||
+            strcmp(mode, "m64s4_1536") == 0 ||
+            strcmp(mode, "1536_m64_s4") == 0 ||
+            strcmp(mode, "1536_m64s4") == 0) {
+            return shape1536 ? g_tm_api.ds4_mxfp4_gated_silu_1536_m64_s4 : nullptr;
         }
         if (strcmp(mode, "m128") == 0 || strcmp(mode, "auto") == 0 ||
             strcmp(mode, "1") == 0 || strcmp(mode, "true") == 0 ||
@@ -5898,20 +5942,26 @@ static tm_pfn_ds4_mxfp4_gated_silu cuda_tm_ds4_down_768_probe(
     return nullptr;
 }
 
-static tm_pfn_ds4_mxfp4_down_reduce cuda_tm_ds4_down_reduce_768_probe(
+static tm_pfn_ds4_mxfp4_down_reduce cuda_tm_ds4_down_reduce_probe(
         const int *token_indices,
         uint32_t total_routes,
         uint32_t n_total_experts,
         int n,
         int k) {
-    if (token_indices || total_routes != 768u || n_total_experts != 6u ||
+    if (token_indices || n_total_experts != 6u ||
         n != 4096 || k != 2048) {
         return nullptr;
     }
     if (!cuda_env_flag_enabled("DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE")) {
         return nullptr;
     }
-    return g_tm_api.ds4_mxfp4_down_768_m128_reduce;
+    if (total_routes == 768u) {
+        return g_tm_api.ds4_mxfp4_down_768_m128_reduce;
+    }
+    if (total_routes == 1536u) {
+        return g_tm_api.ds4_mxfp4_down_1536_m128_reduce;
+    }
+    return nullptr;
 }
 
 static int cuda_tm_compact_schedule_enabled(void) {
@@ -6361,7 +6411,7 @@ static int cuda_tm_grouped_down_reduce_matmul(
         return 0;
     }
     tm_pfn_ds4_mxfp4_down_reduce ds4_reduce_probe =
-        cuda_tm_ds4_down_reduce_768_probe(token_indices, total_routes, n_total_experts, n, k);
+        cuda_tm_ds4_down_reduce_probe(token_indices, total_routes, n_total_experts, n, k);
     if (!ds4_reduce_probe) {
         return 0;
     }
@@ -7023,7 +7073,7 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     }
     const int use_down_reduce_epilogue =
         ok && use_gated_silu &&
-        cuda_tm_ds4_down_reduce_768_probe(nullptr, total_routes, gemm_group_count, (int)hidden, (int)mid);
+        cuda_tm_ds4_down_reduce_probe(nullptr, total_routes, gemm_group_count, (int)hidden, (int)mid);
     if (ok && use_down_reduce_epilogue) {
         if (!accumulate_out) {
             ok = cuda_ok(cudaMemset(out_f32->ptr,

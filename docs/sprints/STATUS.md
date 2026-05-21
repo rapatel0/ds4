@@ -96,6 +96,16 @@ faster in isolation (`0.9435 ms` vs `0.9651 ms` generic gated), but served A/B
 was flat to slightly worse (`61.204203` generated tok/s and `57.378940`
 continuation/decode tok/s versus `61.223893` and `57.397400` control), so the
 1536-route probes remain explicit opt-ins and are not selected by `auto`.
+Sprint 147 extended the down-reduce epilogue to the 1536-route shape and
+validated it with a full 43-layer 256-slot smoke, but served A/B was deferred
+after the strategy pivot to larger fused-kernel work. Sprint 148 tested a real
+stage-4 SM70 software-pipeline variant of the fused MXFP4 gate/up+gated-SiLU
+kernel. The 768-route `m128_s4` probe improved the isolated gate/up benchmark
+(`0.5811 ms` vs `0.6033 ms` for `m128`) and passed full 43-layer smoke, but
+served A/B was only run-noise positive (`60.049057` generated and `56.295991`
+continuation/decode tok/s versus `59.865668` and `56.124063` control), and the
+profile did not show a reliable gate/up bucket reduction. Stage-4 probes remain
+explicit opt-ins.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
@@ -113,6 +123,8 @@ current topology because it gives up too much stage overlap.
 | Sprint 145 192-slot 16K midpoint | 16,384 | 192 | `60.700926` | `56.907118` | 192/192 token match |
 | Sprint 145 128-slot 16K control | 16,384 | 128 | `59.860493` | `56.119213` | 128/128 token match |
 | Sprint 139 gated m128 auto probe | 32,768 | 128 | `60.130047` | `56.371919` | 128/128 token match |
+| Sprint 148 gate `m128_s4` opt-in | 32,768 | 128 | `60.049057` | `56.295991` | 128/128 token match |
+| Sprint 148 same-binary control | 32,768 | 128 | `59.865668` | `56.124063` | 128/128 token match |
 | Sprint 140 gated down-probe-off control | 32,768 | 128 | `60.129772` | `56.371661` | 128/128 token match |
 | Sprint 141 scalar route-row reduce repeat | 32,768 | 128 | `60.112248` | `56.355232` | 128/128 token match |
 | Sprint 141 control repeat | 32,768 | 128 | `60.108232` | `56.351468` | 128/128 token match |

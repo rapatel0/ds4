@@ -95,7 +95,15 @@ isolation (`0.9435 ms` vs `0.9651 ms` generic gated), but served A/B was flat
 to slightly worse: `61.204203` generated tok/s and `57.378940`
 continuation/decode tok/s versus `61.223893` and `57.397400` control. The
 1536-route probes therefore remain explicit opt-ins and are not selected by
-`auto`.
+`auto`. Sprint 147 extended the down-reduce epilogue to that 1536-route shape
+and proved full-scheduler correctness, but served A/B was deferred after the
+strategy pivot to larger fused-kernel work. Sprint 148 tested deeper SM70
+software pipelining in the fused MXFP4 gate/up+gated-SiLU kernel. The
+768-route `m128_s4` probe improved the standalone probe (`0.5811 ms` vs
+`0.6033 ms` for `m128`) and passed full 43-layer smoke, but served A/B was
+only `60.049057` generated / `56.295991` continuation tok/s versus
+`59.865668` / `56.124063` control. The profile did not show a reliable
+gate/up bucket reduction, so stage-4 probes remain explicit opt-ins.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
@@ -179,6 +187,8 @@ to slightly worse.
 | 144 | SM70 MXFP4 m64n256 tile probe | Correct; standalone down improved slightly (`0.2896 ms` vs `0.2936 ms`), but served A/B regressed: control `59.993301`, down `m64n256` `59.791839`, gate `m64n256` `59.797232` | Keep opt-in only; do not promote individual tile tweaks without served wins |
 | 145 | 256-slot 16K short-context admission | Correct; planner worst GPU was `29.07 GiB / 32.00 GiB` including reserve, full 43-layer smoke passed, and served 16K runs reached `59.860493` at 128 slots, `60.700926` at 192 slots, and `61.065087` at 256 slots | Ship guarded 256-slot admission for `ctx <= 16K`; simple slot widening is now mostly exhausted |
 | 146 | 1536-route fixed-shape gate/up and down probes | Correct; standalone gate `m128_1536` improved to `0.9435 ms` vs `0.9651 ms`, but served A/B was `61.204203` vs `61.223893` control and continuation/decode was `57.378940` vs `57.397400` | Keep explicit opt-in only; do not select 1536 probes from `auto` |
+| 147 | 1536-route down-reduce epilogue | Correct; full 43-layer 256-slot smoke passed with `DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE=1` | Keep explicit opt-in only; served A/B deferred for larger fused-kernel work |
+| 148 | SM70 stage-4 fused gate/up software-pipeline probe | Correct; `m128_s4` improved the isolated 768-route probe to `0.5811 ms` vs `0.6033 ms`, but served A/B was only `60.049057` vs `59.865668` control and profile stayed neutral | Keep explicit opt-in only; stage count alone is not the material fused-kernel lever |
 
 ## Remaining
 
@@ -234,6 +244,9 @@ to slightly worse.
     matching 1536-route fixed gate/down probes for that 256-slot shape; the
     microbenchmark improved slightly, but served decode was neutral to
     slightly worse, so fixed-shape specialization alone is not enough.
+    Sprint 148 then tested the stage-count version of software pipelining on
+    the fused gate/up kernel. It improved the isolated 768-route probe but did
+    not reduce the routed-FFN gate/up bucket reliably in the full scheduler.
     Sprint 122 further showed that merely chunking slots to feed wider kernels
     loses too much stage overlap, so the fusion target must match the per-slot
     served topology or replace it with an overlapped scheduler.
@@ -315,3 +328,7 @@ positive in served A/B.
 The 1536-route fixed gate/up and down probes are available after Sprint 146
 for 256-slot/16K diagnostics. They require explicit `m128_1536` or
 `1536_m128` modes and are intentionally not selected by `auto`.
+Stage-4 fused gate/up probes are available after Sprint 148 for diagnostics
+with explicit modes such as `m128_s4`, `m64_s4`, and `m128_s4_1536`. They are
+not selected by `auto` because served and profile results stayed inside the
+run band.

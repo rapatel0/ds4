@@ -285,7 +285,9 @@ interleaved gated-SiLU pack, route-expanded activations, six compact groups,
 and 768 routed rows. Set it to `off` to force generic TurboMind, or `m64` for
 the slower comparison probe. Sprint 144 also adds explicit `m64n256`/`n256`
 selection for tile-shape sweeps; it remains opt-in because served A/B
-regressed against `auto`.
+regressed against `auto`. Sprint 148 adds explicit stage-4 software-pipeline
+probes such as `m128_s4`, `m64_s4`, and `m128_s4_1536`; these also remain
+diagnostic-only because served/profile A/B stayed inside the run band.
 
 `DS4_V100_TURBOMIND_DOWN_PROBE=auto` selects the fixed-shape DS4/V100 m128
 compact down kernel when all production guards match: route-expanded
@@ -299,9 +301,9 @@ keep it off for normal serving.
 `DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE=1` selects the Sprint 142 fixed-shape
 down-GEMM epilogue that applies route weights and atomically accumulates
 directly into `[token, hidden]` rows. It avoids materializing the normal
-`down_routes` reduction surface for the 768-route high-slot shape, but stays
-off by default because same-binary served A/B was only run-noise positive
-against control.
+`down_routes` reduction surface for the 768-route high-slot shape, and Sprint
+147 extends the diagnostic to 1536 routes. It stays off by default because
+same-binary served A/B was only run-noise positive against control.
 
 `DS4_V100_TURBOMIND_DISPATCH_POLICY` selects TurboMind's grouped GEMM launch
 policy. `default` keeps the normal heuristic/cache path. `reuse` requests a

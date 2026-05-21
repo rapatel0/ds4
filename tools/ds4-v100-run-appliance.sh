@@ -467,8 +467,8 @@ esac
 case "$DS4_V100_TURBOMIND_GATE_UP_PROBE" in
     0|false|off|none) DS4_V100_TURBOMIND_GATE_UP_PROBE=off ;;
     1|true|on|auto) DS4_V100_TURBOMIND_GATE_UP_PROBE=auto ;;
-    m64|m128|m64n256|n256) ;;
-    *) fail "DS4_V100_TURBOMIND_GATE_UP_PROBE must be off, auto, m64, m128, or m64n256" ;;
+    m64|m128|m64n256|n256|m64_s4|m64s4|m128_s4|m128s4|m128_1536|1536_m128|m128_s4_1536|m128s4_1536|1536_m128_s4|1536_m128s4|m64_s4_1536|m64s4_1536|1536_m64_s4|1536_m64s4) ;;
+    *) fail "DS4_V100_TURBOMIND_GATE_UP_PROBE must be off, auto, m64, m128, m64n256, or an explicit stage-4/1536 probe" ;;
 esac
 case "$DS4_V100_TURBOMIND_DOWN_PROBE" in
     0|false|off|none) DS4_V100_TURBOMIND_DOWN_PROBE=off ;;

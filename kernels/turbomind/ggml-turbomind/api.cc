@@ -76,6 +76,21 @@ extern int ggml_turbomind_ds4_mxfp4_gated_silu_768_m64_launch(
     size_t             partials_size,
     int*               flags,
     void*              stream);
+extern int ggml_turbomind_ds4_mxfp4_gated_silu_768_m64_s4_launch(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream);
 extern int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128_launch(
     const void*        A,
     const int*         expert_offsets,
@@ -91,7 +106,52 @@ extern int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128_launch(
     size_t             partials_size,
     int*               flags,
     void*              stream);
+extern int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128_s4_launch(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream);
 extern int ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128_launch(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream);
+extern int ggml_turbomind_ds4_mxfp4_gated_silu_1536_m64_s4_launch(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream);
+extern int ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128_s4_launch(
     const void*        A,
     const int*         expert_offsets,
     int                num_experts,
@@ -167,6 +227,24 @@ extern int ggml_turbomind_ds4_mxfp4_down_768_m64n256_launch(
     int*               flags,
     void*              stream);
 extern int ggml_turbomind_ds4_mxfp4_down_768_m128_reduce_launch(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    float*             route_out,
+    const int*         sorted_pairs,
+    const float*       route_weights,
+    int                n_routes,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream);
+extern int ggml_turbomind_ds4_mxfp4_down_1536_m128_reduce_launch(
     const void*        A,
     const int*         expert_offsets,
     int                num_experts,
@@ -1268,6 +1346,30 @@ extern "C" GGML_TM_EXPORT int ggml_turbomind_ds4_mxfp4_gated_silu_768_m64(
                                        stream_v);
 }
 
+extern "C" GGML_TM_EXPORT int ggml_turbomind_ds4_mxfp4_gated_silu_768_m64_s4(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream_v)
+{
+    return launch_ds4_probe_with_state(ggml_turbomind_ds4_mxfp4_gated_silu_768_m64_s4_launch,
+                                       768,
+                                       A,
+                                       expert_offsets,
+                                       num_experts,
+                                       total_tokens,
+                                       weights_packed,
+                                       scales_packed,
+                                       k_pack_value,
+                                       D,
+                                       stream_v);
+}
+
 extern "C" GGML_TM_EXPORT int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128(
     const void*        A,
     const int*         expert_offsets,
@@ -1292,6 +1394,30 @@ extern "C" GGML_TM_EXPORT int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128(
                                        stream_v);
 }
 
+extern "C" GGML_TM_EXPORT int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128_s4(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream_v)
+{
+    return launch_ds4_probe_with_state(ggml_turbomind_ds4_mxfp4_gated_silu_768_m128_s4_launch,
+                                       768,
+                                       A,
+                                       expert_offsets,
+                                       num_experts,
+                                       total_tokens,
+                                       weights_packed,
+                                       scales_packed,
+                                       k_pack_value,
+                                       D,
+                                       stream_v);
+}
+
 extern "C" GGML_TM_EXPORT int ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128(
     const void*        A,
     const int*         expert_offsets,
@@ -1304,6 +1430,54 @@ extern "C" GGML_TM_EXPORT int ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128(
     void*              stream_v)
 {
     return launch_ds4_probe_with_state(ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128_launch,
+                                       1536,
+                                       A,
+                                       expert_offsets,
+                                       num_experts,
+                                       total_tokens,
+                                       weights_packed,
+                                       scales_packed,
+                                       k_pack_value,
+                                       D,
+                                       stream_v);
+}
+
+extern "C" GGML_TM_EXPORT int ggml_turbomind_ds4_mxfp4_gated_silu_1536_m64_s4(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream_v)
+{
+    return launch_ds4_probe_with_state(ggml_turbomind_ds4_mxfp4_gated_silu_1536_m64_s4_launch,
+                                       1536,
+                                       A,
+                                       expert_offsets,
+                                       num_experts,
+                                       total_tokens,
+                                       weights_packed,
+                                       scales_packed,
+                                       k_pack_value,
+                                       D,
+                                       stream_v);
+}
+
+extern "C" GGML_TM_EXPORT int ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128_s4(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream_v)
+{
+    return launch_ds4_probe_with_state(ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128_s4_launch,
                                        1536,
                                        A,
                                        expert_offsets,
@@ -1436,6 +1610,49 @@ extern "C" GGML_TM_EXPORT int ggml_turbomind_ds4_mxfp4_down_768_m128_reduce(
     }
     if (num_experts != 6 || total_tokens != 768 || n_routes <= 0) return 2;
     return ggml_turbomind_ds4_mxfp4_down_768_m128_reduce_launch(
+        A,
+        expert_offsets,
+        num_experts,
+        total_tokens,
+        weights_packed,
+        scales_packed,
+        k_pack_value,
+        route_out,
+        sorted_pairs,
+        route_weights,
+        n_routes,
+        s->d_barriers,
+        tmg::Gemm::kBarriersSize,
+        s->d_partials,
+        s->partials_size,
+        s->d_flags,
+        stream_v);
+}
+
+extern "C" GGML_TM_EXPORT int ggml_turbomind_ds4_mxfp4_down_1536_m128_reduce(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    float*             route_out,
+    const int*         sorted_pairs,
+    const float*       route_weights,
+    int                n_routes,
+    void*              stream_v)
+{
+    int cur_dev = -1;
+    cudaGetDevice(&cur_dev);
+    State * s = get_state(cur_dev);
+    if (!s || !s->initialized) return 100;
+    if (!A || !expert_offsets || !weights_packed || !scales_packed ||
+        !route_out || !sorted_pairs || !route_weights) {
+        return 1;
+    }
+    if (num_experts != 6 || total_tokens != 1536 || n_routes <= 0) return 2;
+    return ggml_turbomind_ds4_mxfp4_down_1536_m128_reduce_launch(
         A,
         expert_offsets,
         num_experts,
