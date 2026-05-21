@@ -207,7 +207,9 @@ typedef struct {
     tm_pfn_mul_mat_grouped_gated_silu_total_tokens mul_mat_grouped_gated_silu_total_tokens;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m64;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m128;
+    tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m64n256;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_down_768_m128;
+    tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_down_768_m64n256;
     tm_pfn_ds4_mxfp4_down_reduce ds4_mxfp4_down_768_m128_reduce;
     int attempted;
     int available;
@@ -1017,9 +1019,15 @@ static int cuda_tm_load_api(void) {
     g_tm_api.ds4_mxfp4_gated_silu_768_m128 =
         (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m128");
+    g_tm_api.ds4_mxfp4_gated_silu_768_m64n256 =
+        (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m64n256");
     g_tm_api.ds4_mxfp4_down_768_m128 =
         (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_down_768_m128");
+    g_tm_api.ds4_mxfp4_down_768_m64n256 =
+        (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_down_768_m64n256");
     g_tm_api.ds4_mxfp4_down_768_m128_reduce =
         (tm_pfn_ds4_mxfp4_down_reduce)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_down_768_m128_reduce");
@@ -5807,6 +5815,9 @@ static tm_pfn_ds4_mxfp4_gated_silu cuda_tm_ds4_gated_silu_768_probe(
         if (strcmp(mode, "m64") == 0) {
             return g_tm_api.ds4_mxfp4_gated_silu_768_m64;
         }
+        if (strcmp(mode, "m64n256") == 0 || strcmp(mode, "n256") == 0) {
+            return g_tm_api.ds4_mxfp4_gated_silu_768_m64n256;
+        }
         if (strcmp(mode, "m128") == 0 || strcmp(mode, "auto") == 0 ||
             strcmp(mode, "1") == 0 || strcmp(mode, "true") == 0 ||
             strcmp(mode, "on") == 0) {
@@ -5847,6 +5858,9 @@ static tm_pfn_ds4_mxfp4_gated_silu cuda_tm_ds4_down_768_probe(
         strcmp(mode, "1") == 0 || strcmp(mode, "true") == 0 ||
         strcmp(mode, "on") == 0) {
         return g_tm_api.ds4_mxfp4_down_768_m128;
+    }
+    if (strcmp(mode, "m64n256") == 0 || strcmp(mode, "n256") == 0) {
+        return g_tm_api.ds4_mxfp4_down_768_m64n256;
     }
     return nullptr;
 }

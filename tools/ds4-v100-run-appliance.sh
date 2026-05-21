@@ -465,13 +465,14 @@ esac
 case "$DS4_V100_TURBOMIND_GATE_UP_PROBE" in
     0|false|off|none) DS4_V100_TURBOMIND_GATE_UP_PROBE=off ;;
     1|true|on|auto) DS4_V100_TURBOMIND_GATE_UP_PROBE=auto ;;
-    m64|m128) ;;
-    *) fail "DS4_V100_TURBOMIND_GATE_UP_PROBE must be off, auto, m64, or m128" ;;
+    m64|m128|m64n256|n256) ;;
+    *) fail "DS4_V100_TURBOMIND_GATE_UP_PROBE must be off, auto, m64, m128, or m64n256" ;;
 esac
 case "$DS4_V100_TURBOMIND_DOWN_PROBE" in
     0|false|off|none) DS4_V100_TURBOMIND_DOWN_PROBE=off ;;
     1|true|on|auto|m128) DS4_V100_TURBOMIND_DOWN_PROBE=auto ;;
-    *) fail "DS4_V100_TURBOMIND_DOWN_PROBE must be off or auto" ;;
+    m64n256|n256) DS4_V100_TURBOMIND_DOWN_PROBE=m64n256 ;;
+    *) fail "DS4_V100_TURBOMIND_DOWN_PROBE must be off, auto, or m64n256" ;;
 esac
 case "$DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE" in
     0|false|off) DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE=0 ;;

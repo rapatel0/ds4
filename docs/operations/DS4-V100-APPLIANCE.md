@@ -272,13 +272,18 @@ roll back to the full 256-expert grouped schedule.
 DS4/V100 m128 compact gated-SiLU kernel when all production guards match:
 interleaved gated-SiLU pack, route-expanded activations, six compact groups,
 and 768 routed rows. Set it to `off` to force generic TurboMind, or `m64` for
-the slower comparison probe.
+the slower comparison probe. Sprint 144 also adds explicit `m64n256`/`n256`
+selection for tile-shape sweeps; it remains opt-in because served A/B
+regressed against `auto`.
 
 `DS4_V100_TURBOMIND_DOWN_PROBE=auto` selects the fixed-shape DS4/V100 m128
 compact down kernel when all production guards match: route-expanded
 activations, six compact groups, 768 routed rows, `N=4096`, and `K=2048`.
 Sprint 140 keeps it off by default because served A/B was slower than generic
-TurboMind despite the isolated microbenchmark win.
+TurboMind despite the isolated microbenchmark win. Sprint 144 adds explicit
+`m64n256`/`n256` selection for the same down shape; it improved the isolated
+down microbenchmark slightly but regressed served 128-slot/32K throughput, so
+keep it off for normal serving.
 
 `DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE=1` selects the Sprint 142 fixed-shape
 down-GEMM epilogue that applies route weights and atomically accumulates

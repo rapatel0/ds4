@@ -26,6 +26,11 @@ using ProbeConfigM64 = Config_MXF4<kColMajor, 0>::Type<
     turbomind::cache_policy::Default,
     turbomind::cache_policy::Stream,
     2, true, 1, 32, 32, 128>;
+using ProbeConfigM64N256 = Config_MXF4<kColMajor, 0>::Type<
+    64, 256, 32, 1, 4, 1,
+    turbomind::cache_policy::Default,
+    turbomind::cache_policy::Stream,
+    2, true, 1, 32, 64, 128>;
 using ProbeConfigM128 = Config_MXF4<kColMajor, 0>::Type<
     128, 128, 16, 2, 2, 1,
     turbomind::cache_policy::Default,
@@ -34,6 +39,7 @@ using ProbeConfigM128 = Config_MXF4<kColMajor, 0>::Type<
 
 using ProbeKernelM16 = KernelImpl<typename ProbeConfigM16::Kernel>;
 using ProbeKernelM64 = KernelImpl<typename ProbeConfigM64::Kernel>;
+using ProbeKernelM64N256 = KernelImpl<typename ProbeConfigM64N256::Kernel>;
 using ProbeKernelM128 = KernelImpl<typename ProbeConfigM128::Kernel>;
 
 ProbeKernelM16 *probe_kernel_m16()
@@ -45,6 +51,12 @@ ProbeKernelM16 *probe_kernel_m16()
 ProbeKernelM64 *probe_kernel_m64()
 {
     static ProbeKernelM64 *kernel = new ProbeKernelM64();
+    return kernel;
+}
+
+ProbeKernelM64N256 *probe_kernel_m64n256()
+{
+    static ProbeKernelM64N256 *kernel = new ProbeKernelM64N256();
     return kernel;
 }
 
@@ -464,6 +476,40 @@ int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128_launch(
                                        stream_v);
 }
 
+int ggml_turbomind_ds4_mxfp4_gated_silu_768_m64n256_launch(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream_v)
+{
+    if (total_tokens != 768) return 2;
+    return launch_ds4_mxfp4_gated_silu(probe_kernel_m64n256(),
+                                       A,
+                                       expert_offsets,
+                                       num_experts,
+                                       total_tokens,
+                                       weights_packed,
+                                       scales_packed,
+                                       k_pack_value,
+                                       D,
+                                       barriers,
+                                       barriers_size,
+                                       partials,
+                                       partials_size,
+                                       flags,
+                                       stream_v);
+}
+
 int ggml_turbomind_ds4_mxfp4_down_768_m128_launch(
     const void*        A,
     const int*         expert_offsets,
@@ -482,6 +528,43 @@ int ggml_turbomind_ds4_mxfp4_down_768_m128_launch(
 {
     if (total_tokens != 768) return 2;
     return launch_ds4_mxfp4_matmul(probe_kernel_m128(),
+                                   A,
+                                   expert_offsets,
+                                   num_experts,
+                                   total_tokens,
+                                   weights_packed,
+                                   scales_packed,
+                                   k_pack_value,
+                                   4096,
+                                   2048,
+                                   false,
+                                   D,
+                                   barriers,
+                                   barriers_size,
+                                   partials,
+                                   partials_size,
+                                   flags,
+                                   stream_v);
+}
+
+int ggml_turbomind_ds4_mxfp4_down_768_m64n256_launch(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream_v)
+{
+    if (total_tokens != 768) return 2;
+    return launch_ds4_mxfp4_matmul(probe_kernel_m64n256(),
                                    A,
                                    expert_offsets,
                                    num_experts,

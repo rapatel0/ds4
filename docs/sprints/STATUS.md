@@ -78,7 +78,12 @@ tok/s versus `59.987105` same-binary control, so it remains opt-in/off because
 the effect is only run-noise positive. Sprint 143 added first-class prefill
 versus decode metrics to the soak, sustained decode, and aggregate throughput
 harnesses so future A/B runs show prompt replay, continuation decode, and
-aggregate generated rates separately.
+aggregate generated rates separately. Sprint 144 added explicit SM70 MXFP4
+`m64n256` tile probes for the 768-route gate/up and down shapes. Both passed
+full 43-layer smoke; the standalone down probe was slightly faster
+(`0.2896 ms` vs `0.2936 ms`), but served A/B regressed to `59.791839`
+generated tok/s versus `59.993301` control, and gate `m64n256` also regressed
+to `59.797232`. The probes remain explicit opt-ins only.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
@@ -98,6 +103,9 @@ current topology because it gives up too much stage overlap.
 | Sprint 141 indexed-A repeat | 32,768 | 128 | `60.056960` | `56.303400` | 128/128 token match |
 | Sprint 142 down-reduce epilogue opt-in | 32,768 | 128 | `60.041003` | `56.288440` | 128/128 token match |
 | Sprint 141 route-row reduce earlier repeat | 32,768 | 128 | `60.022743` | `56.271322` | 128/128 token match |
+| Sprint 144 control with split metrics | 32,768 | 128 | `59.993301` | `56.243719` | 128/128 token match |
+| Sprint 144 gate m64n256 probe | 32,768 | 128 | `59.797232` | `56.059905` | 128/128 token match |
+| Sprint 144 down m64n256 probe | 32,768 | 128 | `59.791839` | `56.054849` | 128/128 token match |
 | Sprint 140 gated down-probe-auto candidate | 32,768 | 128 | `60.038469` | `56.286064` | 128/128 token match |
 | Sprint 142 down-reduce epilogue control | 32,768 | 128 | `59.987105` | `56.237910` | 128/128 token match |
 | Sprint 139 gated probe-off control | 32,768 | 128 | `60.061899` | `56.308030` | 128/128 token match |
@@ -204,6 +212,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 141 | Half2 route-row reduce tail probe | Correct; full 43-layer 128-slot smoke passed, but 128-slot served A/B was neutral: half2 route-row reduce `60.104512`, scalar route-row reduce `60.112248`, control `60.108232` | Keep half2 reduce opt-in/off; separate tail-kernel vectorization is not enough |
 | 142 | TurboMind down-epilogue reduce probe | Correct; full 43-layer 128-slot smoke passed and served A/B was `60.041003` vs `59.987105` control | Keep off by default; atomic epilogue fusion proves the integration boundary but is not a material throughput win |
 | 143 | Prefill/decode metric split | Correct; V100 one-request smoke reported aggregate prompt `6.841274`, generated `0.760142`, continuation `0.380071`, and response-local prompt/decode rates | Ship benchmark visibility change; no runtime default change |
+| 144 | SM70 MXFP4 m64n256 tile probe | Correct; full 43-layer smoke passed, but served 128-slot/32K A/B regressed: control `59.993301`, down `m64n256` `59.791839`, gate `m64n256` `59.797232` | Keep explicit opt-in only; larger routed-FFN executor work is still the next lever |
 
 ## Sprint 106 Profile Takeaway
 

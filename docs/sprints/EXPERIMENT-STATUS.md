@@ -81,6 +81,9 @@ control, so it remains default-off because the result is only run-noise
 positive. Sprint 143 added explicit prefill versus decode metrics to the soak,
 sustained decode, and aggregate throughput harnesses so future experiments can
 separate prompt replay, continuation decode, and aggregate generated rates.
+Sprint 144 added explicit SM70 MXFP4 `m64n256` probes for the 768-route
+gate/up and down shapes. Both were correct, but served 128-slot/32K A/B
+regressed versus control, so they remain opt-in test hooks only.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
@@ -159,6 +162,7 @@ to slightly worse.
 | 141 | Half2 route-row reduce tail probe | Correct; full 43-layer 128-slot smoke passed, but half2 route-row reduce was `60.104512` vs scalar route-row reduce `60.112248` and control `60.108232` | Keep off by default; separate tail vectorization does not move served throughput |
 | 142 | TurboMind down-epilogue reduce probe | Correct; full 43-layer 128-slot smoke passed and served A/B was `60.041003` vs `59.987105` same-binary control | Keep off by default; the atomic epilogue reduce is correct but not a material throughput win |
 | 143 | Prefill/decode metric split | Correct; one-request V100 smoke emitted aggregate prompt, generated, and continuation tok/s plus response-local prompt/decode rates | Ship benchmark visibility change; use split metrics in future A/B decisions |
+| 144 | SM70 MXFP4 m64n256 tile probe | Correct; standalone down improved slightly (`0.2896 ms` vs `0.2936 ms`), but served A/B regressed: control `59.993301`, down `m64n256` `59.791839`, gate `m64n256` `59.797232` | Keep opt-in only; do not promote individual tile tweaks without served wins |
 
 ## Remaining
 

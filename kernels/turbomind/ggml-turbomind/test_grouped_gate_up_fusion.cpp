@@ -272,8 +272,12 @@ static int run_case(void * lib, const Case & c) {
         dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m64");
     auto probe768_m128 = (pfn_ds4_mxfp4_gated_silu_96)
         dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m128");
+    auto probe768_m64n256 = (pfn_ds4_mxfp4_gated_silu_96)
+        dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m64n256");
     auto down_probe768_m128 = (pfn_ds4_mxfp4_gated_silu_96)
         dlsym(lib, "ggml_turbomind_ds4_mxfp4_down_768_m128");
+    auto down_probe768_m64n256 = (pfn_ds4_mxfp4_gated_silu_96)
+        dlsym(lib, "ggml_turbomind_ds4_mxfp4_down_768_m64n256");
     if (!in || !sh || !pb || !pw || !mmgt || !mmgs) {
         fprintf(stderr, "[gate_up_fusion] dlsym failed\n");
         return 1;
@@ -304,6 +308,11 @@ static int run_case(void * lib, const Case & c) {
         if (variant && std::strcmp(variant, "m128") == 0 && probe768_m128) {
             probe = probe768_m128;
             probe_label = "m128_768";
+        } else if (variant && (std::strcmp(variant, "m64n256") == 0 ||
+                               std::strcmp(variant, "n256") == 0) &&
+                   probe768_m64n256) {
+            probe = probe768_m64n256;
+            probe_label = "m64n256_768";
         } else if ((!variant || std::strcmp(variant, "off") != 0) && probe768_m64) {
             probe = probe768_m64;
             probe_label = "m64_768";
@@ -311,10 +320,23 @@ static int run_case(void * lib, const Case & c) {
     }
     const bool run_probe = probe != nullptr;
     const char *down_probe_mode = std::getenv("DS4_TURBOMIND_DOWN_PROBE");
+    const char *down_probe_label = "none";
+    pfn_ds4_mxfp4_gated_silu_96 down_probe = nullptr;
+    if (compact_groups && total_tokens == 768) {
+        if (down_probe_mode &&
+            (std::strcmp(down_probe_mode, "m64n256") == 0 ||
+             std::strcmp(down_probe_mode, "n256") == 0) &&
+            down_probe768_m64n256) {
+            down_probe = down_probe768_m64n256;
+            down_probe_label = "m64n256_768";
+        } else if (down_probe768_m128 &&
+                   (!down_probe_mode || std::strcmp(down_probe_mode, "off") != 0)) {
+            down_probe = down_probe768_m128;
+            down_probe_label = "m128_768";
+        }
+    }
     const bool run_down_probe =
-        compact_groups &&
-        total_tokens == 768 &&
-        down_probe768_m128 &&
+        down_probe &&
         (!down_probe_mode || std::strcmp(down_probe_mode, "off") != 0);
 
     std::vector<std::vector<block_mxfp4>> gate(active.size());
@@ -483,10 +505,10 @@ static int run_case(void * lib, const Case & c) {
             return 7;
         }
         if (run_down_probe) {
-            rc = down_probe768_m128(d_down_A, d_offsets, num_experts, total_tokens,
-                                    (const void * const *) down_packed.d_w_table,
-                                    (const void * const *) down_packed.d_s_table,
-                                    down_packed.k_pack, d_down_probe, nullptr);
+            rc = down_probe(d_down_A, d_offsets, num_experts, total_tokens,
+                            (const void * const *) down_packed.d_w_table,
+                            (const void * const *) down_packed.d_s_table,
+                            down_packed.k_pack, d_down_probe, nullptr);
             if (rc != 0) {
                 fprintf(stderr, "[gate_up_fusion] down probe warmup rc=%d\n", rc);
                 return 7;
@@ -607,10 +629,10 @@ static int run_case(void * lib, const Case & c) {
     if (run_down_probe) {
         CHECK_CUDA(cudaEventRecord(down_probe_start, nullptr));
         for (int iter = 0; iter < bench_iters; ++iter) {
-            rc = down_probe768_m128(d_down_A, d_offsets, num_experts, total_tokens,
-                                    (const void * const *) down_packed.d_w_table,
-                                    (const void * const *) down_packed.d_s_table,
-                                    down_packed.k_pack, d_down_probe, nullptr);
+            rc = down_probe(d_down_A, d_offsets, num_experts, total_tokens,
+                            (const void * const *) down_packed.d_w_table,
+                            (const void * const *) down_packed.d_s_table,
+                            down_packed.k_pack, d_down_probe, nullptr);
             if (rc != 0) {
                 fprintf(stderr, "[gate_up_fusion] down probe rc=%d\n", rc);
                 return 10;
@@ -740,9 +762,9 @@ static int run_case(void * lib, const Case & c) {
     }
     const float down_probe_rel = down_probe_sum_ref > 0 ? down_probe_sum_abs / down_probe_sum_ref : 0.0f;
     fprintf(stderr,
-            "[gate_up_fusion tpa=%d] total_routes=%d active=%zu separate_ms=%.4f fused_ms=%.4f gated_ms=%.4f probe_label=%s probe_ms=%.4f down_ms=%.4f down_probe_ms=%.4f fused_speedup=%.3fx gated_speedup=%.3fx probe_vs_gated=%.3fx down_probe_vs_generic=%.3fx max_abs_gate=%.4e max_abs_up=%.4e rel=%.4e bad=%d/%zu gated_max_abs=%.4e gated_abs_tol=%.1f gated_rel=%.4e gated_bad=%d/%zu probe_max_abs=%.4e probe_rel=%.4e probe_bad=%d/%zu down_probe_max_abs=%.4e down_probe_rel=%.4e down_probe_bad=%d/%zu k_pack_sep=0x%x k_pack_fused=0x%x k_pack_gated=0x%x k_pack_down=0x%x\n",
+            "[gate_up_fusion tpa=%d] total_routes=%d active=%zu separate_ms=%.4f fused_ms=%.4f gated_ms=%.4f probe_label=%s probe_ms=%.4f down_probe_label=%s down_ms=%.4f down_probe_ms=%.4f fused_speedup=%.3fx gated_speedup=%.3fx probe_vs_gated=%.3fx down_probe_vs_generic=%.3fx max_abs_gate=%.4e max_abs_up=%.4e rel=%.4e bad=%d/%zu gated_max_abs=%.4e gated_abs_tol=%.1f gated_rel=%.4e gated_bad=%d/%zu probe_max_abs=%.4e probe_rel=%.4e probe_bad=%d/%zu down_probe_max_abs=%.4e down_probe_rel=%.4e down_probe_bad=%d/%zu k_pack_sep=0x%x k_pack_fused=0x%x k_pack_gated=0x%x k_pack_down=0x%x\n",
             c.tokens_per_active, total_tokens, active.size(),
-            separate_ms, fused_ms, gated_ms, probe_label, probe_ms, down_ms, down_probe_ms,
+            separate_ms, fused_ms, gated_ms, probe_label, probe_ms, down_probe_label, down_ms, down_probe_ms,
             separate_ms / fused_ms, separate_ms / gated_ms, run_probe ? gated_ms / probe_ms : 0.0f,
             run_down_probe ? down_ms / down_probe_ms : 0.0f,
             max_abs_gate, max_abs_up, rel, bad, 2 * values_per_half,
