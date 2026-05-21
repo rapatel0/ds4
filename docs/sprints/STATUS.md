@@ -12,7 +12,7 @@ the fixed-shape gate/up probe itself only contributes about `0.1%` end-to-end.
 The runtime now reliably coalesces
 high-slot concurrent requests into one tensor batch by resolving launcher
 `auto` microbatch wait to 200 ms at `active_microbatch >= 16`. The best current
-served result is Sprint 145's `61.065087` generated tok/s at 256-slot/16K;
+served result is Sprint 146's `61.223893` generated tok/s at 256-slot/16K;
 the best 32K result remains `60.130047`, and the current 256K production-auto
 repeat remains `43.534061` generated tok/s. Sprint 123 found
 correct opt-in shared-FFN fusions up to `43.887206`. Sprint 124 added a
@@ -90,6 +90,12 @@ validation. It served correctly at `61.065087` generated tok/s and
 `57.248519` continuation/decode tok/s with `256/256` token match, but the
 decode gain over the 128-slot/16K control was only about 2%, so slot widening
 is now a ceiling-expansion tactic rather than the main throughput lever.
+Sprint 146 added explicit 1536-route fixed-shape gate/up and down probes for
+the 256-slot compact routed shape. The gate probe was correct and slightly
+faster in isolation (`0.9435 ms` vs `0.9651 ms` generic gated), but served A/B
+was flat to slightly worse (`61.204203` generated tok/s and `57.378940`
+continuation/decode tok/s versus `61.223893` and `57.397400` control), so the
+1536-route probes remain explicit opt-ins and are not selected by `auto`.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
@@ -101,6 +107,8 @@ current topology because it gives up too much stage overlap.
 
 | Mode | Context | Slots | Generated tok/s | Continuation tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
+| Sprint 146 256-slot 16K control repeat | 16,384 | 256 | `61.223893` | `57.397400` | 256/256 token match |
+| Sprint 146 gate `m128_1536` opt-in | 16,384 | 256 | `61.204203` | `57.378940` | 256/256 token match |
 | Sprint 145 256-slot 16K throughput ceiling | 16,384 | 256 | `61.065087` | `57.248519` | 256/256 token match |
 | Sprint 145 192-slot 16K midpoint | 16,384 | 192 | `60.700926` | `56.907118` | 192/192 token match |
 | Sprint 145 128-slot 16K control | 16,384 | 128 | `59.860493` | `56.119213` | 128/128 token match |
@@ -223,6 +231,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 143 | Prefill/decode metric split | Correct; V100 one-request smoke reported aggregate prompt `6.841274`, generated `0.760142`, continuation `0.380071`, and response-local prompt/decode rates | Ship benchmark visibility change; no runtime default change |
 | 144 | SM70 MXFP4 m64n256 tile probe | Correct; full 43-layer smoke passed, but served 128-slot/32K A/B regressed: control `59.993301`, down `m64n256` `59.791839`, gate `m64n256` `59.797232` | Keep explicit opt-in only; larger routed-FFN executor work is still the next lever |
 | 145 | 256-slot 16K short-context admission | Correct; planner worst GPU was `29.07 GiB / 32.00 GiB` including reserve, full 43-layer smoke passed, and served 16K runs reached `59.860493` at 128 slots, `60.700926` at 192 slots, and `61.065087` at 256 slots | Ship guarded 256-slot admission for `ctx <= 16K`; simple slot widening is now mostly exhausted |
+| 146 | 1536-route fixed-shape gate/up and down probes | Correct; standalone gate `m128_1536` improved to `0.9435 ms` vs `0.9651 ms`, but served A/B was `61.204203` vs `61.223893` control and continuation/decode was `57.378940` vs `57.397400` | Keep explicit opt-in only; do not select 1536 probes from `auto` |
 
 ## Sprint 106 Profile Takeaway
 
@@ -381,16 +390,17 @@ Sprint 116 ships a DS4-shaped batched attention projection F8 HMMA path:
 
 ## Next Target
 
-The next target still needs to change a larger execution boundary. Sprint 123
-showed that per-slot shared-FFN launch/epilogue fusion is correct but too small
-to move the practical target materially, and Sprint 124 showed that removing
-the packed TurboMind output clear plus atomic scatter-add is also too small.
-Aggregate throughput is still only about `44` tok/s, far below the practical
-serving target. The next sprint should attack either the full TurboMind routed
-expert boundary with route-aware activation staging and persistent/grouped
-execution, or a broader CUTLASS/TurboMind-inspired software-pipelined F8 kernel
-that fuses decode, staging, MMA, activation, and epilogue work without giving
-up the current per-step stage overlap.
+The next target still needs to change a larger execution boundary. Sprints
+123-146 show that per-slot shared-FFN fusion, route-row tail fusion, dispatch
+bypass, tile probes, fixed-shape 768/1536-route probes, and simple slot widening
+are correct but too small to close the practical serving gap. Aggregate
+throughput is now about `61` tok/s at 256-slot/16K and about `46` tok/s at
+16-slot/256K, far below the practical serving target. The next sprint should
+attack either the full TurboMind routed expert boundary with route-aware
+activation staging and persistent/grouped execution, or a broader
+CUTLASS/TurboMind-inspired software-pipelined kernel that fuses packed decode,
+staging, MMA, activation, and epilogue work without giving up the current
+per-step stage overlap.
 
 The concise current status is also tracked in
 `docs/sprints/EXPERIMENT-STATUS.md`.

@@ -476,6 +476,40 @@ int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128_launch(
                                        stream_v);
 }
 
+int ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128_launch(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream_v)
+{
+    if (total_tokens != 1536) return 2;
+    return launch_ds4_mxfp4_gated_silu(probe_kernel_m128(),
+                                       A,
+                                       expert_offsets,
+                                       num_experts,
+                                       total_tokens,
+                                       weights_packed,
+                                       scales_packed,
+                                       k_pack_value,
+                                       D,
+                                       barriers,
+                                       barriers_size,
+                                       partials,
+                                       partials_size,
+                                       flags,
+                                       stream_v);
+}
+
 int ggml_turbomind_ds4_mxfp4_gated_silu_768_m64n256_launch(
     const void*        A,
     const int*         expert_offsets,
@@ -527,6 +561,43 @@ int ggml_turbomind_ds4_mxfp4_down_768_m128_launch(
     void*              stream_v)
 {
     if (total_tokens != 768) return 2;
+    return launch_ds4_mxfp4_matmul(probe_kernel_m128(),
+                                   A,
+                                   expert_offsets,
+                                   num_experts,
+                                   total_tokens,
+                                   weights_packed,
+                                   scales_packed,
+                                   k_pack_value,
+                                   4096,
+                                   2048,
+                                   false,
+                                   D,
+                                   barriers,
+                                   barriers_size,
+                                   partials,
+                                   partials_size,
+                                   flags,
+                                   stream_v);
+}
+
+int ggml_turbomind_ds4_mxfp4_down_1536_m128_launch(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream_v)
+{
+    if (total_tokens != 1536) return 2;
     return launch_ds4_mxfp4_matmul(probe_kernel_m128(),
                                    A,
                                    expert_offsets,

@@ -88,11 +88,18 @@ added a guarded 256-slot/16K admission tier. It passed planner, full 43-layer
 smoke, and served correctness, reaching `61.065087` generated tok/s and
 `57.248519` continuation/decode tok/s. The lift over the 128-slot/16K control
 was only about 2%, so the practical ceiling is now clearly a routed-expert
-execution problem rather than a simple slot-count problem.
+execution problem rather than a simple slot-count problem. Sprint 146 added
+explicit 1536-route fixed-shape gate/up and down probes for the 256-slot
+compact routed shape. The gate probe was correct and slightly faster in
+isolation (`0.9435 ms` vs `0.9651 ms` generic gated), but served A/B was flat
+to slightly worse: `61.204203` generated tok/s and `57.378940`
+continuation/decode tok/s versus `61.223893` and `57.397400` control. The
+1536-route probes therefore remain explicit opt-ins and are not selected by
+`auto`.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
-| Short-context ceiling target | 16,384 | 256 | `61.065087` | opt-in | 256/256 token match |
+| Short-context ceiling target | 16,384 | 256 | `61.223893` | opt-in | 256/256 token match |
 | Short-context max-throughput target | 32,768 | 128 | `60.130047` | opt-in | 128/128 token match |
 | Short-context high-throughput target | 65,536 | 64 | `57.322945` | opt-in | 64/64 token match |
 | Short-context throughput target | 131,072 | 32 | `52.840889` | opt-in | 32/32 token match |
@@ -171,6 +178,7 @@ to slightly worse.
 | 143 | Prefill/decode metric split | Correct; one-request V100 smoke emitted aggregate prompt, generated, and continuation tok/s plus response-local prompt/decode rates | Ship benchmark visibility change; use split metrics in future A/B decisions |
 | 144 | SM70 MXFP4 m64n256 tile probe | Correct; standalone down improved slightly (`0.2896 ms` vs `0.2936 ms`), but served A/B regressed: control `59.993301`, down `m64n256` `59.791839`, gate `m64n256` `59.797232` | Keep opt-in only; do not promote individual tile tweaks without served wins |
 | 145 | 256-slot 16K short-context admission | Correct; planner worst GPU was `29.07 GiB / 32.00 GiB` including reserve, full 43-layer smoke passed, and served 16K runs reached `59.860493` at 128 slots, `60.700926` at 192 slots, and `61.065087` at 256 slots | Ship guarded 256-slot admission for `ctx <= 16K`; simple slot widening is now mostly exhausted |
+| 146 | 1536-route fixed-shape gate/up and down probes | Correct; standalone gate `m128_1536` improved to `0.9435 ms` vs `0.9651 ms`, but served A/B was `61.204203` vs `61.223893` control and continuation/decode was `57.378940` vs `57.397400` | Keep explicit opt-in only; do not select 1536 probes from `auto` |
 
 ## Remaining
 
@@ -222,7 +230,10 @@ to slightly worse.
     control. Even a correct weighted-reduce epilogue is too small in this
     atomic form. Sprint 145 confirms that widening to 256 slots at 16K is
     memory-safe and correct, but only moves continuation/decode throughput by
-    about 2% versus the 128-slot/16K control.
+    about 2% versus the 128-slot/16K control. Sprint 146 then tested the
+    matching 1536-route fixed gate/down probes for that 256-slot shape; the
+    microbenchmark improved slightly, but served decode was neutral to
+    slightly worse, so fixed-shape specialization alone is not enough.
     Sprint 122 further showed that merely chunking slots to feed wider kernels
     loses too much stage overlap, so the fusion target must match the per-slot
     served topology or replace it with an overlapped scheduler.
@@ -301,3 +312,6 @@ route-row-reduce and control.
 `DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE=1` is available after Sprint 142, but
 stays default-off because the fused atomic epilogue reduce was only run-noise
 positive in served A/B.
+The 1536-route fixed gate/up and down probes are available after Sprint 146
+for 256-slot/16K diagnostics. They require explicit `m128_1536` or
+`1536_m128` modes and are intentionally not selected by `auto`.

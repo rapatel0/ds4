@@ -144,7 +144,7 @@ static bool env_flag(const char *name, bool fallback) {
 static std::vector<Case> parse_cases_from_env() {
     const char *v = std::getenv("DS4_TURBOMIND_GATE_UP_CASES");
     if (!v || !v[0]) {
-        return {{1}, {4}, {8}, {16}, {32}, {64}, {128}};
+        return {{1}, {4}, {8}, {16}, {32}, {64}, {128}, {256}};
     }
 
     std::vector<Case> out;
@@ -152,10 +152,10 @@ static std::vector<Case> parse_cases_from_env() {
     while (*p) {
         char *end = nullptr;
         long parsed = std::strtol(p, &end, 10);
-        if (end == p || parsed < 1 || parsed > 128) {
+        if (end == p || parsed < 1 || parsed > 256) {
             fprintf(stderr,
                     "[gate_up_fusion] invalid DS4_TURBOMIND_GATE_UP_CASES=%s; "
-                    "expected comma-separated integers in [1,128]\n",
+                    "expected comma-separated integers in [1,256]\n",
                     v);
             std::exit(2);
         }
@@ -272,10 +272,14 @@ static int run_case(void * lib, const Case & c) {
         dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m64");
     auto probe768_m128 = (pfn_ds4_mxfp4_gated_silu_96)
         dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m128");
+    auto probe1536_m128 = (pfn_ds4_mxfp4_gated_silu_96)
+        dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128");
     auto probe768_m64n256 = (pfn_ds4_mxfp4_gated_silu_96)
         dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m64n256");
     auto down_probe768_m128 = (pfn_ds4_mxfp4_gated_silu_96)
         dlsym(lib, "ggml_turbomind_ds4_mxfp4_down_768_m128");
+    auto down_probe1536_m128 = (pfn_ds4_mxfp4_gated_silu_96)
+        dlsym(lib, "ggml_turbomind_ds4_mxfp4_down_1536_m128");
     auto down_probe768_m64n256 = (pfn_ds4_mxfp4_gated_silu_96)
         dlsym(lib, "ggml_turbomind_ds4_mxfp4_down_768_m64n256");
     if (!in || !sh || !pb || !pw || !mmgt || !mmgs) {
@@ -317,6 +321,15 @@ static int run_case(void * lib, const Case & c) {
             probe = probe768_m64;
             probe_label = "m64_768";
         }
+    } else if (compact_groups && total_tokens == 1536) {
+        const char *variant = std::getenv("DS4_TURBOMIND_GATE_UP_PROBE");
+        if (probe1536_m128 &&
+            variant &&
+            (std::strcmp(variant, "m128_1536") == 0 ||
+             std::strcmp(variant, "1536_m128") == 0)) {
+            probe = probe1536_m128;
+            probe_label = "m128_1536";
+        }
     }
     const bool run_probe = probe != nullptr;
     const char *down_probe_mode = std::getenv("DS4_TURBOMIND_DOWN_PROBE");
@@ -333,6 +346,14 @@ static int run_case(void * lib, const Case & c) {
                    (!down_probe_mode || std::strcmp(down_probe_mode, "off") != 0)) {
             down_probe = down_probe768_m128;
             down_probe_label = "m128_768";
+        }
+    } else if (compact_groups && total_tokens == 1536) {
+        if (down_probe1536_m128 &&
+            down_probe_mode &&
+            (std::strcmp(down_probe_mode, "m128_1536") == 0 ||
+             std::strcmp(down_probe_mode, "1536_m128") == 0)) {
+            down_probe = down_probe1536_m128;
+            down_probe_label = "m128_1536";
         }
     }
     const bool run_down_probe =

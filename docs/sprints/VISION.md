@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: codex
-revision: 146
+revision: 147
 ---
 
 # Vision: DS4 V100 Appliance
@@ -149,11 +149,18 @@ optimized V100 low-bit expert kernels in the actual hot path.
   short-context admission ceiling to 256 slots at 16K after planner and
   full-scheduler validation. It served correctly at `61.065087` generated
   tok/s and `57.248519` continuation/decode tok/s, but only improved decode by
-  about 2% over the 128-slot/16K control.
+  about 2% over the 128-slot/16K control. Sprint 146 tested the matching
+  1536-route fixed-shape gate/up and down probes for the 256-slot compact
+  routed shape. The gate probe improved in isolation (`0.9435 ms` vs
+  `0.9651 ms` generic gated), but served A/B was flat to slightly worse:
+  `61.204203` generated tok/s and `57.378940` continuation/decode tok/s versus
+  `61.223893` and `57.397400` control. The 1536-route probes stay explicit
+  opt-ins and are not selected by `auto`.
   Dispatch-policy tuning, dispatch bypass, final scatter fusion, wrapper-level
   activation compaction, separate tail-vectorization, atomic epilogue reduce,
-  simple slot widening, and basic gate/up launch fusion are therefore not the
-  missing throughput lever. The project remains far below the practical
+  simple slot widening, fixed-shape gate/down probes, and basic gate/up launch
+  fusion are therefore not the missing throughput lever. The project remains
+  far below the practical
   serving target, so the next meaningful step is still larger
   execution-boundary work:
   a narrow DS4-only persistent grouped routed-expert pipeline that
@@ -2681,6 +2688,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-21 | Shipped Sprint 143 prefill/decode metric split. | The benchmark harnesses now report aggregate prompt/prefill, generated, and continuation/decode tok/s separately. This is now the required visibility layer for served A/B decisions because aggregate generated tok/s can hide whether a change helps prompt replay or decode. | Sprint 144+ |
 | 2026-05-21 | Completed Sprint 144 SM70 MXFP4 m64n256 tile probe. | The wider-N tile passed standalone correctness and full 43-layer smoke, with a small isolated down improvement (`0.2896 ms` vs `0.2936 ms`), but served 128-slot/32K A/B regressed for both down `m64n256` (`59.791839`) and gate `m64n256` (`59.797232`) versus control (`59.993301`). Keep it opt-in; the next throughput step must be a larger routed-FFN executor or scheduler boundary. | Sprint 145+ |
 | 2026-05-21 | Shipped Sprint 145 256-slot 16K admission. | The planner fits 256 slots at 16K with worst GPU `29.07 GiB / 32.00 GiB` including reserve, full 43-layer smoke passed, and served A/B reached `61.065087` generated tok/s / `57.248519` continuation tok/s with `256/256` token match. The 128/192/256 slot curve is nearly flat, so this is a guarded ceiling rather than the main route to practical throughput. | Sprint 146+ |
+| 2026-05-21 | Completed Sprint 146 1536-route fixed-shape probe. | The 1536-route gate/up and down probes are correct and explicit opt-ins. Gate `m128_1536` improved the standalone compact 256-slot shape (`0.9435 ms` vs `0.9651 ms` generic gated), but served 256-slot/16K A/B was flat to slightly worse: `61.204203` generated / `57.378940` continuation tok/s versus `61.223893` / `57.397400` control. Keep 1536 probes out of `auto`; larger software-pipelined routed-FFN work remains the main path. | Sprint 147+ |
 
 ## Open Questions
 

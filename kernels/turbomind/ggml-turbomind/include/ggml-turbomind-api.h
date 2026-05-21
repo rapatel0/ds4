@@ -281,6 +281,21 @@ int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128(
     void*              D,
     void*              stream  /* cudaStream_t */);
 
+/**
+ * Fixed-shape DS4/V100 probe for the 256-slot compact routed gate/up shape:
+ * total_tokens = 1536, N = 4096, K = 4096.
+ */
+int ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
 int ggml_turbomind_ds4_mxfp4_gated_silu_768_m64n256(
     const void*        A,
     const int*         expert_offsets,
@@ -297,6 +312,21 @@ int ggml_turbomind_ds4_mxfp4_gated_silu_768_m64n256(
  * Uses MXFP4 down expert rows with total_tokens = 768, N = 4096, K = 2048.
  */
 int ggml_turbomind_ds4_mxfp4_down_768_m128(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
+/**
+ * Fixed-shape DS4/V100 probe for the 256-slot compact routed down projection:
+ * total_tokens = 1536, N = 4096, K = 2048.
+ */
+int ggml_turbomind_ds4_mxfp4_down_1536_m128(
     const void*        A,
     const int*         expert_offsets,
     int                num_experts,
