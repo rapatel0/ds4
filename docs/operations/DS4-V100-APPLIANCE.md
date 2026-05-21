@@ -160,6 +160,10 @@ serving and `0` for one-slot serving. Increase it only when concurrent clients
 arrive unevenly enough to split batches; decrease it for latency-sensitive
 single-request testing.
 
+For throughput serving, `ctx=262144` now admits up to 16 slots. The launcher
+keeps the long-context tier memory-safe by rejecting slot counts above the
+planner-backed context cap, including 16-slot `ctx=1048576` configs.
+
 Set `DS4_V100_CUDA_PROFILER_WINDOW=1` only under `nvprof` or Nsight tooling.
 It starts/stops the CUDA profiler around generation batches after startup
 warmup, so profiles represent the served decode path rather than appliance

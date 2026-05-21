@@ -4,16 +4,19 @@ Last updated: 2026-05-21
 
 ## Topline
 
-Current default throughput is the Sprint 111 fused TurboMind gate/up appliance,
-the Sprint 115 shared gate/up SwiGLU HMMA path, the Sprint 116 batched
-attention-projection F8 HMMA path for active 4/8-slot batches, and Sprint 119
-event-ordered handoff for multi-slot per-step serving. Sprint 114 shared-down
-HMMA remains opt-in: combined pair+down set an 8-slot best in that sprint but
-regressed 4-slot/1M. Sprint 117 and 118 showed scalar per-slot fusion and
-naive single-token WMMA are not enough.
+Current 8-slot default throughput is the Sprint 111 fused TurboMind gate/up
+appliance, the Sprint 115 shared gate/up SwiGLU HMMA path, the Sprint 116
+batched attention-projection F8 HMMA path for active 4/8-slot batches, and
+Sprint 119 event-ordered handoff for multi-slot per-step serving. Sprint 121
+adds a 16-slot 256K throughput mode that better fills Volta HMMA token tiles.
+Sprint 114 shared-down HMMA remains opt-in: combined pair+down set an 8-slot
+best in that sprint but regressed 4-slot/1M. Sprint 117 and 118 showed scalar
+per-slot fusion and naive single-token WMMA are not enough.
 
 | Mode | Context | Slots | Generated tok/s | Continuation tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
+| Sprint 121 16-slot throughput mode | 262,144 | 16 | `43.659461` | `40.930745` | 16/16 token match |
+| Sprint 121 same-binary 8-slot control | 262,144 | 8 | `34.445844` | `32.292979` | 8/8 token match |
 | Sprint 120 current default repeat | 262,144 | 8 | `34.490294` | `32.334651` | 8/8 token match |
 | Single scalar fusion opt-in repeat | 262,144 | 8 | `34.689964` | `32.521841` | 8/8 token match |
 | Single row-pair fusion opt-in | 262,144 | 8 | `34.380968` | `32.232157` | 8/8 token match |
@@ -63,6 +66,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 118 | Single-token HMMA for the hot `4096 x 8192` F8 projection | Correct and traced, but regressed to `16.083451` vs `33.502249` same-binary control | Kept opt-in/off; naive n=1 WMMA is not viable |
 | 119 | Event-ordered stage handoff | Correct; `34.433252` vs `33.379839` at 8-slot/256K and `21.771077` vs `21.566859` at 4-slot/1M | Shipped/default as `DS4_V100_ASYNC_EVENT_HANDOFF=auto` |
 | 120 | Single shared gate/up/SwiGLU row-pair probe | Correct; `34.380968` row-pair vs `34.490294` default and `34.689964` scalar single-fusion at 8-slot/256K | Kept opt-in/off; row-pair compaction does not beat the default |
+| 121 | 16-slot 256K throughput mode | Correct; `43.659461` at 16-slot/256K vs `34.445844` same-binary 8-slot control | Shipped as admitted 256K mode with context-aware launcher guard |
 
 ## Sprint 106 Profile Takeaway
 

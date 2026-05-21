@@ -36,7 +36,7 @@ static void usage(FILE *fp) {
     fprintf(fp,
             "usage: tests/cuda_v100_full_scheduler_smoke --index FILE "
             "[--model FILE | --shard-dir DIR | --appliance-dir DIR] [--tm-index FILE] "
-            "[--token N] [--position N] [--stages N] [--slots N] "
+            "[--token N] [--position N] [--stages N] [--slots N] [--ctx N] "
             "[--expect-tm-layers N]\n");
 }
 
@@ -132,6 +132,7 @@ int main(int argc, char **argv) {
     int position = 16;
     int stages = DS4_V100_EXPECTED_GPUS;
     int slots = 1;
+    uint64_t ctx = 1048576ULL;
     int expect_tm_layers = -1;
 
     for (int i = 1; i < argc; i++) {
@@ -157,6 +158,8 @@ int main(int argc, char **argv) {
             stages = parse_int_arg(argv[++i], "--stages", DS4_V100_EXPECTED_GPUS);
         } else if (!strcmp(argv[i], "--slots") && i + 1 < argc) {
             slots = parse_int_arg(argv[++i], "--slots", DS4_V100_SCHED_MAX_SLOTS);
+        } else if (!strcmp(argv[i], "--ctx") && i + 1 < argc) {
+            ctx = (uint64_t)parse_int_arg(argv[++i], "--ctx", 2000000);
         } else if (!strcmp(argv[i], "--expect-tm-layers") && i + 1 < argc) {
             expect_tm_layers = parse_int_arg(argv[++i], "--expect-tm-layers",
                                              DS4_V100_N_LAYERS);
@@ -208,6 +211,7 @@ int main(int argc, char **argv) {
     opts.model_map = model.ptr;
     opts.model_size = model.size;
     opts.kv_active_slots = (uint64_t)slots;
+    opts.kv_ctx_tokens = ctx;
 
     char err[512] = {0};
     for (int i = 0; i < stages; i++) {

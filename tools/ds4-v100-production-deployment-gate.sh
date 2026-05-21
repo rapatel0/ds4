@@ -161,8 +161,8 @@ case "$slots" in ''|0|*[!0-9]*) fail "--slots must be a positive integer" ;; esa
 case "$active_microbatch" in ''|0|*[!0-9]*) fail "--active-microbatch must be a positive integer" ;; esac
 case "$port" in ''|0|*[!0-9]*) fail "--port must be a positive integer" ;; esac
 
-if [ "$slots" -lt 1 ] || [ "$slots" -gt 8 ]; then
-    fail "--slots must be in [1,8]"
+if [ "$slots" -lt 1 ] || [ "$slots" -gt 16 ]; then
+    fail "--slots must be in [1,16]"
 fi
 if [ "$active_microbatch" -lt 1 ] || [ "$active_microbatch" -gt "$slots" ]; then
     fail "--active-microbatch must be in [1,slots]"

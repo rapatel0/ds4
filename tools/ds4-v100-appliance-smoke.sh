@@ -171,12 +171,12 @@ case "$active_microbatch" in
         ;;
 esac
 
-if [ "$slots" -lt 1 ] || [ "$slots" -gt 8 ]; then
-    echo "ds4-v100-appliance-smoke: --slots must be in [1,8]" >&2
+if [ "$slots" -lt 1 ] || [ "$slots" -gt 16 ]; then
+    echo "ds4-v100-appliance-smoke: --slots must be in [1,16]" >&2
     exit 2
 fi
-if [ "$active_microbatch" -lt 1 ] || [ "$active_microbatch" -gt 8 ]; then
-    echo "ds4-v100-appliance-smoke: --active-microbatch must be in [1,8]" >&2
+if [ "$active_microbatch" -lt 1 ] || [ "$active_microbatch" -gt 16 ]; then
+    echo "ds4-v100-appliance-smoke: --active-microbatch must be in [1,16]" >&2
     exit 2
 fi
 if [ "$active_microbatch" -gt "$slots" ]; then

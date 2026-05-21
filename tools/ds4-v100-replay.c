@@ -690,15 +690,17 @@ static replay_cli_options parse_options(int argc, char **argv) {
             opt.ctx = parse_u64_arg(need_arg(&i, argc, argv, arg), arg);
         } else if (!strcmp(arg, "--slots")) {
             uint64_t v = parse_u64_arg(need_arg(&i, argc, argv, arg), arg);
-            if (v > 8) {
-                fprintf(stderr, "ds4-v100-replay: --slots must be in [1,8]\n");
+            if (v > DS4_V100_SCHED_MAX_SLOTS) {
+                fprintf(stderr, "ds4-v100-replay: --slots must be in [1,%u]\n",
+                        DS4_V100_SCHED_MAX_SLOTS);
                 exit(2);
             }
             opt.slots = (uint32_t)v;
         } else if (!strcmp(arg, "--active-microbatch")) {
             uint64_t v = parse_u64_arg(need_arg(&i, argc, argv, arg), arg);
-            if (v > 8) {
-                fprintf(stderr, "ds4-v100-replay: --active-microbatch must be in [1,8]\n");
+            if (v > DS4_V100_SCHED_MAX_SLOTS) {
+                fprintf(stderr, "ds4-v100-replay: --active-microbatch must be in [1,%u]\n",
+                        DS4_V100_SCHED_MAX_SLOTS);
                 exit(2);
             }
             opt.active_microbatch = (uint32_t)v;

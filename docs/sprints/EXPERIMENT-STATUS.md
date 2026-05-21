@@ -5,15 +5,17 @@ Last updated: 2026-05-21
 ## Topline
 
 The appliance is correct and served on the 8x V100 node, but it is not yet in
-the practical throughput range from the vision. The current default is the
-Sprint 111 fused TurboMind gate/up appliance plus the Sprint 115 shared
+the practical throughput range from the vision. The current 8-slot default is
+the Sprint 111 fused TurboMind gate/up appliance plus the Sprint 115 shared
 gate/up SwiGLU F8 HMMA path, Sprint 116 batched attention-projection F8 HMMA
 path for active 4/8-slot batches, and Sprint 119 event-ordered handoff for
-multi-slot per-step serving.
+multi-slot per-step serving. Sprint 121 adds an admitted 16-slot 256K
+throughput mode.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
-| Throughput serving target | 262,144 | 8 | `34.689964` | `34.490294` | 8/8 token match |
+| Throughput serving target | 262,144 | 16 | `43.659461` | `43.659461` | 16/16 token match |
+| 8-slot compatibility target | 262,144 | 8 | `34.689964` | `34.490294` | 8/8 token match |
 | Long-context target | 1,048,576 | 4 | `21.771077` | `21.771077` | 4/4 token match |
 
 The older `20.249531` long-context result used the Sprint 108 small-route build
@@ -28,6 +30,7 @@ to slightly worse.
   `3136`, selected token id `926`.
 - HTTP served soak benchmarks at:
   - `ctx=262144`, `slots=8`, `active_microbatch=8`, 16 generated tokens.
+  - `ctx=262144`, `slots=16`, `active_microbatch=16`, 16 generated tokens.
   - `ctx=1048576`, `slots=4`, `active_microbatch=4`, 16 generated tokens.
 - MTP exact commit path was previously validated, but it is not the current
   throughput default because exact verification did not improve tok/s.
@@ -57,10 +60,11 @@ to slightly worse.
 | 118 | Single-token HMMA for the hot `4096 x 8192` F8 projection | Correct and traced as `plain/hmma_single`, but `16.083451` vs `33.502249` same-binary control at 8-slot/256K | Keep opt-in/off; do not broaden single-token WMMA |
 | 119 | Event-ordered stage handoff for per-step multi-slot serving | Correct; `34.433252` vs `33.379839` at 8-slot/256K and `21.771077` vs `21.566859` at 4-slot/1M | Shipped/default as `DS4_V100_ASYNC_EVENT_HANDOFF=auto` |
 | 120 | Single-token shared gate/up/SwiGLU row-pair fusion | Correct; current default repeat was `34.490294`, scalar single fusion was `34.689964`, and row-pair single fusion was `34.380968` at 8-slot/256K | Keep opt-in/off; row-pair compaction is not the missing kernel lever |
+| 121 | 16-slot 256K throughput mode | Correct; `43.659461` at 16-slot/256K vs `34.445844` same-binary 8-slot control | Keep as admitted 256K throughput mode; reject unsafe 16-slot long-context configs |
 
 ## Remaining
 
-- Close the throughput gap. The current `~34` tok/s aggregate is far below the
+- Close the throughput gap. The current best `~44` tok/s aggregate is far below the
   `~1k-2k` practical target discussed in the vision.
 - Improve GPU utilization. The latest profile says the bottleneck is device
   kernel shape/occupancy, not disk, host RAM, or bulk PCIe/NVLink traffic.
@@ -85,8 +89,10 @@ The default launcher now keeps `DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=0`,
 `DS4_V100_ENABLE_BATCH_ATTN_PROJ=1`, and
 `DS4_V100_CUDA_F8_HMMA_ATTN_BATCH=1` are default.
 `DS4_V100_ASYNC_EVENT_HANDOFF=auto` enables event-ordered handoff for
-multi-slot per-step serving and resolves off for one-slot latency configs. The
-opt-in diagnostic paths can be enabled, or defaults rolled back, with:
+multi-slot per-step serving and resolves off for one-slot latency configs.
+`ctx=262144` can now admit 16 slots; the launcher rejects 16-slot 1M configs
+before allocation. The opt-in diagnostic paths can be enabled, or defaults
+rolled back, with:
 
 ```text
 DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=1

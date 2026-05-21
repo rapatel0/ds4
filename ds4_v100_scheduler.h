@@ -16,7 +16,7 @@ typedef struct ds4_v100_stage_scheduler ds4_v100_stage_scheduler;
 typedef struct ds4_v100_stage_scheduler_snapshot ds4_v100_stage_scheduler_snapshot;
 
 enum {
-    DS4_V100_SCHED_MAX_SLOTS = 8,
+    DS4_V100_SCHED_MAX_SLOTS = 16,
 };
 
 typedef struct {

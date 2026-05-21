@@ -42,6 +42,7 @@ enum {
     DS4_N_INDEXER_HEAD     = 64,
     DS4_N_INDEXER_HEAD_DIM = 128,
     DS4_N_HC               = 4,
+    DS4_PLAN_MAX_SLOTS     = 16,
 };
 
 typedef struct {
@@ -517,7 +518,7 @@ static uint64_t plan_total_no_reserve(const gpu_plan *p) {
 static uint32_t admitted_slots_for_ctx(const options *opt, uint64_t ctx, uint64_t *worst_total_out) {
     uint32_t admitted = 0;
     uint64_t last_worst = 0;
-    for (uint32_t slots = 1; slots <= 8; slots++) {
+    for (uint32_t slots = 1; slots <= DS4_PLAN_MAX_SLOTS; slots++) {
         uint64_t worst = 0;
         bool ok = true;
         for (uint32_t gpu = 0; gpu < opt->gpus; gpu++) {
@@ -566,7 +567,7 @@ static void compute_plan_worst(const options *opt,
 
 static void print_planner_json(const options *opt) {
     static const uint64_t tiers[] = { 131072ULL, 262144ULL, 524288ULL, 1048576ULL };
-    static const uint32_t target_slots[] = { 1, 2, 4, 8 };
+    static const uint32_t target_slots[] = { 1, 2, 4, 8, 16 };
 
     uint64_t worst = 0;
     uint32_t worst_gpu = 0;

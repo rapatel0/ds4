@@ -155,8 +155,8 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-case "$plan_slots" in ''|0|*[!0-9]*) fail "--plan-slots must be in [1,8]" ;; esac
-case "$smoke_slots" in ''|0|*[!0-9]*) fail "--smoke-slots must be in [1,8]" ;; esac
+case "$plan_slots" in ''|0|*[!0-9]*) fail "--plan-slots must be in [1,16]" ;; esac
+case "$smoke_slots" in ''|0|*[!0-9]*) fail "--smoke-slots must be in [1,16]" ;; esac
 case "$active_microbatch" in ''|0|*[!0-9]*) fail "--active-microbatch must be in [1,slots]" ;; esac
 if [ "$active_microbatch" -gt "$smoke_slots" ]; then
     fail "--active-microbatch must be <= --smoke-slots"
@@ -268,8 +268,8 @@ run_smoke() {
     return 0
 }
 
-if [ "$smoke_slots" -gt 8 ]; then
-    fail "--smoke-slots must be <= 8"
+if [ "$smoke_slots" -gt 16 ]; then
+    fail "--smoke-slots must be <= 16"
 fi
 
 run_smoke "$port" || fail "appliance smoke failed"

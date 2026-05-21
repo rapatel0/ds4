@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: codex
-revision: 123
+revision: 124
 ---
 
 # Vision: DS4 V100 Appliance
@@ -63,8 +63,12 @@ optimized V100 low-bit expert kernels in the actual hot path.
   shipped event-ordered handoff as the multi-slot per-step default, raising the
   measured 8-slot/256K appliance target to `34.433252` and 4-slot/1M to
   `21.771077`. Sprint 120 implemented a row-pair per-slot shared
-  gate/up/SwiGLU probe, but it did not beat the default. The project remains
-  far below the practical serving target. The next meaningful step needs
+  gate/up/SwiGLU probe, but it did not beat the default. Sprint 121 raised the
+  active-slot ceiling to 16 for the 256K tier and measured `43.659461`
+  generated tok/s with `16/16` token matches, versus `34.445844` for the
+  same-binary 8-slot control. The project remains far below the practical
+  serving target, but this result confirms that exposing more active rows to
+  the existing HMMA/TurboMind paths is useful. The next meaningful step needs
   profile-guided larger execution-boundary work: deeper TurboMind expert
   scheduling, persistent grouped expert execution, or a real SM70
   software-pipelined F8 shared-FFN/attention-output kernel.
@@ -762,8 +766,9 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 113 direct FFN delta accumulation | `33.360404` opt-in vs `33.589285` control at 256K/8 slots | Measured | Direct shared/routed accumulation into the final FFN delta buffer is correct but slightly slower. Keep it off. |
 | Sprint 114 shared-down F8 HMMA probe | `33.550415` opt-in vs `33.397763` control at 256K/8 slots; `21.396331` vs `21.365610` at 1M/4 slots | Measured | A DS4-shaped Volta WMMA kernel for `tokens x 2048` by `4096 x 2048` shared-down F8 is correct and marginally faster in-run, but the delta is too small and below the default best. Keep it opt-in and use the result to justify larger fused F8 FFN work. |
 | Sprint 115 shared gate/up SwiGLU F8 HMMA | `33.578236` default vs `33.292541` control at 256K/8 slots; `21.455638` vs `21.430420` at 1M/4 slots | Measured | A DS4-shaped Volta WMMA kernel computes shared gate and up projections from the same activation tile, then applies SwiGLU. This path is now the default. Combined with Sprint 114 shared-down HMMA, it reaches `33.674684` at 256K/8 slots but regresses 1M/4 slots, so shared-down remains opt-in. |
-| Sustained benchmark without major kernel changes | `~5-20` tok/s | Medium | Current evidence is at the low end; more slots will not help much until multi-token request state is batched rather than reset/serialized. |
-| Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
+| Sprint 121 16-slot 256K throughput mode | `43.659461` at 256K/16 slots vs `34.445844` same-binary 8-slot control | Measured | Raising the active-slot ceiling fills more Volta HMMA token lanes and increases TurboMind route counts. The launcher admits 16 slots only for 256K-class contexts and rejects unsafe 16-slot 1M configs before allocation. |
+| Sustained benchmark without major kernel changes | `~20-45` tok/s | Medium | Current evidence reaches the low end of the continuous-batching band only at 256K/16 slots; more slots help when they fill existing HMMA/TurboMind tile shapes, but this is still far below the practical target. |
+| Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Sprint 121 reached `43.659461` tok/s at 16 slots/256K. Further progress requires persistent per-slot state, no per-request reset, multi-token batching, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
 | Hero synthetic benchmark | `~1,000-3,000+` tok/s | Speculative | Requires short context, high concurrency, persistent grouped kernels, MTP commit, and excellent load balance. |
 
@@ -2570,6 +2575,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-21 | Completed Sprint 118 single-token HMMA probe. | The hot `4096 x 8192` single-token HMMA path was correct but regressed badly (`16.083451` vs `33.502249`), confirming that naive WMMA wastes too much of the token tile. | Sprint 119+ |
 | 2026-05-21 | Shipped Sprint 119 event-ordered stage handoff. | `DS4_V100_ASYNC_EVENT_HANDOFF=auto` now enables CUDA event-ordered handoff for multi-slot per-step serving. It raised 8-slot/256K to `34.433252` generated tok/s and 4-slot/1M to `21.771077`, with token matches preserved. | Sprint 120+ |
 | 2026-05-21 | Completed Sprint 120 single shared gate/up/SwiGLU row-pair probe. | The new opt-in row-pair single-fusion kernel is correct, but measured below the current default (`34.380968` vs `34.490294`). Do not promote; proceed to a real SM70 pipelined F8 mainloop or deeper TurboMind expert scheduling. | Sprint 121+ |
+| 2026-05-21 | Shipped Sprint 121 16-slot 256K throughput mode. | The runtime and wrappers now admit 16 active slots for 256K serving, with context-aware guards preventing unsafe 16-slot long-context launch. Full 16-slot scheduler correctness passes at 256K, and served throughput improved to `43.659461` generated tok/s with `16/16` token matches. The next sprint should profile this mode and target a real SM70 pipelined F8 mainloop or deeper TurboMind expert scheduling. | Sprint 122+ |
 
 ## Open Questions
 
