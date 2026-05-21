@@ -1,0 +1,2 @@
+[tp_split_2gpu tpa=128] gpu_pair=4,7 routes=768 full_ms=1.1606 half0_ms=0.6206 half1_ms=0.6207 concurrent_compute_ms=0.6207 compute_speedup=1.870x total_with_copy_ms=0.9061 total_with_copy_speedup=1.281x input_payload_mib=6.00 output_payload_mib=6.00
+[tp_split_2gpu tpa=256] gpu_pair=4,7 routes=1536 full_ms=1.3858 half0_ms=0.9488 half1_ms=0.8873 concurrent_compute_ms=0.9488 compute_speedup=1.461x total_with_copy_ms=1.4682 total_with_copy_speedup=0.944x input_payload_mib=12.00 output_payload_mib=12.00

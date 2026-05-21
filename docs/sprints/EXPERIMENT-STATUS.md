@@ -110,7 +110,12 @@ speedups of `1.858x` at 768 routes and `1.468x` at 1536 routes before
 communication. P2P payload timing shows placement matters: a 12 MiB hidden
 payload moves in about `0.26 ms` over NV2, `0.52 ms` over NV1, and
 `1.29-1.31 ms` over SYS. This justifies a bounded 2-GPU TP prototype on NV2
-pairs, but not an immediate 8-way scheduler rewrite.
+pairs, but not an immediate 8-way scheduler rewrite. Sprint 150 built that
+2-GPU proxy. Clean NV2 pairs delivered about `1.87x` concurrent compute
+speedup and `1.28x` total-with-copy speedup at 768 routes, but the 1536-route
+shape was neutral to slower after copies (`0.85-0.94x`). TP is therefore a
+targeted 128-slot/32K candidate, not a blanket fix for the current 256-slot
+ceiling.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|

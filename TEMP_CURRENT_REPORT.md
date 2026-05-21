@@ -21,6 +21,13 @@ about `0.26 ms` over NV2, `0.52 ms` over NV1, and `1.29-1.31 ms` over SYS.
 That makes 2-way TP worth a bounded prototype on NV2 pairs, but it is not a
 credible direct path from `~61 tok/s` to `1k+ tok/s` by itself.
 
+I then built the bounded 2-GPU TP proxy. On clean NV2 pairs, 768-route
+concurrent half-FFN compute is about `1.87x` faster and remains about `1.28x`
+faster after conservative input/output payload copies. At 1536 routes, compute
+speedup is only `1.29-1.46x` and total-with-copy is slower (`0.85-0.94x`).
+This narrows TP to an opt-in 128-slot/32K candidate unless we keep hidden state
+replicated across TP ranks or overlap the payloads better.
+
 ## Short Answer
 
 We have a correct, deployed 8x V100 DS4-Flash appliance path, but we are still
@@ -127,9 +134,12 @@ Tensor parallel variants:
   768 routes and `1.468x` at 1536 routes before communication.
 - The P2P proxy shows placement matters: NV2 moves 12 MiB in about `0.26 ms`,
   NV1 in about `0.52 ms`, and SYS in about `1.3 ms`.
-- My current read is that 2-way TP is worth prototyping on NV2 pairs, while
-  8-way expert parallelism is probably underfilled because the compact served
-  shape currently has only 6 active expert groups.
+- The real 2-GPU proxy shows 768-route total-with-copy speedup of about
+  `1.28x` on NV2 pairs, but 1536-route total-with-copy is neutral to slower.
+- My current read is that 2-way TP is worth prototyping only for the
+  128-slot/32K route shape first, while 8-way expert parallelism is probably
+  underfilled because the compact served shape currently has only 6 active
+  expert groups.
 
 ## What The Experiments Show So Far
 
@@ -165,7 +175,7 @@ measured, but it is still over an order of magnitude away from that target.
 Prototype the smallest production-relevant 2-way TP routed-FFN path:
 
 - constrain placement to NV2 pairs first;
+- target the 128-slot/32K tier before 256-slot/16K;
 - split the `2048` intermediate dimension across two GPUs;
-- overlap half-FFN compute with the hidden payload exchange/reduce;
-- validate against the current layer-owned FFN output for one stage before
-  attempting a scheduler-wide change.
+- validate the one-stage output against the current layer-owned FFN path;
+- only then attempt overlap/replicated-hidden-state optimizations.

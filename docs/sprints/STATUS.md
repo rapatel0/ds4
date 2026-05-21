@@ -111,6 +111,12 @@ proxy. The 2-way FFN middle-dimension split shows ideal compute speedups of
 Peer-copy measurements show a 12 MiB hidden payload takes about `0.26 ms` over
 NV2, `0.52 ms` over NV1, and `1.29-1.31 ms` over SYS, so a TP prototype should
 start with NV2 pairs and stay bounded before any scheduler-wide rewrite.
+Sprint 150 built that bounded 2-GPU TP proxy. On clean NV2 pairs, the
+768-route shape shows about `1.87x` concurrent compute speedup and about
+`1.28x` total speedup after conservative input/output copies. The 1536-route
+shape is neutral to slower after copies (`0.85-0.94x`), so TP is a candidate
+for the 128-slot/32K tier first, not a broad replacement for the 256-slot/16K
+ceiling.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched

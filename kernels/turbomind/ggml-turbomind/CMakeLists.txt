@@ -223,6 +223,14 @@ if(GGML_TURBOMIND_TEST)
     add_executable(test_ggml_turbomind_p2p_reduce_proxy test_p2p_reduce_proxy.cpp)
     target_link_libraries(test_ggml_turbomind_p2p_reduce_proxy PRIVATE CUDA::cudart)
 
+    # DS4 two-GPU TP split compute and payload proxy.
+    add_executable(test_ggml_turbomind_tp_split_2gpu test_tp_split_2gpu.cpp)
+    target_include_directories(test_ggml_turbomind_tp_split_2gpu PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(test_ggml_turbomind_tp_split_2gpu PRIVATE CUDA::cudart ${CMAKE_DL_LIBS})
+    add_dependencies(test_ggml_turbomind_tp_split_2gpu ggml-turbomind)
+
     # SPRINT-025 P2 — multi-device init/dispatch smoke.
     add_executable(test_ggml_turbomind_multi_device test_multi_device.cpp)
     target_include_directories(test_ggml_turbomind_multi_device PRIVATE
