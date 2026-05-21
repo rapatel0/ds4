@@ -5,13 +5,14 @@ Last updated: 2026-05-20
 ## Topline
 
 The appliance is correct and served on the 8x V100 node, but it is not yet in
-the practical throughput range from the vision. Sprint 111 raises the main
-8-slot/256K target to `33.430971` generated tok/s by shipping fused TurboMind
-gate/up expert packing and execution.
+the practical throughput range from the vision. The current default is the
+Sprint 111 fused TurboMind gate/up appliance path; Sprint 112 repeated that
+default at `33.484099` generated tok/s in the same binary used for the rejected
+F8 warp-scale probe.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
-| Throughput serving target | 262,144 | 8 | `33.430971` | `33.430971` | 8/8 token match |
+| Throughput serving target | 262,144 | 8 | `33.484099` | `33.484099` | 8/8 token match |
 | Long-context target | 1,048,576 | 4 | `21.403909` | `21.403909` | 4/4 token match |
 
 The older `20.249531` long-context result used the Sprint 108 small-route build
@@ -46,6 +47,7 @@ to slightly worse.
 | 109 | F8 row4 CTA probe | Correct; `30.998275` row4 vs `31.380225` control at 8-slot/256K | Rejected as default |
 | 110 | TurboMind fused gate/up grouped-GEMM probe | Correct; fused gate_up was `1.46x-1.53x` faster than separate gate and up calls | Proceed to appliance implementation |
 | 111 | Production fused TurboMind gate_up appliance | Correct; `33.430971` fused vs `31.312694` same-binary separate control at 8-slot/256K; `21.403909` at 4-slot/1M | Shipped/default for fused packs |
+| 112 | Fused appliance profile and F8 warp-scale probe | F8 row-pair/grouped kernels were `54.58%` GPU time; warp-scale was correct but `29.009399` vs `33.484099` control at 8-slot/256K | Kept opt-in/off |
 
 ## Remaining
 
@@ -57,19 +59,21 @@ to slightly worse.
   - TurboMind MXFP4 expert occupancy and route-expanded activation layout.
   - Persistent/grouped expert execution beyond the shipped Sprint 111 fused
     gate_up launch reduction.
-  - Software-pipelined F8 dequant+dot work that improves instruction throughput
-    without the row4 occupancy loss.
+  - A real tiled/persistent F8 projection rewrite. The Sprint 112 warp-scale
+    probe shows that very small scalar F8 scale-hoisting changes can regress.
 - Decide whether the next production step is a deeper TurboMind adapter change
   or a lower-level CUTLASS/TurboMind-inspired persistent kernel probe.
 
 ## Operator Status
 
-The default launcher now keeps `DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=0` and
-`DS4_V100_CUDA_F8_ROW4=0`. The opt-in diagnostic paths can be enabled with:
+The default launcher now keeps `DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=0`,
+`DS4_V100_CUDA_F8_ROW4=0`, and `DS4_V100_CUDA_F8_WARP_SCALE=0`. The opt-in
+diagnostic paths can be enabled with:
 
 ```text
 DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=1
 DS4_V100_CUDA_F8_ROW4=1
+DS4_V100_CUDA_F8_WARP_SCALE=1
 DS4_V100_TURBOMIND_FUSED_GATE_UP=0
 ```
 

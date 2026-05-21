@@ -24,6 +24,7 @@ log_dir=""
 cuda_visible_devices="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 require_gpus="8"
 reserve_mib="4096"
+replay_bin="${DS4_V100_BIN:-./tools/ds4-v100-replay}"
 
 usage() {
     cat <<'USAGE'
@@ -203,7 +204,7 @@ if command -v nvidia-smi >/dev/null 2>&1; then
 fi
 
 (
-    export DS4_V100_BIN=./tools/ds4-v100-replay
+    export DS4_V100_BIN="$replay_bin"
     export DS4_V100_MODEL="$model"
     export DS4_V100_MTP_MODEL="$mtp_model"
     export DS4_V100_APPLIANCE_DIR="$appliance_dir"

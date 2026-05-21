@@ -2718,6 +2718,17 @@ __device__ static float arena_e4m3fn_to_f32(uint8_t x) {
     return __uint_as_float(sign | ((118u + hi) << 23) | mant);
 }
 
+__device__ static float arena_f8_block_scale_warp(const uint8_t *row, uint32_t c) {
+    const uint32_t lane = threadIdx.x & 31u;
+    const uint32_t warp_c = c - lane;
+    float scale = 0.0f;
+    if (lane == 0u) {
+        const uint8_t *block = row + (uint64_t)(warp_c >> 7) * 129ull;
+        scale = arena_e8m0_to_f32(block[0]);
+    }
+    return __shfl_sync(0xffffffffu, scale, 0);
+}
+
 __device__ static float arena_mxfp4_nibble_to_f32(uint8_t q) {
     switch (q & 0x0fu) {
         case 0x0u: return 0.0f;
@@ -2879,6 +2890,42 @@ __global__ static void arena_f8_e4m3_b128_matmul_rows2_kernel(
         if (have_r1) {
             const uint8_t *block1 = row1 + block_offset;
             const float scale1 = arena_e8m0_to_f32(block1[0]);
+            acc1 += arena_e4m3fn_to_f32(block1[1u + block_lane]) * scale1 * xv;
+        }
+    }
+
+    arena_block_sum2_256_f32(&acc0, &acc1);
+    if (threadIdx.x == 0) {
+        out[r0] = acc0;
+        if (have_r1) out[r1] = acc1;
+    }
+}
+
+__global__ static void arena_f8_e4m3_b128_matmul_rows2_warp_scale_kernel(
+        float *out,
+        const uint8_t *base,
+        const float *x,
+        uint32_t rows,
+        uint32_t cols,
+        uint32_t row_stride_bytes) {
+    const uint32_t r0 = blockIdx.x * 2u;
+    const uint32_t r1 = r0 + 1u;
+    if (r0 >= rows) return;
+    const int have_r1 = r1 < rows;
+    const uint8_t *row0 = base + (uint64_t)r0 * row_stride_bytes;
+    const uint8_t *row1 = have_r1 ? base + (uint64_t)r1 * row_stride_bytes : row0;
+    float acc0 = 0.0f;
+    float acc1 = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        const float xv = x[c];
+        const uint64_t block_offset = (uint64_t)(c >> 7) * 129ull;
+        const uint32_t block_lane = c & 127u;
+        const uint8_t *block0 = row0 + block_offset;
+        const float scale0 = arena_f8_block_scale_warp(row0, c);
+        acc0 += arena_e4m3fn_to_f32(block0[1u + block_lane]) * scale0 * xv;
+        if (have_r1) {
+            const uint8_t *block1 = row1 + block_offset;
+            const float scale1 = arena_f8_block_scale_warp(row1, c);
             acc1 += arena_e4m3fn_to_f32(block1[1u + block_lane]) * scale1 * xv;
         }
     }
@@ -3232,6 +3279,47 @@ __global__ static void arena_f8_e4m3_b128_matmul_grouped_rows2_ds4_attn_o_kernel
         const uint8_t *block1 = row1 + block_offset;
         const float scale0 = arena_e8m0_to_f32(block0[0]);
         const float scale1 = arena_e8m0_to_f32(block1[0]);
+        acc0 += arena_e4m3fn_to_f32(block0[1u + block_lane]) * scale0 * xv;
+        acc1 += arena_e4m3fn_to_f32(block1[1u + block_lane]) * scale1 * xv;
+    }
+
+    arena_block_sum2_256_f32(&acc0, &acc1);
+    if (threadIdx.x == 0) {
+        out[r0] = acc0;
+        out[r1] = acc1;
+    }
+}
+
+__global__ static void arena_f8_e4m3_b128_matmul_grouped_rows2_ds4_attn_o_warp_scale_kernel(
+        float *out,
+        const uint8_t *base,
+        const float *x,
+        uint32_t row_stride_bytes) {
+    enum {
+        DS4_GROUPS = 8,
+        DS4_ROWS_PER_GROUP = 1024,
+        DS4_COLS_PER_GROUP = 4096,
+        DS4_ROWS = DS4_GROUPS * DS4_ROWS_PER_GROUP,
+    };
+
+    const uint32_t pair = blockIdx.x;
+    const uint32_t r0 = pair * 2u;
+    if (r0 >= DS4_ROWS) return;
+    const uint32_t r1 = r0 + 1u;
+    const uint32_t group = pair >> 9;
+    const uint8_t *row0 = base + (uint64_t)r0 * row_stride_bytes;
+    const uint8_t *row1 = base + (uint64_t)r1 * row_stride_bytes;
+    const float *xg = x + (uint64_t)group * DS4_COLS_PER_GROUP;
+    float acc0 = 0.0f;
+    float acc1 = 0.0f;
+    for (uint32_t c = threadIdx.x; c < DS4_COLS_PER_GROUP; c += blockDim.x) {
+        const float xv = xg[c];
+        const uint64_t block_offset = (uint64_t)(c >> 7) * 129ull;
+        const uint32_t block_lane = c & 127u;
+        const uint8_t *block0 = row0 + block_offset;
+        const uint8_t *block1 = row1 + block_offset;
+        const float scale0 = arena_f8_block_scale_warp(row0, c);
+        const float scale1 = arena_f8_block_scale_warp(row1, c);
         acc0 += arena_e4m3fn_to_f32(block0[1u + block_lane]) * scale0 * xv;
         acc1 += arena_e4m3fn_to_f32(block1[1u + block_lane]) * scale1 * xv;
     }
@@ -5790,6 +5878,16 @@ static int cuda_f8_row4_enabled(void) {
            strcmp(v, "OFF") != 0;
 }
 
+static int cuda_f8_warp_scale_enabled(void) {
+    const char *v = getenv("DS4_CUDA_F8_WARP_SCALE");
+    return v && v[0] &&
+           strcmp(v, "0") != 0 &&
+           strcmp(v, "false") != 0 &&
+           strcmp(v, "FALSE") != 0 &&
+           strcmp(v, "off") != 0 &&
+           strcmp(v, "OFF") != 0;
+}
+
 static int cuda_f8_row4_shape_ok(uint64_t rows, uint32_t cols) {
     if (rows < 2048u || (rows & 3u) != 0u) return 0;
     return cols == 1024u || cols == 2048u || cols == 4096u || cols == 8192u;
@@ -5931,13 +6029,23 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_f32(
             view->cols,
             view->row_stride_bytes);
     } else if (cuda_f8_rowpair_enabled() && view->rows > 1u) {
-        arena_f8_e4m3_b128_matmul_rows2_kernel<<<(view->rows + 1u) / 2u, 256>>>(
-            (float *)out_f32->ptr,
-            base,
-            (const float *)x_f32->ptr,
-            view->rows,
-            view->cols,
-            view->row_stride_bytes);
+        if (cuda_f8_warp_scale_enabled()) {
+            arena_f8_e4m3_b128_matmul_rows2_warp_scale_kernel<<<(view->rows + 1u) / 2u, 256>>>(
+                (float *)out_f32->ptr,
+                base,
+                (const float *)x_f32->ptr,
+                view->rows,
+                view->cols,
+                view->row_stride_bytes);
+        } else {
+            arena_f8_e4m3_b128_matmul_rows2_kernel<<<(view->rows + 1u) / 2u, 256>>>(
+                (float *)out_f32->ptr,
+                base,
+                (const float *)x_f32->ptr,
+                view->rows,
+                view->cols,
+                view->row_stride_bytes);
+        }
     } else {
         arena_f8_e4m3_b128_matmul_kernel<<<view->rows, 256>>>(
             (float *)out_f32->ptr,
@@ -6101,11 +6209,19 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_grouped_f32(
     } else if (cuda_f8_rowpair_enabled() && rows > 1u) {
         if (cuda_f8_grouped_ds4_fast_enabled() &&
             groups == 8u && rows_per_group == 1024u && cols_per_group == 4096u) {
-            arena_f8_e4m3_b128_matmul_grouped_rows2_ds4_attn_o_kernel<<<4096u, 256>>>(
-                (float *)out_f32->ptr,
-                base,
-                (const float *)x_f32->ptr,
-                view->row_stride_bytes);
+            if (cuda_f8_warp_scale_enabled()) {
+                arena_f8_e4m3_b128_matmul_grouped_rows2_ds4_attn_o_warp_scale_kernel<<<4096u, 256>>>(
+                    (float *)out_f32->ptr,
+                    base,
+                    (const float *)x_f32->ptr,
+                    view->row_stride_bytes);
+            } else {
+                arena_f8_e4m3_b128_matmul_grouped_rows2_ds4_attn_o_kernel<<<4096u, 256>>>(
+                    (float *)out_f32->ptr,
+                    base,
+                    (const float *)x_f32->ptr,
+                    view->row_stride_bytes);
+            }
         } else {
             arena_f8_e4m3_b128_matmul_grouped_rows2_kernel<<<(unsigned int)((rows + 1u) / 2u), 256>>>(
                 (float *)out_f32->ptr,

@@ -87,6 +87,7 @@ fi
 : "${DS4_V100_CUDA_TENSOR_POOL_MAX_MIB:=2048}"
 : "${DS4_V100_CUDA_F8_ROWPAIR:=1}"
 : "${DS4_V100_CUDA_F8_ROW4:=0}"
+: "${DS4_V100_CUDA_F8_WARP_SCALE:=0}"
 : "${DS4_V100_CUDA_F8_GROUPED_DS4_FAST:=1}"
 : "${DS4_V100_ENABLE_OUTPUT_HEAD_BATCH:=0}"
 : "${DS4_V100_BATCH_SHARED_F8:=1}"
@@ -338,6 +339,11 @@ case "$DS4_V100_CUDA_F8_ROW4" in
     1|true|on) DS4_V100_CUDA_F8_ROW4=1 ;;
     *) fail "DS4_V100_CUDA_F8_ROW4 must be 0 or 1" ;;
 esac
+case "$DS4_V100_CUDA_F8_WARP_SCALE" in
+    0|false|off) DS4_V100_CUDA_F8_WARP_SCALE=0 ;;
+    1|true|on) DS4_V100_CUDA_F8_WARP_SCALE=1 ;;
+    *) fail "DS4_V100_CUDA_F8_WARP_SCALE must be 0 or 1" ;;
+esac
 case "$DS4_V100_CUDA_F8_GROUPED_DS4_FAST" in
     0|false|off) DS4_V100_CUDA_F8_GROUPED_DS4_FAST=0 ;;
     1|true|on) DS4_V100_CUDA_F8_GROUPED_DS4_FAST=1 ;;
@@ -458,7 +464,7 @@ print_resolved() {
 }
 
 if [ "$mode" = "check" ]; then
-    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff startup_warmup=$startup_warmup cuda_profiler_window=$cuda_profiler_window cuda_tensor_pool=$cuda_tensor_pool cuda_tensor_pool_max_mib=$DS4_V100_CUDA_TENSOR_POOL_MAX_MIB cuda_f8_rowpair=$DS4_V100_CUDA_F8_ROWPAIR cuda_f8_row4=$DS4_V100_CUDA_F8_ROW4 cuda_f8_grouped_ds4_fast=$DS4_V100_CUDA_F8_GROUPED_DS4_FAST batch_shared_f8=$DS4_V100_BATCH_SHARED_F8 disable_grouped_attn_output_a=$DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A appliance_dir=${DS4_V100_APPLIANCE_DIR:-none} turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN disable_turbomind_total_tokens=$DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS turbomind_route_validate_sync=$DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC turbomind_small_route_build=$DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD turbomind_fused_gate_up=$DS4_V100_TURBOMIND_FUSED_GATE_UP"
+    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff startup_warmup=$startup_warmup cuda_profiler_window=$cuda_profiler_window cuda_tensor_pool=$cuda_tensor_pool cuda_tensor_pool_max_mib=$DS4_V100_CUDA_TENSOR_POOL_MAX_MIB cuda_f8_rowpair=$DS4_V100_CUDA_F8_ROWPAIR cuda_f8_row4=$DS4_V100_CUDA_F8_ROW4 cuda_f8_warp_scale=$DS4_V100_CUDA_F8_WARP_SCALE cuda_f8_grouped_ds4_fast=$DS4_V100_CUDA_F8_GROUPED_DS4_FAST batch_shared_f8=$DS4_V100_BATCH_SHARED_F8 disable_grouped_attn_output_a=$DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A appliance_dir=${DS4_V100_APPLIANCE_DIR:-none} turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN disable_turbomind_total_tokens=$DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS turbomind_route_validate_sync=$DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC turbomind_small_route_build=$DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD turbomind_fused_gate_up=$DS4_V100_TURBOMIND_FUSED_GATE_UP"
     exit 0
 fi
 if [ "$mode" = "print" ]; then
@@ -494,6 +500,7 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_CUDA_TENSOR_POOL_MAX_MIB=$DS4_V100_CUDA_TENSOR_POOL_MAX_MIB"
     echo "DS4_V100_CUDA_F8_ROWPAIR=$DS4_V100_CUDA_F8_ROWPAIR"
     echo "DS4_V100_CUDA_F8_ROW4=$DS4_V100_CUDA_F8_ROW4"
+    echo "DS4_V100_CUDA_F8_WARP_SCALE=$DS4_V100_CUDA_F8_WARP_SCALE"
     echo "DS4_V100_CUDA_F8_GROUPED_DS4_FAST=$DS4_V100_CUDA_F8_GROUPED_DS4_FAST"
     echo "DS4_V100_ENABLE_OUTPUT_HEAD_BATCH=$DS4_V100_ENABLE_OUTPUT_HEAD_BATCH"
     echo "DS4_V100_BATCH_SHARED_F8=$DS4_V100_BATCH_SHARED_F8"
@@ -531,5 +538,6 @@ export DS4_CUDA_TENSOR_POOL="$cuda_tensor_pool"
 export DS4_CUDA_TENSOR_POOL_MAX_MIB="$DS4_V100_CUDA_TENSOR_POOL_MAX_MIB"
 export DS4_CUDA_F8_ROWPAIR="$DS4_V100_CUDA_F8_ROWPAIR"
 export DS4_CUDA_F8_ROW4="$DS4_V100_CUDA_F8_ROW4"
+export DS4_CUDA_F8_WARP_SCALE="$DS4_V100_CUDA_F8_WARP_SCALE"
 export DS4_CUDA_F8_GROUPED_DS4_FAST="$DS4_V100_CUDA_F8_GROUPED_DS4_FAST"
 exec "${cmd[@]}"

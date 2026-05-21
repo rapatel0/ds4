@@ -11,7 +11,7 @@ as the previous appliance.
 
 | Mode | Context | Slots | Generated tok/s | Continuation tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
-| Production fused gate_up appliance | 262,144 | 8 | `33.430971` | `31.341535` | 8/8 token match |
+| Production fused gate_up appliance | 262,144 | 8 | `33.484099` | `31.391343` | 8/8 token match |
 | Same-binary separate gate/up control | 262,144 | 8 | `31.312694` | `29.355651` | 8/8 token match |
 | Production fused gate_up appliance | 1,048,576 | 4 | `21.403909` | `20.066165` | 4/4 token match |
 | Small-route opt-in | 1,048,576 | 4 | `20.249531` | `18.983935` | 4/4 token match |
@@ -32,6 +32,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 109 | F8 four-output-row CTA probe | Correct; regressed 8-slot/256K to `30.998275` vs `31.380225` control and 4-slot/1M to `19.898462` vs `20.041787` control | Rejected as default; opt-in only |
 | 110 | TurboMind fused gate+up grouped-GEMM probe | Correct; `1.504x`, `1.532x`, and `1.462x` faster at 6, 24, and 48 total routes | Proceed to appliance implementation |
 | 111 | Production fused TurboMind gate_up appliance | Correct; 8-slot/256K improved to `33.430971` from `31.312694` same-binary separate control | Shipped/default for fused packs |
+| 112 | Fused appliance profile plus F8 warp-scale probe | Profile showed F8 row-pair/grouped kernels at `54.58%` GPU time; warp-scale was correct but regressed 8-slot/256K to `29.009399` vs `33.484099` control | Kept opt-in/off |
 
 ## Sprint 106 Profile Takeaway
 
@@ -129,14 +130,27 @@ Sprint 111 ships that fused gate/up result into the appliance:
   generated tok/s;
 - 4-slot/1M fused sanity passed at `21.403909` generated tok/s.
 
+Sprint 112 profiles the fused appliance and tests a narrow F8 scale-hoist
+variant:
+
+- fused 8-slot/256K profile reached `33.972205` generated tok/s under the
+  profiler harness and preserved `8/8` token matches;
+- F8 row-pair plus DS4 grouped attention-output kernels were `54.58%` of GPU
+  time after Sprint 111;
+- warp-broadcast E8M0 scale loading passed source/projection, scheduler, and
+  selected-token correctness;
+- same-binary 8-slot/256K A/B regressed from `33.484099` to `29.009399`
+  generated tok/s, so `DS4_V100_CUDA_F8_WARP_SCALE=0` remains the default.
+
 ## Next Target
 
-The next target is deeper expert-kernel utilization. Fused gate/up removes one
-large grouped GEMM launch per routed layer, but aggregate throughput is still
-only `33.43` tok/s, far below the practical serving target. The next sprint
-should profile the fused served path and decide between persistent/grouped
-TurboMind expert execution, fused SwiGLU/down scheduling, or larger F8 kernel
-pipeline changes.
+The next target needs to change a larger execution boundary. Fused gate/up
+removed one large grouped GEMM launch per routed layer, but aggregate throughput
+is still only about `33.5` tok/s, far below the practical serving target. The
+fused profile says F8 projections are now the largest bucket, but Sprint 112
+shows tiny scalar F8 scale tweaks can regress. The next sprint should focus on
+either a real CUTLASS/TurboMind-style tiled F8 projection path or deeper
+TurboMind expert scheduling that raises tensor-core occupancy.
 
 The concise current status is also tracked in
 `docs/sprints/EXPERIMENT-STATUS.md`.
