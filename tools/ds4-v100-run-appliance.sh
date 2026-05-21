@@ -134,6 +134,7 @@ fi
 : "${DS4_V100_CUDA_VISIBLE_DEVICES:=0,1,2,3,4,5,6,7}"
 : "${DS4_V100_REQUIRE_GPUS:=8}"
 : "${DS4_V100_RESERVE_MIB:=4096}"
+: "${DS4_V100_EXPERIMENTAL_CTX_SLOT_CAP:=}"
 : "${DS4_V100_MAX_REQUESTS:=0}"
 : "${DS4_V100_LOG_DIR:=logs/v100-appliance}"
 : "${DS4_V100_SERVE_MODE:=base}"
@@ -269,6 +270,9 @@ is_uint "$DS4_V100_TOKENS" || fail "DS4_V100_TOKENS must be a positive integer"
 is_uint "$DS4_V100_PORT" || fail "DS4_V100_PORT must be a positive integer"
 is_uint "$DS4_V100_REQUIRE_GPUS" || fail "DS4_V100_REQUIRE_GPUS must be an integer"
 is_uint "$DS4_V100_RESERVE_MIB" || fail "DS4_V100_RESERVE_MIB must be an integer"
+if [ -n "$DS4_V100_EXPERIMENTAL_CTX_SLOT_CAP" ]; then
+    is_uint "$DS4_V100_EXPERIMENTAL_CTX_SLOT_CAP" || fail "DS4_V100_EXPERIMENTAL_CTX_SLOT_CAP must be empty or an integer"
+fi
 is_uint "$DS4_V100_MAX_REQUESTS" || fail "DS4_V100_MAX_REQUESTS must be an integer"
 is_uint "$DS4_V100_MTP_TOP_K" || fail "DS4_V100_MTP_TOP_K must be an integer"
 is_uint "$DS4_V100_MTP_GPU" || fail "DS4_V100_MTP_GPU must be an integer"
@@ -290,6 +294,12 @@ elif [ "$DS4_V100_CTX" -gt 32768 ]; then
     ctx_slot_cap=64
 elif [ "$DS4_V100_CTX" -gt 16384 ]; then
     ctx_slot_cap=128
+fi
+if [ -n "$DS4_V100_EXPERIMENTAL_CTX_SLOT_CAP" ]; then
+    [ "$DS4_V100_EXPERIMENTAL_CTX_SLOT_CAP" -ge 1 ] || fail "DS4_V100_EXPERIMENTAL_CTX_SLOT_CAP must be positive"
+    [ "$DS4_V100_EXPERIMENTAL_CTX_SLOT_CAP" -le 256 ] || fail "DS4_V100_EXPERIMENTAL_CTX_SLOT_CAP must be <= 256"
+    ctx_slot_cap="$DS4_V100_EXPERIMENTAL_CTX_SLOT_CAP"
+    warn "using experimental ctx slot cap override: $ctx_slot_cap"
 fi
 [ "$DS4_V100_SLOTS" -le "$ctx_slot_cap" ] || fail "DS4_V100_SLOTS=$DS4_V100_SLOTS exceeds ctx=$DS4_V100_CTX admission cap $ctx_slot_cap"
 if [ "$DS4_V100_MICROBATCH_WAIT_US" != "auto" ]; then

@@ -1,0 +1,85 @@
+HTTP/1.1 200 OK
+Connection: close
+Content-Type: text/plain; version=0.0.4
+
+# HELP ds4_v100_readiness_level Deployment readiness level exposed by the replay service.
+# TYPE ds4_v100_readiness_level gauge
+ds4_v100_readiness_level 2
+# HELP ds4_v100_served_requests HTTP requests accepted by this process.
+# TYPE ds4_v100_served_requests counter
+ds4_v100_served_requests 3
+# HELP ds4_v100_generation_requests_total Generation requests accepted by the scheduler.
+# TYPE ds4_v100_generation_requests_total counter
+ds4_v100_generation_requests_total 0
+# HELP ds4_v100_tensor_batched_groups_total Same-token-count tensor batch groups executed by the scheduler.
+# TYPE ds4_v100_tensor_batched_groups_total counter
+ds4_v100_tensor_batched_groups_total 0
+# HELP ds4_v100_tensor_batched_requests_total Requests served through tensor batch groups.
+# TYPE ds4_v100_tensor_batched_requests_total counter
+ds4_v100_tensor_batched_requests_total 0
+# HELP ds4_v100_tensor_batched_tokens_total Generated tokens served through tensor batch groups.
+# TYPE ds4_v100_tensor_batched_tokens_total counter
+ds4_v100_tensor_batched_tokens_total 0
+# HELP ds4_v100_rejected_requests_total HTTP generation requests rejected by admission policy.
+# TYPE ds4_v100_rejected_requests_total counter
+ds4_v100_rejected_requests_total 0
+# HELP ds4_v100_rejected_busy_total HTTP generation requests rejected because the scheduler was busy.
+# TYPE ds4_v100_rejected_busy_total counter
+ds4_v100_rejected_busy_total 0
+# HELP ds4_v100_rejected_context_total HTTP generation requests rejected for exceeding context.
+# TYPE ds4_v100_rejected_context_total counter
+ds4_v100_rejected_context_total 0
+# HELP ds4_v100_rejected_bad_request_total HTTP generation requests rejected for malformed input.
+# TYPE ds4_v100_rejected_bad_request_total counter
+ds4_v100_rejected_bad_request_total 0
+# HELP ds4_v100_ctx_tokens Configured KV context tokens per slot.
+# TYPE ds4_v100_ctx_tokens gauge
+ds4_v100_ctx_tokens 262144
+# HELP ds4_v100_default_tokens Default generated tokens per request.
+# TYPE ds4_v100_default_tokens gauge
+ds4_v100_default_tokens 64
+# HELP ds4_v100_max_tokens Maximum generated tokens accepted by the appliance endpoint.
+# TYPE ds4_v100_max_tokens gauge
+ds4_v100_max_tokens 64
+# HELP ds4_v100_configured_slots Configured admission slots.
+# TYPE ds4_v100_configured_slots gauge
+ds4_v100_configured_slots 24
+# HELP ds4_v100_active_microbatch Active decode requests supported by this process.
+# TYPE ds4_v100_active_microbatch gauge
+ds4_v100_active_microbatch 24
+# HELP ds4_v100_microbatch_wait_us Max microseconds the server waits to coalesce active requests.
+# TYPE ds4_v100_microbatch_wait_us gauge
+ds4_v100_microbatch_wait_us 200000
+# HELP ds4_v100_active_slots Active slots scheduled concurrently by this process.
+# TYPE ds4_v100_active_slots gauge
+ds4_v100_active_slots 24
+# HELP ds4_v100_startup_warmup_enabled Whether the server warmed the appliance before accepting traffic.
+# TYPE ds4_v100_startup_warmup_enabled gauge
+ds4_v100_startup_warmup_enabled 1
+# HELP ds4_v100_concurrent_request_capacity Concurrent generation request capacity.
+# TYPE ds4_v100_concurrent_request_capacity gauge
+ds4_v100_concurrent_request_capacity 24
+# HELP ds4_v100_scheduler_slots_ready Whether true device-resident multi-slot scheduling is implemented.
+# TYPE ds4_v100_scheduler_slots_ready gauge
+ds4_v100_scheduler_slots_ready 1
+# HELP ds4_v100_mtp_enabled Whether speculative MTP serving is enabled.
+# TYPE ds4_v100_mtp_enabled gauge
+ds4_v100_mtp_enabled 0
+# HELP ds4_v100_mtp_requests_total Requests evaluated by the MTP service.
+# TYPE ds4_v100_mtp_requests_total counter
+ds4_v100_mtp_requests_total 0
+# HELP ds4_v100_mtp_drafts_total MTP draft attempts completed.
+# TYPE ds4_v100_mtp_drafts_total counter
+ds4_v100_mtp_drafts_total 0
+# HELP ds4_v100_mtp_accepted_total MTP drafts matching the base target token.
+# TYPE ds4_v100_mtp_accepted_total counter
+ds4_v100_mtp_accepted_total 0
+# HELP ds4_v100_mtp_rejected_total MTP drafts rejected by exact target-token comparison.
+# TYPE ds4_v100_mtp_rejected_total counter
+ds4_v100_mtp_rejected_total 0
+# HELP ds4_v100_mtp_skipped_total Requests where MTP was skipped.
+# TYPE ds4_v100_mtp_skipped_total counter
+ds4_v100_mtp_skipped_total 0
+# HELP ds4_v100_mtp_committed_total Accepted MTP drafts emitted by commit-mode serving.
+# TYPE ds4_v100_mtp_committed_total counter
+ds4_v100_mtp_committed_total 0
