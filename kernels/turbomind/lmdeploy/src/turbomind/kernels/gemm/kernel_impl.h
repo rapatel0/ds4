@@ -191,7 +191,13 @@ public:
                                to_param((void*)workspace.partials, Pdesc),
                                (int*)workspace.barriers,
                                combin_mat,
-                               silu_act};
+                               silu_act,
+                               false,
+                               nullptr,
+                               nullptr,
+                               nullptr,
+                               0,
+                               0};
 
         // std::cout << Adesc.offsets << " " << Adesc.idxs << "\n";
 

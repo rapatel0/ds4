@@ -191,6 +191,9 @@ typedef int  (*tm_pfn_mul_mat_grouped_gated_silu_total_tokens)(const void *, con
 typedef int  (*tm_pfn_ds4_mxfp4_gated_silu)(const void *, const int *, int, int,
                                             const void * const *, const void * const *,
                                             int, void *, void *);
+typedef int  (*tm_pfn_ds4_mxfp4_down_reduce)(const void *, const int *, int, int,
+                                             const void * const *, const void * const *,
+                                             int, float *, const int *, const float *, int, void *);
 
 typedef struct {
     void *handle;
@@ -205,6 +208,7 @@ typedef struct {
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m64;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m128;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_down_768_m128;
+    tm_pfn_ds4_mxfp4_down_reduce ds4_mxfp4_down_768_m128_reduce;
     int attempted;
     int available;
     int warned;
@@ -1016,6 +1020,9 @@ static int cuda_tm_load_api(void) {
     g_tm_api.ds4_mxfp4_down_768_m128 =
         (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_down_768_m128");
+    g_tm_api.ds4_mxfp4_down_768_m128_reduce =
+        (tm_pfn_ds4_mxfp4_down_reduce)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_down_768_m128_reduce");
     if (!g_tm_api.api_version || !g_tm_api.init || !g_tm_api.shutdown ||
         !g_tm_api.packed_bytes || !g_tm_api.pack_weight || !g_tm_api.mul_mat_grouped) {
         fprintf(stderr, "ds4: TurboMind library is missing required C ABI symbols\n");
@@ -5844,6 +5851,22 @@ static tm_pfn_ds4_mxfp4_gated_silu cuda_tm_ds4_down_768_probe(
     return nullptr;
 }
 
+static tm_pfn_ds4_mxfp4_down_reduce cuda_tm_ds4_down_reduce_768_probe(
+        const int *token_indices,
+        uint32_t total_routes,
+        uint32_t n_total_experts,
+        int n,
+        int k) {
+    if (token_indices || total_routes != 768u || n_total_experts != 6u ||
+        n != 4096 || k != 2048) {
+        return nullptr;
+    }
+    if (!cuda_env_flag_enabled("DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE")) {
+        return nullptr;
+    }
+    return g_tm_api.ds4_mxfp4_down_768_m128_reduce;
+}
+
 static int cuda_tm_compact_schedule_enabled(void) {
     return cuda_env_flag_enabled("DS4_V100_TURBOMIND_COMPACT_SCHEDULE");
 }
@@ -6270,6 +6293,52 @@ static int cuda_tm_grouped_matmul(
         return 0;
     }
     return cuda_ok(cudaGetLastError(), label ? label : "turbomind grouped GEMM");
+}
+
+static int cuda_tm_grouped_down_reduce_matmul(
+        const __half *a,
+        const int *token_indices,
+        const int *offsets,
+        const cuda_tm_matrix_pack *pack,
+        uint32_t total_routes,
+        uint32_t n_total_experts,
+        int n,
+        int k,
+        float *out,
+        const int *sorted_pairs,
+        const float *route_weights,
+        uint32_t n_routes,
+        const char *label) {
+    if (!pack || !pack->d_weights || !pack->d_scales || !out ||
+        !sorted_pairs || !route_weights) {
+        return 0;
+    }
+    tm_pfn_ds4_mxfp4_down_reduce ds4_reduce_probe =
+        cuda_tm_ds4_down_reduce_768_probe(token_indices, total_routes, n_total_experts, n, k);
+    if (!ds4_reduce_probe) {
+        return 0;
+    }
+    const int rc = ds4_reduce_probe(
+        a,
+        offsets,
+        (int)n_total_experts,
+        (int)total_routes,
+        (const void * const *)pack->d_weights,
+        (const void * const *)pack->d_scales,
+        pack->k_pack,
+        out,
+        sorted_pairs,
+        route_weights,
+        (int)n_routes,
+        nullptr);
+    if (rc != 0) {
+        fprintf(stderr,
+                "ds4: TurboMind DS4 down reduce epilogue failed for %s: rc=%d\n",
+                label ? label : "packed down reduce",
+                rc);
+        return 0;
+    }
+    return cuda_ok(cudaGetLastError(), label ? label : "turbomind DS4 down reduce epilogue");
 }
 
 static int cuda_tm_grouped_gated_silu_matmul(
@@ -6905,7 +6974,33 @@ static int cuda_tm_routed_mxfp4_packed_impl(
         ok = cuda_ok(cudaGetLastError(), "turbomind packed swiglu launch");
         if (ok) tm_prof.mark(&tm_prof.swiglu_ms);
     }
-    if (ok) {
+    const int use_down_reduce_epilogue =
+        ok && use_gated_silu &&
+        cuda_tm_ds4_down_reduce_768_probe(nullptr, total_routes, gemm_group_count, (int)hidden, (int)mid);
+    if (ok && use_down_reduce_epilogue) {
+        if (!accumulate_out) {
+            ok = cuda_ok(cudaMemset(out_f32->ptr,
+                                    0,
+                                    (size_t)n_tokens * hidden * sizeof(float)),
+                         "turbomind DS4 down reduce output clear");
+        }
+        if (ok) {
+            ok = cuda_tm_grouped_down_reduce_matmul(
+                mid_half,
+                nullptr,
+                gemm_offsets,
+                &down_run_pack,
+                total_routes,
+                gemm_group_count,
+                (int)hidden,
+                (int)mid,
+                (float *)out_f32->ptr,
+                sorted_pairs,
+                sorted_weights,
+                n_routes,
+                "packed down reduce epilogue");
+        }
+    } else if (ok) {
         ok = cuda_tm_grouped_matmul(
             mid_half, nullptr, gemm_offsets, &down_run_pack, total_routes, gemm_group_count, (int)hidden, (int)mid,
             down_routes, "packed down");
@@ -6916,6 +7011,16 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     cuda_tm_matrix_pack_table_free(&up_pack);
     cuda_tm_matrix_pack_table_free(&gate_pack);
     if (!ok) return 1;
+
+    if (use_down_reduce_epilogue) {
+        tm_prof.mark(&tm_prof.scatter_ms);
+        tm_prof.finish(n_tokens,
+                       total_routes,
+                       tm_prof_active_experts,
+                       tm_prof_max_routes_per_expert,
+                       fused_gate_up);
+        return 0;
+    }
 
     if (use_route_row_reduce) {
         const int use_half2_reduce =

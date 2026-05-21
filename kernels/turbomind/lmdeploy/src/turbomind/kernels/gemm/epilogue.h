@@ -186,6 +186,12 @@ struct EpilogueParam {
     MatrixCombination_v3 combine_mat;
 
     bool silu_act;
+    bool ds4_route_reduce;
+    float* ds4_route_out;
+    const int* ds4_sorted_pairs;
+    const float* ds4_route_weights;
+    int ds4_n_routes;
+    int ds4_hidden;
 };
 
 template<class Tc_,
@@ -302,6 +308,35 @@ struct Epilogue_ {
             }
             ptr -= dc * C;
             ptr += ds;
+        }
+    }
+
+    template<class VecC, class Pred>
+    __device__ void StoreDs4RouteReduce(const VecC& vec_C, const int4& tile_offset, int2 cs0, Pred& pred,
+                                        const EpilogueParam& param)
+    {
+        constexpr int dc = Map::kDeltaC;
+        constexpr int ds = Map::kDeltaS;
+        const int route_base = param.c.offsets ? __ldg(param.c.offsets + tile_offset.w) : 0;
+        PRAGMA_UNROLL
+        for (int s = 0; s < S; ++s) {
+            PRAGMA_UNROLL
+            for (int c = 0; c < C; ++c) {
+                if (pred(s, c)) {
+                    const int route_row = route_base + cs0.y + s * ds;
+                    const int pair = __ldg(param.ds4_sorted_pairs + route_row);
+                    const int tok = pair / param.ds4_n_routes;
+                    const float weight = __ldg(param.ds4_route_weights + route_row);
+                    const auto vals = cast<float>(vec_C[s][c]);
+                    PRAGMA_UNROLL
+                    for (int i = 0; i < kAccess; ++i) {
+                        const int col = cs0.x + c * dc + i;
+                        if (col < param.ds4_hidden) {
+                            atomicAdd(param.ds4_route_out + (int64_t)tok * param.ds4_hidden + col, vals[i] * weight);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -422,6 +457,11 @@ struct Epilogue_ {
         // Scale(scale_SC{}, mode_SC{}, delta_cs, tmp_C, param.scale_S, param.scale_C, tile_offset.w, cs0, pred);
 
         param.combine_mat((Tc*)0, constant<kMode>{}, tmp_C, cs0, tile_offset.w, delta_cs, pred);
+
+        if (param.ds4_route_reduce) {
+            StoreDs4RouteReduce(tmp_C, tile_offset, cs0, pred, param);
+            return;
+        }
 
         const MatrixData c = resolve<Tc, kMode>(param.c, tile_offset.w);
 

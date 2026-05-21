@@ -186,6 +186,142 @@ int launch_ds4_mxfp4_matmul(
         stream);
 }
 
+template<class Gemm>
+int launch_ds4_mxfp4_down_reduce_epilogue(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    float*             route_out,
+    const int*         sorted_pairs,
+    const float*       route_weights,
+    int                n_routes,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream_v)
+{
+    if (!A || !expert_offsets || !weights_packed || !scales_packed || !route_out ||
+        !sorted_pairs || !route_weights) {
+        return 1;
+    }
+    if (num_experts != 6 || total_tokens != 768 || n_routes <= 0) return 2;
+
+    constexpr int n = 4096;
+    constexpr int k = 2048;
+    constexpr int group_size = 32;
+
+    cudaStream_t stream = (cudaStream_t)stream_v;
+
+    tmg::MatrixLayout Adesc{};
+    Adesc.type    = turbomind::kHalf;
+    Adesc.order   = tmg::Order::kRowMajor;
+    Adesc.rows    = total_tokens;
+    Adesc.cols    = k;
+    Adesc.ld      = k;
+    Adesc.pack    = 0;
+    Adesc.num     = num_experts;
+    Adesc.offsets = const_cast<int*>(expert_offsets);
+    Adesc.idxs    = nullptr;
+
+    auto convs = tmg::GetConverters(
+        turbomind::kHalf,
+        turbomind::kFloat4_e2m1,
+        turbomind::kHalf,
+        false,
+        70);
+    const tmg::LayoutConverter* conv_w = convs[0];
+    const tmg::LayoutConverter* conv_s = convs[1];
+    if (!conv_w || !conv_s) return 3;
+
+    tmg::MatrixLayout Bdesc{};
+    Bdesc.type    = turbomind::kFloat4_e2m1;
+    Bdesc.order   = conv_w->order;
+    Bdesc.rows    = n;
+    Bdesc.cols    = k;
+    Bdesc.ld      = 0;
+    Bdesc.pack    = (tmg::Pack)((uint32_t)k_pack_value & 0xFFFu);
+    Bdesc.num     = num_experts;
+    if (tmg::get_operand_tag(conv_w->pack) != tmg::OPERAND_A) {
+        std::swap(Bdesc.rows, Bdesc.cols);
+        Bdesc.order = ~Bdesc.order;
+    }
+
+    uint32_t v_pack_raw = ((uint32_t)k_pack_value >> 12) & 0xFFFu;
+    if (v_pack_raw == 0) {
+        v_pack_raw = ((uint32_t)k_pack_value & 0xF0Fu) | (uint32_t)tmg::OPERAND_V;
+    }
+
+    tmg::MatrixLayout Vdesc{};
+    Vdesc.type    = turbomind::kUint8;
+    Vdesc.order   = conv_s->order;
+    Vdesc.rows    = n;
+    Vdesc.cols    = k / group_size;
+    Vdesc.ld      = 0;
+    Vdesc.pack    = (tmg::Pack)v_pack_raw;
+    Vdesc.num     = num_experts;
+    if (tmg::get_operand_tag(conv_s->pack) != tmg::OPERAND_U) {
+        std::swap(Vdesc.rows, Vdesc.cols);
+        Vdesc.order = ~Vdesc.order;
+    }
+
+    tmg::MatrixLayout Ddesc{};
+    Ddesc.type    = turbomind::kHalf;
+    Ddesc.order   = tmg::Order::kRowMajor;
+    Ddesc.rows    = total_tokens;
+    Ddesc.cols    = n;
+    Ddesc.ld      = n;
+    Ddesc.pack    = 0;
+    Ddesc.num     = num_experts;
+    Ddesc.offsets = const_cast<int*>(expert_offsets);
+    Ddesc.idxs    = nullptr;
+
+    using Sched = typename Gemm::Scheduler;
+    Sched sched{{Ddesc.rows, Ddesc.cols, Adesc.cols, std::max(1, Ddesc.num)}, 1, 1};
+    sched.offsets_ = Ddesc.offsets;
+
+    tmg::MatrixLayout Pdesc = Ddesc;
+    Pdesc.ld = tmg::mk2cs<Gemm::kOrderC>(Pdesc.rows, Pdesc.cols).x;
+
+    tmg::MatrixCombination_v3 combin_mat{
+        tmg::to_param(nullptr, Ddesc),
+        1.0f,
+        0.0f,
+    };
+
+    tmg::EpilogueParam epilogue{
+        tmg::to_param(route_out, Ddesc),
+        tmg::to_param(partials, Pdesc),
+        (int*)barriers,
+        combin_mat,
+        false,
+        true,
+        route_out,
+        sorted_pairs,
+        route_weights,
+        n_routes,
+        n,
+    };
+
+    tmg::GemmParam param{
+        tmg::to_param((void*)A, Adesc),
+        tmg::to_param((void*)weights_packed, Bdesc),
+        tmg::MatrixParam{},
+        tmg::to_param((void*)scales_packed, Vdesc),
+    };
+
+    constexpr size_t smem_size = sizeof(typename Gemm::SharedStorage);
+    const auto grid = sched.get_grid_shape();
+    const auto block = Gemm::Impl::WARPS * WARP_SIZE;
+    tmg::gemm_kernel<Gemm><<<grid, block, smem_size, stream>>>(param, epilogue, sched);
+    return 0;
+}
+
 template<class Kernel>
 int launch_ds4_mxfp4_gated_silu(
     Kernel*             kernel,
@@ -363,4 +499,45 @@ int ggml_turbomind_ds4_mxfp4_down_768_m128_launch(
                                    partials_size,
                                    flags,
                                    stream_v);
+}
+
+int ggml_turbomind_ds4_mxfp4_down_768_m128_reduce_launch(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    float*             route_out,
+    const int*         sorted_pairs,
+    const float*       route_weights,
+    int                n_routes,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream_v)
+{
+    if (total_tokens != 768) return 2;
+    (void)probe_kernel_m128();
+    return launch_ds4_mxfp4_down_reduce_epilogue<typename ProbeConfigM128::Kernel>(
+        A,
+        expert_offsets,
+        num_experts,
+        total_tokens,
+        weights_packed,
+        scales_packed,
+        k_pack_value,
+        route_out,
+        sorted_pairs,
+        route_weights,
+        n_routes,
+        barriers,
+        barriers_size,
+        partials,
+        partials_size,
+        flags,
+        stream_v);
 }

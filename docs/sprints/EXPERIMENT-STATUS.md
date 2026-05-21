@@ -73,7 +73,12 @@ slower with the probe enabled (`60.038469` vs `60.129772`), so it remains
 default-off. Sprint 141 added a half2-vectorized route-row-reduce tail variant.
 It passed full 43-layer 128-slot smoke, but 128-slot served A/B stayed neutral:
 control `60.108232`, scalar route-row reduce `60.112248`, and half2 route-row
-reduce `60.104512`, all with `128/128` token match.
+reduce `60.104512`, all with `128/128` token match. Sprint 142 moved the
+weighted route reduction into the TurboMind down GEMM epilogue for the exact
+768-route high-slot shape. It passed full 43-layer 128-slot smoke and served
+correctly at `60.041003` generated tok/s versus `59.987105` same-binary
+control, so it remains default-off because the result is only run-noise
+positive.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
@@ -150,6 +155,7 @@ to slightly worse.
 | 139 | Fixed-shape 128-slot gate/up probe | Correct; m128 measured `0.5999 ms` vs `0.6480 ms` generic gated in isolation, full 43-layer 128-slot smoke passed, and served gated A/B was `60.130047` vs `60.061899` probe-off | Keep exact-guard auto path; move next work to a larger routed-FFN boundary |
 | 140 | Fixed-shape 128-slot down probe | Correct; fixed down measured `0.3026 ms` vs `0.3272 ms` generic and full 43-layer smoke passed, but served A/B was `60.038469` vs `60.129772` down-probe-off | Keep off by default; target down epilogue plus weighted reduce or persistent routed FFN next |
 | 141 | Half2 route-row reduce tail probe | Correct; full 43-layer 128-slot smoke passed, but half2 route-row reduce was `60.104512` vs scalar route-row reduce `60.112248` and control `60.108232` | Keep off by default; separate tail vectorization does not move served throughput |
+| 142 | TurboMind down-epilogue reduce probe | Correct; full 43-layer 128-slot smoke passed and served A/B was `60.041003` vs `59.987105` same-binary control | Keep off by default; the atomic epilogue reduce is correct but not a material throughput win |
 
 ## Remaining
 
@@ -195,8 +201,10 @@ to slightly worse.
     the isolated fixed down probe improved to `0.3026 ms`, but served A/B
     regressed from `60.129772` to `60.038469`. Sprint 141 vectorized the
     separate route-row reduce tail with half2, but the 128-slot A/B stayed in
-    the same band as control, so even a better standalone tail kernel is too
-    small.
+    the same band as control. Sprint 142 moved that reduce into the down GEMM
+    epilogue, but the served result was only `60.041003` vs `59.987105`
+    control. Even a correct weighted-reduce epilogue is too small in this
+    atomic form.
     Sprint 122 further showed that merely chunking slots to feed wider kernels
     loses too much stage overlap, so the fusion target must match the per-slot
     served topology or replace it with an overlapped scheduler.
@@ -250,6 +258,7 @@ DS4_V100_TURBOMIND_GATED_SILU=1
 DS4_V100_TURBOMIND_COMPACT_SCHEDULE=0
 DS4_V100_TURBOMIND_GATE_UP_PROBE=off
 DS4_V100_TURBOMIND_DOWN_PROBE=auto
+DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE=1
 ```
 
 The fused gate/up path is default-enabled for appliances that contain fused
@@ -271,3 +280,6 @@ default-off because served A/B was slower than generic TurboMind. Set
 `DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE_H2=1` is available after Sprint 141, but
 stays default-off because served A/B was neutral against both scalar
 route-row-reduce and control.
+`DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE=1` is available after Sprint 142, but
+stays default-off because the fused atomic epilogue reduce was only run-noise
+positive in served A/B.

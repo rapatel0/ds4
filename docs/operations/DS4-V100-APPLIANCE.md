@@ -157,6 +157,7 @@ DS4_V100_TURBOMIND_GATED_SILU=0
 DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1
 DS4_V100_TURBOMIND_GATE_UP_PROBE=auto
 DS4_V100_TURBOMIND_DOWN_PROBE=off
+DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE=0
 DS4_V100_TURBOMIND_DISPATCH_POLICY=default
 DS4_V100_TURBOMIND_ALLOW_UNSAFE_MEASURE=0
 DS4_V100_TURBOMIND_PROFILE=0
@@ -264,6 +265,13 @@ compact down kernel when all production guards match: route-expanded
 activations, six compact groups, 768 routed rows, `N=4096`, and `K=2048`.
 Sprint 140 keeps it off by default because served A/B was slower than generic
 TurboMind despite the isolated microbenchmark win.
+
+`DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE=1` selects the Sprint 142 fixed-shape
+down-GEMM epilogue that applies route weights and atomically accumulates
+directly into `[token, hidden]` rows. It avoids materializing the normal
+`down_routes` reduction surface for the 768-route high-slot shape, but stays
+off by default because same-binary served A/B was only run-noise positive
+against control.
 
 `DS4_V100_TURBOMIND_DISPATCH_POLICY` selects TurboMind's grouped GEMM launch
 policy. `default` keeps the normal heuristic/cache path. `reuse` requests a

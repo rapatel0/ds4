@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: codex
-revision: 144
+revision: 145
 ---
 
 # Vision: DS4 V100 Appliance
@@ -138,11 +138,16 @@ optimized V100 low-bit expert kernels in the actual hot path.
   half2-vectorized route-row-reduce tail variant. It passed full 43-layer
   128-slot smoke, but served A/B stayed neutral: control `60.108232`, scalar
   route-row reduce `60.112248`, and half2 route-row reduce `60.104512`.
+  Sprint 142 then moved the weighted route reduction into the TurboMind down
+  GEMM epilogue for the exact 768-route high-slot shape. It passed full
+  43-layer smoke and served correctly at `60.041003` generated tok/s versus
+  `59.987105` same-binary control, but the improvement is only run-noise
+  positive, so it also remains opt-in and default-off.
   Dispatch-policy tuning, dispatch bypass, final scatter fusion, wrapper-level
-  activation compaction, separate tail-vectorization, and basic gate/up launch
-  fusion are therefore not the missing throughput lever. The project remains
-  far below the practical serving target, so the next meaningful step is still
-  larger execution-boundary work:
+  activation compaction, separate tail-vectorization, atomic epilogue reduce,
+  and basic gate/up launch fusion are therefore not the missing throughput
+  lever. The project remains far below the practical serving target, so the
+  next meaningful step is still larger execution-boundary work:
   a narrow DS4-only persistent grouped routed-expert pipeline that
   software-pipelines packed MXFP4 dequant, gate/up HMMA, gated activation, down
   HMMA, and weighted scatter/reduce for the current compact routed shape, or
