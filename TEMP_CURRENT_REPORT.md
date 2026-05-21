@@ -4,6 +4,17 @@ Date: 2026-05-21
 
 ## Latest Update
 
+I broadened the fused MXFP4 gate/up+gated-SiLU software-pipeline test into a
+2/3/4-stage sweep. The result is now clear: deeper staging inside this single
+fused GEMM is not a material lever. At 768 routed rows, `m128`, `m128_s3`, and
+`m128_s4` measured `0.5809 ms`, `0.5863 ms`, and `0.5794 ms`. At 1536 routed
+rows, `m128_1536`, `m128_s3_1536`, and `m128_s4_1536` measured `0.8743 ms`,
+`0.8821 ms`, and `0.8774 ms`. NCU all-GEMM profiling of the 768-route fixed
+probe launch also stayed flat: `690.18 us`, `695.30 us`, and `688.77 us`, all
+with `50,331,648` HMMA instructions. Stage-count variants should remain
+explicit diagnostics only; the next fused-kernel attempt needs to change the
+larger routed-FFN boundary.
+
 After this report was first written, I tested a true stage-count software
 pipeline variant on the fused MXFP4 gate/up+gated-SiLU kernel. The 768-route
 `m128_s4` probe improved the isolated benchmark (`0.5811 ms` vs `0.6033 ms`
@@ -119,8 +130,12 @@ Software pipelining:
 
 - Tested as a stage-count variant inside the fused TurboMind MXFP4
   gate/up+gated-SiLU kernel.
-- The isolated 768-route `m128_s4` path improved, but served throughput and NCU
-  counters did not show a material end-to-end gain.
+- Expanded to a 2/3/4-stage sweep. The 768-route `m128`, `m128_s3`, and
+  `m128_s4` fixed probes measured `0.5809 ms`, `0.5863 ms`, and `0.5794 ms`;
+  the 1536-route `m128_1536`, `m128_s3_1536`, and `m128_s4_1536` probes
+  measured `0.8743 ms`, `0.8821 ms`, and `0.8774 ms`.
+- NCU fixed-probe counters were also neutral: about `690-695 us`, `40%` SM
+  throughput, `11-12%` DRAM throughput, and identical HMMA instruction count.
 - TurboMind's SM70 MXFP4 kernels already use the relevant style internally:
   packed low-bit load, dequant/staging, and Volta HMMA.
 - We have not yet written a new end-to-end DS4-only persistent routed-FFN kernel
@@ -181,10 +196,10 @@ measured, but it is still over an order of magnitude away from that target.
 
 ## Immediate Next Step
 
-Prototype the smallest production-relevant 2-way TP routed-FFN path:
+Do not keep tuning stage count inside the current gate/up fused GEMM. The next
+implementation should choose one larger boundary:
 
-- constrain placement to NV2 pairs first;
-- target the 128-slot/32K tier before 256-slot/16K;
-- split the `2048` intermediate dimension across two GPUs;
-- validate the one-stage output against the current layer-owned FFN path;
-- only then attempt overlap/replicated-hidden-state optimizations.
+- a true routed-FFN fused/persistent executor that combines gate/up, activation,
+  down, and route-weighted reduce; or
+- the smallest production-relevant 2-way TP routed-FFN path, constrained to NV2
+  pairs and the 128-slot/32K tier first.

@@ -270,6 +270,17 @@ int ggml_turbomind_ds4_mxfp4_gated_silu_768_m64(
     void*              D,
     void*              stream  /* cudaStream_t */);
 
+int ggml_turbomind_ds4_mxfp4_gated_silu_768_m64_s3(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
 int ggml_turbomind_ds4_mxfp4_gated_silu_768_m64_s4(
     const void*        A,
     const int*         expert_offsets,
@@ -282,6 +293,17 @@ int ggml_turbomind_ds4_mxfp4_gated_silu_768_m64_s4(
     void*              stream  /* cudaStream_t */);
 
 int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
+int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128_s3(
     const void*        A,
     const int*         expert_offsets,
     int                num_experts,
@@ -318,7 +340,29 @@ int ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128(
     void*              D,
     void*              stream  /* cudaStream_t */);
 
+int ggml_turbomind_ds4_mxfp4_gated_silu_1536_m64_s3(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
 int ggml_turbomind_ds4_mxfp4_gated_silu_1536_m64_s4(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
+int ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128_s3(
     const void*        A,
     const int*         expert_offsets,
     int                num_experts,

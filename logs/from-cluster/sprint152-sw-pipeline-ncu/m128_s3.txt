@@ -1,0 +1,19 @@
+== m128_s3 ==
+==PROF== Connected to process 348749 (/workspace/ds4/build/turbomind-v100-s127/test_ggml_turbomind_grouped_gate_up_fusion)
+==PROF== Profiling "convert_kernel" - 0 (1/1): 0%....50%....100% - 8 passes
+[gate_up_fusion tpa=128] shape group_mode=compact groups=6 active=6 total_routes=768 max_routes_per_expert=128 warmup_iters=1 bench_iters=1
+[gate_up_fusion tpa=128] total_routes=768 active=6 separate_ms=0.8325 fused_ms=0.7772 gated_ms=0.7885 probe_label=m128_s3_768 probe_ms=0.6963 down_probe_label=m128_768 down_ms=0.4035 down_probe_ms=0.3543 fused_speedup=1.071x gated_speedup=1.056x probe_vs_gated=1.132x down_probe_vs_generic=1.139x max_abs_gate=1.2500e-01 max_abs_up=6.2500e-02 rel=3.9591e-07 bad=0/3145728 gated_max_abs=1.0266e+01 gated_abs_tol=16.0 gated_rel=2.9025e-04 gated_bad=0/1572864 probe_max_abs=0.0000e+00 probe_rel=0.0000e+00 probe_bad=0/1572864 down_probe_max_abs=0.0000e+00 down_probe_rel=0.0000e+00 down_probe_bad=0/3145728 k_pack_sep=0x341321 k_pack_fused=0x341321 k_pack_gated=0x341321 k_pack_down=0x341321
+[gate_up_fusion tpa=128] PASS
+==PROF== Disconnected from process 348749
+[348749] test_ggml_turbomind_grouped_gate_up_fusion@127.0.0.1
+  void turbomind::gemm::convert_kernel<turbomind::gemm::ConvertOperand<(int)64, (int)32, (int)1, turbomind::gemm::sm70_s884::Operand_V<unsigned char>, unsigned char, turbomind::gemm::Converter<unsigned char, unsigned char>>>(T1::Param) (32, 1, 1)x(32, 1, 1), Context 1, Stream 7, Device 0, CC 7.0
+    Section: Command line profiler metrics
+    -------------------------------------------------- ----------- ------------
+    Metric Name                                        Metric Unit Metric Value
+    -------------------------------------------------- ----------- ------------
+    dram__throughput.avg.pct_of_peak_sustained_elapsed           %         3.06
+    gpu__time_duration.sum                                 usecond        16.10
+    sm__inst_executed_pipe_tensor_op_hmma.sum                 inst            0
+    sm__throughput.avg.pct_of_peak_sustained_elapsed             %         2.00
+    -------------------------------------------------- ----------- ------------
+

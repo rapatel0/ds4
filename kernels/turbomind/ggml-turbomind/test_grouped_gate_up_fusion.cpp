@@ -307,16 +307,24 @@ static int run_case(void * lib, const Case & c) {
         dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_96");
     auto probe768_m64 = (pfn_ds4_mxfp4_gated_silu_96)
         dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m64");
+    auto probe768_m64_s3 = (pfn_ds4_mxfp4_gated_silu_96)
+        dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m64_s3");
     auto probe768_m64_s4 = (pfn_ds4_mxfp4_gated_silu_96)
         dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m64_s4");
     auto probe768_m128 = (pfn_ds4_mxfp4_gated_silu_96)
         dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m128");
+    auto probe768_m128_s3 = (pfn_ds4_mxfp4_gated_silu_96)
+        dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m128_s3");
     auto probe768_m128_s4 = (pfn_ds4_mxfp4_gated_silu_96)
         dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m128_s4");
     auto probe1536_m128 = (pfn_ds4_mxfp4_gated_silu_96)
         dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128");
+    auto probe1536_m64_s3 = (pfn_ds4_mxfp4_gated_silu_96)
+        dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_1536_m64_s3");
     auto probe1536_m64_s4 = (pfn_ds4_mxfp4_gated_silu_96)
         dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_1536_m64_s4");
+    auto probe1536_m128_s3 = (pfn_ds4_mxfp4_gated_silu_96)
+        dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128_s3");
     auto probe1536_m128_s4 = (pfn_ds4_mxfp4_gated_silu_96)
         dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128_s4");
     auto probe768_m64n256 = (pfn_ds4_mxfp4_gated_silu_96)
@@ -360,11 +368,21 @@ static int run_case(void * lib, const Case & c) {
         if (variant && std::strcmp(variant, "m128") == 0 && probe768_m128) {
             probe = probe768_m128;
             probe_label = "m128_768";
+        } else if (variant && (std::strcmp(variant, "m128_s3") == 0 ||
+                               std::strcmp(variant, "m128s3") == 0) &&
+                   probe768_m128_s3) {
+            probe = probe768_m128_s3;
+            probe_label = "m128_s3_768";
         } else if (variant && (std::strcmp(variant, "m128_s4") == 0 ||
                                std::strcmp(variant, "m128s4") == 0) &&
                    probe768_m128_s4) {
             probe = probe768_m128_s4;
             probe_label = "m128_s4_768";
+        } else if (variant && (std::strcmp(variant, "m64_s3") == 0 ||
+                               std::strcmp(variant, "m64s3") == 0) &&
+                   probe768_m64_s3) {
+            probe = probe768_m64_s3;
+            probe_label = "m64_s3_768";
         } else if (variant && (std::strcmp(variant, "m64_s4") == 0 ||
                                std::strcmp(variant, "m64s4") == 0) &&
                    probe768_m64_s4) {
@@ -387,6 +405,16 @@ static int run_case(void * lib, const Case & c) {
              std::strcmp(variant, "1536_m128") == 0)) {
             probe = probe1536_m128;
             probe_label = "m128_1536";
+        } else if (probe1536_m128_s3 &&
+                   variant &&
+                   (std::strcmp(variant, "m128_s3") == 0 ||
+                    std::strcmp(variant, "m128s3") == 0 ||
+                    std::strcmp(variant, "m128_s3_1536") == 0 ||
+                    std::strcmp(variant, "m128s3_1536") == 0 ||
+                    std::strcmp(variant, "1536_m128_s3") == 0 ||
+                    std::strcmp(variant, "1536_m128s3") == 0)) {
+            probe = probe1536_m128_s3;
+            probe_label = "m128_s3_1536";
         } else if (probe1536_m128_s4 &&
                    variant &&
                    (std::strcmp(variant, "m128_s4") == 0 ||
@@ -397,6 +425,16 @@ static int run_case(void * lib, const Case & c) {
                     std::strcmp(variant, "1536_m128s4") == 0)) {
             probe = probe1536_m128_s4;
             probe_label = "m128_s4_1536";
+        } else if (probe1536_m64_s3 &&
+                   variant &&
+                   (std::strcmp(variant, "m64_s3") == 0 ||
+                    std::strcmp(variant, "m64s3") == 0 ||
+                    std::strcmp(variant, "m64_s3_1536") == 0 ||
+                    std::strcmp(variant, "m64s3_1536") == 0 ||
+                    std::strcmp(variant, "1536_m64_s3") == 0 ||
+                    std::strcmp(variant, "1536_m64s3") == 0)) {
+            probe = probe1536_m64_s3;
+            probe_label = "m64_s3_1536";
         } else if (probe1536_m64_s4 &&
                    variant &&
                    (std::strcmp(variant, "m64_s4") == 0 ||

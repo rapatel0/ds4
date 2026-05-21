@@ -206,11 +206,15 @@ typedef struct {
     tm_pfn_mul_mat_grouped_total_tokens mul_mat_grouped_total_tokens;
     tm_pfn_mul_mat_grouped_gated_silu_total_tokens mul_mat_grouped_gated_silu_total_tokens;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m64;
+    tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m64_s3;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m64_s4;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m128;
+    tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m128_s3;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m128_s4;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_1536_m128;
+    tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_1536_m64_s3;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_1536_m64_s4;
+    tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_1536_m128_s3;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_1536_m128_s4;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m64n256;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_down_768_m128;
@@ -1023,21 +1027,33 @@ static int cuda_tm_load_api(void) {
     g_tm_api.ds4_mxfp4_gated_silu_768_m64 =
         (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m64");
+    g_tm_api.ds4_mxfp4_gated_silu_768_m64_s3 =
+        (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m64_s3");
     g_tm_api.ds4_mxfp4_gated_silu_768_m64_s4 =
         (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m64_s4");
     g_tm_api.ds4_mxfp4_gated_silu_768_m128 =
         (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m128");
+    g_tm_api.ds4_mxfp4_gated_silu_768_m128_s3 =
+        (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m128_s3");
     g_tm_api.ds4_mxfp4_gated_silu_768_m128_s4 =
         (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m128_s4");
     g_tm_api.ds4_mxfp4_gated_silu_1536_m128 =
         (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128");
+    g_tm_api.ds4_mxfp4_gated_silu_1536_m64_s3 =
+        (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_1536_m64_s3");
     g_tm_api.ds4_mxfp4_gated_silu_1536_m64_s4 =
         (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_1536_m64_s4");
+    g_tm_api.ds4_mxfp4_gated_silu_1536_m128_s3 =
+        (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128_s3");
     g_tm_api.ds4_mxfp4_gated_silu_1536_m128_s4 =
         (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128_s4");
@@ -5848,6 +5864,12 @@ static tm_pfn_ds4_mxfp4_gated_silu cuda_tm_ds4_gated_silu_768_probe(
         if (strcmp(mode, "m64") == 0) {
             return shape768 ? g_tm_api.ds4_mxfp4_gated_silu_768_m64 : nullptr;
         }
+        if (strcmp(mode, "m64_s3") == 0 || strcmp(mode, "m64s3") == 0) {
+            if (shape1536) {
+                return g_tm_api.ds4_mxfp4_gated_silu_1536_m64_s3;
+            }
+            return g_tm_api.ds4_mxfp4_gated_silu_768_m64_s3;
+        }
         if (strcmp(mode, "m64_s4") == 0 || strcmp(mode, "m64s4") == 0) {
             if (shape1536) {
                 return g_tm_api.ds4_mxfp4_gated_silu_1536_m64_s4;
@@ -5860,17 +5882,35 @@ static tm_pfn_ds4_mxfp4_gated_silu cuda_tm_ds4_gated_silu_768_probe(
         if (strcmp(mode, "m128_1536") == 0 || strcmp(mode, "1536_m128") == 0) {
             return shape1536 ? g_tm_api.ds4_mxfp4_gated_silu_1536_m128 : nullptr;
         }
+        if (strcmp(mode, "m128_s3") == 0 || strcmp(mode, "m128s3") == 0) {
+            if (shape1536) {
+                return g_tm_api.ds4_mxfp4_gated_silu_1536_m128_s3;
+            }
+            return g_tm_api.ds4_mxfp4_gated_silu_768_m128_s3;
+        }
         if (strcmp(mode, "m128_s4") == 0 || strcmp(mode, "m128s4") == 0) {
             if (shape1536) {
                 return g_tm_api.ds4_mxfp4_gated_silu_1536_m128_s4;
             }
             return g_tm_api.ds4_mxfp4_gated_silu_768_m128_s4;
         }
+        if (strcmp(mode, "m128_s3_1536") == 0 ||
+            strcmp(mode, "m128s3_1536") == 0 ||
+            strcmp(mode, "1536_m128_s3") == 0 ||
+            strcmp(mode, "1536_m128s3") == 0) {
+            return shape1536 ? g_tm_api.ds4_mxfp4_gated_silu_1536_m128_s3 : nullptr;
+        }
         if (strcmp(mode, "m128_s4_1536") == 0 ||
             strcmp(mode, "m128s4_1536") == 0 ||
             strcmp(mode, "1536_m128_s4") == 0 ||
             strcmp(mode, "1536_m128s4") == 0) {
             return shape1536 ? g_tm_api.ds4_mxfp4_gated_silu_1536_m128_s4 : nullptr;
+        }
+        if (strcmp(mode, "m64_s3_1536") == 0 ||
+            strcmp(mode, "m64s3_1536") == 0 ||
+            strcmp(mode, "1536_m64_s3") == 0 ||
+            strcmp(mode, "1536_m64s3") == 0) {
+            return shape1536 ? g_tm_api.ds4_mxfp4_gated_silu_1536_m64_s3 : nullptr;
         }
         if (strcmp(mode, "m64_s4_1536") == 0 ||
             strcmp(mode, "m64s4_1536") == 0 ||

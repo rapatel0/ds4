@@ -288,6 +288,9 @@ selection for tile-shape sweeps; it remains opt-in because served A/B
 regressed against `auto`. Sprint 148 adds explicit stage-4 software-pipeline
 probes such as `m128_s4`, `m64_s4`, and `m128_s4_1536`; these also remain
 diagnostic-only because served/profile A/B stayed inside the run band.
+Sprint 152 adds explicit stage-3 software-pipeline probes such as `m128_s3`,
+`m64_s3`, and `m128_s3_1536`; these also remain diagnostic-only because the
+2/3/4-stage sweep stayed neutral.
 
 `DS4_V100_TURBOMIND_DOWN_PROBE=auto` selects the fixed-shape DS4/V100 m128
 compact down kernel when all production guards match: route-expanded

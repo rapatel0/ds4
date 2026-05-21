@@ -119,7 +119,14 @@ for the 128-slot/32K tier first, not a broad replacement for the 256-slot/16K
 ceiling. Sprint 151 added the missing correctness gate: finite MXFP4 fixtures
 now compare full one-GPU down output against the sum of the two TP partials.
 Both clean NV2 pairs pass at 768 and 1536 routes with `rel ~= 2.46e-04`,
-`bad=0`, and max absolute difference `6.1035e-05`.
+`bad=0`, and max absolute difference `6.1035e-05`. Sprint 152 completed the
+fused gate/up software-pipeline sweep by adding 3-stage variants and comparing
+2/3/4-stage fixed probes. At 768 routes, `m128`, `m128_s3`, and `m128_s4`
+measured `0.5809 ms`, `0.5863 ms`, and `0.5794 ms`; at 1536 routes,
+`m128_1536`, `m128_s3_1536`, and `m128_s4_1536` measured `0.8743 ms`,
+`0.8821 ms`, and `0.8774 ms`. NCU fixed-probe counters were also neutral, with
+identical HMMA instruction counts. Stage-count tuning inside the existing
+fused gate/up GEMM is now exhausted as a material lever.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
@@ -421,12 +428,11 @@ The next target still needs to change a larger execution boundary. Sprints
 bypass, tile probes, fixed-shape 768/1536-route probes, and simple slot widening
 are correct but too small to close the practical serving gap. Aggregate
 throughput is now about `61` tok/s at 256-slot/16K and about `46` tok/s at
-16-slot/256K, far below the practical serving target. The next sprint should
-attack either the full TurboMind routed expert boundary with route-aware
-activation staging and persistent/grouped execution, or a broader
-CUTLASS/TurboMind-inspired software-pipelined kernel that fuses packed decode,
-staging, MMA, activation, and epilogue work without giving up the current
-per-step stage overlap.
+16-slot/256K, far below the practical serving target. After the Sprint 152
+stage-count sweep, the next sprint should avoid more gate/up-only stage tuning
+and instead attack either the full TurboMind routed expert boundary with
+route-aware activation staging and persistent/grouped execution, or the bounded
+2-way TP routed-FFN path for the 128-slot/32K tier.
 
 The concise current status is also tracked in
 `docs/sprints/EXPERIMENT-STATUS.md`.

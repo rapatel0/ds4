@@ -203,6 +203,10 @@ to slightly worse.
 | 146 | 1536-route fixed-shape gate/up and down probes | Correct; standalone gate `m128_1536` improved to `0.9435 ms` vs `0.9651 ms`, but served A/B was `61.204203` vs `61.223893` control and continuation/decode was `57.378940` vs `57.397400` | Keep explicit opt-in only; do not select 1536 probes from `auto` |
 | 147 | 1536-route down-reduce epilogue | Correct; full 43-layer 256-slot smoke passed with `DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE=1` | Keep explicit opt-in only; served A/B deferred for larger fused-kernel work |
 | 148 | SM70 stage-4 fused gate/up software-pipeline probe | Correct; `m128_s4` improved the isolated 768-route probe to `0.5811 ms` vs `0.6033 ms`, but served A/B was only `60.049057` vs `59.865668` control and profile stayed neutral | Keep explicit opt-in only; stage count alone is not the material fused-kernel lever |
+| 149 | TP split and P2P topology probe | Correct; ideal 2-way FFN compute speedup was `1.858x` at 768 routes and `1.468x` at 1536 routes, with 12 MiB NV2 payloads around `0.26 ms` | Prototype only on NV2 pairs; do not start with 8-way TP/EP |
+| 150 | Two-GPU TP split timing proxy | Correct; 768-route NV2 total-with-copy speedup was about `1.28x`, while 1536 routes were neutral to slower (`0.85-0.94x`) | Candidate only for 128-slot/32K first |
+| 151 | Two-GPU TP correctness gate | Correct; full one-GPU routed-FFN output matches FP32 sum of TP partial outputs with `rel ~= 2.46e-04`, `bad=0` | Split math is valid; remaining risk is production scheduling and payload overlap |
+| 152 | 2/3/4-stage fused gate/up software-pipeline sweep | Correct; 768-route `m128/m128_s3/m128_s4` measured `0.5809/0.5863/0.5794 ms`, 1536-route `m128_1536/m128_s3_1536/m128_s4_1536` measured `0.8743/0.8821/0.8774 ms`, and NCU fixed-probe HMMA counts were identical | Do not spend more effort on gate/up stage count; next fusion must cover a larger routed-FFN boundary or use bounded TP |
 
 ## Remaining
 
@@ -261,11 +265,15 @@ to slightly worse.
     Sprint 148 then tested the stage-count version of software pipelining on
     the fused gate/up kernel. It improved the isolated 768-route probe but did
     not reduce the routed-FFN gate/up bucket reliably in the full scheduler.
+    Sprint 152 broadened that into a 2/3/4-stage sweep and found the fixed
+    probes neutral at both 768 and 1536 routes, with identical HMMA counts in
+    NCU. Stage count inside the existing fused gate/up kernel is therefore
+    exhausted.
     Sprint 122 further showed that merely chunking slots to feed wider kernels
     loses too much stage overlap, so the fusion target must match the per-slot
     served topology or replace it with an overlapped scheduler.
-- Decide whether the next production step is a deeper TurboMind adapter change
-  or a lower-level CUTLASS/TurboMind-inspired persistent kernel probe.
+- Decide whether the next production step is a true routed-FFN fused/persistent
+  executor or the bounded 2-way TP routed-FFN prototype for 128-slot/32K.
 
 ## Operator Status
 
@@ -346,3 +354,6 @@ Stage-4 fused gate/up probes are available after Sprint 148 for diagnostics
 with explicit modes such as `m128_s4`, `m64_s4`, and `m128_s4_1536`. They are
 not selected by `auto` because served and profile results stayed inside the
 run band.
+Stage-3 fused gate/up probes are available after Sprint 152 for diagnostics
+with explicit modes such as `m128_s3`, `m64_s3`, and `m128_s3_1536`. They are
+not selected by `auto` because the 2/3/4-stage sweep stayed neutral.
