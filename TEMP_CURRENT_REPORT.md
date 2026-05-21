@@ -4,6 +4,24 @@ Date: 2026-05-21
 
 ## Latest Update
 
+Sprint 155 implemented and tested an actual opt-in routed-FFN
+stream-per-expert software pipeline on V100. The final path supports the
+current non-interleaved fused gate/up pack by chaining fused gate/up, group
+SwiGLU, and down projection on per-group CUDA streams, then joining before the
+existing weighted route reduction. A profiled stage-0 hardware smoke proved the
+branch was active (`group_pipeline_calls=6`, `group_pipeline_groups=48`) and
+correct.
+
+Served A/B was correct but slower, so the flag stays diagnostic-only. At
+128-slot/32K, active group pipeline measured `59.125703` generated tok/s and
+`55.430346` continuation/decode tok/s versus `59.394915` and `55.682733`
+control. At 256-slot/16K, it measured `60.308689` generated and `56.539396`
+decode tok/s versus `60.648138` and `56.857630` control. This rules out a
+host-orchestrated stream-per-expert pipeline as the material shift by itself.
+The next useful kernel direction is a larger persistent DS4-only routed-FFN
+boundary that removes the extra launches/stream joins, or the bounded one-layer
+2-way TP prototype for the 128-slot/32K NV2 case.
+
 Sprint 154 fully tested the currently implemented fused routed-FFN boundary:
 TurboMind fused gate/up + gated-SiLU plus the down-projection route-weighted
 reduce epilogue. It is correct, but not a material speedup. At 128-slot/32K,
@@ -173,6 +191,10 @@ Software pipelining:
   throughput, `11-12%` DRAM throughput, and identical HMMA instruction count.
 - TurboMind's SM70 MXFP4 kernels already use the relevant style internally:
   packed low-bit load, dequant/staging, and Volta HMMA.
+- Sprint 155 tested the larger host-orchestrated stream-per-expert routed-FFN
+  pipeline. It is correct and was proven active on V100, but served A/B
+  regressed: `59.125703` vs `59.394915` generated tok/s at 128-slot/32K and
+  `60.308689` vs `60.648138` at 256-slot/16K.
 - We have not yet written a new end-to-end DS4-only persistent routed-FFN kernel
   that software-pipelines gate/up, activation, down, and reduce as one larger
   unit.

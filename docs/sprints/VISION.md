@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: sprint-execute
-revision: 154
+revision: 155
 ---
 
 # Vision: DS4 V100 Appliance
@@ -183,11 +183,18 @@ optimized V100 low-bit expert kernels in the actual hot path.
   and the 256-slot/16K result was slightly slower (`60.642962` vs
   `60.671924`). A synchronized 128-slot profile still showed gate/up and down
   GEMMs dominating, so epilogue-only down-reduce fusion also stays off by
-  default.
+  default. Sprint 155 then implemented a true stream-per-expert routed-FFN
+  software pipeline for the actual non-interleaved fused gate/up pack. A
+  profiled V100 stage smoke proved it active (`group_pipeline_calls=6`), but
+  served A/B regressed at both high-slot shapes: `59.125703` vs `59.394915`
+  generated tok/s at 128-slot/32K and `60.308689` vs `60.648138` at
+  256-slot/16K. Host-orchestrated per-expert streams therefore stay
+  diagnostic-only.
   Dispatch-policy tuning, dispatch bypass, final scatter fusion, wrapper-level
   activation compaction, separate tail-vectorization, atomic epilogue reduce,
-  simple slot widening, fixed-shape gate/down probes, and basic gate/up launch
-  fusion are therefore not the missing throughput lever. The project remains
+  simple slot widening, fixed-shape gate/down probes, basic gate/up launch
+  fusion, and stream-per-expert host software pipelining are therefore not the
+  missing throughput lever. The project remains
   far below the practical
   serving target, so the next meaningful step is still larger
   execution-boundary work:
@@ -2725,6 +2732,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-21 | Completed Sprint 152 fused gate/up software-pipeline sweep. | The fused MXFP4 gate/up+gated-SiLU probe now has 3-stage variants, so the 2/3/4-stage question was tested directly. At 768 routes, `m128`, `m128_s3`, and `m128_s4` measured `0.5809`, `0.5863`, and `0.5794 ms`; at 1536 routes, `m128_1536`, `m128_s3_1536`, and `m128_s4_1536` measured `0.8743`, `0.8821`, and `0.8774 ms`. NCU fixed-probe counters were also neutral with identical HMMA counts, so stage-count tuning inside the existing gate/up kernel is exhausted. The next material implementation should either fuse the larger routed-FFN boundary or prototype bounded 2-way TP for 128-slot/32K. | Sprint 153+ |
 | 2026-05-21 | Completed Sprint 153 bounded TP pack contract. | `tools/ds4-v100-appliance-pack --emit-tp-split` now emits split TP TurboMind expert rows for gate/up and down, and the V100 context binder accepts those TP descriptors while keeping normal owner-GPU checks fail-closed. A layer-3, six-expert GPU0/GPU3 bounded pack passed partial context smoke. The real 2-GPU NV2 proxy measured `1.157x` total-with-copy speedup at 768 routes but `0.912x` at 1536 routes, so TP should stay scoped to a one-layer 128-slot/32K prototype. | Sprint 154+ |
 | 2026-05-21 | Completed Sprint 154 fused routed-FFN boundary validation. | The down-reduce epilogue is correct but not a throughput lever. Served A/B was flat at 128-slot/32K (`59.509317` vs `59.502747` generated tok/s) and slightly slower at 256-slot/16K (`60.642962` vs `60.671924`). A synchronized profile kept gate/up and down GEMMs as the dominant buckets, so stage-count tuning and epilogue-only down-reduce fusion are both exhausted. | Sprint 155+ |
+| 2026-05-21 | Completed Sprint 155 stream-per-expert routed-FFN pipeline. | The opt-in `DS4_V100_TURBOMIND_GROUP_PIPELINE=1` path now executes the production non-interleaved fused gate/up pack as per-group gate/up, SwiGLU, and down chains on CUDA streams. A profiled V100 smoke proved `group_pipeline_calls=6`, but served A/B regressed at both 128-slot/32K and 256-slot/16K, so this remains diagnostic-only. Next work should remove launch/stream overhead with a persistent routed-FFN boundary or continue the bounded one-layer 2-way TP prototype. | Sprint 156+ |
 
 ## Open Questions
 

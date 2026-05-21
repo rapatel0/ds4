@@ -220,6 +220,12 @@ typedef struct {
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_down_768_m128;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_down_1536_m128;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_down_768_m64n256;
+    tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m128_group;
+    tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gate_up_768_m128_group;
+    tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_down_768_m128_group;
+    tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_1536_m128_group;
+    tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gate_up_1536_m128_group;
+    tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_down_1536_m128_group;
     tm_pfn_ds4_mxfp4_down_reduce ds4_mxfp4_down_768_m128_reduce;
     tm_pfn_ds4_mxfp4_down_reduce ds4_mxfp4_down_1536_m128_reduce;
     int attempted;
@@ -316,10 +322,14 @@ static int g_model_load_progress_started;
 static int g_model_load_progress_tty;
 enum {
     DS4_CUDA_MAX_TMP_DEVICES = 16,
+    DS4_CUDA_TM_PIPE_MAX_STREAMS = 8,
 };
 
 static void *g_cuda_tmp[DS4_CUDA_MAX_TMP_DEVICES];
 static uint64_t g_cuda_tmp_bytes[DS4_CUDA_MAX_TMP_DEVICES];
+static cudaStream_t g_tm_pipe_streams[DS4_CUDA_MAX_TMP_DEVICES][DS4_CUDA_TM_PIPE_MAX_STREAMS];
+static cudaEvent_t g_tm_pipe_events[DS4_CUDA_MAX_TMP_DEVICES][DS4_CUDA_TM_PIPE_MAX_STREAMS];
+static cudaEvent_t g_tm_pipe_start_events[DS4_CUDA_MAX_TMP_DEVICES];
 static void *g_model_stage_raw[4];
 static void *g_model_stage[4];
 static cudaEvent_t g_model_stage_event[4];
@@ -715,6 +725,8 @@ static void cuda_f8_shape_trace(const char *kind,
 struct cuda_tm_profile_stats {
     uint64_t calls;
     uint64_t fused_calls;
+    uint64_t group_pipeline_calls;
+    uint64_t group_pipeline_groups;
     uint64_t tokens;
     uint64_t routes;
     uint64_t active_expert_sum;
@@ -753,10 +765,12 @@ static void cuda_tm_profile_dump(void) {
         const double calls = (double)s.calls;
         const double total = s.total_ms > 0.0 ? s.total_ms : 1.0;
         fprintf(stderr,
-                "ds4: turbomind_profile gpu=%d calls=%llu fused_calls=%llu tokens=%llu routes=%llu avg_tokens=%.3f avg_routes=%.3f avg_active_experts=%.3f max_routes_call=%u max_routes_expert=%u total_ms=%.3f route_ms=%.3f gather_ms=%.3f gate_up_ms=%.3f swiglu_ms=%.3f down_ms=%.3f scatter_ms=%.3f gate_up_pct=%.2f down_pct=%.2f\n",
+                "ds4: turbomind_profile gpu=%d calls=%llu fused_calls=%llu group_pipeline_calls=%llu group_pipeline_groups=%llu tokens=%llu routes=%llu avg_tokens=%.3f avg_routes=%.3f avg_active_experts=%.3f max_routes_call=%u max_routes_expert=%u total_ms=%.3f route_ms=%.3f gather_ms=%.3f gate_up_ms=%.3f swiglu_ms=%.3f down_ms=%.3f scatter_ms=%.3f gate_up_pct=%.2f down_pct=%.2f\n",
                 gpu,
                 (unsigned long long)s.calls,
                 (unsigned long long)s.fused_calls,
+                (unsigned long long)s.group_pipeline_calls,
+                (unsigned long long)s.group_pipeline_groups,
                 (unsigned long long)s.tokens,
                 (unsigned long long)s.routes,
                 (double)s.tokens / calls,
@@ -801,12 +815,18 @@ static void cuda_tm_profile_record(int gpu,
                                    float swiglu_ms,
                                    float down_ms,
                                    float scatter_ms,
-                                   float total_ms) {
+                                   float total_ms,
+                                   int group_pipeline,
+                                   uint32_t group_pipeline_groups) {
     if (gpu < 0 || gpu >= DS4_CUDA_MAX_TMP_DEVICES) return;
     std::lock_guard<std::mutex> lk(g_tm_profile_mutex);
     cuda_tm_profile_stats &s = g_tm_profile_stats[gpu];
     s.calls++;
     if (fused_gate_up) s.fused_calls++;
+    if (group_pipeline) {
+        s.group_pipeline_calls++;
+        s.group_pipeline_groups += group_pipeline_groups;
+    }
     s.tokens += n_tokens;
     s.routes += total_routes;
     s.active_expert_sum += active_experts;
@@ -872,7 +892,9 @@ struct cuda_tm_profile_call {
                 uint32_t total_routes,
                 uint32_t active_experts,
                 uint32_t max_routes_per_expert,
-                int fused_gate_up) {
+                int fused_gate_up,
+                int group_pipeline,
+                uint32_t group_pipeline_groups) {
         if (!enabled) return;
         float total_ms = 0.0f;
         if (cudaEventElapsedTime(&total_ms, start, last) != cudaSuccess) return;
@@ -888,7 +910,9 @@ struct cuda_tm_profile_call {
                                swiglu_ms,
                                down_ms,
                                scatter_ms,
-                               total_ms);
+                               total_ms,
+                               group_pipeline,
+                               group_pipeline_groups);
     }
 
     void cleanup() {
@@ -1069,6 +1093,24 @@ static int cuda_tm_load_api(void) {
     g_tm_api.ds4_mxfp4_down_768_m64n256 =
         (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_down_768_m64n256");
+    g_tm_api.ds4_mxfp4_gated_silu_768_m128_group =
+        (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m128_group");
+    g_tm_api.ds4_mxfp4_gate_up_768_m128_group =
+        (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gate_up_768_m128_group");
+    g_tm_api.ds4_mxfp4_down_768_m128_group =
+        (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_down_768_m128_group");
+    g_tm_api.ds4_mxfp4_gated_silu_1536_m128_group =
+        (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128_group");
+    g_tm_api.ds4_mxfp4_gate_up_1536_m128_group =
+        (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gate_up_1536_m128_group");
+    g_tm_api.ds4_mxfp4_down_1536_m128_group =
+        (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_down_1536_m128_group");
     g_tm_api.ds4_mxfp4_down_768_m128_reduce =
         (tm_pfn_ds4_mxfp4_down_reduce)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_down_768_m128_reduce");
@@ -2007,8 +2049,27 @@ extern "C" void ds4_gpu_cleanup(void) {
     g_q8_f32_by_offset.clear();
     g_q8_f32_bytes = 0;
     for (int dev = 0; dev < DS4_CUDA_MAX_TMP_DEVICES; dev++) {
+        int need_device = g_cuda_tmp[dev] != NULL;
+        if (g_tm_pipe_start_events[dev]) need_device = 1;
+        for (int i = 0; i < DS4_CUDA_TM_PIPE_MAX_STREAMS; i++) {
+            if (g_tm_pipe_events[dev][i] || g_tm_pipe_streams[dev][i]) need_device = 1;
+        }
+        if (need_device) (void)cudaSetDevice(dev);
+        if (g_tm_pipe_start_events[dev]) {
+            (void)cudaEventDestroy(g_tm_pipe_start_events[dev]);
+            g_tm_pipe_start_events[dev] = NULL;
+        }
+        for (int i = 0; i < DS4_CUDA_TM_PIPE_MAX_STREAMS; i++) {
+            if (g_tm_pipe_events[dev][i]) {
+                (void)cudaEventDestroy(g_tm_pipe_events[dev][i]);
+                g_tm_pipe_events[dev][i] = NULL;
+            }
+            if (g_tm_pipe_streams[dev][i]) {
+                (void)cudaStreamDestroy(g_tm_pipe_streams[dev][i]);
+                g_tm_pipe_streams[dev][i] = NULL;
+            }
+        }
         if (g_cuda_tmp[dev]) {
-            (void)cudaSetDevice(dev);
             (void)cudaFree(g_cuda_tmp[dev]);
             g_cuda_tmp[dev] = NULL;
             g_cuda_tmp_bytes[dev] = 0;
@@ -5604,6 +5665,34 @@ __global__ static void tm_swiglu_fused_gate_up_half_kernel(
     out[idx] = __float2half_rn(s * u * weights[row]);
 }
 
+__global__ static void tm_swiglu_fused_gate_up_half_group_kernel(
+        __half *out,
+        const __half *gate_up,
+        const float *weights,
+        const int *offsets,
+        uint32_t group,
+        uint32_t total_routes,
+        uint32_t cols,
+        float clamp) {
+    const uint64_t idx = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t n = (uint64_t)total_routes * cols;
+    if (idx >= n) return;
+    const uint32_t row = (uint32_t)(idx / cols);
+    const int start = offsets[group];
+    const int end = offsets[group + 1u];
+    if ((int)row < start || (int)row >= end) return;
+    const uint32_t col = (uint32_t)(idx - (uint64_t)row * cols);
+    const uint64_t base = (uint64_t)row * (uint64_t)cols * 2u + col;
+    float g = __half2float(gate_up[base]);
+    float u = __half2float(gate_up[base + cols]);
+    if (clamp > 1.0e-6f) {
+        g = fminf(g, clamp);
+        u = fminf(fmaxf(u, -clamp), clamp);
+    }
+    const float s = g / (1.0f + expf(-g));
+    out[idx] = __float2half_rn(s * u * weights[row]);
+}
+
 __global__ static void tm_scatter_sum_half_to_f32_kernel(
         float *out,
         const __half *routes,
@@ -5825,7 +5914,7 @@ static int cuda_tm_route_validation_sync_enabled(void) {
 static int cuda_tm_total_tokens_abi_enabled(void) {
     if (!g_tm_api.mul_mat_grouped_total_tokens) return 0;
     const char *disable = getenv("DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS");
-    if (!disable || !disable[0]) return 0;
+    if (!disable || !disable[0]) return 1;
     return !cuda_env_flag_enabled("DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS");
 }
 
@@ -6004,6 +6093,48 @@ static tm_pfn_ds4_mxfp4_down_reduce cuda_tm_ds4_down_reduce_probe(
     return nullptr;
 }
 
+static tm_pfn_ds4_mxfp4_gated_silu cuda_tm_ds4_group_gated_silu_probe(
+        uint32_t total_routes,
+        int fused_n,
+        int k) {
+    if (fused_n != 4096 || k != 4096) return nullptr;
+    if (total_routes == 768u) {
+        return g_tm_api.ds4_mxfp4_gated_silu_768_m128_group;
+    }
+    if (total_routes == 1536u) {
+        return g_tm_api.ds4_mxfp4_gated_silu_1536_m128_group;
+    }
+    return nullptr;
+}
+
+static tm_pfn_ds4_mxfp4_gated_silu cuda_tm_ds4_group_gate_up_probe(
+        uint32_t total_routes,
+        int fused_n,
+        int k) {
+    if (fused_n != 4096 || k != 4096) return nullptr;
+    if (total_routes == 768u) {
+        return g_tm_api.ds4_mxfp4_gate_up_768_m128_group;
+    }
+    if (total_routes == 1536u) {
+        return g_tm_api.ds4_mxfp4_gate_up_1536_m128_group;
+    }
+    return nullptr;
+}
+
+static tm_pfn_ds4_mxfp4_gated_silu cuda_tm_ds4_group_down_probe(
+        uint32_t total_routes,
+        int n,
+        int k) {
+    if (n != 4096 || k != 2048) return nullptr;
+    if (total_routes == 768u) {
+        return g_tm_api.ds4_mxfp4_down_768_m128_group;
+    }
+    if (total_routes == 1536u) {
+        return g_tm_api.ds4_mxfp4_down_1536_m128_group;
+    }
+    return nullptr;
+}
+
 static int cuda_tm_compact_schedule_enabled(void) {
     return cuda_env_flag_enabled("DS4_V100_TURBOMIND_COMPACT_SCHEDULE");
 }
@@ -6028,6 +6159,84 @@ static int cuda_tm_route_row_reduce_half2_enabled(void) {
 
 static int cuda_tm_indexed_a_enabled(void) {
     return cuda_env_flag_enabled("DS4_V100_TURBOMIND_INDEXED_A");
+}
+
+static int cuda_tm_group_pipeline_enabled(void) {
+    return cuda_env_flag_enabled("DS4_V100_TURBOMIND_GROUP_PIPELINE");
+}
+
+static uint32_t cuda_tm_group_pipeline_stream_limit(void) {
+    const char *v = getenv("DS4_V100_TURBOMIND_GROUP_PIPELINE_STREAMS");
+    if (!v || !v[0]) return DS4_CUDA_TM_PIPE_MAX_STREAMS;
+    char *end = NULL;
+    long parsed = strtol(v, &end, 10);
+    if (!end || *end != '\0' || parsed < 1 || parsed > DS4_CUDA_TM_PIPE_MAX_STREAMS) {
+        cuda_tm_warn_once("invalid DS4_V100_TURBOMIND_GROUP_PIPELINE_STREAMS; using default");
+        return DS4_CUDA_TM_PIPE_MAX_STREAMS;
+    }
+    return (uint32_t)parsed;
+}
+
+static int cuda_tm_pipeline_ensure(int gpu, uint32_t streams) {
+    if (gpu < 0 || gpu >= DS4_CUDA_MAX_TMP_DEVICES ||
+        streams == 0 || streams > DS4_CUDA_TM_PIPE_MAX_STREAMS) {
+        return 0;
+    }
+    if (!cuda_ok(cudaSetDevice(gpu), "turbomind group pipeline set device")) return 0;
+    if (!g_tm_pipe_start_events[gpu]) {
+        cudaError_t err =
+            cudaEventCreateWithFlags(&g_tm_pipe_start_events[gpu], cudaEventDisableTiming);
+        if (err != cudaSuccess) {
+            fprintf(stderr,
+                    "ds4: CUDA TurboMind group pipeline start event create failed: %s\n",
+                    cudaGetErrorString(err));
+            (void)cudaGetLastError();
+            return 0;
+        }
+    }
+    for (uint32_t i = 0; i < streams; i++) {
+        if (!g_tm_pipe_streams[gpu][i]) {
+            cudaError_t err =
+                cudaStreamCreateWithFlags(&g_tm_pipe_streams[gpu][i], cudaStreamNonBlocking);
+            if (err != cudaSuccess) {
+                fprintf(stderr,
+                        "ds4: CUDA TurboMind group pipeline stream create failed: %s\n",
+                        cudaGetErrorString(err));
+                (void)cudaGetLastError();
+                return 0;
+            }
+        }
+        if (!g_tm_pipe_events[gpu][i]) {
+            cudaError_t err =
+                cudaEventCreateWithFlags(&g_tm_pipe_events[gpu][i], cudaEventDisableTiming);
+            if (err != cudaSuccess) {
+                fprintf(stderr,
+                        "ds4: CUDA TurboMind group pipeline event create failed: %s\n",
+                        cudaGetErrorString(err));
+                (void)cudaGetLastError();
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+static int cuda_tm_pipeline_join_default(int gpu, uint32_t streams, const char *label) {
+    if (gpu < 0 || gpu >= DS4_CUDA_MAX_TMP_DEVICES ||
+        streams == 0 || streams > DS4_CUDA_TM_PIPE_MAX_STREAMS) {
+        return 0;
+    }
+    if (!cuda_ok(cudaSetDevice(gpu), "turbomind group pipeline join set device")) return 0;
+    for (uint32_t i = 0; i < streams; i++) {
+        if (!g_tm_pipe_events[gpu][i]) return 0;
+        if (!cuda_ok(cudaEventRecord(g_tm_pipe_events[gpu][i], g_tm_pipe_streams[gpu][i]),
+                     label ? label : "turbomind group pipeline event record") ||
+            !cuda_ok(cudaStreamWaitEvent(0, g_tm_pipe_events[gpu][i], 0),
+                     label ? label : "turbomind group pipeline default wait")) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 static int cuda_tm_use_small_route_build(uint32_t total_routes, uint32_t n_total_experts) {
@@ -6802,9 +7011,17 @@ static int cuda_tm_routed_mxfp4_packed_impl(
 
     const int use_route_row_reduce = cuda_tm_route_row_reduce_enabled();
     const int use_indexed_a = cuda_tm_indexed_a_enabled();
+    const int group_pipeline_requested =
+        fused_gate_up && !use_indexed_a && cuda_tm_group_pipeline_enabled();
+    const uint32_t group_pipeline_stream_limit =
+        group_pipeline_requested ? cuda_tm_group_pipeline_stream_limit() : 0u;
     const int use_compact_schedule =
-        cuda_tm_compact_schedule_enabled() && total_routes < n_total_experts;
-    const uint32_t tm_group_count = use_compact_schedule ? total_routes : n_total_experts;
+        group_pipeline_requested ||
+        (cuda_tm_compact_schedule_enabled() && total_routes < n_total_experts);
+    const uint32_t tm_group_count =
+        use_compact_schedule
+            ? (group_pipeline_requested ? group_pipeline_stream_limit : total_routes)
+            : n_total_experts;
     uint64_t scratch_bytes = 0;
     const uint64_t counts_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     scratch_bytes += (uint64_t)n_total_experts * sizeof(int);
@@ -7070,26 +7287,132 @@ static int cuda_tm_routed_mxfp4_packed_impl(
         gemm_group_count = tm_group_count;
     }
     int ok = 1;
-    if (fused_gate_up) {
-        ok = use_gated_silu
-            ? cuda_tm_grouped_gated_silu_matmul(
-                  a_half, sorted_tokens, gemm_offsets, &gate_up_run_pack, total_routes, gemm_group_count,
-                  (int)fused_n_u64, (int)hidden, mid_half, "packed gate_up")
-            : cuda_tm_grouped_matmul(
-                  a_half, sorted_tokens, gemm_offsets, &gate_up_run_pack, total_routes, gemm_group_count,
-                  (int)fused_n_u64, (int)hidden, gate_out, "packed gate_up");
-    } else {
-        ok = cuda_tm_grouped_matmul(
-            a_half, sorted_tokens, gemm_offsets, &gate_run_pack, total_routes, gemm_group_count, (int)mid, (int)hidden,
-            gate_out, "packed gate");
-        if (ok) {
+    int used_group_pipeline = 0;
+    if (group_pipeline_requested) {
+        const uint32_t stream_limit = group_pipeline_stream_limit;
+        tm_pfn_ds4_mxfp4_gated_silu group_gate =
+            use_gated_silu
+                ? cuda_tm_ds4_group_gated_silu_probe(total_routes, (int)fused_n_u64, (int)hidden)
+                : cuda_tm_ds4_group_gate_up_probe(total_routes, (int)fused_n_u64, (int)hidden);
+        tm_pfn_ds4_mxfp4_gated_silu group_down =
+            cuda_tm_ds4_group_down_probe(total_routes, (int)hidden, (int)mid);
+        if (!group_gate || !group_down || gemm_group_count == 0 ||
+            gemm_group_count > stream_limit ||
+            gemm_group_count > DS4_CUDA_TM_PIPE_MAX_STREAMS) {
+            cuda_tm_warn_once("TurboMind group pipeline unavailable for this shape; falling back");
+        } else if (!cuda_tm_pipeline_ensure(arena->gpu, gemm_group_count)) {
+            cuda_tm_warn_once("TurboMind group pipeline stream setup failed; falling back");
+        } else {
+            used_group_pipeline = 1;
+            if (!cuda_ok(cudaEventRecord(g_tm_pipe_start_events[arena->gpu], 0),
+                         "turbomind group pipeline start event record")) {
+                ok = 0;
+            }
+            for (uint32_t group = 0; group < gemm_group_count && ok; group++) {
+                cudaStream_t stream = g_tm_pipe_streams[arena->gpu][group];
+                if (!cuda_ok(cudaStreamWaitEvent(stream,
+                                                 g_tm_pipe_start_events[arena->gpu],
+                                                 0),
+                             "turbomind group pipeline stream wait")) {
+                    ok = 0;
+                    break;
+                }
+                const int gate_rc = group_gate(
+                    a_half,
+                    gemm_offsets + group,
+                    1,
+                    (int)total_routes,
+                    (const void * const *)(gate_up_run_pack.d_weights + group),
+                    (const void * const *)(gate_up_run_pack.d_scales + group),
+                    gate_up_run_pack.k_pack,
+                    use_gated_silu ? (void *)mid_half : (void *)gate_out,
+                    stream);
+                if (gate_rc != 0) {
+                    fprintf(stderr,
+                            "ds4: TurboMind group pipeline gate_up failed: group=%u rc=%d\n",
+                            group,
+                            gate_rc);
+                    ok = 0;
+                    break;
+                }
+                if (!cuda_ok(cudaGetLastError(),
+                             "turbomind group pipeline gate_up launch")) {
+                    ok = 0;
+                    break;
+                }
+                if (!use_gated_silu) {
+                    tm_swiglu_fused_gate_up_half_group_kernel<<<
+                        ((uint64_t)total_routes * mid + 255u) / 256u,
+                        256,
+                        0,
+                        stream>>>(
+                        mid_half,
+                        gate_out,
+                        sorted_weights,
+                        gemm_offsets,
+                        group,
+                        total_routes,
+                        mid,
+                        10.0f);
+                    if (!cuda_ok(cudaGetLastError(),
+                                 "turbomind group pipeline swiglu launch")) {
+                        ok = 0;
+                        break;
+                    }
+                }
+                const int down_rc = group_down(
+                    mid_half,
+                    gemm_offsets + group,
+                    1,
+                    (int)total_routes,
+                    (const void * const *)(down_run_pack.d_weights + group),
+                    (const void * const *)(down_run_pack.d_scales + group),
+                    down_run_pack.k_pack,
+                    down_routes,
+                    stream);
+                if (down_rc != 0) {
+                    fprintf(stderr,
+                            "ds4: TurboMind group pipeline down failed: group=%u rc=%d\n",
+                            group,
+                            down_rc);
+                    ok = 0;
+                    break;
+                }
+                if (!cuda_ok(cudaGetLastError(),
+                             "turbomind group pipeline down launch")) {
+                    ok = 0;
+                    break;
+                }
+            }
+            if (ok) {
+                ok = cuda_tm_pipeline_join_default(arena->gpu,
+                                                   gemm_group_count,
+                                                   "turbomind group pipeline join");
+            }
+        }
+    }
+    if (!used_group_pipeline) {
+        if (fused_gate_up) {
+            ok = use_gated_silu
+                ? cuda_tm_grouped_gated_silu_matmul(
+                      a_half, sorted_tokens, gemm_offsets, &gate_up_run_pack, total_routes, gemm_group_count,
+                      (int)fused_n_u64, (int)hidden, mid_half, "packed gate_up")
+                : cuda_tm_grouped_matmul(
+                      a_half, sorted_tokens, gemm_offsets, &gate_up_run_pack, total_routes, gemm_group_count,
+                      (int)fused_n_u64, (int)hidden, gate_out, "packed gate_up");
+        } else {
             ok = cuda_tm_grouped_matmul(
-                a_half, sorted_tokens, gemm_offsets, &up_run_pack, total_routes, gemm_group_count, (int)mid, (int)hidden,
-                up_out, "packed up");
+                a_half, sorted_tokens, gemm_offsets, &gate_run_pack, total_routes, gemm_group_count, (int)mid, (int)hidden,
+                gate_out, "packed gate");
+            if (ok) {
+                ok = cuda_tm_grouped_matmul(
+                    a_half, sorted_tokens, gemm_offsets, &up_run_pack, total_routes, gemm_group_count, (int)mid, (int)hidden,
+                    up_out, "packed up");
+            }
         }
     }
     if (ok) tm_prof.mark(&tm_prof.gate_up_ms);
-    if (ok && !use_gated_silu) {
+    if (ok && !used_group_pipeline && !use_gated_silu) {
         if (fused_gate_up) {
             tm_swiglu_fused_gate_up_half_kernel<<<((uint64_t)total_routes * mid + 255u) / 256u, 256>>>(
                 mid_half,
@@ -7112,7 +7435,7 @@ static int cuda_tm_routed_mxfp4_packed_impl(
         if (ok) tm_prof.mark(&tm_prof.swiglu_ms);
     }
     const int use_down_reduce_epilogue =
-        ok && use_gated_silu &&
+        ok && !used_group_pipeline && use_gated_silu &&
         cuda_tm_ds4_down_reduce_probe(nullptr, total_routes, gemm_group_count, (int)hidden, (int)mid);
     if (ok && use_down_reduce_epilogue) {
         if (!accumulate_out) {
@@ -7137,7 +7460,7 @@ static int cuda_tm_routed_mxfp4_packed_impl(
                 n_routes,
                 "packed down reduce epilogue");
         }
-    } else if (ok) {
+    } else if (ok && !used_group_pipeline) {
         ok = cuda_tm_grouped_matmul(
             mid_half, nullptr, gemm_offsets, &down_run_pack, total_routes, gemm_group_count, (int)hidden, (int)mid,
             down_routes, "packed down");
@@ -7155,7 +7478,9 @@ static int cuda_tm_routed_mxfp4_packed_impl(
                        total_routes,
                        tm_prof_active_experts,
                        tm_prof_max_routes_per_expert,
-                       fused_gate_up);
+                       fused_gate_up,
+                       used_group_pipeline,
+                       used_group_pipeline ? gemm_group_count : 0u);
         return 0;
     }
 
@@ -7209,7 +7534,9 @@ static int cuda_tm_routed_mxfp4_packed_impl(
                            total_routes,
                            tm_prof_active_experts,
                            tm_prof_max_routes_per_expert,
-                           fused_gate_up);
+                           fused_gate_up,
+                           used_group_pipeline,
+                           used_group_pipeline ? gemm_group_count : 0u);
         }
         return reduce_ok ? 0 : 1;
     }
@@ -7248,7 +7575,9 @@ static int cuda_tm_routed_mxfp4_packed_impl(
                        total_routes,
                        tm_prof_active_experts,
                        tm_prof_max_routes_per_expert,
-                       fused_gate_up);
+                       fused_gate_up,
+                       used_group_pipeline,
+                       used_group_pipeline ? gemm_group_count : 0u);
     }
     return scatter_ok ? 0 : 1;
 }

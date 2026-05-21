@@ -141,7 +141,16 @@ continuation tok/s versus `59.502747` / `55.783825` control), and the
 256-slot/16K result was slightly slower (`60.642962` / `56.852777` versus
 `60.671924` / `56.879929` control). A synchronized profile kept gate/up at
 about `58-61%` and down at about `25-29%` of profiled routed-FFN time, so
-epilogue-only fusion is not a material software-pipeline lever.
+epilogue-only fusion is not a material software-pipeline lever. Sprint 155
+then implemented a true opt-in stream-per-expert routed-FFN pipeline for the
+current non-interleaved fused gate/up pack. The path proved active on V100
+(`group_pipeline_calls=6` in a profiled stage smoke), but served throughput
+regressed: 128-slot/32K was `59.125703` generated / `55.430346` continuation
+tok/s versus `59.394915` / `55.682733` control, and 256-slot/16K was
+`60.308689` / `56.539396` versus `60.648138` / `56.857630` control. The flag
+remains diagnostic-only; the next material FFN path must remove launches/stream
+joins with a persistent fused boundary or continue the bounded 2-way TP
+prototype.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
@@ -158,6 +167,7 @@ current topology because it gives up too much stage overlap.
 | Sprint 145 256-slot 16K throughput ceiling | 16,384 | 256 | `61.065087` | `57.248519` | 256/256 token match |
 | Sprint 154 256-slot 16K down-reduce control | 16,384 | 256 | `60.671924` | `56.879929` | 256/256 token match |
 | Sprint 154 256-slot 16K down-reduce opt-in | 16,384 | 256 | `60.642962` | `56.852777` | 256/256 token match |
+| Sprint 155 active group-pipeline opt-in | 16,384 | 256 | `60.308689` | `56.539396` | 256/256 token match |
 | Sprint 145 192-slot 16K midpoint | 16,384 | 192 | `60.700926` | `56.907118` | 192/192 token match |
 | Sprint 145 128-slot 16K control | 16,384 | 128 | `59.860493` | `56.119213` | 128/128 token match |
 | Sprint 139 gated m128 auto probe | 32,768 | 128 | `60.130047` | `56.371919` | 128/128 token match |

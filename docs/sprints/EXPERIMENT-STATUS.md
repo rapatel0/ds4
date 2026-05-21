@@ -129,7 +129,12 @@ A/B for the fused down-reduce boundary at both current high-slot shapes:
 128-slot/32K was run-noise flat (`59.509317` vs `59.502747` generated tok/s),
 and 256-slot/16K was slightly slower (`60.642962` vs `60.671924`). A
 synchronized 128-slot profile still showed gate/up and down GEMMs dominating,
-so epilogue-only down-reduce fusion remains explicit opt-in only.
+so epilogue-only down-reduce fusion remains explicit opt-in only. Sprint 155
+implemented an opt-in stream-per-expert routed-FFN pipeline for the actual
+non-interleaved fused gate/up appliance pack. It proved active on V100 with
+`group_pipeline_calls=6` in a profiled stage smoke, but served throughput
+regressed: `59.125703` vs `59.394915` generated tok/s at 128-slot/32K and
+`60.308689` vs `60.648138` at 256-slot/16K. It remains diagnostic-only.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|

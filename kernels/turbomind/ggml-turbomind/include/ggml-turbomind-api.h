@@ -437,6 +437,77 @@ int ggml_turbomind_ds4_mxfp4_down_768_m64n256(
     void*              stream  /* cudaStream_t */);
 
 /**
+ * Fixed-shape one-expert-group probes for DS4/V100 software-pipelined routed
+ * FFN experiments. These use caller-owned stream ordering and do not share the
+ * generic TurboMind workspace between concurrent group streams.
+ */
+int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128_group(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
+int ggml_turbomind_ds4_mxfp4_gate_up_768_m128_group(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
+int ggml_turbomind_ds4_mxfp4_down_768_m128_group(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
+int ggml_turbomind_ds4_mxfp4_gated_silu_1536_m128_group(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
+int ggml_turbomind_ds4_mxfp4_gate_up_1536_m128_group(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
+int ggml_turbomind_ds4_mxfp4_down_1536_m128_group(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
+/**
  * Fixed-shape DS4/V100 down projection with a DS4-specific epilogue that
  * applies route weights and atomically accumulates directly into F32
  * [token, hidden] output. This is an experimental Sprint 142 ABI for the
