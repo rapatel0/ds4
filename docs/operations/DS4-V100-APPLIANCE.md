@@ -169,13 +169,15 @@ DS4_V100_MTP_GPU=7
 ```
 
 `DS4_V100_MICROBATCH_WAIT_US=auto` resolves to `0` for one-slot serving,
-`50000` us for 2-15 active slots, and `200000` us for 16 active slots. The
-16-slot wait prevents split request batches in throughput serving; decrease it
-only for latency-sensitive tests where accepting lower aggregate tok/s is fine.
+`50000` us for 2-15 active slots, and `200000` us for 16 or more active slots.
+The high-slot wait prevents split request batches in throughput serving;
+decrease it only for latency-sensitive tests where accepting lower aggregate
+tok/s is fine.
 
-For throughput serving, `ctx=262144` now admits up to 16 slots. The launcher
-keeps the long-context tier memory-safe by rejecting slot counts above the
-planner-backed context cap, including 16-slot `ctx=1048576` configs.
+For throughput serving, `ctx=131072` now admits up to 32 slots, while
+`ctx=262144` remains capped at 16 slots. The launcher keeps the long-context
+tier memory-safe by rejecting slot counts above the planner-backed context cap,
+including 16-slot `ctx=1048576` configs and 32-slot `ctx=262144` configs.
 
 Set `DS4_V100_CUDA_PROFILER_WINDOW=1` only under `nvprof` or Nsight tooling.
 It starts/stops the CUDA profiler around generation batches after startup

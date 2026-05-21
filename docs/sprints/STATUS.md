@@ -4,11 +4,13 @@ Last updated: 2026-05-21
 
 ## Topline
 
-Current production throughput mode is the Sprint 121 16-slot/256K appliance
-with the Sprint 122 rendezvous fix. The runtime now reliably coalesces 16
-concurrent requests into one tensor batch by resolving launcher `auto`
-microbatch wait to 200 ms at `active_microbatch >= 16`. The current
-production-auto repeat remains `43.534061` generated tok/s. Sprint 123 found
+Current long-context production throughput mode is the Sprint 121 16-slot/256K
+appliance with the Sprint 122 rendezvous fix. Sprint 135 adds an explicit
+32-slot/128K short-context throughput mode. The runtime now reliably coalesces
+high-slot concurrent requests into one tensor batch by resolving launcher
+`auto` microbatch wait to 200 ms at `active_microbatch >= 16`. The best current
+served result is `52.840889` generated tok/s at 32-slot/128K; the current
+256K production-auto repeat remains `43.534061` generated tok/s. Sprint 123 found
 correct opt-in shared-FFN fusions up to `43.887206`. Sprint 124 added a
 correct opt-in TurboMind route-row reduce path and measured up to `43.822500`.
 Sprint 125 added a correct grouped-batch attention output-A probe and measured
@@ -38,9 +40,13 @@ also use the served compact active-expert topology; compact 96-route gated-SiLU
 is `0.1740 ms` vs `0.1895 ms` separate gate+up, only `1.089x`. Sprint 134
 added a fixed-shape DS4 ABI probe that bypasses generic dispatch and directly
 launches the matching SM70 MXFP4 gated kernel; it was bit-identical and exactly
-neutral at `0.1746 ms` vs `0.1746 ms` generic gated. The next target is
-therefore not dispatch bypass or gate/up launch fusion; it must change kernel
-math/dataflow or scheduling shape.
+neutral at `0.1746 ms` vs `0.1746 ms` generic gated. Sprint 135 raised the
+admitted short-context throughput tier to 32 slots at 128K, while keeping 256K
+capped at 16 slots. The 32-slot 128K appliance passed full scheduler smoke and
+served correctness, reaching `52.840889` generated tok/s versus `45.780913`
+for a same-context 16-slot control. The next target is therefore not dispatch
+bypass or gate/up launch fusion; it must change kernel math/dataflow or widen
+the served scheduling shape further.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
@@ -52,6 +58,8 @@ current topology because it gives up too much stage overlap.
 
 | Mode | Context | Slots | Generated tok/s | Continuation tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
+| Sprint 135 32-slot 128K throughput mode | 131,072 | 32 | `52.840889` | `49.538334` | 32/32 token match |
+| Sprint 135 same-context control | 131,072 | 16 | `45.780913` | `42.919606` | 16/16 token match |
 | Sprint 128 gated compact + route-row-reduce opt-in | 262,144 | 16 | `46.394722` | `43.495052` | 16/16 token match |
 | Sprint 128 gated compact opt-in | 262,144 | 16 | `46.328184` | `43.432672` | 16/16 token match |
 | Sprint 128 compact launcher default on fused appliance | 262,144 | 16 | `45.888778` | `43.020729` | 16/16 token match |
@@ -140,6 +148,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 132 | Production-shaped TurboMind gate/up benchmark | Correct; historical 6/24/48-route cases still pass, and the 96-route served-profile case shows gated-SiLU at `0.1776 ms` vs `0.2889 ms` separate gate+up | Use this as the benchmark harness for any lower-level SM70 mainloop probe; no appliance default change |
 | 133 | Compact-group gate/up benchmark correction | Correct; at 96 routes, sparse256 gated is `0.2128 ms` while compact gated is `0.1740 ms`, and compact separate gate+up is already `0.1895 ms` | Future probes must beat compact gated, not sparse grouped overhead |
 | 134 | Fixed-shape compact gate/up ABI probe | Correct; direct fixed SM70 launch was bit-identical and `0.1746 ms` vs `0.1746 ms` generic gated | Do not promote; generic TurboMind already selects this effective path |
+| 135 | 32-slot 128K throughput admission | Correct; full 43-layer smoke passed, and 32-slot 128K served at `52.840889` vs `45.780913` same-context 16-slot control | Ship as explicit short-context throughput mode; test wider short-context admission and lower-level software-pipelined kernels next |
 
 ## Sprint 106 Profile Takeaway
 

@@ -11,7 +11,7 @@ gate/up SwiGLU F8 HMMA path, Sprint 116 batched attention-projection F8 HMMA
 path for active 4/8-slot batches, and Sprint 119 event-ordered handoff for
 multi-slot per-step serving. Sprint 121 adds an admitted 16-slot 256K
 throughput mode. Sprint 122 stabilizes 16-slot request coalescing by resolving
-launcher `auto` microbatch wait to 200 ms at 16 active slots.
+launcher `auto` microbatch wait to 200 ms at high active-slot counts.
 Sprint 123 tested production-path shared-FFN fusion candidates. They were
 correct, but stayed opt-in because the best measured candidate did not clear
 the promotion bar. Sprint 124 tested a TurboMind route-row reduce that removes
@@ -49,12 +49,17 @@ to use compact active-expert grouping like the served runtime; at that topology
 gated-SiLU was `0.1740 ms` vs `0.1895 ms` separate gate+up, only `1.089x`.
 Sprint 134 added a fixed-shape DS4 ABI that directly launches the matching SM70
 MXFP4 gated kernel; it was bit-identical and neutral at `0.1746 ms` vs
-`0.1746 ms` generic gated. These results keep pointing the next implementation
-at lower-level packed MXFP4 dataflow or served scheduling work rather than
-another launch-boundary, dispatch, or wrapper data-movement tweak.
+`0.1746 ms` generic gated. Sprint 135 then widened the short-context served
+scheduling shape instead of changing another wrapper boundary: 32-slot 128K
+passed full scheduler smoke and served at `52.840889` generated tok/s versus
+`45.780913` for the same-context 16-slot control. These results keep pointing
+the next implementation at lower-level packed MXFP4 dataflow or wider served
+scheduling work rather than another launch-boundary, dispatch, or wrapper
+data-movement tweak.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
+| Short-context throughput target | 131,072 | 32 | `52.840889` | opt-in | 32/32 token match |
 | Throughput serving target | 262,144 | 16 | `46.394722` | `45.888778` | 16/16 token match |
 | 8-slot compatibility target | 262,144 | 8 | `34.689964` | `34.490294` | 8/8 token match |
 | Long-context target | 1,048,576 | 4 | `21.771077` | `21.771077` | 4/4 token match |
@@ -70,6 +75,7 @@ to slightly worse.
 - Selected-token oracle for the official short prompt, expected text hex
   `3136`, selected token id `926`.
 - HTTP served soak benchmarks at:
+  - `ctx=131072`, `slots=32`, `active_microbatch=32`, 16 generated tokens.
   - `ctx=262144`, `slots=8`, `active_microbatch=8`, 16 generated tokens.
   - `ctx=262144`, `slots=16`, `active_microbatch=16`, 16 generated tokens.
   - `ctx=1048576`, `slots=4`, `active_microbatch=4`, 16 generated tokens.
@@ -115,10 +121,11 @@ to slightly worse.
 | 132 | Production-shaped TurboMind gate/up benchmark | Correct; added env-selectable cases and the served-profile 96-route case, where gated-SiLU measured `0.1776 ms` vs `0.2889 ms` separate gate+up | Use as the 1-GPU V100 acceptance harness for lower-level routed-expert kernel work |
 | 133 | Compact-group gate/up benchmark correction | Correct; compact 96-route gated-SiLU measured `0.1740 ms`, while compact separate gate+up was `0.1895 ms`; sparse256 overstated fusion benefit at `1.534x` | Use compact mode as the acceptance baseline; sparse-group wins do not predict served default wins |
 | 134 | Fixed-shape compact gate/up ABI probe | Correct; direct fixed SM70 launch was bit-identical to generic gated and measured `0.1746 ms` vs `0.1746 ms` | Do not promote; dispatch bypass is not the missing lever |
+| 135 | 32-slot 128K throughput admission | Correct; full 43-layer smoke passed, and 32-slot 128K served at `52.840889` vs `45.780913` same-context 16-slot control | Ship as explicit short-context throughput mode; evaluate 64-slot short context and deeper software-pipelined expert kernels next |
 
 ## Remaining
 
-- Close the throughput gap. The current best `~46` tok/s aggregate is far below the
+- Close the throughput gap. The current best `~53` tok/s aggregate is far below the
   `~1k-2k` practical target discussed in the vision.
 - Improve GPU utilization. The latest profile says the bottleneck is device
   kernel shape/occupancy, not disk, host RAM, or bulk PCIe/NVLink traffic.
@@ -148,7 +155,9 @@ to slightly worse.
     The useful version therefore needs either a lower-level packed
     decode/activation staging/MMA/epilogue specialization that beats the compact
     `0.1740 ms` baseline, or a scheduler that keeps expert work larger than the
-    current compact microshape.
+    current compact microshape. Sprint 135 confirms that wider served scheduling
+    does help: 32-slot 128K reached `52.840889`, but still far below the
+    practical vision target.
     Sprint 122 further showed that merely chunking slots to feed wider kernels
     loses too much stage overlap, so the fusion target must match the per-slot
     served topology or replace it with an overlapped scheduler.
@@ -166,9 +175,10 @@ The default launcher now keeps `DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=0`,
 `DS4_V100_CUDA_F8_HMMA_ATTN_BATCH=1` are default.
 `DS4_V100_ASYNC_EVENT_HANDOFF=auto` enables event-ordered handoff for
 multi-slot per-step serving and resolves off for one-slot latency configs.
-`ctx=262144` can now admit 16 slots; the launcher rejects 16-slot 1M configs
-before allocation. `DS4_V100_MICROBATCH_WAIT_US=auto` resolves to 200 ms when
-`DS4_V100_ACTIVE_MICROBATCH >= 16` so bursty 16-slot clients form one tensor
+`ctx=131072` can now admit 32 slots, while `ctx=262144` remains capped at
+16 slots; the launcher rejects over-cap configs before allocation.
+`DS4_V100_MICROBATCH_WAIT_US=auto` resolves to 200 ms when
+`DS4_V100_ACTIVE_MICROBATCH >= 16` so bursty high-slot clients form one tensor
 batch. The opt-in diagnostic paths can be enabled, or defaults rolled back,
 with:
 

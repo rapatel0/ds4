@@ -23,7 +23,7 @@ extern "C" {
 #define DS4_V100_OUT_GROUPS 8u
 #define DS4_V100_OUT_GROUP_DIM 4096u
 #define DS4_V100_OUT_GROUP_RANK 1024u
-#define DS4_V100_LAYER_MAX_BATCH 16u
+#define DS4_V100_LAYER_MAX_BATCH 32u
 
 typedef struct {
     ds4_gpu_tensor *raw_kv;
