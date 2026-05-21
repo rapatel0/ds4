@@ -3542,6 +3542,137 @@ __global__ static void arena_f8_e4m3_b128_pair_swiglu_ptrs_kernel(
     }
 }
 
+__global__ static void arena_f8_e4m3_b128_pair_swiglu_ptr_table_hmma_kernel(
+        float *out,
+        const uint8_t *gate_base,
+        const uint8_t *up_base,
+        const float *const *x_rows,
+        uint32_t gate_row_stride_bytes,
+        uint32_t up_row_stride_bytes,
+        uint32_t n_tokens,
+        float clamp,
+        float weight) {
+#if __CUDA_ARCH__ >= 700
+    namespace wmma = nvcuda::wmma;
+    enum {
+        DS4_ROWS = 2048,
+        DS4_COLS = 4096,
+        WARPS_PER_BLOCK = 4,
+        TILE_M = 16,
+        TILE_N = 16,
+        TILE_K = 16,
+        ROWS_PER_BLOCK = WARPS_PER_BLOCK * TILE_N,
+    };
+
+    const uint32_t tid = threadIdx.x;
+    const uint32_t warp = tid >> 5u;
+    if (warp >= WARPS_PER_BLOCK) return;
+
+    const uint32_t row_block = blockIdx.x * ROWS_PER_BLOCK;
+
+    __shared__ const float *x_ptrs[TILE_M];
+    __shared__ __half a_sh[TILE_M * TILE_K];
+    __shared__ __half gate_b_sh[WARPS_PER_BLOCK * TILE_K * TILE_N];
+    __shared__ __half up_b_sh[WARPS_PER_BLOCK * TILE_K * TILE_N];
+    __shared__ float gate_c_sh[WARPS_PER_BLOCK * TILE_M * TILE_N];
+    __shared__ float up_c_sh[WARPS_PER_BLOCK * TILE_M * TILE_N];
+
+    for (uint32_t i = tid; i < TILE_M; i += blockDim.x) {
+        x_ptrs[i] = i < n_tokens ? x_rows[i] : nullptr;
+    }
+    __syncthreads();
+
+    wmma::fragment<wmma::matrix_a, TILE_M, TILE_N, TILE_K, __half, wmma::row_major> a_frag;
+    wmma::fragment<wmma::matrix_b, TILE_M, TILE_N, TILE_K, __half, wmma::col_major> gate_b_frag;
+    wmma::fragment<wmma::matrix_b, TILE_M, TILE_N, TILE_K, __half, wmma::col_major> up_b_frag;
+    wmma::fragment<wmma::accumulator, TILE_M, TILE_N, TILE_K, float> gate_c_frag;
+    wmma::fragment<wmma::accumulator, TILE_M, TILE_N, TILE_K, float> up_c_frag;
+    wmma::fill_fragment(gate_c_frag, 0.0f);
+    wmma::fill_fragment(up_c_frag, 0.0f);
+
+    for (uint32_t k0 = 0; k0 < DS4_COLS; k0 += TILE_K) {
+        for (uint32_t i = tid; i < TILE_M * TILE_K; i += blockDim.x) {
+            const uint32_t token = i >> 4u;
+            const uint32_t k = i & 15u;
+            const float *x = x_ptrs[token];
+            const float v = x ? x[k0 + k] : 0.0f;
+            a_sh[i] = __float2half_rn(v);
+        }
+
+        for (uint32_t i = tid; i < WARPS_PER_BLOCK * TILE_K * TILE_N; i += blockDim.x) {
+            const uint32_t wtile = i >> 8u;
+            const uint32_t local = i & 255u;
+            const uint32_t out_col = local >> 4u;
+            const uint32_t k = local & 15u;
+            const uint32_t row = row_block + wtile * TILE_N + out_col;
+            float gate_w = 0.0f;
+            float up_w = 0.0f;
+            if (row < DS4_ROWS) {
+                const uint32_t col = k0 + k;
+                const uint64_t block_offset = (uint64_t)(col >> 7u) * 129ull;
+                const uint32_t block_lane = col & 127u;
+                const uint8_t *gate_row = gate_base + (uint64_t)row * gate_row_stride_bytes;
+                const uint8_t *up_row = up_base + (uint64_t)row * up_row_stride_bytes;
+                const uint8_t *gate_block = gate_row + block_offset;
+                const uint8_t *up_block = up_row + block_offset;
+                gate_w = arena_e4m3fn_to_f32(gate_block[1u + block_lane]) *
+                         arena_e8m0_to_f32(gate_block[0]);
+                up_w = arena_e4m3fn_to_f32(up_block[1u + block_lane]) *
+                       arena_e8m0_to_f32(up_block[0]);
+            }
+            gate_b_sh[i] = __float2half_rn(gate_w);
+            up_b_sh[i] = __float2half_rn(up_w);
+        }
+        __syncthreads();
+
+        wmma::load_matrix_sync(a_frag, a_sh, TILE_K);
+        wmma::load_matrix_sync(gate_b_frag, gate_b_sh + warp * TILE_K * TILE_N, TILE_K);
+        wmma::load_matrix_sync(up_b_frag, up_b_sh + warp * TILE_K * TILE_N, TILE_K);
+        wmma::mma_sync(gate_c_frag, a_frag, gate_b_frag, gate_c_frag);
+        wmma::mma_sync(up_c_frag, a_frag, up_b_frag, up_c_frag);
+        __syncthreads();
+    }
+
+    wmma::store_matrix_sync(gate_c_sh + warp * TILE_M * TILE_N,
+                            gate_c_frag,
+                            TILE_N,
+                            wmma::mem_row_major);
+    wmma::store_matrix_sync(up_c_sh + warp * TILE_M * TILE_N,
+                            up_c_frag,
+                            TILE_N,
+                            wmma::mem_row_major);
+    __syncthreads();
+
+    for (uint32_t i = tid; i < WARPS_PER_BLOCK * TILE_M * TILE_N; i += blockDim.x) {
+        const uint32_t wtile = i >> 8u;
+        const uint32_t local = i & 255u;
+        const uint32_t token = local >> 4u;
+        const uint32_t out_col = local & 15u;
+        const uint32_t row = row_block + wtile * TILE_N + out_col;
+        if (token < n_tokens && row < DS4_ROWS) {
+            float g = gate_c_sh[wtile * TILE_M * TILE_N + local];
+            float u = up_c_sh[wtile * TILE_M * TILE_N + local];
+            if (clamp > 1.0e-6f) {
+                g = fminf(g, clamp);
+                u = fminf(fmaxf(u, -clamp), clamp);
+            }
+            const float s = g / (1.0f + expf(-g));
+            out[(uint64_t)token * DS4_ROWS + row] = s * u * weight;
+        }
+    }
+#else
+    (void)out;
+    (void)gate_base;
+    (void)up_base;
+    (void)x_rows;
+    (void)gate_row_stride_bytes;
+    (void)up_row_stride_bytes;
+    (void)n_tokens;
+    (void)clamp;
+    (void)weight;
+#endif
+}
+
 __global__ static void arena_mxfp4_matmul_kernel(
         float *out,
         const uint8_t *base,
@@ -6176,6 +6307,16 @@ static int cuda_f8_hmma_shared_down_shape_ok(uint32_t rows, uint32_t cols, uint3
            (n_tokens == 4u || n_tokens == 8u);
 }
 
+static int cuda_f8_hmma_pair_swiglu_enabled(void) {
+    return cuda_env_flag_enabled("DS4_CUDA_F8_HMMA_PAIR_SWIGLU");
+}
+
+static int cuda_f8_hmma_pair_swiglu_shape_ok(uint32_t rows, uint32_t cols, uint32_t n_tokens) {
+    return rows == 2048u &&
+           cols == 4096u &&
+           (n_tokens == 4u || n_tokens == 8u);
+}
+
 static uint64_t cuda_f8_f16_arena_cache_reserve_bytes(void) {
     int present = 0;
     const uint64_t mib = cuda_parse_mib_env("DS4_CUDA_F8_F16_CACHE_RESERVE_MIB", &present);
@@ -6609,18 +6750,33 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_batch_ptr_table_f32(
         (const uint8_t *)((const char *)arena->ptr + gate->arena_offset);
     const uint8_t *up_base =
         (const uint8_t *)((const char *)arena->ptr + up->arena_offset);
-    dim3 grid(gate->rows, n_tokens, 1);
-    arena_f8_e4m3_b128_pair_swiglu_ptrs_kernel<<<grid, 256>>>(
-        (float *)out_f32->ptr,
-        gate_base,
-        up_base,
-        (const float *const *)x_row_ptrs->ptr,
-        gate->rows,
-        gate->cols,
-        gate->row_stride_bytes,
-        up->row_stride_bytes,
-        clamp,
-        weight);
+    if (cuda_f8_hmma_pair_swiglu_enabled() &&
+        cuda_f8_hmma_pair_swiglu_shape_ok(gate->rows, gate->cols, n_tokens)) {
+        dim3 grid((gate->rows + 63u) / 64u, 1, 1);
+        arena_f8_e4m3_b128_pair_swiglu_ptr_table_hmma_kernel<<<grid, 128>>>(
+            (float *)out_f32->ptr,
+            gate_base,
+            up_base,
+            (const float *const *)x_row_ptrs->ptr,
+            gate->row_stride_bytes,
+            up->row_stride_bytes,
+            n_tokens,
+            clamp,
+            weight);
+    } else {
+        dim3 grid(gate->rows, n_tokens, 1);
+        arena_f8_e4m3_b128_pair_swiglu_ptrs_kernel<<<grid, 256>>>(
+            (float *)out_f32->ptr,
+            gate_base,
+            up_base,
+            (const float *const *)x_row_ptrs->ptr,
+            gate->rows,
+            gate->cols,
+            gate->row_stride_bytes,
+            up->row_stride_bytes,
+            clamp,
+            weight);
+    }
     return cuda_ok(cudaGetLastError(), "f8 source pair ptr table swiglu launch") ? 0 : 1;
 }
 

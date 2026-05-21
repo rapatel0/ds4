@@ -6,14 +6,13 @@ Last updated: 2026-05-20
 
 The appliance is correct and served on the 8x V100 node, but it is not yet in
 the practical throughput range from the vision. The current default is the
-Sprint 111 fused TurboMind gate/up appliance path; Sprint 114 added a guarded
-shared-down F8 HMMA path that is correct and slightly faster in its own A/B,
-but the delta is inside run noise and below the Sprint 113 best repeat.
+Sprint 111 fused TurboMind gate/up appliance plus the Sprint 115 shared
+gate/up SwiGLU F8 HMMA path.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
-| Throughput serving target | 262,144 | 8 | `33.589285` | `33.589285` | 8/8 token match |
-| Long-context target | 1,048,576 | 4 | `21.403909` | `21.403909` | 4/4 token match |
+| Throughput serving target | 262,144 | 8 | `33.674684` opt-in pair+down | `33.578236` | 8/8 token match |
+| Long-context target | 1,048,576 | 4 | `21.455638` | `21.455638` | 4/4 token match |
 
 The older `20.249531` long-context result used the Sprint 108 small-route build
 path, but that path is not the default because the 8-slot/256K A/B was neutral
@@ -50,6 +49,7 @@ to slightly worse.
 | 112 | Fused appliance profile and F8 warp-scale probe | F8 row-pair/grouped kernels were `54.58%` GPU time; warp-scale was correct but `29.009399` vs `33.484099` control at 8-slot/256K | Kept opt-in/off |
 | 113 | Direct FFN delta accumulation | Correct; `33.360404` direct delta vs `33.589285` control at 8-slot/256K | Kept opt-in/off |
 | 114 | Shared-down F8 HMMA batch kernel | Correct; `33.550415` HMMA vs `33.397763` control at 8-slot/256K, and `21.396331` vs `21.365610` at 4-slot/1M | Kept opt-in/off |
+| 115 | Shared gate/up SwiGLU F8 HMMA batch kernel | Correct; `33.578236` HMMA vs `33.292541` control at 8-slot/256K, and `21.455638` vs `21.430420` at 4-slot/1M | Shipped/default |
 
 ## Remaining
 
@@ -61,9 +61,9 @@ to slightly worse.
   - TurboMind MXFP4 expert occupancy and route-expanded activation layout.
   - Persistent/grouped expert execution beyond the shipped Sprint 111 fused
     gate_up launch reduction.
-  - A larger fused F8 FFN rewrite. The Sprint 112 warp-scale probe,
-    Sprint 113 direct-delta probe, and Sprint 114 small-M HMMA shared-down
-    probe show that isolated single-boundary changes are not enough.
+  - A larger fused F8 FFN rewrite. Sprint 115 shipped pair-SwiGLU HMMA, but
+    the combined pair+down opt-in regressed long context, so a larger fused
+    region needs profiling rather than blind defaulting.
 - Decide whether the next production step is a deeper TurboMind adapter change
   or a lower-level CUTLASS/TurboMind-inspired persistent kernel probe.
 
@@ -71,7 +71,9 @@ to slightly worse.
 
 The default launcher now keeps `DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=0`,
 `DS4_V100_CUDA_F8_ROW4=0`, `DS4_V100_CUDA_F8_WARP_SCALE=0`, and
-`DS4_V100_FFN_DIRECT_DELTA=0`. The opt-in diagnostic paths can be enabled with:
+`DS4_V100_FFN_DIRECT_DELTA=0`, while
+`DS4_V100_CUDA_F8_HMMA_PAIR_SWIGLU=1` is default. The opt-in diagnostic paths
+can be enabled with:
 
 ```text
 DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=1

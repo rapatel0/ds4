@@ -4,23 +4,25 @@ Last updated: 2026-05-20
 
 ## Topline
 
-Current best 8-slot throughput is still the Sprint 111 fused TurboMind gate/up
-appliance path. It turns each layer's separate gate and up expert GEMMs into one
-offline-packed `gate_up` grouped GEMM and keeps the same per-GPU VRAM footprint
-as the previous appliance. Sprint 114 added a guarded Volta HMMA path for the
-shared-down F8 batch projection; it is correct and slightly faster in its own
-same-binary run, but the gain is inside run noise and below the Sprint 113
-default repeat, so it remains opt-in.
+Current default throughput is the Sprint 111 fused TurboMind gate/up appliance
+plus the Sprint 115 shared gate/up SwiGLU HMMA path. The pair-SwiGLU HMMA path
+is default-enabled because it improved both same-binary serving tiers. Sprint
+114 shared-down HMMA remains opt-in: combined pair+down set a new 8-slot best
+but regressed 4-slot/1M.
 
 | Mode | Context | Slots | Generated tok/s | Continuation tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
+| Pair-SwiGLU F8 HMMA default | 262,144 | 8 | `33.578236` | `31.479596` | 8/8 token match |
+| Pair+down F8 HMMA opt-in | 262,144 | 8 | `33.674684` | `31.570016` | 8/8 token match |
 | Production fused gate_up appliance | 262,144 | 8 | `33.589285` | `31.489955` | 8/8 token match |
 | Shared-down F8 HMMA opt-in | 262,144 | 8 | `33.550415` | `31.453514` | 8/8 token match |
 | Direct FFN delta opt-in | 262,144 | 8 | `33.360404` | `31.275379` | 8/8 token match |
 | Same-binary separate gate/up control | 262,144 | 8 | `31.312694` | `29.355651` | 8/8 token match |
+| Pair-SwiGLU F8 HMMA default | 1,048,576 | 4 | `21.455638` | `20.114660` | 4/4 token match |
 | Production fused gate_up appliance | 1,048,576 | 4 | `21.403909` | `20.066165` | 4/4 token match |
 | Shared-down F8 HMMA opt-in | 1,048,576 | 4 | `21.396331` | `20.059061` | 4/4 token match |
 | Small-route opt-in | 1,048,576 | 4 | `20.249531` | `18.983935` | 4/4 token match |
+| Pair+down F8 HMMA opt-in | 1,048,576 | 4 | `21.370925` | `20.035242` | 4/4 token match |
 
 The last pre-Sprint107 committed baseline was Sprint 104 at `31.451185`
 generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
@@ -41,6 +43,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 112 | Fused appliance profile plus F8 warp-scale probe | Profile showed F8 row-pair/grouped kernels at `54.58%` GPU time; warp-scale was correct but regressed 8-slot/256K to `29.009399` vs `33.484099` control | Kept opt-in/off |
 | 113 | Direct FFN delta accumulation and cached FFN input ptr table | Correct, but `33.360404` vs `33.589285` control at 8-slot/256K | Kept opt-in/off |
 | 114 | DS4-shaped shared-down F8 HMMA batch kernel | Correct; `33.550415` vs `33.397763` control at 8-slot/256K and `21.396331` vs `21.365610` at 4-slot/1M | Kept opt-in/off |
+| 115 | DS4-shaped shared gate/up SwiGLU F8 HMMA kernel | Correct; `33.578236` vs `33.292541` control at 8-slot/256K and `21.455638` vs `21.430420` at 4-slot/1M | Shipped/default |
 
 ## Sprint 106 Profile Takeaway
 
@@ -171,15 +174,25 @@ Sprint 114 tests a DS4-shaped shared-down F8 HMMA batch kernel:
   `33.550415` vs `33.397763` at 8-slot/256K and `21.396331` vs `21.365610`
   at 4-slot/1M.
 
+Sprint 115 ships a DS4-shaped shared gate/up SwiGLU F8 HMMA batch kernel:
+
+- the kernel is guarded by `DS4_CUDA_F8_HMMA_PAIR_SWIGLU=1`;
+- it only dispatches for `rows=2048`, `cols=4096`, and `n_tokens=4/8`;
+- focused pair-SwiGLU smoke, full scheduler, and selected-token smokes passed;
+- same-binary A/B improved both measured tiers:
+  `33.578236` vs `33.292541` at 8-slot/256K and `21.455638` vs `21.430420`
+  at 4-slot/1M;
+- the combined pair+shared-down HMMA path reached `33.674684` at 8-slot/256K
+  but regressed 4-slot/1M to `21.370925`, so only pair-SwiGLU HMMA is default.
+
 ## Next Target
 
 The next target needs to change a larger execution boundary. Fused gate/up
-removed one large grouped GEMM launch per routed layer, but aggregate throughput
-is still only about `33.6` tok/s, far below the practical serving target. The
-Sprint 114 HMMA probe shows that a naive small-M WMMA tile is not enough by
-itself. The next sprint should either fuse a larger F8 FFN region
-(gate/up/SwiGLU/down) or deepen TurboMind expert scheduling so the kernel owns
-more work per launch and raises tensor-core occupancy.
+removed one large grouped GEMM launch per routed layer, and Sprint 115 moved
+the shared gate/up/SwiGLU projection to HMMA, but aggregate throughput is still
+only about `33.6` tok/s, far below the practical serving target. The next sprint
+should profile the pair-HMMA default and decide between deeper F8 shared-FFN
+fusion and TurboMind expert scheduling.
 
 The concise current status is also tracked in
 `docs/sprints/EXPERIMENT-STATUS.md`.
