@@ -12,10 +12,13 @@ path for active 4/8-slot batches, and Sprint 119 event-ordered handoff for
 multi-slot per-step serving. Sprint 121 adds an admitted 16-slot 256K
 throughput mode. Sprint 122 stabilizes 16-slot request coalescing by resolving
 launcher `auto` microbatch wait to 200 ms at 16 active slots.
+Sprint 123 tested production-path shared-FFN fusion candidates. They were
+correct, but stayed opt-in because the best measured candidate did not clear
+the promotion bar.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
-| Throughput serving target | 262,144 | 16 | `43.730215` | `43.534061` | 16/16 token match |
+| Throughput serving target | 262,144 | 16 | `43.887206` | `43.534061` | 16/16 token match |
 | 8-slot compatibility target | 262,144 | 8 | `34.689964` | `34.490294` | 8/8 token match |
 | Long-context target | 1,048,576 | 4 | `21.771077` | `21.771077` | 4/4 token match |
 
@@ -63,6 +66,7 @@ to slightly worse.
 | 120 | Single-token shared gate/up/SwiGLU row-pair fusion | Correct; current default repeat was `34.490294`, scalar single fusion was `34.689964`, and row-pair single fusion was `34.380968` at 8-slot/256K | Keep opt-in/off; row-pair compaction is not the missing kernel lever |
 | 121 | 16-slot 256K throughput mode | Correct; `43.659461` at 16-slot/256K vs `34.445844` same-binary 8-slot control | Keep as admitted 256K throughput mode; reject unsafe 16-slot long-context configs |
 | 122 | 16-slot profile, HMMA admission, async chunk probes, and 16-slot rendezvous policy | Correct; best `43.730215`, production-auto `43.534061`, one 16-request tensor batch after 200 ms auto wait; chunked tensor scheduling regressed (`28.876459` at chunk 2, `18.447169` at chunk 4, `13.315378` at chunk 16) | Ship 16-slot auto rendezvous; keep chunk/output-B probes opt-in/off |
+| 123 | Production-path shared FFN fusion A/B | Correct; scalar shared-pair fusion reached `43.887206`, fused shared-down-add reached `43.539555`, and combined scalar+down-add reached `43.812630` at 16-slot/256K | Keep opt-in/off; small shared-FFN launch/epilogue fusion is not enough |
 
 ## Remaining
 
@@ -77,6 +81,8 @@ to slightly worse.
   - A larger software-pipelined F8/attention-output/FFN rewrite. Sprint 117
     showed scalar per-slot shared-FFN fusion removes calls but does not improve
     throughput, and Sprint 118 showed naive single-token WMMA is much slower.
+    Sprint 123 showed shared-down-add epilogue fusion is also only a small
+    opt-in gain.
     The useful version needs packed decode, activation staging, MMA, and
     epilogue work in one tensor-core-oriented kernel with useful tile fill.
     Sprint 122 further showed that merely chunking slots to feed wider kernels
@@ -114,6 +120,7 @@ DS4_V100_CUDA_F8_HMMA_SINGLE=1
 DS4_V100_TURBOMIND_FUSED_GATE_UP=0
 DS4_V100_ASYNC_EVENT_HANDOFF=0
 DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE_ROWS2=1
+DS4_V100_F8_SHARED_DOWN_ADD=1
 DS4_V100_BATCH_ATTN_OUTPUT_B=1
 DS4_V100_ASYNC_SLOT_CHUNK=2
 ```

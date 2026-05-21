@@ -3131,6 +3131,34 @@ __global__ static void arena_f8_e4m3_b128_matmul_batch_kernel(
     if (threadIdx.x == 0) out[(uint64_t)tok * rows + r] = acc;
 }
 
+__global__ static void arena_f8_e4m3_b128_matmul_batch_add_kernel(
+        float *out,
+        const float *add,
+        const uint8_t *base,
+        const float *x,
+        uint32_t rows,
+        uint32_t cols,
+        uint32_t row_stride_bytes) {
+    const uint32_t r = blockIdx.x;
+    const uint32_t tok = blockIdx.y;
+    if (r >= rows) return;
+    const uint8_t *row = base + (uint64_t)r * row_stride_bytes;
+    const float *x_row = x + (uint64_t)tok * cols;
+    float acc = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        const uint8_t *block = row + (uint64_t)(c / 128u) * 129ull;
+        const float scale = arena_e8m0_to_f32(block[0]);
+        const float w = arena_e4m3fn_to_f32(block[1u + (c % 128u)]) * scale;
+        acc += w * x_row[c];
+    }
+
+    acc = arena_block_sum_256_f32(acc);
+    if (threadIdx.x == 0) {
+        const uint64_t idx = (uint64_t)tok * rows + r;
+        out[idx] = acc + add[idx];
+    }
+}
+
 __global__ static void arena_f8_e4m3_b128_matmul_batch_rows2_kernel(
         float *out,
         const uint8_t *base,
@@ -3166,6 +3194,46 @@ __global__ static void arena_f8_e4m3_b128_matmul_batch_rows2_kernel(
     if (threadIdx.x == 0) {
         out[(uint64_t)tok * rows + r0] = acc0;
         if (have_r1) out[(uint64_t)tok * rows + r1] = acc1;
+    }
+}
+
+__global__ static void arena_f8_e4m3_b128_matmul_batch_rows2_add_kernel(
+        float *out,
+        const float *add,
+        const uint8_t *base,
+        const float *x,
+        uint32_t rows,
+        uint32_t cols,
+        uint32_t row_stride_bytes) {
+    const uint32_t r0 = blockIdx.x * 2u;
+    const uint32_t r1 = r0 + 1u;
+    const uint32_t tok = blockIdx.y;
+    if (r0 >= rows) return;
+    const int have_r1 = r1 < rows;
+    const uint8_t *row0 = base + (uint64_t)r0 * row_stride_bytes;
+    const uint8_t *row1 = have_r1 ? base + (uint64_t)r1 * row_stride_bytes : row0;
+    const float *x_row = x + (uint64_t)tok * cols;
+    const uint64_t out_base = (uint64_t)tok * rows;
+    float acc0 = 0.0f;
+    float acc1 = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        const float xv = x_row[c];
+        const uint64_t block_offset = (uint64_t)(c / 128u) * 129ull;
+        const uint32_t block_lane = c % 128u;
+        const uint8_t *block0 = row0 + block_offset;
+        const float scale0 = arena_e8m0_to_f32(block0[0]);
+        acc0 += arena_e4m3fn_to_f32(block0[1u + block_lane]) * scale0 * xv;
+        if (have_r1) {
+            const uint8_t *block1 = row1 + block_offset;
+            const float scale1 = arena_e8m0_to_f32(block1[0]);
+            acc1 += arena_e4m3fn_to_f32(block1[1u + block_lane]) * scale1 * xv;
+        }
+    }
+
+    arena_block_sum2_256_f32(&acc0, &acc1);
+    if (threadIdx.x == 0) {
+        out[out_base + r0] = acc0 + add[out_base + r0];
+        if (have_r1) out[out_base + r1] = acc1 + add[out_base + r1];
     }
 }
 
@@ -3256,6 +3324,102 @@ __global__ static void arena_f8_e4m3_b128_matmul_batch_hmma_shared_down_kernel(
     }
 #else
     (void)out;
+    (void)base;
+    (void)x;
+    (void)row_stride_bytes;
+    (void)n_tokens;
+#endif
+}
+
+__global__ static void arena_f8_e4m3_b128_matmul_batch_hmma_shared_down_add_kernel(
+        float *out,
+        const float *add,
+        const uint8_t *base,
+        const float *x,
+        uint32_t row_stride_bytes,
+        uint32_t n_tokens) {
+#if __CUDA_ARCH__ >= 700
+    namespace wmma = nvcuda::wmma;
+    enum {
+        DS4_ROWS = 4096,
+        DS4_COLS = 2048,
+        WARPS_PER_BLOCK = 4,
+        TILE_M = 16,
+        TILE_N = 16,
+        TILE_K = 16,
+        ROWS_PER_BLOCK = WARPS_PER_BLOCK * TILE_N,
+    };
+
+    const uint32_t tid = threadIdx.x;
+    const uint32_t warp = tid >> 5u;
+    if (warp >= WARPS_PER_BLOCK) return;
+
+    const uint32_t row_block = blockIdx.x * ROWS_PER_BLOCK;
+
+    __shared__ __half a_sh[TILE_M * TILE_K];
+    __shared__ __half b_sh[WARPS_PER_BLOCK * TILE_K * TILE_N];
+    __shared__ float c_sh[WARPS_PER_BLOCK * TILE_M * TILE_N];
+
+    wmma::fragment<wmma::matrix_a, TILE_M, TILE_N, TILE_K, __half, wmma::row_major> a_frag;
+    wmma::fragment<wmma::matrix_b, TILE_M, TILE_N, TILE_K, __half, wmma::col_major> b_frag;
+    wmma::fragment<wmma::accumulator, TILE_M, TILE_N, TILE_K, float> c_frag;
+    wmma::fill_fragment(c_frag, 0.0f);
+
+    for (uint32_t k0 = 0; k0 < DS4_COLS; k0 += TILE_K) {
+        for (uint32_t i = tid; i < TILE_M * TILE_K; i += blockDim.x) {
+            const uint32_t token = i >> 4u;
+            const uint32_t k = i & 15u;
+            float v = 0.0f;
+            if (token < n_tokens) {
+                v = x[(uint64_t)token * DS4_COLS + k0 + k];
+            }
+            a_sh[i] = __float2half_rn(v);
+        }
+
+        for (uint32_t i = tid; i < WARPS_PER_BLOCK * TILE_K * TILE_N; i += blockDim.x) {
+            const uint32_t wtile = i >> 8u;
+            const uint32_t local = i & 255u;
+            const uint32_t out_col = local >> 4u;
+            const uint32_t k = local & 15u;
+            const uint32_t row = row_block + wtile * TILE_N + out_col;
+            float w = 0.0f;
+            if (row < DS4_ROWS) {
+                const uint32_t col = k0 + k;
+                const uint8_t *row_base = base + (uint64_t)row * row_stride_bytes;
+                const uint8_t *block = row_base + (uint64_t)(col >> 7u) * 129ull;
+                w = arena_e4m3fn_to_f32(block[1u + (col & 127u)]) *
+                    arena_e8m0_to_f32(block[0]);
+            }
+            b_sh[i] = __float2half_rn(w);
+        }
+        __syncthreads();
+
+        wmma::load_matrix_sync(a_frag, a_sh, TILE_K);
+        wmma::load_matrix_sync(b_frag, b_sh + warp * TILE_K * TILE_N, TILE_K);
+        wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+        __syncthreads();
+    }
+
+    wmma::store_matrix_sync(c_sh + warp * TILE_M * TILE_N,
+                            c_frag,
+                            TILE_N,
+                            wmma::mem_row_major);
+    __syncthreads();
+
+    for (uint32_t i = tid; i < WARPS_PER_BLOCK * TILE_M * TILE_N; i += blockDim.x) {
+        const uint32_t wtile = i >> 8u;
+        const uint32_t local = i & 255u;
+        const uint32_t token = local >> 4u;
+        const uint32_t out_col = local & 15u;
+        const uint32_t row = row_block + wtile * TILE_N + out_col;
+        if (token < n_tokens && row < DS4_ROWS) {
+            const uint64_t idx = (uint64_t)token * DS4_ROWS + row;
+            out[idx] = c_sh[wtile * TILE_M * TILE_N + local] + add[idx];
+        }
+    }
+#else
+    (void)out;
+    (void)add;
     (void)base;
     (void)x;
     (void)row_stride_bytes;
@@ -7038,6 +7202,83 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_batch_f32(
             view->row_stride_bytes);
     }
     return cuda_ok(cudaGetLastError(), "f8 source batch matmul launch") ? 0 : 1;
+}
+
+extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_batch_add_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *view,
+        const ds4_gpu_tensor          *x_f32,
+        uint32_t                       n_tokens,
+        const ds4_gpu_tensor          *add_f32,
+        ds4_gpu_tensor                *out_f32) {
+    if (!x_f32 || !add_f32 || !out_f32 ||
+        !x_f32->ptr || !add_f32->ptr || !out_f32->ptr ||
+        n_tokens == 0 ||
+        !cuda_f8_e4m3_b128_view_layout_ok(arena, view) ||
+        x_f32->device != arena->gpu ||
+        add_f32->device != arena->gpu ||
+        out_f32->device != arena->gpu ||
+        x_f32->bytes < (uint64_t)n_tokens * view->cols * sizeof(float) ||
+        add_f32->bytes < (uint64_t)n_tokens * view->rows * sizeof(float) ||
+        out_f32->bytes < (uint64_t)n_tokens * view->rows * sizeof(float)) {
+        return 1;
+    }
+    if (!cuda_ok(cudaSetDevice(arena->gpu), "f8 source batch matmul add set device")) return 1;
+    const uint8_t *base = (const uint8_t *)((const char *)arena->ptr + view->arena_offset);
+    const int use_hmma_shared_down =
+        cuda_f8_hmma_shared_down_enabled() &&
+        cuda_f8_hmma_shared_down_shape_ok(view->rows, view->cols, n_tokens);
+    if (use_hmma_shared_down) {
+        cuda_f8_shape_trace("batch_add", "hmma_shared_down", arena->gpu,
+                            view->rows, view->cols, n_tokens, 0, 0, 0);
+        dim3 grid((view->rows + 63u) / 64u, 1, 1);
+        arena_f8_e4m3_b128_matmul_batch_hmma_shared_down_add_kernel<<<grid, 128>>>(
+            (float *)out_f32->ptr,
+            (const float *)add_f32->ptr,
+            base,
+            (const float *)x_f32->ptr,
+            view->row_stride_bytes,
+            n_tokens);
+    } else if (cuda_f8_rowpair_enabled() && view->rows > 1u) {
+        cuda_f8_shape_trace("batch_add", "rows2", arena->gpu,
+                            view->rows, view->cols, n_tokens, 0, 0, 0);
+        dim3 grid((view->rows + 1u) / 2u, n_tokens, 1);
+        arena_f8_e4m3_b128_matmul_batch_rows2_add_kernel<<<grid, 256>>>(
+            (float *)out_f32->ptr,
+            (const float *)add_f32->ptr,
+            base,
+            (const float *)x_f32->ptr,
+            view->rows,
+            view->cols,
+            view->row_stride_bytes);
+    } else {
+        cuda_f8_shape_trace("batch_add", "rows1", arena->gpu,
+                            view->rows, view->cols, n_tokens, 0, 0, 0);
+        dim3 grid(view->rows, n_tokens, 1);
+        arena_f8_e4m3_b128_matmul_batch_add_kernel<<<grid, 256>>>(
+            (float *)out_f32->ptr,
+            (const float *)add_f32->ptr,
+            base,
+            (const float *)x_f32->ptr,
+            view->rows,
+            view->cols,
+            view->row_stride_bytes);
+    }
+    return cuda_ok(cudaGetLastError(), "f8 source batch matmul add launch") ? 0 : 1;
+}
+
+extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_add_f32(
+        const ds4_gpu_arena           *arena,
+        const ds4_gpu_source_row_view *view,
+        const ds4_gpu_tensor          *x_f32,
+        const ds4_gpu_tensor          *add_f32,
+        ds4_gpu_tensor                *out_f32) {
+    return ds4_gpu_arena_f8_e4m3_b128_matmul_batch_add_f32(arena,
+                                                           view,
+                                                           x_f32,
+                                                           1u,
+                                                           add_f32,
+                                                           out_f32);
 }
 
 extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_batch_ptr_table_f32(

@@ -48,10 +48,11 @@ int main(void) {
     const uint64_t arena_bytes = matrix_bytes * 2u;
     uint8_t *payload = (uint8_t *)malloc((size_t)arena_bytes);
     float *x = (float *)malloc((uint64_t)TOKENS * COLS * sizeof(float));
+    float *add = (float *)malloc((uint64_t)TOKENS * ROWS * sizeof(float));
     float *scalar = (float *)malloc((uint64_t)TOKENS * ROWS * sizeof(float));
     float *hmma = (float *)malloc((uint64_t)TOKENS * ROWS * sizeof(float));
-    check(payload && x && scalar && hmma, "host buffers allocate");
-    if (!payload || !x || !scalar || !hmma) return 1;
+    check(payload && x && add && scalar && hmma, "host buffers allocate");
+    if (!payload || !x || !add || !scalar || !hmma) return 1;
 
     for (uint32_t r = 0; r < ROWS; r++) {
         fill_f8_row(payload + (uint64_t)r * row_bytes, COLS, r, 0);
@@ -61,6 +62,10 @@ int main(void) {
         for (uint32_t c = 0; c < COLS; c++) {
             x[(uint64_t)t * COLS + c] =
                 (float)((int)((c + 11u * t) % 19u) - 9) * 0.001953125f;
+        }
+        for (uint32_t r = 0; r < ROWS; r++) {
+            add[(uint64_t)t * ROWS + r] =
+                (float)((int)((r + 5u * t) % 17u) - 8) * 0.00390625f;
         }
     }
 
@@ -87,9 +92,25 @@ int main(void) {
 
     ds4_gpu_tensor *x_rows[TOKENS] = {0};
     ds4_gpu_tensor *x_ptrs_t = ds4_gpu_tensor_alloc(TOKENS * sizeof(void *));
+    ds4_gpu_tensor *x_batch_t = ds4_gpu_tensor_alloc((uint64_t)TOKENS * COLS * sizeof(float));
+    ds4_gpu_tensor *add_t = ds4_gpu_tensor_alloc((uint64_t)TOKENS * ROWS * sizeof(float));
     ds4_gpu_tensor *scalar_t = ds4_gpu_tensor_alloc((uint64_t)TOKENS * ROWS * sizeof(float));
     ds4_gpu_tensor *hmma_t = ds4_gpu_tensor_alloc((uint64_t)TOKENS * ROWS * sizeof(float));
-    check(x_ptrs_t && scalar_t && hmma_t, "device output tensors allocate");
+    check(x_ptrs_t && x_batch_t && add_t && scalar_t && hmma_t, "device output tensors allocate");
+    if (x_batch_t) {
+        check(ds4_gpu_tensor_write(x_batch_t,
+                                   0,
+                                   x,
+                                   (uint64_t)TOKENS * COLS * sizeof(float)),
+              "x batch upload");
+    }
+    if (add_t) {
+        check(ds4_gpu_tensor_write(add_t,
+                                   0,
+                                   add,
+                                   (uint64_t)TOKENS * ROWS * sizeof(float)),
+              "add batch upload");
+    }
     for (uint32_t t = 0; t < TOKENS; t++) {
         x_rows[t] = ds4_gpu_tensor_alloc(COLS * sizeof(float));
         check(x_rows[t] != NULL, "x row tensor allocate");
@@ -102,7 +123,7 @@ int main(void) {
         }
     }
 
-    if (x_ptrs_t && scalar_t && hmma_t) {
+    if (x_ptrs_t && x_batch_t && add_t && scalar_t && hmma_t) {
         unsetenv("DS4_CUDA_F8_F16_CACHE");
         setenv("DS4_CUDA_F8_HMMA_PAIR_SWIGLU", "0", 1);
         check(ds4_gpu_arena_f8_e4m3_b128_pair_swiglu_batch_ptrs_f32(arena,
@@ -213,10 +234,67 @@ int main(void) {
                     hmma[max_i]);
             failures++;
         }
+
+        setenv("DS4_CUDA_F8_ROWPAIR", "1", 1);
+        unsetenv("DS4_CUDA_F8_HMMA_SHARED_DOWN");
+        check(ds4_gpu_arena_f8_e4m3_b128_matmul_batch_f32(arena,
+                                                           &gate,
+                                                           x_batch_t,
+                                                           TOKENS,
+                                                           scalar_t) == 0,
+              "batch matmul for add reference");
+        check(ds4_gpu_add_tensor(scalar_t,
+                                 scalar_t,
+                                 add_t,
+                                 TOKENS * ROWS),
+              "batch add reference");
+        check(ds4_gpu_arena_f8_e4m3_b128_matmul_batch_add_f32(arena,
+                                                               &gate,
+                                                               x_batch_t,
+                                                               TOKENS,
+                                                               add_t,
+                                                               hmma_t) == 0,
+              "batch matmul add fused");
+        check(ds4_gpu_tensor_read(scalar_t,
+                                  0,
+                                  scalar,
+                                  (uint64_t)TOKENS * ROWS * sizeof(float)),
+              "batch add reference read");
+        check(ds4_gpu_tensor_read(hmma_t,
+                                  0,
+                                  hmma,
+                                  (uint64_t)TOKENS * ROWS * sizeof(float)),
+              "batch add fused read");
+        max_abs = 0.0f;
+        max_rel = 0.0f;
+        max_i = 0;
+        for (uint64_t i = 0; i < (uint64_t)TOKENS * ROWS; i++) {
+            const float diff = fabsf(hmma[i] - scalar[i]);
+            const float denom = fmaxf(fabsf(scalar[i]), 1.0e-6f);
+            const float rel = diff / denom;
+            if (diff > max_abs) {
+                max_abs = diff;
+                max_rel = rel;
+                max_i = i;
+            }
+        }
+        if (max_abs > 1.0e-5f && max_rel > 1.0e-5f) {
+            fprintf(stderr,
+                    "cuda_f8_hmma_pair_swiglu_smoke: batch matmul add max diff %.8g rel %.8g at token %llu row %llu ref %.8g fused %.8g\n",
+                    max_abs,
+                    max_rel,
+                    (unsigned long long)(max_i / ROWS),
+                    (unsigned long long)(max_i % ROWS),
+                    scalar[max_i],
+                    hmma[max_i]);
+            failures++;
+        }
     }
 
     ds4_gpu_tensor_free(hmma_t);
     ds4_gpu_tensor_free(scalar_t);
+    ds4_gpu_tensor_free(add_t);
+    ds4_gpu_tensor_free(x_batch_t);
     ds4_gpu_tensor_free(x_ptrs_t);
     for (uint32_t t = 0; t < TOKENS; t++) {
         ds4_gpu_tensor_free(x_rows[t]);
@@ -224,6 +302,7 @@ int main(void) {
     ds4_gpu_arena_close(arena);
     free(hmma);
     free(scalar);
+    free(add);
     free(x);
     free(payload);
 

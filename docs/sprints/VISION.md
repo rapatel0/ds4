@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: codex
-revision: 125
+revision: 126
 ---
 
 # Vision: DS4 V100 Appliance
@@ -71,7 +71,11 @@ optimized V100 low-bit expert kernels in the actual hot path.
   `43.534061` generated tok/s with one 16-request tensor batch, and the best
   observed candidate reached `43.730215`. Sprint 122 also showed that chunking
   slots to feed wider batch kernels regresses because it loses stage overlap.
-  The project remains far below the practical serving target, so the next
+  Sprint 123 added an opt-in fused shared-down-add F8 epilogue and re-tested
+  per-slot shared gate/up/SwiGLU fusion at 16 slots. The path stayed correct
+  and reached `43.887206` generated tok/s in the best opt-in run, but the gain
+  did not clear the promotion bar, so production defaults are unchanged. The
+  project remains far below the practical serving target, so the next
   meaningful step needs profile-guided larger execution-boundary work: deeper
   TurboMind expert scheduling, persistent grouped expert execution, or a real
   SM70 software-pipelined F8 shared-FFN/attention-output kernel that preserves
