@@ -144,7 +144,7 @@ static bool env_flag(const char *name, bool fallback) {
 static std::vector<Case> parse_cases_from_env() {
     const char *v = std::getenv("DS4_TURBOMIND_GATE_UP_CASES");
     if (!v || !v[0]) {
-        return {{1}, {4}, {8}, {16}};
+        return {{1}, {4}, {8}, {16}, {32}, {64}, {128}};
     }
 
     std::vector<Case> out;

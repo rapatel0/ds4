@@ -52,6 +52,11 @@ generated tok/s versus `52.884400` for a same-context 32-slot control.
 Sprint 137 admitted 128 slots at 32K, passed full scheduler smoke, and reached
 `59.598172` generated tok/s versus `57.170428` for a same-context 64-slot
 control. The slot-width sweep remains positive but is clearly diminishing.
+Sprint 138 widened the standalone TurboMind compact gate/up benchmark defaults
+to cover 192/384/768 routed-row shapes. The 768-route compact baseline is
+`0.6379 ms` for fused gate_up and `0.6481 ms` for gated-SiLU, so the next
+kernel probe must beat that larger-route baseline rather than the older
+96-route case.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
@@ -160,6 +165,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 135 | 32-slot 128K throughput admission | Correct; full 43-layer smoke passed, and 32-slot 128K served at `52.840889` vs `45.780913` same-context 16-slot control | Ship as explicit short-context throughput mode; test wider short-context admission and lower-level software-pipelined kernels next |
 | 136 | 64-slot 64K throughput admission | Correct; full 43-layer smoke passed, and 64-slot 64K served at `57.322945` vs `52.884400` same-context 32-slot control | Ship as explicit short-context throughput mode; diminishing slot-width returns make software-pipelined expert kernels the next major lever |
 | 137 | 128-slot 32K throughput admission | Correct; full 43-layer smoke and status/metrics confirmed 128 slots, and served throughput reached `59.598172` vs `57.170428` same-context 64-slot control | Ship as explicit short-context throughput mode; stop treating admission width as the main lever and move to software-pipelined expert kernels |
+| 138 | Wide compact TurboMind gate/up benchmark | Correct; default compact benchmark now covers up to 768 routed rows, where fused gate_up is `0.6379 ms` and gated-SiLU is `0.6481 ms` | Use `0.638 ms` as the acceptance target for the next packed MXFP4 software-pipelined kernel probe |
 
 ## Sprint 106 Profile Takeaway
 

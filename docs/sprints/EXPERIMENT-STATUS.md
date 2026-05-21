@@ -59,6 +59,9 @@ reached `59.598172` generated tok/s versus `57.170428` for the same-context
 64-slot control. These results keep pointing the next implementation at
 lower-level packed MXFP4 dataflow rather than another launch-boundary,
 dispatch, wrapper data-movement tweak, or simple admission-width change.
+Sprint 138 widened the compact TurboMind gate/up benchmark defaults to include
+192/384/768 routed-row shapes. At 768 routes, the current fused gate_up
+baseline is `0.6379 ms` and gated-SiLU is `0.6481 ms`.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
@@ -131,6 +134,7 @@ to slightly worse.
 | 135 | 32-slot 128K throughput admission | Correct; full 43-layer smoke passed, and 32-slot 128K served at `52.840889` vs `45.780913` same-context 16-slot control | Ship as explicit short-context throughput mode; evaluate 64-slot short context and deeper software-pipelined expert kernels next |
 | 136 | 64-slot 64K throughput admission | Correct; full 43-layer smoke passed, and 64-slot 64K served at `57.322945` vs `52.884400` same-context 32-slot control | Ship as explicit short-context throughput mode; slot scaling helps but shows diminishing returns |
 | 137 | 128-slot 32K throughput admission | Correct; full 43-layer smoke passed, status/metrics confirmed 128-slot serving, and 128-slot 32K served at `59.598172` vs `57.170428` same-context 64-slot control | Ship as explicit short-context throughput mode; simple slot widening is now mostly exhausted |
+| 138 | Wide compact TurboMind gate/up benchmark | Correct; 192/384/768 route compact cases pass, with 768-route fused gate_up at `0.6379 ms` and gated-SiLU at `0.6481 ms` | Use as the software-pipelined MXFP4 expert acceptance baseline |
 
 ## Remaining
 
@@ -168,7 +172,8 @@ to slightly worse.
     scheduling does help: 32-slot 128K reached `52.840889`, 64-slot 64K
     reached `57.322945`, and 128-slot 32K reached `59.598172`, but the
     marginal gain is shrinking and all remain far below the practical vision
-    target.
+    target. Sprint 138 sets the next kernel acceptance target: beat the
+    compact 768-route fused gate_up baseline of about `0.638 ms`.
     Sprint 122 further showed that merely chunking slots to feed wider kernels
     loses too much stage overlap, so the fusion target must match the per-slot
     served topology or replace it with an overlapped scheduler.

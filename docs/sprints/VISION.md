@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: codex
-revision: 140
+revision: 141
 ---
 
 # Vision: DS4 V100 Appliance
@@ -121,7 +121,11 @@ optimized V100 low-bit expert kernels in the actual hot path.
   added 128-slot 32K admission; full scheduler smoke passed, status/metrics
   confirmed the 128-slot binary, and served throughput reached `59.598172`
   generated tok/s versus `57.170428` for the same-context 64-slot control.
-  256K remains capped at 16 slots to avoid overfilling 32 GB V100s.
+  256K remains capped at 16 slots to avoid overfilling 32 GB V100s. Sprint 138
+  then updated the compact TurboMind gate/up benchmark to cover the high-slot
+  served route shapes. The 768-route compact baseline is `0.6379 ms` for fused
+  gate_up and `0.6481 ms` for gated-SiLU, giving the next software-pipelined
+  MXFP4 kernel a concrete acceptance target.
   Dispatch-policy tuning, dispatch bypass, final scatter fusion, wrapper-level
   activation compaction, and basic gate/up launch fusion are therefore not the
   missing throughput lever. The project remains far below the practical serving
@@ -829,6 +833,7 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 135 32-slot 128K throughput mode | `52.840889` at 128K/32 slots vs `45.780913` same-context 16-slot control | Measured | Raising the active-slot ceiling again improves aggregate throughput when the context cap is lowered enough to stay inside the 32 GB V100 memory budget. 256K remains capped at 16 slots. |
 | Sprint 136 64-slot 64K throughput mode | `57.322945` at 64K/64 slots vs `52.884400` same-context 32-slot control | Measured | Slot-width scaling continues to help, but the marginal gain shrank to about `8.4%`. The short-context tier is now better utilized, while long-context tiers remain capped for memory safety. |
 | Sprint 137 128-slot 32K throughput mode | `59.598172` at 32K/128 slots vs `57.170428` same-context 64-slot control | Measured | Slot-width scaling is still positive but now only about `4.2%`. This is useful as an explicit short-context mode, but it strongly suggests the easy scheduler-width sweep is nearly exhausted. |
+| Sprint 138 wide compact gate/up baseline | `0.6379 ms` fused gate_up at 768 routed rows | Measured | The benchmark now covers the 192/384/768-route compact shapes produced by high-slot serving. The next kernel sprint should beat this larger-route baseline, not the older 96-route case. |
 | Sustained benchmark without major kernel changes | `~20-60` tok/s | Medium | Current evidence reaches the low end of the continuous-batching band at 256K/16 slots and improves to `59.598172` at 32K/128 slots; more slots help when they fill existing HMMA/TurboMind tile shapes, but this is still far below the practical target. |
 | Continuous token-step batching, 8-128 active slots | `~40-240` tok/s | Medium-low | Sprint 137 reached `59.598172` tok/s at 128 slots/32K. Further progress requires persistent per-slot state, no per-request reset, multi-token batching, wider safe admission where memory allows it, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
@@ -2642,6 +2647,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-21 | Shipped Sprint 135 32-slot 128K throughput admission. | The scheduler and layer executor now admit 32 active slots for 128K contexts while keeping 256K capped at 16 slots. Full 32-slot scheduler smoke passed and the served appliance reached `52.840889` generated tok/s with `32/32` token matches, versus `45.780913` for the same-context 16-slot control. Next work should test 64-slot short-context fit and lower-level software-pipelined expert kernels. | Sprint 136+ |
 | 2026-05-21 | Shipped Sprint 136 64-slot 64K throughput admission. | The scheduler and layer executor now admit 64 active slots for 64K contexts while keeping 128K capped at 32 slots and 256K capped at 16 slots. Full 64-slot scheduler smoke passed and the served appliance reached `57.322945` generated tok/s with `64/64` token matches, versus `52.884400` for the same-context 32-slot control. Next work should prioritize lower-level software-pipelined expert kernels or a bounded 96/128-slot occupancy map. | Sprint 137+ |
 | 2026-05-21 | Shipped Sprint 137 128-slot 32K throughput admission. | The scheduler and layer executor now admit 128 active slots for 32K contexts while keeping 64K capped at 64 slots, 128K capped at 32 slots, and 256K capped at 16 slots. Full 128-slot scheduler smoke passed, status/metrics confirmed the served binary, and throughput reached `59.598172` generated tok/s with `128/128` token matches. The same-context 64-slot control was `57.170428`, so scheduler-width scaling is still positive but diminishing. Next work should shift to the software-pipelined packed MXFP4 expert kernel path. | Sprint 138+ |
+| 2026-05-21 | Completed Sprint 138 wide compact gate/up baseline. | The TurboMind gate/up benchmark now defaults through `tokens_per_active=128`, covering 768 routed rows in compact mode. V100 validation passed through 192/384/768-route shapes; the 768-route fused gate_up baseline is `0.6379 ms`. Sprint 139 should implement a narrow software-pipelined packed MXFP4 kernel probe that beats that baseline or proves the current TurboMind path is already near the practical ceiling. | Sprint 139+ |
 
 ## Open Questions
 
