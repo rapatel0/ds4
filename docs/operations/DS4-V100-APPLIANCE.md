@@ -105,6 +105,20 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
   --log-dir logs/full-envelope-gate
 ```
 
+Benchmark summaries report prompt/prefill and decode separately. For soak and
+sustained runs, prefer reading:
+
+```text
+aggregate_prompt_tokens_per_second
+aggregate_continuation_tokens_per_second
+aggregate_generated_tokens_per_second
+prompt_response_tokens_per_second_avg
+continuation_response_tokens_per_second_avg
+```
+
+This avoids hiding prefill or decode changes behind a single generated-tok/s
+number.
+
 ## Required Files
 
 The current cluster convention is:

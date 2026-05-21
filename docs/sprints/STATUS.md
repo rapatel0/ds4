@@ -75,7 +75,10 @@ lever. Sprint 142 moved that idea into the TurboMind down GEMM epilogue for
 the exact 768-route high-slot shape. The fused epilogue reduce path passed the
 full 43-layer 128-slot smoke and served correctly at `60.041003` generated
 tok/s versus `59.987105` same-binary control, so it remains opt-in/off because
-the effect is only run-noise positive.
+the effect is only run-noise positive. Sprint 143 added first-class prefill
+versus decode metrics to the soak, sustained decode, and aggregate throughput
+harnesses so future A/B runs show prompt replay, continuation decode, and
+aggregate generated rates separately.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
@@ -200,6 +203,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 140 | Fixed-shape 128-slot down probe | Correct; down m128 measured `0.3026 ms` vs `0.3272 ms` generic in isolation and full 43-layer smoke passed, but served A/B was `60.038469` vs `60.129772` down-probe-off | Keep down probe opt-in/off; move to down epilogue plus weighted reduce or a persistent routed-FFN executor |
 | 141 | Half2 route-row reduce tail probe | Correct; full 43-layer 128-slot smoke passed, but 128-slot served A/B was neutral: half2 route-row reduce `60.104512`, scalar route-row reduce `60.112248`, control `60.108232` | Keep half2 reduce opt-in/off; separate tail-kernel vectorization is not enough |
 | 142 | TurboMind down-epilogue reduce probe | Correct; full 43-layer 128-slot smoke passed and served A/B was `60.041003` vs `59.987105` control | Keep off by default; atomic epilogue fusion proves the integration boundary but is not a material throughput win |
+| 143 | Prefill/decode metric split | Correct; V100 one-request smoke reported aggregate prompt `6.841274`, generated `0.760142`, continuation `0.380071`, and response-local prompt/decode rates | Ship benchmark visibility change; no runtime default change |
 
 ## Sprint 106 Profile Takeaway
 

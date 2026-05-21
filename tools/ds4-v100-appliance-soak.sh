@@ -301,6 +301,11 @@ http_get "/health" "$health_http" "$health_json" || fail "health request failed"
 grep -q '"status":"ok"' "$health_json" || fail "bad /health response"
 http_get "/v100/status" "$status_before_http" "$status_before" || fail "status request failed"
 http_get "/metrics" "$metrics_before_http" "$metrics_before" || fail "metrics request failed"
+async_pipeline_decode_before="$(sed -n 's/.*"async_pipeline_decode":\([^,}]*\).*/\1/p' "$status_before" | sed -n '1p')"
+require_async_response=0
+case "${async_pipeline_decode_before:-false}" in
+    true) require_async_response=1 ;;
+esac
 
 post_request() {
     local request_id="$1"
@@ -309,7 +314,8 @@ post_request() {
     local response_http_i="$log_dir/${response_prefix}_${request_id}.http"
     local response_json_i="$log_dir/${response_prefix}_${request_id}.json"
     local response_row_i="$log_dir/${response_prefix}_${request_id}.row.json"
-    local start_s end_s elapsed_ms status_line got generated continuation_ms
+    local start_s end_s elapsed_ms status_line got generated prompt_tokens
+    local prompt_replay_ms prompt_tps continuation_ms continuation_tps generated_tps
 
     start_s="$(now_s)"
     if ! exec 3<>"/dev/tcp/$host/$port"; then
@@ -344,7 +350,12 @@ post_request() {
     http_body "$response_http_i" "$response_json_i"
     got="$(grep -o '"text_hex":"[^"]*"' "$response_json_i" | sed -n '1{s/^"text_hex":"//;s/"$//;p;}')"
     generated="$(sed -n 's/.*"generated_tokens":\([0-9][0-9]*\).*/\1/p' "$response_json_i" | sed -n '1p')"
+    prompt_tokens="$(sed -n 's/.*"prompt_tokens":\([0-9][0-9]*\).*/\1/p' "$response_json_i" | sed -n '1p')"
+    prompt_replay_ms="$(sed -n 's/.*"prompt_replay":\([0-9.][0-9.]*\).*/\1/p' "$response_json_i" | sed -n '1p')"
+    prompt_tps="$(sed -n 's/.*"prompt_tokens_per_second":\([0-9.][0-9.]*\).*/\1/p' "$response_json_i" | sed -n '1p')"
     continuation_ms="$(sed -n 's/.*"continuation_decode":\([0-9.][0-9.]*\).*/\1/p' "$response_json_i" | sed -n '1p')"
+    continuation_tps="$(sed -n 's/.*"continuation_tokens_per_second":\([0-9.][0-9.]*\).*/\1/p' "$response_json_i" | sed -n '1p')"
+    generated_tps="$(sed -n 's/.*"generated_tokens_per_second":\([0-9.][0-9.]*\).*/\1/p' "$response_json_i" | sed -n '1p')"
     if [ "$got" != "$expected_lower" ]; then
         echo "ds4-v100-appliance-soak: request $request_id expected $expected_hex, got ${got:-none}" >&2
         cat "$response_json_i" >&2
@@ -355,13 +366,18 @@ post_request() {
         cat "$response_json_i" >&2
         return 1
     fi
+    if ! is_uint "${prompt_tokens:-}"; then
+        prompt_tokens=0
+    fi
     if [ "$require_async" -eq 1 ] && ! grep -q '"async_pipeline":' "$response_json_i"; then
         echo "ds4-v100-appliance-soak: request $request_id missing async_pipeline timing" >&2
         cat "$response_json_i" >&2
         return 1
     fi
-    printf '{"index":%s,"status":200,"elapsed_ms":%s,"first_hex":"%s","generated_tokens":%s,"continuation_ms":%s}\n' \
-        "$request_id" "$elapsed_ms" "$got" "$generated" "${continuation_ms:-0}" >"$response_row_i"
+    printf '{"index":%s,"status":200,"elapsed_ms":%s,"first_hex":"%s","prompt_tokens":%s,"prompt_replay_ms":%s,"prompt_tokens_per_second":%s,"generated_tokens":%s,"generated_tokens_per_second":%s,"continuation_ms":%s,"continuation_tokens_per_second":%s}\n' \
+        "$request_id" "$elapsed_ms" "$got" "$prompt_tokens" "${prompt_replay_ms:-0}" \
+        "${prompt_tps:-0}" "$generated" "${generated_tps:-0}" "${continuation_ms:-0}" \
+        "${continuation_tps:-0}" >"$response_row_i"
 }
 
 for warmup_id in $(seq 1 "$warmup_requests"); do
@@ -371,7 +387,7 @@ done
 request_start_s="$(now_s)"
 pids=""
 for request_id in $(seq 1 "$requests"); do
-    post_request "$request_id" "response" &
+    post_request "$request_id" "response" "$require_async_response" &
     pids="$pids $!"
 done
 failed=0
@@ -401,8 +417,16 @@ continuation_total="$(awk '
     }
     END { printf "%d", sum }
 ' "$log_dir"/response_*.row.json)"
+prompt_total="$(awk '
+    match($0, /"prompt_tokens":[0-9]+/) {
+        v = substr($0, RSTART + 16, RLENGTH - 16)
+        sum += v
+    }
+    END { printf "%d", sum }
+' "$log_dir"/response_*.row.json)"
 aggregate_generated_tps="$(awk -v toks="$generated_total" -v elapsed="$elapsed_s" 'BEGIN { v = 0.0; if (elapsed > 0) v = toks / elapsed; printf "%.6f", v }')"
 aggregate_continuation_tps="$(awk -v toks="$continuation_total" -v elapsed="$elapsed_s" 'BEGIN { v = 0.0; if (elapsed > 0) v = toks / elapsed; printf "%.6f", v }')"
+aggregate_prompt_tps="$(awk -v toks="$prompt_total" -v elapsed="$elapsed_s" 'BEGIN { v = 0.0; if (elapsed > 0) v = toks / elapsed; printf "%.6f", v }')"
 latency_ms_avg="$(awk '
     match($0, /"elapsed_ms":[0-9.]+/) {
         v = substr($0, RSTART + 13, RLENGTH - 13)
@@ -410,6 +434,46 @@ latency_ms_avg="$(awk '
         n++
     }
     END { printf "%.3f", n ? sum / n : 0.0 }
+' "$log_dir"/response_*.row.json)"
+prompt_replay_ms_avg="$(awk '
+    match($0, /"prompt_replay_ms":[0-9.]+/) {
+        v = substr($0, RSTART + 19, RLENGTH - 19)
+        sum += v
+        n++
+    }
+    END { printf "%.3f", n ? sum / n : 0.0 }
+' "$log_dir"/response_*.row.json)"
+continuation_ms_avg="$(awk '
+    match($0, /"continuation_ms":[0-9.]+/) {
+        v = substr($0, RSTART + 18, RLENGTH - 18)
+        sum += v
+        n++
+    }
+    END { printf "%.3f", n ? sum / n : 0.0 }
+' "$log_dir"/response_*.row.json)"
+prompt_response_tps_avg="$(awk '
+    match($0, /"prompt_tokens_per_second":[0-9.]+/) {
+        v = substr($0, RSTART + 27, RLENGTH - 27)
+        sum += v
+        n++
+    }
+    END { printf "%.6f", n ? sum / n : 0.0 }
+' "$log_dir"/response_*.row.json)"
+continuation_response_tps_avg="$(awk '
+    match($0, /"continuation_tokens_per_second":[0-9.]+/) {
+        v = substr($0, RSTART + 33, RLENGTH - 33)
+        sum += v
+        n++
+    }
+    END { printf "%.6f", n ? sum / n : 0.0 }
+' "$log_dir"/response_*.row.json)"
+generated_response_tps_avg="$(awk '
+    match($0, /"generated_tokens_per_second":[0-9.]+/) {
+        v = substr($0, RSTART + 30, RLENGTH - 30)
+        sum += v
+        n++
+    }
+    END { printf "%.6f", n ? sum / n : 0.0 }
 ' "$log_dir"/response_*.row.json)"
 async_pipeline_mode="$(sed -n 's/.*"async_pipeline_mode":"\([^"]*\)".*/\1/p' "$status_before" | sed -n '1p')"
 async_pipeline_decode="$(sed -n 's/.*"async_pipeline_decode":\([^,}]*\).*/\1/p' "$status_before" | sed -n '1p')"
@@ -429,17 +493,24 @@ async_event_handoff_status="$(sed -n 's/.*"async_event_handoff":\([^,}]*\).*/\1/
     printf ']\n'
 } >"$responses_json"
 
-printf '{"aggregate_continuation_tokens_per_second":%s,"aggregate_generated_tokens_per_second":%s,"async_event_handoff":%s,"async_handoff":%s,"async_pipeline_decode":%s,"async_pipeline_mode":"%s","continuation_tokens":%s,"elapsed_s":%s,"errors":0,"generated_tokens":%s,"latency_ms_avg":%s,"requests":%s,"schema":"ds4_v100_appliance_soak.v1","status_200":%s,"token_match":%s,"warmup_requests":%s}\n' \
+printf '{"aggregate_continuation_tokens_per_second":%s,"aggregate_generated_tokens_per_second":%s,"aggregate_prompt_tokens_per_second":%s,"async_event_handoff":%s,"async_handoff":%s,"async_pipeline_decode":%s,"async_pipeline_mode":"%s","continuation_decode_ms_avg":%s,"continuation_response_tokens_per_second_avg":%s,"continuation_tokens":%s,"elapsed_s":%s,"errors":0,"generated_response_tokens_per_second_avg":%s,"generated_tokens":%s,"latency_ms_avg":%s,"prefill_prompt_replay_ms_avg":%s,"prompt_response_tokens_per_second_avg":%s,"prompt_tokens":%s,"requests":%s,"schema":"ds4_v100_appliance_soak.v1","status_200":%s,"token_match":%s,"warmup_requests":%s}\n' \
     "$aggregate_continuation_tps" \
     "$aggregate_generated_tps" \
+    "$aggregate_prompt_tps" \
     "${async_event_handoff_status:-false}" \
     "${async_handoff_status:-false}" \
     "${async_pipeline_decode:-false}" \
     "${async_pipeline_mode:-unknown}" \
+    "$continuation_ms_avg" \
+    "$continuation_response_tps_avg" \
     "$continuation_total" \
     "$elapsed_s" \
+    "$generated_response_tps_avg" \
     "$generated_total" \
     "$latency_ms_avg" \
+    "$prompt_replay_ms_avg" \
+    "$prompt_response_tps_avg" \
+    "$prompt_total" \
     "$requests" \
     "$requests" \
     "$requests" \

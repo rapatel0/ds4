@@ -78,7 +78,9 @@ weighted route reduction into the TurboMind down GEMM epilogue for the exact
 768-route high-slot shape. It passed full 43-layer 128-slot smoke and served
 correctly at `60.041003` generated tok/s versus `59.987105` same-binary
 control, so it remains default-off because the result is only run-noise
-positive.
+positive. Sprint 143 added explicit prefill versus decode metrics to the soak,
+sustained decode, and aggregate throughput harnesses so future experiments can
+separate prompt replay, continuation decode, and aggregate generated rates.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
@@ -156,6 +158,7 @@ to slightly worse.
 | 140 | Fixed-shape 128-slot down probe | Correct; fixed down measured `0.3026 ms` vs `0.3272 ms` generic and full 43-layer smoke passed, but served A/B was `60.038469` vs `60.129772` down-probe-off | Keep off by default; target down epilogue plus weighted reduce or persistent routed FFN next |
 | 141 | Half2 route-row reduce tail probe | Correct; full 43-layer 128-slot smoke passed, but half2 route-row reduce was `60.104512` vs scalar route-row reduce `60.112248` and control `60.108232` | Keep off by default; separate tail vectorization does not move served throughput |
 | 142 | TurboMind down-epilogue reduce probe | Correct; full 43-layer 128-slot smoke passed and served A/B was `60.041003` vs `59.987105` same-binary control | Keep off by default; the atomic epilogue reduce is correct but not a material throughput win |
+| 143 | Prefill/decode metric split | Correct; one-request V100 smoke emitted aggregate prompt, generated, and continuation tok/s plus response-local prompt/decode rates | Ship benchmark visibility change; use split metrics in future A/B decisions |
 
 ## Remaining
 

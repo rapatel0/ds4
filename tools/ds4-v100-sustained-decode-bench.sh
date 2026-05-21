@@ -415,6 +415,7 @@ def send_once():
         try:
             data = json.loads(body.decode("utf-8", errors="replace"))
             generated = int(data.get("generated_tokens", 0))
+            prompt_tokens = int(data.get("prompt_tokens", 0))
             toks = data.get("tokens", [])
             if toks:
                 first_hex = str(toks[0].get("text_hex", "")).lower()
@@ -423,13 +424,16 @@ def send_once():
         except Exception as exc:
             parse_error = repr(exc)
             mtp = {}
+            prompt_tokens = 0
     else:
         mtp = {}
+        prompt_tokens = 0
     return {
         "status": status,
         "latency_ms": dt_ms,
         "error": parse_error,
         "generated": generated,
+        "prompt_tokens": prompt_tokens,
         "first_hex": first_hex,
         "timing": timing if isinstance(timing, dict) else {},
         "mtp": mtp if isinstance(mtp, dict) else {},
@@ -517,6 +521,7 @@ stats = {
     "errors": 0,
     "token_match": 0,
     "token_mismatch": 0,
+    "prompt_token_total": 0,
     "generated_token_total": 0,
     "continuation_token_total": 0,
     "mtp_attempted": 0,
@@ -553,6 +558,7 @@ def worker():
             if r.get("error"):
                 stats["errors"] += 1
             generated = int(r.get("generated", 0))
+            stats["prompt_token_total"] += int(r.get("prompt_tokens", 0))
             stats["generated_token_total"] += generated
             stats["continuation_token_total"] += max(0, generated - 1)
             if r["status"] == 200 and generated == expected_tokens and r["first_hex"] == expected_hex:
@@ -632,6 +638,7 @@ summary = {
     "errors": stats["errors"],
     "token_match": stats["token_match"],
     "token_mismatch": stats["token_mismatch"],
+    "prompt_token_total": stats["prompt_token_total"],
     "generated_token_total": stats["generated_token_total"],
     "continuation_token_total": stats["continuation_token_total"],
     "mtp": {
@@ -651,6 +658,9 @@ summary = {
     },
     "aggregate_generated_tokens_per_second": (
         stats["generated_token_total"] / elapsed_s if elapsed_s > 0 else 0.0
+    ),
+    "aggregate_prompt_tokens_per_second": (
+        stats["prompt_token_total"] / elapsed_s if elapsed_s > 0 else 0.0
     ),
     "aggregate_continuation_tokens_per_second": (
         stats["continuation_token_total"] / elapsed_s if elapsed_s > 0 else 0.0
@@ -963,7 +973,7 @@ printf 'async_event_handoff\t%s\n' "$async_event_handoff" >>"$summary_tsv"
 printf 'async_handoff\t%s\n' "$async_handoff" >>"$summary_tsv"
 printf 'mtp_serving\t%s\n' "$mtp_serving" >>"$summary_tsv"
 printf 'mtp_top_k\t%s\n' "$mtp_top_k" >>"$summary_tsv"
-printf '\nctx\tslots\tpolicy\tmtp_serving\tstatus_200\tstatus_other\terrors\ttoken_match\ttoken_mismatch\tlatency_avg_ms\tlatency_p50_ms\tlatency_p95_ms\tlatency_p99_ms\telapsed_s\taggregate_generated_tokens_per_second\taggregate_continuation_tokens_per_second\tavg_continuation_response_tokens_per_second\tavg_gpu_util_percent\tmax_gpu_util_percent\tmtp_attempted\tmtp_accepted\tmtp_rejected\tmtp_committed\tmtp_draft_ms_avg\tmtp_draft_ms_total\tavg_async_total_ms\tavg_async_setup_ms\tavg_async_host_wait_ms\tavg_async_complete_ms\tavg_async_wait_prev_sum_ms\tavg_async_handoff_sum_ms\tavg_async_device_sync_sum_ms\n' >>"$summary_tsv"
+printf '\nctx\tslots\tpolicy\tmtp_serving\tstatus_200\tstatus_other\terrors\ttoken_match\ttoken_mismatch\tlatency_avg_ms\tlatency_p50_ms\tlatency_p95_ms\tlatency_p99_ms\telapsed_s\taggregate_prompt_tokens_per_second\taggregate_generated_tokens_per_second\taggregate_continuation_tokens_per_second\tavg_prompt_response_tokens_per_second\tavg_continuation_response_tokens_per_second\tavg_gpu_util_percent\tmax_gpu_util_percent\tmtp_attempted\tmtp_accepted\tmtp_rejected\tmtp_committed\tmtp_draft_ms_avg\tmtp_draft_ms_total\tavg_async_total_ms\tavg_async_setup_ms\tavg_async_host_wait_ms\tavg_async_complete_ms\tavg_async_wait_prev_sum_ms\tavg_async_handoff_sum_ms\tavg_async_device_sync_sum_ms\n' >>"$summary_tsv"
 
 case_index=0
 case_paths=()
@@ -1032,8 +1042,10 @@ print("\t".join([
     f"{float(lat.get('p95', 0.0)):.3f}",
     f"{float(lat.get('p99', 0.0)):.3f}",
     f"{float(d.get('elapsed_s', 0.0)):.6f}",
+    f"{float(d.get('aggregate_prompt_tokens_per_second', 0.0)):.6f}",
     f"{float(d.get('aggregate_generated_tokens_per_second', 0.0)):.6f}",
     f"{float(d.get('aggregate_continuation_tokens_per_second', 0.0)):.6f}",
+    f"{float(timing.get('prompt_tokens_per_second', 0.0)):.6f}",
     f"{float(timing.get('continuation_tokens_per_second', 0.0)):.6f}",
     f"{float(gpu.get('avg_gpu_util_percent', 0.0)):.3f}",
     f"{float(gpu.get('max_gpu_util_percent', 0.0)):.3f}",

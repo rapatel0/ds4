@@ -351,7 +351,9 @@ stats = {
     "status_413": 0,
     "token_match": 0,
     "token_mismatch": 0,
+    "prompt_token_total": 0,
     "generated_token_total": 0,
+    "continuation_token_total": 0,
     "mtp_attempted": 0,
     "mtp_accepted": 0,
     "errors": 0,
@@ -419,10 +421,13 @@ def worker():
         except Exception:
             first_hex = ""
         generated = int(data.get("generated_tokens", 0))
+        prompt_tokens = int(data.get("prompt_tokens", 0))
         mtp = data.get("mtp") if isinstance(data, dict) else None
         with stats_lock:
             stats["status_200"] += 1
+            stats["prompt_token_total"] += prompt_tokens
             stats["generated_token_total"] += generated
+            stats["continuation_token_total"] += max(0, generated - 1)
             if generated == expected_tokens and first_hex == expected_hex:
                 stats["token_match"] += 1
             else:
@@ -449,6 +454,8 @@ p95 = percentile(sorted_lat, 0.95)
 p99 = percentile(sorted_lat, 0.99)
 avg = statistics.fmean(sorted_lat) if sorted_lat else 0.0
 tok_s = (stats["generated_token_total"] / elapsed_s) if elapsed_s > 0 else 0.0
+prompt_tok_s = (stats["prompt_token_total"] / elapsed_s) if elapsed_s > 0 else 0.0
+continuation_tok_s = (stats["continuation_token_total"] / elapsed_s) if elapsed_s > 0 else 0.0
 
 summary = {
     "schema": "ds4_v100_aggregate_throughput_case.v1",
@@ -465,7 +472,9 @@ summary = {
     "errors": stats["errors"],
     "token_match": stats["token_match"],
     "token_mismatch": stats["token_mismatch"],
+    "prompt_token_total": stats["prompt_token_total"],
     "generated_token_total": stats["generated_token_total"],
+    "continuation_token_total": stats["continuation_token_total"],
     "mtpa_attempted": stats["mtp_attempted"],
     "mtpa_accepted": stats["mtp_accepted"],
     "latency_ms": {
@@ -475,6 +484,8 @@ summary = {
         "p99": p99,
     },
     "aggregate_tokens_per_second": tok_s,
+    "aggregate_prompt_tokens_per_second": prompt_tok_s,
+    "aggregate_continuation_tokens_per_second": continuation_tok_s,
 }
 
 with open(out_path, "w", encoding="utf-8") as f:
@@ -507,7 +518,7 @@ printf 'model\t%s\n' "$model" >>"$summary_tsv"
 printf 'pack_index\t%s\n' "$pack_index" >>"$summary_tsv"
 printf 'expected_token_hex\t%s\n' "$expected_lower" >>"$summary_tsv"
 printf 'requests_per_case\t%s\n' "$requests" >>"$summary_tsv"
-printf '\nctx\tslots\tpolicy\tmode\tstatus_200\tstatus_other\terrors\ttoken_match\ttoken_mismatch\tmtp_attempted\tmtp_accepted\tlatency_avg_ms\tlatency_p50_ms\tlatency_p95_ms\tlatency_p99_ms\telapsed_s\taggregate_tokens_per_second\n' >>"$summary_tsv"
+printf '\nctx\tslots\tpolicy\tmode\tstatus_200\tstatus_other\terrors\ttoken_match\ttoken_mismatch\tmtp_attempted\tmtp_accepted\tlatency_avg_ms\tlatency_p50_ms\tlatency_p95_ms\tlatency_p99_ms\telapsed_s\taggregate_prompt_tokens_per_second\taggregate_tokens_per_second\taggregate_continuation_tokens_per_second\n' >>"$summary_tsv"
 
 mode_list=("off")
 if [ "$mtp_mode" = "verify" ]; then
@@ -566,7 +577,9 @@ print("\t".join([
     f"{float(lat.get('p95', 0.0)):.3f}",
     f"{float(lat.get('p99', 0.0)):.3f}",
     f"{float(d.get('elapsed_s', 0.0)):.6f}",
+    f"{float(d.get('aggregate_prompt_tokens_per_second', 0.0)):.6f}",
     f"{float(d.get('aggregate_tokens_per_second', 0.0)):.6f}",
+    f"{float(d.get('aggregate_continuation_tokens_per_second', 0.0)):.6f}",
 ]))
 PY
 )"
