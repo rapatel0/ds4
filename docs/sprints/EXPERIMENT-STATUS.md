@@ -61,11 +61,16 @@ lower-level packed MXFP4 dataflow rather than another launch-boundary,
 dispatch, wrapper data-movement tweak, or simple admission-width change.
 Sprint 138 widened the compact TurboMind gate/up benchmark defaults to include
 192/384/768 routed-row shapes. At 768 routes, the current fused gate_up
-baseline is `0.6379 ms` and gated-SiLU is `0.6481 ms`.
+baseline is `0.6379 ms` and gated-SiLU is `0.6481 ms`. Sprint 139 added a
+fixed-shape 768-route m128 gated-SiLU probe, wired it into the appliance under
+exact guards, and validated the interleaved gated appliance at `60.130047`
+generated tok/s for 128-slot/32K. The isolated kernel result improved to
+`0.5999 ms`, but the served probe-off control was `60.061899`, so the
+production effect is tiny.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
-| Short-context max-throughput target | 32,768 | 128 | `59.598172` | opt-in | 128/128 token match |
+| Short-context max-throughput target | 32,768 | 128 | `60.130047` | opt-in | 128/128 token match |
 | Short-context high-throughput target | 65,536 | 64 | `57.322945` | opt-in | 64/64 token match |
 | Short-context throughput target | 131,072 | 32 | `52.840889` | opt-in | 32/32 token match |
 | Throughput serving target | 262,144 | 16 | `46.394722` | `45.888778` | 16/16 token match |
@@ -135,6 +140,7 @@ to slightly worse.
 | 136 | 64-slot 64K throughput admission | Correct; full 43-layer smoke passed, and 64-slot 64K served at `57.322945` vs `52.884400` same-context 32-slot control | Ship as explicit short-context throughput mode; slot scaling helps but shows diminishing returns |
 | 137 | 128-slot 32K throughput admission | Correct; full 43-layer smoke passed, status/metrics confirmed 128-slot serving, and 128-slot 32K served at `59.598172` vs `57.170428` same-context 64-slot control | Ship as explicit short-context throughput mode; simple slot widening is now mostly exhausted |
 | 138 | Wide compact TurboMind gate/up benchmark | Correct; 192/384/768 route compact cases pass, with 768-route fused gate_up at `0.6379 ms` and gated-SiLU at `0.6481 ms` | Use as the software-pipelined MXFP4 expert acceptance baseline |
+| 139 | Fixed-shape 128-slot gate/up probe | Correct; m128 measured `0.5999 ms` vs `0.6480 ms` generic gated in isolation, full 43-layer 128-slot smoke passed, and served gated A/B was `60.130047` vs `60.061899` probe-off | Keep exact-guard auto path; move next work to a larger routed-FFN boundary |
 
 ## Remaining
 
@@ -172,8 +178,11 @@ to slightly worse.
     scheduling does help: 32-slot 128K reached `52.840889`, 64-slot 64K
     reached `57.322945`, and 128-slot 32K reached `59.598172`, but the
     marginal gain is shrinking and all remain far below the practical vision
-    target. Sprint 138 sets the next kernel acceptance target: beat the
-    compact 768-route fused gate_up baseline of about `0.638 ms`.
+    target. Sprint 138 set the next kernel acceptance target: beat the compact
+    768-route fused gate_up baseline of about `0.638 ms`. Sprint 139 beat that
+    target in isolation with a fixed m128 gated-SiLU probe at `0.5999 ms`, but
+    served A/B only moved from `60.061899` to `60.130047`, so gate/up-only
+    specialization is not enough.
     Sprint 122 further showed that merely chunking slots to feed wider kernels
     loses too much stage overlap, so the fusion target must match the per-slot
     served topology or replace it with an overlapped scheduler.
@@ -186,6 +195,7 @@ The default launcher now keeps `DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=0`,
 `DS4_V100_CUDA_F8_ROW4=0`, `DS4_V100_CUDA_F8_WARP_SCALE=0`, and
 `DS4_V100_FFN_DIRECT_DELTA=0`, while
 `DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1`,
+`DS4_V100_TURBOMIND_GATE_UP_PROBE=auto`,
 `DS4_V100_CUDA_F8_HMMA_PAIR_SWIGLU=1`,
 `DS4_V100_ENABLE_BATCH_ATTN_PROJ=1`, and
 `DS4_V100_CUDA_F8_HMMA_ATTN_BATCH=1` are default.
@@ -222,6 +232,7 @@ DS4_V100_CUDA_F8_HMMA_GROUPED_ATTN_O_BATCH=1
 DS4_V100_TURBOMIND_PROFILE=1
 DS4_V100_TURBOMIND_GATED_SILU=1
 DS4_V100_TURBOMIND_COMPACT_SCHEDULE=0
+DS4_V100_TURBOMIND_GATE_UP_PROBE=off
 ```
 
 The fused gate/up path is default-enabled for appliances that contain fused
@@ -233,3 +244,7 @@ and the Sprint 127 TurboMind ABI; do not enable it against the Sprint 111
 Compact scheduling is default-on after Sprint 128; set
 `DS4_V100_TURBOMIND_COMPACT_SCHEDULE=0` only to roll back to the old 256-expert
 grouped schedule.
+The fixed-shape m128 gate/up probe is default-auto after Sprint 139, but only
+selects on the exact interleaved gated 768-route compact shape. Set
+`DS4_V100_TURBOMIND_GATE_UP_PROBE=off` to force the generic TurboMind gated
+path.

@@ -254,6 +254,33 @@ int ggml_turbomind_ds4_mxfp4_gated_silu_96(
     void*              D,
     void*              stream  /* cudaStream_t */);
 
+/**
+ * Fixed-shape DS4/V100 probes for the 128-slot compact routed gate/up shape.
+ * Both use MXFP4 interleaved gate/up rows and total_tokens = 768; the suffix
+ * names the CTA-M family being tested.
+ */
+int ggml_turbomind_ds4_mxfp4_gated_silu_768_m64(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
+int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
 // ============================================================================
 // Single-expert mul-mat (convenience for non-grouped cases like dense layers)
 // ============================================================================

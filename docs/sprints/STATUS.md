@@ -6,10 +6,13 @@ Last updated: 2026-05-21
 
 Current long-context production throughput mode is the Sprint 121 16-slot/256K
 appliance with the Sprint 122 rendezvous fix. Sprint 137 adds an explicit
-128-slot/32K short-context throughput mode. The runtime now reliably coalesces
+128-slot/32K short-context throughput mode. Sprint 139 raises the best observed
+gated-appliance 128-slot/32K run to `60.130047` generated tok/s, while showing
+the fixed-shape gate/up probe itself only contributes about `0.1%` end-to-end.
+The runtime now reliably coalesces
 high-slot concurrent requests into one tensor batch by resolving launcher
 `auto` microbatch wait to 200 ms at `active_microbatch >= 16`. The best current
-served result is `59.598172` generated tok/s at 128-slot/32K; the current
+served result is `60.130047` generated tok/s at 128-slot/32K; the current
 256K production-auto repeat remains `43.534061` generated tok/s. Sprint 123 found
 correct opt-in shared-FFN fusions up to `43.887206`. Sprint 124 added a
 correct opt-in TurboMind route-row reduce path and measured up to `43.822500`.
@@ -54,9 +57,12 @@ Sprint 137 admitted 128 slots at 32K, passed full scheduler smoke, and reached
 control. The slot-width sweep remains positive but is clearly diminishing.
 Sprint 138 widened the standalone TurboMind compact gate/up benchmark defaults
 to cover 192/384/768 routed-row shapes. The 768-route compact baseline is
-`0.6379 ms` for fused gate_up and `0.6481 ms` for gated-SiLU, so the next
-kernel probe must beat that larger-route baseline rather than the older
-96-route case.
+`0.6379 ms` for fused gate_up and `0.6481 ms` for gated-SiLU. Sprint 139 added
+a fixed-shape 768-route m128 gated-SiLU probe and wired it into the appliance
+under exact production guards. It beat the isolated generic gated path
+(`0.5999 ms` vs `0.6480 ms`) and served correctly at `60.130047` generated
+tok/s on the 128-slot/32K gated appliance, but same-binary probe-off was
+`60.061899`, so the end-to-end gain is only about `0.1%`.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
@@ -68,6 +74,8 @@ current topology because it gives up too much stage overlap.
 
 | Mode | Context | Slots | Generated tok/s | Continuation tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
+| Sprint 139 gated m128 auto probe | 32,768 | 128 | `60.130047` | `56.371919` | 128/128 token match |
+| Sprint 139 gated probe-off control | 32,768 | 128 | `60.061899` | `56.308030` | 128/128 token match |
 | Sprint 137 128-slot 32K throughput mode | 32,768 | 128 | `59.598172` | `55.873286` | 128/128 token match |
 | Sprint 137 same-context control | 32,768 | 64 | `57.170428` | `53.597276` | 64/64 token match |
 | Sprint 136 64-slot 64K throughput mode | 65,536 | 64 | `57.322945` | `53.740261` | 64/64 token match |
@@ -166,6 +174,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 136 | 64-slot 64K throughput admission | Correct; full 43-layer smoke passed, and 64-slot 64K served at `57.322945` vs `52.884400` same-context 32-slot control | Ship as explicit short-context throughput mode; diminishing slot-width returns make software-pipelined expert kernels the next major lever |
 | 137 | 128-slot 32K throughput admission | Correct; full 43-layer smoke and status/metrics confirmed 128 slots, and served throughput reached `59.598172` vs `57.170428` same-context 64-slot control | Ship as explicit short-context throughput mode; stop treating admission width as the main lever and move to software-pipelined expert kernels |
 | 138 | Wide compact TurboMind gate/up benchmark | Correct; default compact benchmark now covers up to 768 routed rows, where fused gate_up is `0.6379 ms` and gated-SiLU is `0.6481 ms` | Use `0.638 ms` as the acceptance target for the next packed MXFP4 software-pipelined kernel probe |
+| 139 | Fixed-shape 128-slot gate/up probe | Correct; the 768-route m128 probe measured `0.5999 ms` vs `0.6480 ms` generic gated in isolation, passed full 43-layer 128-slot smoke, and served at `60.130047` vs `60.061899` probe-off | Keep guarded auto selection, but do not treat gate/up-only fusion as the remaining major lever |
 
 ## Sprint 106 Profile Takeaway
 

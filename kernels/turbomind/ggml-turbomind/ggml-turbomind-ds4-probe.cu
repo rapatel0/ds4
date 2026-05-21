@@ -16,22 +16,47 @@ namespace {
 using namespace turbomind::gemm;
 using namespace turbomind::gemm::sm70_s884;
 
-using ProbeConfig = Config_MXF4<kColMajor, 0>::Type<
+using ProbeConfigM16 = Config_MXF4<kColMajor, 0>::Type<
     16, 128, 32, 1, 4, 1,
     turbomind::cache_policy::Default,
     turbomind::cache_policy::Stream,
     2, true, 1, 32>;
-using ProbeKernel = KernelImpl<typename ProbeConfig::Kernel>;
+using ProbeConfigM64 = Config_MXF4<kColMajor, 0>::Type<
+    64, 128, 32, 1, 4, 1,
+    turbomind::cache_policy::Default,
+    turbomind::cache_policy::Stream,
+    2, true, 1, 32, 32, 128>;
+using ProbeConfigM128 = Config_MXF4<kColMajor, 0>::Type<
+    128, 128, 16, 2, 2, 1,
+    turbomind::cache_policy::Default,
+    turbomind::cache_policy::Default,
+    2, true, 1, 32, 64, 128>;
 
-ProbeKernel *probe_kernel()
+using ProbeKernelM16 = KernelImpl<typename ProbeConfigM16::Kernel>;
+using ProbeKernelM64 = KernelImpl<typename ProbeConfigM64::Kernel>;
+using ProbeKernelM128 = KernelImpl<typename ProbeConfigM128::Kernel>;
+
+ProbeKernelM16 *probe_kernel_m16()
 {
-    static ProbeKernel *kernel = new ProbeKernel();
+    static ProbeKernelM16 *kernel = new ProbeKernelM16();
     return kernel;
 }
 
-}  // namespace
+ProbeKernelM64 *probe_kernel_m64()
+{
+    static ProbeKernelM64 *kernel = new ProbeKernelM64();
+    return kernel;
+}
 
-int ggml_turbomind_ds4_mxfp4_gated_silu_96_launch(
+ProbeKernelM128 *probe_kernel_m128()
+{
+    static ProbeKernelM128 *kernel = new ProbeKernelM128();
+    return kernel;
+}
+
+template<class Kernel>
+int launch_ds4_mxfp4_gated_silu(
+    Kernel*             kernel,
     const void*        A,
     const int*         expert_offsets,
     int                num_experts,
@@ -48,7 +73,7 @@ int ggml_turbomind_ds4_mxfp4_gated_silu_96_launch(
     void*              stream_v)
 {
     if (!A || !expert_offsets || !weights_packed || !scales_packed || !D) return 1;
-    if (num_experts != 6 || total_tokens != 96) return 2;
+    if (!kernel || num_experts != 6 || total_tokens <= 0) return 2;
 
     constexpr int K = 4096;
     constexpr int N = 4096;
@@ -138,7 +163,7 @@ int ggml_turbomind_ds4_mxfp4_gated_silu_96_launch(
     tmg::MatrixLayout Cdesc = Ddesc;
     tmg::MatrixLayout Udesc{};
 
-    return probe_kernel()->Launch(
+    return kernel->Launch(
         op,
         1.0f,
         A,
@@ -158,4 +183,108 @@ int ggml_turbomind_ds4_mxfp4_gated_silu_96_launch(
         1,
         workspace,
         stream);
+}
+
+}  // namespace
+
+int ggml_turbomind_ds4_mxfp4_gated_silu_96_launch(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream_v)
+{
+    if (total_tokens != 96) return 2;
+    return launch_ds4_mxfp4_gated_silu(probe_kernel_m16(),
+                                       A,
+                                       expert_offsets,
+                                       num_experts,
+                                       total_tokens,
+                                       weights_packed,
+                                       scales_packed,
+                                       k_pack_value,
+                                       D,
+                                       barriers,
+                                       barriers_size,
+                                       partials,
+                                       partials_size,
+                                       flags,
+                                       stream_v);
+}
+
+int ggml_turbomind_ds4_mxfp4_gated_silu_768_m64_launch(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream_v)
+{
+    if (total_tokens != 768) return 2;
+    return launch_ds4_mxfp4_gated_silu(probe_kernel_m64(),
+                                       A,
+                                       expert_offsets,
+                                       num_experts,
+                                       total_tokens,
+                                       weights_packed,
+                                       scales_packed,
+                                       k_pack_value,
+                                       D,
+                                       barriers,
+                                       barriers_size,
+                                       partials,
+                                       partials_size,
+                                       flags,
+                                       stream_v);
+}
+
+int ggml_turbomind_ds4_mxfp4_gated_silu_768_m128_launch(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream_v)
+{
+    if (total_tokens != 768) return 2;
+    return launch_ds4_mxfp4_gated_silu(probe_kernel_m128(),
+                                       A,
+                                       expert_offsets,
+                                       num_experts,
+                                       total_tokens,
+                                       weights_packed,
+                                       scales_packed,
+                                       k_pack_value,
+                                       D,
+                                       barriers,
+                                       barriers_size,
+                                       partials,
+                                       partials_size,
+                                       flags,
+                                       stream_v);
 }

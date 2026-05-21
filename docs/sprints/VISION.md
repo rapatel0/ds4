@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: codex
-revision: 141
+revision: 142
 ---
 
 # Vision: DS4 V100 Appliance
@@ -125,7 +125,12 @@ optimized V100 low-bit expert kernels in the actual hot path.
   then updated the compact TurboMind gate/up benchmark to cover the high-slot
   served route shapes. The 768-route compact baseline is `0.6379 ms` for fused
   gate_up and `0.6481 ms` for gated-SiLU, giving the next software-pipelined
-  MXFP4 kernel a concrete acceptance target.
+  MXFP4 kernel a concrete acceptance target. Sprint 139 added a fixed-shape
+  768-route m128 gated-SiLU probe and wired it into the production appliance
+  under exact guards. It beat the isolated target at `0.5999 ms`, passed full
+  43-layer 128-slot smoke, and served at `60.130047` generated tok/s on the
+  interleaved gated appliance, but the same-binary probe-off control was
+  `60.061899`, so gate/up-only specialization is not a material topline lever.
   Dispatch-policy tuning, dispatch bypass, final scatter fusion, wrapper-level
   activation compaction, and basic gate/up launch fusion are therefore not the
   missing throughput lever. The project remains far below the practical serving
@@ -2648,6 +2653,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-21 | Shipped Sprint 136 64-slot 64K throughput admission. | The scheduler and layer executor now admit 64 active slots for 64K contexts while keeping 128K capped at 32 slots and 256K capped at 16 slots. Full 64-slot scheduler smoke passed and the served appliance reached `57.322945` generated tok/s with `64/64` token matches, versus `52.884400` for the same-context 32-slot control. Next work should prioritize lower-level software-pipelined expert kernels or a bounded 96/128-slot occupancy map. | Sprint 137+ |
 | 2026-05-21 | Shipped Sprint 137 128-slot 32K throughput admission. | The scheduler and layer executor now admit 128 active slots for 32K contexts while keeping 64K capped at 64 slots, 128K capped at 32 slots, and 256K capped at 16 slots. Full 128-slot scheduler smoke passed, status/metrics confirmed the served binary, and throughput reached `59.598172` generated tok/s with `128/128` token matches. The same-context 64-slot control was `57.170428`, so scheduler-width scaling is still positive but diminishing. Next work should shift to the software-pipelined packed MXFP4 expert kernel path. | Sprint 138+ |
 | 2026-05-21 | Completed Sprint 138 wide compact gate/up baseline. | The TurboMind gate/up benchmark now defaults through `tokens_per_active=128`, covering 768 routed rows in compact mode. V100 validation passed through 192/384/768-route shapes; the 768-route fused gate_up baseline is `0.6379 ms`. Sprint 139 should implement a narrow software-pipelined packed MXFP4 kernel probe that beats that baseline or proves the current TurboMind path is already near the practical ceiling. | Sprint 139+ |
+| 2026-05-21 | Completed Sprint 139 fixed-shape 128-slot gate/up probe. | A fixed m128 TurboMind MXFP4 gated-SiLU ABI beat the 768-route isolated gate/up target at `0.5999 ms`, then passed full 43-layer 128-slot smoke and served at `60.130047` generated tok/s on the interleaved gated appliance. The same-binary probe-off control was `60.061899`, so gate/up-only specialization is not a material served lever. Next work should fuse or schedule a larger routed-FFN boundary, especially down plus weighted scatter/reduce. | Sprint 140+ |
 
 ## Open Questions
 

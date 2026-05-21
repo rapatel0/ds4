@@ -266,8 +266,12 @@ static int run_case(void * lib, const Case & c) {
     auto mmgt = (pfn_mul_mat_grouped_total_tokens) dlsym(lib, "ggml_turbomind_mul_mat_grouped_total_tokens");
     auto mmgs = (pfn_mul_mat_grouped_gated_silu_total_tokens)
         dlsym(lib, "ggml_turbomind_mul_mat_grouped_gated_silu_total_tokens");
-    auto probe = (pfn_ds4_mxfp4_gated_silu_96)
+    auto probe96 = (pfn_ds4_mxfp4_gated_silu_96)
         dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_96");
+    auto probe768_m64 = (pfn_ds4_mxfp4_gated_silu_96)
+        dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m64");
+    auto probe768_m128 = (pfn_ds4_mxfp4_gated_silu_96)
+        dlsym(lib, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m128");
     if (!in || !sh || !pb || !pw || !mmgt || !mmgs) {
         fprintf(stderr, "[gate_up_fusion] dlsym failed\n");
         return 1;
@@ -288,7 +292,22 @@ static int run_case(void * lib, const Case & c) {
         ? std::vector<int>{0, 1, 2, 3, 4, 5}
         : std::vector<int>{0, 17, 42, 87, 173, 255};
     const int total_tokens = (int) active.size() * c.tokens_per_active;
-    const bool run_probe = probe && compact_groups && total_tokens == 96;
+    const char *probe_label = "none";
+    pfn_ds4_mxfp4_gated_silu_96 probe = nullptr;
+    if (compact_groups && total_tokens == 96 && probe96) {
+        probe = probe96;
+        probe_label = "m16_96";
+    } else if (compact_groups && total_tokens == 768) {
+        const char *variant = std::getenv("DS4_TURBOMIND_GATE_UP_PROBE");
+        if (variant && std::strcmp(variant, "m128") == 0 && probe768_m128) {
+            probe = probe768_m128;
+            probe_label = "m128_768";
+        } else if ((!variant || std::strcmp(variant, "off") != 0) && probe768_m64) {
+            probe = probe768_m64;
+            probe_label = "m64_768";
+        }
+    }
+    const bool run_probe = probe != nullptr;
 
     std::vector<std::vector<block_mxfp4>> gate(active.size());
     std::vector<std::vector<block_mxfp4>> up(active.size());
@@ -600,9 +619,9 @@ static int run_case(void * lib, const Case & c) {
     const float gated_rel = gated_sum_ref > 0 ? gated_sum_abs / gated_sum_ref : 0.0f;
     const float probe_rel = probe_sum_ref > 0 ? probe_sum_abs / probe_sum_ref : 0.0f;
     fprintf(stderr,
-            "[gate_up_fusion tpa=%d] total_routes=%d active=%zu separate_ms=%.4f fused_ms=%.4f gated_ms=%.4f probe_ms=%.4f fused_speedup=%.3fx gated_speedup=%.3fx probe_vs_gated=%.3fx max_abs_gate=%.4e max_abs_up=%.4e rel=%.4e bad=%d/%zu gated_max_abs=%.4e gated_abs_tol=%.1f gated_rel=%.4e gated_bad=%d/%zu probe_max_abs=%.4e probe_rel=%.4e probe_bad=%d/%zu k_pack_sep=0x%x k_pack_fused=0x%x k_pack_gated=0x%x\n",
+            "[gate_up_fusion tpa=%d] total_routes=%d active=%zu separate_ms=%.4f fused_ms=%.4f gated_ms=%.4f probe_label=%s probe_ms=%.4f fused_speedup=%.3fx gated_speedup=%.3fx probe_vs_gated=%.3fx max_abs_gate=%.4e max_abs_up=%.4e rel=%.4e bad=%d/%zu gated_max_abs=%.4e gated_abs_tol=%.1f gated_rel=%.4e gated_bad=%d/%zu probe_max_abs=%.4e probe_rel=%.4e probe_bad=%d/%zu k_pack_sep=0x%x k_pack_fused=0x%x k_pack_gated=0x%x\n",
             c.tokens_per_active, total_tokens, active.size(),
-            separate_ms, fused_ms, gated_ms, probe_ms,
+            separate_ms, fused_ms, gated_ms, probe_label, probe_ms,
             separate_ms / fused_ms, separate_ms / gated_ms, run_probe ? gated_ms / probe_ms : 0.0f,
             max_abs_gate, max_abs_up, rel, bad, 2 * values_per_half,
             gated_max_abs, gated_abs_tol, gated_rel, gated_bad, values_per_half,

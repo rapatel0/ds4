@@ -154,6 +154,7 @@ DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE=0
 DS4_V100_TURBOMIND_INDEXED_A=0
 DS4_V100_TURBOMIND_GATED_SILU=0
 DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1
+DS4_V100_TURBOMIND_GATE_UP_PROBE=auto
 DS4_V100_TURBOMIND_DISPATCH_POLICY=default
 DS4_V100_TURBOMIND_ALLOW_UNSAFE_MEASURE=0
 DS4_V100_TURBOMIND_PROFILE=0
@@ -244,6 +245,12 @@ active-expert schedule. It keeps the existing sorted route rows but presents
 at most `total_routes` grouped entries to TurboMind instead of the full
 256-expert schedule. This is the default after Sprint 128; set it to `0` to
 roll back to the full 256-expert grouped schedule.
+
+`DS4_V100_TURBOMIND_GATE_UP_PROBE=auto` selects the fixed-shape Sprint 139
+DS4/V100 m128 compact gated-SiLU kernel when all production guards match:
+interleaved gated-SiLU pack, route-expanded activations, six compact groups,
+and 768 routed rows. Set it to `off` to force generic TurboMind, or `m64` for
+the slower comparison probe.
 
 `DS4_V100_TURBOMIND_DISPATCH_POLICY` selects TurboMind's grouped GEMM launch
 policy. `default` keeps the normal heuristic/cache path. `reuse` requests a

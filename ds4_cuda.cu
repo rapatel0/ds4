@@ -188,6 +188,9 @@ typedef int  (*tm_pfn_mul_mat_grouped_total_tokens)(const void *, const int *, c
 typedef int  (*tm_pfn_mul_mat_grouped_gated_silu_total_tokens)(const void *, const int *, const int *, int, int,
                                                                const void * const *, const void * const *,
                                                                int, int, int, int, int, void *, void *);
+typedef int  (*tm_pfn_ds4_mxfp4_gated_silu)(const void *, const int *, int, int,
+                                            const void * const *, const void * const *,
+                                            int, void *, void *);
 
 typedef struct {
     void *handle;
@@ -199,6 +202,8 @@ typedef struct {
     tm_pfn_mul_mat_grouped mul_mat_grouped;
     tm_pfn_mul_mat_grouped_total_tokens mul_mat_grouped_total_tokens;
     tm_pfn_mul_mat_grouped_gated_silu_total_tokens mul_mat_grouped_gated_silu_total_tokens;
+    tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m64;
+    tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m128;
     int attempted;
     int available;
     int warned;
@@ -1001,6 +1006,12 @@ static int cuda_tm_load_api(void) {
     g_tm_api.mul_mat_grouped_gated_silu_total_tokens =
         (tm_pfn_mul_mat_grouped_gated_silu_total_tokens)dlsym(
             g_tm_api.handle, "ggml_turbomind_mul_mat_grouped_gated_silu_total_tokens");
+    g_tm_api.ds4_mxfp4_gated_silu_768_m64 =
+        (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m64");
+    g_tm_api.ds4_mxfp4_gated_silu_768_m128 =
+        (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_768_m128");
     if (!g_tm_api.api_version || !g_tm_api.init || !g_tm_api.shutdown ||
         !g_tm_api.packed_bytes || !g_tm_api.pack_weight || !g_tm_api.mul_mat_grouped) {
         fprintf(stderr, "ds4: TurboMind library is missing required C ABI symbols\n");
@@ -5700,6 +5711,45 @@ static int cuda_tm_gated_silu_enabled(void) {
            cuda_env_flag_enabled("DS4_V100_TURBOMIND_GATED_SILU");
 }
 
+static tm_pfn_ds4_mxfp4_gated_silu cuda_tm_ds4_gated_silu_768_probe(
+        const int *token_indices,
+        uint32_t total_routes,
+        uint32_t n_total_experts,
+        int fused_n,
+        int k) {
+    if (token_indices || total_routes != 768u || n_total_experts != 6u ||
+        fused_n != 8192 || k != 4096) {
+        return nullptr;
+    }
+    const char *mode = getenv("DS4_V100_TURBOMIND_GATE_UP_PROBE");
+    if (mode && mode[0]) {
+        if (strcmp(mode, "0") == 0 ||
+            strcmp(mode, "false") == 0 ||
+            strcmp(mode, "False") == 0 ||
+            strcmp(mode, "FALSE") == 0 ||
+            strcmp(mode, "off") == 0 ||
+            strcmp(mode, "Off") == 0 ||
+            strcmp(mode, "OFF") == 0 ||
+            strcmp(mode, "none") == 0) {
+            return nullptr;
+        }
+        if (strcmp(mode, "m64") == 0) {
+            return g_tm_api.ds4_mxfp4_gated_silu_768_m64;
+        }
+        if (strcmp(mode, "m128") == 0 || strcmp(mode, "auto") == 0 ||
+            strcmp(mode, "1") == 0 || strcmp(mode, "true") == 0 ||
+            strcmp(mode, "on") == 0) {
+            return g_tm_api.ds4_mxfp4_gated_silu_768_m128 ?
+                g_tm_api.ds4_mxfp4_gated_silu_768_m128 :
+                g_tm_api.ds4_mxfp4_gated_silu_768_m64;
+        }
+        return nullptr;
+    }
+    return g_tm_api.ds4_mxfp4_gated_silu_768_m128 ?
+        g_tm_api.ds4_mxfp4_gated_silu_768_m128 :
+        g_tm_api.ds4_mxfp4_gated_silu_768_m64;
+}
+
 static int cuda_tm_compact_schedule_enabled(void) {
     return cuda_env_flag_enabled("DS4_V100_TURBOMIND_COMPACT_SCHEDULE");
 }
@@ -6121,6 +6171,23 @@ static int cuda_tm_grouped_gated_silu_matmul(
     if (!pack || !pack->d_weights || !pack->d_scales ||
         !g_tm_api.mul_mat_grouped_gated_silu_total_tokens) {
         return 0;
+    }
+    tm_pfn_ds4_mxfp4_gated_silu ds4_probe =
+        cuda_tm_ds4_gated_silu_768_probe(token_indices, total_routes, n_total_experts, fused_n, k);
+    if (ds4_probe) {
+        const int probe_rc = ds4_probe(
+            a,
+            offsets,
+            (int)n_total_experts,
+            (int)total_routes,
+            (const void * const *)pack->d_weights,
+            (const void * const *)pack->d_scales,
+            pack->k_pack,
+            d,
+            nullptr);
+        if (probe_rc == 0) {
+            return cuda_ok(cudaGetLastError(), label ? label : "turbomind DS4 gated-SiLU probe");
+        }
     }
     const int rc = g_tm_api.mul_mat_grouped_gated_silu_total_tokens(
         a,
