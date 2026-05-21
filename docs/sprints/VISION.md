@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
-last_updated: 2026-05-20
+last_updated: 2026-05-21
 last_updated_by: codex
-revision: 120
+revision: 121
 ---
 
 # Vision: DS4 V100 Appliance
@@ -48,17 +48,20 @@ optimized V100 low-bit expert kernels in the actual hot path.
   correctness, and improves the 8-slot/256K served target from `31.312694` to
   `33.430971` generated tok/s in a same-binary A/B. The fused 4-slot/1M sanity
   run reached `21.403909` generated tok/s.
-- Sprints 112-115 tested hot-path cleanup around the fused appliance.
+- Sprints 112-116 tested hot-path cleanup around the fused appliance.
   F8 warp-scale hoisting and direct FFN-delta accumulation both passed
   correctness but regressed the primary 8-slot/256K A/B, so they remain opt-in.
   The Sprint 114 shared-down F8 HMMA path also passed correctness but remains
   opt-in because the pair+down combination regressed 4-slot/1M. Sprint 115
   shipped shared gate/up SwiGLU F8 HMMA as the new launcher default, improving
   same-binary 8-slot/256K to `33.578236` and 4-slot/1M to `21.455638`. The
-  combined pair+down opt-in reached a new 8-slot best of `33.674684`, but it is
-  not the default. The project remains far below the practical serving target.
-  The next meaningful step needs profile-guided larger F8 FFN fusion or deeper
-  TurboMind expert scheduling.
+  combined pair+down opt-in reached `33.674684`, but it is not the default.
+  Sprint 116 then shipped batched attention-projection F8 HMMA for active
+  4/8-slot batches, improving same-binary 8-slot/256K to `33.697698` and
+  4-slot/1M to `21.469010`. The project remains far below the practical
+  serving target. The next meaningful step needs profile-guided larger
+  execution-boundary work: deeper TurboMind expert scheduling, persistent
+  grouped expert execution, or broader attention-output/FFN fusion.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation

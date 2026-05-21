@@ -1195,7 +1195,12 @@ static int execute_attention_output_batch(const ds4_v100_layer_state *state,
         n_slots == 0 || n_slots > DS4_V100_LAYER_MAX_BATCH) {
         return exec_error(err, errlen, "invalid attention batch inputs");
     }
-    if (n_slots == 1 || !env_flag_enabled("DS4_V100_ENABLE_BATCH_ATTN_PROJ")) {
+    const bool use_attention_projection_batch =
+        env_flag_enabled("DS4_V100_ENABLE_BATCH_ATTN_PROJ") &&
+        (n_slots == 4u ||
+         n_slots == 8u ||
+         env_flag_enabled("DS4_V100_ENABLE_BATCH_ATTN_PROJ_ANY"));
+    if (n_slots == 1 || !use_attention_projection_batch) {
         for (uint32_t slot = 0; slot < n_slots; slot++) {
             if (execute_attention_output(state,
                                          &cfgs[slot],

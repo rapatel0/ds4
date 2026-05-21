@@ -1,18 +1,19 @@
 # DS4 V100 Experiment Status
 
-Last updated: 2026-05-20
+Last updated: 2026-05-21
 
 ## Topline
 
 The appliance is correct and served on the 8x V100 node, but it is not yet in
 the practical throughput range from the vision. The current default is the
 Sprint 111 fused TurboMind gate/up appliance plus the Sprint 115 shared
-gate/up SwiGLU F8 HMMA path.
+gate/up SwiGLU F8 HMMA path plus the Sprint 116 batched attention-projection
+F8 HMMA path for active 4/8-slot batches.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
-| Throughput serving target | 262,144 | 8 | `33.674684` opt-in pair+down | `33.578236` | 8/8 token match |
-| Long-context target | 1,048,576 | 4 | `21.455638` | `21.455638` | 4/4 token match |
+| Throughput serving target | 262,144 | 8 | `33.697698` | `33.697698` | 8/8 token match |
+| Long-context target | 1,048,576 | 4 | `21.469010` | `21.469010` | 4/4 token match |
 
 The older `20.249531` long-context result used the Sprint 108 small-route build
 path, but that path is not the default because the 8-slot/256K A/B was neutral
@@ -50,10 +51,11 @@ to slightly worse.
 | 113 | Direct FFN delta accumulation | Correct; `33.360404` direct delta vs `33.589285` control at 8-slot/256K | Kept opt-in/off |
 | 114 | Shared-down F8 HMMA batch kernel | Correct; `33.550415` HMMA vs `33.397763` control at 8-slot/256K, and `21.396331` vs `21.365610` at 4-slot/1M | Kept opt-in/off |
 | 115 | Shared gate/up SwiGLU F8 HMMA batch kernel | Correct; `33.578236` HMMA vs `33.292541` control at 8-slot/256K, and `21.455638` vs `21.430420` at 4-slot/1M | Shipped/default |
+| 116 | Batched attention projection F8 HMMA kernel | Correct; `33.697698` HMMA batch vs `33.380614` control at 8-slot/256K, and `21.469010` vs `21.333447` at 4-slot/1M | Shipped/default for 4/8-slot batches |
 
 ## Remaining
 
-- Close the throughput gap. The current `~32` tok/s aggregate is far below the
+- Close the throughput gap. The current `~34` tok/s aggregate is far below the
   `~1k-2k` practical target discussed in the vision.
 - Improve GPU utilization. The latest profile says the bottleneck is device
   kernel shape/occupancy, not disk, host RAM, or bulk PCIe/NVLink traffic.
@@ -61,9 +63,10 @@ to slightly worse.
   - TurboMind MXFP4 expert occupancy and route-expanded activation layout.
   - Persistent/grouped expert execution beyond the shipped Sprint 111 fused
     gate_up launch reduction.
-  - A larger fused F8 FFN rewrite. Sprint 115 shipped pair-SwiGLU HMMA, but
-    the combined pair+down opt-in regressed long context, so a larger fused
-    region needs profiling rather than blind defaulting.
+  - A larger fused F8/attention-output rewrite. Sprint 116 shipped attention
+    projection HMMA batching, but the latest profile before it still showed
+    ungrouped F8 row-pair matmuls, grouped attention-output, and TurboMind
+    experts as the meaningful device buckets.
 - Decide whether the next production step is a deeper TurboMind adapter change
   or a lower-level CUTLASS/TurboMind-inspired persistent kernel probe.
 
@@ -72,14 +75,18 @@ to slightly worse.
 The default launcher now keeps `DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=0`,
 `DS4_V100_CUDA_F8_ROW4=0`, `DS4_V100_CUDA_F8_WARP_SCALE=0`, and
 `DS4_V100_FFN_DIRECT_DELTA=0`, while
-`DS4_V100_CUDA_F8_HMMA_PAIR_SWIGLU=1` is default. The opt-in diagnostic paths
-can be enabled with:
+`DS4_V100_CUDA_F8_HMMA_PAIR_SWIGLU=1`,
+`DS4_V100_ENABLE_BATCH_ATTN_PROJ=1`, and
+`DS4_V100_CUDA_F8_HMMA_ATTN_BATCH=1` are default. The opt-in diagnostic paths
+can be enabled, or defaults rolled back, with:
 
 ```text
 DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=1
 DS4_V100_CUDA_F8_ROW4=1
 DS4_V100_CUDA_F8_WARP_SCALE=1
 DS4_V100_CUDA_F8_HMMA_SHARED_DOWN=1
+DS4_V100_ENABLE_BATCH_ATTN_PROJ=0
+DS4_V100_CUDA_F8_HMMA_ATTN_BATCH=0
 DS4_V100_FFN_DIRECT_DELTA=1
 DS4_V100_TURBOMIND_FUSED_GATE_UP=0
 ```

@@ -1,23 +1,26 @@
 # DS4 V100 Appliance Status
 
-Last updated: 2026-05-20
+Last updated: 2026-05-21
 
 ## Topline
 
-Current default throughput is the Sprint 111 fused TurboMind gate/up appliance
-plus the Sprint 115 shared gate/up SwiGLU HMMA path. The pair-SwiGLU HMMA path
-is default-enabled because it improved both same-binary serving tiers. Sprint
-114 shared-down HMMA remains opt-in: combined pair+down set a new 8-slot best
-but regressed 4-slot/1M.
+Current default throughput is the Sprint 111 fused TurboMind gate/up appliance,
+the Sprint 115 shared gate/up SwiGLU HMMA path, and the Sprint 116 batched
+attention-projection F8 HMMA path for active 4/8-slot batches. Sprint 114
+shared-down HMMA remains opt-in: combined pair+down set an 8-slot best in that
+sprint but regressed 4-slot/1M.
 
 | Mode | Context | Slots | Generated tok/s | Continuation tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
+| Batched attention projection F8 HMMA default | 262,144 | 8 | `33.697698` | `31.591592` | 8/8 token match |
+| Promoted launcher default repeat | 262,144 | 8 | `33.540586` | `31.444300` | 8/8 token match |
 | Pair-SwiGLU F8 HMMA default | 262,144 | 8 | `33.578236` | `31.479596` | 8/8 token match |
 | Pair+down F8 HMMA opt-in | 262,144 | 8 | `33.674684` | `31.570016` | 8/8 token match |
 | Production fused gate_up appliance | 262,144 | 8 | `33.589285` | `31.489955` | 8/8 token match |
 | Shared-down F8 HMMA opt-in | 262,144 | 8 | `33.550415` | `31.453514` | 8/8 token match |
 | Direct FFN delta opt-in | 262,144 | 8 | `33.360404` | `31.275379` | 8/8 token match |
 | Same-binary separate gate/up control | 262,144 | 8 | `31.312694` | `29.355651` | 8/8 token match |
+| Batched attention projection F8 HMMA default | 1,048,576 | 4 | `21.469010` | `20.127197` | 4/4 token match |
 | Pair-SwiGLU F8 HMMA default | 1,048,576 | 4 | `21.455638` | `20.114660` | 4/4 token match |
 | Production fused gate_up appliance | 1,048,576 | 4 | `21.403909` | `20.066165` | 4/4 token match |
 | Shared-down F8 HMMA opt-in | 1,048,576 | 4 | `21.396331` | `20.059061` | 4/4 token match |
@@ -44,6 +47,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 113 | Direct FFN delta accumulation and cached FFN input ptr table | Correct, but `33.360404` vs `33.589285` control at 8-slot/256K | Kept opt-in/off |
 | 114 | DS4-shaped shared-down F8 HMMA batch kernel | Correct; `33.550415` vs `33.397763` control at 8-slot/256K and `21.396331` vs `21.365610` at 4-slot/1M | Kept opt-in/off |
 | 115 | DS4-shaped shared gate/up SwiGLU F8 HMMA kernel | Correct; `33.578236` vs `33.292541` control at 8-slot/256K and `21.455638` vs `21.430420` at 4-slot/1M | Shipped/default |
+| 116 | DS4-shaped attention projection F8 HMMA batch kernel | Correct; `33.697698` vs `33.380614` control at 8-slot/256K and `21.469010` vs `21.333447` at 4-slot/1M | Shipped/default for active 4/8-slot batches |
 
 ## Sprint 106 Profile Takeaway
 
@@ -185,14 +189,30 @@ Sprint 115 ships a DS4-shaped shared gate/up SwiGLU F8 HMMA batch kernel:
 - the combined pair+shared-down HMMA path reached `33.674684` at 8-slot/256K
   but regressed 4-slot/1M to `21.370925`, so only pair-SwiGLU HMMA is default.
 
+Sprint 116 ships a DS4-shaped batched attention projection F8 HMMA path:
+
+- the remaining profile after Sprint 115 still showed ungrouped F8 row-pair
+  matmuls as the largest device bucket: `41.65%` GPU time and `12,341` calls;
+- the new kernels cover `attn_q_a` (`1024 x 4096`), `attn_kv_latent`
+  (`512 x 4096`), and `attn_q_b` (`32768 x 1024`) for active 4/8-slot batches;
+- `DS4_V100_ENABLE_BATCH_ATTN_PROJ=1` and
+  `DS4_V100_CUDA_F8_HMMA_ATTN_BATCH=1` are now launcher defaults, while
+  non-4/8-slot batches stay on the per-slot projection path unless
+  `DS4_V100_ENABLE_BATCH_ATTN_PROJ_ANY=1` is set;
+- focused CUDA smoke, full scheduler, and selected-token oracle all passed;
+- same-binary A/B improved both measured tiers:
+  `33.697698` vs `33.380614` at 8-slot/256K and `21.469010` vs `21.333447`
+  at 4-slot/1M.
+
 ## Next Target
 
-The next target needs to change a larger execution boundary. Fused gate/up
-removed one large grouped GEMM launch per routed layer, and Sprint 115 moved
-the shared gate/up/SwiGLU projection to HMMA, but aggregate throughput is still
-only about `33.6` tok/s, far below the practical serving target. The next sprint
-should profile the pair-HMMA default and decide between deeper F8 shared-FFN
-fusion and TurboMind expert scheduling.
+The next target still needs to change a larger execution boundary. Sprint 116
+converted the attention projection batch path into a small default win, but
+aggregate throughput is still only about `33.7` tok/s, far below the practical
+serving target. The next sprint should profile the new default and decide
+between deeper TurboMind expert scheduling, persistent grouped expert execution,
+or a broader attention-output/FFN fusion that removes launches rather than only
+changing individual GEMV tiles.
 
 The concise current status is also tracked in
 `docs/sprints/EXPERIMENT-STATUS.md`.
