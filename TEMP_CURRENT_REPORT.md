@@ -4,6 +4,23 @@ Date: 2026-05-21
 
 ## Latest Update
 
+Sprint 154 fully tested the currently implemented fused routed-FFN boundary:
+TurboMind fused gate/up + gated-SiLU plus the down-projection route-weighted
+reduce epilogue. It is correct, but not a material speedup. At 128-slot/32K,
+the down-reduce epilogue was run-noise flat at `59.509317` generated tok/s
+versus `59.502747` control. At 256-slot/16K, it was slightly slower at
+`60.642962` versus `60.671924` control. Continuation/decode moved the same
+way: `55.789985` versus `55.783825` at 128-slot/32K, and `56.852777` versus
+`56.879929` at 256-slot/16K.
+
+A synchronized 128-slot full-scheduler profile confirmed why this did not
+move the topline: gate/up and down GEMMs still dominate, while the final
+scatter/reduce tail is too small to matter at served level. The practical
+conclusion is that stage-count tuning and epilogue-only fusion are now both
+exhausted. The next implementation needs to change the routed expert execution
+model itself, either with a persistent/grouped routed-FFN executor or a narrow
+one-layer 2-way TP prototype for the 128-slot/32K NV2 case.
+
 I also moved the tensor-parallel idea one step closer to a real appliance
 contract. `tools/ds4-v100-appliance-pack --emit-tp-split` now emits bounded
 2-way MXFP4 routed-FFN splits for gate/up and down, and the V100 context binder
@@ -129,6 +146,9 @@ Kernel fusion:
 - Route-row reduce, half2 reduce, down-reduce epilogue, fixed-shape 768-route
   gate/down probes, m64n256 tile probes, and 1536-route fixed-shape probes were
   tested. Most were correct; most were neutral or worse in served A/B.
+- Sprint 154 completed the missing served A/B for the down-reduce epilogue at
+  both 768-route and 1536-route high-slot shapes. It was flat at 128-slot/32K
+  and slightly slower at 256-slot/16K, so it stays off by default.
 
 Batched decode / multislots:
 

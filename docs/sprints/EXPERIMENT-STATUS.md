@@ -124,7 +124,12 @@ contract: `--emit-tp-split` emits split gate/up and down TurboMind descriptors,
 the context binder accepts those TP expert rows, and a layer-3 GPU0/GPU3
 bounded pack passed partial context smoke. The real two-GPU NV2 proxy measured
 `1.157x` total-with-copy speedup at 768 routes but `0.912x` at 1536 routes, so
-TP remains a narrow 128-slot/32K candidate only.
+TP remains a narrow 128-slot/32K candidate only. Sprint 154 closed the served
+A/B for the fused down-reduce boundary at both current high-slot shapes:
+128-slot/32K was run-noise flat (`59.509317` vs `59.502747` generated tok/s),
+and 256-slot/16K was slightly slower (`60.642962` vs `60.671924`). A
+synchronized 128-slot profile still showed gate/up and down GEMMs dominating,
+so epilogue-only down-reduce fusion remains explicit opt-in only.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
@@ -215,6 +220,7 @@ to slightly worse.
 | 151 | Two-GPU TP correctness gate | Correct; full one-GPU routed-FFN output matches FP32 sum of TP partial outputs with `rel ~= 2.46e-04`, `bad=0` | Split math is valid; remaining risk is production scheduling and payload overlap |
 | 152 | 2/3/4-stage fused gate/up software-pipeline sweep | Correct; 768-route `m128/m128_s3/m128_s4` measured `0.5809/0.5863/0.5794 ms`, 1536-route `m128_1536/m128_s3_1536/m128_s4_1536` measured `0.8743/0.8821/0.8774 ms`, and NCU fixed-probe HMMA counts were identical | Do not spend more effort on gate/up stage count; next fusion must cover a larger routed-FFN boundary or use bounded TP |
 | 153 | Bounded TP pack contract | Correct; `--emit-tp-split` emitted `ffn_gate_up_exps.tp{0,1}` and `ffn_down_exps.tp{0,1}` rows across GPU0/GPU3, partial context binding passed, and the real two-GPU NV2 proxy was `1.157x` total-with-copy at 768 routes but `0.912x` at 1536 routes | Keep TP scoped to a one-layer 128-slot/32K prototype; default runtime remains layer-sharded |
+| 154 | Fused routed-FFN boundary validation | Correct; down-reduce epilogue served at `59.509317` vs `59.502747` control for 128-slot/32K and `60.642962` vs `60.671924` control for 256-slot/16K | Keep off by default; epilogue-only fusion is too small, and the next lever must change routed expert execution |
 
 ## Remaining
 
@@ -278,7 +284,10 @@ to slightly worse.
     NCU. Stage count inside the existing fused gate/up kernel is therefore
     exhausted. Sprint 153 added a bounded TP pack contract and proved the split
     descriptors can be emitted and bound, but the latest two-GPU proxy remains
-    positive only for the 768-route shape.
+    positive only for the 768-route shape. Sprint 154 completed the missing
+    served A/B for down-reduce epilogue fusion at 768 and 1536 routed rows;
+    the 128-slot run was flat and the 256-slot run was slightly slower, so
+    epilogue-only fusion is also exhausted.
     Sprint 122 further showed that merely chunking slots to feed wider kernels
     loses too much stage overlap, so the fusion target must match the per-slot
     served topology or replace it with an overlapped scheduler.
@@ -354,9 +363,9 @@ default-off because served A/B was slower than generic TurboMind. Set
 `DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE_H2=1` is available after Sprint 141, but
 stays default-off because served A/B was neutral against both scalar
 route-row-reduce and control.
-`DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE=1` is available after Sprint 142, but
-stays default-off because the fused atomic epilogue reduce was only run-noise
-positive in served A/B.
+`DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE=1` is available after Sprints 142 and
+154, but stays default-off because the 128-slot/32K served result was flat and
+the 256-slot/16K result was slightly slower.
 The 1536-route fixed gate/up and down probes are available after Sprint 146
 for 256-slot/16K diagnostics. They require explicit `m128_1536` or
 `1536_m128` modes and are intentionally not selected by `auto`.

@@ -133,7 +133,15 @@ rows across GPU0 and GPU3 and passed partial context binding. The real 2-GPU
 NV2 proxy remains positive only at the 768-route shape (`1.157x`
 total-with-copy on pair `0,3` in this run) and slower at 1536 routes
 (`0.912x`), so TP remains a narrow 128-slot/32K prototype candidate rather
-than a broad topology replacement.
+than a broad topology replacement. Sprint 154 closed the served A/B gap for
+the largest currently implemented fused routed-FFN boundary: fused gate/up plus
+gated-SiLU plus the down-projection route-weighted reduce epilogue. The
+128-slot/32K result was flat (`59.509317` generated / `55.789985`
+continuation tok/s versus `59.502747` / `55.783825` control), and the
+256-slot/16K result was slightly slower (`60.642962` / `56.852777` versus
+`60.671924` / `56.879929` control). A synchronized profile kept gate/up at
+about `58-61%` and down at about `25-29%` of profiled routed-FFN time, so
+epilogue-only fusion is not a material software-pipeline lever.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
@@ -148,9 +156,13 @@ current topology because it gives up too much stage overlap.
 | Sprint 146 256-slot 16K control repeat | 16,384 | 256 | `61.223893` | `57.397400` | 256/256 token match |
 | Sprint 146 gate `m128_1536` opt-in | 16,384 | 256 | `61.204203` | `57.378940` | 256/256 token match |
 | Sprint 145 256-slot 16K throughput ceiling | 16,384 | 256 | `61.065087` | `57.248519` | 256/256 token match |
+| Sprint 154 256-slot 16K down-reduce control | 16,384 | 256 | `60.671924` | `56.879929` | 256/256 token match |
+| Sprint 154 256-slot 16K down-reduce opt-in | 16,384 | 256 | `60.642962` | `56.852777` | 256/256 token match |
 | Sprint 145 192-slot 16K midpoint | 16,384 | 192 | `60.700926` | `56.907118` | 192/192 token match |
 | Sprint 145 128-slot 16K control | 16,384 | 128 | `59.860493` | `56.119213` | 128/128 token match |
 | Sprint 139 gated m128 auto probe | 32,768 | 128 | `60.130047` | `56.371919` | 128/128 token match |
+| Sprint 154 128-slot 32K down-reduce opt-in | 32,768 | 128 | `59.509317` | `55.789985` | 128/128 token match |
+| Sprint 154 128-slot 32K down-reduce control | 32,768 | 128 | `59.502747` | `55.783825` | 128/128 token match |
 | Sprint 148 gate `m128_s4` opt-in | 32,768 | 128 | `60.049057` | `56.295991` | 128/128 token match |
 | Sprint 148 same-binary control | 32,768 | 128 | `59.865668` | `56.124063` | 128/128 token match |
 | Sprint 140 gated down-probe-off control | 32,768 | 128 | `60.129772` | `56.371661` | 128/128 token match |
@@ -272,6 +284,14 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 144 | SM70 MXFP4 m64n256 tile probe | Correct; full 43-layer smoke passed, but served 128-slot/32K A/B regressed: control `59.993301`, down `m64n256` `59.791839`, gate `m64n256` `59.797232` | Keep explicit opt-in only; larger routed-FFN executor work is still the next lever |
 | 145 | 256-slot 16K short-context admission | Correct; planner worst GPU was `29.07 GiB / 32.00 GiB` including reserve, full 43-layer smoke passed, and served 16K runs reached `59.860493` at 128 slots, `60.700926` at 192 slots, and `61.065087` at 256 slots | Ship guarded 256-slot admission for `ctx <= 16K`; simple slot widening is now mostly exhausted |
 | 146 | 1536-route fixed-shape gate/up and down probes | Correct; standalone gate `m128_1536` improved to `0.9435 ms` vs `0.9651 ms`, but served A/B was `61.204203` vs `61.223893` control and continuation/decode was `57.378940` vs `57.397400` | Keep explicit opt-in only; do not select 1536 probes from `auto` |
+| 147 | 1536-route down-reduce correctness checkpoint | Correct; the down GEMM route-weighted F32 accumulation epilogue covers 1536 routes and passed full 43-layer 256-slot smoke | Keep opt-in pending served A/B |
+| 148 | Stage-4 fused gate/up software-pipeline probe | Correct; isolated `m128_s4` improved the 768-route probe but served A/B was only `60.049057` vs `59.865668`, inside the run band | Keep stage-count variants explicit opt-ins |
+| 149 | TP split and P2P topology probe | Correct; ideal 2-way FFN split was positive before communication and NV2 payloads were fast enough for a bounded prototype | Prototype only on clean NV2 pairs |
+| 150 | Two-GPU TP split proxy | Correct; 768 routes were positive after copies, but 1536 routes were neutral to slower | Scope TP to 128-slot/32K first |
+| 151 | Two-GPU TP correctness gate | Correct; full one-GPU output matched the sum of two TP partials at 768 and 1536 routes on NV2 pairs | Split math accepted; scheduler remains the risk |
+| 152 | Fused gate/up stage-count sweep | Correct; 2/3/4-stage variants were neutral at 768 and 1536 routes, and NCU counters were flat | Stop tuning gate/up stage count |
+| 153 | Bounded TP pack contract | Correct; `--emit-tp-split` emits split gate/up and down rows and context binding accepts TP descriptors. Real 2-GPU NV2 proxy was `1.157x` at 768 routes and `0.912x` at 1536 routes | Keep TP to a one-layer 128-slot/32K prototype |
+| 154 | Fused routed-FFN boundary validation | Correct; down-reduce epilogue served A/B was flat at 128-slot/32K and slightly slower at 256-slot/16K, while profile kept gate/up at `~58-61%` and down at `~25-29%` | Keep down-reduce opt-in; next work must change gate/up+down execution, not only the epilogue |
 
 ## Sprint 106 Profile Takeaway
 
@@ -431,16 +451,16 @@ Sprint 116 ships a DS4-shaped batched attention projection F8 HMMA path:
 ## Next Target
 
 The next target still needs to change a larger execution boundary. Sprints
-123-146 show that per-slot shared-FFN fusion, route-row tail fusion, dispatch
-bypass, tile probes, fixed-shape 768/1536-route probes, and simple slot widening
+123-154 show that per-slot shared-FFN fusion, route-row tail fusion, dispatch
+bypass, tile probes, fixed-shape 768/1536-route probes, stage-count tuning,
+epilogue-only down-reduce fusion, bounded TP probes, and simple slot widening
 are correct but too small to close the practical serving gap. Aggregate
-throughput is now about `61` tok/s at 256-slot/16K and about `46` tok/s at
-16-slot/256K, far below the practical serving target. After the Sprint 152
-stage-count sweep and Sprint 153 TP pack-contract checkpoint, the next sprint
-should avoid more gate/up-only stage tuning and either attack the full
-TurboMind routed expert boundary with route-aware activation staging and
-persistent/grouped execution, or build the narrow one-layer 2-way TP routed-FFN
-runtime path for the 128-slot/32K tier.
+throughput is still about `61` tok/s at 256-slot/16K and about `46` tok/s at
+16-slot/256K, far below the practical serving target. The next sprint should
+either attack the full TurboMind routed expert boundary with route-aware
+activation staging and persistent/grouped execution, or build the narrow
+one-layer 2-way TP routed-FFN runtime path for the 128-slot/32K tier as a
+bounded scheduling experiment.
 
 The concise current status is also tracked in
 `docs/sprints/EXPERIMENT-STATUS.md`.
