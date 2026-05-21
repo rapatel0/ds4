@@ -41,9 +41,12 @@ control was `45.837745` generated tok/s and route-row-reduce was `45.660765`,
 both with 16/16 token match. Sprint 131 then added an opt-in TurboMind
 indexed-A path that uses compact token indices for gate/up and avoids
 route-expanded activation scratch. It was correct, but measured `45.789937`
-vs `45.663281` control, so it remains opt-in. These results keep pointing the
-next implementation at a DS4-specific software-pipelined packed MXFP4 gate/up
-mainloop rather than another launch-boundary or wrapper data-movement tweak.
+vs `45.663281` control, so it remains opt-in. Sprint 132 extended the
+standalone TurboMind gate/up benchmark to the production 96-route shape and
+measured the interleaved gated path at `0.1776 ms` vs `0.2889 ms` for separate
+gate+up, a `1.626x` isolated speedup. These results keep pointing the next
+implementation at lower-level packed MXFP4 mainloop/scheduling work rather
+than another launch-boundary or wrapper data-movement tweak.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
@@ -104,6 +107,7 @@ to slightly worse.
 | 129 | TurboMind dispatch policy probe | Correct for `default` and `reuse`; `reuse` served at `45.813841` vs `45.840691` default, while unsafe `measure` aborted the full scheduler in TurboMind's measurer | Keep `default`; block `measure`/`append` unless `DS4_V100_TURBOMIND_ALLOW_UNSAFE_MEASURE=1`; move to persistent routed-FFN work |
 | 130 | Routed FFN software-pipeline targeting | Correct; route-row-reduce repeated at `45.660765` vs `45.837745` compact fused control, and TurboMind/tc-grid review points to packed MXFP4 load/dequant/HMMA pipelining as the useful fusion boundary | Keep route-row-reduce opt-in; implement a guarded DS4-specific routed gate/up software-pipeline probe |
 | 131 | TurboMind indexed-A routed activation probe | Correct; avoids route-expanded activation materialization for gate/up, passed full 43-layer smokes, and served at `45.789937` vs `45.663281` control | Keep indexed-A opt-in; wrapper-level activation compaction is not enough |
+| 132 | Production-shaped TurboMind gate/up benchmark | Correct; added env-selectable cases and the served-profile 96-route case, where gated-SiLU measured `0.1776 ms` vs `0.2889 ms` separate gate+up | Use as the 1-GPU V100 acceptance harness for lower-level routed-expert kernel work |
 
 ## Remaining
 
@@ -130,9 +134,12 @@ to slightly worse.
     Sprint 130 repeated the current route-row-reduce tail fusion and found it
     slightly slower than the compact fused control. Sprint 131 reduced
     gate/up activation materialization with TurboMind indexed-A, but remained
-    inside run noise. The useful version therefore needs packed decode,
-    activation staging, MMA, and epilogue work in one tensor-core-oriented
-    kernel with useful tile fill.
+    inside run noise. Sprint 132 showed the existing interleaved gated gate/up
+    primitive is already `1.626x` faster than separate gate/up at the
+    production 96-route standalone shape. The useful version therefore needs
+    either a lower-level packed decode/activation staging/MMA/epilogue
+    specialization with better tile fill, or a scheduler that keeps that fast
+    primitive fed in the served topology.
     Sprint 122 further showed that merely chunking slots to feed wider kernels
     loses too much stage overlap, so the fusion target must match the per-slot
     served topology or replace it with an overlapped scheduler.

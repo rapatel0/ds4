@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: codex
-revision: 134
+revision: 135
 ---
 
 # Vision: DS4 V100 Appliance
@@ -103,15 +103,18 @@ optimized V100 low-bit expert kernels in the actual hot path.
   fused appliance: route-row-reduce was `45.660765` versus a `45.837745`
   control, both correct. Sprint 131 then added a correct opt-in TurboMind
   indexed-A route that avoids route-expanded gate/up activation materialization,
-  but it measured `45.789937` versus `45.663281` control. Dispatch-policy
-  tuning, final scatter fusion, and wrapper-level activation compaction are
-  therefore not the missing throughput lever. The project remains far below the
-  practical serving target, so the next meaningful step is still larger
+  but it measured `45.789937` versus `45.663281` control. Sprint 132 extended
+  the standalone TurboMind gate/up benchmark to the production 96-route shape:
+  interleaved gated gate/up passed at `0.1776 ms` versus `0.2889 ms` separate
+  gate+up, a `1.626x` isolated speedup. Dispatch-policy tuning, final scatter
+  fusion, wrapper-level activation compaction, and basic gate/up launch fusion
+  are therefore not the missing throughput lever. The project remains far below
+  the practical serving target, so the next meaningful step is still larger
   execution-boundary work: a narrow DS4-only persistent grouped routed-expert
   pipeline that software-pipelines packed MXFP4 dequant, gate/up HMMA, gated
   activation, down HMMA, and weighted scatter/reduce for the current 16-slot
-  compact routed shape, or a real SM70 software-pipelined F8
-  shared-FFN/attention-output kernel that preserves the current served topology.
+  compact routed shape, or scheduling work that keeps the existing fast
+  TurboMind primitive fed in the served topology.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation

@@ -30,8 +30,12 @@ compact control was `45.837745`, while compact plus route-row-reduce was
 `45.660765`, so route-row-reduce remains opt-in. Sprint 131 added a correct
 opt-in TurboMind indexed-A path that avoids route-expanded FP16 activations for
 gate/up GEMMs, but served A/B was only `45.789937` vs `45.663281` control, so
-it also remains opt-in. The next target is still a DS4-specific packed MXFP4
-software-pipelined routed gate/up probe.
+it also remains opt-in. Sprint 132 extended the standalone TurboMind gate/up
+benchmark to the production 96-route shape from the served profile; the
+interleaved gated path passed at `0.1776 ms` vs `0.2889 ms` for separate
+gate+up, a `1.626x` isolated speedup. The next target is therefore not another
+gate/up launch fusion; it is either SM70 packed-MXFP4 mainloop specialization
+or scheduling that keeps that fast primitive fed in the served appliance.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
@@ -128,6 +132,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 129 | TurboMind dispatch policy probe | Correct for `default` and `reuse`; full scheduler `measure` aborted inside TurboMind's measurer, while served `reuse` was `45.813841` vs `45.840691` default | Keep default dispatch; guard unsafe measure/append; move to DS4-specific persistent routed-FFN |
 | 130 | Routed FFN software-pipeline targeting | Correctness held; compact fused route-row-reduce repeated at `45.660765` vs `45.837745` control, confirming final scatter/reduce fusion is not the lever | Keep route-row-reduce opt-in; next code should target the packed MXFP4 gate/up mainloop with DS4-specific software pipelining |
 | 131 | TurboMind indexed-A routed activation probe | Correct; full 43-layer smokes passed with indexed-A off/on, and served A/B was `45.789937` vs `45.663281` control | Keep indexed-A opt-in; wrapper-level activation compaction is correct but not a promotion-level win |
+| 132 | Production-shaped TurboMind gate/up benchmark | Correct; historical 6/24/48-route cases still pass, and the 96-route served-profile case shows gated-SiLU at `0.1776 ms` vs `0.2889 ms` separate gate+up | Use this as the benchmark harness for any lower-level SM70 mainloop probe; no appliance default change |
 
 ## Sprint 106 Profile Takeaway
 

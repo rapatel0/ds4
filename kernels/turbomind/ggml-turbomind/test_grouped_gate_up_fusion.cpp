@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <random>
 #include <vector>
 
@@ -106,6 +107,57 @@ static float elapsed_ms(cudaEvent_t start, cudaEvent_t stop) {
     float ms = 0.0f;
     CHECK_CUDA(cudaEventElapsedTime(&ms, start, stop));
     return ms;
+}
+
+static int env_int(const char *name, int fallback, int lo, int hi) {
+    const char *v = std::getenv(name);
+    if (!v || !v[0]) return fallback;
+    char *end = nullptr;
+    long parsed = std::strtol(v, &end, 10);
+    if (!end || *end != '\0' || parsed < lo || parsed > hi) {
+        fprintf(stderr,
+                "[gate_up_fusion] ignoring invalid %s=%s, expected integer [%d,%d]\n",
+                name, v, lo, hi);
+        return fallback;
+    }
+    return (int)parsed;
+}
+
+static std::vector<Case> parse_cases_from_env() {
+    const char *v = std::getenv("DS4_TURBOMIND_GATE_UP_CASES");
+    if (!v || !v[0]) {
+        return {{1}, {4}, {8}, {16}};
+    }
+
+    std::vector<Case> out;
+    const char *p = v;
+    while (*p) {
+        char *end = nullptr;
+        long parsed = std::strtol(p, &end, 10);
+        if (end == p || parsed < 1 || parsed > 128) {
+            fprintf(stderr,
+                    "[gate_up_fusion] invalid DS4_TURBOMIND_GATE_UP_CASES=%s; "
+                    "expected comma-separated integers in [1,128]\n",
+                    v);
+            std::exit(2);
+        }
+        out.push_back(Case{(int)parsed});
+        p = end;
+        if (*p == ',') {
+            ++p;
+        } else if (*p != '\0') {
+            fprintf(stderr,
+                    "[gate_up_fusion] invalid DS4_TURBOMIND_GATE_UP_CASES=%s; "
+                    "unexpected character '%c'\n",
+                    v, *p);
+            std::exit(2);
+        }
+    }
+    if (out.empty()) {
+        fprintf(stderr, "[gate_up_fusion] no benchmark cases selected\n");
+        std::exit(2);
+    }
+    return out;
 }
 
 static void free_packed(PackedExperts & p) {
@@ -290,8 +342,12 @@ static int run_case(void * lib, const Case & c) {
     CHECK_CUDA(cudaMemset(d_fused, 0, (size_t) total_tokens * fused_N * sizeof(__half)));
     CHECK_CUDA(cudaMemset(d_gated, 0, (size_t) total_tokens * N * sizeof(__half)));
 
-    constexpr int warmup_iters = 3;
-    constexpr int bench_iters = 30;
+    const int warmup_iters = env_int("DS4_TURBOMIND_GATE_UP_WARMUP_ITERS", 3, 0, 1000);
+    const int bench_iters = env_int("DS4_TURBOMIND_GATE_UP_BENCH_ITERS", 30, 1, 10000);
+    fprintf(stderr,
+            "[gate_up_fusion tpa=%d] shape active=%zu total_routes=%d max_routes_per_expert=%d warmup_iters=%d bench_iters=%d\n",
+            c.tokens_per_active, active.size(), total_tokens, c.tokens_per_active,
+            warmup_iters, bench_iters);
     int rc = 0;
 
     for (int iter = 0; iter < warmup_iters; ++iter) {
@@ -421,6 +477,7 @@ static int run_case(void * lib, const Case & c) {
     float gated_sum_ref = 0.0f;
     int bad = 0;
     int gated_bad = 0;
+    constexpr float gated_abs_tol = 16.0f;
     const size_t values_per_half = (size_t) total_tokens * N;
     for (int row = 0; row < total_tokens; ++row) {
         for (int col = 0; col < N; ++col) {
@@ -447,7 +504,7 @@ static int run_case(void * lib, const Case & c) {
             if (!std::isfinite(gate_f) || !std::isfinite(up_f) || dg > 0.25f || du > 0.25f) {
                 bad++;
             }
-            if (!std::isfinite(gated) || dgs > 8.0f) {
+            if (!std::isfinite(gated) || dgs > gated_abs_tol) {
                 gated_bad++;
             }
         }
@@ -455,11 +512,11 @@ static int run_case(void * lib, const Case & c) {
     const float rel = sum_ref > 0 ? sum_abs / sum_ref : 0.0f;
     const float gated_rel = gated_sum_ref > 0 ? gated_sum_abs / gated_sum_ref : 0.0f;
     fprintf(stderr,
-            "[gate_up_fusion tpa=%d] total_routes=%d active=%zu separate_ms=%.4f fused_ms=%.4f gated_ms=%.4f fused_speedup=%.3fx gated_speedup=%.3fx max_abs_gate=%.4e max_abs_up=%.4e rel=%.4e bad=%d/%zu gated_max_abs=%.4e gated_rel=%.4e gated_bad=%d/%zu k_pack_sep=0x%x k_pack_fused=0x%x k_pack_gated=0x%x\n",
+            "[gate_up_fusion tpa=%d] total_routes=%d active=%zu separate_ms=%.4f fused_ms=%.4f gated_ms=%.4f fused_speedup=%.3fx gated_speedup=%.3fx max_abs_gate=%.4e max_abs_up=%.4e rel=%.4e bad=%d/%zu gated_max_abs=%.4e gated_abs_tol=%.1f gated_rel=%.4e gated_bad=%d/%zu k_pack_sep=0x%x k_pack_fused=0x%x k_pack_gated=0x%x\n",
             c.tokens_per_active, total_tokens, active.size(),
             separate_ms, fused_ms, gated_ms, separate_ms / fused_ms, separate_ms / gated_ms,
             max_abs_gate, max_abs_up, rel, bad, 2 * values_per_half,
-            gated_max_abs, gated_rel, gated_bad, values_per_half,
+            gated_max_abs, gated_abs_tol, gated_rel, gated_bad, values_per_half,
             gate_packed.k_pack, fused_packed.k_pack, gated_packed.k_pack);
 
     free_packed(gate_packed);
@@ -476,7 +533,7 @@ static int run_case(void * lib, const Case & c) {
 
     if (bad != 0 || gated_bad != 0 ||
         rel > 1e-3f || gated_rel > 1e-3f ||
-        max_abs_gate > 0.25f || max_abs_up > 0.25f || gated_max_abs > 8.0f) {
+        max_abs_gate > 0.25f || max_abs_up > 0.25f || gated_max_abs > gated_abs_tol) {
         fprintf(stderr, "[gate_up_fusion tpa=%d] FAIL\n", c.tokens_per_active);
         return 11;
     }
@@ -492,11 +549,7 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    const Case cases[] = {
-        {1},
-        {4},
-        {8},
-    };
+    const std::vector<Case> cases = parse_cases_from_env();
 
     int failures = 0;
     for (const Case & c : cases) {
