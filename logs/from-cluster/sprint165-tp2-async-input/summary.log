@@ -1,0 +1,48 @@
+Sprint 165 V100 validation summary
+Date: 2026-05-21
+Pod: llm/llamacpp-build-8gpu on gpu-01
+
+Build:
+  cd /workspace/ds4
+  make -j80 CUDA_ARCH=sm_70 tests/cuda_v100_stage_scheduler_smoke tools/ds4-v100-replay
+  PASS
+
+Change under test:
+  DS4_V100_TP2_ASYNC_INPUT=1
+  Alias: DS4_V100_TP_ROUTED_FFN_ASYNC_INPUT=1
+
+Behavior:
+  TP2 async-input mode enqueues peer copies of x, selected, and weights with
+  ds4_gpu_tensor_copy_async before launching owner-half compute. Peer-half
+  compute runs on the peer default stream after those input copies. Peer output
+  copy remains synchronous before owner add to avoid peer scratch reuse hazards.
+
+Stage profile, stage 0, ctx=262144, slots=16:
+
+  Run 1:
+    no TP:
+      tp2_layers=0 ffn_ms=148.462 total_ms=246.462
+    TP2 synchronous input:
+      tp2_layers=1 ffn_ms=212.429 total_ms=317.593
+    TP2 async input:
+      tp2_layers=1 ffn_ms=136.294 total_ms=235.591
+
+  Warm repeat:
+    no TP:
+      tp2_layers=0 ffn_ms=84.978 total_ms=166.453
+    TP2 async input:
+      tp2_layers=1 ffn_ms=145.917 total_ms=245.107
+
+Negative gate:
+  DS4_V100_TP2_LAYER=2 with only layer-3 TP descriptors and async input:
+    cuda_v100_stage_scheduler_smoke: TP2 routed FFN layer 2 has no TP2 bindings
+    rc=1
+  PASS, failed closed.
+
+Conclusion:
+  Async input copies remove a large fraction of the synchronous-overlay penalty
+  in the cold A/B/C run, but they do not make the one-layer TP2 overlay
+  competitive with the normal production path on a warm repeat. The TP overlay
+  should remain diagnostic-only. The next sprint should stop optimizing this
+  per-layer overlay and move to either a broader persistent TP/EP scheduler
+  boundary or a non-TP larger fused routed-FFN boundary.

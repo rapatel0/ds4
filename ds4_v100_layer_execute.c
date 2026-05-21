@@ -435,6 +435,11 @@ static bool single_slot_batch_scratch_enabled(void) {
            env_flag_enabled("DS4_V100_TURBOMIND_GRAPH");
 }
 
+static bool tp2_async_input_enabled(void) {
+    return env_flag_enabled("DS4_V100_TP2_ASYNC_INPUT") ||
+           env_flag_enabled("DS4_V100_TP_ROUTED_FFN_ASYNC_INPUT");
+}
+
 static bool tp2_routed_enabled(const ds4_v100_layer_state *state,
                                const ds4_v100_layer_execute_config *cfg,
                                uint32_t n_slots,
@@ -476,9 +481,15 @@ static int execute_turbomind_tp2_routed(const ds4_v100_layer_state *state,
     const uint64_t hidden_bytes = (uint64_t)n_slots * hidden * sizeof(float);
     const uint64_t route_i32_bytes = (uint64_t)n_slots * routes * sizeof(int32_t);
     const uint64_t route_f32_bytes = (uint64_t)n_slots * routes * sizeof(float);
-    if (!ds4_gpu_tensor_copy(cfg->tp2_peer_input, 0, x, 0, hidden_bytes) ||
-        !ds4_gpu_tensor_copy(cfg->tp2_peer_selected, 0, selected, 0, route_i32_bytes) ||
-        !ds4_gpu_tensor_copy(cfg->tp2_peer_weights, 0, weights, 0, route_f32_bytes)) {
+    const bool async_input = tp2_async_input_enabled();
+    const int copied = async_input
+        ? ds4_gpu_tensor_copy_async(cfg->tp2_peer_input, 0, x, 0, hidden_bytes) &&
+          ds4_gpu_tensor_copy_async(cfg->tp2_peer_selected, 0, selected, 0, route_i32_bytes) &&
+          ds4_gpu_tensor_copy_async(cfg->tp2_peer_weights, 0, weights, 0, route_f32_bytes)
+        : ds4_gpu_tensor_copy(cfg->tp2_peer_input, 0, x, 0, hidden_bytes) &&
+          ds4_gpu_tensor_copy(cfg->tp2_peer_selected, 0, selected, 0, route_i32_bytes) &&
+          ds4_gpu_tensor_copy(cfg->tp2_peer_weights, 0, weights, 0, route_f32_bytes);
+    if (!copied) {
         return exec_error(err, errlen, "TP2 routed input peer copy failed");
     }
     if (ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_f32(

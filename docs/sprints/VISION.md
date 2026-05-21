@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: sprint-execute
-revision: 164
+revision: 165
 ---
 
 # Vision: DS4 V100 Appliance
@@ -245,6 +245,17 @@ optimized V100 low-bit expert kernels in the actual hot path.
   attempt should remove overlay-style payload copies by designing persistent
   peer ownership or a broader TP/EP scheduler boundary; otherwise practical
   throughput work should return to the larger fused routed-FFN boundary.
+- Sprint 165 tested the obvious TP2 overlay serialization fix:
+  `DS4_V100_TP2_ASYNC_INPUT=1` enqueues peer input copies before launching the
+  owner half, so peer input transfer can overlap owner compute while preserving
+  synchronous peer output copy for scratch safety. This reduced the cold
+  stage-0 TP penalty (`317.593 ms` sync-input total to `235.591 ms`
+  async-input total), but the warm no-TP control remained much faster
+  (`166.453 ms` total, `84.978 ms` FFN) than async TP (`245.107 ms` total,
+  `145.917 ms` FFN). The per-layer TP overlay is therefore exhausted as a
+  near-term serving lever. Future TP work should only happen as a broader
+  persistent TP/EP scheduler boundary; otherwise the practical-serving path
+  should return to larger non-TP fused routed-FFN execution.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation
@@ -2781,6 +2792,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-21 | Rejected Sprint 161 small-route fused executor probe. | A 12-route fixed TurboMind gate/up probe selected correctly in served `chunk=2` mode, but it was slightly slower than the same-build generic `chunk=2` control (`60.71` / `59.76` generated/continuation tok/s versus `60.88` / `59.93`) and the final rebuilt binary wedged during startup warmup after selection. A 24-route `chunk=4` smoke also wedged. The temporary runtime and TurboMind API changes were removed; the next implementation should move to a true in-stage layer-wavefront scheduler or bounded TP/EP prototype, not more slot-chunk executor variants. | Sprint 162+ |
 | 2026-05-21 | Completed Sprint 162 TP route-shape gate. | The two-GPU TP proxy is positive at the actual 256K serving route counts, not only at the old 768-route diagnostic shape. On NV2 pairs, 6 routes measured `1.260x` total-with-copy speedup and 96 routes measured `1.325-1.328x`, all with TP-sum correctness passing. The next implementation should be a bounded one-layer TP routed-FFN executor using the existing TP split pack descriptors, with correctness against the current one-GPU layer output before any served-mode promotion. | Sprint 163+ |
 | 2026-05-21 | Completed Sprint 164 guarded scheduler TP overlay. | The scheduler can now execute layer 3 routed FFN through default-off TP2 owner+peer overlay arenas and assert `tp2_layers=1`. Primitive and scheduler correctness passed, the negative gate fails clearly, and full 8-stage open fits 32 GiB V100 memory. However the synchronous one-layer overlay regressed stage and full selected-token timing (`0.511053` vs `0.639435` generated tok/s), so it remains diagnostic-only. Next work should either design persistent peer ownership / broader TP-EP scheduling or return to a larger fused routed-FFN boundary. | Sprint 165+ |
+| 2026-05-21 | Completed Sprint 165 TP2 async-input gate. | `DS4_V100_TP2_ASYNC_INPUT=1` overlaps peer input copies with owner-half compute and keeps the TP2 overlay default-off. It improved the cold TP overlay stage profile versus sync input (`235.591 ms` vs `317.593 ms` total), but warm no-TP remained much faster than async TP (`166.453 ms` vs `245.107 ms`). The one-layer overlay is not a practical serving lever; next work should either implement a broader persistent TP/EP scheduler boundary or return to a larger fused routed-FFN boundary. | Sprint 166+ |
 
 ## Open Questions
 
