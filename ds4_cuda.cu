@@ -6673,6 +6673,14 @@ static int cuda_f8_hmma_attn_batch_enabled(void) {
     return cuda_env_flag_enabled("DS4_CUDA_F8_HMMA_ATTN_BATCH");
 }
 
+static int cuda_f8_hmma_single_enabled(void) {
+    return cuda_env_flag_enabled("DS4_CUDA_F8_HMMA_SINGLE");
+}
+
+static int cuda_f8_hmma_single_shape_ok(uint32_t rows, uint32_t cols) {
+    return rows == 4096u && cols == 8192u;
+}
+
 static int cuda_f8_hmma_attn_batch_shape_ok(uint32_t rows, uint32_t cols, uint32_t n_tokens) {
     if (n_tokens != 4u && n_tokens != 8u) return 0;
     return (rows == 1024u && cols == 4096u) ||
@@ -6795,7 +6803,20 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_f32(
     if (!cuda_f8_e4m3_b128_matmul_view_ok(arena, view, x_f32, out_f32)) return 1;
     if (!cuda_ok(cudaSetDevice(arena->gpu), "f8 source matmul set device")) return 1;
     const uint8_t *base = (const uint8_t *)((const char *)arena->ptr + view->arena_offset);
-    if (cuda_f8_row4_enabled() &&
+    if (cuda_f8_hmma_single_enabled() &&
+        cuda_f8_hmma_single_shape_ok(view->rows, view->cols)) {
+        cuda_f8_shape_trace("plain", "hmma_single", arena->gpu,
+                            view->rows, view->cols, 1u, 0, 0, 0);
+        dim3 grid((view->rows + 63u) / 64u, 1, 1);
+        arena_f8_e4m3_b128_matmul_batch_hmma_attn_kernel<<<grid, 128>>>(
+            (float *)out_f32->ptr,
+            base,
+            (const float *)x_f32->ptr,
+            view->rows,
+            view->cols,
+            view->row_stride_bytes,
+            1u);
+    } else if (cuda_f8_row4_enabled() &&
         cuda_f8_rowpair_enabled() &&
         cuda_f8_row4_shape_ok(view->rows, view->cols)) {
         cuda_f8_shape_trace("plain", "rows4", arena->gpu,

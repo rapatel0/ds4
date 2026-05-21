@@ -54,6 +54,7 @@ to slightly worse.
 | 115 | Shared gate/up SwiGLU F8 HMMA batch kernel | Correct; `33.578236` HMMA vs `33.292541` control at 8-slot/256K, and `21.455638` vs `21.430420` at 4-slot/1M | Shipped/default |
 | 116 | Batched attention projection F8 HMMA kernel | Correct; `33.697698` HMMA batch vs `33.380614` control at 8-slot/256K, and `21.469010` vs `21.333447` at 4-slot/1M | Shipped/default for 4/8-slot batches |
 | 117 | F8 shape trace, async chunk probe, and per-slot shared gate/up/SwiGLU fusion | Trace showed the fast served path is per-slot stage-pipelined; `DS4_V100_ASYNC_SLOT_CHUNK=4` was correct but only `11.483646`; single shared pair-SwiGLU was correct at `33.562643` vs `33.697698` default | Keep opt-in/off; next fusion must be software-pipelined/HMMA, not just scalar launch reduction |
+| 118 | Single-token HMMA for the hot `4096 x 8192` F8 projection | Correct and traced as `plain/hmma_single`, but `16.083451` vs `33.502249` same-binary control at 8-slot/256K | Keep opt-in/off; do not broaden single-token WMMA |
 
 ## Remaining
 
@@ -67,8 +68,9 @@ to slightly worse.
     gate_up launch reduction.
   - A larger software-pipelined F8/attention-output/FFN rewrite. Sprint 117
     showed scalar per-slot shared-FFN fusion removes calls but does not improve
-    throughput; the useful version needs packed decode, activation staging,
-    MMA, and epilogue work in one tensor-core-oriented kernel.
+    throughput, and Sprint 118 showed naive single-token WMMA is much slower.
+    The useful version needs packed decode, activation staging, MMA, and
+    epilogue work in one tensor-core-oriented kernel with useful tile fill.
 - Decide whether the next production step is a deeper TurboMind adapter change
   or a lower-level CUTLASS/TurboMind-inspired persistent kernel probe.
 
@@ -91,6 +93,7 @@ DS4_V100_ENABLE_BATCH_ATTN_PROJ=0
 DS4_V100_CUDA_F8_HMMA_ATTN_BATCH=0
 DS4_V100_FFN_DIRECT_DELTA=1
 DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE=1
+DS4_V100_CUDA_F8_HMMA_SINGLE=1
 DS4_V100_TURBOMIND_FUSED_GATE_UP=0
 ```
 
