@@ -153,6 +153,16 @@ typedef struct {
     bool fp8_kv_cache;
     bool suppress_router_readback;
 
+    int tp2_layer;
+    ds4_gpu_arena *tp2_owner_arena;
+    ds4_gpu_arena *tp2_peer_arena;
+    ds4_gpu_tensor *tp2_peer_input;
+    ds4_gpu_tensor *tp2_peer_selected;
+    ds4_gpu_tensor *tp2_peer_weights;
+    ds4_gpu_tensor *tp2_peer_out;
+    ds4_gpu_tensor *tp2_peer_recv;
+    uint32_t tp2_scratch_slots;
+
     int checkpoint_layer;
     ds4_v100_layer_execute_checkpoint_fn checkpoint_fn;
     void *checkpoint_user;
@@ -163,6 +173,7 @@ typedef struct {
     float route_weights[6];
     uint32_t routes;
     uint32_t turbomind_routed;
+    uint32_t turbomind_tp2_routed;
     double timing_hc_attn_ms;
     double timing_attention_ms;
     double timing_hc_ffn_ms;

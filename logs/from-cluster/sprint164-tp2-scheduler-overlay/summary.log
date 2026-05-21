@@ -1,0 +1,96 @@
+Sprint 164 V100 validation summary
+Date: 2026-05-21
+Pod: llm/llamacpp-build-8gpu on gpu-01
+
+Build:
+  cd /workspace/ds4
+  make -j80 CUDA_ARCH=sm_70 tests/cuda_v100_stage_scheduler_smoke tests/cuda_v100_tp_routed_ffn_smoke tools/ds4-v100-replay
+  PASS
+
+Combined TurboMind index:
+  /workspace/ds4-tp2-combined-s164/turbomind-pack-index.tsv
+  rows: 91
+  appended rows:
+    blk.3.ffn_gate_up_exps.tp0.weight
+    blk.3.ffn_down_exps.tp0.weight
+    blk.3.ffn_gate_up_exps.tp1.weight
+    blk.3.ffn_down_exps.tp1.weight
+
+Primitive TP smoke:
+  command:
+    DS4_V100_TURBOMIND_LIB=./build/turbomind-v100-s127/libggml-turbomind.so
+    DS4_V100_TURBOMIND_GATED_SILU=1
+    DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1
+    ./tests/cuda_v100_tp_routed_ffn_smoke
+      --index /workspace/ds4-appliance-full-tm-gated-s127/pack-index.tsv
+      --tm-index /workspace/ds4-tp-split-pack-s163/turbomind-pack-index.tsv
+      --tm-dir /workspace/ds4-tp-split-pack-s163
+      --layer 3 --owner-gpu 0 --peer-gpu 3 --tokens 16 --iters 10
+  result:
+    layer=3 pair=0,3 tokens=16 routes=96 values=65536
+    max_abs=1.34401e-06 rel=0.000278022 bad=0 bad_frac=0
+    ref_ms=1.9739 owner_ms=1.0893 peer_ms=1.1655
+    copy_in_ms=0.0170 copy_out_ms=0.0059 sum_ms=0.0271
+    total_ms=1.2204 speedup=1.617x
+    owner_bytes=5133828096 peer_bytes=1711276032
+    PASS
+
+Scheduler stage smoke:
+  non-TP:
+    stage=0 gpu=0 layers=0-5 executed=6 tm_layers=6 tp2_layers=0
+    token=16 pos=16 slots=1 arena_bytes=22524134668 uploaded_tensors=1 uploaded_bytes=22524134668
+    ok
+  TP slots=1:
+    stage=0 gpu=0 layers=0-5 executed=6 tm_layers=6 tp2_layers=1
+    token=16 pos=16 slots=1 arena_bytes=22524134668 uploaded_tensors=1 uploaded_bytes=22524134668
+    ok
+  TP slots=16:
+    stage=0 gpu=0 layers=0-5 executed=6 tm_layers=6 tp2_layers=1
+    token=16 pos=16 slots=16 arena_bytes=22524134668 uploaded_tensors=1 uploaded_bytes=22524134668
+    ok
+
+Negative gate:
+  DS4_V100_TP2_LAYER=2 with only layer-3 TP descriptors:
+    cuda_v100_stage_scheduler_smoke: TP2 routed FFN layer 2 has no TP2 bindings
+    rc=1
+  PASS, failed closed.
+
+Stage profile, slots=16, ctx=262144:
+  non-TP:
+    tp2_layers=0 ffn_ms=88.577 total_ms=178.819
+  TP overlay:
+    tp2_layers=1 ffn_ms=118.585 total_ms=216.829
+
+Full 8-stage open with TP overlay:
+  command:
+    ./tools/ds4-v100-replay --model /models/DSv4-Flash-256e-fixed.gguf
+      --index /workspace/ds4-appliance-full-tm-gated-s127/pack-index.tsv
+      --tm-index /workspace/ds4-tp2-combined-s164/turbomind-pack-index.tsv
+      --shard-dir /workspace/ds4-appliance-full-tm-gated-s127
+      --ctx 262144 --slots 16 --open-only --serial-open --json
+  result:
+    open_total=257153.285 ms
+    open_stage=[21972.510,27089.429,28831.514,38013.299,38459.708,42561.663,35530.718,24674.297]
+    observed memory during open:
+      GPU0 about 26746 MiB
+      GPU3 about 22514 MiB
+    PASS, fits 32 GiB cards.
+
+Full selected-token decode comparison:
+  no TP:
+    prompt_tokens=5 generated_tokens=1
+    prompt_replay=1560.589 ms
+    generated_tokens_per_second=0.639435
+    stage_decode=[996.590,92.427,89.265,84.234,85.068,78.733,77.256,55.730]
+  TP overlay:
+    prompt_tokens=5 generated_tokens=1
+    prompt_replay=1953.716 ms
+    generated_tokens_per_second=0.511053
+    stage_decode=[1361.390,120.189,100.135,68.259,89.035,76.658,77.791,58.364]
+
+Conclusion:
+  The scheduler TP2 overlay is correct, default-off, and fits, but the one-layer
+  synchronous copy-based overlay is slower than the normal production path. Keep
+  it diagnostic-only. The next TP attempt needs persistent peer ownership,
+  overlap, or a broader TP/EP scheduler boundary instead of per-layer overlay
+  copies.

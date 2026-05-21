@@ -65,6 +65,8 @@ struct ds4_v100_stage_scheduler {
     ds4_v100_context *ctx;
     ds4_pack *pack;
     ds4_gpu_arena *arena;
+    ds4_gpu_arena *tp2_owner_arena;
+    ds4_gpu_arena *tp2_peer_arena;
     ds4_v100_stage_info stage;
     ds4_v100_tensor_binding token_embedding;
     ds4_v100_tensor_binding hc_head_fn;
@@ -84,8 +86,14 @@ struct ds4_v100_stage_scheduler {
     ds4_gpu_tensor *output_embd;
     ds4_gpu_tensor *output_norm_scratch;
     ds4_gpu_tensor *output_logits;
+    ds4_gpu_tensor *tp2_peer_input;
+    ds4_gpu_tensor *tp2_peer_selected;
+    ds4_gpu_tensor *tp2_peer_weights;
+    ds4_gpu_tensor *tp2_peer_out;
+    ds4_gpu_tensor *tp2_peer_recv;
     uint32_t output_scratch_vocab;
     uint32_t output_scratch_slots;
+    uint32_t tp2_scratch_slots;
     ds4_v100_layer_batch_scratch batch_scratch;
     uint64_t uploaded_tensors;
     uint64_t uploaded_bytes;
@@ -104,6 +112,10 @@ struct ds4_v100_stage_scheduler {
     uint32_t indexer_top_k;
     bool fp8_kv_cache;
     bool suppress_router_readback;
+    int tp2_layer;
+    int tp2_requested_peer_gpu;
+    char tp2_shard_dir[1024];
+    uint64_t tp2_uploaded_bytes;
 };
 
 static int scheduler_error(char *err, size_t errlen, const char *msg) {
@@ -124,6 +136,67 @@ static int scheduler_errorf_u64(char *err, size_t errlen, const char *fmt, uint6
 static int scheduler_errorf_u32(char *err, size_t errlen, const char *fmt, uint32_t value) {
     if (err && errlen) snprintf(err, errlen, fmt, value);
     return 1;
+}
+
+static const char *scheduler_first_env(const char *a, const char *b) {
+    const char *v = a ? getenv(a) : NULL;
+    if (v && v[0]) return v;
+    v = b ? getenv(b) : NULL;
+    return (v && v[0]) ? v : NULL;
+}
+
+static bool scheduler_env_enabled(const char *name) {
+    const char *v = name ? getenv(name) : NULL;
+    if (!v || !v[0]) return false;
+    if (!strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "False") ||
+        !strcmp(v, "no") || !strcmp(v, "No") || !strcmp(v, "off") ||
+        !strcmp(v, "Off")) {
+        return false;
+    }
+    return true;
+}
+
+static int scheduler_parse_i32_value(const char *s,
+                                     const char *name,
+                                     int min_value,
+                                     int max_value,
+                                     int *out,
+                                     char *err,
+                                     size_t errlen) {
+    if (!s || !s[0] || !out) {
+        return scheduler_error(err, errlen, "missing integer scheduler option");
+    }
+    errno = 0;
+    char *end = NULL;
+    long v = strtol(s, &end, 10);
+    if (errno || !end || *end != '\0' || v < min_value || v > max_value) {
+        if (err && errlen) {
+            snprintf(err,
+                     errlen,
+                     "invalid %s: %s",
+                     name ? name : "scheduler integer",
+                     s);
+        }
+        return 1;
+    }
+    *out = (int)v;
+    return 0;
+}
+
+static int scheduler_join_path(char *dst,
+                               size_t dst_size,
+                               const char *dir,
+                               const char *base,
+                               char *err,
+                               size_t errlen) {
+    if (!dst || dst_size == 0 || !dir || !dir[0] || !base || !base[0]) {
+        return scheduler_error(err, errlen, "missing scheduler path component");
+    }
+    int n = snprintf(dst, dst_size, "%s/%s", dir, base);
+    if (n < 0 || (size_t)n >= dst_size) {
+        return scheduler_error(err, errlen, "scheduler path is too long");
+    }
+    return 0;
 }
 
 static uint64_t scheduler_model_offset(const ds4_v100_stage_scheduler *sched,
@@ -251,8 +324,15 @@ void ds4_v100_stage_scheduler_close(ds4_v100_stage_scheduler *sched) {
             free_layer_cache(scheduler_cache_slot(sched, layer, slot));
         }
     }
+    ds4_gpu_tensor_free(sched->tp2_peer_recv);
+    ds4_gpu_tensor_free(sched->tp2_peer_out);
+    ds4_gpu_tensor_free(sched->tp2_peer_weights);
+    ds4_gpu_tensor_free(sched->tp2_peer_selected);
+    ds4_gpu_tensor_free(sched->tp2_peer_input);
     free_output_head_scratch(sched);
     ds4_v100_layer_batch_scratch_free(&sched->batch_scratch);
+    ds4_gpu_arena_close(sched->tp2_peer_arena);
+    ds4_gpu_arena_close(sched->tp2_owner_arena);
     ds4_gpu_arena_close(sched->arena);
     if (sched->shard_map && sched->shard_map != MAP_FAILED) {
         munmap(sched->shard_map, (size_t)sched->shard_size);
@@ -369,6 +449,69 @@ static int upload_stage_shard(ds4_v100_stage_scheduler *sched,
     return 0;
 }
 
+static int open_upload_file_arena(ds4_gpu_arena **out,
+                                  int gpu,
+                                  const char *path,
+                                  uint64_t *uploaded_bytes,
+                                  char *err,
+                                  size_t errlen) {
+    if (!out || gpu < 0 || !path || !path[0]) {
+        return scheduler_error(err, errlen, "missing overlay arena input");
+    }
+    *out = NULL;
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        if (err && errlen) snprintf(err, errlen, "cannot open %s: %s", path, strerror(errno));
+        return 1;
+    }
+    struct stat st;
+    if (fstat(fd, &st) != 0 || st.st_size <= 0) {
+        if (err && errlen) snprintf(err, errlen, "cannot stat %s: %s", path, strerror(errno));
+        close(fd);
+        return 1;
+    }
+    const uint64_t bytes = (uint64_t)st.st_size;
+    ds4_gpu_arena *arena = NULL;
+    if (ds4_gpu_arena_open(&arena, gpu, bytes) != 0) {
+        close(fd);
+        return scheduler_errorf(err, errlen, "failed to open TP2 overlay arena on gpu%d", gpu);
+    }
+    unsigned char *chunk = (unsigned char *)malloc(DS4_V100_SCHED_UPLOAD_CHUNK);
+    if (!chunk) {
+        ds4_gpu_arena_close(arena);
+        close(fd);
+        return scheduler_error(err, errlen, "failed to allocate TP2 upload chunk");
+    }
+    uint64_t done = 0;
+    while (done < bytes) {
+        uint64_t want = bytes - done;
+        if (want > DS4_V100_SCHED_UPLOAD_CHUNK) want = DS4_V100_SCHED_UPLOAD_CHUNK;
+        ssize_t got = read(fd, chunk, (size_t)want);
+        if (got <= 0 || (uint64_t)got != want) {
+            if (err && errlen) {
+                snprintf(err, errlen, "short read while uploading %s", path);
+            }
+            free(chunk);
+            ds4_gpu_arena_close(arena);
+            close(fd);
+            return 1;
+        }
+        if (ds4_gpu_arena_upload(arena, done, chunk, (uint64_t)got) != 0) {
+            if (err && errlen) snprintf(err, errlen, "TP2 overlay upload failed on gpu%d", gpu);
+            free(chunk);
+            ds4_gpu_arena_close(arena);
+            close(fd);
+            return 1;
+        }
+        done += (uint64_t)got;
+    }
+    free(chunk);
+    close(fd);
+    if (uploaded_bytes) *uploaded_bytes = bytes;
+    *out = arena;
+    return 0;
+}
+
 static int upload_stage_weights(ds4_v100_stage_scheduler *sched,
                                 char *err,
                                 size_t errlen) {
@@ -385,6 +528,154 @@ static int upload_stage_weights(ds4_v100_stage_scheduler *sched,
     int rc = ds4_pack_for_each(sched->pack, upload_stage_entry, &ud);
     free(chunk);
     return rc != 0;
+}
+
+static int scheduler_load_tp2_env(ds4_v100_stage_scheduler *sched,
+                                  char *err,
+                                  size_t errlen) {
+    if (!sched) return scheduler_error(err, errlen, "missing scheduler TP2 env input");
+    sched->tp2_layer = -1;
+    sched->tp2_requested_peer_gpu = -1;
+
+    const char *layer_env =
+        scheduler_first_env("DS4_V100_TP_ROUTED_FFN_LAYER", "DS4_V100_TP2_LAYER");
+    const bool enabled =
+        scheduler_env_enabled("DS4_V100_TP_ROUTED_FFN") ||
+        scheduler_env_enabled("DS4_V100_TP2_ROUTED_FFN") ||
+        (layer_env && strcmp(layer_env, "-1") != 0);
+    if (!enabled) return 0;
+    if (!layer_env) {
+        return scheduler_error(err,
+                               errlen,
+                               "TP2 routed FFN requires DS4_V100_TP_ROUTED_FFN_LAYER");
+    }
+    if (scheduler_parse_i32_value(layer_env,
+                                  "TP2 routed FFN layer",
+                                  -1,
+                                  DS4_V100_N_LAYERS - 1,
+                                  &sched->tp2_layer,
+                                  err,
+                                  errlen)) {
+        return 1;
+    }
+    if (sched->tp2_layer < 0) return 0;
+
+    const char *dir_env =
+        scheduler_first_env("DS4_V100_TP_ROUTED_FFN_SHARD_DIR", "DS4_V100_TP2_SHARD_DIR");
+    if (!dir_env) {
+        return scheduler_error(err,
+                               errlen,
+                               "TP2 routed FFN requires DS4_V100_TP_ROUTED_FFN_SHARD_DIR");
+    }
+    if (strlen(dir_env) >= sizeof(sched->tp2_shard_dir)) {
+        return scheduler_error(err, errlen, "TP2 routed FFN shard dir is too long");
+    }
+    snprintf(sched->tp2_shard_dir, sizeof(sched->tp2_shard_dir), "%s", dir_env);
+
+    const char *peer_env =
+        scheduler_first_env("DS4_V100_TP_ROUTED_FFN_PEER_GPU", "DS4_V100_TP2_PEER_GPU");
+    if (peer_env &&
+        scheduler_parse_i32_value(peer_env,
+                                  "TP2 routed FFN peer GPU",
+                                  0,
+                                  DS4_V100_EXPECTED_GPUS - 1,
+                                  &sched->tp2_requested_peer_gpu,
+                                  err,
+                                  errlen)) {
+        return 1;
+    }
+    return 0;
+}
+
+static int scheduler_setup_tp2_overlay(ds4_v100_stage_scheduler *sched,
+                                       char *err,
+                                       size_t errlen) {
+    if (!sched || sched->tp2_layer < 0) return 0;
+    const int layer = sched->tp2_layer;
+    if (layer < sched->stage.layer_begin || layer > sched->stage.layer_end) {
+        return 0;
+    }
+    ds4_v100_layer_state *state = &sched->states[layer];
+    if (!state->has_turbomind_tp2_routed) {
+        return scheduler_errorf(err, errlen, "TP2 routed FFN layer %d has no TP2 bindings", layer);
+    }
+    if (state->owning_gpu != sched->stage.gpu ||
+        state->turbomind_tp2_gate_up_binding[0].owning_gpu != sched->stage.gpu ||
+        state->turbomind_tp2_down_binding[0].owning_gpu != sched->stage.gpu) {
+        return scheduler_errorf(err, errlen, "TP2 routed FFN owner mismatch for layer %d", layer);
+    }
+    const int peer_gpu = state->turbomind_tp2_peer_gpu;
+    if (peer_gpu < 0 || peer_gpu == sched->stage.gpu) {
+        return scheduler_errorf(err, errlen, "TP2 routed FFN invalid peer GPU for layer %d", layer);
+    }
+    if (sched->tp2_requested_peer_gpu >= 0 &&
+        sched->tp2_requested_peer_gpu != peer_gpu) {
+        return scheduler_errorf(err, errlen, "TP2 routed FFN peer mismatch for layer %d", layer);
+    }
+    if (!ds4_gpu_enable_peer_access(sched->stage.gpu, peer_gpu)) {
+        return scheduler_errorf(err, errlen, "TP2 peer access enable failed for layer %d", layer);
+    }
+
+    char owner_path[1024];
+    char peer_path[1024];
+    if (scheduler_join_path(owner_path,
+                            sizeof(owner_path),
+                            sched->tp2_shard_dir,
+                            state->turbomind_tp2_gate_up_binding[0].shard_file,
+                            err,
+                            errlen) ||
+        scheduler_join_path(peer_path,
+                            sizeof(peer_path),
+                            sched->tp2_shard_dir,
+                            state->turbomind_tp2_gate_up_binding[1].shard_file,
+                            err,
+                            errlen)) {
+        return 1;
+    }
+    uint64_t owner_bytes = 0;
+    uint64_t peer_bytes = 0;
+    if (open_upload_file_arena(&sched->tp2_owner_arena,
+                               sched->stage.gpu,
+                               owner_path,
+                               &owner_bytes,
+                               err,
+                               errlen) ||
+        open_upload_file_arena(&sched->tp2_peer_arena,
+                               peer_gpu,
+                               peer_path,
+                               &peer_bytes,
+                               err,
+                               errlen)) {
+        return 1;
+    }
+    sched->tp2_uploaded_bytes = owner_bytes + peer_bytes;
+
+    const uint64_t hidden_bytes =
+        (uint64_t)sched->active_slots * state->hidden_size * sizeof(float);
+    const uint64_t route_i32_bytes =
+        (uint64_t)sched->active_slots * state->routes_per_token * sizeof(int32_t);
+    const uint64_t route_f32_bytes =
+        (uint64_t)sched->active_slots * state->routes_per_token * sizeof(float);
+    if (!ds4_gpu_set_device(peer_gpu)) {
+        return scheduler_errorf(err, errlen, "failed to set TP2 peer gpu%d", peer_gpu);
+    }
+    sched->tp2_peer_input = ds4_gpu_tensor_alloc(hidden_bytes);
+    sched->tp2_peer_selected = ds4_gpu_tensor_alloc(route_i32_bytes);
+    sched->tp2_peer_weights = ds4_gpu_tensor_alloc(route_f32_bytes);
+    sched->tp2_peer_out = ds4_gpu_tensor_alloc(hidden_bytes);
+    if (!ds4_gpu_set_device(sched->stage.gpu)) {
+        return scheduler_errorf(err, errlen, "failed to restore TP2 owner gpu%d", sched->stage.gpu);
+    }
+    sched->tp2_peer_recv = ds4_gpu_tensor_alloc(hidden_bytes);
+    if (!sched->tp2_peer_input ||
+        !sched->tp2_peer_selected ||
+        !sched->tp2_peer_weights ||
+        !sched->tp2_peer_out ||
+        !sched->tp2_peer_recv) {
+        return scheduler_errorf(err, errlen, "TP2 routed FFN scratch allocation failed for layer %d", layer);
+    }
+    sched->tp2_scratch_slots = sched->active_slots;
+    return 0;
 }
 
 static int alloc_layer_cache(ds4_v100_stage_scheduler *sched,
@@ -761,6 +1052,12 @@ int ds4_v100_stage_scheduler_open(ds4_v100_stage_scheduler **out,
         (ds4_v100_stage_scheduler *)calloc(1, sizeof(*sched));
     if (!sched) return scheduler_error(err, errlen, "failed to allocate scheduler");
     sched->shard_fd = -1;
+    sched->tp2_layer = -1;
+    sched->tp2_requested_peer_gpu = -1;
+    if (scheduler_load_tp2_env(sched, err, errlen)) {
+        ds4_v100_stage_scheduler_close(sched);
+        return 1;
+    }
     sched->active_slots = (uint32_t)(opts->kv_active_slots ? opts->kv_active_slots : 1u);
     if (sched->active_slots == 0 || sched->active_slots > DS4_V100_SCHED_MAX_SLOTS) {
         ds4_v100_stage_scheduler_close(sched);
@@ -875,6 +1172,11 @@ int ds4_v100_stage_scheduler_open(ds4_v100_stage_scheduler **out,
         }
     }
 
+    if (scheduler_setup_tp2_overlay(sched, err, errlen)) {
+        ds4_v100_stage_scheduler_close(sched);
+        return 1;
+    }
+
     const uint64_t hc_bytes =
         (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS * sizeof(float);
     for (uint32_t slot = 0; slot < sched->active_slots; slot++) {
@@ -971,6 +1273,7 @@ int ds4_v100_stage_scheduler_decode_hc_slot_span(
     double timing_hc_final_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
     double timing_total_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
     uint32_t turbomind_layers[DS4_V100_SCHED_MAX_SLOTS] = {0};
+    uint32_t turbomind_tp2_layers[DS4_V100_SCHED_MAX_SLOTS] = {0};
     memset(last, 0, sizeof(last));
     for (uint32_t rel = 0; rel < n_slots; rel++) {
         const uint32_t slot = slot_start + rel;
@@ -1006,6 +1309,15 @@ int ds4_v100_stage_scheduler_decode_hc_slot_span(
                 .decode_cache = &lc->cache,
                 .fp8_kv_cache = sched->fp8_kv_cache,
                 .suppress_router_readback = sched->suppress_router_readback,
+                .tp2_layer = sched->tp2_layer,
+                .tp2_owner_arena = sched->tp2_owner_arena,
+                .tp2_peer_arena = sched->tp2_peer_arena,
+                .tp2_peer_input = sched->tp2_peer_input,
+                .tp2_peer_selected = sched->tp2_peer_selected,
+                .tp2_peer_weights = sched->tp2_peer_weights,
+                .tp2_peer_out = sched->tp2_peer_out,
+                .tp2_peer_recv = sched->tp2_peer_recv,
+                .tp2_scratch_slots = sched->tp2_scratch_slots,
             };
             memset(&last[rel], 0, sizeof(last[rel]));
             hidden_hc[rel] = cur[rel];
@@ -1061,6 +1373,7 @@ int ds4_v100_stage_scheduler_decode_hc_slot_span(
             timing_hc_final_ms[rel] += last[rel].timing_hc_final_ms;
             timing_total_ms[rel] += last[rel].timing_total_ms;
             turbomind_layers[rel] += last[rel].turbomind_routed ? 1u : 0u;
+            turbomind_tp2_layers[rel] += last[rel].turbomind_tp2_routed ? 1u : 0u;
             ds4_gpu_tensor *tmp = cur[rel];
             cur[rel] = next[rel];
             next[rel] = tmp;
@@ -1085,6 +1398,7 @@ int ds4_v100_stage_scheduler_decode_hc_slot_span(
             r->uploaded_bytes = sched->uploaded_bytes;
             r->last_layer_report = last[rel];
             r->turbomind_routed_layers_executed = turbomind_layers[rel];
+            r->turbomind_tp2_routed_layers_executed = turbomind_tp2_layers[rel];
             r->timing_hc_attn_ms = timing_hc_attn_ms[rel];
             r->timing_attention_ms = timing_attention_ms[rel];
             r->timing_hc_ffn_ms = timing_hc_ffn_ms[rel];
@@ -1382,6 +1696,7 @@ int ds4_v100_stage_scheduler_decode_hc_checkpoints(
     ds4_gpu_tensor *next = cur == sched->hc_a[0] ? sched->hc_b[0] : sched->hc_a[0];
     ds4_v100_layer_execute_report last;
     uint32_t turbomind_layers = 0;
+    uint32_t turbomind_tp2_layers = 0;
     memset(&last, 0, sizeof(last));
     uint32_t executed = 0;
     for (int layer = sched->stage.layer_begin; layer <= sched->stage.layer_end; layer++) {
@@ -1404,6 +1719,15 @@ int ds4_v100_stage_scheduler_decode_hc_checkpoints(
             .decode_cache = &lc->cache,
             .fp8_kv_cache = sched->fp8_kv_cache,
             .suppress_router_readback = sched->suppress_router_readback,
+            .tp2_layer = sched->tp2_layer,
+            .tp2_owner_arena = sched->tp2_owner_arena,
+            .tp2_peer_arena = sched->tp2_peer_arena,
+            .tp2_peer_input = sched->tp2_peer_input,
+            .tp2_peer_selected = sched->tp2_peer_selected,
+            .tp2_peer_weights = sched->tp2_peer_weights,
+            .tp2_peer_out = sched->tp2_peer_out,
+            .tp2_peer_recv = sched->tp2_peer_recv,
+            .tp2_scratch_slots = sched->tp2_scratch_slots,
             .checkpoint_layer = layer,
             .checkpoint_fn = checkpoint_fn ? scheduler_layer_checkpoint : NULL,
             .checkpoint_user = &layer_checkpoint_user,
@@ -1423,6 +1747,7 @@ int ds4_v100_stage_scheduler_decode_hc_checkpoints(
         next = tmp;
         executed++;
         turbomind_layers += last.turbomind_routed ? 1u : 0u;
+        turbomind_tp2_layers += last.turbomind_tp2_routed ? 1u : 0u;
         if (checkpoint_fn) {
             const uint64_t hc_bytes =
                 (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS * sizeof(float);
@@ -1455,6 +1780,7 @@ int ds4_v100_stage_scheduler_decode_hc_checkpoints(
         report->uploaded_bytes = sched->uploaded_bytes;
         report->last_layer_report = last;
         report->turbomind_routed_layers_executed = turbomind_layers;
+        report->turbomind_tp2_routed_layers_executed = turbomind_tp2_layers;
     }
     return 0;
 }

@@ -38,7 +38,7 @@ static void usage(FILE *fp) {
             "[--model FILE | --shard-dir DIR | --appliance-dir DIR] "
             "[--tm-index FILE] "
             "[--stage N] [--token N] [--position N] [--slots N] [--ctx N] "
-            "[--expect-tm-layers N]\n");
+            "[--expect-tm-layers N] [--expect-tp2-layers N]\n");
 }
 
 static int parse_int_arg(const char *s, const char *name, int max_v) {
@@ -135,6 +135,7 @@ int main(int argc, char **argv) {
     int slots = 1;
     uint64_t ctx = 1048576ULL;
     int expect_tm_layers = -1;
+    int expect_tp2_layers = -1;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--index") && i + 1 < argc) {
@@ -164,6 +165,9 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--expect-tm-layers") && i + 1 < argc) {
             expect_tm_layers = parse_int_arg(argv[++i], "--expect-tm-layers",
                                              DS4_V100_N_LAYERS);
+        } else if (!strcmp(argv[i], "--expect-tp2-layers") && i + 1 < argc) {
+            expect_tp2_layers = parse_int_arg(argv[++i], "--expect-tp2-layers",
+                                              DS4_V100_N_LAYERS);
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             usage(stdout);
             return 0;
@@ -259,21 +263,28 @@ int main(int argc, char **argv) {
             check(reports[i].turbomind_routed_layers_executed > 0,
                   "appliance stage used TurboMind routed layers");
         }
+        if (expect_tp2_layers >= 0) {
+            check(reports[i].turbomind_tp2_routed_layers_executed == (uint32_t)expect_tp2_layers,
+                  "stage used expected TP2 routed layers");
+        }
     }
 
-    printf("cuda_v100_stage_scheduler_smoke: stage=%d gpu=%d layers=%d-%d executed=%u tm_layers=%u token=%d pos=%d slots=%u arena_bytes=%" PRIu64 " uploaded_tensors=%" PRIu64 " uploaded_bytes=%" PRIu64 " expert0=%d %s\n",
+    printf("cuda_v100_stage_scheduler_smoke: stage=%d gpu=%d layers=%d-%d executed=%u tm_layers=%u tp2_layers=%u token=%d pos=%d slots=%u arena_bytes=%" PRIu64 " uploaded_tensors=%" PRIu64 " uploaded_bytes=%" PRIu64 " ffn_ms=%.3f total_ms=%.3f expert0=%d %s\n",
            reports[0].stage_id,
            reports[0].gpu,
            reports[0].first_layer,
            reports[0].last_layer,
            reports[0].layers_executed,
            reports[0].turbomind_routed_layers_executed,
+           reports[0].turbomind_tp2_routed_layers_executed,
            token,
            position,
            n_slots,
            reports[0].arena_bytes,
            reports[0].uploaded_tensors,
            reports[0].uploaded_bytes,
+           reports[0].timing_ffn_ms,
+           reports[0].timing_total_ms,
            reports[0].last_layer_report.selected_experts[0],
            failures ? "FAIL" : "ok");
 

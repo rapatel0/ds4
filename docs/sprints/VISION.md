@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: sprint-execute
-revision: 155
+revision: 164
 ---
 
 # Vision: DS4 V100 Appliance
@@ -232,6 +232,19 @@ optimized V100 low-bit expert kernels in the actual hot path.
   only from `0.2071 ms` to `0.1946 ms` (`1.064x`). TP is therefore validated as
   a real runtime primitive, but serving integration should be guarded and
   layer-local before any broad topology rewrite.
+- Sprint 164 moved that primitive into the real stage scheduler as an
+  explicit default-off one-layer TP2 overlay. The scheduler can load separate
+  owner and peer TP split arenas, pass TP tensors into the layer executor, and
+  assert `tp2_layers=1` on layer 3 while normal runs report `tp2_layers=0`.
+  Full 8-stage open with the overlay fits 32 GiB V100 memory, but performance
+  regressed: a 16-slot stage-0 profile moved from `total_ms=178.819`,
+  `ffn_ms=88.577` without TP to `total_ms=216.829`, `ffn_ms=118.585` with the
+  overlay, and a full selected-token decode moved from `0.639435` generated
+  tok/s to `0.511053`. The one-layer synchronous overlay is therefore a useful
+  correctness/topology primitive, not a default performance path. The next TP
+  attempt should remove overlay-style payload copies by designing persistent
+  peer ownership or a broader TP/EP scheduler boundary; otherwise practical
+  throughput work should return to the larger fused routed-FFN boundary.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation
@@ -2767,6 +2780,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-21 | Completed Sprint 160 async slot chunking gate. | `DS4_V100_ASYNC_SLOT_CHUNK=16` proves the HTTP serving path can expose the fixed96 routed executor shape (`total_routes=96`) and select the fixed gate_up kernel, but throughput collapses to `20.67` generated / `20.34` continuation tok/s because global chunking destroys stage overlap. The chunk sweep also regressed at 2, 4, and 8 slots versus the default one-slot stage pipeline. Keep slot chunking diagnostic-only; the next practical-serving work should be a bounded TP/EP prototype or a layer-local batching redesign that creates dense routed-FFN kernels without serializing each stage chunk. | Sprint 161+ |
 | 2026-05-21 | Rejected Sprint 161 small-route fused executor probe. | A 12-route fixed TurboMind gate/up probe selected correctly in served `chunk=2` mode, but it was slightly slower than the same-build generic `chunk=2` control (`60.71` / `59.76` generated/continuation tok/s versus `60.88` / `59.93`) and the final rebuilt binary wedged during startup warmup after selection. A 24-route `chunk=4` smoke also wedged. The temporary runtime and TurboMind API changes were removed; the next implementation should move to a true in-stage layer-wavefront scheduler or bounded TP/EP prototype, not more slot-chunk executor variants. | Sprint 162+ |
 | 2026-05-21 | Completed Sprint 162 TP route-shape gate. | The two-GPU TP proxy is positive at the actual 256K serving route counts, not only at the old 768-route diagnostic shape. On NV2 pairs, 6 routes measured `1.260x` total-with-copy speedup and 96 routes measured `1.325-1.328x`, all with TP-sum correctness passing. The next implementation should be a bounded one-layer TP routed-FFN executor using the existing TP split pack descriptors, with correctness against the current one-GPU layer output before any served-mode promotion. | Sprint 163+ |
+| 2026-05-21 | Completed Sprint 164 guarded scheduler TP overlay. | The scheduler can now execute layer 3 routed FFN through default-off TP2 owner+peer overlay arenas and assert `tp2_layers=1`. Primitive and scheduler correctness passed, the negative gate fails clearly, and full 8-stage open fits 32 GiB V100 memory. However the synchronous one-layer overlay regressed stage and full selected-token timing (`0.511053` vs `0.639435` generated tok/s), so it remains diagnostic-only. Next work should either design persistent peer ownership / broader TP-EP scheduling or return to a larger fused routed-FFN boundary. | Sprint 165+ |
 
 ## Open Questions
 
