@@ -151,6 +151,7 @@ DS4_V100_BATCH_ATTN_OUTPUT_A=0
 DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS=1
 DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC=0
 DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE=0
+DS4_V100_TURBOMIND_GATED_SILU=0
 DS4_V100_TURBOMIND_PROFILE=0
 DS4_V100_HOST=127.0.0.1
 DS4_V100_PORT=18080
@@ -218,6 +219,11 @@ keeps a token/route to sorted-row map during TurboMind route compaction and
 uses that map to replace the packed output clear plus atomic scatter-add with a
 deterministic per-token reduce. Keep it `0` for normal serving until the
 same-binary V100 A/B clears the promotion bar.
+
+`DS4_V100_TURBOMIND_GATED_SILU=1` enables the Sprint 127 TurboMind gated-SiLU
+epilogue path. It requires an appliance packed with
+`--fuse-gate-up-interleaved`; leave it `0` for existing fused gate/up
+appliances whose rows are laid out as `[all gate][all up]`.
 
 `DS4_V100_TURBOMIND_PROFILE=1` is a Sprint 126 diagnostic for the production
 routed-expert path. It prints per-GPU CUDA-event totals for route build,

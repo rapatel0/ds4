@@ -176,6 +176,10 @@ static ds4_gpu_turbomind_mxfp4_matrix_view tm_gpu_view(
     v.scale_stride = b->scale_stride;
     v.experts_packed = b->experts_packed;
     v.experts_total = b->experts_total;
+    if (b->runtime_layout &&
+        !strcmp(b->runtime_layout, "turbomind_mxfp4_grouped_gate_up_interleaved")) {
+        v.flags |= DS4_GPU_TURBOMIND_MXFP4_GATE_UP_INTERLEAVED;
+    }
     return v;
 }
 

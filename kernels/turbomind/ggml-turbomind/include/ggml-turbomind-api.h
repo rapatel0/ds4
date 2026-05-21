@@ -206,6 +206,29 @@ int ggml_turbomind_mul_mat_grouped_total_tokens(
     void*              D,
     void*              stream  /* cudaStream_t */);
 
+/**
+ * Same routed grouped GEMM contract as
+ * ggml_turbomind_mul_mat_grouped_total_tokens(), but uses TurboMind's
+ * gated-SiLU epilogue. The packed weight rows must be interleaved as
+ * [gate0, up0, gate1, up1, ...]. N is the fused logical output width and must
+ * be even. D is fp16 [total_tokens, N / 2].
+ */
+int ggml_turbomind_mul_mat_grouped_gated_silu_total_tokens(
+    const void*        A,
+    const int*         token_indices,    // may be NULL
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,    // may be NULL for FP16
+    int                ggml_type,
+    int                N,
+    int                K,
+    int                group_size,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
 // ============================================================================
 // Single-expert mul-mat (convenience for non-grouped cases like dense layers)
 // ============================================================================

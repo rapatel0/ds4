@@ -23,10 +23,15 @@ unchanged. Sprint 126 added a default-off production routed-expert stage
 profiler. It confirmed the current binary still serves correctly at
 `43.453309` generated tok/s with profiling disabled, and showed that the
 separate SwiGLU stage is only about `3.2%` of profiled routed-FFN time.
+Sprint 127 added an opt-in TurboMind gated-SiLU ABI and an interleaved
+gate/up appliance pack. The path is correct, removes the standalone SwiGLU
+profile bucket, and measured `43.933293` generated tok/s, but it is still a
+small end-to-end change rather than the persistent expert pipeline needed for
+the vision target.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
-| Throughput serving target | 262,144 | 16 | `43.887206` | `43.453309` | 16/16 token match |
+| Throughput serving target | 262,144 | 16 | `43.933293` | `43.453309` | 16/16 token match |
 | 8-slot compatibility target | 262,144 | 8 | `34.689964` | `34.490294` | 8/8 token match |
 | Long-context target | 1,048,576 | 4 | `21.771077` | `21.771077` | 4/4 token match |
 
@@ -78,6 +83,7 @@ to slightly worse.
 | 124 | TurboMind route-row reduce | Correct; first candidate reached `43.822500`, but repeat was `42.998450` vs `43.517862` control repeat at 16-slot/256K | Keep opt-in/off; final routed scatter fusion is not enough |
 | 125 | Batched grouped attention output-A | Correct; rows2 output-A batching reached `43.640921`, rows2 A+B reached `43.619996`, and HMMA A+B reached `43.245208` vs `43.503005` control at 16-slot/256K | Keep opt-in/off; single projection batching is too small |
 | 126 | Routed-expert stage profiler | Correct; full 43-layer profile showed gate/up `47.0%`, down `23.4%`, route build `16.8%`, gather `3.7%`, SwiGLU `3.2%`, scatter `4.6%` of profiled routed-FFN time; no-profile served sanity was `43.453309` | Ship default-off diagnostic; use it to target larger TurboMind/persistent expert work |
+| 127 | TurboMind gated-SiLU interleaved pack | Correct; standalone gated grouped path was `1.47x-1.55x` faster than separate gate/up, full 43-layer gated profile removed standalone SwiGLU and reduced profiled routed-FFN total from `28.242 ms` to `26.734 ms`; served A/B was `43.933293` vs `43.691032` control | Keep opt-in/off; confirms format-aware epilogue fusion, but does not materially change the topline |
 
 ## Remaining
 
@@ -88,12 +94,9 @@ to slightly worse.
 - Attack larger hot-path buckets instead of small host-side route plumbing:
   - TurboMind MXFP4 expert occupancy and route-expanded activation layout.
   - Persistent/grouped expert execution beyond the shipped Sprint 111 fused
-    gate_up launch reduction.
-  - TurboMind gated-SiLU support with an interleaved fused gate/up pack as the
-    next bounded production implementation. Sprint 126 showed this cannot be
-    treated as the whole answer because standalone SwiGLU is only `3.2%` of
-    profiled routed-FFN time, but it can remove the `2 * mid` intermediate and
-    provide a controlled step toward a deeper persistent routed-expert kernel.
+    gate_up launch reduction and Sprint 127 gated-SiLU epilogue fusion.
+    Sprint 127 proved the interleaved format and gated epilogue path, but the
+    served delta was only `43.933293` vs `43.691032` control.
   - A larger software-pipelined F8/attention-output/FFN rewrite. Sprint 117
     showed scalar per-slot shared-FFN fusion removes calls but does not improve
     throughput, and Sprint 118 showed naive single-token WMMA is much slower.
@@ -145,8 +148,12 @@ DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE=1
 DS4_V100_BATCH_ATTN_OUTPUT_A=1
 DS4_V100_CUDA_F8_HMMA_GROUPED_ATTN_O_BATCH=1
 DS4_V100_TURBOMIND_PROFILE=1
+DS4_V100_TURBOMIND_GATED_SILU=1
 ```
 
 The fused gate/up path is default-enabled for appliances that contain fused
 `ffn_gate_up_exps.weight` tensors. Set `DS4_V100_TURBOMIND_FUSED_GATE_UP=0`
-only when the appliance also contains separate gate/up tensors.
+only when the appliance also contains separate gate/up tensors. The gated-SiLU
+path additionally requires an appliance packed with `--fuse-gate-up-interleaved`
+and the Sprint 127 TurboMind ABI; do not enable it against the Sprint 111
+`[all gate][all up]` fused pack.

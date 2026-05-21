@@ -55,6 +55,7 @@ struct options {
     uint32_t expert_limit = 0;
     bool skip_non_experts = false;
     bool fuse_gate_up = false;
+    bool fuse_gate_up_interleaved = false;
     bool keep_separate_gate_up = false;
 };
 
@@ -139,6 +140,7 @@ static void usage(FILE *fp) {
                  "  --layer N                Bounded validation: TurboMind-pack routed experts only for layer N\n"
                  "  --expert-limit N         Bounded validation: pack first N experts per routed tensor\n"
                  "  --fuse-gate-up           Emit fused gate_up routed expert tensors\n"
+                 "  --fuse-gate-up-interleaved Emit fused gate_up rows as [gate0,up0,...]\n"
                  "  --keep-separate-gate-up  With --fuse-gate-up, also emit separate gate/up tensors\n"
                  "  --skip-non-experts       Bounded validation: do not copy non-selected tensors\n"
                  "\n"
@@ -178,6 +180,9 @@ static void parse_args(int argc, char **argv, options *opt) {
             opt->expert_limit = (uint32_t)parse_u64(need(a), a);
         } else if (!std::strcmp(a, "--fuse-gate-up")) {
             opt->fuse_gate_up = true;
+        } else if (!std::strcmp(a, "--fuse-gate-up-interleaved")) {
+            opt->fuse_gate_up = true;
+            opt->fuse_gate_up_interleaved = true;
         } else if (!std::strcmp(a, "--keep-separate-gate-up")) {
             opt->keep_separate_gate_up = true;
         } else if (!std::strcmp(a, "--skip-non-experts")) {
@@ -607,8 +612,19 @@ static void emit_fused_gate_up_turbomind_tensor(pack_state *st, const ds4_pack_e
                    host_up.data(),
                    host_up.size(),
                    up.source_name);
-        std::memcpy(host_fused.data(), host_gate.data(), host_gate.size());
-        std::memcpy(host_fused.data() + host_gate.size(), host_up.data(), host_up.size());
+        if (st->opt.fuse_gate_up_interleaved) {
+            for (uint32_t row = 0; row < shape.n; row++) {
+                std::memcpy(host_fused.data() + (uint64_t)(2u * row) * row_bytes,
+                            host_gate.data() + (uint64_t)row * row_bytes,
+                            row_bytes);
+                std::memcpy(host_fused.data() + (uint64_t)(2u * row + 1u) * row_bytes,
+                            host_up.data() + (uint64_t)row * row_bytes,
+                            row_bytes);
+            }
+        } else {
+            std::memcpy(host_fused.data(), host_gate.data(), host_gate.size());
+            std::memcpy(host_fused.data() + host_gate.size(), host_up.data(), host_up.size());
+        }
         if (!cuda_ok(cudaMemcpy(d_src,
                                 host_fused.data(),
                                 host_fused.size(),
@@ -667,16 +683,25 @@ static void emit_fused_gate_up_turbomind_tensor(pack_state *st, const ds4_pack_e
     if (gate->byte_length > UINT64_MAX - up.byte_length) die("fused source byte length overflow");
     const uint64_t source_bytes = gate->byte_length + up.byte_length;
 
+    const char *runtime_layout = st->opt.fuse_gate_up_interleaved
+        ? "turbomind_mxfp4_grouped_gate_up_interleaved"
+        : "turbomind_mxfp4_grouped";
+    const char *kernel_family = st->opt.fuse_gate_up_interleaved
+        ? "turbomind_mxfp4_grouped_gated_silu_sm70"
+        : "turbomind_mxfp4_grouped_sm70";
+
     std::fprintf(st->tm_index,
-                 "%s\t%s\tmxfp4\t%s\tturbomind_mxfp4_grouped\t%d\t%d\t"
-                 "turbomind_mxfp4_grouped_sm70\t%u\t%u\t%u\t%u\t%zu\t%zu\t%d\t%d\t%d\t"
+                 "%s\t%s\tmxfp4\t%s\t%s\t%d\t%d\t"
+                 "%s\t%u\t%u\t%u\t%u\t%zu\t%zu\t%d\t%d\t%d\t"
                  "gpu%d.weights\t%" PRIu64 "\t%" PRIu64 "\t%s\t%" PRIu64 "\t%" PRIu64
                  "\tpending\t%d\n",
                  fused_semantic.c_str(),
                  fused_source_name.c_str(),
                  fused_shape,
+                 runtime_layout,
                  gate->owning_gpu,
                  gate->layer_id,
+                 kernel_family,
                  fused_n,
                  shape.k,
                  experts_to_pack,
@@ -698,13 +723,14 @@ static void emit_fused_gate_up_turbomind_tensor(pack_state *st, const ds4_pack_e
     st->tm_weight_bytes += weight_total;
     st->tm_scale_bytes += scale_total;
     std::fprintf(stderr,
-                 "appliance packed %s experts=%u/%u gpu=%u fused_N=%u weight_offset=%" PRIu64
+                 "appliance packed %s experts=%u/%u gpu=%u fused_N=%u interleaved=%d weight_offset=%" PRIu64
                  " scale_offset=%" PRIu64 " k_pack=0x%x\n",
                  fused_semantic.c_str(),
                  experts_to_pack,
                  shape.experts,
                  gpu,
                  fused_n,
+                 st->opt.fuse_gate_up_interleaved ? 1 : 0,
                  weight_offset,
                  scale_offset,
                  expected_k_pack);

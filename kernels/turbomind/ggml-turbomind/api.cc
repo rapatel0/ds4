@@ -861,3 +861,133 @@ extern "C" GGML_TM_EXPORT int ggml_turbomind_mul_mat_grouped_total_tokens(
         D, Ddesc, workspace, stream);
     return rc;
 }
+
+extern "C" GGML_TM_EXPORT int ggml_turbomind_mul_mat_grouped_gated_silu_total_tokens(
+    const void*        A,
+    const int*         token_indices,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                ggml_type,
+    int                N,
+    int                K,
+    int                group_size,
+    int                k_pack_value,
+    void*              D,
+    void*              stream_v)
+{
+    int cur_dev = -1;
+    cudaGetDevice(&cur_dev);
+    State * s = get_state(cur_dev);
+    if (!s || !s->initialized) return 100;
+    if (!A || !expert_offsets || !weights_packed || !D) return 1;
+    if (num_experts <= 0 || total_tokens <= 0 || N <= 0 || (N & 1)) return 2;
+    cudaStream_t stream = (cudaStream_t) stream_v;
+
+    tmg::Workspace workspace{};
+    workspace.barriers        = s->d_barriers;
+    workspace.barriers_size   = tmg::Gemm::kBarriersSize;
+    workspace.partials        = s->d_partials;
+    workspace.partials_size   = s->partials_size;
+    workspace.tensormaps      = nullptr;
+    workspace.tensormaps_size = 0;
+    workspace.flags           = s->d_flags;
+
+    tmg::Operation op{};
+    op.dispatch  = tmg::DispatchPolicy::kDefault;
+    op.epilogue  = tmg::Epilogue::kGatedSilu;
+    op.quant_a   = tmg::QuantDesc{tmg::QuantType::kNone, 0};
+    op.quant_b   = (ggml_type == GGML_TM_DTYPE_FP16)
+                       ? tmg::QuantDesc{tmg::QuantType::kNone, 0}
+                       : tmg::QuantDesc{tmg::QuantType::kK, group_size};
+    op.batch_dim = 0;
+
+    tmg::MatrixLayout Adesc;
+    Adesc.type    = turbomind::kHalf;
+    Adesc.order   = tmg::Order::kRowMajor;
+    Adesc.rows    = total_tokens;
+    Adesc.cols    = K;
+    Adesc.ld      = K;
+    Adesc.pack    = 0;
+    Adesc.num     = num_experts;
+    Adesc.offsets = const_cast<int*>(expert_offsets);
+    Adesc.idxs    = const_cast<int*>(token_indices);
+
+    tmg::MatrixLayout Bdesc{};
+    tmg::MatrixLayout Vdesc{};
+    if (ggml_type != GGML_TM_DTYPE_FP16) {
+        auto convs = tmg::GetConverters(
+            /*data_type=*/turbomind::kHalf,
+            /*weight_type=*/to_tm_wdtype(ggml_type),
+            /*input_type=*/turbomind::kHalf,
+            /*grouped=*/false,
+            /*sm=*/70);
+        const tmg::LayoutConverter* conv_w = convs[0];
+        const tmg::LayoutConverter* conv_s = convs[1];
+        if (!conv_w) {
+            fprintf(stderr, "[ggml-turbomind] mul_mat_grouped_gated_silu_total_tokens: no conv_w for type=%d\n", ggml_type);
+            return 3;
+        }
+
+        Bdesc.type    = to_tm_wdtype(ggml_type);
+        Bdesc.order   = conv_w->order;
+        Bdesc.rows    = N;
+        Bdesc.cols    = K;
+        Bdesc.ld      = 0;
+        Bdesc.pack    = decode_pack(k_pack_value & 0xFFFu);
+        Bdesc.num     = num_experts;
+        Bdesc.offsets = nullptr;
+        Bdesc.idxs    = nullptr;
+        if (tmg::get_operand_tag(conv_w->pack) != tmg::OPERAND_A) {
+            std::swap(Bdesc.rows, Bdesc.cols);
+            Bdesc.order = ~Bdesc.order;
+        }
+
+        if (scales_packed && conv_s) {
+            uint32_t v_pack_raw = ((uint32_t)k_pack_value >> 12) & 0xFFFu;
+            if (v_pack_raw == 0) {
+                v_pack_raw = ((uint32_t)k_pack_value & 0xF0Fu) | (uint32_t)tmg::OPERAND_V;
+            }
+            Vdesc.type    = to_tm_sdtype(ggml_type);
+            Vdesc.order   = conv_s->order;
+            Vdesc.rows    = N;
+            Vdesc.cols    = K / group_size;
+            Vdesc.ld      = 0;
+            Vdesc.pack    = (tmg::Pack)v_pack_raw;
+            Vdesc.num     = num_experts;
+            if (tmg::get_operand_tag(conv_s->pack) != tmg::OPERAND_U) {
+                std::swap(Vdesc.rows, Vdesc.cols);
+                Vdesc.order = ~Vdesc.order;
+            }
+        }
+    } else {
+        Bdesc.type    = turbomind::kHalf;
+        Bdesc.order   = tmg::Order::kRowMajor;
+        Bdesc.rows    = K;
+        Bdesc.cols    = N;
+        Bdesc.ld      = 0;
+        Bdesc.pack    = 0;
+        Bdesc.num     = num_experts;
+    }
+
+    tmg::MatrixLayout Ddesc;
+    Ddesc.type    = turbomind::kHalf;
+    Ddesc.order   = tmg::Order::kRowMajor;
+    Ddesc.rows    = total_tokens;
+    Ddesc.cols    = N;
+    Ddesc.ld      = N / 2;
+    Ddesc.pack    = 0;
+    Ddesc.num     = num_experts;
+    Ddesc.offsets = const_cast<int*>(expert_offsets);
+    Ddesc.idxs    = nullptr;
+    tmg::MatrixLayout Cdesc = Ddesc;
+    tmg::MatrixLayout Udesc{};
+
+    int rc = s->gemm->Run(
+        op, 1.0f, A, Adesc, nullptr, Udesc,
+        weights_packed, Bdesc, scales_packed, Vdesc, 0.0f, nullptr, Cdesc,
+        D, Ddesc, workspace, stream);
+    return rc;
+}

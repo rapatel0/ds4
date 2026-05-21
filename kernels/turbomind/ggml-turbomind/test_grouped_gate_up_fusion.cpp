@@ -30,6 +30,9 @@ typedef int  (*pfn_pack_weight)(const void *, int, int, int, int, void *, void *
 typedef int  (*pfn_mul_mat_grouped_total_tokens)(const void *, const int *, const int *, int, int,
                                                  const void * const *, const void * const *,
                                                  int, int, int, int, int, void *, void *);
+typedef int  (*pfn_mul_mat_grouped_gated_silu_total_tokens)(const void *, const int *, const int *, int, int,
+                                                            const void * const *, const void * const *,
+                                                            int, int, int, int, int, void *, void *);
 
 struct block_mxfp4 {
     uint8_t e;
@@ -78,6 +81,22 @@ static void make_fused_fixture(std::vector<block_mxfp4> & fused,
         const size_t src = (size_t) row * blocks_per_row;
         const size_t gate_dst = (size_t) row * blocks_per_row;
         const size_t up_dst = (size_t) (row + N) * blocks_per_row;
+        std::copy(gate.begin() + src, gate.begin() + src + blocks_per_row, fused.begin() + gate_dst);
+        std::copy(up.begin()   + src, up.begin()   + src + blocks_per_row, fused.begin() + up_dst);
+    }
+}
+
+static void make_fused_interleaved_fixture(std::vector<block_mxfp4> & fused,
+                                           const std::vector<block_mxfp4> & gate,
+                                           const std::vector<block_mxfp4> & up,
+                                           int N,
+                                           int K) {
+    const int blocks_per_row = K / 32;
+    fused.resize((size_t) 2 * N * blocks_per_row);
+    for (int row = 0; row < N; ++row) {
+        const size_t src = (size_t) row * blocks_per_row;
+        const size_t gate_dst = (size_t) (2 * row) * blocks_per_row;
+        const size_t up_dst = (size_t) (2 * row + 1) * blocks_per_row;
         std::copy(gate.begin() + src, gate.begin() + src + blocks_per_row, fused.begin() + gate_dst);
         std::copy(up.begin()   + src, up.begin()   + src + blocks_per_row, fused.begin() + up_dst);
     }
@@ -175,7 +194,9 @@ static int run_case(void * lib, const Case & c) {
     auto pb   = (pfn_packed_bytes)                 dlsym(lib, "ggml_turbomind_packed_bytes");
     auto pw   = (pfn_pack_weight)                  dlsym(lib, "ggml_turbomind_pack_weight_expert");
     auto mmgt = (pfn_mul_mat_grouped_total_tokens) dlsym(lib, "ggml_turbomind_mul_mat_grouped_total_tokens");
-    if (!in || !sh || !pb || !pw || !mmgt) {
+    auto mmgs = (pfn_mul_mat_grouped_gated_silu_total_tokens)
+        dlsym(lib, "ggml_turbomind_mul_mat_grouped_gated_silu_total_tokens");
+    if (!in || !sh || !pb || !pw || !mmgt || !mmgs) {
         fprintf(stderr, "[gate_up_fusion] dlsym failed\n");
         return 1;
     }
@@ -196,21 +217,26 @@ static int run_case(void * lib, const Case & c) {
     std::vector<std::vector<block_mxfp4>> gate(active.size());
     std::vector<std::vector<block_mxfp4>> up(active.size());
     std::vector<std::vector<block_mxfp4>> fused(active.size());
+    std::vector<std::vector<block_mxfp4>> fused_interleaved(active.size());
     for (size_t i = 0; i < active.size(); ++i) {
         make_mxfp4_fixture(gate[i], N, K, 0x47000000u + (uint32_t)i * 101u);
         make_mxfp4_fixture(up[i],   N, K, 0x55000000u + (uint32_t)i * 131u);
         make_fused_fixture(fused[i], gate[i], up[i], N, K);
+        make_fused_interleaved_fixture(fused_interleaved[i], gate[i], up[i], N, K);
     }
 
     PackedExperts gate_packed;
     PackedExperts up_packed;
     PackedExperts fused_packed;
+    PackedExperts gated_packed;
     if (pack_fixture_set(pb, pw, ggml_type, N, K, group_size, num_experts, active, gate, gate_packed) != 0 ||
         pack_fixture_set(pb, pw, ggml_type, N, K, group_size, num_experts, active, up, up_packed) != 0 ||
-        pack_fixture_set(pb, pw, ggml_type, fused_N, K, group_size, num_experts, active, fused, fused_packed) != 0) {
+        pack_fixture_set(pb, pw, ggml_type, fused_N, K, group_size, num_experts, active, fused, fused_packed) != 0 ||
+        pack_fixture_set(pb, pw, ggml_type, fused_N, K, group_size, num_experts, active, fused_interleaved, gated_packed) != 0) {
         free_packed(gate_packed);
         free_packed(up_packed);
         free_packed(fused_packed);
+        free_packed(gated_packed);
         sh();
         return 3;
     }
@@ -231,6 +257,7 @@ static int run_case(void * lib, const Case & c) {
         free_packed(gate_packed);
         free_packed(up_packed);
         free_packed(fused_packed);
+        free_packed(gated_packed);
         sh();
         return 4;
     }
@@ -251,14 +278,17 @@ static int run_case(void * lib, const Case & c) {
     __half * d_gate = nullptr;
     __half * d_up = nullptr;
     __half * d_fused = nullptr;
+    __half * d_gated = nullptr;
     CHECK_CUDA(cudaMalloc(&d_A, h_A.size() * sizeof(__half)));
     CHECK_CUDA(cudaMalloc(&d_gate, (size_t) total_tokens * N * sizeof(__half)));
     CHECK_CUDA(cudaMalloc(&d_up, (size_t) total_tokens * N * sizeof(__half)));
     CHECK_CUDA(cudaMalloc(&d_fused, (size_t) total_tokens * fused_N * sizeof(__half)));
+    CHECK_CUDA(cudaMalloc(&d_gated, (size_t) total_tokens * N * sizeof(__half)));
     CHECK_CUDA(cudaMemcpy(d_A, h_A.data(), h_A.size() * sizeof(__half), cudaMemcpyHostToDevice));
     CHECK_CUDA(cudaMemset(d_gate, 0, (size_t) total_tokens * N * sizeof(__half)));
     CHECK_CUDA(cudaMemset(d_up, 0, (size_t) total_tokens * N * sizeof(__half)));
     CHECK_CUDA(cudaMemset(d_fused, 0, (size_t) total_tokens * fused_N * sizeof(__half)));
+    CHECK_CUDA(cudaMemset(d_gated, 0, (size_t) total_tokens * N * sizeof(__half)));
 
     constexpr int warmup_iters = 3;
     constexpr int bench_iters = 30;
@@ -289,6 +319,14 @@ static int run_case(void * lib, const Case & c) {
             fprintf(stderr, "[gate_up_fusion] fused warmup rc=%d\n", rc);
             return 7;
         }
+        rc = mmgs(d_A, nullptr, d_offsets, num_experts, total_tokens,
+                  (const void * const *) gated_packed.d_w_table,
+                  (const void * const *) gated_packed.d_s_table,
+                  ggml_type, fused_N, K, group_size, gated_packed.k_pack, d_gated, nullptr);
+        if (rc != 0) {
+            fprintf(stderr, "[gate_up_fusion] gated warmup rc=%d\n", rc);
+            return 7;
+        }
     }
     CHECK_CUDA(cudaDeviceSynchronize());
 
@@ -296,10 +334,14 @@ static int run_case(void * lib, const Case & c) {
     cudaEvent_t sep_stop = nullptr;
     cudaEvent_t fused_start = nullptr;
     cudaEvent_t fused_stop = nullptr;
+    cudaEvent_t gated_start = nullptr;
+    cudaEvent_t gated_stop = nullptr;
     CHECK_CUDA(cudaEventCreate(&sep_start));
     CHECK_CUDA(cudaEventCreate(&sep_stop));
     CHECK_CUDA(cudaEventCreate(&fused_start));
     CHECK_CUDA(cudaEventCreate(&fused_stop));
+    CHECK_CUDA(cudaEventCreate(&gated_start));
+    CHECK_CUDA(cudaEventCreate(&gated_stop));
 
     CHECK_CUDA(cudaEventRecord(sep_start, nullptr));
     for (int iter = 0; iter < bench_iters; ++iter) {
@@ -337,25 +379,48 @@ static int run_case(void * lib, const Case & c) {
     CHECK_CUDA(cudaEventRecord(fused_stop, nullptr));
     CHECK_CUDA(cudaEventSynchronize(fused_stop));
 
+    CHECK_CUDA(cudaEventRecord(gated_start, nullptr));
+    for (int iter = 0; iter < bench_iters; ++iter) {
+        rc = mmgs(d_A, nullptr, d_offsets, num_experts, total_tokens,
+                  (const void * const *) gated_packed.d_w_table,
+                  (const void * const *) gated_packed.d_s_table,
+                  ggml_type, fused_N, K, group_size, gated_packed.k_pack, d_gated, nullptr);
+        if (rc != 0) {
+            fprintf(stderr, "[gate_up_fusion] gated rc=%d\n", rc);
+            return 10;
+        }
+    }
+    CHECK_CUDA(cudaEventRecord(gated_stop, nullptr));
+    CHECK_CUDA(cudaEventSynchronize(gated_stop));
+
     const float separate_ms = elapsed_ms(sep_start, sep_stop) / (float) bench_iters;
     const float fused_ms = elapsed_ms(fused_start, fused_stop) / (float) bench_iters;
+    const float gated_ms = elapsed_ms(gated_start, gated_stop) / (float) bench_iters;
     CHECK_CUDA(cudaEventDestroy(sep_start));
     CHECK_CUDA(cudaEventDestroy(sep_stop));
     CHECK_CUDA(cudaEventDestroy(fused_start));
     CHECK_CUDA(cudaEventDestroy(fused_stop));
+    CHECK_CUDA(cudaEventDestroy(gated_start));
+    CHECK_CUDA(cudaEventDestroy(gated_stop));
 
     std::vector<__half> h_gate((size_t) total_tokens * N);
     std::vector<__half> h_up((size_t) total_tokens * N);
     std::vector<__half> h_fused((size_t) total_tokens * fused_N);
+    std::vector<__half> h_gated((size_t) total_tokens * N);
     CHECK_CUDA(cudaMemcpy(h_gate.data(), d_gate, h_gate.size() * sizeof(__half), cudaMemcpyDeviceToHost));
     CHECK_CUDA(cudaMemcpy(h_up.data(), d_up, h_up.size() * sizeof(__half), cudaMemcpyDeviceToHost));
     CHECK_CUDA(cudaMemcpy(h_fused.data(), d_fused, h_fused.size() * sizeof(__half), cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(h_gated.data(), d_gated, h_gated.size() * sizeof(__half), cudaMemcpyDeviceToHost));
 
     float max_abs_gate = 0.0f;
     float max_abs_up = 0.0f;
     float sum_abs = 0.0f;
     float sum_ref = 0.0f;
+    float gated_max_abs = 0.0f;
+    float gated_sum_abs = 0.0f;
+    float gated_sum_ref = 0.0f;
     int bad = 0;
+    int gated_bad = 0;
     const size_t values_per_half = (size_t) total_tokens * N;
     for (int row = 0; row < total_tokens; ++row) {
         for (int col = 0; col < N; ++col) {
@@ -366,36 +431,52 @@ static int run_case(void * lib, const Case & c) {
             const float up_ref = __half2float(h_up[half_idx]);
             const float gate_f = __half2float(h_fused[fused_gate_idx]);
             const float up_f = __half2float(h_fused[fused_up_idx]);
+            const float gated = __half2float(h_gated[half_idx]);
+            const float silu = gate_ref / (1.0f + expf(-gate_ref));
+            const float gated_ref = silu * up_ref;
             const float dg = fabsf(gate_f - gate_ref);
             const float du = fabsf(up_f - up_ref);
+            const float dgs = fabsf(gated - gated_ref);
             max_abs_gate = std::max(max_abs_gate, dg);
             max_abs_up = std::max(max_abs_up, du);
+            gated_max_abs = std::max(gated_max_abs, dgs);
             sum_abs += dg + du;
             sum_ref += fabsf(gate_ref) + fabsf(up_ref);
+            gated_sum_abs += dgs;
+            gated_sum_ref += fabsf(gated_ref);
             if (!std::isfinite(gate_f) || !std::isfinite(up_f) || dg > 0.25f || du > 0.25f) {
                 bad++;
+            }
+            if (!std::isfinite(gated) || dgs > 8.0f) {
+                gated_bad++;
             }
         }
     }
     const float rel = sum_ref > 0 ? sum_abs / sum_ref : 0.0f;
+    const float gated_rel = gated_sum_ref > 0 ? gated_sum_abs / gated_sum_ref : 0.0f;
     fprintf(stderr,
-            "[gate_up_fusion tpa=%d] total_routes=%d active=%zu separate_ms=%.4f fused_ms=%.4f speedup=%.3fx max_abs_gate=%.4e max_abs_up=%.4e rel=%.4e bad=%d/%zu k_pack_sep=0x%x k_pack_fused=0x%x\n",
+            "[gate_up_fusion tpa=%d] total_routes=%d active=%zu separate_ms=%.4f fused_ms=%.4f gated_ms=%.4f fused_speedup=%.3fx gated_speedup=%.3fx max_abs_gate=%.4e max_abs_up=%.4e rel=%.4e bad=%d/%zu gated_max_abs=%.4e gated_rel=%.4e gated_bad=%d/%zu k_pack_sep=0x%x k_pack_fused=0x%x k_pack_gated=0x%x\n",
             c.tokens_per_active, total_tokens, active.size(),
-            separate_ms, fused_ms, separate_ms / fused_ms,
+            separate_ms, fused_ms, gated_ms, separate_ms / fused_ms, separate_ms / gated_ms,
             max_abs_gate, max_abs_up, rel, bad, 2 * values_per_half,
-            gate_packed.k_pack, fused_packed.k_pack);
+            gated_max_abs, gated_rel, gated_bad, values_per_half,
+            gate_packed.k_pack, fused_packed.k_pack, gated_packed.k_pack);
 
     free_packed(gate_packed);
     free_packed(up_packed);
     free_packed(fused_packed);
+    free_packed(gated_packed);
     CHECK_CUDA(cudaFree(d_offsets));
     CHECK_CUDA(cudaFree(d_A));
     CHECK_CUDA(cudaFree(d_gate));
     CHECK_CUDA(cudaFree(d_up));
     CHECK_CUDA(cudaFree(d_fused));
+    CHECK_CUDA(cudaFree(d_gated));
     sh();
 
-    if (bad != 0 || rel > 1e-3f || max_abs_gate > 0.25f || max_abs_up > 0.25f) {
+    if (bad != 0 || gated_bad != 0 ||
+        rel > 1e-3f || gated_rel > 1e-3f ||
+        max_abs_gate > 0.25f || max_abs_up > 0.25f || gated_max_abs > 8.0f) {
         fprintf(stderr, "[gate_up_fusion tpa=%d] FAIL\n", c.tokens_per_active);
         return 11;
     }

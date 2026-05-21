@@ -122,7 +122,12 @@ typedef struct {
     int k_pack;
     int weight_stride;
     int scale_stride;
+    uint32_t flags;
 } ds4_gpu_turbomind_mxfp4_matrix_view;
+
+enum {
+    DS4_GPU_TURBOMIND_MXFP4_GATE_UP_INTERLEAVED = 1u << 0,
+};
 
 int ds4_gpu_device_count(void);
 int ds4_gpu_arena_open(ds4_gpu_arena **out, int gpu, uint64_t bytes);
