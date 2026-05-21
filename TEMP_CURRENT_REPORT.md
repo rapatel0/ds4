@@ -2,6 +2,39 @@
 
 Date: 2026-05-21
 
+## Sprint 157 Update
+
+Sprint 157 added an opt-in CUDA Graph replay probe around the post-router
+TurboMind routed-FFN core. It builds on the V100 pod and passes full 43-layer
+scheduler smoke with graph off and graph on. I also added single-slot served
+scratch reuse under `DS4_V100_TURBOMIND_GRAPH=1` so the served path has stable
+scratch tensor pointers before capture.
+
+The served result is not a win. At 128-slot/32K, graph-disabled control was
+`59.607704` generated / `55.882222` continuation-decode tok/s. Graph enabled
+with stable scratch and global capture was correct but measured `59.450666` /
+`55.734999`, with zero graph captures. Switching capture mode to thread-local
+was also correct but measured `59.367233` / `55.656781`, again with zero graph
+captures.
+
+The server logs show 43 graph warmup keys followed by 43 begin-capture failures
+with:
+
+```text
+operation not permitted when stream is capturing
+```
+
+A smaller diagnostic with `--async-pipeline-mode off` still failed to begin
+capture, so this is not just the per-step async scheduler. The likely blocker is
+that the current routed-FFN kernel path launches on the legacy default stream.
+CUDA Graph replay would require threading an explicit capture stream through
+the TurboMind routed-FFN kernels and related CUDA operations.
+
+Decision: keep `DS4_V100_TURBOMIND_GRAPH` default-off and diagnostic-only. Do
+not spend more time on wrapper-level graph replay. The next material path is
+still a true persistent/larger fused routed-FFN executor, or the bounded 2-way
+TP prototype for the 128-slot/32K NV2 case.
+
 ## Sprint 156 Update
 
 Sprint 156 re-tested the routed-FFN stream pipeline with the correct active

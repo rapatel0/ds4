@@ -139,7 +139,14 @@ exact six-group version is slightly positive in the deterministic served
 benchmark, but it is not production-safe because arbitrary traffic can activate
 more groups. A safe auto-group implementation passed full scheduler smoke but
 regressed served throughput due to host active-group readback. The group
-pipeline remains diagnostic-only.
+pipeline remains diagnostic-only. Sprint 157 added an opt-in CUDA Graph replay
+probe around the TurboMind routed-FFN core. It built and passed full scheduler
+smoke, but served graph capture failed before replay on the current
+legacy-default-stream kernel path. The 128-slot/32K graph probe was correct but
+slower than control (`59.450666` / `55.734999` generated/decode tok/s with
+global capture, `59.367233` / `55.656781` with thread-local capture, both with
+zero captures). Graph replay remains diagnostic-only unless the routed-FFN
+executor is rewritten around an explicit stream.
 
 | Track | Context | Slots | Best Generated tok/s | Current Default Generated tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
@@ -231,6 +238,9 @@ to slightly worse.
 | 152 | 2/3/4-stage fused gate/up software-pipeline sweep | Correct; 768-route `m128/m128_s3/m128_s4` measured `0.5809/0.5863/0.5794 ms`, 1536-route `m128_1536/m128_s3_1536/m128_s4_1536` measured `0.8743/0.8821/0.8774 ms`, and NCU fixed-probe HMMA counts were identical | Do not spend more effort on gate/up stage count; next fusion must cover a larger routed-FFN boundary or use bounded TP |
 | 153 | Bounded TP pack contract | Correct; `--emit-tp-split` emitted `ffn_gate_up_exps.tp{0,1}` and `ffn_down_exps.tp{0,1}` rows across GPU0/GPU3, partial context binding passed, and the real two-GPU NV2 proxy was `1.157x` total-with-copy at 768 routes but `0.912x` at 1536 routes | Keep TP scoped to a one-layer 128-slot/32K prototype; default runtime remains layer-sharded |
 | 154 | Fused routed-FFN boundary validation | Correct; down-reduce epilogue served at `59.509317` vs `59.502747` control for 128-slot/32K and `60.642962` vs `60.671924` control for 256-slot/16K | Keep off by default; epilogue-only fusion is too small, and the next lever must change routed expert execution |
+| 155 | Host stream-per-expert routed-FFN pipeline | Correct and active, but served A/B regressed at both 128-slot/32K and 256-slot/16K | Keep diagnostic-only |
+| 156 | Exact six-group and safe auto-group pipeline validation | Exact six-group diagnostic was slightly positive; safe auto-group was correct but slower due to host readback | Keep diagnostic-only; do not promote unsafe hardcoded group count |
+| 157 | Routed-FFN CUDA Graph replay probe | Builds and passes scheduler smoke, but served capture fails with zero graph captures; 128-slot/32K graph candidate was slower than control | Keep diagnostic-only; explicit stream plumbing or persistent FFN executor needed |
 
 ## Remaining
 

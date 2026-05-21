@@ -159,6 +159,15 @@ groups is not safe for arbitrary serving traffic. A safe auto-group mode was
 implemented and passed full scheduler smoke, but its host active-group readback
 regressed served throughput. The group pipeline therefore remains diagnostic;
 the next material path is still a persistent/larger fused routed-FFN executor.
+Sprint 157 added an opt-in CUDA Graph replay probe around the TurboMind
+routed-FFN core. It built and passed full 43-layer graph-off and graph-on
+scheduler smokes, but served 128-slot/32K capture failed in the current
+legacy-default-stream kernel path. Graph-disabled control was `59.607704`
+generated / `55.882222` continuation tok/s; graph enabled with stable scratch
+was correct but measured `59.450666` / `55.734999` with zero captures, and the
+thread-local capture variant measured `59.367233` / `55.656781` with zero
+captures. The graph flag remains diagnostic-only; real graph replay would
+require threading an explicit stream through the routed-FFN executor.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
@@ -182,6 +191,9 @@ current topology because it gives up too much stage overlap.
 | Sprint 145 192-slot 16K midpoint | 16,384 | 192 | `60.700926` | `56.907118` | 192/192 token match |
 | Sprint 145 128-slot 16K control | 16,384 | 128 | `59.860493` | `56.119213` | 128/128 token match |
 | Sprint 139 gated m128 auto probe | 32,768 | 128 | `60.130047` | `56.371919` | 128/128 token match |
+| Sprint 157 graph-disabled control | 32,768 | 128 | `59.607704` | `55.882222` | 128/128 token match |
+| Sprint 157 graph stable-scratch global capture probe | 32,768 | 128 | `59.450666` | `55.734999` | 128/128 token match, 0 captures |
+| Sprint 157 graph stable-scratch thread-local capture probe | 32,768 | 128 | `59.367233` | `55.656781` | 128/128 token match, 0 captures |
 | Sprint 156 six-group pipeline diagnostic | 32,768 | 128 | `59.645848` | `55.917982` | 128/128 token match |
 | Sprint 156 same-binary control | 32,768 | 128 | `59.516392` | `55.796618` | 128/128 token match |
 | Sprint 156 safe auto-group diagnostic | 32,768 | 128 | `58.988662` | `55.301871` | 128/128 token match |

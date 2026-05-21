@@ -430,6 +430,11 @@ static bool env_flag_default_enabled(const char *name) {
            strcmp(v, "OFF") != 0;
 }
 
+static bool single_slot_batch_scratch_enabled(void) {
+    return env_flag_enabled("DS4_V100_SINGLE_SLOT_BATCH_SCRATCH") ||
+           env_flag_enabled("DS4_V100_TURBOMIND_GRAPH");
+}
+
 static bool has_turbomind_separate_gate_up(const ds4_v100_layer_state *state) {
     return state &&
            state->turbomind_gate_view.experts_packed != 0 &&
@@ -1697,20 +1702,55 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
 
     const bool use_single_shared_pair =
         env_flag_enabled("DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE");
-    ds4_gpu_tensor *router_t = ds4_gpu_tensor_alloc(256u * sizeof(float));
-    ds4_gpu_tensor *probs_t = ds4_gpu_tensor_alloc(256u * sizeof(float));
-    ds4_gpu_tensor *selected_t = ds4_gpu_tensor_alloc(6u * sizeof(int32_t));
-    ds4_gpu_tensor *weights_t = ds4_gpu_tensor_alloc(6u * sizeof(float));
-    ds4_gpu_tensor *routed_mid_t = ds4_gpu_tensor_alloc((uint64_t)routes * mid * sizeof(float));
-    ds4_gpu_tensor *accum_a = ds4_gpu_tensor_alloc((uint64_t)hidden * sizeof(float));
-    ds4_gpu_tensor *shared_gate_t = use_single_shared_pair ? NULL
-        : ds4_gpu_tensor_alloc((uint64_t)mid * sizeof(float));
-    ds4_gpu_tensor *shared_up_t = use_single_shared_pair ? NULL
-        : ds4_gpu_tensor_alloc((uint64_t)mid * sizeof(float));
-    ds4_gpu_tensor *shared_mid_t = ds4_gpu_tensor_alloc((uint64_t)mid * sizeof(float));
-    ds4_gpu_tensor *shared_t = ds4_gpu_tensor_alloc((uint64_t)hidden * sizeof(float));
-
     int rc = 1;
+    const bool use_scratch =
+        cfg->batch_scratch != NULL && single_slot_batch_scratch_enabled();
+    ds4_gpu_tensor *router_t = NULL;
+    ds4_gpu_tensor *probs_t = NULL;
+    ds4_gpu_tensor *selected_t = NULL;
+    ds4_gpu_tensor *weights_t = NULL;
+    ds4_gpu_tensor *routed_mid_t = NULL;
+    ds4_gpu_tensor *accum_a = NULL;
+    ds4_gpu_tensor *shared_gate_t = NULL;
+    ds4_gpu_tensor *shared_up_t = NULL;
+    ds4_gpu_tensor *shared_mid_t = NULL;
+    ds4_gpu_tensor *shared_t = NULL;
+    if (use_scratch &&
+        ensure_batch_scratch(cfg->batch_scratch,
+                             hidden,
+                             mid,
+                             routes,
+                             state->q_lora_rank,
+                             state->q_width,
+                             state->kv_latent_width,
+                             state->attention_output_rank,
+                             err,
+                             errlen)) {
+        goto done;
+    }
+    router_t = use_scratch ? cfg->batch_scratch->ffn_router
+        : ds4_gpu_tensor_alloc(256u * sizeof(float));
+    probs_t = use_scratch ? cfg->batch_scratch->ffn_probs
+        : ds4_gpu_tensor_alloc(256u * sizeof(float));
+    selected_t = use_scratch ? cfg->batch_scratch->ffn_selected
+        : ds4_gpu_tensor_alloc(6u * sizeof(int32_t));
+    weights_t = use_scratch ? cfg->batch_scratch->ffn_weights
+        : ds4_gpu_tensor_alloc(6u * sizeof(float));
+    routed_mid_t = use_scratch ? cfg->batch_scratch->ffn_routed_mid
+        : ds4_gpu_tensor_alloc((uint64_t)routes * mid * sizeof(float));
+    accum_a = use_scratch ? cfg->batch_scratch->ffn_routed_out_view[0]
+        : ds4_gpu_tensor_alloc((uint64_t)hidden * sizeof(float));
+    shared_gate_t = use_single_shared_pair ? NULL
+        : (use_scratch ? cfg->batch_scratch->ffn_shared_gate
+                       : ds4_gpu_tensor_alloc((uint64_t)mid * sizeof(float)));
+    shared_up_t = use_single_shared_pair ? NULL
+        : (use_scratch ? cfg->batch_scratch->ffn_shared_up
+                       : ds4_gpu_tensor_alloc((uint64_t)mid * sizeof(float)));
+    shared_mid_t = use_scratch ? cfg->batch_scratch->ffn_shared_mid
+        : ds4_gpu_tensor_alloc((uint64_t)mid * sizeof(float));
+    shared_t = use_scratch ? cfg->batch_scratch->ffn_shared
+        : ds4_gpu_tensor_alloc((uint64_t)hidden * sizeof(float));
+
     int32_t selected[6] = {0};
     float weights[6] = {0};
     const bool readback_routes = !cfg->suppress_router_readback;
@@ -1903,16 +1943,18 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
     rc = 0;
 
 done:
-    ds4_gpu_tensor_free(shared_t);
-    ds4_gpu_tensor_free(shared_mid_t);
-    ds4_gpu_tensor_free(shared_up_t);
-    ds4_gpu_tensor_free(shared_gate_t);
-    ds4_gpu_tensor_free(accum_a);
-    ds4_gpu_tensor_free(routed_mid_t);
-    ds4_gpu_tensor_free(weights_t);
-    ds4_gpu_tensor_free(selected_t);
-    ds4_gpu_tensor_free(probs_t);
-    ds4_gpu_tensor_free(router_t);
+    if (!use_scratch) {
+        ds4_gpu_tensor_free(shared_t);
+        ds4_gpu_tensor_free(shared_mid_t);
+        ds4_gpu_tensor_free(shared_up_t);
+        ds4_gpu_tensor_free(shared_gate_t);
+        ds4_gpu_tensor_free(accum_a);
+        ds4_gpu_tensor_free(routed_mid_t);
+        ds4_gpu_tensor_free(weights_t);
+        ds4_gpu_tensor_free(selected_t);
+        ds4_gpu_tensor_free(probs_t);
+        ds4_gpu_tensor_free(router_t);
+    }
     return rc;
 }
 
@@ -2562,18 +2604,55 @@ int ds4_v100_layer_execute_hc_decode(
         return exec_error(err, errlen, "HC control dimensions do not match DS4");
     }
 
-    ds4_gpu_tensor *hc_norm = ds4_gpu_tensor_alloc(hc_bytes);
-    ds4_gpu_tensor *hc_mix = ds4_gpu_tensor_alloc(DS4_V100_HC_MIX * sizeof(float));
-    ds4_gpu_tensor *attn_split = ds4_gpu_tensor_alloc(DS4_V100_HC_MIX * sizeof(float));
-    ds4_gpu_tensor *ffn_split = ds4_gpu_tensor_alloc(DS4_V100_HC_MIX * sizeof(float));
-    ds4_gpu_tensor *attn_cur = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
-    ds4_gpu_tensor *attn_out = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
-    ds4_gpu_tensor *after_attn_hc = ds4_gpu_tensor_alloc(hc_bytes);
-    ds4_gpu_tensor *ffn_cur = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
-    ds4_gpu_tensor *ffn_norm = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
-    ds4_gpu_tensor *ffn_delta = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
-
     int rc = 1;
+    const bool use_scratch =
+        cfg->batch_scratch != NULL && single_slot_batch_scratch_enabled();
+    ds4_gpu_tensor *hc_norm = NULL;
+    ds4_gpu_tensor *hc_mix = NULL;
+    ds4_gpu_tensor *attn_split = NULL;
+    ds4_gpu_tensor *ffn_split = NULL;
+    ds4_gpu_tensor *attn_cur = NULL;
+    ds4_gpu_tensor *attn_out = NULL;
+    ds4_gpu_tensor *after_attn_hc = NULL;
+    ds4_gpu_tensor *ffn_cur = NULL;
+    ds4_gpu_tensor *ffn_norm = NULL;
+    ds4_gpu_tensor *ffn_delta = NULL;
+    if (use_scratch &&
+        ensure_batch_scratch(cfg->batch_scratch,
+                             hidden_n,
+                             state->intermediate_size,
+                             state->routes_per_token,
+                             state->q_lora_rank,
+                             state->q_width,
+                             state->kv_latent_width,
+                             state->attention_output_rank,
+                             err,
+                             errlen)) {
+        goto done;
+    }
+    if (use_scratch) {
+        hc_norm = cfg->batch_scratch->hc_norm[0];
+        hc_mix = cfg->batch_scratch->hc_mix[0];
+        attn_split = cfg->batch_scratch->attn_split[0];
+        ffn_split = cfg->batch_scratch->ffn_split[0];
+        attn_cur = cfg->batch_scratch->attn_cur[0];
+        attn_out = cfg->batch_scratch->attn_out[0];
+        after_attn_hc = cfg->batch_scratch->after_attn_hc[0];
+        ffn_cur = cfg->batch_scratch->ffn_cur[0];
+        ffn_norm = cfg->batch_scratch->ffn_norm[0];
+        ffn_delta = cfg->batch_scratch->ffn_delta[0];
+    } else {
+        hc_norm = ds4_gpu_tensor_alloc(hc_bytes);
+        hc_mix = ds4_gpu_tensor_alloc(DS4_V100_HC_MIX * sizeof(float));
+        attn_split = ds4_gpu_tensor_alloc(DS4_V100_HC_MIX * sizeof(float));
+        ffn_split = ds4_gpu_tensor_alloc(DS4_V100_HC_MIX * sizeof(float));
+        attn_cur = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
+        attn_out = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
+        after_attn_hc = ds4_gpu_tensor_alloc(hc_bytes);
+        ffn_cur = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
+        ffn_norm = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
+        ffn_delta = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
+    }
     if (!hc_norm || !hc_mix || !attn_split || !ffn_split || !attn_cur ||
         !attn_out || !after_attn_hc || !ffn_cur || !ffn_norm || !ffn_delta) {
         exec_error(err, errlen, "failed to allocate HC layer executor tensors");
@@ -2660,16 +2739,18 @@ int ds4_v100_layer_execute_hc_decode(
     rc = 0;
 
 done:
-    ds4_gpu_tensor_free(ffn_delta);
-    ds4_gpu_tensor_free(ffn_norm);
-    ds4_gpu_tensor_free(ffn_cur);
-    ds4_gpu_tensor_free(after_attn_hc);
-    ds4_gpu_tensor_free(attn_out);
-    ds4_gpu_tensor_free(attn_cur);
-    ds4_gpu_tensor_free(ffn_split);
-    ds4_gpu_tensor_free(attn_split);
-    ds4_gpu_tensor_free(hc_mix);
-    ds4_gpu_tensor_free(hc_norm);
+    if (!use_scratch) {
+        ds4_gpu_tensor_free(ffn_delta);
+        ds4_gpu_tensor_free(ffn_norm);
+        ds4_gpu_tensor_free(ffn_cur);
+        ds4_gpu_tensor_free(after_attn_hc);
+        ds4_gpu_tensor_free(attn_out);
+        ds4_gpu_tensor_free(attn_cur);
+        ds4_gpu_tensor_free(ffn_split);
+        ds4_gpu_tensor_free(attn_split);
+        ds4_gpu_tensor_free(hc_mix);
+        ds4_gpu_tensor_free(hc_norm);
+    }
     return rc;
 }
 

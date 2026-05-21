@@ -330,12 +330,15 @@ static uint64_t g_cuda_tmp_bytes[DS4_CUDA_MAX_TMP_DEVICES];
 static cudaStream_t g_tm_pipe_streams[DS4_CUDA_MAX_TMP_DEVICES][DS4_CUDA_TM_PIPE_MAX_STREAMS];
 static cudaEvent_t g_tm_pipe_events[DS4_CUDA_MAX_TMP_DEVICES][DS4_CUDA_TM_PIPE_MAX_STREAMS];
 static cudaEvent_t g_tm_pipe_start_events[DS4_CUDA_MAX_TMP_DEVICES];
+static thread_local int g_tm_graph_inner;
+static thread_local int g_tm_graph_force_total_tokens;
 static void *g_model_stage_raw[4];
 static void *g_model_stage[4];
 static cudaEvent_t g_model_stage_event[4];
 static uint64_t g_model_stage_bytes;
 
 static int cuda_ok(cudaError_t err, const char *what);
+static void cuda_tm_graph_cache_release_all(void);
 static const char *cuda_model_range_ptr_from_fd(
         const void *model_map,
         uint64_t offset,
@@ -2030,6 +2033,7 @@ extern "C" int ds4_gpu_init(void) {
 extern "C" void ds4_gpu_cleanup(void) {
     (void)cudaDeviceSynchronize();
     cuda_tm_profile_dump();
+    cuda_tm_graph_cache_release_all();
     cuda_tensor_pool_release_all();
     cuda_tm_matrix_table_cache_release_all();
     cuda_f8_f16_arena_cache_release_all();
@@ -5913,6 +5917,7 @@ static int cuda_tm_route_validation_sync_enabled(void) {
 
 static int cuda_tm_total_tokens_abi_enabled(void) {
     if (!g_tm_api.mul_mat_grouped_total_tokens) return 0;
+    if (g_tm_graph_force_total_tokens) return 1;
     const char *disable = getenv("DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS");
     if (!disable || !disable[0]) return 1;
     return !cuda_env_flag_enabled("DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS");
@@ -6944,6 +6949,24 @@ static int cuda_tm_routed_mxfp4_transient(
     return cuda_ok(cudaGetLastError(), "turbomind down scatter sum launch");
 }
 
+static int cuda_tm_routed_mxfp4_graph_dispatch(
+        const ds4_gpu_arena *arena,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *gate,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *up,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *gate_up,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *down,
+        uint32_t hidden,
+        uint32_t mid,
+        uint32_t n_total_experts,
+        const ds4_gpu_tensor *selected_i32,
+        const ds4_gpu_tensor *weights_f32,
+        uint32_t n_routes,
+        const ds4_gpu_tensor *x_f32,
+        const ds4_gpu_tensor *x_row_ptrs,
+        uint32_t n_tokens,
+        ds4_gpu_tensor *out_f32,
+        int accumulate_out);
+
 static int cuda_tm_routed_mxfp4_packed_impl(
         const ds4_gpu_arena *arena,
         const ds4_gpu_turbomind_mxfp4_matrix_view *gate,
@@ -7009,6 +7032,25 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     if (gate_up_interleaved && !use_gated_silu) {
         cuda_tm_warn_once("interleaved gate_up pack requires DS4_V100_TURBOMIND_GATED_SILU=1 and new TurboMind ABI");
         return 1;
+    }
+    if (!g_tm_graph_inner) {
+        const int graph_rc = cuda_tm_routed_mxfp4_graph_dispatch(arena,
+                                                                 gate,
+                                                                 up,
+                                                                 gate_up,
+                                                                 down,
+                                                                 hidden,
+                                                                 mid,
+                                                                 n_total_experts,
+                                                                 selected_i32,
+                                                                 weights_f32,
+                                                                 n_routes,
+                                                                 x_f32,
+                                                                 x_row_ptrs,
+                                                                 n_tokens,
+                                                                 out_f32,
+                                                                 accumulate_out);
+        if (graph_rc >= 0) return graph_rc;
     }
     cuda_tm_profile_call tm_prof;
     tm_prof.begin(arena->gpu);
@@ -7613,6 +7655,326 @@ static int cuda_tm_routed_mxfp4_packed_impl(
                        used_group_pipeline ? gemm_group_count : 0u);
     }
     return scatter_ok ? 0 : 1;
+}
+
+typedef struct {
+    int gpu;
+    const void *arena_ptr;
+    const void *selected_ptr;
+    const void *weights_ptr;
+    const void *x_ptr;
+    const void *x_row_ptrs;
+    const void *out_ptr;
+    uint64_t gate_weight_offset;
+    uint64_t up_weight_offset;
+    uint64_t gate_up_weight_offset;
+    uint64_t down_weight_offset;
+    uint64_t gate_scale_offset;
+    uint64_t up_scale_offset;
+    uint64_t gate_up_scale_offset;
+    uint64_t down_scale_offset;
+    uint32_t hidden;
+    uint32_t mid;
+    uint32_t n_total_experts;
+    uint32_t n_routes;
+    uint32_t n_tokens;
+    uint32_t gate_up_flags;
+    uint32_t mode_flags;
+    int accumulate_out;
+} cuda_tm_graph_key;
+
+typedef struct {
+    cuda_tm_graph_key key;
+    cudaGraph_t graph;
+    cudaGraphExec_t exec;
+    void *scratch_ptr;
+    uint64_t scratch_bytes;
+    uint64_t launches;
+    int warmup_done;
+    int disabled;
+} cuda_tm_graph_entry;
+
+static std::mutex g_tm_graph_mutex;
+static std::vector<cuda_tm_graph_entry> g_tm_graph_entries;
+
+static int cuda_tm_graph_enabled(void) {
+    return cuda_env_flag_enabled("DS4_V100_TURBOMIND_GRAPH");
+}
+
+static int cuda_tm_graph_verbose(void) {
+    return cuda_env_flag_enabled("DS4_V100_TURBOMIND_GRAPH_VERBOSE");
+}
+
+static uint64_t cuda_tm_graph_view_weight_offset(
+        const ds4_gpu_turbomind_mxfp4_matrix_view *view) {
+    return view ? view->weight_offset : UINT64_MAX;
+}
+
+static uint64_t cuda_tm_graph_view_scale_offset(
+        const ds4_gpu_turbomind_mxfp4_matrix_view *view) {
+    return view ? view->scale_offset : UINT64_MAX;
+}
+
+static uint32_t cuda_tm_graph_mode_flags(
+        const ds4_gpu_turbomind_mxfp4_matrix_view *gate_up) {
+    uint32_t flags = 0;
+    if (gate_up) flags |= 1u << 0;
+    if (gate_up && ((gate_up->flags & DS4_GPU_TURBOMIND_MXFP4_GATE_UP_INTERLEAVED) != 0)) {
+        flags |= 1u << 1;
+    }
+    if (cuda_tm_route_row_reduce_enabled()) flags |= 1u << 2;
+    if (cuda_tm_route_row_reduce_half2_enabled()) flags |= 1u << 3;
+    if (cuda_tm_indexed_a_enabled()) flags |= 1u << 4;
+    if (cuda_tm_compact_schedule_enabled()) flags |= 1u << 5;
+    if (cuda_tm_gated_silu_enabled()) flags |= 1u << 6;
+    if (cuda_env_flag_enabled("DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE")) flags |= 1u << 7;
+    return flags;
+}
+
+static int cuda_tm_graph_key_equal(const cuda_tm_graph_key &a,
+                                   const cuda_tm_graph_key &b) {
+    return a.gpu == b.gpu &&
+        a.arena_ptr == b.arena_ptr &&
+        a.selected_ptr == b.selected_ptr &&
+        a.weights_ptr == b.weights_ptr &&
+        a.x_ptr == b.x_ptr &&
+        a.x_row_ptrs == b.x_row_ptrs &&
+        a.out_ptr == b.out_ptr &&
+        a.gate_weight_offset == b.gate_weight_offset &&
+        a.up_weight_offset == b.up_weight_offset &&
+        a.gate_up_weight_offset == b.gate_up_weight_offset &&
+        a.down_weight_offset == b.down_weight_offset &&
+        a.gate_scale_offset == b.gate_scale_offset &&
+        a.up_scale_offset == b.up_scale_offset &&
+        a.gate_up_scale_offset == b.gate_up_scale_offset &&
+        a.down_scale_offset == b.down_scale_offset &&
+        a.hidden == b.hidden &&
+        a.mid == b.mid &&
+        a.n_total_experts == b.n_total_experts &&
+        a.n_routes == b.n_routes &&
+        a.n_tokens == b.n_tokens &&
+        a.gate_up_flags == b.gate_up_flags &&
+        a.mode_flags == b.mode_flags &&
+        a.accumulate_out == b.accumulate_out;
+}
+
+static void cuda_tm_graph_entry_destroy(cuda_tm_graph_entry *entry) {
+    if (!entry) return;
+    if (entry->exec) {
+        (void)cudaGraphExecDestroy(entry->exec);
+        entry->exec = NULL;
+    }
+    if (entry->graph) {
+        (void)cudaGraphDestroy(entry->graph);
+        entry->graph = NULL;
+    }
+    entry->scratch_ptr = NULL;
+    entry->scratch_bytes = 0;
+    entry->launches = 0;
+}
+
+static void cuda_tm_graph_cache_release_all(void) {
+    std::lock_guard<std::mutex> lk(g_tm_graph_mutex);
+    for (cuda_tm_graph_entry &entry : g_tm_graph_entries) {
+        cuda_tm_graph_entry_destroy(&entry);
+    }
+    g_tm_graph_entries.clear();
+}
+
+static int cuda_tm_graph_capture_supported(void) {
+    if (!cuda_tm_graph_enabled()) return 0;
+    if (!g_tm_api.mul_mat_grouped_total_tokens) return 0;
+    if (cuda_tm_profile_enabled()) return 0;
+    if (cuda_tm_route_validation_sync_enabled()) return 0;
+    if (cuda_tm_group_pipeline_enabled()) return 0;
+    if (cuda_tm_group_pipeline_auto_groups_enabled()) return 0;
+    return 1;
+}
+
+static int cuda_tm_graph_launch_entry(cuda_tm_graph_entry *entry) {
+    if (!entry || !entry->exec) return -1;
+    const int gpu = entry->key.gpu;
+    if (gpu < 0 || gpu >= DS4_CUDA_MAX_TMP_DEVICES) return -1;
+    if (entry->scratch_ptr != g_cuda_tmp[gpu] ||
+        g_cuda_tmp_bytes[gpu] < entry->scratch_bytes) {
+        if (cuda_tm_graph_verbose()) {
+            fprintf(stderr,
+                    "ds4: turbomind_graph scratch moved gpu=%d; recapturing\n",
+                    gpu);
+        }
+        cuda_tm_graph_entry_destroy(entry);
+        entry->warmup_done = 1;
+        return -1;
+    }
+    const cudaError_t launch_err = cudaGraphLaunch(entry->exec, 0);
+    if (launch_err != cudaSuccess) {
+        fprintf(stderr,
+                "ds4: turbomind_graph launch failed on gpu=%d: %s\n",
+                gpu,
+                cudaGetErrorString(launch_err));
+        (void)cudaGetLastError();
+        cuda_tm_graph_entry_destroy(entry);
+        entry->disabled = 1;
+        return -1;
+    }
+    entry->launches++;
+    return 0;
+}
+
+static int cuda_tm_routed_mxfp4_graph_dispatch(
+        const ds4_gpu_arena *arena,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *gate,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *up,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *gate_up,
+        const ds4_gpu_turbomind_mxfp4_matrix_view *down,
+        uint32_t hidden,
+        uint32_t mid,
+        uint32_t n_total_experts,
+        const ds4_gpu_tensor *selected_i32,
+        const ds4_gpu_tensor *weights_f32,
+        uint32_t n_routes,
+        const ds4_gpu_tensor *x_f32,
+        const ds4_gpu_tensor *x_row_ptrs,
+        uint32_t n_tokens,
+        ds4_gpu_tensor *out_f32,
+        int accumulate_out) {
+    if (!cuda_tm_graph_capture_supported()) return -1;
+    if (!arena || arena->gpu < 0 || arena->gpu >= DS4_CUDA_MAX_TMP_DEVICES ||
+        !selected_i32 || !weights_f32 || !out_f32) {
+        return -1;
+    }
+
+    cuda_tm_graph_key key = {};
+    key.gpu = arena->gpu;
+    key.arena_ptr = arena->ptr;
+    key.selected_ptr = selected_i32->ptr;
+    key.weights_ptr = weights_f32->ptr;
+    key.x_ptr = x_f32 ? x_f32->ptr : NULL;
+    key.x_row_ptrs = x_row_ptrs ? x_row_ptrs->ptr : NULL;
+    key.out_ptr = out_f32->ptr;
+    key.gate_weight_offset = cuda_tm_graph_view_weight_offset(gate);
+    key.up_weight_offset = cuda_tm_graph_view_weight_offset(up);
+    key.gate_up_weight_offset = cuda_tm_graph_view_weight_offset(gate_up);
+    key.down_weight_offset = cuda_tm_graph_view_weight_offset(down);
+    key.gate_scale_offset = cuda_tm_graph_view_scale_offset(gate);
+    key.up_scale_offset = cuda_tm_graph_view_scale_offset(up);
+    key.gate_up_scale_offset = cuda_tm_graph_view_scale_offset(gate_up);
+    key.down_scale_offset = cuda_tm_graph_view_scale_offset(down);
+    key.hidden = hidden;
+    key.mid = mid;
+    key.n_total_experts = n_total_experts;
+    key.n_routes = n_routes;
+    key.n_tokens = n_tokens;
+    key.gate_up_flags = gate_up ? gate_up->flags : 0;
+    key.mode_flags = cuda_tm_graph_mode_flags(gate_up);
+    key.accumulate_out = accumulate_out;
+
+    std::lock_guard<std::mutex> lk(g_tm_graph_mutex);
+    cuda_tm_graph_entry *entry = NULL;
+    for (cuda_tm_graph_entry &candidate : g_tm_graph_entries) {
+        if (cuda_tm_graph_key_equal(candidate.key, key)) {
+            entry = &candidate;
+            break;
+        }
+    }
+    if (!entry) {
+        cuda_tm_graph_entry fresh = {};
+        fresh.key = key;
+        fresh.warmup_done = 1;
+        g_tm_graph_entries.push_back(fresh);
+        if (cuda_tm_graph_verbose()) {
+            fprintf(stderr,
+                    "ds4: turbomind_graph warmup key gpu=%d tokens=%u routes=%u\n",
+                    key.gpu,
+                    key.n_tokens,
+                    key.n_tokens * key.n_routes);
+        }
+        return -1;
+    }
+    if (entry->disabled) return -1;
+    if (entry->exec) return cuda_tm_graph_launch_entry(entry);
+    if (!entry->warmup_done) {
+        entry->warmup_done = 1;
+        return -1;
+    }
+
+    cudaGraph_t graph = NULL;
+    cudaGraphExec_t exec = NULL;
+    cudaError_t err = cudaStreamBeginCapture(0, cudaStreamCaptureModeThreadLocal);
+    if (err != cudaSuccess) {
+        if (cuda_tm_graph_verbose()) {
+            fprintf(stderr,
+                    "ds4: turbomind_graph begin capture failed gpu=%d: %s\n",
+                    key.gpu,
+                    cudaGetErrorString(err));
+        }
+        (void)cudaGetLastError();
+        entry->disabled = 1;
+        return -1;
+    }
+
+    g_tm_graph_inner++;
+    g_tm_graph_force_total_tokens++;
+    const int inner_rc = cuda_tm_routed_mxfp4_packed_impl(arena,
+                                                          gate,
+                                                          up,
+                                                          gate_up,
+                                                          down,
+                                                          hidden,
+                                                          mid,
+                                                          n_total_experts,
+                                                          selected_i32,
+                                                          weights_f32,
+                                                          n_routes,
+                                                          x_f32,
+                                                          x_row_ptrs,
+                                                          n_tokens,
+                                                          out_f32,
+                                                          accumulate_out);
+    g_tm_graph_force_total_tokens--;
+    g_tm_graph_inner--;
+
+    err = cudaStreamEndCapture(0, &graph);
+    if (inner_rc != 0 || err != cudaSuccess || !graph) {
+        if (cuda_tm_graph_verbose()) {
+            fprintf(stderr,
+                    "ds4: turbomind_graph capture failed gpu=%d rc=%d err=%s\n",
+                    key.gpu,
+                    inner_rc,
+                    cudaGetErrorString(err));
+        }
+        if (graph) (void)cudaGraphDestroy(graph);
+        (void)cudaGetLastError();
+        entry->disabled = 1;
+        return -1;
+    }
+
+    err = cudaGraphInstantiate(&exec, graph, NULL, NULL, 0);
+    if (err != cudaSuccess || !exec) {
+        fprintf(stderr,
+                "ds4: turbomind_graph instantiate failed on gpu=%d: %s\n",
+                key.gpu,
+                cudaGetErrorString(err));
+        if (exec) (void)cudaGraphExecDestroy(exec);
+        if (graph) (void)cudaGraphDestroy(graph);
+        (void)cudaGetLastError();
+        entry->disabled = 1;
+        return -1;
+    }
+
+    entry->graph = graph;
+    entry->exec = exec;
+    entry->scratch_ptr = g_cuda_tmp[key.gpu];
+    entry->scratch_bytes = g_cuda_tmp_bytes[key.gpu];
+    if (cuda_tm_graph_verbose()) {
+        fprintf(stderr,
+                "ds4: turbomind_graph captured gpu=%d tokens=%u routes=%u scratch=%.2f MiB\n",
+                key.gpu,
+                key.n_tokens,
+                key.n_tokens * key.n_routes,
+                (double)entry->scratch_bytes / 1048576.0);
+    }
+    return cuda_tm_graph_launch_entry(entry);
 }
 
 extern "C" int ds4_gpu_arena_turbomind_mxfp4_routed_swiglu_down_sum_f32(

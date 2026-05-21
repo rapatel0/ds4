@@ -1000,7 +1000,7 @@ int ds4_v100_stage_scheduler_decode_hc_slot_span(
                 .model_size = sched->model_size,
                 .model_map_uses_shard_offsets = sched->model_map_uses_shard_offsets,
                 .arena = sched->arena,
-                .batch_scratch = use_layer_batch && n_slots > 1 ? &sched->batch_scratch : NULL,
+                .batch_scratch = use_layer_batch ? &sched->batch_scratch : NULL,
                 .router_token = tokens[rel],
                 .position = positions[rel],
                 .decode_cache = &lc->cache,
