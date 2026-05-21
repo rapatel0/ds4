@@ -5,11 +5,11 @@ Last updated: 2026-05-21
 ## Topline
 
 Current long-context production throughput mode is the Sprint 121 16-slot/256K
-appliance with the Sprint 122 rendezvous fix. Sprint 135 adds an explicit
-32-slot/128K short-context throughput mode. The runtime now reliably coalesces
+appliance with the Sprint 122 rendezvous fix. Sprint 136 adds an explicit
+64-slot/64K short-context throughput mode. The runtime now reliably coalesces
 high-slot concurrent requests into one tensor batch by resolving launcher
 `auto` microbatch wait to 200 ms at `active_microbatch >= 16`. The best current
-served result is `52.840889` generated tok/s at 32-slot/128K; the current
+served result is `57.322945` generated tok/s at 64-slot/64K; the current
 256K production-auto repeat remains `43.534061` generated tok/s. Sprint 123 found
 correct opt-in shared-FFN fusions up to `43.887206`. Sprint 124 added a
 correct opt-in TurboMind route-row reduce path and measured up to `43.822500`.
@@ -46,7 +46,9 @@ capped at 16 slots. The 32-slot 128K appliance passed full scheduler smoke and
 served correctness, reaching `52.840889` generated tok/s versus `45.780913`
 for a same-context 16-slot control. The next target is therefore not dispatch
 bypass or gate/up launch fusion; it must change kernel math/dataflow or widen
-the served scheduling shape further.
+the served scheduling shape further. Sprint 136 widened the short-context tier
+again to 64 slots at 64K, passed full scheduler smoke, and reached `57.322945`
+generated tok/s versus `52.884400` for a same-context 32-slot control.
 
 The default stack still uses the Sprint 111 fused TurboMind gate/up appliance,
 Sprint 115 shared gate/up SwiGLU F8 HMMA, Sprint 116 batched
@@ -58,6 +60,8 @@ current topology because it gives up too much stage overlap.
 
 | Mode | Context | Slots | Generated tok/s | Continuation tok/s | Correctness |
 |---|---:|---:|---:|---:|---|
+| Sprint 136 64-slot 64K throughput mode | 65,536 | 64 | `57.322945` | `53.740261` | 64/64 token match |
+| Sprint 136 same-context control | 65,536 | 32 | `52.884400` | `49.579125` | 32/32 token match |
 | Sprint 135 32-slot 128K throughput mode | 131,072 | 32 | `52.840889` | `49.538334` | 32/32 token match |
 | Sprint 135 same-context control | 131,072 | 16 | `45.780913` | `42.919606` | 16/16 token match |
 | Sprint 128 gated compact + route-row-reduce opt-in | 262,144 | 16 | `46.394722` | `43.495052` | 16/16 token match |
@@ -149,6 +153,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 | 133 | Compact-group gate/up benchmark correction | Correct; at 96 routes, sparse256 gated is `0.2128 ms` while compact gated is `0.1740 ms`, and compact separate gate+up is already `0.1895 ms` | Future probes must beat compact gated, not sparse grouped overhead |
 | 134 | Fixed-shape compact gate/up ABI probe | Correct; direct fixed SM70 launch was bit-identical and `0.1746 ms` vs `0.1746 ms` generic gated | Do not promote; generic TurboMind already selects this effective path |
 | 135 | 32-slot 128K throughput admission | Correct; full 43-layer smoke passed, and 32-slot 128K served at `52.840889` vs `45.780913` same-context 16-slot control | Ship as explicit short-context throughput mode; test wider short-context admission and lower-level software-pipelined kernels next |
+| 136 | 64-slot 64K throughput admission | Correct; full 43-layer smoke passed, and 64-slot 64K served at `57.322945` vs `52.884400` same-context 32-slot control | Ship as explicit short-context throughput mode; diminishing slot-width returns make software-pipelined expert kernels the next major lever |
 
 ## Sprint 106 Profile Takeaway
 

@@ -174,10 +174,11 @@ The high-slot wait prevents split request batches in throughput serving;
 decrease it only for latency-sensitive tests where accepting lower aggregate
 tok/s is fine.
 
-For throughput serving, `ctx=131072` now admits up to 32 slots, while
-`ctx=262144` remains capped at 16 slots. The launcher keeps the long-context
-tier memory-safe by rejecting slot counts above the planner-backed context cap,
-including 16-slot `ctx=1048576` configs and 32-slot `ctx=262144` configs.
+For throughput serving, `ctx=65536` now admits up to 64 slots, `ctx=131072`
+admits up to 32 slots, and `ctx=262144` remains capped at 16 slots. The
+launcher keeps the long-context tier memory-safe by rejecting slot counts above
+the planner-backed context cap, including 16-slot `ctx=1048576` configs,
+32-slot `ctx=262144` configs, and 64-slot `ctx=131072` configs.
 
 Set `DS4_V100_CUDA_PROFILER_WINDOW=1` only under `nvprof` or Nsight tooling.
 It starts/stops the CUDA profiler around generation batches after startup

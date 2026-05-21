@@ -132,7 +132,7 @@ if [ "$microbatch_wait_us" != "auto" ]; then
     is_uint "$microbatch_wait_us" || fail "--microbatch-wait-us must be auto or an integer"
     [ "$microbatch_wait_us" -le 1000000 ] || fail "--microbatch-wait-us must be <= 1000000"
 fi
-[ "$slots" -ge 1 ] && [ "$slots" -le 32 ] || fail "--slots must be in [1,32]"
+[ "$slots" -ge 1 ] && [ "$slots" -le 64 ] || fail "--slots must be in [1,64]"
 [ "$active_microbatch" -ge 1 ] && [ "$active_microbatch" -le "$slots" ] || fail "--active-microbatch must be in [1,slots]"
 case "$queue_policy" in sequential|reject-busy) ;; *) fail "--queue-policy must be sequential or reject-busy" ;; esac
 case "$async_pipeline_mode" in

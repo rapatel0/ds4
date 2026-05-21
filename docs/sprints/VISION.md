@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: codex
-revision: 138
+revision: 139
 ---
 
 # Vision: DS4 V100 Appliance
@@ -115,7 +115,10 @@ optimized V100 low-bit expert kernels in the actual hot path.
   Sprint 135 then widened the served scheduling shape where memory allowed it:
   32-slot 128K full scheduler smoke passed and the served appliance reached
   `52.840889` generated tok/s versus `45.780913` for the same-context 16-slot
-  control. 256K remains capped at 16 slots to avoid overfilling 32 GB V100s.
+  control. Sprint 136 added the next short-context tier: 64-slot 64K full
+  scheduler smoke passed and served throughput reached `57.322945` generated
+  tok/s versus `52.884400` for the same-context 32-slot control. 256K remains
+  capped at 16 slots to avoid overfilling 32 GB V100s.
   Dispatch-policy tuning, dispatch bypass, final scatter fusion, wrapper-level
   activation compaction, and basic gate/up launch fusion are therefore not the
   missing throughput lever. The project remains far below the practical serving
@@ -821,8 +824,9 @@ The practical target should be staged from current evidence, not from roofline:
 | Sprint 115 shared gate/up SwiGLU F8 HMMA | `33.578236` default vs `33.292541` control at 256K/8 slots; `21.455638` vs `21.430420` at 1M/4 slots | Measured | A DS4-shaped Volta WMMA kernel computes shared gate and up projections from the same activation tile, then applies SwiGLU. This path is now the default. Combined with Sprint 114 shared-down HMMA, it reaches `33.674684` at 256K/8 slots but regresses 1M/4 slots, so shared-down remains opt-in. |
 | Sprint 121 16-slot 256K throughput mode | `43.659461` at 256K/16 slots vs `34.445844` same-binary 8-slot control | Measured | Raising the active-slot ceiling fills more Volta HMMA token lanes and increases TurboMind route counts. The launcher admits 16 slots only for 256K-class contexts and rejects unsafe 16-slot 1M configs before allocation. |
 | Sprint 135 32-slot 128K throughput mode | `52.840889` at 128K/32 slots vs `45.780913` same-context 16-slot control | Measured | Raising the active-slot ceiling again improves aggregate throughput when the context cap is lowered enough to stay inside the 32 GB V100 memory budget. 256K remains capped at 16 slots. |
-| Sustained benchmark without major kernel changes | `~20-55` tok/s | Medium | Current evidence reaches the low end of the continuous-batching band at 256K/16 slots and improves to `52.840889` at 128K/32 slots; more slots help when they fill existing HMMA/TurboMind tile shapes, but this is still far below the practical target. |
-| Continuous token-step batching, 8-32 active slots | `~40-200` tok/s | Medium-low | Sprint 135 reached `52.840889` tok/s at 32 slots/128K. Further progress requires persistent per-slot state, no per-request reset, multi-token batching, wider safe admission where memory allows it, and useful queue depth. |
+| Sprint 136 64-slot 64K throughput mode | `57.322945` at 64K/64 slots vs `52.884400` same-context 32-slot control | Measured | Slot-width scaling continues to help, but the marginal gain shrank to about `8.4%`. The short-context tier is now better utilized, while long-context tiers remain capped for memory safety. |
+| Sustained benchmark without major kernel changes | `~20-60` tok/s | Medium | Current evidence reaches the low end of the continuous-batching band at 256K/16 slots and improves to `57.322945` at 64K/64 slots; more slots help when they fill existing HMMA/TurboMind tile shapes, but this is still far below the practical target. |
+| Continuous token-step batching, 8-64 active slots | `~40-220` tok/s | Medium-low | Sprint 136 reached `57.322945` tok/s at 64 slots/64K. Further progress requires persistent per-slot state, no per-request reset, multi-token batching, wider safe admission where memory allows it, and useful queue depth. |
 | Optimized MoE/expert batching with fused low-bit kernels | `~300-1,200` tok/s | Low until proven | Requires routed expert grouping, fused unpack/dequant plus HMMA/DP4A-style kernels, fewer launches, and hot-path kernel selection. |
 | Hero synthetic benchmark | `~1,000-3,000+` tok/s | Speculative | Requires short context, high concurrency, persistent grouped kernels, MTP commit, and excellent load balance. |
 
@@ -2632,6 +2636,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-21 | Shipped Sprint 121 16-slot 256K throughput mode. | The runtime and wrappers now admit 16 active slots for 256K serving, with context-aware guards preventing unsafe 16-slot long-context launch. Full 16-slot scheduler correctness passes at 256K, and served throughput improved to `43.659461` generated tok/s with `16/16` token matches. The next sprint should profile this mode and target a real SM70 pipelined F8 mainloop or deeper TurboMind expert scheduling. | Sprint 122+ |
 | 2026-05-21 | Shipped Sprint 122 16-slot rendezvous stabilization. | The 16-slot profile confirmed the served hot path still feeds F8 wrappers as `n_tokens=1`; async slot chunking exposes wider batch kernels but regresses end-to-end throughput by losing stage overlap. The launcher now resolves `DS4_V100_MICROBATCH_WAIT_US=auto` to 200 ms at 16 active slots, producing one 16-request tensor batch and `43.534061` generated tok/s by default; best observed candidate was `43.730215`. Next work should focus on a software-pipelined hot-path kernel or TurboMind expert scheduler change that improves the per-slot topology instead of synthetic wide-batch probes. | Sprint 123+ |
 | 2026-05-21 | Shipped Sprint 135 32-slot 128K throughput admission. | The scheduler and layer executor now admit 32 active slots for 128K contexts while keeping 256K capped at 16 slots. Full 32-slot scheduler smoke passed and the served appliance reached `52.840889` generated tok/s with `32/32` token matches, versus `45.780913` for the same-context 16-slot control. Next work should test 64-slot short-context fit and lower-level software-pipelined expert kernels. | Sprint 136+ |
+| 2026-05-21 | Shipped Sprint 136 64-slot 64K throughput admission. | The scheduler and layer executor now admit 64 active slots for 64K contexts while keeping 128K capped at 32 slots and 256K capped at 16 slots. Full 64-slot scheduler smoke passed and the served appliance reached `57.322945` generated tok/s with `64/64` token matches, versus `52.884400` for the same-context 32-slot control. Next work should prioritize lower-level software-pipelined expert kernels or a bounded 96/128-slot occupancy map. | Sprint 137+ |
 
 ## Open Questions
 
@@ -2645,4 +2650,4 @@ GPU utilization with architectural changes, and only then compare against the
 4. Should the persistent `/srv/dev/ds4-sprint004` pack become the seed
    deployment artifact, or should a formal pack release format come first?
 5. Which practical-use target matters first: single-user latency, aggregate
-   throughput at 8-32 slots, or synthetic maximum throughput?
+   throughput at 8-64 slots, or synthetic maximum throughput?
