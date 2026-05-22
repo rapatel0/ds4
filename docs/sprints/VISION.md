@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-22
 last_updated_by: sprint-execute
-revision: 171
+revision: 172
 ---
 
 # Vision: DS4 V100 Appliance
@@ -342,6 +342,15 @@ optimized V100 low-bit expert kernels in the actual hot path.
   closes another exact served-shape wrapper boundary; next work should change
   the larger routed-FFN execution model with a persistent gate/up + down
   executor or a broader persistent TP/EP scheduler boundary.
+- Sprint 172 rechecked the existing one-kernel small-route builder on the
+  production 16-slot/256K served path. The first candidate was mildly positive
+  (`46.550101` generated / `43.640720` continuation tok/s), but the repeat fell
+  below the fresh control repeat (`45.927784` / `43.057298` versus
+  `46.136775` / `43.253227`). Averaged against the nearby Sprint 171 control,
+  the effect is about `0.4%`, which is run noise. Keep
+  `DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=0` as the production default. This
+  closes the last cheap route-construction variant; next work should be a
+  persistent routed-FFN executor or a persistent TP/EP scheduler boundary.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation
@@ -2880,6 +2889,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-21 | Completed Sprint 164 guarded scheduler TP overlay. | The scheduler can now execute layer 3 routed FFN through default-off TP2 owner+peer overlay arenas and assert `tp2_layers=1`. Primitive and scheduler correctness passed, the negative gate fails clearly, and full 8-stage open fits 32 GiB V100 memory. However the synchronous one-layer overlay regressed stage and full selected-token timing (`0.511053` vs `0.639435` generated tok/s), so it remains diagnostic-only. Next work should either design persistent peer ownership / broader TP-EP scheduling or return to a larger fused routed-FFN boundary. | Sprint 165+ |
 | 2026-05-21 | Completed Sprint 165 TP2 async-input gate. | `DS4_V100_TP2_ASYNC_INPUT=1` overlaps peer input copies with owner-half compute and keeps the TP2 overlay default-off. It improved the cold TP overlay stage profile versus sync input (`235.591 ms` vs `317.593 ms` total), but warm no-TP remained much faster than async TP (`166.453 ms` vs `245.107 ms`). The one-layer overlay is not a practical serving lever; next work should either implement a broader persistent TP/EP scheduler boundary or return to a larger fused routed-FFN boundary. | Sprint 166+ |
 | 2026-05-22 | Completed Sprint 171 six-route down-reduce epilogue. | `ggml_turbomind_ds4_mxfp4_down_6_m16_reduce` extends the existing down route-reduce epilogue to the exact served 6-route shape and selected correctly on V100. The served 16-slot/256K A/B regressed (`43.887560` generated / `41.144588` continuation tok/s versus `45.941120` / `43.069800` control), so keep it default-off. The next implementation should stop tuning wrapper boundaries and move to a persistent gate/up + down routed-FFN executor or a broader persistent TP/EP scheduler boundary. | Sprint 172+ |
+| 2026-05-22 | Completed Sprint 172 small-route builder recheck. | `DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=1` is correct but not repeatably faster on the production 16-slot/256K served path. Candidate/control/candidate-repeat were `46.550101`, `46.136775`, and `45.927784` generated tok/s with all runs `16/16` correct. Keep the flag default-off and move next to the deeper persistent routed-FFN versus TP/EP decision. | Sprint 173+ |
 
 ## Open Questions
 
