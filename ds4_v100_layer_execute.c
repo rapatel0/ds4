@@ -2985,6 +2985,193 @@ done:
     return rc;
 }
 
+int ds4_v100_layer_execute_hc_prepare_ffn(
+        const ds4_v100_layer_state          *state,
+        const ds4_v100_layer_execute_config *cfg,
+        const ds4_gpu_tensor                *hidden_hc,
+        ds4_gpu_tensor                      *next_hidden_hc,
+        uint32_t                             scratch_slot,
+        ds4_v100_layer_prepared_ffn         *prepared,
+        char                                *err,
+        size_t                               errlen) {
+    if (!hidden_hc || !next_hidden_hc || !prepared) {
+        return exec_error(err, errlen, "missing HC FFN-prepare input");
+    }
+    if (!cfg || !cfg->batch_scratch) {
+        return exec_error(err, errlen, "HC FFN-prepare requires batch scratch");
+    }
+    if (scratch_slot >= DS4_V100_LAYER_MAX_BATCH) {
+        return exec_error(err, errlen, "HC FFN-prepare scratch slot out of range");
+    }
+    if (cfg->checkpoint_fn) {
+        return exec_error(err, errlen, "HC FFN-prepare does not support checkpoints");
+    }
+    if (validate_execute_common(state, cfg, err, errlen)) return 1;
+    const uint32_t hidden_n = state->hidden_size;
+    const uint64_t hc_values = (uint64_t)DS4_V100_N_HC * hidden_n;
+    const uint64_t hc_bytes = hc_values * sizeof(float);
+    if (hidden_n != DS4_V100_OUT_GROUP_DIM ||
+        ds4_gpu_tensor_bytes(hidden_hc) < hc_bytes ||
+        ds4_gpu_tensor_bytes(next_hidden_hc) < hc_bytes) {
+        return exec_error(err, errlen, "HC FFN-prepare tensor is too small");
+    }
+    if (state->hc_attn_fn.n_shape_dims != 2 ||
+        state->hc_ffn_fn.n_shape_dims != 2 ||
+        state->hc_attn_fn.shape[0] != hc_values ||
+        state->hc_ffn_fn.shape[0] != hc_values ||
+        state->hc_attn_fn.shape[1] != DS4_V100_HC_MIX ||
+        state->hc_ffn_fn.shape[1] != DS4_V100_HC_MIX) {
+        return exec_error(err, errlen, "HC FFN-prepare control dimensions do not match DS4");
+    }
+    if (ensure_batch_scratch(cfg->batch_scratch,
+                             hidden_n,
+                             state->intermediate_size,
+                             state->routes_per_token,
+                             state->q_lora_rank,
+                             state->q_width,
+                             state->kv_latent_width,
+                             state->attention_output_rank,
+                             err,
+                             errlen)) {
+        return 1;
+    }
+
+    ds4_gpu_tensor *hc_norm = cfg->batch_scratch->hc_norm[scratch_slot];
+    ds4_gpu_tensor *hc_mix = cfg->batch_scratch->hc_mix[scratch_slot];
+    ds4_gpu_tensor *attn_split = cfg->batch_scratch->attn_split[scratch_slot];
+    ds4_gpu_tensor *ffn_split = cfg->batch_scratch->ffn_split[scratch_slot];
+    ds4_gpu_tensor *attn_cur = cfg->batch_scratch->attn_cur[scratch_slot];
+    ds4_gpu_tensor *attn_out = cfg->batch_scratch->attn_out[scratch_slot];
+    ds4_gpu_tensor *after_attn_hc = cfg->batch_scratch->after_attn_hc[scratch_slot];
+    ds4_gpu_tensor *ffn_cur = cfg->batch_scratch->ffn_cur[scratch_slot];
+    ds4_gpu_tensor *ffn_norm = cfg->batch_scratch->ffn_norm[scratch_slot];
+    ds4_gpu_tensor *ffn_delta = cfg->batch_scratch->ffn_delta[scratch_slot];
+    if (!hc_norm || !hc_mix || !attn_split || !ffn_split || !attn_cur ||
+        !attn_out || !after_attn_hc || !ffn_cur || !ffn_norm || !ffn_delta) {
+        return exec_error(err, errlen, "HC FFN-prepare scratch tensors are missing");
+    }
+
+    if (!ds4_gpu_rms_norm_plain_tensor(hc_norm, hidden_hc, (uint32_t)hc_values, DS4_V100_RMS_EPS) ||
+        !ds4_gpu_matmul_f32_tensor(hc_mix,
+                                   cfg->model_map,
+                                   cfg->model_size,
+                                   model_offset_for_binding(cfg, &state->hc_attn_fn),
+                                   hc_values,
+                                   DS4_V100_HC_MIX,
+                                   hc_norm,
+                                   1) ||
+        !ds4_gpu_hc_split_weighted_sum_tensor(attn_cur,
+                                              attn_split,
+                                              hc_mix,
+                                              hidden_hc,
+                                              cfg->model_map,
+                                              cfg->model_size,
+                                              model_offset_for_binding(cfg, &state->hc_attn_scale),
+                                              model_offset_for_binding(cfg, &state->hc_attn_base),
+                                              hidden_n,
+                                              DS4_V100_N_HC,
+                                              DS4_V100_HC_SINKHORN_ITERS,
+                                              DS4_V100_RMS_EPS) ||
+        execute_attention_output(state, cfg, attn_cur, attn_out, err, errlen) ||
+        !ds4_gpu_hc_expand_split_tensor(after_attn_hc,
+                                        attn_out,
+                                        hidden_hc,
+                                        attn_split,
+                                        hidden_n,
+                                        DS4_V100_N_HC) ||
+        !ds4_gpu_rms_norm_plain_tensor(hc_norm, after_attn_hc, (uint32_t)hc_values, DS4_V100_RMS_EPS) ||
+        !ds4_gpu_matmul_f32_tensor(hc_mix,
+                                   cfg->model_map,
+                                   cfg->model_size,
+                                   model_offset_for_binding(cfg, &state->hc_ffn_fn),
+                                   hc_values,
+                                   DS4_V100_HC_MIX,
+                                   hc_norm,
+                                   1) ||
+        !ds4_gpu_hc_split_weighted_sum_tensor(ffn_cur,
+                                              ffn_split,
+                                              hc_mix,
+                                              after_attn_hc,
+                                              cfg->model_map,
+                                              cfg->model_size,
+                                              model_offset_for_binding(cfg, &state->hc_ffn_scale),
+                                              model_offset_for_binding(cfg, &state->hc_ffn_base),
+                                              hidden_n,
+                                              DS4_V100_N_HC,
+                                              DS4_V100_HC_SINKHORN_ITERS,
+                                              DS4_V100_RMS_EPS) ||
+        !ds4_gpu_rms_norm_weight_tensor(ffn_norm,
+                                        ffn_cur,
+                                        cfg->model_map,
+                                        cfg->model_size,
+                                        model_offset_for_binding(cfg, &state->ffn_norm),
+                                        hidden_n,
+                                        DS4_V100_RMS_EPS)) {
+        if (err && err[0] == '\0') exec_error(err, errlen, "HC FFN-prepare sequence failed");
+        return 1;
+    }
+
+    *prepared = (ds4_v100_layer_prepared_ffn) {
+        .scratch_slot = scratch_slot,
+        .hidden_hc = hidden_hc,
+        .next_hidden_hc = next_hidden_hc,
+        .after_attn_hc = after_attn_hc,
+        .ffn_split = ffn_split,
+        .ffn_norm = ffn_norm,
+        .ffn_delta = ffn_delta,
+    };
+    return 0;
+}
+
+int ds4_v100_layer_execute_hc_finish_ffn_batch(
+        const ds4_v100_layer_state           *state,
+        const ds4_v100_layer_execute_config  *cfgs,
+        ds4_v100_layer_prepared_ffn          *prepared,
+        uint32_t                              n_slots,
+        ds4_v100_layer_execute_report        *reports,
+        char                                 *err,
+        size_t                                errlen) {
+    if (!state || !cfgs || !prepared || n_slots == 0 ||
+        n_slots > DS4_V100_LAYER_MAX_BATCH) {
+        return exec_error(err, errlen, "invalid HC FFN-finish inputs");
+    }
+    const uint32_t hidden_n = state->hidden_size;
+    ds4_gpu_tensor *ffn_norm[DS4_V100_LAYER_MAX_BATCH] = {0};
+    ds4_gpu_tensor *ffn_delta[DS4_V100_LAYER_MAX_BATCH] = {0};
+    for (uint32_t slot = 0; slot < n_slots; slot++) {
+        if (!prepared[slot].after_attn_hc ||
+            !prepared[slot].ffn_split ||
+            !prepared[slot].ffn_norm ||
+            !prepared[slot].ffn_delta ||
+            !prepared[slot].next_hidden_hc) {
+            return exec_error(err, errlen, "HC FFN-finish slot is not prepared");
+        }
+        ffn_norm[slot] = prepared[slot].ffn_norm;
+        ffn_delta[slot] = prepared[slot].ffn_delta;
+    }
+    if (execute_ffn_delta_batch(state,
+                                cfgs,
+                                (const ds4_gpu_tensor *const *)ffn_norm,
+                                ffn_delta,
+                                n_slots,
+                                reports,
+                                err,
+                                errlen)) {
+        return 1;
+    }
+    for (uint32_t slot = 0; slot < n_slots; slot++) {
+        if (!ds4_gpu_hc_expand_split_tensor(prepared[slot].next_hidden_hc,
+                                            prepared[slot].ffn_delta,
+                                            prepared[slot].after_attn_hc,
+                                            prepared[slot].ffn_split,
+                                            hidden_n,
+                                            DS4_V100_N_HC)) {
+            return exec_error(err, errlen, "HC FFN-finish expansion failed");
+        }
+    }
+    return 0;
+}
+
 int ds4_v100_layer_execute_hc_decode_batch(
         const ds4_v100_layer_state           *state,
         const ds4_v100_layer_execute_config  *cfgs,

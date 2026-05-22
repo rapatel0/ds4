@@ -189,6 +189,16 @@ typedef struct {
     double timing_total_ms;
 } ds4_v100_layer_execute_report;
 
+typedef struct {
+    uint32_t scratch_slot;
+    const ds4_gpu_tensor *hidden_hc;
+    ds4_gpu_tensor *next_hidden_hc;
+    ds4_gpu_tensor *after_attn_hc;
+    ds4_gpu_tensor *ffn_split;
+    ds4_gpu_tensor *ffn_norm;
+    ds4_gpu_tensor *ffn_delta;
+} ds4_v100_layer_prepared_ffn;
+
 int ds4_v100_layer_execute_decode(
         const ds4_v100_layer_state          *state,
         const ds4_v100_layer_execute_config *cfg,
@@ -212,6 +222,25 @@ int ds4_v100_layer_execute_hc_decode_batch(
         const ds4_v100_layer_execute_config  *cfgs,
         const ds4_gpu_tensor *const          *hidden_hc,
         ds4_gpu_tensor *const                *next_hidden_hc,
+        uint32_t                              n_slots,
+        ds4_v100_layer_execute_report        *reports,
+        char                                 *err,
+        size_t                                errlen);
+
+int ds4_v100_layer_execute_hc_prepare_ffn(
+        const ds4_v100_layer_state          *state,
+        const ds4_v100_layer_execute_config *cfg,
+        const ds4_gpu_tensor                *hidden_hc,
+        ds4_gpu_tensor                      *next_hidden_hc,
+        uint32_t                             scratch_slot,
+        ds4_v100_layer_prepared_ffn         *prepared,
+        char                                *err,
+        size_t                               errlen);
+
+int ds4_v100_layer_execute_hc_finish_ffn_batch(
+        const ds4_v100_layer_state           *state,
+        const ds4_v100_layer_execute_config  *cfgs,
+        ds4_v100_layer_prepared_ffn          *prepared,
         uint32_t                              n_slots,
         ds4_v100_layer_execute_report        *reports,
         char                                 *err,

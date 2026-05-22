@@ -1564,6 +1564,145 @@ int ds4_v100_stage_scheduler_decode_hc_layer_span(
     return 0;
 }
 
+int ds4_v100_stage_scheduler_decode_hc_ffn_microbatch_layer(
+    ds4_v100_stage_scheduler *sched,
+    uint32_t slot_start,
+    const uint32_t *tokens,
+    const uint32_t *positions,
+    uint32_t n_slots,
+    int layer,
+    ds4_v100_stage_scheduler_report *reports,
+    char *err,
+    size_t errlen) {
+    if (scheduler_validate_slot_span_args(
+            sched, tokens, positions, slot_start, n_slots, err, errlen)) {
+        return 1;
+    }
+    if (scheduler_validate_layer_span_args(sched, layer, layer, err, errlen)) {
+        return 1;
+    }
+    if (!ds4_gpu_set_device(sched->stage.gpu)) {
+        return scheduler_errorf(err, errlen, "failed to set scheduler device gpu%d",
+                                sched->stage.gpu);
+    }
+    if (scheduler_activate_model_source(sched, err, errlen)) return 1;
+
+    ds4_gpu_tensor *cur[DS4_V100_SCHED_MAX_SLOTS];
+    ds4_gpu_tensor *next[DS4_V100_SCHED_MAX_SLOTS];
+    ds4_v100_layer_execute_config cfgs[DS4_V100_SCHED_MAX_SLOTS];
+    ds4_v100_layer_prepared_ffn prepared[DS4_V100_SCHED_MAX_SLOTS];
+    ds4_v100_layer_execute_report layer_reports[DS4_V100_SCHED_MAX_SLOTS];
+    memset(prepared, 0, sizeof(prepared));
+    memset(layer_reports, 0, sizeof(layer_reports));
+
+    for (uint32_t rel = 0; rel < n_slots; rel++) {
+        const uint32_t slot = slot_start + rel;
+        scheduler_layer_cache *lc = scheduler_cache_slot(sched, layer, slot);
+        if (!lc) {
+            return scheduler_errorf(err, errlen, "missing decode cache for layer %d",
+                                    layer);
+        }
+        if (!sched->cur_hc[slot]) {
+            return scheduler_errorf(err, errlen, "missing scheduler HC input for slot %d",
+                                    (int)slot);
+        }
+        cur[rel] = sched->cur_hc[slot];
+        next[rel] = cur[rel] == sched->hc_a[slot] ? sched->hc_b[slot] : sched->hc_a[slot];
+        cfgs[rel] = (ds4_v100_layer_execute_config) {
+            .model_map = sched->model_map,
+            .model_size = sched->model_size,
+            .model_map_uses_shard_offsets = sched->model_map_uses_shard_offsets,
+            .arena = sched->arena,
+            .batch_scratch = &sched->batch_scratch,
+            .router_token = tokens[rel],
+            .position = positions[rel],
+            .decode_cache = &lc->cache,
+            .fp8_kv_cache = sched->fp8_kv_cache,
+            .suppress_router_readback = sched->suppress_router_readback,
+            .tp2_layer = sched->tp2_layer,
+            .tp2_layer_count = sched->tp2_layer_count,
+            .tp2_owner_arena = sched->tp2_owner_arena,
+            .tp2_peer_arena = sched->tp2_peer_arena,
+            .tp2_peer_input = sched->tp2_peer_input,
+            .tp2_peer_selected = sched->tp2_peer_selected,
+            .tp2_peer_weights = sched->tp2_peer_weights,
+            .tp2_peer_out = sched->tp2_peer_out,
+            .tp2_peer_recv = sched->tp2_peer_recv,
+            .tp2_scratch_slots = sched->tp2_scratch_slots,
+        };
+        if (ds4_v100_layer_execute_hc_prepare_ffn(&sched->states[layer],
+                                                  &cfgs[rel],
+                                                  cur[rel],
+                                                  next[rel],
+                                                  rel,
+                                                  &prepared[rel],
+                                                  err,
+                                                  errlen)) {
+            if (err && errlen && err[0]) {
+                char inner[256];
+                snprintf(inner, sizeof(inner), "%s", err);
+                snprintf(err,
+                         errlen,
+                         "FFN microbatch prepare failed at layer %d slot %u: %s",
+                         layer,
+                         slot,
+                         inner);
+            }
+            return 1;
+        }
+    }
+
+    if (ds4_v100_layer_execute_hc_finish_ffn_batch(&sched->states[layer],
+                                                   cfgs,
+                                                   prepared,
+                                                   n_slots,
+                                                   layer_reports,
+                                                   err,
+                                                   errlen)) {
+        if (err && errlen && err[0]) {
+            char inner[256];
+            snprintf(inner, sizeof(inner), "%s", err);
+            snprintf(err,
+                     errlen,
+                     "FFN microbatch finish failed at layer %d: %s",
+                     layer,
+                     inner);
+        }
+        return 1;
+    }
+
+    for (uint32_t rel = 0; rel < n_slots; rel++) {
+        const uint32_t slot = slot_start + rel;
+        sched->cur_hc[slot] = next[rel];
+        if (reports) {
+            ds4_v100_stage_scheduler_report *r = &reports[rel];
+            memset(r, 0, sizeof(*r));
+            r->stage_id = sched->stage.stage_id;
+            r->gpu = sched->stage.gpu;
+            r->first_layer = layer;
+            r->last_layer = layer;
+            r->layers_executed = 1;
+            r->position = positions[rel];
+            r->token = tokens[rel];
+            r->arena_bytes = ds4_gpu_arena_bytes(sched->arena);
+            r->uploaded_tensors = sched->uploaded_tensors;
+            r->uploaded_bytes = sched->uploaded_bytes;
+            r->last_layer_report = layer_reports[rel];
+            r->timing_tp2_copy_in_ms = layer_reports[rel].timing_tp2_copy_in_ms;
+            r->timing_tp2_owner_ms = layer_reports[rel].timing_tp2_owner_ms;
+            r->timing_tp2_peer_ms = layer_reports[rel].timing_tp2_peer_ms;
+            r->timing_tp2_copy_out_ms = layer_reports[rel].timing_tp2_copy_out_ms;
+            r->timing_tp2_reduce_ms = layer_reports[rel].timing_tp2_reduce_ms;
+            r->timing_tp2_total_ms = layer_reports[rel].timing_tp2_total_ms;
+            r->turbomind_routed_layers_executed =
+                layer_reports[rel].turbomind_routed ? 1u : 0u;
+            r->turbomind_tp2_routed_layers_executed =
+                layer_reports[rel].turbomind_tp2_routed ? 1u : 0u;
+        }
+    }
+    return 0;
+}
+
 int ds4_v100_stage_scheduler_decode_hc(ds4_v100_stage_scheduler *sched,
                                        uint32_t token,
                                        uint32_t position,
