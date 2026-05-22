@@ -1,0 +1,88 @@
+Sprint 167 - Layer-Span Scheduler Primitive
+Date: 2026-05-21
+Pod: llm/llamacpp-build-8gpu
+Repo: /workspace/ds4
+
+Build
+-----
+Command:
+  make -j80 CUDA_ARCH=sm_70 tests/cuda_v100_stage_layer_span_smoke
+
+Result:
+  PASS
+
+Production TurboMind segmented layer-span smoke
+-----------------------------------------------
+Command:
+  DS4_V100_TURBOMIND_LIB=./build/turbomind-v100-s127/libggml-turbomind.so \
+  DS4_V100_TURBOMIND_GATED_SILU=1 \
+  DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1 \
+  ./tests/cuda_v100_stage_layer_span_smoke \
+    --index /workspace/ds4-appliance-full-tm-gated-s127/pack-index.tsv \
+    --turbomind-index /workspace/ds4-appliance-full-tm-gated-s127/turbomind-pack-index.tsv \
+    --shard-dir /workspace/ds4-appliance-full-tm-gated-s127 \
+    --model /models/DSv4-Flash-256e-fixed.gguf
+
+Output:
+  ds4: CUDA loading model tensors into device cache
+  cuda_v100_stage_layer_span_smoke: stage0=[0,5] stage1=[6,11] token0=16 token1=926 max_abs_slot0=0.01612854 max_abs_slot1=0.0221862793 threshold=0.03
+  cuda_v100_stage_layer_span_smoke: ok
+
+Production TurboMind full-vs-full repeat diagnostic
+---------------------------------------------------
+Command:
+  DS4_V100_STAGE_LAYER_SPAN_SECOND_FULL=1 \
+  DS4_V100_TURBOMIND_LIB=./build/turbomind-v100-s127/libggml-turbomind.so \
+  DS4_V100_TURBOMIND_GATED_SILU=1 \
+  DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1 \
+  ./tests/cuda_v100_stage_layer_span_smoke \
+    --index /workspace/ds4-appliance-full-tm-gated-s127/pack-index.tsv \
+    --turbomind-index /workspace/ds4-appliance-full-tm-gated-s127/turbomind-pack-index.tsv \
+    --shard-dir /workspace/ds4-appliance-full-tm-gated-s127 \
+    --model /models/DSv4-Flash-256e-fixed.gguf
+
+Output:
+  ds4: CUDA loading model tensors into device cache
+  cuda_v100_stage_layer_span_smoke: stage0=[0,5] stage1=[6,11] token0=16 token1=926 max_abs_slot0=0.016078949 max_abs_slot1=0.0161018372 threshold=0.03
+  cuda_v100_stage_layer_span_smoke: ok
+
+Replay regression smoke
+-----------------------
+Command:
+  make -j80 CUDA_ARCH=sm_70 tools/ds4-v100-replay
+
+  DS4_V100_TURBOMIND_LIB=./build/turbomind-v100-s127/libggml-turbomind.so \
+  DS4_V100_TURBOMIND_GATED_SILU=1 \
+  DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1 \
+  ./tools/ds4-v100-replay \
+    --model /models/DSv4-Flash-256e-fixed.gguf \
+    --appliance-dir /workspace/ds4-appliance-full-tm-gated-s127 \
+    --ctx 32768 \
+    --slots 4 \
+    --active-microbatch 4 \
+    --tokens 1 \
+    --prompt Hello \
+    --async-pipeline-decode \
+    --async-pipeline-mode per-step \
+    --async-event-handoff \
+    --json
+
+Output summary:
+  prompt_tokens=5
+  generated_tokens=1
+  token_id=19923
+  text_hex=48656c6c6f
+  prompt_tokens_per_second=2.771571
+  generated_tokens_per_second=0.553503
+
+Notes
+-----
+- Running the smoke against only pack-index.tsv from the TurboMind appliance
+  fails at open with missing raw expert descriptors, as expected for this
+  production pack. The smoke now accepts --turbomind-index and --shard-dir so
+  it mirrors the replay appliance open path.
+- The production TurboMind path has repeat-run HC drift around 1e-2 for this
+  two-stage partial-chain smoke. The segmented layer-span path is within the
+  same envelope, so the smoke threshold is 3e-2.
+- GPUs were clear after validation.
+

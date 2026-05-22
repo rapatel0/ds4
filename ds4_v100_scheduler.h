@@ -134,6 +134,18 @@ int ds4_v100_stage_scheduler_decode_token_slot_span(
     char *err,
     size_t errlen);
 
+int ds4_v100_stage_scheduler_decode_token_layer_span(
+    ds4_v100_stage_scheduler *sched,
+    uint32_t slot_start,
+    const uint32_t *tokens,
+    const uint32_t *positions,
+    uint32_t n_slots,
+    int first_layer,
+    int last_layer,
+    ds4_v100_stage_scheduler_report *reports,
+    char *err,
+    size_t errlen);
+
 int ds4_v100_stage_scheduler_decode_token_checkpoints(
     ds4_v100_stage_scheduler *sched,
     uint32_t token,
@@ -200,6 +212,18 @@ int ds4_v100_stage_scheduler_decode_hc_slot_span(
     const uint32_t *tokens,
     const uint32_t *positions,
     uint32_t n_slots,
+    ds4_v100_stage_scheduler_report *reports,
+    char *err,
+    size_t errlen);
+
+int ds4_v100_stage_scheduler_decode_hc_layer_span(
+    ds4_v100_stage_scheduler *sched,
+    uint32_t slot_start,
+    const uint32_t *tokens,
+    const uint32_t *positions,
+    uint32_t n_slots,
+    int first_layer,
+    int last_layer,
     ds4_v100_stage_scheduler_report *reports,
     char *err,
     size_t errlen);

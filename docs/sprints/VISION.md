@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: sprint-execute
-revision: 166
+revision: 167
 ---
 
 # Vision: DS4 V100 Appliance
@@ -271,6 +271,21 @@ optimized V100 low-bit expert kernels in the actual hot path.
   as a practical lever at 256K; the next meaningful work is a larger
   DS4-specific routed-FFN executor boundary or a broader persistent TP/EP
   scheduler, not more queue-level chunking.
+- Sprint 167 shipped the scheduler primitive needed for an in-stage layer
+  wavefront attempt. The stage scheduler now exposes bounded layer-span APIs
+  for both token-seeded stage-0 execution and HC-input stages while preserving
+  the existing full-stage wrappers. A new production-appliance CUDA smoke runs
+  full stage execution and segmented layer-span execution across stages 0 and
+  1 for two slots, using both `pack-index.tsv` and `turbomind-pack-index.tsv`.
+  It passed on the V100 pod with `max_abs_slot0=0.01612854` and
+  `max_abs_slot1=0.0221862793` under a `0.03` threshold. A full-vs-full repeat
+  diagnostic showed the same TurboMind repeat-run drift envelope
+  (`0.016078949` / `0.0161018372`), so the segmented path is not adding a new
+  numerical instability. A normal replay smoke also passed on the production
+  appliance, returning token hex `48656c6c6f` for prompt `Hello`. The next
+  practical scheduling sprint can now wire an opt-in replay diagnostic that
+  tracks per-slot local layer progress and batches only slots that are ready at
+  the same layer.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation

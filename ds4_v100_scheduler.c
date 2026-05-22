@@ -1232,6 +1232,39 @@ static bool scheduler_use_layer_batch(void) {
                      strcmp(env, "false") == 0));
 }
 
+static int scheduler_validate_layer_span_args(
+    const ds4_v100_stage_scheduler *sched,
+    int first_layer,
+    int last_layer,
+    char *err,
+    size_t errlen) {
+    if (!sched) return scheduler_error(err, errlen, "missing scheduler");
+    if (first_layer > last_layer) {
+        if (err && errlen) {
+            snprintf(err,
+                     errlen,
+                     "invalid layer span [%d,%d]",
+                     first_layer,
+                     last_layer);
+        }
+        return 1;
+    }
+    if (first_layer < sched->stage.layer_begin ||
+        last_layer > sched->stage.layer_end) {
+        if (err && errlen) {
+            snprintf(err,
+                     errlen,
+                     "layer span [%d,%d] outside stage range [%d,%d]",
+                     first_layer,
+                     last_layer,
+                     sched->stage.layer_begin,
+                     sched->stage.layer_end);
+        }
+        return 1;
+    }
+    return 0;
+}
+
 int ds4_v100_stage_scheduler_decode_hc_batch(
     ds4_v100_stage_scheduler *sched,
     const uint32_t *tokens,
@@ -1253,8 +1286,36 @@ int ds4_v100_stage_scheduler_decode_hc_slot_span(
     ds4_v100_stage_scheduler_report *reports,
     char *err,
     size_t errlen) {
+    if (!sched) return scheduler_error(err, errlen, "missing scheduler");
+    return ds4_v100_stage_scheduler_decode_hc_layer_span(
+        sched,
+        slot_start,
+        tokens,
+        positions,
+        n_slots,
+        sched->stage.layer_begin,
+        sched->stage.layer_end,
+        reports,
+        err,
+        errlen);
+}
+
+int ds4_v100_stage_scheduler_decode_hc_layer_span(
+    ds4_v100_stage_scheduler *sched,
+    uint32_t slot_start,
+    const uint32_t *tokens,
+    const uint32_t *positions,
+    uint32_t n_slots,
+    int first_layer,
+    int last_layer,
+    ds4_v100_stage_scheduler_report *reports,
+    char *err,
+    size_t errlen) {
     if (scheduler_validate_slot_span_args(
             sched, tokens, positions, slot_start, n_slots, err, errlen)) {
+        return 1;
+    }
+    if (scheduler_validate_layer_span_args(sched, first_layer, last_layer, err, errlen)) {
         return 1;
     }
     if (!ds4_gpu_set_device(sched->stage.gpu)) {
@@ -1287,7 +1348,7 @@ int ds4_v100_stage_scheduler_decode_hc_slot_span(
 
     uint32_t executed = 0;
     const bool use_layer_batch = scheduler_use_layer_batch();
-    for (int layer = sched->stage.layer_begin; layer <= sched->stage.layer_end; layer++) {
+    for (int layer = first_layer; layer <= last_layer; layer++) {
         ds4_v100_layer_execute_config cfgs[DS4_V100_SCHED_MAX_SLOTS];
         const ds4_gpu_tensor *hidden_hc[DS4_V100_SCHED_MAX_SLOTS];
         ds4_gpu_tensor *next_hc[DS4_V100_SCHED_MAX_SLOTS];
@@ -1388,8 +1449,8 @@ int ds4_v100_stage_scheduler_decode_hc_slot_span(
             memset(r, 0, sizeof(*r));
             r->stage_id = sched->stage.stage_id;
             r->gpu = sched->stage.gpu;
-            r->first_layer = sched->stage.layer_begin;
-            r->last_layer = sched->stage.layer_end;
+            r->first_layer = first_layer;
+            r->last_layer = last_layer;
             r->layers_executed = executed;
             r->position = positions[rel];
             r->token = tokens[rel];
@@ -1444,11 +1505,48 @@ int ds4_v100_stage_scheduler_decode_token_slot_span(
     char *err,
     size_t errlen) {
     if (!sched) return scheduler_error(err, errlen, "missing scheduler");
+    return ds4_v100_stage_scheduler_decode_token_layer_span(
+        sched,
+        slot_start,
+        tokens,
+        positions,
+        n_slots,
+        sched->stage.layer_begin,
+        sched->stage.layer_end,
+        reports,
+        err,
+        errlen);
+}
+
+int ds4_v100_stage_scheduler_decode_token_layer_span(
+    ds4_v100_stage_scheduler *sched,
+    uint32_t slot_start,
+    const uint32_t *tokens,
+    const uint32_t *positions,
+    uint32_t n_slots,
+    int first_layer,
+    int last_layer,
+    ds4_v100_stage_scheduler_report *reports,
+    char *err,
+    size_t errlen) {
+    if (!sched) return scheduler_error(err, errlen, "missing scheduler");
     if (!sched->stage.owns_token_embedding) {
         return scheduler_error(err, errlen, "decode-token requires token-embedding stage");
     }
     if (scheduler_validate_slot_span_args(
             sched, tokens, positions, slot_start, n_slots, err, errlen)) {
+        return 1;
+    }
+    if (scheduler_validate_layer_span_args(sched, first_layer, last_layer, err, errlen)) {
+        return 1;
+    }
+    if (first_layer != sched->stage.layer_begin) {
+        if (err && errlen) {
+            snprintf(err,
+                     errlen,
+                     "decode-token layer span must start at stage first layer %d",
+                     sched->stage.layer_begin);
+        }
         return 1;
     }
     if (!ds4_gpu_set_device(sched->stage.gpu)) {
@@ -1478,8 +1576,17 @@ int ds4_v100_stage_scheduler_decode_token_slot_span(
         }
         sched->cur_hc[slot] = sched->hc_a[slot];
     }
-    return ds4_v100_stage_scheduler_decode_hc_slot_span(
-        sched, slot_start, tokens, positions, n_slots, reports, err, errlen);
+    return ds4_v100_stage_scheduler_decode_hc_layer_span(
+        sched,
+        slot_start,
+        tokens,
+        positions,
+        n_slots,
+        first_layer,
+        last_layer,
+        reports,
+        err,
+        errlen);
 }
 
 int ds4_v100_stage_scheduler_decode_token(ds4_v100_stage_scheduler *sched,
