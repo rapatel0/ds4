@@ -1,0 +1,6 @@
+ds4: CUDA loading model tensors into device cache
+ds4: TurboMind routed executor fused6_reduce shape total_routes=6 active_experts=6 max_routes_per_expert=1
+ds4: routed-FFN liveness executor=fused6_reduce total_routes=6 route_expanded_a_half=0 compact_a_half=1 gate_out=elided mid_half=materialized down_routes=elided output_mode=full_sum
+ds4: TurboMind down-reduce epilogue selected total_routes=6
+ds4-v100-replay: startup warmup ok prompt_tokens=5 token=30594 total_ms=1523.730
+ds4-v100-replay: serving http://127.0.0.1:18420/v100/selected-token
