@@ -51,6 +51,8 @@ typedef struct {
     uint32_t slots;
     uint32_t active_microbatch;
     uint32_t microbatch_wait_us;
+    uint32_t synthetic_prompt_token;
+    uint32_t synthetic_prompt_len;
     uint32_t mtp_top_k;
     int mtp_gpu;
     int mtp_reserve_mib;
@@ -68,6 +70,7 @@ typedef struct {
     bool async_event_handoff;
     bool startup_warmup;
     bool cuda_profiler_window;
+    bool synthetic_prompt_token_set;
     ds4_v100_replay_async_pipeline_mode async_pipeline_mode;
 } replay_cli_options;
 
@@ -595,6 +598,9 @@ static void usage(FILE *fp) {
             "  --appliance-dir DIR       shorthand for DIR/pack-index.tsv, DIR/turbomind-pack-index.tsv, and shards\n"
             "  --prompt TEXT             prompt text\n"
             "  --prompt-file FILE        prompt file\n"
+            "  --synthetic-prompt-token ID\n"
+            "                            build prompt from repeated token ID\n"
+            "  --synthetic-prompt-len N  synthetic repeated-token prompt length\n"
             "  --system TEXT             system prompt, default empty\n"
             "  --tokens N                greedy tokens to generate, default 1\n"
             "  --ctx N                   KV context tokens, default 1048576\n"
@@ -710,6 +716,21 @@ static replay_cli_options parse_options(int argc, char **argv) {
             opt.prompt = need_arg(&i, argc, argv, arg);
         } else if (!strcmp(arg, "--prompt-file")) {
             opt.prompt_file = need_arg(&i, argc, argv, arg);
+        } else if (!strcmp(arg, "--synthetic-prompt-token")) {
+            uint64_t v = parse_u64_arg(need_arg(&i, argc, argv, arg), arg);
+            if (v > INT32_MAX) {
+                fprintf(stderr, "ds4-v100-replay: invalid --synthetic-prompt-token\n");
+                exit(2);
+            }
+            opt.synthetic_prompt_token = (uint32_t)v;
+            opt.synthetic_prompt_token_set = true;
+        } else if (!strcmp(arg, "--synthetic-prompt-len")) {
+            uint64_t v = parse_u64_arg(need_arg(&i, argc, argv, arg), arg);
+            if (v > INT32_MAX) {
+                fprintf(stderr, "ds4-v100-replay: invalid --synthetic-prompt-len\n");
+                exit(2);
+            }
+            opt.synthetic_prompt_len = (uint32_t)v;
         } else if (!strcmp(arg, "--system")) {
             opt.system = need_arg(&i, argc, argv, arg);
         } else if (!strcmp(arg, "--tokens")) {
@@ -864,8 +885,10 @@ static replay_cli_options parse_options(int argc, char **argv) {
             exit(2);
         }
     }
+    bool synthetic_prompt = opt.synthetic_prompt_len != 0;
     if (!opt.model_path || !opt.index_path ||
-        (!opt.serve && !opt.open_only && !opt.prompt && !opt.prompt_file)) {
+        (!opt.serve && !opt.open_only && !opt.prompt && !opt.prompt_file &&
+         !synthetic_prompt)) {
         usage(stderr);
         exit(2);
     }
@@ -896,6 +919,22 @@ static replay_cli_options parse_options(int argc, char **argv) {
     }
     if (opt.prompt && opt.prompt_file) {
         fprintf(stderr, "ds4-v100-replay: use --prompt or --prompt-file, not both\n");
+        exit(2);
+    }
+    if (synthetic_prompt && (opt.prompt || opt.prompt_file)) {
+        fprintf(stderr, "ds4-v100-replay: synthetic prompt mode cannot be combined with --prompt or --prompt-file\n");
+        exit(2);
+    }
+    if (!synthetic_prompt && opt.synthetic_prompt_token_set) {
+        fprintf(stderr, "ds4-v100-replay: --synthetic-prompt-token requires --synthetic-prompt-len\n");
+        exit(2);
+    }
+    if (synthetic_prompt && !opt.synthetic_prompt_token_set) {
+        fprintf(stderr, "ds4-v100-replay: --synthetic-prompt-len requires --synthetic-prompt-token\n");
+        exit(2);
+    }
+    if (synthetic_prompt && opt.system && opt.system[0]) {
+        fprintf(stderr, "ds4-v100-replay: synthetic prompt mode cannot be combined with --system\n");
         exit(2);
     }
     return opt;
@@ -2275,9 +2314,10 @@ static int run_server(const replay_cli_options *opt,
 
 int main(int argc, char **argv) {
     replay_cli_options opt = parse_options(argc, argv);
+    const bool synthetic_prompt = opt.synthetic_prompt_len != 0;
     char *prompt_owned = NULL;
     const char *prompt_text = NULL;
-    if (!opt.serve && !opt.open_only) {
+    if (!opt.serve && !opt.open_only && !synthetic_prompt) {
         prompt_owned = opt.prompt_file ? read_file(opt.prompt_file) : NULL;
         prompt_text = opt.prompt_file ? prompt_owned : opt.prompt;
         if (!prompt_text) return 1;
@@ -2353,7 +2393,13 @@ int main(int argc, char **argv) {
     }
 
     ds4_tokens prompt = {0};
-    ds4_v100_replay_encode_prompt(rt, opt.system, prompt_text, DS4_THINK_NONE, &prompt);
+    if (synthetic_prompt) {
+        for (uint32_t i = 0; i < opt.synthetic_prompt_len; i++) {
+            ds4_tokens_push(&prompt, (int)opt.synthetic_prompt_token);
+        }
+    } else {
+        ds4_v100_replay_encode_prompt(rt, opt.system, prompt_text, DS4_THINK_NONE, &prompt);
+    }
     if (opt.ctx && (uint64_t)prompt.len + opt.tokens > opt.ctx) {
         fprintf(stderr, "ds4-v100-replay: prompt exceeds configured context\n");
         replay_mtp_service_close(mtp);

@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-22
 last_updated_by: sprint-execute
-revision: 183
+revision: 184
 ---
 
 # Vision: DS4 V100 Appliance
@@ -381,6 +381,14 @@ optimized V100 low-bit expert kernels in the actual hot path.
   greedy top-1. Keep it default-off until a broader quality/tolerance gate
   clears it. The important signal is that online/persistent attention is a real
   long-context lever.
+- Sprint 184 added synthetic token prompt replay, which fixes a measurement
+  blind spot: previous 256K runs configured long-context capacity but still used
+  an 18-token text prompt. The new `--synthetic-prompt-token` /
+  `--synthetic-prompt-len` path can advance real KV position without giant text
+  files. A bounded len-256 run recorded `20108.067 ms` prompt replay and
+  `14.071008` continuation tok/s; the Sprint 183 online-single attention gate
+  was slower on the same len-256 direct check (`12.038632` continuation tok/s),
+  so it remains default-off.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation
@@ -2939,6 +2947,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-22 | Completed Sprint 181 persistent production appliance pack. | The 8-GPU build pod now has a repo-owned localpool-backed manifest/helper, so `/workspace` is backed by `/localpool/ds4/workspace` instead of `/dev/md0`. TurboMind was rebuilt on V100 using offline `fmt`, CUTLASS, and `concurrentqueue` dependency overrides, and the full interleaved gated-SiLU appliance pack was regenerated under `/workspace/packs/ds4-appliance-full-tm-gated-s181` (`142G`; GPU shard sizes from `22.5G` down to `11.8G`). Production-pack validation passed: 16-slot/256K smoke returned expected token `3136`; 16-slot/256K sustained base reached `48.163685` generated / `47.411127` continuation tok/s with `16/16` matches; one-slot/256K reached `10.357728` / `10.195888`; and 16-slot/256K MTP verify accepted `16/16` drafts. This restores the real optimized appliance baseline after pod recycle; the next sprint should use this persistent pack for either profiling or the next larger persistent routed-FFN / TP-EP boundary, not source-pack substitutes. | Sprint 182+ |
 | 2026-05-22 | Completed Sprint 182 production-pack profiling hook. | The sustained decode harness now supports `DS4_V100_REPLAY_BIN` wrappers and a `--cuda-profiler-window` pass-through, while the nvprof wrapper uses `DS4_V100_REPLAY_UNDERLYING_BIN` to avoid recursion. V100 evidence from the persistent Sprint 181 pack passed: async 16-slot/256K profile reached `20.811726` generated / `18.210261` continuation tok/s with `16/16` matches under profiling, synchronized diagnostic profile exposed attention as the dominant stage bucket (`9315.361 ms` attention versus `2223.435 ms` FFN across stages), and a one-slot nvprof smoke captured the profiler window successfully. The next sprint should not continue wrapper-only routed-FFN tuning; at 256K, persistent attention/KV execution and broader persistent TP/EP topology are now equal-priority candidates. | Sprint 183+ |
 | 2026-05-22 | Completed Sprint 183 single-token online attention gate. | Added default-off `DS4_CUDA_ATTENTION_DECODE_ONLINE_SINGLE=1`, fixed the existing online attention kernel's `ratio==0` single-token raw-window semantics, and validated it on the persistent production pack. Same-binary 16-slot/256K A/B improved from `47.648307` generated / `46.903802` continuation tok/s to `49.378552` / `48.607012`, both `16/16` first-token checks passing. Direct 8-token JSON compare matched through token 5 but diverged at token 6, so do not promote by default without a quality/tolerance gate. This confirms online attention is a material long-context lever; Sprint 184 should either qualify quality for this path or implement a more quality-preserving persistent/online attention boundary. | Sprint 184+ |
+| 2026-05-22 | Completed Sprint 184 synthetic long-context replay. | `tools/ds4-v100-replay` now supports `--synthetic-prompt-token` plus `--synthetic-prompt-len`, with parser guards against mixing synthetic mode with text prompts or system prompts. V100 build and parser validation passed. Synthetic len-8 replay generated successfully, and a bounded len-256 / 262144-context run recorded `20108.067 ms` prompt replay, `12.731209` prompt tok/s, and `14.071008` continuation tok/s. Repeating len-256 with Sprint 183's online-single attention gate preserved the two output IDs but slowed continuation to `12.038632`, so online-single remains default-off. Next work should use synthetic tiers like 1024/4096 to characterize actual filled-context decode before promoting attention changes. | Sprint 185+ |
 
 ## Open Questions
 
