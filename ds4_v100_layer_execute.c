@@ -456,7 +456,10 @@ static bool tp2_routed_enabled(const ds4_v100_layer_state *state,
     if (!state || !cfg || !use_fused_gate_up || !state->has_turbomind_tp2_routed) {
         return false;
     }
-    if (cfg->tp2_layer != state->layer_id ||
+    const int tp2_count = cfg->tp2_layer_count > 0 ? cfg->tp2_layer_count : 1;
+    if (cfg->tp2_layer < 0 ||
+        state->layer_id < cfg->tp2_layer ||
+        state->layer_id >= cfg->tp2_layer + tp2_count ||
         !cfg->tp2_owner_arena ||
         !cfg->tp2_peer_arena ||
         !cfg->tp2_peer_input ||

@@ -1,0 +1,4 @@
+ds4: CUDA loading model tensors into device cache
+ds4: TP/EP routed boundary layer=3 slots=16 routes=6 async_input=1 copy_in_ms=0.2626 owner_ms=0.4066 peer_ms=27.1011 copy_out_ms=0.0320 reduce_ms=0.0143 total_ms=27.8167
+ds4: TP/EP routed boundary layer=4 slots=16 routes=6 async_input=1 copy_in_ms=0.0420 owner_ms=0.3845 peer_ms=0.3535 copy_out_ms=0.0211 reduce_ms=0.0099 total_ms=0.8110
+cuda_v100_stage_scheduler_smoke: stage=0 gpu=0 layers=0-5 executed=6 tm_layers=6 tp2_layers=2 token=16 pos=16 slots=16 arena_bytes=22524134668 uploaded_tensors=1 uploaded_bytes=22524134668 ffn_ms=0.000 total_ms=0.000 expert0=35 ok

@@ -1,0 +1,17 @@
+appliance packed blk.3.ffn_gate_up_exps.tp0.weight experts=256/256 gpu=0 half=0 fused_N=2048 weight_offset=0 scale_offset=1073741824 k_pack=0x341321
+appliance packed blk.3.ffn_down_exps.tp0.weight experts=256/256 gpu=0 half=0 N=4096 K=1024 weight_offset=1140850688 scale_offset=1677721600 k_pack=0x341321
+appliance packed blk.3.ffn_gate_up_exps.tp1.weight experts=256/256 gpu=3 half=1 fused_N=2048 weight_offset=0 scale_offset=1073741824 k_pack=0x341321
+appliance packed blk.3.ffn_down_exps.tp1.weight experts=256/256 gpu=3 half=1 N=4096 K=1024 weight_offset=1140850688 scale_offset=1677721600 k_pack=0x341321
+appliance packed blk.4.ffn_gate_up_exps.tp0.weight experts=256/256 gpu=0 half=0 fused_N=2048 weight_offset=1711276032 scale_offset=2785017856 k_pack=0x341321
+appliance packed blk.4.ffn_down_exps.tp0.weight experts=256/256 gpu=0 half=0 N=4096 K=1024 weight_offset=2852126720 scale_offset=3388997632 k_pack=0x341321
+appliance packed blk.4.ffn_gate_up_exps.tp1.weight experts=256/256 gpu=3 half=1 fused_N=2048 weight_offset=1711276032 scale_offset=2785017856 k_pack=0x341321
+appliance packed blk.4.ffn_down_exps.tp1.weight experts=256/256 gpu=3 half=1 N=4096 K=1024 weight_offset=2852126720 scale_offset=3388997632 k_pack=0x341321
+ds4-v100-appliance-pack: wrote /workspace/ds4-tp-span-s176 source_rows=0 tm_rows=8 skipped_rows=1326 source_bytes=0 tm_weight_bytes=6442450944 tm_scale_bytes=402653184
+ds4-v100-appliance-pack: gpu0.weights bytes=3422552064
+ds4-v100-appliance-pack: gpu1.weights bytes=0
+ds4-v100-appliance-pack: gpu2.weights bytes=0
+ds4-v100-appliance-pack: gpu3.weights bytes=3422552064
+ds4-v100-appliance-pack: gpu4.weights bytes=0
+ds4-v100-appliance-pack: gpu5.weights bytes=0
+ds4-v100-appliance-pack: gpu6.weights bytes=0
+ds4-v100-appliance-pack: gpu7.weights bytes=0

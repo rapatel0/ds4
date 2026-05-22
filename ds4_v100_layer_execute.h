@@ -154,6 +154,7 @@ typedef struct {
     bool suppress_router_readback;
 
     int tp2_layer;
+    int tp2_layer_count;
     ds4_gpu_arena *tp2_owner_arena;
     ds4_gpu_arena *tp2_peer_arena;
     ds4_gpu_tensor *tp2_peer_input;

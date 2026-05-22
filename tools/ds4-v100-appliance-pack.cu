@@ -52,12 +52,14 @@ struct options {
     int pack_gpu = 0;
     int only_gpu = -1;
     int layer_filter = -1;
+    uint32_t layer_count = 1;
     uint32_t expert_limit = 0;
     bool skip_non_experts = false;
     bool fuse_gate_up = false;
     bool fuse_gate_up_interleaved = false;
     bool keep_separate_gate_up = false;
     bool emit_tp_split = false;
+    bool tp_split_only = false;
 };
 
 struct shape3 {
@@ -139,11 +141,13 @@ static void usage(FILE *fp) {
                  "  --pack-gpu N             CUDA device used for offline packing. Default: 0\n"
                  "  --only-gpu N             Bounded validation: emit rows only for owning GPU N\n"
                  "  --layer N                Bounded validation: TurboMind-pack routed experts only for layer N\n"
+                 "  --layer-count N          Bounded validation: include N layers starting at --layer. Default: 1\n"
                  "  --expert-limit N         Bounded validation: pack first N experts per routed tensor\n"
                  "  --fuse-gate-up           Emit fused gate_up routed expert tensors\n"
                  "  --fuse-gate-up-interleaved Emit fused gate_up rows as [gate0,up0,...]\n"
                  "  --keep-separate-gate-up  With --fuse-gate-up, also emit separate gate/up tensors\n"
                  "  --emit-tp-split          Emit experimental 2-way TP half-mid routed expert tensors\n"
+                 "  --tp-split-only          Emit only TP split rows for selected routed expert layers\n"
                  "  --skip-non-experts       Bounded validation: do not copy non-selected tensors\n"
                  "\n"
                  "Without bounded options this emits one production-shaped appliance directory:\n"
@@ -178,6 +182,8 @@ static void parse_args(int argc, char **argv, options *opt) {
             opt->only_gpu = parse_i32(need(a), a);
         } else if (!std::strcmp(a, "--layer")) {
             opt->layer_filter = parse_i32(need(a), a);
+        } else if (!std::strcmp(a, "--layer-count")) {
+            opt->layer_count = (uint32_t)parse_u64(need(a), a);
         } else if (!std::strcmp(a, "--expert-limit")) {
             opt->expert_limit = (uint32_t)parse_u64(need(a), a);
         } else if (!std::strcmp(a, "--fuse-gate-up")) {
@@ -189,6 +195,9 @@ static void parse_args(int argc, char **argv, options *opt) {
             opt->keep_separate_gate_up = true;
         } else if (!std::strcmp(a, "--emit-tp-split")) {
             opt->emit_tp_split = true;
+        } else if (!std::strcmp(a, "--tp-split-only")) {
+            opt->emit_tp_split = true;
+            opt->tp_split_only = true;
         } else if (!std::strcmp(a, "--skip-non-experts")) {
             opt->skip_non_experts = true;
         } else if (!std::strcmp(a, "-h") || !std::strcmp(a, "--help")) {
@@ -207,8 +216,19 @@ static void parse_args(int argc, char **argv, options *opt) {
     if (opt->gpus == 0 || opt->gpus > MAX_GPUS) die("--gpus must be in 1..8");
     if (opt->only_gpu >= (int)opt->gpus) die("--only-gpu must be less than --gpus");
     if (opt->alignment == 0) die("--align must be positive");
+    if (opt->layer_count == 0) die("--layer-count must be positive");
+    if (opt->layer_filter < 0 && opt->layer_count != 1) {
+        die("--layer-count requires --layer");
+    }
+    if (opt->layer_filter >= 0 &&
+        (uint64_t)opt->layer_filter + (uint64_t)opt->layer_count > 43u) {
+        die("--layer/--layer-count exceeds DS4 layer range");
+    }
     if (opt->keep_separate_gate_up && !opt->fuse_gate_up) {
         die("--keep-separate-gate-up requires --fuse-gate-up");
+    }
+    if (opt->tp_split_only && !opt->emit_tp_split) {
+        die("--tp-split-only requires --emit-tp-split");
     }
 }
 
@@ -1143,11 +1163,21 @@ static int emit_entry_cb(const ds4_pack_entry *e, void *ud) {
         return 0;
     }
     if (is_routed_expert(e)) {
-        if (st->opt.layer_filter >= 0 && e->layer_id != st->opt.layer_filter) {
+        if (st->opt.layer_filter >= 0 &&
+            (e->layer_id < st->opt.layer_filter ||
+             e->layer_id >= st->opt.layer_filter + (int)st->opt.layer_count)) {
             if (st->opt.skip_non_experts) {
                 st->skipped_rows++;
             } else {
                 emit_source_tensor(st, e);
+            }
+            return 0;
+        }
+        if (st->opt.tp_split_only) {
+            if (is_gate_expert(e)) {
+                emit_tp_split_turbomind_tensors(st, e);
+            } else {
+                st->skipped_rows++;
             }
             return 0;
         }

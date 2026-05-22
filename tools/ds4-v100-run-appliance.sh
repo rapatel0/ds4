@@ -333,9 +333,10 @@ is_uint "$DS4_V100_CUDA_TENSOR_POOL_MAX_MIB" || fail "DS4_V100_CUDA_TENSOR_POOL_
 [ "$DS4_V100_TOKENS" -ge 1 ] || fail "DS4_V100_TOKENS must be positive"
 [ "$DS4_V100_TOKENS" -le 64 ] || fail "DS4_V100_TOKENS must be <= 64"
 [ "$DS4_V100_MTP_TOP_K" -ge 2 ] && [ "$DS4_V100_MTP_TOP_K" -le 16 ] || fail "DS4_V100_MTP_TOP_K must be between 2 and 16"
-[ "$DS4_V100_TP_EP_LAYER_COUNT" -eq 1 ] || fail "Sprint 174 TP/EP gate currently supports DS4_V100_TP_EP_LAYER_COUNT=1"
+[ "$DS4_V100_TP_EP_LAYER_COUNT" -ge 1 ] || fail "DS4_V100_TP_EP_LAYER_COUNT must be positive"
 if [ -n "$DS4_V100_TP_EP_LAYER_FIRST" ]; then
     [ "$DS4_V100_TP_EP_LAYER_FIRST" -le 42 ] || fail "DS4_V100_TP_EP_LAYER_FIRST must be in [0,42]"
+    [ $((DS4_V100_TP_EP_LAYER_FIRST + DS4_V100_TP_EP_LAYER_COUNT)) -le 43 ] || fail "DS4_V100_TP_EP layer span exceeds [0,42]"
 fi
 if [ -n "$DS4_V100_TP_EP_PEER" ]; then
     [ "$DS4_V100_TP_EP_PEER" -le 7 ] || fail "DS4_V100_TP_EP_PEER must be in [0,7]"
