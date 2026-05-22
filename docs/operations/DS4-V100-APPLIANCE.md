@@ -40,10 +40,73 @@ Not supported today:
 
 ## Build
 
-On the V100 build pod or host:
+Use the localpool-backed build pod for production pack generation and cluster
+benchmarking. The generated TurboMind appliance pack is too large and too
+expensive to place on the default `/workspace` emptyDir backed by the host root
+mirror.
+
+```bash
+tools/ds4-v100-localpool-build-pod.sh ensure
+```
+
+After this, `/workspace` inside `llm/llamacpp-build-8gpu` is backed by
+`/localpool/ds4/workspace` on `gpu-01`, while `/models` remains the read-only
+model PVC. Keep production packs under `/workspace/packs/` and benchmark logs
+under `/workspace/logs/`.
+
+On the V100 build pod:
 
 ```bash
 CUDA_ARCH=sm_70 make tools/ds4-v100-replay
+```
+
+Build the TurboMind shared library and the appliance packer:
+
+```bash
+# If the pod cannot resolve GitHub, pre-populate these source directories
+# under /workspace/deps from a networked host and keep the same CMake
+# -DFETCHCONTENT_SOURCE_DIR_* arguments below.
+cmake -S kernels/turbomind/ggml-turbomind \
+  -B build/turbomind-v100 \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CUDA_ARCHITECTURES=70 \
+  -DFETCHCONTENT_SOURCE_DIR_FMT=/workspace/deps/fmt \
+  -DFETCHCONTENT_SOURCE_DIR_CUTLASS=/workspace/deps/cutlass \
+  -DFETCHCONTENT_SOURCE_DIR_CONCURRENTQUEUE=/workspace/deps/concurrentqueue
+
+cmake --build build/turbomind-v100 \
+  --target ggml-turbomind test_ggml_turbomind_grouped_gate_up_fusion -j80
+
+CUDA_ARCH=sm_70 make -j80 tools/ds4-v100-appliance-pack tools/ds4-v100-replay
+```
+
+Generate or refresh the current production interleaved TurboMind appliance pack:
+
+```bash
+tools/ds4-v100-appliance-pack \
+  --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv \
+  --source /models/DSv4-Flash-256e-fixed.gguf \
+  --out-dir /workspace/packs/ds4-appliance-full-tm-gated \
+  --pack-gpu 0 \
+  --fuse-gate-up-interleaved \
+  --lib build/turbomind-v100/libggml-turbomind.so
+```
+
+Run the production-pack throughput gate with separate prompt/decode metrics:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+tools/ds4-v100-sustained-decode-bench.sh \
+  --appliance-dir /workspace/packs/ds4-appliance-full-tm-gated \
+  --ctx-tiers 262144 \
+  --slot-tiers 16 \
+  --tokens 64 \
+  --requests 16 \
+  --warmup-requests 1 \
+  --async-pipeline-mode per-step \
+  --async-event-handoff \
+  --microbatch-wait-us 200000 \
+  --log-dir /workspace/logs/ds4-production-pack-256k-16slot
 ```
 
 For the full readiness gate:

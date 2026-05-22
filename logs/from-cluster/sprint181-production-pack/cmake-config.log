@@ -1,0 +1,47 @@
+-- The CXX compiler identification is GNU 11.4.0
+-- The CUDA compiler identification is NVIDIA 12.2.140
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Detecting CUDA compiler ABI info
+-- Detecting CUDA compiler ABI info - done
+-- Check for working CUDA compiler: /usr/local/cuda/bin/nvcc - skipped
+-- Detecting CUDA compile features
+-- Detecting CUDA compile features - done
+-- Found CUDAToolkit: /usr/local/cuda/include (found version "12.2.140") 
+-- Looking for C++ include pthread.h
+-- Looking for C++ include pthread.h - found
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE  
+[ 11%] Creating directories for 'fmt-populate'
+[ 22%] Performing download step (git clone) for 'fmt-populate'
+Cloning into 'fmt-src'...
+fatal: unable to access 'https://github.com/fmtlib/fmt.git/': Could not resolve host: github.com
+Cloning into 'fmt-src'...
+fatal: unable to access 'https://github.com/fmtlib/fmt.git/': Could not resolve host: github.com
+Cloning into 'fmt-src'...
+fatal: unable to access 'https://github.com/fmtlib/fmt.git/': Could not resolve host: github.com
+-- Had to git clone more than once:
+          3 times.
+CMake Error at fmt-subbuild/fmt-populate-prefix/tmp/fmt-populate-gitclone.cmake:31 (message):
+  Failed to clone repository: 'https://github.com/fmtlib/fmt.git'
+
+
+gmake[2]: *** [CMakeFiles/fmt-populate.dir/build.make:102: fmt-populate-prefix/src/fmt-populate-stamp/fmt-populate-download] Error 1
+gmake[1]: *** [CMakeFiles/Makefile2:83: CMakeFiles/fmt-populate.dir/all] Error 2
+gmake: *** [Makefile:91: all] Error 2
+
+CMake Error at /usr/share/cmake-3.22/Modules/FetchContent.cmake:1087 (message):
+  Build step for fmt failed: 2
+Call Stack (most recent call first):
+  /usr/share/cmake-3.22/Modules/FetchContent.cmake:1216:EVAL:2 (__FetchContent_directPopulate)
+  /usr/share/cmake-3.22/Modules/FetchContent.cmake:1216 (cmake_language)
+  /usr/share/cmake-3.22/Modules/FetchContent.cmake:1259 (FetchContent_Populate)
+  CMakeLists.txt:70 (FetchContent_MakeAvailable)
+
+
+-- Configuring incomplete, errors occurred!
+See also "/workspace/ds4-sprint181/build/turbomind-v100/CMakeFiles/CMakeOutput.log".

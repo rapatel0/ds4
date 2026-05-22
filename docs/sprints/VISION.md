@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-22
 last_updated_by: sprint-execute
-revision: 180
+revision: 181
 ---
 
 # Vision: DS4 V100 Appliance
@@ -351,6 +351,21 @@ optimized V100 low-bit expert kernels in the actual hot path.
   `DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=0` as the production default. This
   closes the last cheap route-construction variant; next work should be a
   persistent routed-FFN executor or a persistent TP/EP scheduler boundary.
+- Sprints 173-181 closed the wrapper-level six-route executor line and restored
+  the persistent production appliance artifact. Fused six-route activation,
+  down-reduce, no-host-sync compaction, FFN wavefront batching, and bounded
+  TP/EP overlays all preserved correctness but did not beat the production
+  control, so they remain explicit diagnostics. Sprint 180 made MTP verify work
+  for active microbatches, and Sprint 181 moved the V100 build pod to
+  localpool-backed `/workspace`, rebuilt TurboMind with offline dependency
+  overrides, regenerated the 142 GiB interleaved gated-SiLU appliance pack at
+  `/workspace/packs/ds4-appliance-full-tm-gated-s181`, and validated it on the
+  cluster. The current production-pack 256K measurements are `10.357728`
+  generated / `10.195888` continuation tok/s for one slot and `48.163685`
+  generated / `47.411127` continuation tok/s for 16 slots, with all tokens
+  matching. MTP verify also passes against the production pack (`16/16`
+  accepted) but remains diagnostic because exact verification still recomputes
+  the base target token.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation
@@ -2906,6 +2921,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-22 | Completed Sprint 178 TP/EP parallel-halves gate. | `DS4_V100_TP_EP_PARALLEL_HALVES=1` now runs the existing TP2 owner and peer routed-FFN halves from separate host threads after the peer input copy is queued. V100 build passed; stage smoke proved `tp2_layers=2` with `parallel_halves=1`, full scheduler smoke passed, and selected-token returned expected token `3136`. Served 16-slot/256K same-binary A/B was correct but not material: no-TP control `71.299803` generated / `70.185744` continuation tok/s; TP2 sequential `66.219059` / `65.184386`; TP2 parallel halves `66.385703` / `65.348426`, all `16/16` correct. Keep diagnostic-only. Host-thread overlap recovers only about `0.25%` within the TP2 overlay and remains about `6.9%` behind production, so the current copy-back/reduce overlay is exhausted. Next work should move to persistent TP/EP ownership that avoids per-layer full-hidden returns, or a true persistent/fused routed-FFN executor. | Sprint 179+ |
 | 2026-05-22 | Completed Sprint 179 compact routed executor no-host-sync gate. | `DS4_V100_TURBOMIND_COMPACT_NO_HOST_SYNC=1` skips the device-to-host active-expert read for routed-executor compact scheduling when profiling and group-pipeline auto are off. V100 selected-token and full scheduler smokes passed, and logs proved `fused6_reduce no_host_sync total_routes=6 compact_groups=6` with expected token `3136`. Served 16-slot/256K A/B was correct but slower: production control `71.407542` generated / `70.291799` continuation tok/s; fused6_reduce host-sync `70.151713` / `69.055593`; no-host-sync quiet `68.092522` / `67.028577`, all `16/16` correct. Keep diagnostic-only. The host sync was not the dominant bottleneck; empty compact groups cost more than the avoided synchronization. The next practical lever must remove `mid_half` materialization or implement a larger persistent routed-FFN executor rather than another wrapper/scheduler tweak. | Sprint 180+ |
 | 2026-05-22 | Completed Sprint 180 MTP verify active microbatch serving. | `--mtp-serving verify` now works with `active_microbatch > 1` for same-token-count, same-prompt-length request batches, using slot-specific final-HC reads while the generation mutex is still held. `--mtp-serving commit` still fails closed unless `active_microbatch=1`. Source-pack V100 validation passed at 2-slot/256K (`2/2` token match, `2/2` MTP accepted) and 16-slot/256K (`16/16` token match, `16/16` MTP accepted), with prompt/generated/continuation tok/s recorded. This is an MTP diagnostics and serving-surface improvement, not a throughput promotion; true MTP speedup still needs speculative verification that avoids serial base-target recompute. | Sprint 181+ |
+| 2026-05-22 | Completed Sprint 181 persistent production appliance pack. | The 8-GPU build pod now has a repo-owned localpool-backed manifest/helper, so `/workspace` is backed by `/localpool/ds4/workspace` instead of `/dev/md0`. TurboMind was rebuilt on V100 using offline `fmt`, CUTLASS, and `concurrentqueue` dependency overrides, and the full interleaved gated-SiLU appliance pack was regenerated under `/workspace/packs/ds4-appliance-full-tm-gated-s181` (`142G`; GPU shard sizes from `22.5G` down to `11.8G`). Production-pack validation passed: 16-slot/256K smoke returned expected token `3136`; 16-slot/256K sustained base reached `48.163685` generated / `47.411127` continuation tok/s with `16/16` matches; one-slot/256K reached `10.357728` / `10.195888`; and 16-slot/256K MTP verify accepted `16/16` drafts. This restores the real optimized appliance baseline after pod recycle; the next sprint should use this persistent pack for either profiling or the next larger persistent routed-FFN / TP-EP boundary, not source-pack substitutes. | Sprint 182+ |
 
 ## Open Questions
 

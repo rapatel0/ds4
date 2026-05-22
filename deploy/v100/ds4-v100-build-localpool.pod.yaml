@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: llamacpp-build-8gpu
+  namespace: llm
+  labels:
+    role: ds4-v100-build
+    storage: localpool
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: gpu-01
+  containers:
+    - name: build
+      image: nvidia/cuda:12.2.2-devel-ubuntu22.04
+      imagePullPolicy: IfNotPresent
+      command: ["sleep", "infinity"]
+      resources:
+        requests:
+          nvidia.com/gpu: "8"
+        limits:
+          nvidia.com/gpu: "8"
+      volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+        - name: models
+          mountPath: /models
+          readOnly: true
+  volumes:
+    - name: workspace
+      hostPath:
+        path: /localpool/ds4/workspace
+        type: Directory
+    - name: models
+      persistentVolumeClaim:
+        claimName: llm-models-local

@@ -1,0 +1,16 @@
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread --std=c++17 -Ikernels/turbomind/ggml-turbomind/include -I. -c -o tools/ds4-v100-appliance-pack.o tools/ds4-v100-appliance-pack.cu
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -c -o ds4_pack.o ds4_pack.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -c -o ds4_source_formats.o ds4_source_formats.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -D_FILE_OFFSET_BITS=64 -c -o tools/ds4-v100-replay.o tools/ds4-v100-replay.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -D_FILE_OFFSET_BITS=64 -c -o tools/ds4-v100-mtp-forward-common.o tools/ds4-v100-mtp-forward-common.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -D_FILE_OFFSET_BITS=64 -c -o ds4_v100_mtp.o ds4_v100_mtp.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -DDS4_NO_GPU -c -o ds4_cpu.o ds4.c
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -c -o ds4_cuda.o ds4_cuda.cu
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -D_FILE_OFFSET_BITS=64 -c -o ds4_v100_replay.o ds4_v100_replay.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -c -o ds4_v100_scheduler.o ds4_v100_scheduler.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -c -o ds4_v100_layer_execute.o ds4_v100_layer_execute.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -c -o ds4_v100_layer_state.o ds4_v100_layer_state.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -I. -c -o ds4_v100_context.o ds4_v100_context.c
+cc -O3 -ffast-math -march=native -Wall -Wextra -std=c99 -D_GNU_SOURCE -fno-finite-math-only -c -o ds4_turbomind_pack.o ds4_turbomind_pack.c
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -o tools/ds4-v100-appliance-pack tools/ds4-v100-appliance-pack.o ds4_pack.o ds4_source_formats.o -lm -Xcompiler -pthread -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/local/cuda/lib64 -lcudart -lcublas -ldl
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread -o tools/ds4-v100-replay tools/ds4-v100-replay.o tools/ds4-v100-mtp-forward-common.o ds4_v100_mtp.o ds4_cpu.o ds4_cuda.o ds4_v100_replay.o ds4_v100_scheduler.o ds4_v100_layer_execute.o ds4_v100_layer_state.o ds4_v100_context.o ds4_pack.o ds4_turbomind_pack.o ds4_source_formats.o -lm -Xcompiler -pthread -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/local/cuda/lib64 -lcudart -lcublas -ldl
