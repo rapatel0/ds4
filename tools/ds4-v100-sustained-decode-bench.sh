@@ -16,6 +16,7 @@ warmup_requests="1"
 host="127.0.0.1"
 port_base="18220"
 sample_ms="500"
+microbatch_wait_us=""
 log_dir=""
 profile_decode="0"
 wavefront_decode="0"
@@ -49,6 +50,7 @@ Options:
   --host ADDR               bind/probe address, default 127.0.0.1
   --port-base N             base port for case runs, default 18220
   --sample-ms N             nvidia-smi sample period in ms, default 500
+  --microbatch-wait-us N    pass --microbatch-wait-us to the server
   --log-dir DIR             write benchmark artifacts
   --profile-decode          pass --profile-decode to the replay server and
                             preserve averaged stage_profile timing
@@ -181,6 +183,11 @@ while [ "$#" -gt 0 ]; do
             sample_ms="$2"
             shift 2
             ;;
+        --microbatch-wait-us)
+            [ "$#" -ge 2 ] || fail "--microbatch-wait-us requires a value"
+            microbatch_wait_us="$2"
+            shift 2
+            ;;
         --log-dir)
             [ "$#" -ge 2 ] || fail "--log-dir requires a value"
             log_dir="$2"
@@ -297,6 +304,9 @@ case "$requests" in ''|0|*[!0-9]*) fail "--requests must be a positive integer" 
 case "$warmup_requests" in ''|*[!0-9]*) fail "--warmup-requests must be a non-negative integer" ;; esac
 case "$port_base" in ''|0|*[!0-9]*) fail "--port-base must be a positive integer" ;; esac
 case "$sample_ms" in ''|0|*[!0-9]*) fail "--sample-ms must be a positive integer" ;; esac
+if [ -n "$microbatch_wait_us" ]; then
+    case "$microbatch_wait_us" in *[!0-9]*) fail "--microbatch-wait-us must be a non-negative integer" ;; esac
+fi
 case "$mtp_top_k" in ''|0|1|*[!0-9]*) fail "--mtp-top-k must be an integer >= 2" ;; esac
 case "$mtp_gpu" in ''|*[!0-9]*) fail "--mtp-gpu must be an integer" ;; esac
 case "$mtp_reserve_mib" in ''|*[!0-9]*) fail "--mtp-reserve-mib must be an integer" ;; esac
@@ -877,8 +887,8 @@ load_case() {
     local gpu_err="$case_dir/gpu_util.err"
     local server_max_requests
     server_max_requests=$((requests + warmup_requests + 32))
-    if [ "$mtp_serving" != "off" ] && [ "$slots" -ne 1 ]; then
-        fail "MTP sustained decode benchmark currently requires slot tier 1"
+    if [ "$mtp_serving" = "commit" ] && [ "$slots" -ne 1 ]; then
+        fail "MTP commit sustained decode benchmark currently requires slot tier 1"
     fi
 
     local cmd=(
@@ -894,6 +904,9 @@ load_case() {
         --port "$port"
         --max-requests "$server_max_requests"
     )
+    if [ -n "$microbatch_wait_us" ]; then
+        cmd+=(--microbatch-wait-us "$microbatch_wait_us")
+    fi
     if [ -n "$appliance_dir" ]; then
         cmd+=(--appliance-dir "$appliance_dir")
     else
@@ -992,6 +1005,7 @@ printf 'async_pipeline_decode\t%s\n' "$async_pipeline_decode" >>"$summary_tsv"
 printf 'async_pipeline_mode\t%s\n' "$async_pipeline_mode" >>"$summary_tsv"
 printf 'async_event_handoff\t%s\n' "$async_event_handoff" >>"$summary_tsv"
 printf 'async_handoff\t%s\n' "$async_handoff" >>"$summary_tsv"
+printf 'microbatch_wait_us\t%s\n' "${microbatch_wait_us:-default}" >>"$summary_tsv"
 printf 'mtp_serving\t%s\n' "$mtp_serving" >>"$summary_tsv"
 printf 'mtp_top_k\t%s\n' "$mtp_top_k" >>"$summary_tsv"
 printf '\nctx\tslots\tpolicy\tmtp_serving\tstatus_200\tstatus_other\terrors\ttoken_match\ttoken_mismatch\tlatency_avg_ms\tlatency_p50_ms\tlatency_p95_ms\tlatency_p99_ms\telapsed_s\taggregate_prompt_tokens_per_second\taggregate_generated_tokens_per_second\taggregate_continuation_tokens_per_second\tavg_prompt_response_tokens_per_second\tavg_continuation_response_tokens_per_second\tavg_gpu_util_percent\tmax_gpu_util_percent\tmtp_attempted\tmtp_accepted\tmtp_rejected\tmtp_committed\tmtp_draft_ms_avg\tmtp_draft_ms_total\tavg_async_total_ms\tavg_async_setup_ms\tavg_async_host_wait_ms\tavg_async_complete_ms\tavg_async_wait_prev_sum_ms\tavg_async_handoff_sum_ms\tavg_async_device_sync_sum_ms\n' >>"$summary_tsv"

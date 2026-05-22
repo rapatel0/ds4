@@ -2725,12 +2725,22 @@ int ds4_v100_replay_read_output_hc(ds4_v100_replay *rt,
                                    uint64_t bytes,
                                    char *err,
                                    size_t errlen) {
+    return ds4_v100_replay_read_output_hc_slot(rt, 0, dst, bytes, err, errlen);
+}
+
+int ds4_v100_replay_read_output_hc_slot(ds4_v100_replay *rt,
+                                        uint32_t slot,
+                                        float *dst,
+                                        uint64_t bytes,
+                                        char *err,
+                                        size_t errlen) {
     if (!rt || !rt->scheds[DS4_V100_EXPECTED_GPUS - 1] || !dst) {
         return replay_error(err, errlen, "missing V100 replay HC read input");
     }
-    if (!ds4_v100_stage_scheduler_read_hc(rt->scheds[DS4_V100_EXPECTED_GPUS - 1],
-                                          dst,
-                                          bytes)) {
+    if (!ds4_v100_stage_scheduler_read_hc_slot(rt->scheds[DS4_V100_EXPECTED_GPUS - 1],
+                                               slot,
+                                               dst,
+                                               bytes)) {
         return replay_error(err, errlen, "V100 replay HC read failed");
     }
     return 0;

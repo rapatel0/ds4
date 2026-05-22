@@ -1,0 +1,20 @@
+schema	ds4_v100_sustained_decode.v1
+model	/models/DSv4-Flash-256e-fixed.gguf
+pack_index	docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv
+appliance_dir	
+expected_token_hex	3136
+tokens_per_request	2
+requests_per_case	16
+warmup_requests	0
+profile_decode	0
+wavefront_decode	0
+async_pipeline_decode	1
+async_pipeline_mode	per-step
+async_event_handoff	1
+async_handoff	0
+microbatch_wait_us	200000
+mtp_serving	verify
+mtp_top_k	5
+
+ctx	slots	policy	mtp_serving	status_200	status_other	errors	token_match	token_mismatch	latency_avg_ms	latency_p50_ms	latency_p95_ms	latency_p99_ms	elapsed_s	aggregate_prompt_tokens_per_second	aggregate_generated_tokens_per_second	aggregate_continuation_tokens_per_second	avg_prompt_response_tokens_per_second	avg_continuation_response_tokens_per_second	avg_gpu_util_percent	max_gpu_util_percent	mtp_attempted	mtp_accepted	mtp_rejected	mtp_committed	mtp_draft_ms_avg	mtp_draft_ms_total	avg_async_total_ms	avg_async_setup_ms	avg_async_host_wait_ms	avg_async_complete_ms	avg_async_wait_prev_sum_ms	avg_async_handoff_sum_ms	avg_async_device_sync_sum_ms
+262144	16	sequential	verify	16	0	0	16	0	9936.544	9936.597	9940.652	9941.289	9.946136	28.955967	3.217330	1.608665	1.931124	2.338925	33.456	76.000	16	16	0	0	5.910	94.559	9748.543	16.781	9729.089	2.662	24741.981	320.802	0.000

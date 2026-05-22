@@ -3,10 +3,10 @@
 This runbook covers the current production deployment package for the DS4 V100
 appliance on the 8x 32 GiB V100 host. The default served endpoint is the
 verified base model path with configurable admission slots (default one slot).
-Same-length non-MTP request batches can advance through token-step
-microbatching when `active_microbatch > 1`. An explicit MTP verify mode can
-also expose the gated one-token MTP draft/verify diagnostics in the same
-resident HTTP process.
+Same-length base request batches can advance through token-step microbatching
+when `active_microbatch > 1`. An explicit MTP verify mode can also expose the
+gated one-token MTP draft/verify diagnostics in the same resident HTTP process,
+including same-length active microbatches.
 
 ## Scope
 
@@ -19,7 +19,8 @@ Supported today:
   (`decode_token_batch`, `decode_hc_batch`, `handoff_batch`) with slot-strided
   KV and HC state.
 - Sequential/queued loopback HTTP requests.
-- Same-token-count non-MTP request-loop microbatching across active slots.
+- Same-token-count request-loop microbatching across active slots for base and
+  MTP verify serving.
 - `/health`, `/status`, `/v100/status`, `/metrics`.
 - `POST /v100/selected-token`.
 - Up to 64 generated tokens per request.
@@ -31,7 +32,7 @@ Not supported today:
 
 - Multi-token MTP draft commit without recomputing the base target token.
 - Mixed-length request-loop microbatching.
-- MTP request-loop microbatching.
+- MTP commit request-loop microbatching.
 - Concurrent overlapping generation outside the active batch window.
 - Streaming responses.
 - OpenAI-compatible API.
@@ -430,7 +431,8 @@ For configured slots `N`:
 When `active_microbatch` is `M`, limits report `active_slots`,
 `active_microbatch`, and `concurrent_requests` as `M`. If `M > 1`,
 `tensor_batched_slots` reports `true`; the `tensor_batched_*` counters increase
-only when same-token-count non-MTP requests actually coalesce into a batch.
+only when same-token-count base or MTP verify requests actually coalesce into a
+batch.
 With `DS4_V100_MICROBATCH_WAIT_US=auto`, the launcher resolves the rendezvous
 window to `50000` us for ordinary multi-slot serving and `200000` us for
 `active_microbatch >= 16`, which keeps high-slot throughput profiles from
@@ -485,6 +487,13 @@ ds4_v100_mtp_drafts_total 1
 ds4_v100_mtp_accepted_total 1
 ds4_v100_mtp_rejected_total 0
 ```
+
+When `active_microbatch > 1`, MTP verify uses the same same-token-count
+microbatch path as base serving. The verifier runs inside the generation
+critical section and reads each request's scheduler slot HC before the runtime
+can be reset for another batch. `DS4_V100_MTP_SERVING=commit` remains restricted
+to `active_microbatch=1` because the current exact-commit path still recomputes
+the base target token serially.
 
 ## Generate
 

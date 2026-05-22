@@ -167,10 +167,17 @@ int ds4_v100_replay_read_token_embedding_f32(ds4_v100_replay *rt,
                                              size_t errlen);
 
 int ds4_v100_replay_read_output_hc(ds4_v100_replay *rt,
-                                   float *dst,
-                                   uint64_t bytes,
-                                   char *err,
-                                   size_t errlen);
+                                    float *dst,
+                                    uint64_t bytes,
+                                    char *err,
+                                    size_t errlen);
+
+int ds4_v100_replay_read_output_hc_slot(ds4_v100_replay *rt,
+                                        uint32_t slot,
+                                        float *dst,
+                                        uint64_t bytes,
+                                        char *err,
+                                        size_t errlen);
 
 void ds4_v100_replay_output_free(ds4_v100_replay_output *out);
 

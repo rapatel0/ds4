@@ -196,6 +196,15 @@ static int replay_generate_mtp_commit_one_slot(replay_mtp_service *svc,
                                                replay_mtp_result *mtp_result,
                                                char *err,
                                                size_t errlen);
+static int replay_mtp_service_run_slot(replay_mtp_service *svc,
+                                       ds4_v100_replay *rt,
+                                       uint32_t hc_slot,
+                                       const ds4_v100_replay_output *outputs,
+                                       uint32_t n_outputs,
+                                       const ds4_v100_replay_counters *counters,
+                                       replay_mtp_result *result,
+                                       char *err,
+                                       size_t errlen);
 
 static const char *queue_policy_name(replay_queue_policy p) {
     switch (p) {
@@ -308,8 +317,8 @@ static void pending_enqueue(replay_server_state *state, replay_pending_generatio
 
 static void pending_wait_for_microbatch(replay_server_state *state,
                                         uint32_t cap,
-                                        bool mtp_enabled) {
-    if (!state || cap <= 1 || mtp_enabled) return;
+                                        bool force_single) {
+    if (!state || cap <= 1 || force_single) return;
     const uint32_t wait_us = state->opt ? state->opt->microbatch_wait_us : 0;
     if (wait_us == 0) return;
 
@@ -400,17 +409,26 @@ static int process_pending_generation_batch(replay_server_state *state) {
     uint32_t cap = state->opt->active_microbatch ? state->opt->active_microbatch : 1;
     if (cap > DS4_V100_SCHED_MAX_SLOTS) cap = DS4_V100_SCHED_MAX_SLOTS;
     const bool mtp_enabled = state->mtp && state->mtp->enabled;
-    pending_wait_for_microbatch(state, cap, mtp_enabled);
+    const bool mtp_commit_enabled =
+        mtp_enabled && state->opt->mtp_serving == REPLAY_MTP_SERVING_COMMIT;
+    const bool mtp_verify_enabled =
+        mtp_enabled && state->opt->mtp_serving == REPLAY_MTP_SERVING_VERIFY;
+    pending_wait_for_microbatch(state, cap, mtp_commit_enabled);
     replay_pending_batch batch;
     pending_collect_batch(state, cap, &batch);
     if (batch.count == 0) return 0;
 
     bool profiler_active = server_profiler_start_if_requested(state);
     const uint32_t batch_tokens = batch.items[0] ? batch.items[0]->tokens : 0;
-    bool can_batch = !mtp_enabled && batch.count > 1 && batch_tokens > 0 &&
+    const int first_prompt_len = batch.items[0] ? batch.items[0]->prompt_tokens.len : 0;
+    bool can_batch = !mtp_commit_enabled && batch.count > 1 && batch_tokens > 0 &&
                      batch_tokens <= DS4_V100_REPLAY_MAX_TOKENS;
     for (uint32_t i = 0; i < batch.count && can_batch; i++) {
-        if (!batch.items[i] || batch.items[i]->tokens != batch_tokens) can_batch = false;
+        if (!batch.items[i] || batch.items[i]->tokens != batch_tokens) {
+            can_batch = false;
+        } else if (mtp_verify_enabled && batch.items[i]->prompt_tokens.len != first_prompt_len) {
+            can_batch = false;
+        }
     }
 
     if (can_batch) {
@@ -463,7 +481,24 @@ static int process_pending_generation_batch(replay_server_state *state) {
                 req->counters.generated_tokens = n_out;
                 req->counters.total_input_tokens =
                     (uint32_t)req->prompt_tokens.len + (n_out > 0 ? n_out - 1u : 0u);
-                pending_mark_done(req, 0, NULL);
+                if (mtp_verify_enabled) {
+                    if (replay_mtp_service_run_slot(state->mtp,
+                                                    state->rt,
+                                                    i,
+                                                    req->outputs,
+                                                    req->n_outputs,
+                                                    &req->counters,
+                                                    &req->mtp_result,
+                                                    err,
+                                                    sizeof(err)) != 0) {
+                        pending_mark_done(req, 1, err);
+                    } else {
+                        req->mtp_result_ready = true;
+                        pending_mark_done(req, 0, NULL);
+                    }
+                } else {
+                    pending_mark_done(req, 0, NULL);
+                }
             }
             pending_remove(state, req);
         }
@@ -850,8 +885,8 @@ static replay_cli_options parse_options(int argc, char **argv) {
         fprintf(stderr, "ds4-v100-replay: --mtp-serving requires --mtp-model\n");
         exit(2);
     }
-    if (opt.mtp_serving != REPLAY_MTP_SERVING_OFF && opt.active_microbatch != 1) {
-        fprintf(stderr, "ds4-v100-replay: --mtp-serving currently requires --active-microbatch 1\n");
+    if (opt.mtp_serving == REPLAY_MTP_SERVING_COMMIT && opt.active_microbatch != 1) {
+        fprintf(stderr, "ds4-v100-replay: --mtp-serving commit currently requires --active-microbatch 1\n");
         exit(2);
     }
     if (opt.async_event_handoff &&
@@ -1071,6 +1106,7 @@ static int replay_mtp_service_open(replay_mtp_service **out,
 
 static int replay_mtp_service_draft(replay_mtp_service *svc,
                                     ds4_v100_replay *rt,
+                                    uint32_t hc_slot,
                                     uint32_t committed_token,
                                     uint32_t committed_pos,
                                     uint32_t target_token,
@@ -1092,11 +1128,12 @@ static int replay_mtp_service_draft(replay_mtp_service *svc,
                                                  DS4_V100_MTP_FORWARD_N_EMBD,
                                                  err,
                                                  errlen) != 0 ||
-        ds4_v100_replay_read_output_hc(rt,
-                                       hc,
-                                       sizeof(hc),
-                                       err,
-                                       errlen) != 0) {
+        ds4_v100_replay_read_output_hc_slot(rt,
+                                            hc_slot,
+                                            hc,
+                                            sizeof(hc),
+                                            err,
+                                            errlen) != 0) {
         return 1;
     }
     ds4_v100_mtp_forward_report report;
@@ -1159,6 +1196,26 @@ static int replay_mtp_service_run(replay_mtp_service *svc,
                                   replay_mtp_result *result,
                                   char *err,
                                   size_t errlen) {
+    return replay_mtp_service_run_slot(svc,
+                                       rt,
+                                       0,
+                                       outputs,
+                                       n_outputs,
+                                       counters,
+                                       result,
+                                       err,
+                                       errlen);
+}
+
+static int replay_mtp_service_run_slot(replay_mtp_service *svc,
+                                       ds4_v100_replay *rt,
+                                       uint32_t hc_slot,
+                                       const ds4_v100_replay_output *outputs,
+                                       uint32_t n_outputs,
+                                       const ds4_v100_replay_counters *counters,
+                                       replay_mtp_result *result,
+                                       char *err,
+                                       size_t errlen) {
     mtp_result_init(result);
     if (!svc || !svc->enabled || !result) return 0;
     mtp_result_set_service(svc, result);
@@ -1173,6 +1230,7 @@ static int replay_mtp_service_run(replay_mtp_service *svc,
     const uint32_t target_idx = n_outputs - 1u;
     return replay_mtp_service_draft(svc,
                                     rt,
+                                    hc_slot,
                                     outputs[committed_idx].token,
                                     counters->prompt_tokens + committed_idx,
                                     outputs[target_idx].token,
@@ -1272,6 +1330,7 @@ static int replay_generate_mtp_commit_one_slot(replay_mtp_service *svc,
         }
         if (replay_mtp_service_draft(svc,
                                      rt,
+                                     0,
                                      committed_token,
                                      committed_pos,
                                      target.token,
@@ -1979,6 +2038,8 @@ static int handle_http_request(int fd, replay_server_state *state) {
                     http_error(fd, 500, "mtp_commit_result_missing");
                     rc = 1;
                 }
+            } else if (pending.mtp_result_ready) {
+                mtp_json = &pending.mtp_result;
             } else {
                 if (replay_mtp_service_run(mtp,
                                            rt,
