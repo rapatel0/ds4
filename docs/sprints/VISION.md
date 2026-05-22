@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-22
 last_updated_by: sprint-execute
-revision: 188
+revision: 189
 ---
 
 # Vision: DS4 V100 Appliance
@@ -2966,6 +2966,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-22 | Completed Sprint 186 synthetic 4096-token context tier. | The 4096-token / 262144-context synthetic filled-context run completed on the persistent production pack: `288102.638 ms` prompt replay, `14.217155` prompt tok/s, `13.354373` continuation tok/s, output IDs `271, 5`. This gives the first two filled-context scaling points after the 256-token smoke. Prompt replay is now clearly the dominant wall-clock cost for larger context tiers. Sprint 187 should either optimize prompt/prefill replay or schedule a deliberately long 16384/65536 synthetic tier; full 256K prefill should not be treated as a quick benchmark. | Sprint 187+ |
 | 2026-05-22 | Completed Sprint 187 synthetic prompt profile repair. | Direct synthetic single-slot profiling now emits the same stage-profile buckets as batch decode. The patched 1024-token / 262144-context run completed with `14.381306` prompt tok/s and `14.282227` continuation tok/s. Bucket sums were attention `37779.266 ms` (`56.8%`), FFN `21473.437 ms` (`32.3%`), HC attention prep `3069.656 ms`, HC FFN prep `3754.986 ms`, and HC final `443.923 ms`; summed handoff was only `219.707 ms`. For filled-context work, the next practical lever is attention/KV execution or a larger fused boundary, not inter-stage transfer. | Sprint 188+ |
 | 2026-05-22 | Rejected Sprint 188 fused Q norm/RoPE probe. | Added default-off `DS4_V100_FUSED_Q_NORM_ROPE=1` to route Q head RMS normalization plus RoPE through the existing fused CUDA primitive in direct and batch attention. V100 build passed and direct synthetic len-256/ctx-262144 output IDs matched control (`3955, 361`), but continuation throughput regressed from `14.068688` to `12.024425` tok/s. Keep diagnostic-only. Simple launch-count fusion inside Q norm/RoPE is not the attention lever; next filled-context work should target reusable attention/cache scratch or finer projection/cache/softmax/output subprofiling. | Sprint 189+ |
+| 2026-05-22 | Completed Sprint 189 opt-in single-slot attention scratch. | `DS4_V100_SINGLE_SLOT_BATCH_SCRATCH=1` now reuses slot-0 attention scratch in `execute_attention_output()` and adds exact `attn_q_a_view` / `attn_kv_raw_view` scratch views. The explicit opt-in path is a real filled-context performance signal: len-256/ctx-262144 continuation improved from `13.858673` to `17.503002` tok/s with matching IDs, and len-1024 improved from `15.228124` to `16.923312` tok/s with matching IDs. It remains default-off because no-env default-on validation produced different len-256 IDs (`1760, 582` instead of `3955, 361`) even after exact views. Next work should isolate that selector discrepancy or build a smaller dedicated single-slot attention scratch arena. | Sprint 190+ |
 
 ## Open Questions
 

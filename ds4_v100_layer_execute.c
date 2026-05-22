@@ -91,8 +91,10 @@ void ds4_v100_layer_batch_scratch_free(ds4_v100_layer_batch_scratch *scratch) {
     free_tensor_array(scratch->attn_low_view, DS4_V100_LAYER_MAX_BATCH);
     free_tensor_array(scratch->attn_heads_view, DS4_V100_LAYER_MAX_BATCH);
     free_tensor_array(scratch->attn_kv_view, DS4_V100_LAYER_MAX_BATCH);
+    free_tensor_array(scratch->attn_kv_raw_view, DS4_V100_LAYER_MAX_BATCH);
     free_tensor_array(scratch->attn_q_view, DS4_V100_LAYER_MAX_BATCH);
     free_tensor_array(scratch->attn_q_a_norm_view, DS4_V100_LAYER_MAX_BATCH);
+    free_tensor_array(scratch->attn_q_a_view, DS4_V100_LAYER_MAX_BATCH);
     free_tensor_array(scratch->attn_norm_view, DS4_V100_LAYER_MAX_BATCH);
     ds4_gpu_tensor_free(scratch->attn_low_batch);
     ds4_gpu_tensor_free(scratch->attn_heads_batch);
@@ -373,6 +375,10 @@ static int ensure_batch_scratch(ds4_v100_layer_batch_scratch *scratch,
             ds4_gpu_tensor_view(scratch->attn_norm_batch,
                                 (uint64_t)slot * hidden_bytes,
                                 hidden_bytes);
+        scratch->attn_q_a_view[slot] =
+            ds4_gpu_tensor_view(scratch->attn_q_a_batch,
+                                (uint64_t)slot * q_rank_bytes,
+                                q_rank_bytes);
         scratch->attn_q_a_norm_view[slot] =
             ds4_gpu_tensor_view(scratch->attn_q_a_norm_batch,
                                 (uint64_t)slot * q_rank_bytes,
@@ -381,6 +387,10 @@ static int ensure_batch_scratch(ds4_v100_layer_batch_scratch *scratch,
             ds4_gpu_tensor_view(scratch->attn_q_batch,
                                 (uint64_t)slot * q_width_bytes,
                                 q_width_bytes);
+        scratch->attn_kv_raw_view[slot] =
+            ds4_gpu_tensor_view(scratch->attn_kv_raw_batch,
+                                (uint64_t)slot * kv_width_bytes,
+                                kv_width_bytes);
         scratch->attn_kv_view[slot] =
             ds4_gpu_tensor_view(scratch->attn_kv_batch,
                                 (uint64_t)slot * kv_width_bytes,
@@ -399,8 +409,10 @@ static int ensure_batch_scratch(ds4_v100_layer_batch_scratch *scratch,
             !scratch->ffn_routed_out_view[slot] ||
             !scratch->ffn_shared_batch_view[slot] ||
             !scratch->attn_norm_view[slot] ||
+            !scratch->attn_q_a_view[slot] ||
             !scratch->attn_q_a_norm_view[slot] ||
             !scratch->attn_q_view[slot] ||
+            !scratch->attn_kv_raw_view[slot] ||
             !scratch->attn_kv_view[slot] ||
             !scratch->attn_heads_view[slot] ||
             !scratch->attn_low_view[slot]) {
@@ -1420,16 +1432,48 @@ static int execute_attention_output(const ds4_v100_layer_state *state,
         return 1;
     }
 
-    ds4_gpu_tensor *attn_norm = ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
-    ds4_gpu_tensor *q_a = ds4_gpu_tensor_alloc((uint64_t)q_rank * sizeof(float));
-    ds4_gpu_tensor *q_a_norm = ds4_gpu_tensor_alloc((uint64_t)q_rank * sizeof(float));
-    ds4_gpu_tensor *q = ds4_gpu_tensor_alloc((uint64_t)q_width * sizeof(float));
-    ds4_gpu_tensor *kv_raw = ds4_gpu_tensor_alloc((uint64_t)kv_width * sizeof(float));
-    ds4_gpu_tensor *kv = ds4_gpu_tensor_alloc((uint64_t)kv_width * sizeof(float));
-    ds4_gpu_tensor *heads = ds4_gpu_tensor_alloc((uint64_t)q_width * sizeof(float));
-    ds4_gpu_tensor *low = ds4_gpu_tensor_alloc((uint64_t)out_rank * sizeof(float));
-
     int rc = 1;
+    ds4_gpu_tensor *attn_norm = NULL;
+    ds4_gpu_tensor *q_a = NULL;
+    ds4_gpu_tensor *q_a_norm = NULL;
+    ds4_gpu_tensor *q = NULL;
+    ds4_gpu_tensor *kv_raw = NULL;
+    ds4_gpu_tensor *kv = NULL;
+    ds4_gpu_tensor *heads = NULL;
+    ds4_gpu_tensor *low = NULL;
+    const bool use_scratch =
+        cfg->batch_scratch != NULL && single_slot_batch_scratch_enabled();
+    if (use_scratch &&
+        ensure_batch_scratch(cfg->batch_scratch,
+                             hidden_n,
+                             state->intermediate_size,
+                             state->routes_per_token,
+                             q_rank,
+                             q_width,
+                             kv_width,
+                             out_rank,
+                             err,
+                             errlen)) {
+        goto done;
+    }
+
+    attn_norm = use_scratch ? cfg->batch_scratch->attn_norm_view[0]
+        : ds4_gpu_tensor_alloc((uint64_t)hidden_n * sizeof(float));
+    q_a = use_scratch ? cfg->batch_scratch->attn_q_a_view[0]
+        : ds4_gpu_tensor_alloc((uint64_t)q_rank * sizeof(float));
+    q_a_norm = use_scratch ? cfg->batch_scratch->attn_q_a_norm_view[0]
+        : ds4_gpu_tensor_alloc((uint64_t)q_rank * sizeof(float));
+    q = use_scratch ? cfg->batch_scratch->attn_q_view[0]
+        : ds4_gpu_tensor_alloc((uint64_t)q_width * sizeof(float));
+    kv_raw = use_scratch ? cfg->batch_scratch->attn_kv_raw_view[0]
+        : ds4_gpu_tensor_alloc((uint64_t)kv_width * sizeof(float));
+    kv = use_scratch ? cfg->batch_scratch->attn_kv_view[0]
+        : ds4_gpu_tensor_alloc((uint64_t)kv_width * sizeof(float));
+    heads = use_scratch ? cfg->batch_scratch->attn_heads_view[0]
+        : ds4_gpu_tensor_alloc((uint64_t)q_width * sizeof(float));
+    low = use_scratch ? cfg->batch_scratch->attn_low_view[0]
+        : ds4_gpu_tensor_alloc((uint64_t)out_rank * sizeof(float));
+
     if (!attn_norm || !q_a || !q_a_norm || !q || !kv_raw || !kv || !heads || !low) {
         exec_error(err, errlen, "failed to allocate attention body tensors");
         goto done;
@@ -1570,14 +1614,16 @@ static int execute_attention_output(const ds4_v100_layer_state *state,
     rc = 0;
 
 done:
-    ds4_gpu_tensor_free(low);
-    ds4_gpu_tensor_free(heads);
-    ds4_gpu_tensor_free(kv);
-    ds4_gpu_tensor_free(kv_raw);
-    ds4_gpu_tensor_free(q);
-    ds4_gpu_tensor_free(q_a_norm);
-    ds4_gpu_tensor_free(q_a);
-    ds4_gpu_tensor_free(attn_norm);
+    if (!use_scratch) {
+        ds4_gpu_tensor_free(low);
+        ds4_gpu_tensor_free(heads);
+        ds4_gpu_tensor_free(kv);
+        ds4_gpu_tensor_free(kv_raw);
+        ds4_gpu_tensor_free(q);
+        ds4_gpu_tensor_free(q_a_norm);
+        ds4_gpu_tensor_free(q_a);
+        ds4_gpu_tensor_free(attn_norm);
+    }
     return rc;
 }
 

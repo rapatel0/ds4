@@ -119,8 +119,10 @@ typedef struct {
     ds4_gpu_tensor *attn_heads_batch;
     ds4_gpu_tensor *attn_low_batch;
     ds4_gpu_tensor *attn_norm_view[DS4_V100_LAYER_MAX_BATCH];
+    ds4_gpu_tensor *attn_q_a_view[DS4_V100_LAYER_MAX_BATCH];
     ds4_gpu_tensor *attn_q_a_norm_view[DS4_V100_LAYER_MAX_BATCH];
     ds4_gpu_tensor *attn_q_view[DS4_V100_LAYER_MAX_BATCH];
+    ds4_gpu_tensor *attn_kv_raw_view[DS4_V100_LAYER_MAX_BATCH];
     ds4_gpu_tensor *attn_kv_view[DS4_V100_LAYER_MAX_BATCH];
     ds4_gpu_tensor *attn_heads_view[DS4_V100_LAYER_MAX_BATCH];
     ds4_gpu_tensor *attn_low_view[DS4_V100_LAYER_MAX_BATCH];
