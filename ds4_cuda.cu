@@ -625,6 +625,11 @@ static int cuda_env_flag_enabled(const char *name) {
            strcmp(env, "OFF") != 0;
 }
 
+static int cuda_attention_decode_online_single_enabled(void) {
+    return cuda_env_flag_enabled("DS4_CUDA_ATTENTION_DECODE_ONLINE_SINGLE") &&
+           getenv("DS4_CUDA_NO_WINDOW_ATTENTION") == NULL;
+}
+
 struct cuda_f8_shape_trace_entry {
     const char *kind;
     const char *path;
@@ -12760,9 +12765,10 @@ __global__ static void attention_decode_mixed_heads8_online_kernel(
 
     const uint32_t qpos = pos0 + t;
     const uint32_t first_raw_pos = pos0 + n_tokens - n_raw;
+    const bool single_all = (n_tokens == 1u && ratio == 0u);
     uint32_t comp_count = 0;
     if (n_comp != 0u) {
-        if (n_tokens == 1u && ratio == 0u) {
+        if (single_all) {
             comp_count = n_comp;
         } else if (ratio != 0u) {
             comp_count = (qpos + 1u) / ratio;
@@ -12774,7 +12780,9 @@ __global__ static void attention_decode_mixed_heads8_online_kernel(
         uint32_t raw_first_idx = 0;
         if (n_raw != 0u) {
             const uint32_t raw_last_pos = first_raw_pos + n_raw - 1u;
-            if (qpos >= first_raw_pos) {
+            if (single_all) {
+                raw_count = n_raw > 256u ? 256u : n_raw;
+            } else if (qpos >= first_raw_pos) {
                 uint32_t lo = first_raw_pos;
                 if (window != 0u && qpos + 1u > window) {
                     const uint32_t wlo = qpos + 1u - window;
@@ -16205,6 +16213,26 @@ extern "C" int ds4_gpu_attention_decode_heads_tensor(
     const float *sinks = (const float *)cuda_model_range_ptr(
             model_map, sinks_offset, (uint64_t)n_head * sizeof(float), "attn_sinks");
     if (!sinks) return 0;
+    if (!use_mask && head_dim == 512u &&
+        cuda_attention_decode_online_single_enabled()) {
+        dim3 online_grid(1, (n_head + 7u) / 8u, 1);
+        attention_decode_mixed_heads8_online_kernel<<<online_grid, 256>>>((float *)heads->ptr,
+                                                                          sinks,
+                                                                          (const float *)q->ptr,
+                                                                          (const float *)raw_kv->ptr,
+                                                                          n_comp ? (const float *)comp_kv->ptr : (const float *)raw_kv->ptr,
+                                                                          1,
+                                                                          0,
+                                                                          n_raw,
+                                                                          raw_cap,
+                                                                          raw_start,
+                                                                          n_comp,
+                                                                          0,
+                                                                          0,
+                                                                          n_head,
+                                                                          head_dim);
+        return cuda_ok(cudaGetLastError(), "attention decode online-single launch");
+    }
     if (!cuda_attention_score_buffer_fits(n_comp)) {
         if (!use_mask && head_dim == 512u &&
             getenv("DS4_CUDA_NO_WINDOW_ATTENTION") == NULL) {
@@ -16284,6 +16312,27 @@ extern "C" int ds4_gpu_arena_attention_decode_heads_tensor(
 
     const float *sinks_ptr =
         (const float *)((const char *)arena->ptr + sinks->arena_offset);
+    if (!use_mask && head_dim == 512u &&
+        cuda_attention_decode_online_single_enabled()) {
+        dim3 online_grid(1, (n_head + 7u) / 8u, 1);
+        attention_decode_mixed_heads8_online_kernel<<<online_grid, 256>>>(
+                (float *)heads->ptr,
+                sinks_ptr,
+                (const float *)q->ptr,
+                (const float *)raw_kv->ptr,
+                n_comp ? (const float *)comp_kv->ptr : (const float *)raw_kv->ptr,
+                1,
+                0,
+                n_raw,
+                raw_cap,
+                raw_start,
+                n_comp,
+                0,
+                0,
+                n_head,
+                head_dim);
+        return cuda_ok(cudaGetLastError(), "arena attention decode online-single launch") ? 0 : 1;
+    }
     if (!cuda_attention_score_buffer_fits(n_comp)) {
         if (!use_mask && head_dim == 512u &&
             getenv("DS4_CUDA_NO_WINDOW_ATTENTION") == NULL) {
@@ -16458,6 +16507,26 @@ static int attention_decode_batch_launch(
     const float *sinks = (const float *)cuda_model_range_ptr(
             model_map, sinks_offset, (uint64_t)n_head * sizeof(float), "attn_sinks");
     if (!sinks) return 0;
+    if (!use_comp_mask && n_tokens == 1u && head_dim == 512u &&
+        cuda_attention_decode_online_single_enabled()) {
+        dim3 online_grid(1, (n_head + 7u) / 8u, 1);
+        attention_decode_mixed_heads8_online_kernel<<<online_grid, 256>>>((float *)heads->ptr,
+                                                                          sinks,
+                                                                          (const float *)q->ptr,
+                                                                          (const float *)raw_kv->ptr,
+                                                                          n_comp ? (const float *)comp_kv->ptr : (const float *)raw_kv->ptr,
+                                                                          1,
+                                                                          pos0,
+                                                                          n_raw,
+                                                                          raw_cap,
+                                                                          raw_start,
+                                                                          n_comp,
+                                                                          window,
+                                                                          ratio,
+                                                                          n_head,
+                                                                          head_dim);
+        return cuda_ok(cudaGetLastError(), "attention decode online-single batch launch");
+    }
     if (!cuda_attention_score_buffer_fits(n_comp)) {
         if (!use_comp_mask && head_dim == 512u &&
             getenv("DS4_CUDA_NO_WINDOW_ATTENTION") == NULL) {
