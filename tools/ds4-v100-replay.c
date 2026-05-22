@@ -2345,6 +2345,18 @@ int main(int argc, char **argv) {
     ropts.async_handoff = opt.async_handoff;
     ropts.async_event_handoff = opt.async_event_handoff;
     ropts.async_pipeline_mode = opt.async_pipeline_mode;
+    if (synthetic_prompt) {
+        uint64_t comp_cap = ((uint64_t)opt.synthetic_prompt_len + opt.tokens + 3ull) / 4ull + 4ull;
+        if (comp_cap < ropts.attn_comp_cap) comp_cap = ropts.attn_comp_cap;
+        if (comp_cap > UINT32_MAX) {
+            fprintf(stderr, "ds4-v100-replay: synthetic prompt compressed cache cap is too large\n");
+            free(expected);
+            free(prompt_owned);
+            return 2;
+        }
+        ropts.attn_comp_cap = (uint32_t)comp_cap;
+        ropts.index_comp_cap = (uint32_t)comp_cap;
+    }
     if (opt.profile_decode) {
         setenv("DS4_V100_PROFILE_DECODE", "1", 1);
     }
