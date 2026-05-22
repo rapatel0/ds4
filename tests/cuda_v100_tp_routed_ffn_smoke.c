@@ -182,6 +182,28 @@ static int run_ref(const ds4_v100_layer_state *state,
         out);
 }
 
+static int run_ref_accum(const ds4_v100_layer_state *state,
+                         const ds4_gpu_arena *arena,
+                         const ds4_gpu_tensor *selected,
+                         const ds4_gpu_tensor *weights,
+                         const ds4_gpu_tensor *x,
+                         uint32_t tokens,
+                         ds4_gpu_tensor *out) {
+    return ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_accum_f32(
+        arena,
+        &state->turbomind_gate_up_view,
+        &state->turbomind_down_view,
+        state->hidden_size,
+        state->intermediate_size,
+        state->routed_experts,
+        selected,
+        weights,
+        state->routes_per_token,
+        x,
+        tokens,
+        out);
+}
+
 static int run_tp_half(const ds4_v100_layer_state *state,
                        const ds4_gpu_arena *arena,
                        uint32_t half,
@@ -329,13 +351,14 @@ int main(int argc, char **argv) {
     ds4_gpu_tensor *owner_out = ds4_gpu_tensor_alloc(hidden_values * sizeof(float));
     ds4_gpu_tensor *peer_recv = ds4_gpu_tensor_alloc(hidden_values * sizeof(float));
     ds4_gpu_tensor *tp_sum = ds4_gpu_tensor_alloc(hidden_values * sizeof(float));
+    ds4_gpu_tensor *accum_out = ds4_gpu_tensor_alloc(hidden_values * sizeof(float));
     ds4_gpu_set_device(opt.peer_gpu);
     ds4_gpu_tensor *x_peer = ds4_gpu_tensor_alloc(hidden_values * sizeof(float));
     ds4_gpu_tensor *selected_peer = ds4_gpu_tensor_alloc(route_values * sizeof(int32_t));
     ds4_gpu_tensor *weights_peer = ds4_gpu_tensor_alloc(route_values * sizeof(float));
     ds4_gpu_tensor *peer_out = ds4_gpu_tensor_alloc(hidden_values * sizeof(float));
     check(x_owner && selected_owner && weights_owner && ref_out &&
-          owner_out && peer_recv && tp_sum && x_peer && selected_peer &&
+          owner_out && peer_recv && tp_sum && accum_out && x_peer && selected_peer &&
           weights_peer && peer_out,
           "device tensor allocation failed");
     if (failures) goto done_tensors;
@@ -400,6 +423,41 @@ int main(int argc, char **argv) {
     check(nan == 0, "non-finite TP comparison output");
     check(rel < 0.02, "TP relative error too high");
     check(bad_frac < 0.001, "TP element error fraction too high");
+
+    check(ds4_gpu_tensor_fill_f32(accum_out, 0.0f, hidden_values),
+          "accum output zero failed");
+    check(run_ref_accum(&state, owner_arena, selected_owner, weights_owner,
+                        x_owner, opt.tokens, accum_out) == 0,
+          "reference accum routed FFN failed");
+    check(ds4_gpu_synchronize(), "accum synchronize failed");
+    check(ds4_gpu_tensor_read(accum_out, 0, tp_host, hidden_values * sizeof(float)),
+          "accum output read failed");
+    if (failures) goto done_tensors;
+    double accum_sum_abs = 0.0;
+    double accum_sum_ref = 0.0;
+    float accum_max_abs = 0.0f;
+    uint64_t accum_bad = 0;
+    uint64_t accum_nan = 0;
+    for (uint64_t i = 0; i < hidden_values; i++) {
+        const float ref = ref_host[i];
+        const float got = tp_host[i];
+        if (!isfinite(ref) || !isfinite(got)) {
+            accum_nan++;
+            accum_bad++;
+            continue;
+        }
+        const float d = fabsf(ref - got);
+        const float tol = fmaxf(16.0f, 0.05f * fabsf(ref));
+        if (d > accum_max_abs) accum_max_abs = d;
+        accum_sum_abs += (double)d;
+        accum_sum_ref += (double)fabsf(ref);
+        if (d > tol) accum_bad++;
+    }
+    const double accum_rel = accum_sum_ref > 0.0 ? accum_sum_abs / accum_sum_ref : 0.0;
+    const double accum_bad_frac = hidden_values ? (double)accum_bad / (double)hidden_values : 0.0;
+    check(accum_nan == 0, "non-finite accum comparison output");
+    check(accum_rel < 0.02, "accum relative error too high");
+    check(accum_bad_frac < 0.001, "accum element error fraction too high");
 
     const uint32_t iters = opt.iters ? opt.iters : 1u;
     double t0 = now_ms();
@@ -497,7 +555,8 @@ int main(int argc, char **argv) {
     fprintf(stderr,
             "cuda_v100_tp_routed_ffn_smoke: layer=%d pair=%d,%d tokens=%u routes=%u "
             "values=%" PRIu64 " max_abs=%.6g rel=%.6g bad=%" PRIu64
-            " bad_frac=%.6g ref_ms=%.4f owner_ms=%.4f peer_ms=%.4f "
+            " bad_frac=%.6g accum_max_abs=%.6g accum_rel=%.6g accum_bad=%" PRIu64
+            " accum_bad_frac=%.6g ref_ms=%.4f owner_ms=%.4f peer_ms=%.4f "
             "copy_in_ms=%.4f copy_out_ms=%.4f sum_ms=%.4f total_ms=%.4f speedup=%.3fx "
             "owner_bytes=%" PRIu64 " peer_bytes=%" PRIu64 "\n",
             opt.layer,
@@ -510,6 +569,10 @@ int main(int argc, char **argv) {
             rel,
             bad,
             bad_frac,
+            accum_max_abs,
+            accum_rel,
+            accum_bad,
+            accum_bad_frac,
             ref_ms,
             owner_ms,
             peer_ms,
@@ -527,6 +590,7 @@ done_tensors:
     ds4_gpu_tensor_free(selected_peer);
     ds4_gpu_tensor_free(x_peer);
     ds4_gpu_tensor_free(tp_sum);
+    ds4_gpu_tensor_free(accum_out);
     ds4_gpu_tensor_free(peer_recv);
     ds4_gpu_tensor_free(owner_out);
     ds4_gpu_tensor_free(ref_out);

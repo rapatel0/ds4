@@ -495,7 +495,8 @@ case "$DS4_V100_TURBOMIND_ROUTED_EXECUTOR" in
     fixed96|chain96|ffn96|96) DS4_V100_TURBOMIND_ROUTED_EXECUTOR=fixed96 ;;
     fixed768|chain768|ffn768|768) DS4_V100_TURBOMIND_ROUTED_EXECUTOR=fixed768 ;;
     fixed6|chain6|ffn6|6) DS4_V100_TURBOMIND_ROUTED_EXECUTOR=fixed6 ;;
-    *) fail "DS4_V100_TURBOMIND_ROUTED_EXECUTOR must be off, auto, fixed96, fixed768, or fixed6" ;;
+    fused6|fused_6|ffn_fused6|unexpanded6|indexed6) DS4_V100_TURBOMIND_ROUTED_EXECUTOR=fused6 ;;
+    *) fail "DS4_V100_TURBOMIND_ROUTED_EXECUTOR must be off, auto, fixed96, fixed768, fixed6, or fused6" ;;
 esac
 case "$DS4_V100_TURBOMIND_ROUTED_EXECUTOR_VERBOSE" in
     0|false|off) DS4_V100_TURBOMIND_ROUTED_EXECUTOR_VERBOSE=0 ;;

@@ -5996,8 +5996,34 @@ enum {
     DS4_CUDA_TM_ROUTED_EXECUTOR_AUTO = 1,
     DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED96 = 2,
     DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED768 = 3,
-    DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED6 = 4
+    DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED6 = 4,
+    DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6 = 5
 };
+
+typedef enum {
+    DS4_TM_ROUTED_OUT_FULL_SUM_F32 = 0,
+    DS4_TM_ROUTED_OUT_PARTIAL_ACCUMULATE_F32 = 1,
+} ds4_tm_routed_output_mode;
+
+typedef struct {
+    const ds4_gpu_tensor *x_f32;
+    const ds4_gpu_tensor *x_row_ptrs;
+    const ds4_gpu_tensor *selected_i32;
+    const ds4_gpu_tensor *weights_f32;
+    const ds4_gpu_turbomind_mxfp4_matrix_view *gate;
+    const ds4_gpu_turbomind_mxfp4_matrix_view *up;
+    const ds4_gpu_turbomind_mxfp4_matrix_view *gate_up;
+    const ds4_gpu_turbomind_mxfp4_matrix_view *down;
+    ds4_gpu_tensor *out_f32;
+    uint32_t hidden;
+    uint32_t mid;
+    uint32_t n_total_experts;
+    uint32_t n_routes;
+    uint32_t n_tokens;
+    uint32_t expert_first;
+    uint32_t expert_count;
+    ds4_tm_routed_output_mode output_mode;
+} ds4_tm_routed_ffn_desc;
 
 static int cuda_tm_routed_executor_mode(void) {
     const char *mode = getenv("DS4_V100_TURBOMIND_ROUTED_EXECUTOR");
@@ -6036,6 +6062,13 @@ static int cuda_tm_routed_executor_mode(void) {
         strcmp(mode, "6") == 0) {
         return DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED6;
     }
+    if (strcmp(mode, "fused6") == 0 ||
+        strcmp(mode, "fused_6") == 0 ||
+        strcmp(mode, "ffn_fused6") == 0 ||
+        strcmp(mode, "unexpanded6") == 0 ||
+        strcmp(mode, "indexed6") == 0) {
+        return DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6;
+    }
     return DS4_CUDA_TM_ROUTED_EXECUTOR_OFF;
 }
 
@@ -6045,6 +6078,7 @@ static const char *cuda_tm_routed_executor_mode_name(int mode) {
         case DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED96: return "fixed96";
         case DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED768: return "fixed768";
         case DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED6: return "fixed6";
+        case DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6: return "fused6";
         default: return "off";
     }
 }
@@ -6088,6 +6122,40 @@ static void cuda_tm_routed_executor_log_selected_once(uint32_t total_routes) {
     fprintf(stderr,
             "ds4: TurboMind routed executor selected fixed gate_up total_routes=%u\n",
             total_routes);
+}
+
+static void cuda_tm_routed_executor_log_liveness_once(
+        int mode,
+        uint32_t total_routes,
+        int route_expanded_a_half,
+        int compact_a_half,
+        int materialized_gate_out,
+        int materialized_mid_half,
+        int materialized_down_routes,
+        ds4_tm_routed_output_mode output_mode) {
+    if (!cuda_tm_routed_executor_verbose_enabled()) return;
+    static int printed6_fused = 0;
+    static int printed6_other = 0;
+    int *printed = nullptr;
+    if (total_routes == 6u && mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6) {
+        printed = &printed6_fused;
+    } else if (total_routes == 6u) {
+        printed = &printed6_other;
+    }
+    if (printed && *printed) return;
+    if (printed) *printed = 1;
+    fprintf(stderr,
+            "ds4: routed-FFN liveness executor=%s total_routes=%u "
+            "route_expanded_a_half=%d compact_a_half=%d gate_out=%s "
+            "mid_half=%s down_routes=%s output_mode=%s\n",
+            cuda_tm_routed_executor_mode_name(mode),
+            total_routes,
+            route_expanded_a_half,
+            compact_a_half,
+            materialized_gate_out ? "materialized" : "elided",
+            materialized_mid_half ? "materialized" : "elided",
+            materialized_down_routes ? "materialized" : "elided",
+            output_mode == DS4_TM_ROUTED_OUT_PARTIAL_ACCUMULATE_F32 ? "partial_accumulate" : "full_sum");
 }
 
 static tm_pfn_ds4_mxfp4_gated_silu cuda_tm_ds4_gated_silu_768_probe(
@@ -7283,10 +7351,35 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     tm_prof.begin(arena->gpu);
     cudaStream_t tm_stream = cuda_tm_active_stream();
 
+    ds4_tm_routed_ffn_desc exec_desc = {};
+    exec_desc.x_f32 = x_f32;
+    exec_desc.x_row_ptrs = x_row_ptrs;
+    exec_desc.selected_i32 = selected_i32;
+    exec_desc.weights_f32 = weights_f32;
+    exec_desc.gate = gate;
+    exec_desc.up = up;
+    exec_desc.gate_up = gate_up;
+    exec_desc.down = down;
+    exec_desc.out_f32 = out_f32;
+    exec_desc.hidden = hidden;
+    exec_desc.mid = mid;
+    exec_desc.n_total_experts = n_total_experts;
+    exec_desc.n_routes = n_routes;
+    exec_desc.n_tokens = n_tokens;
+    exec_desc.expert_first = 0;
+    exec_desc.expert_count = n_total_experts;
+    exec_desc.output_mode = accumulate_out
+        ? DS4_TM_ROUTED_OUT_PARTIAL_ACCUMULATE_F32
+        : DS4_TM_ROUTED_OUT_FULL_SUM_F32;
+
     const int use_route_row_reduce = cuda_tm_route_row_reduce_enabled();
     const int use_indexed_a = cuda_tm_indexed_a_enabled();
+    const int routed_executor_mode = cuda_tm_routed_executor_mode();
     int group_pipeline_requested =
-        fused_gate_up && !use_indexed_a && cuda_tm_group_pipeline_enabled();
+        fused_gate_up &&
+        !use_indexed_a &&
+        routed_executor_mode != DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6 &&
+        cuda_tm_group_pipeline_enabled();
     const uint32_t group_pipeline_stream_limit =
         group_pipeline_requested ? cuda_tm_group_pipeline_stream_limit() : 0u;
     const int group_pipeline_auto_groups =
@@ -7294,7 +7387,6 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     int use_compact_schedule =
         group_pipeline_requested ||
         (cuda_tm_compact_schedule_enabled() && total_routes < n_total_experts);
-    const int routed_executor_mode = cuda_tm_routed_executor_mode();
     const int routed_executor_requested =
         routed_executor_mode != DS4_CUDA_TM_ROUTED_EXECUTOR_OFF &&
         fused_gate_up &&
@@ -7304,13 +7396,21 @@ static int cuda_tm_routed_mxfp4_packed_impl(
         routed_executor_requested &&
         ((total_routes == 6u &&
           (routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_AUTO ||
-           routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED6)) ||
+           routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED6 ||
+           routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6)) ||
          (total_routes == 96u &&
           (routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_AUTO ||
            routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED96)) ||
          (total_routes == 768u &&
           (routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_AUTO ||
            routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED768)));
+    const int use_fused6_unexpanded_a =
+        routed_executor_candidate_shape &&
+        routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6 &&
+        total_routes == 6u &&
+        hidden == 4096u &&
+        mid == 2048u;
+    const int use_unexpanded_a = use_indexed_a || use_fused6_unexpanded_a;
     const uint32_t tm_group_capacity =
         use_compact_schedule
             ? (group_pipeline_requested ? group_pipeline_stream_limit : total_routes)
@@ -7326,7 +7426,7 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     const uint64_t sorted_pairs_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     scratch_bytes += (uint64_t)total_routes * sizeof(int);
     const uint64_t sorted_tokens_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
-    if (use_indexed_a) {
+    if (use_unexpanded_a) {
         scratch_bytes += (uint64_t)total_routes * sizeof(int);
     }
     const uint64_t pair_rows_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
@@ -7374,7 +7474,7 @@ static int cuda_tm_routed_mxfp4_packed_impl(
         scratch_bytes += (uint64_t)tm_group_capacity * sizeof(cuda_tm_strided_ptr);
     }
     const uint64_t a_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
-    scratch_bytes += (uint64_t)(use_indexed_a ? n_tokens : total_routes) * hidden * sizeof(__half);
+    scratch_bytes += (uint64_t)(use_unexpanded_a ? n_tokens : total_routes) * hidden * sizeof(__half);
     const uint64_t gate_out_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     if (!use_gated_silu) {
         scratch_bytes += (uint64_t)total_routes * mid * (fused_gate_up ? 2u : 1u) * sizeof(__half);
@@ -7395,7 +7495,7 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     int *cursors = (int *)(scratch + cursors_off);
     int *offsets = (int *)(scratch + offsets_off);
     int *sorted_pairs = (int *)(scratch + sorted_pairs_off);
-    int *sorted_tokens = use_indexed_a ? (int *)(scratch + sorted_tokens_off) : nullptr;
+    int *sorted_tokens = use_unexpanded_a ? (int *)(scratch + sorted_tokens_off) : nullptr;
     int *pair_rows = use_route_row_reduce ? (int *)(scratch + pair_rows_off) : nullptr;
     float *sorted_weights = (float *)(scratch + sorted_weights_off);
     int *bad = (int *)(scratch + bad_off);
@@ -7505,7 +7605,7 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     }
     tm_prof.mark(&tm_prof.route_ms);
 
-    if (use_indexed_a) {
+    if (use_unexpanded_a) {
         tm_cast_f32_rows_to_f16_kernel<<<((uint64_t)n_tokens * hidden + 255u) / 256u, 256, 0, tm_stream>>>(
             a_half,
             x_f32 ? (const float *)x_f32->ptr : nullptr,
@@ -7523,6 +7623,25 @@ static int cuda_tm_routed_mxfp4_packed_impl(
             total_routes);
     }
     if (!cuda_ok(cudaGetLastError(), "turbomind packed gather activations launch")) return 1;
+    if (use_fused6_unexpanded_a) {
+        cuda_tm_routed_executor_log_liveness_once(routed_executor_mode,
+                                                  total_routes,
+                                                  0,
+                                                  1,
+                                                  !use_gated_silu,
+                                                  1,
+                                                  1,
+                                                  exec_desc.output_mode);
+    } else if (routed_executor_candidate_shape) {
+        cuda_tm_routed_executor_log_liveness_once(routed_executor_mode,
+                                                  total_routes,
+                                                  use_unexpanded_a ? 0 : 1,
+                                                  use_unexpanded_a ? 1 : 0,
+                                                  !use_gated_silu,
+                                                  1,
+                                                  1,
+                                                  exec_desc.output_mode);
+    }
     tm_prof.mark(&tm_prof.gather_ms);
 
     cuda_tm_matrix_pack gate_pack = {};

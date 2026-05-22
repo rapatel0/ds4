@@ -1,7 +1,7 @@
 # Sprint 173 - Reusable Fused Routed-FFN Boundary
 
 Date: 2026-05-22
-Status: Planned
+Status: Completed
 
 ## Overview
 
@@ -161,23 +161,93 @@ the supported six-route path and emit evidence that this actually happened.
 
 ## Definition Of Done
 
-- [ ] `fused6` opt-in mode exists and defaults off.
-- [ ] Current default path remains behaviorally unchanged.
-- [ ] Routed-FFN executor descriptor exists with explicit input, route metadata,
+- [x] `fused6` opt-in mode exists and defaults off.
+- [x] Current default path remains behaviorally unchanged.
+- [x] Routed-FFN executor descriptor exists with explicit input, route metadata,
       packed weight, ownership, and output-mode fields.
-- [ ] Candidate path removes/bypasses route-expanded `a_half` for the six-route
+- [x] Candidate path removes/bypasses route-expanded `a_half` for the six-route
       served shape.
-- [ ] Logs prove `materialized_a_half=0` or equivalent for the candidate.
-- [ ] Replay/focused correctness passes before served benchmarking.
-- [ ] Synthetic full-vs-partial additive-output smoke passes.
-- [ ] Served 16-slot/256K A/B records prompt, generated, and continuation/decode
+- [x] Logs prove `materialized_a_half=0` or equivalent for the candidate.
+- [x] Replay/focused correctness passes before served benchmarking.
+- [x] Synthetic full-vs-partial additive-output smoke passes.
+- [x] Served 16-slot/256K A/B records prompt, generated, and continuation/decode
       tok/s separately, with token-match evidence.
-- [ ] Promote only if continuation/decode tok/s improves by `>= 10%` with
+- [x] Promote only if continuation/decode tok/s improves by `>= 10%` with
       correctness intact.
-- [ ] If correct but below `10%`, keep `fused6` opt-in and record it as the TP/EP
+- [x] If correct but below `10%`, keep `fused6` opt-in and record it as the TP/EP
       primitive seed.
-- [ ] If no real global intermediate is removed, stop and pivot to persistent
+- [x] If no real global intermediate is removed, stop and pivot to persistent
       TP/EP boundary planning.
+
+## Results
+
+Implemented:
+
+- Added `DS4_V100_TURBOMIND_ROUTED_EXECUTOR=fused6` in `ds4_cuda.cu`.
+- Added a routed-FFN descriptor with input, route metadata, packed weight,
+  ownership, and output-mode fields.
+- Added the `FULL_SUM_F32` / `PARTIAL_ACCUMULATE_F32` internal output mode.
+- Added a guarded six-route candidate path that uses the un-expanded activation
+  route: cast one source token row once, pass `sorted_tokens` into the grouped
+  gate/up GEMM, and avoid route-expanded `a_half`.
+- Added liveness logging for `a_half`, `gate_out`, `mid_half`, `down_routes`,
+  and output mode.
+- Updated the appliance launcher allowlist to accept `fused6`.
+- Extended `tests/cuda_v100_tp_routed_ffn_smoke.c` to also validate the
+  `*_accum_f32` path against the full-output reference.
+
+Validation:
+
+- `git diff --check` passed.
+- V100 build passed:
+  - `CUDA_ARCH=sm_70 make -j80 ds4_cuda.o`
+  - `CUDA_ARCH=sm_70 make -j80 tools/ds4-v100-replay`
+  - `CUDA_ARCH=sm_70 make -j80 tests/cuda_v100_tp_routed_ffn_smoke`
+- Focused served smoke selected `fused6`, produced the expected first token
+  (`3136`), and logged:
+
+```text
+ds4: TurboMind routed executor fused6 shape total_routes=6 active_experts=6 max_routes_per_expert=1
+ds4: routed-FFN liveness executor=fused6 total_routes=6 route_expanded_a_half=0 compact_a_half=1 gate_out=elided mid_half=materialized down_routes=materialized output_mode=full_sum
+```
+
+- TP/partial smoke passed on the V100 pod with `fused6` enabled:
+  - `tokens=1`, `routes=6`
+  - `max_abs=9.16538e-07`
+  - `rel=0.000276278`
+  - `bad=0`
+  - `accum_max_abs=2.32831e-10`
+  - `accum_rel=2.4959e-08`
+  - `accum_bad=0`
+
+Same-binary served A/B at 16-slot/256K, per-step async + event handoff:
+
+| Mode | Generated tok/s | Continuation tok/s | Prompt tok/s | Token match |
+|---|---:|---:|---:|---:|
+| control | `46.227335` | `43.338126` | `52.005752` | `16/16` |
+| fused6 | `45.522409` | `42.677258` | `51.212710` | `16/16` |
+
+Evidence:
+
+- `logs/from-cluster/sprint173-fused6-smoke/`
+- `logs/from-cluster/sprint173-fused6-ab/`
+
+## Decision
+
+`fused6` is correct and removes a real global expanded intermediate, but it does
+not improve throughput. The served A/B regressed by about `1.5%` on both
+generated and continuation/decode tok/s:
+
+- generated: `45.522409 / 46.227335 = 0.9848`
+- continuation: `42.677258 / 43.338126 = 0.9848`
+
+Keep `DS4_V100_TURBOMIND_ROUTED_EXECUTOR=fused6` opt-in and default off. The
+result is useful as a TP/EP primitive seed because it creates the explicit
+boundary and liveness accounting, but `a_half` removal alone is not the
+production serving lever. Sprint 174 should move to a persistent TP/EP boundary
+or a larger persistent routed-FFN boundary that removes `mid_half`/`down_routes`
+and changes the GEMM scheduling, not another small wrapper around the six-route
+gate/up call.
 
 ## Risks
 

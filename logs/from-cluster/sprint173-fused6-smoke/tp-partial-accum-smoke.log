@@ -1,0 +1,5 @@
+ds4: CUDA backend initialized on Tesla V100-SXM2-32GB (sm_70)
+ds4: TurboMind routed executor fused6 shape total_routes=6 active_experts=6 max_routes_per_expert=1
+ds4: routed-FFN liveness executor=fused6 total_routes=6 route_expanded_a_half=0 compact_a_half=1 gate_out=elided mid_half=materialized down_routes=materialized output_mode=full_sum
+cuda_v100_tp_routed_ffn_smoke: layer=3 pair=0,3 tokens=1 routes=6 values=4096 max_abs=9.16538e-07 rel=0.000276278 bad=0 bad_frac=0 accum_max_abs=2.32831e-10 accum_rel=2.4959e-08 accum_bad=0 accum_bad_frac=0 ref_ms=0.2434 owner_ms=0.1762 peer_ms=0.1840 copy_in_ms=0.0217 copy_out_ms=0.0077 sum_ms=0.0132 total_ms=0.3773 speedup=0.645x owner_bytes=5133828096 peer_bytes=1711276032
+cuda_v100_tp_routed_ffn_smoke: PASS
