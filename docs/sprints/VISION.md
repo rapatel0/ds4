@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-22
 last_updated_by: sprint-execute
-revision: 186
+revision: 187
 ---
 
 # Vision: DS4 V100 Appliance
@@ -2964,6 +2964,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-22 | Completed Sprint 184 synthetic long-context replay. | `tools/ds4-v100-replay` now supports `--synthetic-prompt-token` plus `--synthetic-prompt-len`, with parser guards against mixing synthetic mode with text prompts or system prompts. V100 build and parser validation passed. Synthetic len-8 replay generated successfully, and a bounded len-256 / 262144-context run recorded `20108.067 ms` prompt replay, `12.731209` prompt tok/s, and `14.071008` continuation tok/s. Repeating len-256 with Sprint 183's online-single attention gate preserved the two output IDs but slowed continuation to `12.038632`, so online-single remains default-off. Next work should use synthetic tiers like 1024/4096 to characterize actual filled-context decode before promoting attention changes. | Sprint 185+ |
 | 2026-05-22 | Completed Sprint 185 synthetic 1024-token context tier. | The first 1024-token synthetic direct replay failed with `decode cache attention compressed capacity exceeded`, proving the old fixed `64` compressed-row cap was only a short-fixture setting. Synthetic prompt mode now sizes `attn_comp_cap` and `index_comp_cap` from the synthetic prompt length with the existing default as a floor. The 1024-token / 262144-context run then completed: `66918.694 ms` prompt replay, `15.302152` prompt tok/s, `15.198459` continuation tok/s, output IDs `926, 926`. This separates capacity-serving benchmarks from actual filled-context benchmarks; next work should add 4096-token timing and decide whether full 256K prefill is worth the wall-clock cost. | Sprint 186+ |
 | 2026-05-22 | Completed Sprint 186 synthetic 4096-token context tier. | The 4096-token / 262144-context synthetic filled-context run completed on the persistent production pack: `288102.638 ms` prompt replay, `14.217155` prompt tok/s, `13.354373` continuation tok/s, output IDs `271, 5`. This gives the first two filled-context scaling points after the 256-token smoke. Prompt replay is now clearly the dominant wall-clock cost for larger context tiers. Sprint 187 should either optimize prompt/prefill replay or schedule a deliberately long 16384/65536 synthetic tier; full 256K prefill should not be treated as a quick benchmark. | Sprint 187+ |
+| 2026-05-22 | Completed Sprint 187 synthetic prompt profile repair. | Direct synthetic single-slot profiling now emits the same stage-profile buckets as batch decode. The patched 1024-token / 262144-context run completed with `14.381306` prompt tok/s and `14.282227` continuation tok/s. Bucket sums were attention `37779.266 ms` (`56.8%`), FFN `21473.437 ms` (`32.3%`), HC attention prep `3069.656 ms`, HC FFN prep `3754.986 ms`, and HC final `443.923 ms`; summed handoff was only `219.707 ms`. For filled-context work, the next practical lever is attention/KV execution or a larger fused boundary, not inter-stage transfer. | Sprint 188+ |
 
 ## Open Questions
 

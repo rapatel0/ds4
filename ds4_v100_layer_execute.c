@@ -2982,6 +2982,21 @@ int ds4_v100_layer_execute_hc_decode(
         goto done;
     }
 
+    const bool profile = env_flag_enabled("DS4_V100_PROFILE_DECODE");
+    double profile_last_ms = 0.0;
+    double timing_hc_attn_ms = 0.0;
+    double timing_attention_ms = 0.0;
+    double timing_hc_ffn_ms = 0.0;
+    double timing_ffn_ms = 0.0;
+    double timing_hc_final_ms = 0.0;
+    if (profile) {
+        if (!ds4_gpu_synchronize()) {
+            exec_error(err, errlen, "HC profile start sync failed");
+            goto done;
+        }
+        profile_last_ms = monotonic_ms();
+    }
+
     if (!ds4_gpu_rms_norm_plain_tensor(hc_norm, hidden_hc, (uint32_t)hc_values, DS4_V100_RMS_EPS) ||
         !ds4_gpu_matmul_f32_tensor(hc_mix,
                                    cfg->model_map,
@@ -3002,9 +3017,24 @@ int ds4_v100_layer_execute_hc_decode(
                                               hidden_n,
                                               DS4_V100_N_HC,
                                               DS4_V100_HC_SINKHORN_ITERS,
-                                              DS4_V100_RMS_EPS) ||
-        execute_attention_output(state, cfg, attn_cur, attn_out, err, errlen) ||
-        !ds4_gpu_hc_expand_split_tensor(after_attn_hc,
+                                              DS4_V100_RMS_EPS)) {
+        if (err && err[0] == '\0') exec_error(err, errlen, "HC attention prep failed");
+        goto done;
+    }
+    if (profile && !profile_mark(&profile_last_ms, &timing_hc_attn_ms)) {
+        exec_error(err, errlen, "HC attention prep profile sync failed");
+        goto done;
+    }
+
+    if (execute_attention_output(state, cfg, attn_cur, attn_out, err, errlen)) {
+        goto done;
+    }
+    if (profile && !profile_mark(&profile_last_ms, &timing_attention_ms)) {
+        exec_error(err, errlen, "HC attention profile sync failed");
+        goto done;
+    }
+
+    if (!ds4_gpu_hc_expand_split_tensor(after_attn_hc,
                                         attn_out,
                                         hidden_hc,
                                         attn_split,
@@ -3037,16 +3067,47 @@ int ds4_v100_layer_execute_hc_decode(
                                         cfg->model_size,
                                         model_offset_for_binding(cfg, &state->ffn_norm),
                                         hidden_n,
-                                        DS4_V100_RMS_EPS) ||
-        execute_ffn_delta(state, cfg, ffn_norm, ffn_delta, report, err, errlen) ||
-        !ds4_gpu_hc_expand_split_tensor(next_hidden_hc,
+                                        DS4_V100_RMS_EPS)) {
+        if (err && err[0] == '\0') exec_error(err, errlen, "HC layer execution sequence failed");
+        goto done;
+    }
+    if (profile && !profile_mark(&profile_last_ms, &timing_hc_ffn_ms)) {
+        exec_error(err, errlen, "HC FFN prep profile sync failed");
+        goto done;
+    }
+
+    if (execute_ffn_delta(state, cfg, ffn_norm, ffn_delta, report, err, errlen)) {
+        goto done;
+    }
+    if (profile && !profile_mark(&profile_last_ms, &timing_ffn_ms)) {
+        exec_error(err, errlen, "HC FFN profile sync failed");
+        goto done;
+    }
+
+    if (!ds4_gpu_hc_expand_split_tensor(next_hidden_hc,
                                         ffn_delta,
                                         after_attn_hc,
                                         ffn_split,
                                         hidden_n,
                                         DS4_V100_N_HC)) {
-        if (err && err[0] == '\0') exec_error(err, errlen, "HC layer execution sequence failed");
+        exec_error(err, errlen, "HC final expansion failed");
         goto done;
+    }
+    if (profile && !profile_mark(&profile_last_ms, &timing_hc_final_ms)) {
+        exec_error(err, errlen, "HC final profile sync failed");
+        goto done;
+    }
+    if (report && profile) {
+        report->timing_hc_attn_ms = timing_hc_attn_ms;
+        report->timing_attention_ms = timing_attention_ms;
+        report->timing_hc_ffn_ms = timing_hc_ffn_ms;
+        report->timing_ffn_ms = timing_ffn_ms;
+        report->timing_hc_final_ms = timing_hc_final_ms;
+        report->timing_total_ms = timing_hc_attn_ms +
+                                  timing_attention_ms +
+                                  timing_hc_ffn_ms +
+                                  timing_ffn_ms +
+                                  timing_hc_final_ms;
     }
 
     if (cfg->checkpoint_fn) {
