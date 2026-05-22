@@ -228,6 +228,7 @@ typedef struct {
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_1536_m128_group;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gate_up_1536_m128_group;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_down_1536_m128_group;
+    tm_pfn_ds4_mxfp4_down_reduce ds4_mxfp4_down_6_m16_reduce;
     tm_pfn_ds4_mxfp4_down_reduce ds4_mxfp4_down_768_m128_reduce;
     tm_pfn_ds4_mxfp4_down_reduce ds4_mxfp4_down_1536_m128_reduce;
     int attempted;
@@ -1132,6 +1133,9 @@ static int cuda_tm_load_api(void) {
     g_tm_api.ds4_mxfp4_down_1536_m128_group =
         (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_down_1536_m128_group");
+    g_tm_api.ds4_mxfp4_down_6_m16_reduce =
+        (tm_pfn_ds4_mxfp4_down_reduce)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_down_6_m16_reduce");
     g_tm_api.ds4_mxfp4_down_768_m128_reduce =
         (tm_pfn_ds4_mxfp4_down_reduce)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_down_768_m128_reduce");
@@ -6284,10 +6288,28 @@ static tm_pfn_ds4_mxfp4_down_reduce cuda_tm_ds4_down_reduce_probe(
     if (!cuda_env_flag_enabled("DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE")) {
         return nullptr;
     }
+    if (total_routes == 6u) {
+        static int printed6 = 0;
+        if (!printed6) {
+            printed6 = 1;
+            fprintf(stderr, "ds4: TurboMind down-reduce epilogue selected total_routes=6\n");
+        }
+        return g_tm_api.ds4_mxfp4_down_6_m16_reduce;
+    }
     if (total_routes == 768u) {
+        static int printed768 = 0;
+        if (!printed768) {
+            printed768 = 1;
+            fprintf(stderr, "ds4: TurboMind down-reduce epilogue selected total_routes=768\n");
+        }
         return g_tm_api.ds4_mxfp4_down_768_m128_reduce;
     }
     if (total_routes == 1536u) {
+        static int printed1536 = 0;
+        if (!printed1536) {
+            printed1536 = 1;
+            fprintf(stderr, "ds4: TurboMind down-reduce epilogue selected total_routes=1536\n");
+        }
         return g_tm_api.ds4_mxfp4_down_1536_m128_reduce;
     }
     return nullptr;

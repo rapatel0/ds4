@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-22
 last_updated_by: sprint-execute
-revision: 170
+revision: 171
 ---
 
 # Vision: DS4 V100 Appliance
@@ -331,6 +331,17 @@ optimized V100 low-bit expert kernels in the actual hot path.
   persistent/fused six-route routed-FFN executor (gate/up + activation + down +
   weighted reduce as one boundary) or a persistent TP/EP boundary, not another
   fixed dispatch-bypass probe. See `SPRINT-170-FOLLOWUPS.md`.
+- Sprint 171 extended the existing TurboMind down-projection route-reduce
+  epilogue to the exact 6-route served shape behind
+  `DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE=1`. The new
+  `ggml_turbomind_ds4_mxfp4_down_6_m16_reduce` ABI built on the V100 pod,
+  exported correctly, and selected in real-model replay/serving. Correctness
+  held with `16/16` token match, but the same-binary 16-slot/256K served A/B
+  regressed from `45.941120` generated / `43.069800` continuation tok/s to
+  `43.887560` / `41.144588`. Keep down-reduce epilogues default-off. This
+  closes another exact served-shape wrapper boundary; next work should change
+  the larger routed-FFN execution model with a persistent gate/up + down
+  executor or a broader persistent TP/EP scheduler boundary.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation
@@ -2868,6 +2879,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-21 | Completed Sprint 162 TP route-shape gate. | The two-GPU TP proxy is positive at the actual 256K serving route counts, not only at the old 768-route diagnostic shape. On NV2 pairs, 6 routes measured `1.260x` total-with-copy speedup and 96 routes measured `1.325-1.328x`, all with TP-sum correctness passing. The next implementation should be a bounded one-layer TP routed-FFN executor using the existing TP split pack descriptors, with correctness against the current one-GPU layer output before any served-mode promotion. | Sprint 163+ |
 | 2026-05-21 | Completed Sprint 164 guarded scheduler TP overlay. | The scheduler can now execute layer 3 routed FFN through default-off TP2 owner+peer overlay arenas and assert `tp2_layers=1`. Primitive and scheduler correctness passed, the negative gate fails clearly, and full 8-stage open fits 32 GiB V100 memory. However the synchronous one-layer overlay regressed stage and full selected-token timing (`0.511053` vs `0.639435` generated tok/s), so it remains diagnostic-only. Next work should either design persistent peer ownership / broader TP-EP scheduling or return to a larger fused routed-FFN boundary. | Sprint 165+ |
 | 2026-05-21 | Completed Sprint 165 TP2 async-input gate. | `DS4_V100_TP2_ASYNC_INPUT=1` overlaps peer input copies with owner-half compute and keeps the TP2 overlay default-off. It improved the cold TP overlay stage profile versus sync input (`235.591 ms` vs `317.593 ms` total), but warm no-TP remained much faster than async TP (`166.453 ms` vs `245.107 ms`). The one-layer overlay is not a practical serving lever; next work should either implement a broader persistent TP/EP scheduler boundary or return to a larger fused routed-FFN boundary. | Sprint 166+ |
+| 2026-05-22 | Completed Sprint 171 six-route down-reduce epilogue. | `ggml_turbomind_ds4_mxfp4_down_6_m16_reduce` extends the existing down route-reduce epilogue to the exact served 6-route shape and selected correctly on V100. The served 16-slot/256K A/B regressed (`43.887560` generated / `41.144588` continuation tok/s versus `45.941120` / `43.069800` control), so keep it default-off. The next implementation should stop tuning wrapper boundaries and move to a persistent gate/up + down routed-FFN executor or a broader persistent TP/EP scheduler boundary. | Sprint 172+ |
 
 ## Open Questions
 

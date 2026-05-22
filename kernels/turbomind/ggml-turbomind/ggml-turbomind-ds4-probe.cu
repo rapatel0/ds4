@@ -271,7 +271,7 @@ int launch_ds4_mxfp4_down_reduce_epilogue(
         return 1;
     }
     if (num_experts != 6 ||
-        (total_tokens != 768 && total_tokens != 1536) ||
+        (total_tokens != 6 && total_tokens != 768 && total_tokens != 1536) ||
         n_routes <= 0) {
         return 2;
     }
@@ -1255,6 +1255,47 @@ int ggml_turbomind_ds4_mxfp4_down_768_m128_reduce_launch(
     if (total_tokens != 768) return 2;
     (void)probe_kernel_m128();
     return launch_ds4_mxfp4_down_reduce_epilogue<typename ProbeConfigM128::Kernel>(
+        A,
+        expert_offsets,
+        num_experts,
+        total_tokens,
+        weights_packed,
+        scales_packed,
+        k_pack_value,
+        route_out,
+        sorted_pairs,
+        route_weights,
+        n_routes,
+        barriers,
+        barriers_size,
+        partials,
+        partials_size,
+        flags,
+        stream_v);
+}
+
+int ggml_turbomind_ds4_mxfp4_down_6_m16_reduce_launch(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    float*             route_out,
+    const int*         sorted_pairs,
+    const float*       route_weights,
+    int                n_routes,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream_v)
+{
+    if (total_tokens != 6) return 2;
+    (void)probe_kernel_m16();
+    return launch_ds4_mxfp4_down_reduce_epilogue<typename ProbeConfigM16::Kernel>(
         A,
         expert_offsets,
         num_experts,
