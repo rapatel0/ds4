@@ -19,6 +19,7 @@ sample_ms="500"
 microbatch_wait_us=""
 log_dir=""
 profile_decode="0"
+cuda_profiler_window="0"
 wavefront_decode="0"
 async_pipeline_decode="0"
 async_pipeline_mode="off"
@@ -28,6 +29,7 @@ mtp_serving="off"
 mtp_top_k="5"
 mtp_gpu="7"
 mtp_reserve_mib="4096"
+replay_bin="${DS4_V100_REPLAY_BIN:-./tools/ds4-v100-replay}"
 
 usage() {
     cat <<'USAGE'
@@ -54,6 +56,8 @@ Options:
   --log-dir DIR             write benchmark artifacts
   --profile-decode          pass --profile-decode to the replay server and
                             preserve averaged stage_profile timing
+  --cuda-profiler-window    call cudaProfilerStart/Stop around generation so
+                            nvprof --profile-from-start off captures decode
   --wavefront-decode        pass --wavefront-decode to the replay server
   --async-pipeline-decode   pass preferred async pipeline mode to the server
   --async-pipeline-mode M   off, persistent, per-step, or mailbox
@@ -65,6 +69,9 @@ Options:
   --mtp-gpu N               MTP sidecar GPU, default 7
   --mtp-reserve-mib N       MTP free-memory reserve, default 4096
   --help                    show this help
+
+Environment:
+  DS4_V100_REPLAY_BIN       replay server executable or wrapper, default ./tools/ds4-v100-replay
 
 Each case starts one resident replay server with:
   active_microbatch = slots
@@ -197,6 +204,10 @@ while [ "$#" -gt 0 ]; do
             profile_decode="1"
             shift
             ;;
+        --cuda-profiler-window)
+            cuda_profiler_window="1"
+            shift
+            ;;
         --wavefront-decode)
             wavefront_decode="1"
             shift
@@ -284,7 +295,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -n "$pack_index" ] || { usage >&2; exit 2; }
-[ -x ./tools/ds4-v100-replay ] || fail "missing executable ./tools/ds4-v100-replay"
+[ -x "$replay_bin" ] || fail "missing executable $replay_bin"
 [ -f "$model" ] || fail "missing model $model"
 [ -f "$pack_index" ] || fail "missing pack index $pack_index"
 command -v python3 >/dev/null 2>&1 ||
@@ -892,7 +903,7 @@ load_case() {
     fi
 
     local cmd=(
-        ./tools/ds4-v100-replay
+        "$replay_bin"
         --serve
         --model "$model"
         --ctx "$ctx"
@@ -914,6 +925,9 @@ load_case() {
     fi
     if [ "$profile_decode" = "1" ]; then
         cmd+=(--profile-decode)
+    fi
+    if [ "$cuda_profiler_window" = "1" ]; then
+        cmd+=(--cuda-profiler-window)
     fi
     if [ "$wavefront_decode" = "1" ]; then
         cmd+=(--wavefront-decode)
@@ -999,7 +1013,9 @@ printf 'expected_token_hex\t%s\n' "$expected_lower" >>"$summary_tsv"
 printf 'tokens_per_request\t%s\n' "$tokens" >>"$summary_tsv"
 printf 'requests_per_case\t%s\n' "$requests" >>"$summary_tsv"
 printf 'warmup_requests\t%s\n' "$warmup_requests" >>"$summary_tsv"
+printf 'replay_bin\t%s\n' "$replay_bin" >>"$summary_tsv"
 printf 'profile_decode\t%s\n' "$profile_decode" >>"$summary_tsv"
+printf 'cuda_profiler_window\t%s\n' "$cuda_profiler_window" >>"$summary_tsv"
 printf 'wavefront_decode\t%s\n' "$wavefront_decode" >>"$summary_tsv"
 printf 'async_pipeline_decode\t%s\n' "$async_pipeline_decode" >>"$summary_tsv"
 printf 'async_pipeline_mode\t%s\n' "$async_pipeline_mode" >>"$summary_tsv"

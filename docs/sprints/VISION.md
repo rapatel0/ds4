@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-22
 last_updated_by: sprint-execute
-revision: 181
+revision: 182
 ---
 
 # Vision: DS4 V100 Appliance
@@ -351,7 +351,7 @@ optimized V100 low-bit expert kernels in the actual hot path.
   `DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=0` as the production default. This
   closes the last cheap route-construction variant; next work should be a
   persistent routed-FFN executor or a persistent TP/EP scheduler boundary.
-- Sprints 173-181 closed the wrapper-level six-route executor line and restored
+- Sprints 173-182 closed the wrapper-level six-route executor line and restored
   the persistent production appliance artifact. Fused six-route activation,
   down-reduce, no-host-sync compaction, FFN wavefront batching, and bounded
   TP/EP overlays all preserved correctness but did not beat the production
@@ -365,7 +365,13 @@ optimized V100 low-bit expert kernels in the actual hot path.
   generated / `47.411127` continuation tok/s for 16 slots, with all tokens
   matching. MTP verify also passes against the production pack (`16/16`
   accepted) but remains diagnostic because exact verification still recomputes
-  the base target token.
+  the base target token. Sprint 182 added repeatable profiler-wrapper hooks,
+  copied profile evidence from the persistent production pack, and showed that
+  at 256K context the synchronized stage profile is attention/KV dominated
+  (`9315.361 ms` attention versus `2223.435 ms` FFN across stages) while async
+  serving still spends most measured time in host/stage wait. The next material
+  sprint should therefore target persistent attention/KV or broader persistent
+  TP/EP ownership at equal priority with any true fused routed-FFN executor.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation
@@ -2922,6 +2928,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-22 | Completed Sprint 179 compact routed executor no-host-sync gate. | `DS4_V100_TURBOMIND_COMPACT_NO_HOST_SYNC=1` skips the device-to-host active-expert read for routed-executor compact scheduling when profiling and group-pipeline auto are off. V100 selected-token and full scheduler smokes passed, and logs proved `fused6_reduce no_host_sync total_routes=6 compact_groups=6` with expected token `3136`. Served 16-slot/256K A/B was correct but slower: production control `71.407542` generated / `70.291799` continuation tok/s; fused6_reduce host-sync `70.151713` / `69.055593`; no-host-sync quiet `68.092522` / `67.028577`, all `16/16` correct. Keep diagnostic-only. The host sync was not the dominant bottleneck; empty compact groups cost more than the avoided synchronization. The next practical lever must remove `mid_half` materialization or implement a larger persistent routed-FFN executor rather than another wrapper/scheduler tweak. | Sprint 180+ |
 | 2026-05-22 | Completed Sprint 180 MTP verify active microbatch serving. | `--mtp-serving verify` now works with `active_microbatch > 1` for same-token-count, same-prompt-length request batches, using slot-specific final-HC reads while the generation mutex is still held. `--mtp-serving commit` still fails closed unless `active_microbatch=1`. Source-pack V100 validation passed at 2-slot/256K (`2/2` token match, `2/2` MTP accepted) and 16-slot/256K (`16/16` token match, `16/16` MTP accepted), with prompt/generated/continuation tok/s recorded. This is an MTP diagnostics and serving-surface improvement, not a throughput promotion; true MTP speedup still needs speculative verification that avoids serial base-target recompute. | Sprint 181+ |
 | 2026-05-22 | Completed Sprint 181 persistent production appliance pack. | The 8-GPU build pod now has a repo-owned localpool-backed manifest/helper, so `/workspace` is backed by `/localpool/ds4/workspace` instead of `/dev/md0`. TurboMind was rebuilt on V100 using offline `fmt`, CUTLASS, and `concurrentqueue` dependency overrides, and the full interleaved gated-SiLU appliance pack was regenerated under `/workspace/packs/ds4-appliance-full-tm-gated-s181` (`142G`; GPU shard sizes from `22.5G` down to `11.8G`). Production-pack validation passed: 16-slot/256K smoke returned expected token `3136`; 16-slot/256K sustained base reached `48.163685` generated / `47.411127` continuation tok/s with `16/16` matches; one-slot/256K reached `10.357728` / `10.195888`; and 16-slot/256K MTP verify accepted `16/16` drafts. This restores the real optimized appliance baseline after pod recycle; the next sprint should use this persistent pack for either profiling or the next larger persistent routed-FFN / TP-EP boundary, not source-pack substitutes. | Sprint 182+ |
+| 2026-05-22 | Completed Sprint 182 production-pack profiling hook. | The sustained decode harness now supports `DS4_V100_REPLAY_BIN` wrappers and a `--cuda-profiler-window` pass-through, while the nvprof wrapper uses `DS4_V100_REPLAY_UNDERLYING_BIN` to avoid recursion. V100 evidence from the persistent Sprint 181 pack passed: async 16-slot/256K profile reached `20.811726` generated / `18.210261` continuation tok/s with `16/16` matches under profiling, synchronized diagnostic profile exposed attention as the dominant stage bucket (`9315.361 ms` attention versus `2223.435 ms` FFN across stages), and a one-slot nvprof smoke captured the profiler window successfully. The next sprint should not continue wrapper-only routed-FFN tuning; at 256K, persistent attention/KV execution and broader persistent TP/EP topology are now equal-priority candidates. | Sprint 183+ |
 
 ## Open Questions
 
