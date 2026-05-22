@@ -1,0 +1,2 @@
+ds4: CUDA loading model tensors into device cache
+cuda_v100_selected_token_smoke: prompt_tokens=18 selected=926 logit=35.154526 expected=3136 topk=926:35.154526:3136,11154:26.720695:323034,1:25.598858:3cefbd9c656e64e296816f66e2968173656e74656e6365efbd9c3e,5718:24.06233:4c6574,3054:23.973534:546f ok

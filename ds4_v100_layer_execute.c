@@ -1,6 +1,7 @@
 #include "ds4_v100_layer_execute.h"
 
 #include <math.h>
+#include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -449,6 +450,11 @@ static bool tp2_verbose_enabled(void) {
            env_flag_enabled("DS4_V100_TP_EP_VERBOSE");
 }
 
+static bool tp2_parallel_halves_enabled(void) {
+    return env_flag_enabled("DS4_V100_TP2_PARALLEL_HALVES") ||
+           env_flag_enabled("DS4_V100_TP_EP_PARALLEL_HALVES");
+}
+
 static bool tp2_routed_enabled(const ds4_v100_layer_state *state,
                                const ds4_v100_layer_execute_config *cfg,
                                uint32_t n_slots,
@@ -479,6 +485,41 @@ static bool tp2_routed_enabled(const ds4_v100_layer_state *state,
            ds4_gpu_tensor_bytes(cfg->tp2_peer_weights) >= route_values * sizeof(float);
 }
 
+typedef struct {
+    const ds4_gpu_arena *arena;
+    const ds4_gpu_turbomind_mxfp4_matrix_view *gate_up;
+    const ds4_gpu_turbomind_mxfp4_matrix_view *down;
+    uint32_t hidden;
+    uint32_t mid;
+    uint32_t n_total_experts;
+    const ds4_gpu_tensor *selected;
+    const ds4_gpu_tensor *weights;
+    uint32_t routes;
+    const ds4_gpu_tensor *x;
+    uint32_t n_slots;
+    ds4_gpu_tensor *out;
+    int rc;
+} ds4_tp2_routed_worker;
+
+static void *tp2_routed_worker_main(void *arg) {
+    ds4_tp2_routed_worker *w = (ds4_tp2_routed_worker *)arg;
+    if (!w) return NULL;
+    w->rc = ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_f32(
+        w->arena,
+        w->gate_up,
+        w->down,
+        w->hidden,
+        w->mid,
+        w->n_total_experts,
+        w->selected,
+        w->weights,
+        w->routes,
+        w->x,
+        w->n_slots,
+        w->out);
+    return NULL;
+}
+
 static int execute_turbomind_tp2_routed(const ds4_v100_layer_state *state,
                                         const ds4_v100_layer_execute_config *cfg,
                                         const ds4_gpu_tensor *selected,
@@ -502,6 +543,7 @@ static int execute_turbomind_tp2_routed(const ds4_v100_layer_state *state,
     double peer_ms = 0.0;
     double copy_out_ms = 0.0;
     double reduce_ms = 0.0;
+    const bool parallel_halves = tp2_parallel_halves_enabled();
     if (profile) {
         if (!ds4_gpu_set_device(ds4_gpu_arena_gpu(cfg->tp2_owner_arena)) ||
             !ds4_gpu_synchronize()) {
@@ -522,7 +564,28 @@ static int execute_turbomind_tp2_routed(const ds4_v100_layer_state *state,
     if (profile && !profile_mark(&profile_last_ms, &copy_in_ms)) {
         return exec_error(err, errlen, "TP2 routed input profile failed");
     }
-    if (ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_f32(
+    if (parallel_halves) {
+        ds4_tp2_routed_worker peer = {
+            .arena = cfg->tp2_peer_arena,
+            .gate_up = &state->turbomind_tp2_gate_up_view[1],
+            .down = &state->turbomind_tp2_down_view[1],
+            .hidden = hidden,
+            .mid = state->intermediate_size / 2u,
+            .n_total_experts = state->routed_experts,
+            .selected = cfg->tp2_peer_selected,
+            .weights = cfg->tp2_peer_weights,
+            .routes = routes,
+            .x = cfg->tp2_peer_input,
+            .n_slots = n_slots,
+            .out = cfg->tp2_peer_out,
+            .rc = 1,
+        };
+        pthread_t peer_thread;
+        const int thread_rc = pthread_create(&peer_thread, NULL, tp2_routed_worker_main, &peer);
+        if (thread_rc != 0) {
+            return exec_error(err, errlen, "TP2 peer thread create failed");
+        }
+        const int owner_rc = ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_f32(
             cfg->tp2_owner_arena,
             &state->turbomind_tp2_gate_up_view[0],
             &state->turbomind_tp2_down_view[0],
@@ -534,29 +597,57 @@ static int execute_turbomind_tp2_routed(const ds4_v100_layer_state *state,
             routes,
             x,
             n_slots,
-            out) != 0) {
-        return exec_error(err, errlen, "TP2 owner routed FFN failed");
-    }
-    if (profile && !profile_mark(&profile_last_ms, &owner_ms)) {
-        return exec_error(err, errlen, "TP2 owner profile failed");
-    }
-    if (ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_f32(
-            cfg->tp2_peer_arena,
-            &state->turbomind_tp2_gate_up_view[1],
-            &state->turbomind_tp2_down_view[1],
-            hidden,
-            state->intermediate_size / 2u,
-            state->routed_experts,
-            cfg->tp2_peer_selected,
-            cfg->tp2_peer_weights,
-            routes,
-            cfg->tp2_peer_input,
-            n_slots,
-            cfg->tp2_peer_out) != 0) {
-        return exec_error(err, errlen, "TP2 peer routed FFN failed");
-    }
-    if (profile && !profile_mark(&profile_last_ms, &peer_ms)) {
-        return exec_error(err, errlen, "TP2 peer profile failed");
+            out);
+        const int join_rc = pthread_join(peer_thread, NULL);
+        if (owner_rc != 0) {
+            return exec_error(err, errlen, "TP2 owner routed FFN failed");
+        }
+        if (join_rc != 0) {
+            return exec_error(err, errlen, "TP2 peer thread join failed");
+        }
+        if (peer.rc != 0) {
+            return exec_error(err, errlen, "TP2 peer routed FFN failed");
+        }
+        if (profile && !profile_mark(&profile_last_ms, &owner_ms)) {
+            return exec_error(err, errlen, "TP2 parallel routed profile failed");
+        }
+    } else {
+        if (ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_f32(
+                cfg->tp2_owner_arena,
+                &state->turbomind_tp2_gate_up_view[0],
+                &state->turbomind_tp2_down_view[0],
+                hidden,
+                state->intermediate_size / 2u,
+                state->routed_experts,
+                selected,
+                weights,
+                routes,
+                x,
+                n_slots,
+                out) != 0) {
+            return exec_error(err, errlen, "TP2 owner routed FFN failed");
+        }
+        if (profile && !profile_mark(&profile_last_ms, &owner_ms)) {
+            return exec_error(err, errlen, "TP2 owner profile failed");
+        }
+        if (ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_f32(
+                cfg->tp2_peer_arena,
+                &state->turbomind_tp2_gate_up_view[1],
+                &state->turbomind_tp2_down_view[1],
+                hidden,
+                state->intermediate_size / 2u,
+                state->routed_experts,
+                cfg->tp2_peer_selected,
+                cfg->tp2_peer_weights,
+                routes,
+                cfg->tp2_peer_input,
+                n_slots,
+                cfg->tp2_peer_out) != 0) {
+            return exec_error(err, errlen, "TP2 peer routed FFN failed");
+        }
+        if (profile && !profile_mark(&profile_last_ms, &peer_ms)) {
+            return exec_error(err, errlen, "TP2 peer profile failed");
+        }
     }
     if (!ds4_gpu_tensor_copy(cfg->tp2_peer_recv, 0, cfg->tp2_peer_out, 0, hidden_bytes)) {
         return exec_error(err, errlen, "TP2 routed output peer copy failed");
@@ -581,12 +672,13 @@ static int execute_turbomind_tp2_routed(const ds4_v100_layer_state *state,
     }
     if (profile) {
         fprintf(stderr,
-                "ds4: TP/EP routed boundary layer=%d slots=%u routes=%u async_input=%u "
+                "ds4: TP/EP routed boundary layer=%d slots=%u routes=%u async_input=%u parallel_halves=%u "
                 "copy_in_ms=%.4f owner_ms=%.4f peer_ms=%.4f copy_out_ms=%.4f reduce_ms=%.4f total_ms=%.4f\n",
                 state->layer_id,
                 n_slots,
                 routes,
                 async_input ? 1u : 0u,
+                parallel_halves ? 1u : 0u,
                 copy_in_ms,
                 owner_ms,
                 peer_ms,
