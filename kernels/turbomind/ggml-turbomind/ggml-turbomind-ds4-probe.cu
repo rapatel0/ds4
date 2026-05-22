@@ -426,6 +426,44 @@ int launch_ds4_mxfp4_gated_silu(
 
 }  // namespace
 
+// Per-request 6-route decode shape: the production per-step async pipeline
+// calls the routed FFN one slot at a time, so each active expert receives a
+// single token (total_tokens == num_experts == 6). Reuses the SM70 M16 MXFP4
+// probe kernel; M16 handles the partial 6-row M tile via predication.
+int ggml_turbomind_ds4_mxfp4_gated_silu_6_launch(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              barriers,
+    size_t             barriers_size,
+    void*              partials,
+    size_t             partials_size,
+    int*               flags,
+    void*              stream_v)
+{
+    if (total_tokens != 6) return 2;
+    return launch_ds4_mxfp4_gated_silu(probe_kernel_m16(),
+                                       A,
+                                       expert_offsets,
+                                       num_experts,
+                                       total_tokens,
+                                       weights_packed,
+                                       scales_packed,
+                                       k_pack_value,
+                                       D,
+                                       barriers,
+                                       barriers_size,
+                                       partials,
+                                       partials_size,
+                                       flags,
+                                       stream_v);
+}
+
 int ggml_turbomind_ds4_mxfp4_gated_silu_96_launch(
     const void*        A,
     const int*         expert_offsets,

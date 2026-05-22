@@ -230,6 +230,32 @@ int ggml_turbomind_mul_mat_grouped_gated_silu_total_tokens(
     void*              stream  /* cudaStream_t */);
 
 /**
+ * DS4/V100 fixed-shape probe for the per-request routed gate/up decode shape.
+ *
+ * Same contract as ggml_turbomind_ds4_mxfp4_gated_silu_96, but for the shape the
+ * production per-step async pipeline actually presents: one token per active
+ * expert (total_tokens == num_experts == 6).
+ *   - MXFP4 weights only, interleaved gate/up packed rows
+ *   - K = 4096, N = 4096, group_size = 32
+ *   - total_tokens = 6, num_experts = 6
+ *   - output D is fp16 [6, 2048]
+ *
+ * Reuses the SM70 M16 probe kernel and bypasses the generic TurboMind dispatch
+ * search. Non-zero return means "probe not available"; callers must fall back to
+ * ggml_turbomind_mul_mat_grouped_gated_silu_total_tokens.
+ */
+int ggml_turbomind_ds4_mxfp4_gated_silu_6(
+    const void*        A,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
+/**
  * DS4/V100 fixed-shape probe for the compact routed gate/up path.
  *
  * This is intentionally narrow and experimental:

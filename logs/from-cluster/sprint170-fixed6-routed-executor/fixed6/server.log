@@ -1,0 +1,5 @@
+ds4: CUDA loading model tensors into device cache
+ds4: TurboMind routed executor fixed6 shape total_routes=6 active_experts=6 max_routes_per_expert=1
+ds4: TurboMind routed executor selected fixed gate_up total_routes=6
+ds4-v100-replay: startup warmup ok prompt_tokens=5 token=30594 total_ms=1618.015
+ds4-v100-replay: serving http://127.0.0.1:18451/v100/selected-token

@@ -205,6 +205,7 @@ typedef struct {
     tm_pfn_mul_mat_grouped mul_mat_grouped;
     tm_pfn_mul_mat_grouped_total_tokens mul_mat_grouped_total_tokens;
     tm_pfn_mul_mat_grouped_gated_silu_total_tokens mul_mat_grouped_gated_silu_total_tokens;
+    tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_6;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_96;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m64;
     tm_pfn_ds4_mxfp4_gated_silu ds4_mxfp4_gated_silu_768_m64_s3;
@@ -1062,6 +1063,9 @@ static int cuda_tm_load_api(void) {
     g_tm_api.mul_mat_grouped_gated_silu_total_tokens =
         (tm_pfn_mul_mat_grouped_gated_silu_total_tokens)dlsym(
             g_tm_api.handle, "ggml_turbomind_mul_mat_grouped_gated_silu_total_tokens");
+    g_tm_api.ds4_mxfp4_gated_silu_6 =
+        (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_6");
     g_tm_api.ds4_mxfp4_gated_silu_96 =
         (tm_pfn_ds4_mxfp4_gated_silu)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_gated_silu_96");
@@ -5987,7 +5991,8 @@ enum {
     DS4_CUDA_TM_ROUTED_EXECUTOR_OFF = 0,
     DS4_CUDA_TM_ROUTED_EXECUTOR_AUTO = 1,
     DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED96 = 2,
-    DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED768 = 3
+    DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED768 = 3,
+    DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED6 = 4
 };
 
 static int cuda_tm_routed_executor_mode(void) {
@@ -6021,6 +6026,12 @@ static int cuda_tm_routed_executor_mode(void) {
         strcmp(mode, "768") == 0) {
         return DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED768;
     }
+    if (strcmp(mode, "fixed6") == 0 ||
+        strcmp(mode, "chain6") == 0 ||
+        strcmp(mode, "ffn6") == 0 ||
+        strcmp(mode, "6") == 0) {
+        return DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED6;
+    }
     return DS4_CUDA_TM_ROUTED_EXECUTOR_OFF;
 }
 
@@ -6029,6 +6040,7 @@ static const char *cuda_tm_routed_executor_mode_name(int mode) {
         case DS4_CUDA_TM_ROUTED_EXECUTOR_AUTO: return "auto";
         case DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED96: return "fixed96";
         case DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED768: return "fixed768";
+        case DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED6: return "fixed6";
         default: return "off";
     }
 }
@@ -6043,9 +6055,11 @@ static void cuda_tm_routed_executor_log_active_once(
         uint32_t active_experts,
         uint32_t max_routes_per_expert) {
     if (!cuda_tm_routed_executor_verbose_enabled()) return;
+    static int printed6 = 0;
     static int printed96 = 0;
     static int printed768 = 0;
-    int *printed = total_routes == 96u ? &printed96 :
+    int *printed = total_routes == 6u ? &printed6 :
+                   total_routes == 96u ? &printed96 :
                    total_routes == 768u ? &printed768 : nullptr;
     if (printed && *printed) return;
     if (printed) *printed = 1;
@@ -6059,9 +6073,11 @@ static void cuda_tm_routed_executor_log_active_once(
 
 static void cuda_tm_routed_executor_log_selected_once(uint32_t total_routes) {
     if (!cuda_tm_routed_executor_verbose_enabled()) return;
+    static int printed6 = 0;
     static int printed96 = 0;
     static int printed768 = 0;
-    int *printed = total_routes == 96u ? &printed96 :
+    int *printed = total_routes == 6u ? &printed6 :
+                   total_routes == 96u ? &printed96 :
                    total_routes == 768u ? &printed768 : nullptr;
     if (printed && *printed) return;
     if (printed) *printed = 1;
@@ -6186,6 +6202,12 @@ static tm_pfn_ds4_mxfp4_gated_silu cuda_tm_routed_executor_gated_silu_probe(
         n_total_experts != 6u ||
         k != 4096) {
         return nullptr;
+    }
+    if (total_routes == 6u &&
+        (mode == DS4_CUDA_TM_ROUTED_EXECUTOR_AUTO ||
+         mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED6)) {
+        if (fused_n != 4096) return nullptr;
+        return g_tm_api.ds4_mxfp4_gated_silu_6;
     }
     if (total_routes == 96u &&
         (mode == DS4_CUDA_TM_ROUTED_EXECUTOR_AUTO ||
@@ -7258,7 +7280,10 @@ static int cuda_tm_routed_mxfp4_packed_impl(
         !use_indexed_a;
     const int routed_executor_candidate_shape =
         routed_executor_requested &&
-        ((total_routes == 96u &&
+        ((total_routes == 6u &&
+          (routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_AUTO ||
+           routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED6)) ||
+         (total_routes == 96u &&
           (routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_AUTO ||
            routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED96)) ||
          (total_routes == 768u &&

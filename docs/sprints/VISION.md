@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
-last_updated: 2026-05-21
+last_updated: 2026-05-22
 last_updated_by: sprint-execute
-revision: 169
+revision: 170
 ---
 
 # Vision: DS4 V100 Appliance
@@ -313,6 +313,24 @@ optimized V100 low-bit expert kernels in the actual hot path.
   implementation should be a larger persistent routed-FFN executor or a
   broader persistent TP/EP boundary, not another wrapper-level launch replay or
   slot/layer scheduling tweak.
+- Sprint 170 added the `fixed6` DS4 routed executor: a new
+  `ggml_turbomind_ds4_mxfp4_gated_silu_6` TurboMind ABI entry (reusing the SM70
+  M16 MXFP4 probe kernel), `DS4_V100_TURBOMIND_ROUTED_EXECUTOR=fixed6`, and a
+  launcher allowlist entry. It targets the shape the production per-step async
+  pipeline actually presents to the routed FFN: `total_routes=6`,
+  `active_experts=6`, `max_routes_per_expert=1`. Unlike the Sprint 158 `fixed96`
+  probe, which never matched the served HTTP shape, `fixed6` was selected and
+  executed on the real served path (server log `selected fixed gate_up
+  total_routes=6`) with `16/16` token match. The same-binary 16-slot/256K A/B
+  was flat: control `44.454879` generated / `41.676449` continuation tok/s
+  versus `fixed6` `44.344945` / `41.573386` (marginally slower per response).
+  This is a clean negative result -- dispatch bypass is not the missing lever
+  even at the correct served shape, so the routed-FFN GEMM execution itself
+  (gate/up + down) is the cost, not generic TurboMind dispatch. Keep `fixed6` an
+  explicit opt-in diagnostic. The next implementation should be a true
+  persistent/fused six-route routed-FFN executor (gate/up + activation + down +
+  weighted reduce as one boundary) or a persistent TP/EP boundary, not another
+  fixed dispatch-bypass probe. See `SPRINT-170-FOLLOWUPS.md`.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation
