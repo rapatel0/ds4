@@ -1,0 +1,19 @@
+ds4: CUDA loading model tensors into device cache
+ds4: TP/EP routed boundary layer=3 slots=1 routes=6 async_input=1 copy_in_ms=0.4908 owner_ms=0.3056 peer_ms=32.6594 copy_out_ms=0.0296 reduce_ms=0.0108 total_ms=33.4962
+ds4: TP/EP routed boundary layer=3 slots=1 routes=6 async_input=1 copy_in_ms=0.0404 owner_ms=0.1759 peer_ms=0.1822 copy_out_ms=0.0205 reduce_ms=0.0081 total_ms=0.4271
+ds4: TP/EP routed boundary layer=3 slots=1 routes=6 async_input=1 copy_in_ms=0.0353 owner_ms=0.1747 peer_ms=0.1850 copy_out_ms=0.0179 reduce_ms=0.0081 total_ms=0.4210
+ds4: TP/EP routed boundary layer=3 slots=1 routes=6 async_input=1 copy_in_ms=0.0306 owner_ms=0.1768 peer_ms=0.1747 copy_out_ms=0.0146 reduce_ms=0.0085 total_ms=0.4052
+ds4: TP/EP routed boundary layer=3 slots=1 routes=6 async_input=1 copy_in_ms=0.0303 owner_ms=0.1764 peer_ms=0.1736 copy_out_ms=0.0145 reduce_ms=0.0087 total_ms=0.4035
+ds4: TP/EP routed boundary layer=3 slots=1 routes=6 async_input=1 copy_in_ms=0.0303 owner_ms=0.1771 peer_ms=0.1754 copy_out_ms=0.0149 reduce_ms=0.0083 total_ms=0.4061
+ds4: TP/EP routed boundary layer=3 slots=1 routes=6 async_input=1 copy_in_ms=0.0296 owner_ms=0.1734 peer_ms=0.1723 copy_out_ms=0.0148 reduce_ms=0.0079 total_ms=0.3980
+ds4: TP/EP routed boundary layer=3 slots=1 routes=6 async_input=1 copy_in_ms=0.0301 owner_ms=0.1737 peer_ms=0.1714 copy_out_ms=0.0147 reduce_ms=0.0084 total_ms=0.3983
+ds4: TP/EP routed boundary layer=3 slots=1 routes=6 async_input=1 copy_in_ms=0.0433 owner_ms=0.1860 peer_ms=0.1973 copy_out_ms=0.0177 reduce_ms=0.0107 total_ms=0.4550
+ds4: TP/EP routed boundary layer=3 slots=1 routes=6 async_input=1 copy_in_ms=0.0296 owner_ms=0.1802 peer_ms=0.1705 copy_out_ms=0.0144 reduce_ms=0.0078 total_ms=0.4025
+ds4: TP/EP routed boundary layer=3 slots=1 routes=6 async_input=1 copy_in_ms=0.0293 owner_ms=0.1799 peer_ms=0.1797 copy_out_ms=0.0145 reduce_ms=0.0078 total_ms=0.4112
+ds4: TP/EP routed boundary layer=3 slots=1 routes=6 async_input=1 copy_in_ms=0.0347 owner_ms=0.1709 peer_ms=0.1711 copy_out_ms=0.0150 reduce_ms=0.0079 total_ms=0.3997
+ds4: TP/EP routed boundary layer=3 slots=1 routes=6 async_input=1 copy_in_ms=0.0309 owner_ms=0.1717 peer_ms=0.1715 copy_out_ms=0.0142 reduce_ms=0.0078 total_ms=0.3961
+ds4: TP/EP routed boundary layer=3 slots=1 routes=6 async_input=1 copy_in_ms=0.0297 owner_ms=0.1821 peer_ms=0.1723 copy_out_ms=0.0146 reduce_ms=0.0079 total_ms=0.4066
+ds4: TP/EP routed boundary layer=3 slots=1 routes=6 async_input=1 copy_in_ms=0.0880 owner_ms=0.1733 peer_ms=0.1832 copy_out_ms=0.0199 reduce_ms=0.0080 total_ms=0.4723
+ds4: TP/EP routed boundary layer=3 slots=1 routes=6 async_input=1 copy_in_ms=0.0298 owner_ms=0.1750 peer_ms=0.1701 copy_out_ms=0.0149 reduce_ms=0.0083 total_ms=0.3982
+ds4: TP/EP routed boundary layer=3 slots=1 routes=6 async_input=1 copy_in_ms=0.0299 owner_ms=0.1719 peer_ms=0.1699 copy_out_ms=0.0143 reduce_ms=0.0078 total_ms=0.3940
+ds4: TP/EP routed boundary layer=3 slots=1 routes=6 async_input=1 copy_in_ms=0.0290 owner_ms=0.1813 peer_ms=0.1712 copy_out_ms=0.0144 reduce_ms=0.0078 total_ms=0.4037

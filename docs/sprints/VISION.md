@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-22
-last_updated_by: sprint-plan
-revision: 175
+last_updated_by: sprint-execute
+revision: 176
 ---
 
 # Vision: DS4 V100 Appliance
@@ -2899,7 +2899,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-22 | Completed Sprint 171 six-route down-reduce epilogue. | `ggml_turbomind_ds4_mxfp4_down_6_m16_reduce` extends the existing down route-reduce epilogue to the exact served 6-route shape and selected correctly on V100. The served 16-slot/256K A/B regressed (`43.887560` generated / `41.144588` continuation tok/s versus `45.941120` / `43.069800` control), so keep it default-off. The next implementation should stop tuning wrapper boundaries and move to a persistent gate/up + down routed-FFN executor or a broader persistent TP/EP scheduler boundary. | Sprint 172+ |
 | 2026-05-22 | Completed Sprint 172 small-route builder recheck. | `DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=1` is correct but not repeatably faster on the production 16-slot/256K served path. Candidate/control/candidate-repeat were `46.550101`, `46.136775`, and `45.927784` generated tok/s with all runs `16/16` correct. Keep the flag default-off and move next to the deeper persistent routed-FFN versus TP/EP decision. | Sprint 173+ |
 | 2026-05-22 | Completed Sprint 173 reusable fused routed-FFN boundary. | `DS4_V100_TURBOMIND_ROUTED_EXECUTOR=fused6` now selects an opt-in six-route executor path that bypasses route-expanded `a_half` (`route_expanded_a_half=0`, `compact_a_half=1`) and preserves correctness. V100 build passed, selected-token smoke returned `3136`, TP/partial smoke passed with `rel=0.000276278` and `accum_rel=2.4959e-08`, and served 16-slot/256K A/B was correct but slower: control `46.227335` generated / `43.338126` continuation versus fused6 `45.522409` / `42.677258`. Keep `fused6` default-off as a TP/EP primitive seed; Sprint 174 should move to persistent TP/EP or a larger routed-FFN boundary, not another small six-route wrapper. | Sprint 174+ |
-| 2026-05-22 | Planned Sprint 174 persistent TP/EP routed-FFN boundary. | The next sprint will build a default-off persistent owner/peer TP/EP boundary for the routed FFN using one NVLink pair and one configurable layer/span gate. It must reuse the Sprint 173 descriptor/output-mode shape, validate tokens=1/routes=6 and tokens=16/routes=96 against the single-GPU reference, expose copy/compute/reduce timing buckets, pass selected-token smoke, and run served 16-slot/256K A/B. Promotion requires `>= 10%` continuation/decode uplift; otherwise keep diagnostic-only and pivot to larger in-GPU routed-FFN fusion or scheduler topology redesign. | Sprint 174 |
+| 2026-05-22 | Completed Sprint 174 TP/EP routed-FFN boundary. | Added default-off `DS4_V100_TP_EP_*` runtime gates and opt-in copy/owner/peer/copy-out/reduce timing buckets over the existing TP2 owner/peer executor. V100 validation passed: `tokens=1/routes=6`, `tokens=16/routes=96`, accumulation parity, negative descriptor gate, stage scheduler TP/EP alias smoke, and full selected-token replay with expected token `3136`. The isolated 16-token TP primitive was slightly positive (`2.0604 ms` vs `2.1326 ms`), but served 16-slot/256K A/B regressed: control `45.984279` generated / `43.110262` continuation tok/s; TP/EP layer-3 candidate `42.400954` / `39.750894`, both `16/16` correct. Keep the path diagnostic-only and pivot away from one-layer overlays toward broader TP/EP topology or a larger in-GPU routed-FFN executor. | Sprint 175+ |
 
 ## Open Questions
 

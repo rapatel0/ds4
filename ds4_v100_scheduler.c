@@ -537,9 +537,12 @@ static int scheduler_load_tp2_env(ds4_v100_stage_scheduler *sched,
     sched->tp2_layer = -1;
     sched->tp2_requested_peer_gpu = -1;
 
-    const char *layer_env =
-        scheduler_first_env("DS4_V100_TP_ROUTED_FFN_LAYER", "DS4_V100_TP2_LAYER");
+    const char *layer_env = getenv("DS4_V100_TP_EP_LAYER_FIRST");
+    if (!layer_env || !layer_env[0]) {
+        layer_env = scheduler_first_env("DS4_V100_TP_ROUTED_FFN_LAYER", "DS4_V100_TP2_LAYER");
+    }
     const bool enabled =
+        scheduler_env_enabled("DS4_V100_TP_EP_ROUTED_FFN") ||
         scheduler_env_enabled("DS4_V100_TP_ROUTED_FFN") ||
         scheduler_env_enabled("DS4_V100_TP2_ROUTED_FFN") ||
         (layer_env && strcmp(layer_env, "-1") != 0);
@@ -547,7 +550,7 @@ static int scheduler_load_tp2_env(ds4_v100_stage_scheduler *sched,
     if (!layer_env) {
         return scheduler_error(err,
                                errlen,
-                               "TP2 routed FFN requires DS4_V100_TP_ROUTED_FFN_LAYER");
+                               "TP/EP routed FFN requires DS4_V100_TP_EP_LAYER_FIRST");
     }
     if (scheduler_parse_i32_value(layer_env,
                                   "TP2 routed FFN layer",
@@ -561,11 +564,14 @@ static int scheduler_load_tp2_env(ds4_v100_stage_scheduler *sched,
     if (sched->tp2_layer < 0) return 0;
 
     const char *dir_env =
-        scheduler_first_env("DS4_V100_TP_ROUTED_FFN_SHARD_DIR", "DS4_V100_TP2_SHARD_DIR");
+        getenv("DS4_V100_TP_EP_SHARD_DIR");
+    if (!dir_env || !dir_env[0]) {
+        dir_env = scheduler_first_env("DS4_V100_TP_ROUTED_FFN_SHARD_DIR", "DS4_V100_TP2_SHARD_DIR");
+    }
     if (!dir_env) {
         return scheduler_error(err,
                                errlen,
-                               "TP2 routed FFN requires DS4_V100_TP_ROUTED_FFN_SHARD_DIR");
+                               "TP/EP routed FFN requires DS4_V100_TP_EP_SHARD_DIR");
     }
     if (strlen(dir_env) >= sizeof(sched->tp2_shard_dir)) {
         return scheduler_error(err, errlen, "TP2 routed FFN shard dir is too long");
@@ -573,7 +579,10 @@ static int scheduler_load_tp2_env(ds4_v100_stage_scheduler *sched,
     snprintf(sched->tp2_shard_dir, sizeof(sched->tp2_shard_dir), "%s", dir_env);
 
     const char *peer_env =
-        scheduler_first_env("DS4_V100_TP_ROUTED_FFN_PEER_GPU", "DS4_V100_TP2_PEER_GPU");
+        getenv("DS4_V100_TP_EP_PEER");
+    if (!peer_env || !peer_env[0]) {
+        peer_env = scheduler_first_env("DS4_V100_TP_ROUTED_FFN_PEER_GPU", "DS4_V100_TP2_PEER_GPU");
+    }
     if (peer_env &&
         scheduler_parse_i32_value(peer_env,
                                   "TP2 routed FFN peer GPU",
@@ -1333,6 +1342,12 @@ int ds4_v100_stage_scheduler_decode_hc_layer_span(
     double timing_ffn_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
     double timing_hc_final_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
     double timing_total_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
+    double timing_tp2_copy_in_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
+    double timing_tp2_owner_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
+    double timing_tp2_peer_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
+    double timing_tp2_copy_out_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
+    double timing_tp2_reduce_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
+    double timing_tp2_total_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
     uint32_t turbomind_layers[DS4_V100_SCHED_MAX_SLOTS] = {0};
     uint32_t turbomind_tp2_layers[DS4_V100_SCHED_MAX_SLOTS] = {0};
     memset(last, 0, sizeof(last));
@@ -1433,6 +1448,12 @@ int ds4_v100_stage_scheduler_decode_hc_layer_span(
             timing_ffn_ms[rel] += last[rel].timing_ffn_ms;
             timing_hc_final_ms[rel] += last[rel].timing_hc_final_ms;
             timing_total_ms[rel] += last[rel].timing_total_ms;
+            timing_tp2_copy_in_ms[rel] += last[rel].timing_tp2_copy_in_ms;
+            timing_tp2_owner_ms[rel] += last[rel].timing_tp2_owner_ms;
+            timing_tp2_peer_ms[rel] += last[rel].timing_tp2_peer_ms;
+            timing_tp2_copy_out_ms[rel] += last[rel].timing_tp2_copy_out_ms;
+            timing_tp2_reduce_ms[rel] += last[rel].timing_tp2_reduce_ms;
+            timing_tp2_total_ms[rel] += last[rel].timing_tp2_total_ms;
             turbomind_layers[rel] += last[rel].turbomind_routed ? 1u : 0u;
             turbomind_tp2_layers[rel] += last[rel].turbomind_tp2_routed ? 1u : 0u;
             ds4_gpu_tensor *tmp = cur[rel];
@@ -1458,6 +1479,12 @@ int ds4_v100_stage_scheduler_decode_hc_layer_span(
             r->uploaded_tensors = sched->uploaded_tensors;
             r->uploaded_bytes = sched->uploaded_bytes;
             r->last_layer_report = last[rel];
+            r->timing_tp2_copy_in_ms = timing_tp2_copy_in_ms[rel];
+            r->timing_tp2_owner_ms = timing_tp2_owner_ms[rel];
+            r->timing_tp2_peer_ms = timing_tp2_peer_ms[rel];
+            r->timing_tp2_copy_out_ms = timing_tp2_copy_out_ms[rel];
+            r->timing_tp2_reduce_ms = timing_tp2_reduce_ms[rel];
+            r->timing_tp2_total_ms = timing_tp2_total_ms[rel];
             r->turbomind_routed_layers_executed = turbomind_layers[rel];
             r->turbomind_tp2_routed_layers_executed = turbomind_tp2_layers[rel];
             r->timing_hc_attn_ms = timing_hc_attn_ms[rel];

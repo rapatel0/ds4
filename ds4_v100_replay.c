@@ -1491,6 +1491,12 @@ static void replay_step_pipeline_report_accum(
     dst->last_layer_report = src->last_layer_report;
     dst->turbomind_routed_layers_executed += src->turbomind_routed_layers_executed;
     dst->turbomind_tp2_routed_layers_executed += src->turbomind_tp2_routed_layers_executed;
+    dst->timing_tp2_copy_in_ms += src->timing_tp2_copy_in_ms;
+    dst->timing_tp2_owner_ms += src->timing_tp2_owner_ms;
+    dst->timing_tp2_peer_ms += src->timing_tp2_peer_ms;
+    dst->timing_tp2_copy_out_ms += src->timing_tp2_copy_out_ms;
+    dst->timing_tp2_reduce_ms += src->timing_tp2_reduce_ms;
+    dst->timing_tp2_total_ms += src->timing_tp2_total_ms;
     dst->timing_hc_attn_ms += src->timing_hc_attn_ms;
     dst->timing_attention_ms += src->timing_attention_ms;
     dst->timing_hc_ffn_ms += src->timing_hc_ffn_ms;

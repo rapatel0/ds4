@@ -435,9 +435,18 @@ static bool single_slot_batch_scratch_enabled(void) {
            env_flag_enabled("DS4_V100_TURBOMIND_GRAPH");
 }
 
+static double monotonic_ms(void);
+static int profile_mark(double *last_ms, double *bucket_ms);
+
 static bool tp2_async_input_enabled(void) {
     return env_flag_enabled("DS4_V100_TP2_ASYNC_INPUT") ||
-           env_flag_enabled("DS4_V100_TP_ROUTED_FFN_ASYNC_INPUT");
+           env_flag_enabled("DS4_V100_TP_ROUTED_FFN_ASYNC_INPUT") ||
+           env_flag_enabled("DS4_V100_TP_EP_ASYNC_INPUT");
+}
+
+static bool tp2_verbose_enabled(void) {
+    return env_flag_enabled("DS4_V100_TP2_VERBOSE") ||
+           env_flag_enabled("DS4_V100_TP_EP_VERBOSE");
 }
 
 static bool tp2_routed_enabled(const ds4_v100_layer_state *state,
@@ -474,6 +483,7 @@ static int execute_turbomind_tp2_routed(const ds4_v100_layer_state *state,
                                         const ds4_gpu_tensor *x,
                                         uint32_t n_slots,
                                         ds4_gpu_tensor *out,
+                                        ds4_v100_layer_execute_report *tp2_report,
                                         char *err,
                                         size_t errlen) {
     const uint32_t hidden = state->hidden_size;
@@ -482,6 +492,20 @@ static int execute_turbomind_tp2_routed(const ds4_v100_layer_state *state,
     const uint64_t route_i32_bytes = (uint64_t)n_slots * routes * sizeof(int32_t);
     const uint64_t route_f32_bytes = (uint64_t)n_slots * routes * sizeof(float);
     const bool async_input = tp2_async_input_enabled();
+    const bool profile = tp2_verbose_enabled();
+    double profile_last_ms = 0.0;
+    double copy_in_ms = 0.0;
+    double owner_ms = 0.0;
+    double peer_ms = 0.0;
+    double copy_out_ms = 0.0;
+    double reduce_ms = 0.0;
+    if (profile) {
+        if (!ds4_gpu_set_device(ds4_gpu_arena_gpu(cfg->tp2_owner_arena)) ||
+            !ds4_gpu_synchronize()) {
+            return exec_error(err, errlen, "TP2 profile sync failed");
+        }
+        profile_last_ms = monotonic_ms();
+    }
     const int copied = async_input
         ? ds4_gpu_tensor_copy_async(cfg->tp2_peer_input, 0, x, 0, hidden_bytes) &&
           ds4_gpu_tensor_copy_async(cfg->tp2_peer_selected, 0, selected, 0, route_i32_bytes) &&
@@ -491,6 +515,9 @@ static int execute_turbomind_tp2_routed(const ds4_v100_layer_state *state,
           ds4_gpu_tensor_copy(cfg->tp2_peer_weights, 0, weights, 0, route_f32_bytes);
     if (!copied) {
         return exec_error(err, errlen, "TP2 routed input peer copy failed");
+    }
+    if (profile && !profile_mark(&profile_last_ms, &copy_in_ms)) {
+        return exec_error(err, errlen, "TP2 routed input profile failed");
     }
     if (ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_f32(
             cfg->tp2_owner_arena,
@@ -507,6 +534,9 @@ static int execute_turbomind_tp2_routed(const ds4_v100_layer_state *state,
             out) != 0) {
         return exec_error(err, errlen, "TP2 owner routed FFN failed");
     }
+    if (profile && !profile_mark(&profile_last_ms, &owner_ms)) {
+        return exec_error(err, errlen, "TP2 owner profile failed");
+    }
     if (ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_f32(
             cfg->tp2_peer_arena,
             &state->turbomind_tp2_gate_up_view[1],
@@ -522,12 +552,44 @@ static int execute_turbomind_tp2_routed(const ds4_v100_layer_state *state,
             cfg->tp2_peer_out) != 0) {
         return exec_error(err, errlen, "TP2 peer routed FFN failed");
     }
+    if (profile && !profile_mark(&profile_last_ms, &peer_ms)) {
+        return exec_error(err, errlen, "TP2 peer profile failed");
+    }
     if (!ds4_gpu_tensor_copy(cfg->tp2_peer_recv, 0, cfg->tp2_peer_out, 0, hidden_bytes)) {
         return exec_error(err, errlen, "TP2 routed output peer copy failed");
+    }
+    if (profile && !profile_mark(&profile_last_ms, &copy_out_ms)) {
+        return exec_error(err, errlen, "TP2 routed output profile failed");
     }
     if (!ds4_gpu_set_device(ds4_gpu_arena_gpu(cfg->tp2_owner_arena)) ||
         !ds4_gpu_add_tensor(out, out, cfg->tp2_peer_recv, (uint32_t)((uint64_t)n_slots * hidden))) {
         return exec_error(err, errlen, "TP2 routed partial sum failed");
+    }
+    if (profile && !profile_mark(&profile_last_ms, &reduce_ms)) {
+        return exec_error(err, errlen, "TP2 routed reduce profile failed");
+    }
+    if (tp2_report) {
+        tp2_report->timing_tp2_copy_in_ms = copy_in_ms;
+        tp2_report->timing_tp2_owner_ms = owner_ms;
+        tp2_report->timing_tp2_peer_ms = peer_ms;
+        tp2_report->timing_tp2_copy_out_ms = copy_out_ms;
+        tp2_report->timing_tp2_reduce_ms = reduce_ms;
+        tp2_report->timing_tp2_total_ms = copy_in_ms + owner_ms + peer_ms + copy_out_ms + reduce_ms;
+    }
+    if (profile) {
+        fprintf(stderr,
+                "ds4: TP/EP routed boundary layer=%d slots=%u routes=%u async_input=%u "
+                "copy_in_ms=%.4f owner_ms=%.4f peer_ms=%.4f copy_out_ms=%.4f reduce_ms=%.4f total_ms=%.4f\n",
+                state->layer_id,
+                n_slots,
+                routes,
+                async_input ? 1u : 0u,
+                copy_in_ms,
+                owner_ms,
+                peer_ms,
+                copy_out_ms,
+                reduce_ms,
+                copy_in_ms + owner_ms + peer_ms + copy_out_ms + reduce_ms);
     }
     return 0;
 }
@@ -1908,6 +1970,8 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
         const bool use_tp2 = tp2_routed_enabled(state, cfg, 1, use_fused_gate_up);
         if (use_tp2) {
             used_tp2 = true;
+            ds4_v100_layer_execute_report tp2_report;
+            memset(&tp2_report, 0, sizeof(tp2_report));
             tm_rc = execute_turbomind_tp2_routed(state,
                                                  cfg,
                                                  selected_t,
@@ -1915,8 +1979,17 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
                                                  ffn_input,
                                                  1,
                                                  accum_a,
+                                                 &tp2_report,
                                                  err,
                                                  errlen);
+            if (tm_rc == 0 && report) {
+                report->timing_tp2_copy_in_ms = tp2_report.timing_tp2_copy_in_ms;
+                report->timing_tp2_owner_ms = tp2_report.timing_tp2_owner_ms;
+                report->timing_tp2_peer_ms = tp2_report.timing_tp2_peer_ms;
+                report->timing_tp2_copy_out_ms = tp2_report.timing_tp2_copy_out_ms;
+                report->timing_tp2_reduce_ms = tp2_report.timing_tp2_reduce_ms;
+                report->timing_tp2_total_ms = tp2_report.timing_tp2_total_ms;
+            }
         } else {
             tm_rc = use_fused_gate_up
                 ? ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_f32(
@@ -2045,10 +2118,22 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
     }
 
     if (report) {
+        const double tp2_copy_in_ms = report->timing_tp2_copy_in_ms;
+        const double tp2_owner_ms = report->timing_tp2_owner_ms;
+        const double tp2_peer_ms = report->timing_tp2_peer_ms;
+        const double tp2_copy_out_ms = report->timing_tp2_copy_out_ms;
+        const double tp2_reduce_ms = report->timing_tp2_reduce_ms;
+        const double tp2_total_ms = report->timing_tp2_total_ms;
         memset(report, 0, sizeof(*report));
         report->routes = routes;
         report->turbomind_routed = state->has_turbomind_routed ? 1u : 0u;
         report->turbomind_tp2_routed = used_tp2 ? 1u : 0u;
+        report->timing_tp2_copy_in_ms = tp2_copy_in_ms;
+        report->timing_tp2_owner_ms = tp2_owner_ms;
+        report->timing_tp2_peer_ms = tp2_peer_ms;
+        report->timing_tp2_copy_out_ms = tp2_copy_out_ms;
+        report->timing_tp2_reduce_ms = tp2_reduce_ms;
+        report->timing_tp2_total_ms = tp2_total_ms;
         if (readback_routes) {
             for (uint32_t i = 0; i < routes && i < 6u; i++) {
                 report->selected_experts[i] = selected[i];
@@ -2301,6 +2386,8 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
         ffn_outputs_match_scratch_delta(cfgs[0].batch_scratch, ffn_deltas, n_slots) &&
         cfgs[0].batch_scratch->ffn_norm_batch &&
         cfgs[0].batch_scratch->ffn_delta_batch;
+    ds4_v100_layer_execute_report tp2_report;
+    memset(&tp2_report, 0, sizeof(tp2_report));
     if (use_direct_delta) {
         if (!use_fused_gate_up && !has_turbomind_separate_gate_up(state)) {
             exec_error(err, errlen,
@@ -2374,6 +2461,7 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
                                                  cfgs[0].batch_scratch->ffn_norm_batch,
                                                  n_slots,
                                                  routed_out_t,
+                                                 &tp2_report,
                                                  err,
                                                  errlen);
         } else if (use_cached_input_ptrs) {
@@ -2626,6 +2714,14 @@ fill_reports:
             report->routes = routes;
             report->turbomind_routed = state->has_turbomind_routed ? 1u : 0u;
             report->turbomind_tp2_routed = use_tp2 ? 1u : 0u;
+            if (use_tp2) {
+                report->timing_tp2_copy_in_ms = tp2_report.timing_tp2_copy_in_ms;
+                report->timing_tp2_owner_ms = tp2_report.timing_tp2_owner_ms;
+                report->timing_tp2_peer_ms = tp2_report.timing_tp2_peer_ms;
+                report->timing_tp2_copy_out_ms = tp2_report.timing_tp2_copy_out_ms;
+                report->timing_tp2_reduce_ms = tp2_report.timing_tp2_reduce_ms;
+                report->timing_tp2_total_ms = tp2_report.timing_tp2_total_ms;
+            }
             if (readback_routes) {
                 for (uint32_t i = 0; i < routes && i < 6u; i++) {
                     report->selected_experts[i] = selected[(uint64_t)slot * routes + i];

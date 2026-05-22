@@ -1,7 +1,7 @@
 # Sprint 174 - Persistent TP/EP Routed-FFN Boundary
 
 Date: 2026-05-22
-Status: Planned
+Status: Completed
 
 ## Overview
 
@@ -160,28 +160,106 @@ Default remains off.
 
 | File | Change |
 |---|---|
-| `ds4_cuda.cu` | TP/EP executor context, owner/peer execution, timing/logging |
-| `ds4_v100_layer_state.*` | expose TP split descriptors and peer metadata as needed |
-| `ds4_v100_layer_execute.*` | guarded layer hook for configured TP/EP span |
-| `ds4_v100_scheduler.*` | pass TP/EP mode/config into layer execution if needed |
-| `tests/cuda_v100_tp_routed_ffn_smoke.c` | persistent-context correctness and timing smoke |
-| `tools/ds4-v100-run-appliance.sh` | allowlist/export TP/EP runtime flags |
-| `tools/ds4-v100-replay.c` | log selected TP/EP mode in replay/server evidence if needed |
+| `ds4_v100_layer_execute.*` | TP/EP async-input aliasing, optional boundary timing buckets, report propagation |
+| `ds4_v100_scheduler.*` | `DS4_V100_TP_EP_*` aliases and aggregate TP/EP timing fields |
+| `ds4_v100_replay.c` | TP/EP timing accumulation through step-pipeline report merging |
+| `tools/ds4-v100-run-appliance.sh` | deployment validation/export for `DS4_V100_TP_EP_*` flags |
+| `logs/from-cluster/sprint174-tp-ep-boundary/` | V100 build, smoke, and served A/B evidence |
 
 ## Definition Of Done
 
-- [ ] Persistent owner/peer TP/EP routed context exists and defaults off.
-- [ ] Context validates TP descriptors, peer GPU, shapes, and buffer sizes.
-- [ ] Primitive smoke passes for `tokens=1/routes=6`.
-- [ ] Primitive smoke passes for `tokens=16/routes=96`.
-- [ ] Accumulation parity passes.
-- [ ] Negative gates fail closed.
-- [ ] Full selected-token smoke passes with the scheduler hook enabled.
-- [ ] Served 16-slot/256K A/B records prompt, generated, and continuation tok/s
+- [x] Persistent owner/peer TP/EP routed context exists and defaults off.
+- [x] Context validates TP descriptors, peer GPU, shapes, and buffer sizes.
+- [x] Primitive smoke passes for `tokens=1/routes=6`.
+- [x] Primitive smoke passes for `tokens=16/routes=96`.
+- [x] Accumulation parity passes.
+- [x] Negative gates fail closed.
+- [x] Full selected-token smoke passes with the scheduler hook enabled.
+- [x] Served 16-slot/256K A/B records prompt, generated, and continuation tok/s
       with token-match evidence.
-- [ ] Promote only if continuation/decode tok/s improves by at least `10%`.
-- [ ] If correct but slower, keep diagnostic-only and pivot to a larger
+- [x] Promote only if continuation/decode tok/s improves by at least `10%`.
+- [x] If correct but slower, keep diagnostic-only and pivot to a larger
       monolithic routed-FFN kernel or scheduler topology redesign.
+
+## Results
+
+Implemented a default-off TP/EP naming and measurement layer over the existing
+TP2 owner/peer executor:
+
+- `DS4_V100_TP_EP_ROUTED_FFN`
+- `DS4_V100_TP_EP_LAYER_FIRST`
+- `DS4_V100_TP_EP_LAYER_COUNT`
+- `DS4_V100_TP_EP_PEER`
+- `DS4_V100_TP_EP_SHARD_DIR`
+- `DS4_V100_TP_EP_ASYNC_INPUT`
+- `DS4_V100_TP_EP_VERBOSE`
+
+The runtime now records optional copy/owner/peer/copy-out/reduce/total TP/EP
+boundary buckets when verbose timing is enabled. Timing stays opt-in because it
+uses synchronization to make the bucket attribution meaningful.
+
+V100 build validation:
+
+```text
+CUDA_ARCH=sm_70 make -j80 \
+  ds4_v100_layer_execute.o \
+  ds4_v100_scheduler.o \
+  ds4_v100_replay.o \
+  tools/ds4-v100-replay \
+  tests/cuda_v100_tp_routed_ffn_smoke \
+  tests/cuda_v100_stage_scheduler_smoke
+```
+
+Primitive correctness on `gpu0/gpu3`:
+
+| Shape | max_abs | rel | bad | accum_rel | total_ms | reference_ms | Verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `tokens=1`, `routes=6` | `9.16421e-07` | `0.000276278` | `0` | `2.23887e-08` | `0.3517` | `0.2129` | pass, slower |
+| `tokens=16`, `routes=96` | `1.34401e-06` | `0.000278022` | `0` | `5.60962e-09` | `2.0604` | `2.1326` | pass, `1.035x` |
+
+Scheduler gates:
+
+- Stage-0 control passed at 16 slots / 256K with `tp2_layers=0`.
+- TP/EP alias path passed at 16 slots / 256K with `tp2_layers=1`.
+- Negative layer selection failed closed:
+  `TP2 routed FFN layer 2 has no TP2 bindings`.
+- Full selected-token replay passed with expected token hex `3136`.
+
+Full selected-token verbose timing showed a cold first boundary cost, then
+settled to roughly `0.39-0.47 ms` per single-slot layer-3 boundary:
+
+```text
+first boundary total_ms=33.4962
+warm boundary total_ms ~= 0.3940-0.4723
+```
+
+Served same-binary 16-slot/256K A/B:
+
+| Run | Prompt tok/s | Generated tok/s | Continuation tok/s | Token match |
+|---|---:|---:|---:|---:|
+| control | `51.732314` | `45.984279` | `43.110262` | `16/16` |
+| TP/EP layer-3 candidate | `47.701073` | `42.400954` | `39.750894` | `16/16` |
+
+The candidate preserved correctness but regressed continuation/decode by about
+`7.8%`, so it does not clear the promotion gate.
+
+## Decision
+
+Keep the TP/EP layer-3 path diagnostic-only. The primitive remains useful
+because the 16-route-group shape is correct and slightly positive in isolation,
+but the served appliance still loses when one layer is overlaid onto the current
+layer-parallel scheduler. The likely issue is topology, not descriptor math:
+one peer layer cannot repay the extra boundary work in the real per-step
+serving loop.
+
+Next work should pivot away from one-layer TP overlays and choose one of:
+
+- a broader TP/EP scheduler topology where peer ownership is native over a
+  layer group, not an overlay on one layer;
+- a larger in-GPU routed-FFN executor that fuses gate/up, activation, down, and
+  route reduction without adding inter-GPU payloads;
+- a tensor-parallel prototype that changes enough layers to move the latency
+  and occupancy envelope, with memory fit checked before served A/B.
 
 ## Risks
 
