@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-22
 last_updated_by: sprint-execute
-revision: 185
+revision: 186
 ---
 
 # Vision: DS4 V100 Appliance
@@ -397,6 +397,12 @@ optimized V100 low-bit expert kernels in the actual hot path.
   prompt replay, `15.302152` prompt tok/s, and `15.198459` continuation tok/s.
   This confirms that capacity-tier serving numbers and filled-context decode
   numbers must be tracked separately.
+- Sprint 186 completed the 4096-token synthetic filled-context tier. Prompt
+  replay took `288102.638 ms`, prompt throughput was `14.217155` tok/s, and the
+  one continuation step measured `13.354373` tok/s. This confirms prompt replay
+  dominates long-context measurement wall time and that full 256K synthetic
+  prefill should be scheduled deliberately or preceded by prompt/prefill
+  optimization.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation
@@ -2957,6 +2963,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-22 | Completed Sprint 183 single-token online attention gate. | Added default-off `DS4_CUDA_ATTENTION_DECODE_ONLINE_SINGLE=1`, fixed the existing online attention kernel's `ratio==0` single-token raw-window semantics, and validated it on the persistent production pack. Same-binary 16-slot/256K A/B improved from `47.648307` generated / `46.903802` continuation tok/s to `49.378552` / `48.607012`, both `16/16` first-token checks passing. Direct 8-token JSON compare matched through token 5 but diverged at token 6, so do not promote by default without a quality/tolerance gate. This confirms online attention is a material long-context lever; Sprint 184 should either qualify quality for this path or implement a more quality-preserving persistent/online attention boundary. | Sprint 184+ |
 | 2026-05-22 | Completed Sprint 184 synthetic long-context replay. | `tools/ds4-v100-replay` now supports `--synthetic-prompt-token` plus `--synthetic-prompt-len`, with parser guards against mixing synthetic mode with text prompts or system prompts. V100 build and parser validation passed. Synthetic len-8 replay generated successfully, and a bounded len-256 / 262144-context run recorded `20108.067 ms` prompt replay, `12.731209` prompt tok/s, and `14.071008` continuation tok/s. Repeating len-256 with Sprint 183's online-single attention gate preserved the two output IDs but slowed continuation to `12.038632`, so online-single remains default-off. Next work should use synthetic tiers like 1024/4096 to characterize actual filled-context decode before promoting attention changes. | Sprint 185+ |
 | 2026-05-22 | Completed Sprint 185 synthetic 1024-token context tier. | The first 1024-token synthetic direct replay failed with `decode cache attention compressed capacity exceeded`, proving the old fixed `64` compressed-row cap was only a short-fixture setting. Synthetic prompt mode now sizes `attn_comp_cap` and `index_comp_cap` from the synthetic prompt length with the existing default as a floor. The 1024-token / 262144-context run then completed: `66918.694 ms` prompt replay, `15.302152` prompt tok/s, `15.198459` continuation tok/s, output IDs `926, 926`. This separates capacity-serving benchmarks from actual filled-context benchmarks; next work should add 4096-token timing and decide whether full 256K prefill is worth the wall-clock cost. | Sprint 186+ |
+| 2026-05-22 | Completed Sprint 186 synthetic 4096-token context tier. | The 4096-token / 262144-context synthetic filled-context run completed on the persistent production pack: `288102.638 ms` prompt replay, `14.217155` prompt tok/s, `13.354373` continuation tok/s, output IDs `271, 5`. This gives the first two filled-context scaling points after the 256-token smoke. Prompt replay is now clearly the dominant wall-clock cost for larger context tiers. Sprint 187 should either optimize prompt/prefill replay or schedule a deliberately long 16384/65536 synthetic tier; full 256K prefill should not be treated as a quick benchmark. | Sprint 187+ |
 
 ## Open Questions
 
