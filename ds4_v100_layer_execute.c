@@ -806,6 +806,37 @@ static int rope_tail_layer_tensor(ds4_gpu_tensor *x,
                                     1.0f);
 }
 
+static int q_head_norm_rope_tail_layer_tensor(ds4_gpu_tensor *x,
+                                              uint32_t n_head,
+                                              uint32_t head_dim,
+                                              uint32_t pos,
+                                              const ds4_v100_layer_state *state) {
+    const uint32_t ratio = layer_ratio(state);
+    const bool compressed = ratio != 0;
+    const float freq_base = compressed ? 160000.0f : 10000.0f;
+    const float freq_scale = compressed ? (1.0f / 16.0f) : 1.0f;
+    const float ext_factor = compressed ? 1.0f : 0.0f;
+    float attn_factor = 1.0f;
+    if (ext_factor != 0.0f && freq_scale > 0.0f) {
+        attn_factor /= 1.0f + 0.1f * logf(1.0f / freq_scale);
+    }
+    return ds4_gpu_head_rms_norm_rope_tail_tensor(x,
+                                                  1,
+                                                  n_head,
+                                                  head_dim,
+                                                  DS4_V100_N_ROT,
+                                                  pos,
+                                                  compressed ? 65536u : 0u,
+                                                  false,
+                                                  freq_base,
+                                                  freq_scale,
+                                                  ext_factor,
+                                                  attn_factor,
+                                                  32.0f,
+                                                  1.0f,
+                                                  DS4_V100_RMS_EPS);
+}
+
 typedef struct {
     const ds4_gpu_tensor *raw_kv;
     uint32_t n_raw;
@@ -1404,6 +1435,7 @@ static int execute_attention_output(const ds4_v100_layer_state *state,
         goto done;
     }
 
+    const bool fused_q_norm_rope = env_flag_enabled("DS4_V100_FUSED_Q_NORM_ROPE");
     if (!ds4_gpu_rms_norm_weight_tensor(attn_norm,
                                         hidden,
                                         cfg->model_map,
@@ -1420,13 +1452,23 @@ static int execute_attention_output(const ds4_v100_layer_state *state,
                                         q_rank,
                                         DS4_V100_RMS_EPS) ||
         ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena, &q_b_v, q_a_norm, q) != 0 ||
-        !ds4_gpu_head_rms_norm_tensor(q, 1, DS4_V100_N_HEAD, DS4_V100_HEAD_DIM, DS4_V100_RMS_EPS) ||
-        !rope_tail_layer_tensor(q,
-                                DS4_V100_N_HEAD,
-                                DS4_V100_HEAD_DIM,
-                                cfg->position,
-                                state,
-                                false) ||
+        !(fused_q_norm_rope
+            ? q_head_norm_rope_tail_layer_tensor(q,
+                                                 DS4_V100_N_HEAD,
+                                                 DS4_V100_HEAD_DIM,
+                                                 cfg->position,
+                                                 state)
+            : (ds4_gpu_head_rms_norm_tensor(q,
+                                            1,
+                                            DS4_V100_N_HEAD,
+                                            DS4_V100_HEAD_DIM,
+                                            DS4_V100_RMS_EPS) &&
+               rope_tail_layer_tensor(q,
+                                      DS4_V100_N_HEAD,
+                                      DS4_V100_HEAD_DIM,
+                                      cfg->position,
+                                      state,
+                                      false))) ||
         ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena, &kv_v, attn_norm, kv_raw) != 0 ||
         !ds4_gpu_rms_norm_weight_tensor(kv,
                                         kv_raw,
@@ -1611,6 +1653,7 @@ static int execute_attention_output_batch(const ds4_v100_layer_state *state,
         use_scratch &&
         n_slots == 16u &&
         env_flag_enabled("DS4_V100_BATCH_ATTN_OUTPUT_B");
+    const bool fused_q_norm_rope = env_flag_enabled("DS4_V100_FUSED_Q_NORM_ROPE");
     if (use_scratch && ensure_batch_scratch(cfgs[0].batch_scratch,
                                             hidden_n,
                                             state->intermediate_size,
@@ -1754,13 +1797,23 @@ static int execute_attention_output_batch(const ds4_v100_layer_state *state,
             .use_indexed_attention = false,
         };
         int attention_ok = 0;
-        if (!ds4_gpu_head_rms_norm_tensor(q_view, 1, DS4_V100_N_HEAD, DS4_V100_HEAD_DIM, DS4_V100_RMS_EPS) ||
-            !rope_tail_layer_tensor(q_view,
-                                    DS4_V100_N_HEAD,
-                                    DS4_V100_HEAD_DIM,
-                                    cfgs[slot].position,
-                                    state,
-                                    false) ||
+        if (!(fused_q_norm_rope
+                ? q_head_norm_rope_tail_layer_tensor(q_view,
+                                                     DS4_V100_N_HEAD,
+                                                     DS4_V100_HEAD_DIM,
+                                                     cfgs[slot].position,
+                                                     state)
+                : (ds4_gpu_head_rms_norm_tensor(q_view,
+                                                1,
+                                                DS4_V100_N_HEAD,
+                                                DS4_V100_HEAD_DIM,
+                                                DS4_V100_RMS_EPS) &&
+                   rope_tail_layer_tensor(q_view,
+                                          DS4_V100_N_HEAD,
+                                          DS4_V100_HEAD_DIM,
+                                          cfgs[slot].position,
+                                          state,
+                                          false))) ||
             !rope_tail_layer_tensor(kv_view,
                                     1,
                                     DS4_V100_HEAD_DIM,
