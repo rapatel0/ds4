@@ -6119,6 +6119,26 @@ static void cuda_tm_routed_executor_log_active_once(
             max_routes_per_expert);
 }
 
+static void cuda_tm_routed_executor_log_no_host_sync_once(
+        int mode,
+        uint32_t total_routes,
+        uint32_t compact_groups) {
+    if (!cuda_tm_routed_executor_verbose_enabled()) return;
+    static int printed6 = 0;
+    static int printed96 = 0;
+    static int printed768 = 0;
+    int *printed = total_routes == 6u ? &printed6 :
+                   total_routes == 96u ? &printed96 :
+                   total_routes == 768u ? &printed768 : nullptr;
+    if (printed && *printed) return;
+    if (printed) *printed = 1;
+    fprintf(stderr,
+            "ds4: TurboMind routed executor %s no_host_sync total_routes=%u compact_groups=%u\n",
+            cuda_tm_routed_executor_mode_name(mode),
+            total_routes,
+            compact_groups);
+}
+
 static void cuda_tm_routed_executor_log_selected_once(uint32_t total_routes) {
     if (!cuda_tm_routed_executor_verbose_enabled()) return;
     static int printed6 = 0;
@@ -6441,6 +6461,10 @@ static tm_pfn_ds4_mxfp4_gated_silu cuda_tm_ds4_group_down_probe(
 
 static int cuda_tm_compact_schedule_enabled(void) {
     return cuda_env_flag_enabled("DS4_V100_TURBOMIND_COMPACT_SCHEDULE");
+}
+
+static int cuda_tm_compact_no_host_sync_enabled(void) {
+    return cuda_env_flag_enabled("DS4_V100_TURBOMIND_COMPACT_NO_HOST_SYNC");
 }
 
 static int cuda_tm_small_route_build_enabled(void) {
@@ -7573,7 +7597,21 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     }
     uint32_t tm_prof_active_experts = 0;
     uint32_t tm_prof_max_routes_per_expert = 0;
-    if (tm_prof.enabled || group_pipeline_auto_groups || (routed_executor_candidate_shape && use_compact_schedule)) {
+    const int skip_compact_active_host_sync =
+        routed_executor_candidate_shape &&
+        use_compact_schedule &&
+        cuda_tm_compact_no_host_sync_enabled() &&
+        !tm_prof.enabled &&
+        !group_pipeline_auto_groups;
+    if (skip_compact_active_host_sync) {
+        cuda_tm_routed_executor_log_no_host_sync_once(routed_executor_mode,
+                                                      total_routes,
+                                                      tm_group_count);
+    }
+    if (tm_prof.enabled ||
+        group_pipeline_auto_groups ||
+        ((routed_executor_candidate_shape && use_compact_schedule) &&
+         !skip_compact_active_host_sync)) {
         uint32_t observed_active_experts = 0;
         uint32_t observed_max_routes_per_expert = 0;
         std::vector<int> h_offsets((size_t)n_total_experts + 1u);
