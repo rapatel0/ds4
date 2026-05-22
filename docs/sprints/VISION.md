@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: sprint-execute
-revision: 168
+revision: 169
 ---
 
 # Vision: DS4 V100 Appliance
@@ -299,6 +299,20 @@ optimized V100 low-bit expert kernels in the actual hot path.
   line for now. The next material path should be a broader persistent TP/EP
   scheduler boundary or a DS4-specific persistent routed-FFN executor, not more
   stage/slot coalescing.
+- Sprint 169 fixed the Sprint 157 CUDA Graph capture blocker by moving the
+  TurboMind routed-FFN graph path off the legacy default stream. The graph path
+  now uses per-GPU nonblocking graph streams with explicit start/done event
+  ordering against the default stream, and graph capture succeeds on the V100
+  pod with `43` captured routed-FFN graph keys and `0` begin-capture or launch
+  failures. Correctness holds in both short replay and served appliance runs.
+  The performance result is not promotable: direct replay improved
+  continuation/decode from `16.039296` to `17.660156` tok/s but lowered
+  generated tok/s, while the practical served 16-slot/256K run regressed from
+  `46.316374` generated / `43.421600` continuation tok/s to `40.058341` /
+  `37.554695`. CUDA Graph replay remains a diagnostic opt-in. The next
+  implementation should be a larger persistent routed-FFN executor or a
+  broader persistent TP/EP boundary, not another wrapper-level launch replay or
+  slot/layer scheduling tweak.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation
