@@ -1387,6 +1387,32 @@ static uint32_t replay_async_ready_wait_us(void) {
     return replay_env_u32_clamped("DS4_V100_ASYNC_READY_WAIT_US", 0, 1000000u);
 }
 
+static bool replay_env_enabled(const char *name) {
+    const char *env = name ? getenv(name) : NULL;
+    if (!env || !env[0]) return false;
+    if (!strcmp(env, "0") ||
+        !strcmp(env, "false") ||
+        !strcmp(env, "False") ||
+        !strcmp(env, "off") ||
+        !strcmp(env, "Off") ||
+        !strcmp(env, "no") ||
+        !strcmp(env, "No")) {
+        return false;
+    }
+    return true;
+}
+
+static bool replay_async_layer_wavefront_enabled(void) {
+    return replay_env_enabled("DS4_V100_ASYNC_LAYER_WAVEFRONT");
+}
+
+static uint32_t replay_async_layer_wavefront_chunk(void) {
+    uint32_t v = replay_env_u32_clamped("DS4_V100_ASYNC_LAYER_WAVEFRONT_CHUNK",
+                                        2,
+                                        DS4_V100_SCHED_MAX_SLOTS);
+    return v ? v : 1u;
+}
+
 static void replay_ready_deadline_from_now(uint32_t wait_us, struct timespec *out) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
@@ -1426,7 +1452,339 @@ static uint32_t replay_step_pipeline_collect_ready_chunk(replay_step_pipeline_ba
     return chunk;
 }
 
+static bool replay_stage_layer_range(int stage, int *first_layer, int *last_layer) {
+    if (!first_layer || !last_layer) return false;
+    int first = -1;
+    int last = -1;
+    for (int layer = 0; layer < DS4_V100_N_LAYERS; layer++) {
+        if (ds4_v100_stage_for_layer(layer) != stage) continue;
+        if (first < 0) first = layer;
+        last = layer;
+    }
+    if (first < 0 || last < first) return false;
+    *first_layer = first;
+    *last_layer = last;
+    return true;
+}
+
+static bool replay_step_pipeline_prev_done_now(replay_step_pipeline_batch *b,
+                                               int stage,
+                                               uint32_t slot) {
+    if (!b || slot >= b->n_slots) return false;
+    if (stage == 0) return true;
+    pthread_mutex_lock(&b->mu);
+    const bool ready = !b->failed && b->done[stage - 1][slot];
+    pthread_mutex_unlock(&b->mu);
+    return ready;
+}
+
+static void replay_step_pipeline_report_accum(
+    ds4_v100_stage_scheduler_report *dst,
+    const ds4_v100_stage_scheduler_report *src) {
+    if (!dst || !src) return;
+    if (dst->layers_executed == 0) {
+        *dst = *src;
+        return;
+    }
+    dst->last_layer = src->last_layer;
+    dst->layers_executed += src->layers_executed;
+    dst->last_layer_report = src->last_layer_report;
+    dst->turbomind_routed_layers_executed += src->turbomind_routed_layers_executed;
+    dst->turbomind_tp2_routed_layers_executed += src->turbomind_tp2_routed_layers_executed;
+    dst->timing_hc_attn_ms += src->timing_hc_attn_ms;
+    dst->timing_attention_ms += src->timing_attention_ms;
+    dst->timing_hc_ffn_ms += src->timing_hc_ffn_ms;
+    dst->timing_ffn_ms += src->timing_ffn_ms;
+    dst->timing_hc_final_ms += src->timing_hc_final_ms;
+    dst->timing_total_ms += src->timing_total_ms;
+}
+
+static bool replay_step_pipeline_find_layer_group(const int *next_layer,
+                                                  const bool *complete,
+                                                  uint32_t n_slots,
+                                                  int first_layer,
+                                                  int last_layer,
+                                                  uint32_t max_chunk,
+                                                  uint32_t min_chunk,
+                                                  uint32_t *out_slot,
+                                                  uint32_t *out_chunk,
+                                                  int *out_layer) {
+    if (!next_layer || !complete || !out_slot || !out_chunk || !out_layer) return false;
+    if (max_chunk == 0) max_chunk = 1;
+    if (min_chunk == 0) min_chunk = 1;
+    for (int layer = first_layer + 1; layer <= last_layer; layer++) {
+        for (uint32_t slot = 0; slot < n_slots;) {
+            if (complete[slot] || next_layer[slot] != layer) {
+                slot++;
+                continue;
+            }
+            const uint32_t start = slot;
+            uint32_t chunk = 0;
+            while (slot < n_slots &&
+                   !complete[slot] &&
+                   next_layer[slot] == layer &&
+                   chunk < max_chunk) {
+                slot++;
+                chunk++;
+            }
+            if (chunk >= min_chunk) {
+                *out_slot = start;
+                *out_chunk = chunk;
+                *out_layer = layer;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static bool replay_step_pipeline_find_startable_slot(replay_step_pipeline_batch *b,
+                                                     int stage,
+                                                     const bool *started,
+                                                     const bool *complete,
+                                                     uint32_t *out_slot) {
+    if (!b || !started || !complete || !out_slot) return false;
+    for (uint32_t slot = 0; slot < b->n_slots; slot++) {
+        if (started[slot] || complete[slot]) continue;
+        if (replay_step_pipeline_prev_done_now(b, stage, slot)) {
+            *out_slot = slot;
+            return true;
+        }
+    }
+    return false;
+}
+
+static int replay_step_pipeline_execute_layer_span(replay_step_pipeline_batch *b,
+                                                   int stage,
+                                                   uint32_t slot,
+                                                   uint32_t chunk,
+                                                   int layer,
+                                                   int last_layer,
+                                                   bool start_layer,
+                                                   int *next_layer,
+                                                   bool *complete,
+                                                   uint32_t *completed,
+                                                   char *local_err,
+                                                   size_t local_errlen) {
+    if (!b || !next_layer || !complete || !completed || chunk == 0) {
+        snprintf(local_err, local_errlen, "missing layer-wavefront execution input");
+        return 1;
+    }
+    ds4_v100_stage_scheduler_report reports[DS4_V100_SCHED_MAX_SLOTS];
+    memset(reports, 0, sizeof(reports));
+
+    double handoff0 = replay_now_ms();
+    if (start_layer && stage > 0) {
+        for (uint32_t rel = 0; rel < chunk; rel++) {
+            const uint32_t s = slot + rel;
+            const ds4_gpu_event *prev_event = b->event_handoff
+                ? b->rt->stage_ready[stage - 1][s]
+                : NULL;
+            if (b->event_handoff && !prev_event) {
+                snprintf(local_err, local_errlen, "missing layer-wavefront source event");
+                return 1;
+            }
+            if (replay_handoff_slot_span_after_event(b->rt,
+                                                     stage,
+                                                     s,
+                                                     1,
+                                                     prev_event,
+                                                     local_err,
+                                                     local_errlen)) {
+                return 1;
+            }
+        }
+        b->handoff_ms[stage - 1] += replay_now_ms() - handoff0;
+    }
+
+    const double decode0 = replay_now_ms();
+    int rc = 0;
+    if (start_layer && stage == 0) {
+        rc = ds4_v100_stage_scheduler_decode_token_layer_span(
+            b->rt->scheds[0],
+            slot,
+            &b->tokens[slot],
+            &b->positions[slot],
+            chunk,
+            layer,
+            layer,
+            reports,
+            local_err,
+            local_errlen);
+    } else {
+        rc = ds4_v100_stage_scheduler_decode_hc_layer_span(
+            b->rt->scheds[stage],
+            slot,
+            &b->tokens[slot],
+            &b->positions[slot],
+            chunk,
+            layer,
+            layer,
+            reports,
+            local_err,
+            local_errlen);
+    }
+    if (rc) return 1;
+    b->stage_decode_ms[stage] += replay_now_ms() - decode0;
+
+    bool completed_now = false;
+    for (uint32_t rel = 0; rel < chunk; rel++) {
+        const uint32_t s = slot + rel;
+        replay_step_pipeline_report_accum(&b->reports[stage][s], &reports[rel]);
+        next_layer[s] = layer + 1;
+        if (layer >= last_layer && !complete[s]) {
+            complete[s] = true;
+            completed_now = true;
+            (*completed)++;
+        }
+    }
+    if (!completed_now) return 0;
+
+    if (b->event_handoff) {
+        for (uint32_t rel = 0; rel < chunk; rel++) {
+            const uint32_t s = slot + rel;
+            if (layer < last_layer) continue;
+            ds4_gpu_event *ready_event = b->rt->stage_ready[stage][s];
+            if (!ready_event || !ds4_gpu_event_record(ready_event)) {
+                snprintf(local_err,
+                         local_errlen,
+                         "layer-wavefront event record failed");
+                return 1;
+            }
+        }
+    } else {
+        const double sync0 = replay_now_ms();
+        if (!ds4_gpu_set_device(stage) || !ds4_gpu_synchronize()) {
+            snprintf(local_err, local_errlen, "layer-wavefront synchronize failed");
+            return 1;
+        }
+        b->sync_ms[stage] += replay_now_ms() - sync0;
+    }
+    for (uint32_t rel = 0; rel < chunk; rel++) {
+        const uint32_t s = slot + rel;
+        if (layer >= last_layer) replay_step_pipeline_mark_done(b, stage, s);
+    }
+    return 0;
+}
+
+static void *replay_step_pipeline_worker_layer_wavefront(void *arg) {
+    replay_step_pipeline_worker *w = (replay_step_pipeline_worker *)arg;
+    if (!w || !w->batch) return NULL;
+    replay_step_pipeline_batch *b = w->batch;
+    const int stage = w->stage;
+    char local_err[512] = {0};
+    int first_layer = -1;
+    int last_layer = -1;
+    if (!replay_stage_layer_range(stage, &first_layer, &last_layer)) {
+        replay_step_pipeline_fail(b, "failed to resolve layer-wavefront stage range");
+        return NULL;
+    }
+
+    bool started[DS4_V100_SCHED_MAX_SLOTS] = {0};
+    bool complete[DS4_V100_SCHED_MAX_SLOTS] = {0};
+    int next_layer[DS4_V100_SCHED_MAX_SLOTS] = {0};
+    uint32_t completed = 0;
+    const uint32_t max_chunk = replay_async_layer_wavefront_chunk();
+
+    while (completed < b->n_slots) {
+        if (b->failed) break;
+        uint32_t slot = 0;
+        uint32_t chunk = 0;
+        int layer = -1;
+        bool start_layer = false;
+
+        if (replay_step_pipeline_find_layer_group(next_layer,
+                                                  complete,
+                                                  b->n_slots,
+                                                  first_layer,
+                                                  last_layer,
+                                                  max_chunk,
+                                                  max_chunk,
+                                                  &slot,
+                                                  &chunk,
+                                                  &layer)) {
+            start_layer = false;
+        } else if (replay_step_pipeline_find_startable_slot(b,
+                                                           stage,
+                                                           started,
+                                                           complete,
+                                                           &slot)) {
+            chunk = 1;
+            layer = first_layer;
+            start_layer = true;
+        } else if (replay_step_pipeline_find_layer_group(next_layer,
+                                                        complete,
+                                                        b->n_slots,
+                                                        first_layer,
+                                                        last_layer,
+                                                        max_chunk,
+                                                        2,
+                                                        &slot,
+                                                        &chunk,
+                                                        &layer) ||
+                   replay_step_pipeline_find_layer_group(next_layer,
+                                                        complete,
+                                                        b->n_slots,
+                                                        first_layer,
+                                                        last_layer,
+                                                        1,
+                                                        1,
+                                                        &slot,
+                                                        &chunk,
+                                                        &layer)) {
+            start_layer = false;
+        } else {
+            uint32_t wait_slot = UINT32_MAX;
+            for (uint32_t s = 0; s < b->n_slots; s++) {
+                if (!started[s] && !complete[s]) {
+                    wait_slot = s;
+                    break;
+                }
+            }
+            if (wait_slot == UINT32_MAX) {
+                replay_step_pipeline_fail(b, "layer-wavefront made no progress");
+                break;
+            }
+            const double wait0 = replay_now_ms();
+            if (!replay_step_pipeline_wait_prev(b, stage, wait_slot)) {
+                break;
+            }
+            b->worker_wait_ms[stage] += replay_now_ms() - wait0;
+            slot = wait_slot;
+            chunk = 1;
+            layer = first_layer;
+            start_layer = true;
+        }
+
+        if (start_layer) {
+            for (uint32_t rel = 0; rel < chunk; rel++) {
+                started[slot + rel] = true;
+                next_layer[slot + rel] = first_layer;
+            }
+        }
+        if (replay_step_pipeline_execute_layer_span(b,
+                                                    stage,
+                                                    slot,
+                                                    chunk,
+                                                    layer,
+                                                    last_layer,
+                                                    start_layer,
+                                                    next_layer,
+                                                    complete,
+                                                    &completed,
+                                                    local_err,
+                                                    sizeof(local_err))) {
+            replay_step_pipeline_fail(b, local_err);
+            break;
+        }
+    }
+    return NULL;
+}
+
 static void *replay_step_pipeline_worker_main(void *arg) {
+    if (replay_async_layer_wavefront_enabled()) {
+        return replay_step_pipeline_worker_layer_wavefront(arg);
+    }
     replay_step_pipeline_worker *w = (replay_step_pipeline_worker *)arg;
     if (!w || !w->batch) return NULL;
     replay_step_pipeline_batch *b = w->batch;

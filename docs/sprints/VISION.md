@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: sprint-execute
-revision: 167
+revision: 168
 ---
 
 # Vision: DS4 V100 Appliance
@@ -286,6 +286,19 @@ optimized V100 low-bit expert kernels in the actual hot path.
   practical scheduling sprint can now wire an opt-in replay diagnostic that
   tracks per-slot local layer progress and batches only slots that are ready at
   the same layer.
+- Sprint 168 wired that opt-in in-stage layer-wavefront replay diagnostic.
+  `DS4_V100_ASYNC_LAYER_WAVEFRONT=1` changes only the per-step async worker and
+  tracks each slot's next local layer, batching contiguous slots that are ready
+  at the same layer up to `DS4_V100_ASYNC_LAYER_WAVEFRONT_CHUNK`. The default
+  path is unchanged when the env gate is unset. The diagnostic built and
+  passed a production TurboMind smoke, but clean 16-slot/256K A/B rejected it:
+  the per-step event-handoff control reached `32.906564` generated tok/s and
+  `30.849903` continuation tok/s, while layer-wavefront chunk 2 reached
+  `26.126248` / `24.493358`, and chunk 4 regressed further to
+  `19.175887` / `17.977394`. This closes the layer-parallel slot-scheduling
+  line for now. The next material path should be a broader persistent TP/EP
+  scheduler boundary or a DS4-specific persistent routed-FFN executor, not more
+  stage/slot coalescing.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation

@@ -1,0 +1,116 @@
+Sprint 168 - Opt-In In-Stage Layer Wavefront
+Date: 2026-05-21
+Pod: llm/llamacpp-build-8gpu
+Repo: /workspace/ds4
+
+Implementation
+--------------
+- Added env-gated per-step replay worker path:
+    DS4_V100_ASYNC_LAYER_WAVEFRONT=1
+- Added contiguous same-layer slot batch cap:
+    DS4_V100_ASYNC_LAYER_WAVEFRONT_CHUNK=N
+- Existing per-step path remains unchanged when the env gate is unset.
+
+Build
+-----
+Command:
+  make -j80 CUDA_ARCH=sm_70 tools/ds4-v100-replay
+
+Result:
+  PASS
+
+Smoke
+-----
+Command:
+  DS4_V100_ASYNC_LAYER_WAVEFRONT=1 \
+  DS4_V100_ASYNC_LAYER_WAVEFRONT_CHUNK=2 \
+  DS4_V100_TURBOMIND_LIB=./build/turbomind-v100-s127/libggml-turbomind.so \
+  DS4_V100_TURBOMIND_GATED_SILU=1 \
+  DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1 \
+  ./tools/ds4-v100-replay \
+    --model /models/DSv4-Flash-256e-fixed.gguf \
+    --appliance-dir /workspace/ds4-appliance-full-tm-gated-s127 \
+    --ctx 32768 \
+    --slots 4 \
+    --active-microbatch 4 \
+    --tokens 1 \
+    --prompt Hello \
+    --async-pipeline-decode \
+    --async-pipeline-mode per-step \
+    --async-event-handoff \
+    --json
+
+Output summary:
+  token_id=19923
+  text_hex=48656c6c6f
+  generated_tokens_per_second=0.672019
+
+Clean 16-slot/256K A/B
+----------------------
+Common:
+  model=/models/DSv4-Flash-256e-fixed.gguf
+  appliance=/workspace/ds4-appliance-full-tm-gated-s127
+  prompt=Hello
+  ctx=262144
+  slots=16
+  active_microbatch=16
+  tokens/request=16
+  requests=16 timed + 1 warmup
+  queue_policy=sequential
+  async_pipeline_mode=per-step
+  async_event_handoff=on
+  MTP=off
+  DS4_V100_TURBOMIND_LIB=./build/turbomind-v100-s127/libggml-turbomind.so
+  DS4_V100_TURBOMIND_GATED_SILU=1
+  DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1
+  max_requests=40 to avoid counting health/warmup against the timed run
+
+Control, layer-wavefront off:
+  status_200=16/16
+  token_match=16/16
+  generated_tokens=256
+  continuation_tokens=240
+  elapsed_s=7.779602957889438
+  aggregate_generated_tok_s=32.90656366214496
+  aggregate_continuation_tok_s=30.8499034332609
+  avg_latency_ms=6690.310867095832
+  max_latency_ms=7770.7026661373675
+
+Candidate, layer-wavefront chunk=2:
+  status_200=16/16
+  token_match=16/16
+  generated_tokens=256
+  continuation_tokens=240
+  elapsed_s=9.798574957996607
+  aggregate_generated_tok_s=26.126248061314126
+  aggregate_continuation_tok_s=24.493357557481993
+  avg_latency_ms=7514.938742126105
+  max_latency_ms=9792.626874987036
+
+Candidate, layer-wavefront chunk=4:
+  status_200=16/16
+  token_match=16/16
+  generated_tokens=256
+  continuation_tokens=240
+  elapsed_s=13.350099750328809
+  aggregate_generated_tok_s=19.17588668157291
+  aggregate_continuation_tok_s=17.9773937639746
+  avg_latency_ms=11613.847716362216
+  max_latency_ms=13349.292750004679
+
+Decision
+--------
+Do not promote in-stage layer-wavefront scheduling. The diagnostic is correct
+and default-off, but same-prompt 16-slot/256K A/B shows it loses materially
+against the existing per-step event-handoff baseline. Chunk 4 is worse than
+chunk 2, so the extra same-layer batching does not recover enough kernel
+density to offset scheduling/serialization overhead.
+
+Next
+----
+Stop spending near-term effort on layer-parallel slot scheduling. The next
+material path should be a broader persistent TP/EP scheduler boundary or a
+DS4-specific persistent routed-FFN executor that keeps packed MXFP4 dequant,
+gate/up HMMA, gated activation, down HMMA, and weighted reduction inside a
+single long-lived execution boundary.
+
