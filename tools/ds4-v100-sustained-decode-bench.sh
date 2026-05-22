@@ -4,6 +4,7 @@ set -u
 model="/models/DSv4-Flash-256e-fixed.gguf"
 mtp_model="/models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf"
 pack_index=""
+appliance_dir=""
 prompt_file="tests/test-vectors/prompts/short_reasoning_plain.txt"
 expected_hex="3136"
 ctx_tiers="1048576"
@@ -29,12 +30,14 @@ mtp_reserve_mib="4096"
 
 usage() {
     cat <<'USAGE'
-usage: tools/ds4-v100-sustained-decode-bench.sh --pack-index FILE [options]
+usage: tools/ds4-v100-sustained-decode-bench.sh (--pack-index FILE | --appliance-dir DIR) [options]
 
 Options:
   --model FILE              source-layout GGUF model
   --mtp-model FILE          DeepSeek-V4 Flash MTP sidecar GGUF
   --pack-index FILE         V100 pack-index.tsv
+  --appliance-dir DIR       appliance dir containing pack-index.tsv,
+                            turbomind-pack-index.tsv, and gpuN.weights shards
   --prompt-file FILE        prompt file
   --expected-token-hex HEX  expected first response token bytes, default 3136
   --ctx-tiers LIST          comma list of ctx tiers, default 1048576
@@ -115,6 +118,12 @@ while [ "$#" -gt 0 ]; do
         --pack-index|--index)
             [ "$#" -ge 2 ] || fail "--pack-index requires a value"
             pack_index="$2"
+            shift 2
+            ;;
+        --appliance-dir)
+            [ "$#" -ge 2 ] || fail "--appliance-dir requires a value"
+            appliance_dir="$2"
+            pack_index="$2/pack-index.tsv"
             shift 2
             ;;
         --prompt-file)
@@ -271,6 +280,13 @@ done
 [ -x ./tools/ds4-v100-replay ] || fail "missing executable ./tools/ds4-v100-replay"
 [ -f "$model" ] || fail "missing model $model"
 [ -f "$pack_index" ] || fail "missing pack index $pack_index"
+command -v python3 >/dev/null 2>&1 ||
+    fail "python3 is required for the sustained decode load client"
+if [ -n "$appliance_dir" ]; then
+    [ -d "$appliance_dir" ] || fail "missing appliance dir $appliance_dir"
+    [ -f "$appliance_dir/turbomind-pack-index.tsv" ] ||
+        fail "missing appliance TurboMind index $appliance_dir/turbomind-pack-index.tsv"
+fi
 [ -f "$prompt_file" ] || fail "missing prompt file $prompt_file"
 if [ "$mtp_serving" != "off" ]; then
     [ -f "$mtp_model" ] || fail "missing MTP model $mtp_model"
@@ -869,7 +885,6 @@ load_case() {
         ./tools/ds4-v100-replay
         --serve
         --model "$model"
-        --index "$pack_index"
         --ctx "$ctx"
         --slots "$slots"
         --active-microbatch "$slots"
@@ -879,6 +894,11 @@ load_case() {
         --port "$port"
         --max-requests "$server_max_requests"
     )
+    if [ -n "$appliance_dir" ]; then
+        cmd+=(--appliance-dir "$appliance_dir")
+    else
+        cmd+=(--index "$pack_index")
+    fi
     if [ "$profile_decode" = "1" ]; then
         cmd+=(--profile-decode)
     fi
@@ -961,6 +981,7 @@ expected_lower="$(printf '%s' "$expected_hex" | tr 'A-F' 'a-f')"
 printf 'schema\tds4_v100_sustained_decode.v1\n' >"$summary_tsv"
 printf 'model\t%s\n' "$model" >>"$summary_tsv"
 printf 'pack_index\t%s\n' "$pack_index" >>"$summary_tsv"
+printf 'appliance_dir\t%s\n' "$appliance_dir" >>"$summary_tsv"
 printf 'expected_token_hex\t%s\n' "$expected_lower" >>"$summary_tsv"
 printf 'tokens_per_request\t%s\n' "$tokens" >>"$summary_tsv"
 printf 'requests_per_case\t%s\n' "$requests" >>"$summary_tsv"

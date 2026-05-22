@@ -1,0 +1,113 @@
+Sprint 166 - Ready-Window Async Slot Coalescing
+Date: 2026-05-21
+Cluster: llamacpp-build-8gpu, /workspace/ds4
+
+Build
+-----
+Command:
+  make -j80 CUDA_ARCH=sm_70 tools/ds4-v100-replay tests/cuda_v100_stage_wavefront_smoke
+
+Result:
+  PASS
+
+Implementation
+--------------
+Ready-window mode is opt-in only:
+  DS4_V100_ASYNC_READY_CHUNK_MAX
+  DS4_V100_ASYNC_READY_STAGE0_CHUNK_MAX
+  DS4_V100_ASYNC_READY_WAIT_US
+
+When DS4_V100_ASYNC_READY_CHUNK_MAX is unset, the existing
+DS4_V100_ASYNC_SLOT_CHUNK behavior is unchanged.
+
+Replay smoke
+------------
+Production appliance:
+  /workspace/ds4-appliance-full-tm-gated-s127
+
+Baseline:
+  ctx=32768 slots=4 active_microbatch=4
+  async_pipeline_mode=per-step async_event_handoff=1
+  generated_tokens_per_second=0.705770
+  first token text_hex=48656c6c6f
+
+Ready-window:
+  DS4_V100_ASYNC_READY_CHUNK_MAX=4
+  DS4_V100_ASYNC_READY_STAGE0_CHUNK_MAX=2
+  DS4_V100_ASYNC_READY_WAIT_US=200
+  ctx=32768 slots=4 active_microbatch=4
+  async_pipeline_mode=per-step async_event_handoff=1
+  generated_tokens_per_second=0.722567
+  first token text_hex=48656c6c6f
+
+Sustained served A/B
+--------------------
+Production appliance:
+  /workspace/ds4-appliance-full-tm-gated-s127
+
+Common settings:
+  model=/models/DSv4-Flash-256e-fixed.gguf
+  ctx=262144
+  slots=16
+  active_microbatch=16
+  tokens_per_request=16
+  concurrent_requests=16
+  queue_policy=sequential
+  async_pipeline_mode=per-step
+  async_event_handoff=1
+  mtp=off
+  DS4_V100_TURBOMIND_LIB=./build/turbomind-v100-s127/libggml-turbomind.so
+  DS4_V100_TURBOMIND_GATED_SILU=1
+  DS4_V100_TURBOMIND_COMPACT_SCHEDULE=1
+
+Control:
+  log_dir=/workspace/ds4-logs/sprint166-control-manual2
+  generated_tokens=256
+  prompt_tokens=272
+  continuation_tokens=240
+  elapsed_s=9.716622
+  aggregate_generated_tok_s=26.346605
+  aggregate_continuation_tok_s=24.699942
+  avg_latency_ms=9203.042
+  first_text_hex=3136
+  avg_gpu_util_percent=31.514
+  max_gpu_util_percent=66.000
+
+Ready-window candidate, ready-only:
+  log_dir=/workspace/ds4-logs/sprint166-ready_w4_s1_wait0-manual3
+  DS4_V100_ASYNC_READY_CHUNK_MAX=4
+  DS4_V100_ASYNC_READY_STAGE0_CHUNK_MAX=1
+  DS4_V100_ASYNC_READY_WAIT_US=0
+  generated_tokens=256
+  prompt_tokens=272
+  continuation_tokens=240
+  elapsed_s=10.228684
+  aggregate_generated_tok_s=25.027658
+  aggregate_continuation_tok_s=23.463429
+  avg_latency_ms=9683.286
+  first_text_hex=3136
+  avg_gpu_util_percent=30.058
+  max_gpu_util_percent=60.000
+
+Ready-window candidate, staged wait diagnostic:
+  log_dir=/workspace/ds4-logs/sprint166-ready_w4_s2_wait200-manual2
+  DS4_V100_ASYNC_READY_CHUNK_MAX=4
+  DS4_V100_ASYNC_READY_STAGE0_CHUNK_MAX=2
+  DS4_V100_ASYNC_READY_WAIT_US=200
+  generated_tokens=256
+  prompt_tokens=272
+  avg_latency_ms=9580.359
+  max_latency_ms=11152.377
+  avg_gpu_util_percent=26.315
+  max_gpu_util_percent=49.000
+  Note: this diagnostic completed all responses correctly, but the first
+  ad-hoc harness waited on the server process and did not preserve exact
+  wall elapsed. Treat it as supporting latency/utilization evidence only.
+
+Decision
+--------
+Do not promote ready-window slot coalescing. It is correct and default-off,
+but the practical 16-slot/256K served A/B is slower than the current per-step
+event-handoff baseline. The next throughput attempt should move to a larger
+DS4-specific routed-FFN executor boundary or a broader persistent TP/EP
+scheduler, not more queue-level slot chunking.

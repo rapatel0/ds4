@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-21
 last_updated_by: sprint-execute
-revision: 165
+revision: 166
 ---
 
 # Vision: DS4 V100 Appliance
@@ -256,6 +256,21 @@ optimized V100 low-bit expert kernels in the actual hot path.
   near-term serving lever. Future TP work should only happen as a broader
   persistent TP/EP scheduler boundary; otherwise the practical-serving path
   should return to larger non-TP fused routed-FFN execution.
+- Sprint 166 tested ready-window async slot coalescing as the least invasive
+  attempt to recover denser routed kernels without the fixed slot-chunk
+  overlap loss. The implementation is explicit-env only
+  (`DS4_V100_ASYNC_READY_CHUNK_MAX`,
+  `DS4_V100_ASYNC_READY_STAGE0_CHUNK_MAX`,
+  `DS4_V100_ASYNC_READY_WAIT_US`) and keeps old per-step/fixed-chunk behavior
+  unchanged when unset. It passed full V100 build and replay smokes, but served
+  16-slot/256K A/B lost to the current per-step event-handoff baseline:
+  control `26.346605` generated tok/s and `24.699942` continuation tok/s
+  versus ready-only coalescing `25.027658` and `23.463429`. A more aggressive
+  stage0-2/wait-200us variant also completed correctly but showed worse
+  latency and utilization. Slot-scheduling coalescing is therefore exhausted
+  as a practical lever at 256K; the next meaningful work is a larger
+  DS4-specific routed-FFN executor boundary or a broader persistent TP/EP
+  scheduler, not more queue-level chunking.
 - Sprint 006 has shipped that context/skeleton contract. The project now has a
   verified 8-GPU V100 topology check, descriptor policy, HC relay smoke, and
   no-math layer walk over the real pack index, while source-layout generation

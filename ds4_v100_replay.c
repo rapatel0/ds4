@@ -11,6 +11,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
 
 typedef struct replay_pipeline_runtime replay_pipeline_runtime;
@@ -1356,6 +1357,75 @@ static uint32_t replay_async_slot_chunk(const replay_step_pipeline_batch *b) {
     return (uint32_t)v;
 }
 
+static uint32_t replay_env_u32_clamped(const char *name,
+                                       uint32_t default_value,
+                                       uint32_t max_value) {
+    const char *env = name ? getenv(name) : NULL;
+    if (!env || !env[0]) return default_value;
+    char *end = NULL;
+    unsigned long v = strtoul(env, &end, 10);
+    if (end == env || *end != '\0') return default_value;
+    if (v > max_value) v = max_value;
+    return (uint32_t)v;
+}
+
+static uint32_t replay_async_ready_chunk_max(void) {
+    return replay_env_u32_clamped("DS4_V100_ASYNC_READY_CHUNK_MAX",
+                                  0,
+                                  DS4_V100_SCHED_MAX_SLOTS);
+}
+
+static uint32_t replay_async_ready_stage0_chunk_max(uint32_t ready_chunk_max) {
+    uint32_t v = replay_env_u32_clamped("DS4_V100_ASYNC_READY_STAGE0_CHUNK_MAX",
+                                        1,
+                                        DS4_V100_SCHED_MAX_SLOTS);
+    if (ready_chunk_max && v > ready_chunk_max) v = ready_chunk_max;
+    return v ? v : 1u;
+}
+
+static uint32_t replay_async_ready_wait_us(void) {
+    return replay_env_u32_clamped("DS4_V100_ASYNC_READY_WAIT_US", 0, 1000000u);
+}
+
+static void replay_ready_deadline_from_now(uint32_t wait_us, struct timespec *out) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    uint64_t nsec = (uint64_t)tv.tv_usec * 1000ull + (uint64_t)wait_us * 1000ull;
+    out->tv_sec = tv.tv_sec + (time_t)(nsec / 1000000000ull);
+    out->tv_nsec = (long)(nsec % 1000000000ull);
+}
+
+static uint32_t replay_step_pipeline_collect_ready_chunk(replay_step_pipeline_batch *b,
+                                                        int stage,
+                                                        uint32_t slot,
+                                                        uint32_t max_chunk,
+                                                        uint32_t wait_us) {
+    if (!b || max_chunk <= 1u || slot >= b->n_slots) return 1;
+    uint32_t remaining = b->n_slots - slot;
+    if (max_chunk > remaining) max_chunk = remaining;
+    if (stage == 0) {
+        const uint32_t stage0_max = replay_async_ready_stage0_chunk_max(max_chunk);
+        return stage0_max < max_chunk ? stage0_max : max_chunk;
+    }
+
+    struct timespec deadline;
+    if (wait_us) replay_ready_deadline_from_now(wait_us, &deadline);
+    uint32_t chunk = 1;
+    while (chunk < max_chunk) {
+        const uint32_t next_slot = slot + chunk;
+        pthread_mutex_lock(&b->mu);
+        while (!b->failed && !b->done[stage - 1][next_slot] && wait_us) {
+            const int wait_rc = pthread_cond_timedwait(&b->cv, &b->mu, &deadline);
+            if (wait_rc == ETIMEDOUT) break;
+        }
+        const bool ready = !b->failed && b->done[stage - 1][next_slot];
+        pthread_mutex_unlock(&b->mu);
+        if (!ready) break;
+        chunk++;
+    }
+    return chunk;
+}
+
 static void *replay_step_pipeline_worker_main(void *arg) {
     replay_step_pipeline_worker *w = (replay_step_pipeline_worker *)arg;
     if (!w || !w->batch) return NULL;
@@ -1363,16 +1433,31 @@ static void *replay_step_pipeline_worker_main(void *arg) {
     const int stage = w->stage;
     char local_err[512] = {0};
     const uint32_t slot_chunk = replay_async_slot_chunk(b);
+    const uint32_t ready_chunk_max = replay_async_ready_chunk_max();
+    const uint32_t ready_wait_us = replay_async_ready_wait_us();
 
-    for (uint32_t slot = 0; slot < b->n_slots; slot += slot_chunk) {
-        uint32_t chunk = slot_chunk;
-        if (chunk > b->n_slots - slot) chunk = b->n_slots - slot;
+    for (uint32_t slot = 0; slot < b->n_slots;) {
+        uint32_t chunk = 1;
         const double wait0 = replay_now_ms();
         bool prev_ready = true;
-        for (uint32_t rel = 0; rel < chunk; rel++) {
-            if (!replay_step_pipeline_wait_prev(b, stage, slot + rel)) {
+        if (ready_chunk_max) {
+            if (!replay_step_pipeline_wait_prev(b, stage, slot)) {
                 prev_ready = false;
-                break;
+            } else {
+                chunk = replay_step_pipeline_collect_ready_chunk(b,
+                                                                 stage,
+                                                                 slot,
+                                                                 ready_chunk_max,
+                                                                 ready_wait_us);
+            }
+        } else {
+            chunk = slot_chunk;
+            if (chunk > b->n_slots - slot) chunk = b->n_slots - slot;
+            for (uint32_t rel = 0; rel < chunk; rel++) {
+                if (!replay_step_pipeline_wait_prev(b, stage, slot + rel)) {
+                    prev_ready = false;
+                    break;
+                }
             }
         }
         b->worker_wait_ms[stage] += replay_now_ms() - wait0;
@@ -1447,6 +1532,7 @@ static void *replay_step_pipeline_worker_main(void *arg) {
         for (uint32_t rel = 0; rel < chunk; rel++) {
             replay_step_pipeline_mark_done(b, stage, slot + rel);
         }
+        slot += chunk;
     }
     return NULL;
 }
