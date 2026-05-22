@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-22
-last_updated_by: sprint-execute
-revision: 172
+last_updated_by: sprint-plan
+revision: 173
 ---
 
 # Vision: DS4 V100 Appliance
@@ -2579,6 +2579,9 @@ GPU utilization with architectural changes, and only then compare against the
 
 ## Parking Lot
 
+- See `docs/sprints/SPRINT-173-DEFERRED.md`: full monolithic routed-FFN
+  fusion, persistent TP/EP scheduler boundary, attention/shared-FFN fusion, MTP
+  production enablement, and routed-executor runbook cleanup.
 - See `docs/sprints/SPRINT-004-DEFERRED.md`: first source-format math probe,
   source-model decode correctness, MTP, production multi-GPU context, hidden
   context relay, layer scheduler, tensor-parallel variants, multi-slot
@@ -2890,6 +2893,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-21 | Completed Sprint 165 TP2 async-input gate. | `DS4_V100_TP2_ASYNC_INPUT=1` overlaps peer input copies with owner-half compute and keeps the TP2 overlay default-off. It improved the cold TP overlay stage profile versus sync input (`235.591 ms` vs `317.593 ms` total), but warm no-TP remained much faster than async TP (`166.453 ms` vs `245.107 ms`). The one-layer overlay is not a practical serving lever; next work should either implement a broader persistent TP/EP scheduler boundary or return to a larger fused routed-FFN boundary. | Sprint 166+ |
 | 2026-05-22 | Completed Sprint 171 six-route down-reduce epilogue. | `ggml_turbomind_ds4_mxfp4_down_6_m16_reduce` extends the existing down route-reduce epilogue to the exact served 6-route shape and selected correctly on V100. The served 16-slot/256K A/B regressed (`43.887560` generated / `41.144588` continuation tok/s versus `45.941120` / `43.069800` control), so keep it default-off. The next implementation should stop tuning wrapper boundaries and move to a persistent gate/up + down routed-FFN executor or a broader persistent TP/EP scheduler boundary. | Sprint 172+ |
 | 2026-05-22 | Completed Sprint 172 small-route builder recheck. | `DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD=1` is correct but not repeatably faster on the production 16-slot/256K served path. Candidate/control/candidate-repeat were `46.550101`, `46.136775`, and `45.927784` generated tok/s with all runs `16/16` correct. Keep the flag default-off and move next to the deeper persistent routed-FFN versus TP/EP decision. | Sprint 173+ |
+| 2026-05-22 | Planned Sprint 173 reusable fused routed-FFN boundary. | The next sprint will implement `DS4_V100_TURBOMIND_ROUTED_EXECUTOR=fused6` as an opt-in local executor boundary for the served six-route shape. Minimum success is a descriptor with full and partial-output modes, removal or bypass of route-expanded `a_half` staging, liveness logs, replay correctness, a synthetic full-vs-partial smoke, and served 16-slot/256K A/B. Promote only on `>= 10%` continuation/decode uplift; otherwise keep the primitive as TP/EP seed or pivot if no real global intermediate is removed. | Sprint 173 |
 
 ## Open Questions
 
