@@ -308,7 +308,31 @@ descriptor-backed EP path still passing. This is not yet optimized HMMA/CUTLASS
 dense math and not full-layer logits equivalence, but it proves the packed
 dense compute path inside TP/EP.
 
-### Sprint 237 - TP/EP Serving Gate [planned]
+### Sprint 237 - Layer-2 Dense Coverage Gate [planned]
+
+Goal: Extend the Sprint 236 packed-F8 dense compute gate from one tensor to
+all compatible layer-2 F8 dense TP tensor groups, with per-tensor timing,
+repeat, and CPU oracle checks.
+
+Rationale: Serving should not start from a path where only one dense tensor can
+compute. The TP/EP layer needs broader dense-family coverage before full-layer
+decode and serving gates are meaningful.
+
+Outcome: Pending.
+
+### Sprint 238 - Full-Layer TP/EP Decode [planned]
+
+Goal: Combine descriptor-backed dense coverage, control/router handling,
+sharded KV, and EP experts into a representative full layer that produces a
+real next hidden state with MTP off.
+
+Rationale: The current path proves bytes, KV, experts, and one dense compute
+gate independently. Full-layer decode must connect those pieces into the layer
+dataflow before serving.
+
+Outcome: Pending.
+
+### Sprint 239 - TP/EP Serving Gate [planned]
 
 Goal: Serve continuous multi-slot requests through the TP/EP runtime at
 `32` slots / `256K`, MTP off.
@@ -319,7 +343,7 @@ GPU utilization, collective time, expert time, and correctness.
 
 Outcome: Pending.
 
-### Sprint 238 - TP/EP Throughput Optimization [tentative]
+### Sprint 240 - TP/EP Throughput Optimization [tentative]
 
 Goal: Optimize the measured TP/EP bottleneck after Sprint 234 identifies it.
 
@@ -329,7 +353,7 @@ sprint should follow measured evidence, not guesswork.
 
 Outcome: Pending.
 
-### Sprint 239 - Multi-Slot MTP On TP/EP [tentative]
+### Sprint 241 - Multi-Slot MTP On TP/EP [tentative]
 
 Goal: Add MTP to the TP/EP serving path only after TP/EP decode is correct and
 benchmarked.
