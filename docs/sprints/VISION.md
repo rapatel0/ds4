@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 277
+revision: 278
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -262,6 +262,10 @@ not a serial layer-chain.
   `DS4_V100_SERVE_MODE=tp-ep`. The launcher smoke reports `728.744669` wall
   generated tok/s and `753.022651` wall continuation tok/s at the same
   `32` slot / `256K` / `32` token shape.
+- Sprint 278 added the sustained HTTP matrix driver for the launcher path. The
+  current matrix reports `737.091414` wall generated tok/s at 32 tokens/request
+  and `739.774102` at 64 tokens/request, both at `32` slots / `256K` with
+  `32/32` token match.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -1227,6 +1231,18 @@ the launcher to start the resident TP/EP server, then exercised `/health`,
 continuation tok/s, `939.787471` decode-only generated tok/s, and
 `976.290858` decode-only continuation tok/s.
 
+### Sprint 278 - TP/EP Sustained HTTP Matrix [complete]
+
+Goal: Add repeatable sustained HTTP metrology for the TP/EP launcher path.
+
+Outcome: Complete. `tools/ds4-v100-tp-ep-http-bench.sh` starts
+`DS4_V100_SERVE_MODE=tp-ep`, drives the HTTP surface using Python stdlib, and
+writes matrix artifacts. The V100 run at `32` slots / `256K` reports
+`737.091414` wall generated tok/s and `766.964251` wall continuation tok/s for
+`32` tokens/request, and `739.774102` wall generated tok/s and `755.504630`
+wall continuation tok/s for `64` tokens/request. Both cases return `32/32`
+token match.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1304,6 +1320,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 275 added a sustained-serving artifact wrapper over the resident TP/EP backend. | We need repeatable serving-shaped metrology before and during HTTP harness integration. | Wire the resident backend into the operational HTTP sustained-decode path. |
 | 2026-05-23 | Sprint 276 added a TP/EP-only resident HTTP harness. | The backend now stays loaded across HTTP health/status/metrics/generation requests. | Wire this server mode into the appliance launcher and run sustained HTTP matrices. |
 | 2026-05-23 | Sprint 277 wired the TP/EP HTTP server into the appliance launcher. | Operators can now start the TP/EP path with `DS4_V100_SERVE_MODE=tp-ep`. | Build and run sustained HTTP matrix tooling against the launcher path. |
+| 2026-05-23 | Sprint 278 added sustained HTTP matrix tooling for the launcher path. | The TP/EP server now has repeatable operational metrology. | Wire Kubernetes defaults and capture GPU utilization around the matrix. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

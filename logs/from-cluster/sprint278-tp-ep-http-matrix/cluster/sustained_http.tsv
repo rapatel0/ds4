@@ -1,0 +1,6 @@
+schema	ds4_v100_tp_ep_sustained_http.v1
+backend	tp_ep_launcher_http
+
+tokens	ctx	slots	status_200	generated_tokens	continuation_tokens	elapsed_s	generated_tok_s	continuation_tok_s	generated_tok_s_decode	continuation_tok_s_decode
+32	262144	32	32	1024	992	1.389244	737.091414	766.964251	952.404358	995.431373
+64	262144	32	32	2048	2016	2.768413	739.774102	755.504630	960.711973	984.032395

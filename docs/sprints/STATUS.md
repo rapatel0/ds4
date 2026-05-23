@@ -17,9 +17,14 @@ using the PP replay server. Sprint 277 wired that server into
 pod at `32` slots / `256K` / `32` generated tokens per request, the launcher
 smoke reports `32/32` token match, `728.744669` wall generated tok/s,
 `753.022651` wall continuation tok/s, `939.787471` decode-only generated
-tok/s, and `976.290858` decode-only continuation tok/s. This is operational as
-a bounded launcher-started server path; the next implementation step is
-sustained HTTP matrix tooling and deployment manifest wiring.
+tok/s, and `976.290858` decode-only continuation tok/s. Sprint 278 added the
+sustained HTTP matrix driver. The current launcher-backed matrix at `32` slots
+/ `256K` reports `737.091414` wall generated tok/s and `766.964251` wall
+continuation tok/s for `32` tokens/request, and `739.774102` wall generated
+tok/s and `755.504630` wall continuation tok/s for `64` tokens/request. This
+is now an operational TP/EP server path with repeatable metrology; remaining
+work is Kubernetes/deployment wiring, GPU-util capture, and optimization of
+the dominant compose-copy stage.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s
