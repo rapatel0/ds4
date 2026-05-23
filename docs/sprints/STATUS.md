@@ -4,65 +4,20 @@ Last updated: 2026-05-23
 
 ## Topline
 
-Current TP/EP implementation status: Sprint 261 added EP+dense overlap and
-promoted it as the default scaffold schedule. The path keeps shared dense
-cache, shared TurboMind API, shared rank buffers, resident active MXFP4 expert
-weights, local per-layer TP runtime, and overlapped routed EP plus dense
-cuBLAS work. The 50-step A/B at `32` slots / `256K` passes `43/43` layers with
-checksum `204721433`. Overlap improves the projected scaffold rate from
-`631.273270` to `846.062424` slot-step tok/s and reduces summed decode from
-`50.691201 ms/token` to `37.822268 ms/token`. Sprint 262 rechecked FP16 EP
-return under this new regime and rejected it: FP16 return regresses projected
-throughput from `831.795688` to `729.339500` slot-step tok/s by increasing
-compose time. Sprint 263 tested direct peer-memory compose and rejected it:
-direct remote reads regress projected throughput from `840.751688` to
-`634.454351` slot-step tok/s by increasing compose time. The remaining
-dominant stage is staged compose/all-to-all with FP32 EP return. Sprint 264
-changed staged peer-copy scheduling from destination streams to source copy
-streams and promoted it: projected throughput improves from `840.494594` to
-`999.490407` slot-step tok/s with checksum preserved. Sprint 265 added the
-first token-major serving-order scaffold. It passes `172/172` layer
-invocations for `4` token steps at `32` slots / `256K`, reporting
-`48.840011 ms/token` proxy and `655.200508` projected slot-step tok/s. This is
-closer to serving order, but still not generated-token serving throughput.
-Sprint 266 tested shared dense-op residency in that token-major scaffold.
-Correctness holds, but the shared dense-op cache regresses the proxy from
-`51.991980` to `56.085843 ms/token`; it remains an opt-in diagnostic and the
-default stays local dense ops per layer. Sprint 267 rechecked shared TP
-runtime in token-major order and promoted it for token-major all-layer runs:
-the 4-step scaffold improves from `51.289549` to `47.902324 ms/token` proxy,
-projected slot-step throughput improves from `623.908781` to `668.026047`,
-and wall time drops from `34880.753622` to `11661.323548 ms` with checksum
-preserved. Sprint 268 then made token-major runs advance logical position per
-token step. The 4-step gate over positions `1024-1027` passes `172/172`
-invocations and improves the proxy again to `45.770462 ms/token` /
-`699.140856` projected slot-step tok/s, with checksum `296236348`. Sprint 269
-ran longer continuous token-major gates. The 32-step run passes `1376/1376`
-invocations at `39.290219 ms/token` proxy / `814.452062` projected slot-step
-tok/s. The measured steady bottleneck is compose/all-to-all:
-`742.079181 ms` summed compose versus `514.766496 ms` summed EP. Sprint 270
-removed same-GPU staged compose copies on the FP32 return path. The 16-step
-A/B improves from `40.271428` to `38.503412 ms/token` proxy and reduces
-compose from `371.558564` to `342.417467 ms`; the 32-step skip-self topline
-is `37.912062 ms/token` proxy / `844.058544` projected slot-step tok/s.
-Sprint 271 split compose timing and showed peer-copy dominates compose
-(`242.803068 ms` copy out of `327.657087 ms` total compose for the 16-step
-run). Sprint 272 tested per-destination copy streams; the 16-step A/B improves
-from `39.288036` to `37.395624 ms/token`, and the 32-step opt-in topline is
-`36.911097 ms/token` proxy / `866.947964` projected slot-step tok/s. Per
-steering, the next focus is TP/EP end-to-end generated/continuation serving,
-not more compose micro-optimization. Sprint 273 added `--serving-bench` to
-report generated/continuation metrics from the resident token-major TP/EP
-loop. At `32` slots / `256K` / `16` generated tokens it reports
-`875.486234` aggregate generated tok/s and `931.549518` aggregate continuation
-tok/s on decode-only timing, but only about `10.6` tok/s on wall timing
-because the scaffold still invokes heavy per-layer `run_layer()` setup for
-every token/layer. Sprint 274 replaced that hot path with a direct resident
-serving loop. With shared dense ops enabled, the current TP/EP serving-shaped
-topline at `32` slots / `256K` / `32` generated tokens per request is
-`669.222644` wall generated tok/s and `690.469286` wall continuation tok/s;
-decode-only rates are `876.524260` generated tok/s and `910.270244`
-continuation tok/s.
+Current TP/EP implementation status: the forward path is TP8/EP8 only, with
+PP/layer-split work frozen as a baseline. The current resident TP/EP backend
+keeps the TP runtime, sharded KV, rank buffers, TurboMind API handles, active
+MXFP4 expert bindings, dense FP16 cache, shared dense ops, source-scheduled
+peer copies, skip-self compose, and multi-copy streams resident across the
+token-major all-layer loop. Sprint 275 added a repeatable sustained serving
+artifact wrapper over that resident backend. On the V100 pod at `32` slots /
+`256K` / `32` generated tokens per request, it reports `32/32` token match,
+`749.304439` wall generated tok/s, `774.209856` wall continuation tok/s,
+`963.264018` decode-only generated tok/s, and `1000.823072` decode-only
+continuation tok/s. This is still a tool-level resident serving harness, not
+the HTTP appliance server; the next implementation step is wiring this backend
+into the operational HTTP sustained-decode path so status, request handling,
+and metrology use the same serving surface.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

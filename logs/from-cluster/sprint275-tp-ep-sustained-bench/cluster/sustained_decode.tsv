@@ -1,0 +1,5 @@
+schema	ds4_v100_tp_ep_sustained_decode.v1
+backend	tp_ep_resident_tool
+
+ctx	slots	requests	tokens	status_200	status_other	errors	token_match	token_mismatch	elapsed_s	aggregate_generated_tokens_per_second	aggregate_continuation_tokens_per_second	aggregate_generated_tokens_per_second_decode	aggregate_continuation_tokens_per_second_decode
+262144	32	32	32	32	0	0	32	0	1.366601	749.304439	774.209856	963.264018	1000.823072

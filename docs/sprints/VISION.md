@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 274
+revision: 275
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -245,6 +245,12 @@ not a serial layer-chain.
   operational metrology. With shared dense ops, `32` slots / `256K` /
   `32` generated tokens/request reports `669.222644` wall generated tok/s and
   `690.469286` wall continuation tok/s.
+- Sprint 275 wrapped that resident TP/EP backend in a repeatable sustained
+  serving artifact harness. The current tool-level V100 result at `32` slots /
+  `256K` / `32` generated tokens/request is `749.304439` wall generated tok/s,
+  `774.209856` wall continuation tok/s, `963.264018` decode-only generated
+  tok/s, and `1000.823072` decode-only continuation tok/s with `32/32` token
+  match. This is not yet the HTTP appliance server.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -1167,6 +1173,22 @@ tokens/request and reports `669.222644` wall generated tok/s,
 and `910.270244` decode continuation tok/s. Next wrap this backend in the
 HTTP sustained-decode harness.
 
+### Sprint 275 - TP/EP Sustained Serving Artifact Wrapper [complete]
+
+Goal: Produce repeatable sustained-serving artifacts from the resident TP/EP
+backend before wiring the backend into the HTTP appliance server.
+
+Outcome: Complete. `tools/ds4-v100-tp-ep-sustained-bench.sh` runs the
+resident TP/EP serving bench with the promoted `32` slot / `256K` settings,
+records stdout/stderr, and writes `sustained_decode.tsv`,
+`sustained_decode.json`, and per-case `result.json` artifacts. The V100 pod
+run at `32` slots / `256K` / `32` generated tokens per request passes with
+`32/32` token match. The current artifact topline is `749.304439` wall
+generated tok/s, `774.209856` wall continuation tok/s, `963.264018`
+decode-only generated tok/s, and `1000.823072` decode-only continuation tok/s.
+This confirms the resident backend can be measured repeatably, but it still
+needs the operational HTTP harness.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1241,6 +1263,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 271 split compose timing and Sprint 272 tested multi-copy streams. | Copy/all-to-all dominates compose, and per-destination copy streams improve the scaffold. | Pivot to TP/EP generated/continuation serving before more kernel micro-optimization. |
 | 2026-05-23 | Sprint 273 added serving-shaped TP/EP metrics. | Decode-only TP/EP rates are promising, but scaffold wall overhead prevents operational serving. | Build a resident serving loop without per-token/per-layer `run_layer()` setup. |
 | 2026-05-23 | Sprint 274 built the resident TP/EP serving loop. | Shared dense ops plus direct decode remove the scaffold wall bottleneck and produce useful serving-shaped wall tok/s. | Integrate the resident TP/EP backend with the HTTP sustained-decode harness. |
+| 2026-05-23 | Sprint 275 added a sustained-serving artifact wrapper over the resident TP/EP backend. | We need repeatable serving-shaped metrology before and during HTTP harness integration. | Wire the resident backend into the operational HTTP sustained-decode path. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 
