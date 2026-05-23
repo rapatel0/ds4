@@ -459,6 +459,8 @@ struct Options {
     bool diagnostic_output_head = false;
     bool tp_hc_final_expand_gate = false;
     bool tp_hc_current_input_gate = false;
+    bool tp_hc_persist_state_gate = false;
+    bool tp_kv_all_slots_gate = false;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -1336,6 +1338,7 @@ void usage(const char *argv0) {
                  "       [--output-head-gate] [--output-head-resident-gate]\n"
                  "       [--final-hc-carry-gate] [--tp-hc-final-expand-gate]\n"
                  "       [--tp-hc-current-input-gate]\n"
+                 "       [--tp-hc-persist-state-gate] [--tp-kv-all-slots-gate]\n"
                  "       [--diagnostic-output-head]\n",
                  argv0);
 }
@@ -1491,6 +1494,11 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--tp-hc-persist-state-gate") == 0) {
+            opt->tp_hc_persist_state_gate = true;
+            opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--tp-kv-all-slots-gate") == 0) {
+            opt->tp_kv_all_slots_gate = true;
         } else if (std::strcmp(arg, "--diagnostic-output-head") == 0) {
             opt->diagnostic_output_head = true;
             opt->final_hc_carry_gate = true;
@@ -5190,12 +5198,18 @@ int run_resident_layer_decode(const Options &opt,
     char err[512] = {0};
     ds4_v100_tp_dense_kv_result kv_result;
     const int write_indexer = ds4_layer_ratio(opt.layer) == 4 ? 1 : 0;
-    if (ds4_v100_tp_runtime_dense_kv_slice(rt, opt.layer, opt.kv_slot, opt.position,
-                                           write_indexer, &kv_result, err, sizeof(err)) != 0) {
-        std::fprintf(stderr, "tp_runtime_dense_kv_slice_failed\t%s\n", err);
-        return 3;
+    const uint32_t kv_first_slot = opt.tp_kv_all_slots_gate ? 0u : opt.kv_slot;
+    const uint32_t kv_end_slot = opt.tp_kv_all_slots_gate ? (uint32_t)opt.slots : opt.kv_slot + 1u;
+    for (uint32_t slot = kv_first_slot; slot < kv_end_slot; ++slot) {
+        if (ds4_v100_tp_runtime_dense_kv_slice(rt, opt.layer, slot, opt.position,
+                                               write_indexer, &kv_result, err,
+                                               sizeof(err)) != 0) {
+            std::fprintf(stderr, "tp_runtime_dense_kv_slice_failed\tslot\t%u\t%s\n",
+                         slot, err);
+            return 3;
+        }
+        if (kv_result.max_abs != 0.0) return 4;
     }
-    if (kv_result.max_abs != 0.0) return 4;
 
     for (int p = 0; p < kGpus; ++p) {
         ranks[p].gated = layer_expert_cache->gated[p];
@@ -5956,7 +5970,8 @@ int run_token_major_serving_loop(const Options &opt,
     double first_token_wall_ms = 0.0;
     double continuation_wall_ms = 0.0;
     uint64_t checksum = 0;
-    if (opt.final_hc_carry_gate && shared_rank_buffers && shared_rank_buffers->initialized) {
+    if (opt.final_hc_carry_gate && !opt.tp_hc_persist_state_gate &&
+        shared_rank_buffers && shared_rank_buffers->initialized) {
         for (int rank = 0; rank < kGpus; ++rank) {
             shared_rank_buffers->ranks[rank].hc_initialized = false;
         }
@@ -6470,6 +6485,9 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "\"coalesced_requests\":%llu,\"bucketed_requests\":%llu,"
                           "\"pending_generation_requests\":%zu,"
                           "\"microbatch_wait_us\":%d,"
+                          "\"kv_runtime_resident\":%d,"
+                          "\"kv_all_slots_gate\":%d,"
+                          "\"hc_persist_state_gate\":%d,"
                           "\"rejected_requests\":%llu,"
                           "\"total_prompt_tokens\":%llu,"
                           "\"total_generated_tokens\":%llu,"
@@ -6497,6 +6515,9 @@ int run_tp_ep_http_server(const Options &base_opt,
                           (unsigned long long)bucketed_requests,
                           pending_generation.size(),
                           base_opt.microbatch_wait_us,
+                          shared_tp_runtime && shared_tp_runtime->initialized ? 1 : 0,
+                          base_opt.tp_kv_all_slots_gate ? 1 : 0,
+                          base_opt.tp_hc_persist_state_gate ? 1 : 0,
                           (unsigned long long)rejected,
                           (unsigned long long)total_prompt_tokens,
                           (unsigned long long)total_generated_tokens,
@@ -6540,6 +6561,9 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "ds4_v100_tp_ep_bucketed_requests %llu\n"
                           "ds4_v100_tp_ep_pending_generation_requests %zu\n"
                           "ds4_v100_tp_ep_microbatch_wait_us %d\n"
+                          "ds4_v100_tp_ep_kv_runtime_resident %d\n"
+                          "ds4_v100_tp_ep_kv_all_slots_gate %d\n"
+                          "ds4_v100_tp_ep_hc_persist_state_gate %d\n"
                           "ds4_v100_tp_ep_rejected_requests %llu\n"
                           "ds4_v100_tp_ep_total_prompt_tokens %llu\n"
                           "ds4_v100_tp_ep_total_generated_tokens %llu\n"
@@ -6566,6 +6590,9 @@ int run_tp_ep_http_server(const Options &base_opt,
                           (unsigned long long)bucketed_requests,
                           pending_generation.size(),
                           base_opt.microbatch_wait_us,
+                          shared_tp_runtime && shared_tp_runtime->initialized ? 1 : 0,
+                          base_opt.tp_kv_all_slots_gate ? 1 : 0,
+                          base_opt.tp_hc_persist_state_gate ? 1 : 0,
                           (unsigned long long)rejected,
                           (unsigned long long)total_prompt_tokens,
                           (unsigned long long)total_generated_tokens,
@@ -6707,6 +6734,9 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   "\"coalesced_batch_size\":%zu,"
                                   "\"coalesced_slot_index\":%zu,"
                                   "\"microbatch_wait_us\":%d,"
+                                  "\"kv_runtime_resident\":%d,"
+                                  "\"kv_all_slots_gate\":%d,"
+                                  "\"hc_persist_state_gate\":%d,"
                                   "\"decode_slots\":%d,"
                                   "\"prompt_tokens\":1,"
                                   "\"generated_tokens\":%llu,"
@@ -6745,6 +6775,9 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   batch.size(),
                                   i,
                                   base_opt.microbatch_wait_us,
+                                  shared_tp_runtime && shared_tp_runtime->initialized ? 1 : 0,
+                                  req_opt.tp_kv_all_slots_gate ? 1 : 0,
+                                  req_opt.tp_hc_persist_state_gate ? 1 : 0,
                                   req_opt.slots,
                                   (unsigned long long)request_generated,
                                   (unsigned long long)request_continuation,

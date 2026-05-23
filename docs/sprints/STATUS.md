@@ -162,6 +162,23 @@ responses, and reports `145.914985` wall generated tok/s /
 `225.722945` decode generated tok/s. This is now the best TP/EP prototype
 server scaffold, but it is still diagnostic: prompt prefill, tokenizer text,
 selected-token feedback, and exact DS4 attention/FFN HC sequencing remain.
+Sprint 295 added KV/resident-state guardrails for downstream serving work.
+The old resident HTTP path allocated sharded KV but only exercised one
+diagnostic KV slot and reset HC state per serving call. The new
+`--tp-kv-all-slots-gate` / `DS4_V100_TP_EP_KV_ALL_SLOTS=1` updates and
+verifies KV rows for every active slot, and
+`--tp-hc-persist-state-gate` / `DS4_V100_TP_EP_HC_PERSIST_STATE=1` prevents
+the token-major serving loop from resetting resident HC state on each call.
+HTTP `/status`, `/metrics`, and response metadata now report
+`kv_runtime_resident`, `kv_all_slots_gate`, and `hc_persist_state_gate`.
+Direct 32-slot / 256K validation passes with `243.089283` decode tok/s and
+`71.431217` wall tok/s; the wall drop is expected because all-slot KV
+write/read verification is outside the timed decode stage. Launcher-level
+`/v1/completions` with 32 concurrent requests passes with one 32-request
+batch, `32/32` HTTP 200 responses, `58.791255` wall generated tok/s, and
+`206.196887` decode generated tok/s. This is a correctness mode, not an
+optimized KV path. Real per-client session keys, stable slot ownership,
+prefill population, eviction/reset semantics, and token feedback remain.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: codex
-revision: 294
+revision: 295
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -68,6 +68,16 @@ not a serial layer-chain.
   Direct all-layer validation reports `238.789977` projected decode tok/s,
   with `40.646652 ms` spent in the HC-current bridge and `22.678353 ms` in HC
   final expand. This is a serving scaffold, not a final performance target.
+- Sprint 295 added stricter cached-state guardrails for downstream-serving
+  work: `DS4_V100_TP_EP_KV_ALL_SLOTS=1` updates and verifies sharded KV rows
+  for every active slot instead of only the old diagnostic `kv_slot=7`, and
+  `DS4_V100_TP_EP_HC_PERSIST_STATE=1` prevents HC state reset between serving
+  calls. The 32-slot `/v1/completions` run passes with
+  `kv_runtime_resident=1`, `kv_all_slots_gate=1`,
+  `hc_persist_state_gate=1`, `58.791255` wall tok/s, and `206.196887` decode
+  tok/s. This is intentionally a correctness mode: all-slot KV readback is
+  expensive and should be removed only after real session ownership and prefill
+  are implemented.
 - Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
   longer exposes PP/layer-split topology modes. Against the real production
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about

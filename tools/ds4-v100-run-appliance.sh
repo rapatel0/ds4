@@ -149,6 +149,8 @@ fi
 : "${DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD:=0}"
 : "${DS4_V100_TP_EP_HC_FINAL_EXPAND:=0}"
 : "${DS4_V100_TP_EP_HC_CURRENT_INPUT:=0}"
+: "${DS4_V100_TP_EP_HC_PERSIST_STATE:=0}"
+: "${DS4_V100_TP_EP_KV_ALL_SLOTS:=0}"
 : "${DS4_V100_TP_EP_VERBOSE:=0}"
 : "${DS4_V100_TP_EP_BIN:=./tools/ds4-v100-tp-ep-full-layer-smoke}"
 : "${DS4_V100_TP_EP_CONTRACT:=/workspace/logs/sprint245-tp-ep-dense-f16-cache-contract/contract/tp-ep-pack-contract.tsv}"
@@ -709,6 +711,16 @@ esac
 if [ "$DS4_V100_TP_EP_HC_CURRENT_INPUT" -eq 1 ]; then
     DS4_V100_TP_EP_HC_FINAL_EXPAND=1
 fi
+case "$DS4_V100_TP_EP_HC_PERSIST_STATE" in
+    0|false|off) DS4_V100_TP_EP_HC_PERSIST_STATE=0 ;;
+    1|true|on) DS4_V100_TP_EP_HC_PERSIST_STATE=1 ;;
+    *) fail "DS4_V100_TP_EP_HC_PERSIST_STATE must be 0 or 1" ;;
+esac
+case "$DS4_V100_TP_EP_KV_ALL_SLOTS" in
+    0|false|off) DS4_V100_TP_EP_KV_ALL_SLOTS=0 ;;
+    1|true|on) DS4_V100_TP_EP_KV_ALL_SLOTS=1 ;;
+    *) fail "DS4_V100_TP_EP_KV_ALL_SLOTS must be 0 or 1" ;;
+esac
 case "$DS4_V100_TP_EP_VERBOSE" in
     0|false|off) DS4_V100_TP_EP_VERBOSE=0 ;;
     1|true|on) DS4_V100_TP_EP_VERBOSE=1 ;;
@@ -839,6 +851,12 @@ if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
     fi
     if [ "$DS4_V100_TP_EP_HC_CURRENT_INPUT" -eq 1 ]; then
         cmd+=(--tp-hc-current-input-gate)
+    fi
+    if [ "$DS4_V100_TP_EP_HC_PERSIST_STATE" -eq 1 ]; then
+        cmd+=(--tp-hc-persist-state-gate)
+    fi
+    if [ "$DS4_V100_TP_EP_KV_ALL_SLOTS" -eq 1 ]; then
+        cmd+=(--tp-kv-all-slots-gate)
     fi
     if [ "$DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD" -eq 1 ]; then
         cmd+=(--diagnostic-output-head)
@@ -997,6 +1015,8 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_TP_EP_COMPACT_ROUTE_COMPOSE=$DS4_V100_TP_EP_COMPACT_ROUTE_COMPOSE"
     echo "DS4_V100_TP_EP_HC_FINAL_EXPAND=$DS4_V100_TP_EP_HC_FINAL_EXPAND"
     echo "DS4_V100_TP_EP_HC_CURRENT_INPUT=$DS4_V100_TP_EP_HC_CURRENT_INPUT"
+    echo "DS4_V100_TP_EP_HC_PERSIST_STATE=$DS4_V100_TP_EP_HC_PERSIST_STATE"
+    echo "DS4_V100_TP_EP_KV_ALL_SLOTS=$DS4_V100_TP_EP_KV_ALL_SLOTS"
     echo "DS4_V100_TP_EP_VERBOSE=$DS4_V100_TP_EP_VERBOSE"
     echo "DS4_V100_TP_EP_BIN=$DS4_V100_TP_EP_BIN"
     echo "DS4_V100_TP_EP_CONTRACT=$DS4_V100_TP_EP_CONTRACT"
@@ -1065,6 +1085,8 @@ export DS4_V100_TP_EP_RETURN_FP16
 export DS4_V100_TP_EP_COMPACT_ROUTE_COMPOSE
 export DS4_V100_TP_EP_HC_FINAL_EXPAND
 export DS4_V100_TP_EP_HC_CURRENT_INPUT
+export DS4_V100_TP_EP_HC_PERSIST_STATE
+export DS4_V100_TP_EP_KV_ALL_SLOTS
 export DS4_V100_TP_EP_VERBOSE
 export DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE
 export DS4_CUDA_F8_PAIR_SWIGLU_SINGLE_ROWS2="$DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE_ROWS2"
