@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 259
+revision: 260
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -185,6 +185,11 @@ not a serial layer-chain.
   the current decode-speed base at `42.723359 ms/token` /
   `749.004771` projected slot-step tok/s. Shared TP runtime remains opt-in
   because it regresses decode to `681.247356` projected slot-step tok/s.
+- Sprint 260 added resident all-layer TurboMind expert bindings. Active MXFP4
+  expert bytes now stay in VRAM across the 43-layer scaffold
+  (`3449290752` bytes/GPU). The 50-step gate passes `43/43` layers with
+  checksum `204721433`, reduces wall time to `14338.419135 ms`, and reports
+  `44.131138 ms/token` / `725.111599` projected slot-step tok/s.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -855,6 +860,23 @@ per-layer TP runtime reports `42.723359 ms/token` summed decode and
 runtime as an opt-in diagnostic; do not use it as the performance base until
 the EP/dense timing interaction is fixed.
 
+### Sprint 260 - TP/EP Resident Expert Bindings [complete]
+
+Goal: Hoist active TurboMind expert bindings into an all-layer resident cache.
+
+Rationale: A production appliance cannot reload expert weights for every layer.
+Expert weights must be device resident, with only layer selection and execution
+changing during decode.
+
+Outcome: Complete. `tools/ds4-v100-tp-ep-full-layer-smoke` now supports
+`--shared-expert-bindings` and `--local-expert-bindings`; shared is the
+default. The resident cache loads active gated and down MXFP4 expert bindings
+for all 43 layers and all 8 GPUs, reporting `27594326016` aggregate bytes and
+`3449290752` bytes/GPU. The V100 50-step A/B at `32` slots / `256K` passes
+`43/43` layers and checksum `204721433`. Shared bindings reduce wall time from
+`35770.339339 ms` to `14338.419135 ms`; decode proxy is `44.131138 ms/token`
+and `725.111599` projected slot-step tok/s.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -915,6 +937,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 257 hoisted TP runtime/KV allocation across the all-layer TP/EP loop. | Correctness holds and wall time drops, but decode proxy regresses and needs repeat timing. | Repeat/longer gate, then decide whether to keep shared TP runtime as the performance base before expert binding hoist. |
 | 2026-05-23 | Sprint 258 repeated the shared TP runtime path with a 50-step all-layer gate. | The decode regression persisted while checksum stayed stable. | Investigate EP timing under shared runtime, or keep Sprint 256 as decode-speed base while hoisting expert bindings. |
 | 2026-05-23 | Sprint 259 added a same-binary TP runtime A/B and made local TP runtime the default. | Shared TP runtime is correct but slower for decode in the same executable. | Hoist expert descriptor bindings or collapse EP/dense/compose boundaries while preserving the local-runtime performance base. |
+| 2026-05-23 | Sprint 260 hoisted active TurboMind expert bindings into a resident all-layer cache. | This matches the production appliance requirement and removes per-layer expert reload churn. | Move toward a real serving loop or reduce the EP/dense/compose boundary now that major setup state is resident. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

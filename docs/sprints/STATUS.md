@@ -4,14 +4,16 @@ Last updated: 2026-05-23
 
 ## Topline
 
-Current TP/EP implementation status: Sprint 259 added a same-binary TP runtime
-sharing toggle and ran a direct 50-step A/B. Local per-layer TP runtime is the
-current decode-speed base: `43/43` layers pass at `32` slots / `256K`, checksum
-`204721433`, `42.723359 ms/token` summed decode, and `749.004771` projected
-slot-step tok/s. Shared TP runtime is correct and lowers setup wall time, but
-it regresses projected decode throughput to `681.247356` slot-step tok/s in
-the same binary. The tool now defaults to local TP runtime and exposes
-`--share-tp-runtime` as an opt-in diagnostic.
+Current TP/EP implementation status: Sprint 260 added resident all-layer
+TurboMind expert bindings. The scaffold now keeps shared dense cache, shared
+TurboMind API, shared rank buffers, and shared active MXFP4 expert weights
+resident while using local per-layer TP runtime as the decode-speed base. The
+50-step A/B at `32` slots / `256K` passes `43/43` layers with checksum
+`204721433`. Shared expert bindings allocate `3449290752` bytes/GPU, reduce
+wall time from `35770.339339 ms` to `14338.419135 ms`, and report
+`44.131138 ms/token` summed decode / `725.111599` projected slot-step tok/s.
+Local expert bindings remain available with `--local-expert-bindings` for
+diagnostics, but shared expert bindings are the production-shaped default.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

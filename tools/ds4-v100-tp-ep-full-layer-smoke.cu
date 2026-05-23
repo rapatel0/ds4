@@ -294,6 +294,20 @@ struct SharedTpRuntime {
     bool initialized = false;
 };
 
+struct LayerExpertCache {
+    DescriptorBindings bindings;
+    PackedExperts gated[kGpus];
+    PackedExperts down[kGpus];
+    uint64_t bytes = 0;
+    bool initialized = false;
+};
+
+struct SharedExpertBindings {
+    LayerExpertCache layers[43];
+    uint64_t bytes = 0;
+    bool initialized = false;
+};
+
 struct DecodeLoopStats {
     bool enabled = false;
     bool pass = true;
@@ -345,6 +359,7 @@ struct Options {
     bool skip_descriptor_checks = false;
     bool skip_predecode_probes = false;
     bool share_tp_runtime = false;
+    bool share_expert_bindings = true;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -764,7 +779,8 @@ void usage(const char *argv0) {
                  "       [--dense-hmma-compose] [--dense-f16-cublas-compose]\n"
                  "       [--dense-f16-cache-compose] [--all-layers]\n"
                  "       [--skip-descriptor-checks] [--skip-predecode-probes]\n"
-                 "       [--share-tp-runtime] [--local-tp-runtime]\n",
+                 "       [--share-tp-runtime] [--local-tp-runtime]\n"
+                 "       [--shared-expert-bindings] [--local-expert-bindings]\n",
                  argv0);
 }
 
@@ -850,6 +866,10 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->share_tp_runtime = true;
         } else if (std::strcmp(arg, "--local-tp-runtime") == 0) {
             opt->share_tp_runtime = false;
+        } else if (std::strcmp(arg, "--shared-expert-bindings") == 0) {
+            opt->share_expert_bindings = true;
+        } else if (std::strcmp(arg, "--local-expert-bindings") == 0) {
+            opt->share_expert_bindings = false;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -2089,6 +2109,54 @@ int pack_descriptor_set(int device, const TmIndexEntry &entry, int rank,
     return 0;
 }
 
+void free_layer_expert_cache(LayerExpertCache *layer) {
+    if (!layer) return;
+    for (int p = 0; p < kGpus; ++p) {
+        free_packed(layer->gated[p]);
+        free_packed(layer->down[p]);
+    }
+    *layer = LayerExpertCache{};
+}
+
+void close_shared_expert_bindings(SharedExpertBindings *shared);
+
+int open_shared_expert_bindings(const Options &opt, SharedExpertBindings *shared) {
+    std::vector<int> active;
+    for (int e = 0; e < kActiveLocalExperts; ++e) active.push_back(e);
+
+    for (int layer = 0; layer < 43; ++layer) {
+        LayerExpertCache &cache = shared->layers[layer];
+        if (parse_tm_index(opt.tm_index_path, layer, &cache.bindings) != 0) {
+            std::fprintf(stderr, "tm index parse failed for layer %d\n", layer);
+            close_shared_expert_bindings(shared);
+            return 1;
+        }
+        for (int p = 0; p < kGpus; ++p) {
+            uint64_t layer_bytes = 0;
+            if (pack_descriptor_set(opt.devices[p], cache.bindings.gated, p, active,
+                                    opt.pack_dir, &cache.gated[p], &layer_bytes) != 0 ||
+                pack_descriptor_set(opt.devices[p], cache.bindings.down, p, active,
+                                    opt.pack_dir, &cache.down[p], &layer_bytes) != 0) {
+                close_shared_expert_bindings(shared);
+                return 2;
+            }
+            cache.bytes += layer_bytes;
+            shared->bytes += layer_bytes;
+        }
+        cache.initialized = true;
+    }
+    shared->initialized = true;
+    return 0;
+}
+
+void close_shared_expert_bindings(SharedExpertBindings *shared) {
+    if (!shared) return;
+    for (int layer = 0; layer < 43; ++layer) {
+        free_layer_expert_cache(&shared->layers[layer]);
+    }
+    *shared = SharedExpertBindings{};
+}
+
 int run_gate(RankState &rank, const Api &api) {
     return api.mmgs(rank.d_a, nullptr, rank.d_offsets, kLocalExperts, rank.routes,
                     (const void * const *)rank.gated.d_w_table,
@@ -2700,7 +2768,8 @@ int run_layer(const Options &opt,
               const DenseF16Cache *shared_dense_f16_cache,
               const SharedApi *shared_api,
               SharedRankBuffers *shared_rank_buffers,
-              SharedTpRuntime *shared_tp_runtime) {
+              SharedTpRuntime *shared_tp_runtime,
+              const SharedExpertBindings *shared_expert_bindings) {
     std::vector<ContractRow> rows;
     LayerStats layer_stats;
     if (parse_contract(opt.contract_path, opt.layer, &rows, &layer_stats) != 0 ||
@@ -2710,9 +2779,15 @@ int run_layer(const Options &opt,
         return 2;
     }
     DescriptorBindings bindings;
-    if (parse_tm_index(opt.tm_index_path, opt.layer, &bindings) != 0) {
-        std::fprintf(stderr, "tm index parse failed for layer %d\n", opt.layer);
-        return 2;
+    const LayerExpertCache *layer_expert_cache = nullptr;
+    if (shared_expert_bindings) {
+        layer_expert_cache = &shared_expert_bindings->layers[opt.layer];
+        bindings = layer_expert_cache->bindings;
+    } else {
+        if (parse_tm_index(opt.tm_index_path, opt.layer, &bindings) != 0) {
+            std::fprintf(stderr, "tm index parse failed for layer %d\n", opt.layer);
+            return 2;
+        }
     }
 
     const auto descriptor_start = std::chrono::steady_clock::now();
@@ -2935,14 +3010,22 @@ int run_layer(const Options &opt,
         min_routes = std::min(min_routes, r.routes);
         max_routes = std::max(max_routes, r.routes);
 
-        std::vector<int> active;
-        for (int e = 0; e < kActiveLocalExperts; ++e) active.push_back(e);
-        if (pack_descriptor_set(r.device, bindings.gated, p, active, opt.pack_dir,
-                                &r.gated, &ep_loaded_bytes) != 0 ||
-            pack_descriptor_set(r.device, bindings.down, p, active, opt.pack_dir,
-                               &r.down, &ep_loaded_bytes) != 0) {
-            close_local_runtime();
-            return 8;
+        if (layer_expert_cache) {
+            r.gated = layer_expert_cache->gated[p];
+            r.down = layer_expert_cache->down[p];
+            ep_loaded_bytes += layer_expert_cache->gated[p].d_w_active.size()
+                ? layer_expert_cache->bytes / kGpus
+                : 0;
+        } else {
+            std::vector<int> active;
+            for (int e = 0; e < kActiveLocalExperts; ++e) active.push_back(e);
+            if (pack_descriptor_set(r.device, bindings.gated, p, active, opt.pack_dir,
+                                    &r.gated, &ep_loaded_bytes) != 0 ||
+                pack_descriptor_set(r.device, bindings.down, p, active, opt.pack_dir,
+                                   &r.down, &ep_loaded_bytes) != 0) {
+                close_local_runtime();
+                return 8;
+            }
         }
         layer_stats.gpu[p].ep_loaded_bytes = ep_loaded_bytes;
     }
@@ -3263,9 +3346,9 @@ int run_layer(const Options &opt,
     for (int p = 0; p < kGpus; ++p) {
         RankState &r = ranks[p];
         CHECK_CUDA(cudaSetDevice(r.device));
-        free_packed(r.gated);
+        if (!layer_expert_cache) free_packed(r.gated);
         r.gated = PackedExperts{};
-        free_packed(r.down);
+        if (!layer_expert_cache) free_packed(r.down);
         r.down = PackedExperts{};
         if (!shared_rank_buffers) {
             CHECK_CUDA(cudaFree(r.d_offsets));
@@ -3304,7 +3387,7 @@ int main(int argc, char **argv) {
     }
 
     if (!opt.all_layers) {
-        return run_layer(opt, nullptr, nullptr, nullptr, nullptr, nullptr);
+        return run_layer(opt, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 
     DenseF16Cache all_layer_dense_f16_cache;
@@ -3382,6 +3465,28 @@ int main(int argc, char **argv) {
                     "mode\tlocal_per_layer\tPASS\n", kGpus, opt.slots);
     }
 
+    SharedExpertBindings shared_expert_bindings;
+    if (opt.share_expert_bindings &&
+        open_shared_expert_bindings(opt, &shared_expert_bindings) != 0) {
+        close_shared_tp_runtime(&shared_tp_runtime);
+        close_shared_rank_buffers(&shared_rank_buffers);
+        close_shared_api(&shared_api);
+        if (shared_dense_f16_cache) {
+            free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+        }
+        return 9;
+    }
+    if (shared_expert_bindings.initialized) {
+        std::printf("tp_ep_all_layer_expert_bindings_shared\tlayers\t43\tdevices\t%d\t"
+                    "bytes\t%llu\tbytes_per_gpu\t%llu\tPASS\n",
+                    kGpus,
+                    (unsigned long long)shared_expert_bindings.bytes,
+                    (unsigned long long)(shared_expert_bindings.bytes / kGpus));
+    } else {
+        std::printf("tp_ep_all_layer_expert_bindings_shared\tlayers\t43\tdevices\t%d\t"
+                    "mode\tlocal_per_layer\tPASS\n", kGpus);
+    }
+
     int pass_layers = 0;
     double sum_decode_ms = 0.0;
     double sum_ep_ms = 0.0;
@@ -3395,8 +3500,10 @@ int main(int argc, char **argv) {
         LayerRunSummary s;
         SharedTpRuntime *tp_runtime_arg =
             shared_tp_runtime.initialized ? &shared_tp_runtime : nullptr;
+        const SharedExpertBindings *expert_arg =
+            shared_expert_bindings.initialized ? &shared_expert_bindings : nullptr;
         const int rc = run_layer(layer_opt, &s, shared_dense_f16_cache, &shared_api,
-                                 &shared_rank_buffers, tp_runtime_arg);
+                                 &shared_rank_buffers, tp_runtime_arg, expert_arg);
         std::printf("tp_ep_all_layer_item\tlayer\t%d\tratio\t%d\t"
                     "total_rows\t%llu\tdense_rows\t%llu\tcontrol_rows\t%llu\t"
                     "expert_rows\t%llu\tkv_rows\t%llu\tcomp_rows\t%llu\t"
@@ -3431,11 +3538,15 @@ int main(int argc, char **argv) {
             std::printf("tp_ep_all_layer_scaffold\tlayers\t43\tpass_layers\t%d\t"
                         "failed_layer\t%d\tdescriptor_checks\t%d\tpredecode_probes\t%d\t"
                         "shared_api\t%d\tshared_rank_buffers\t%d\tshared_tp_runtime\t%d\t"
+                        "shared_expert_bindings\t%d\t"
                         "wall_ms\t%.6f\tFAIL\n",
                         pass_layers, layer, opt.skip_descriptor_checks ? 0 : 1,
                         opt.skip_predecode_probes ? 0 : 1, shared_api.initialized ? 1 : 0,
                         shared_rank_buffers.initialized ? 1 : 0,
-                        shared_tp_runtime.initialized ? 1 : 0, wall_ms);
+                        shared_tp_runtime.initialized ? 1 : 0,
+                        shared_expert_bindings.initialized ? 1 : 0,
+                        wall_ms);
+            close_shared_expert_bindings(&shared_expert_bindings);
             close_shared_tp_runtime(&shared_tp_runtime);
             close_shared_rank_buffers(&shared_rank_buffers);
             close_shared_api(&shared_api);
@@ -3455,6 +3566,7 @@ int main(int argc, char **argv) {
                 "slots\t%d\tctx\t262144\tdecode_steps_per_layer\t%d\t"
                 "descriptor_checks\t%d\tpredecode_probes\t%d\tshared_api\t%d\t"
                 "shared_rank_buffers\t%d\tshared_tp_runtime\t%d\t"
+                "shared_expert_bindings\t%d\t"
                 "sum_decode_ms_per_token\t%.6f\tprojected_slot_step_tok_s\t%.6f\t"
                 "sum_ep_ms\t%.6f\tsum_dense_ms\t%.6f\tsum_compose_ms\t%.6f\t"
                 "wall_ms\t%.6f\tchecksum\t%llu\tPASS\n",
@@ -3464,8 +3576,10 @@ int main(int argc, char **argv) {
                 shared_api.initialized ? 1 : 0,
                 shared_rank_buffers.initialized ? 1 : 0,
                 shared_tp_runtime.initialized ? 1 : 0,
+                shared_expert_bindings.initialized ? 1 : 0,
                 sum_decode_ms, slot_step_tok_s, sum_ep_ms, sum_dense_ms,
                 sum_compose_ms, wall_ms, (unsigned long long)checksum);
+    close_shared_expert_bindings(&shared_expert_bindings);
     close_shared_tp_runtime(&shared_tp_runtime);
     close_shared_rank_buffers(&shared_rank_buffers);
     close_shared_api(&shared_api);
