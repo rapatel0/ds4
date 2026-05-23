@@ -1,7 +1,7 @@
 # Sprint 217 - 32-Slot 256K Admission Probe
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete
 
 ## Overview
 
@@ -78,24 +78,24 @@ sprint intentionally stays on the current PP/layer serving path.
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists and is committed before execution evidence is staged.
-- [ ] Focused `256K`/`32`-slot gate wrapper exists and passes `bash -n`.
-- [ ] Launcher `--check` with the experimental cap override passes or records
+- [x] Sprint plan exists and is committed before execution evidence is staged.
+- [x] Focused `256K`/`32`-slot gate wrapper exists and passes `bash -n`.
+- [x] Launcher `--check` with the experimental cap override passes or records
       a clear fail-closed reason.
-- [ ] V100 focused sustained decode run completes or fails with the exact
+- [x] V100 focused sustained decode run completes or fails with the exact
       allocator/OOM/admission error recorded.
-- [ ] If the run completes, token match, generated tok/s, continuation tok/s,
+- [x] If the run completes, token match, generated tok/s, continuation tok/s,
       prompt tok/s, GPU utilization, and max memory are recorded.
-- [ ] If worst-GPU memory reserve is acceptable, `ctx=262144` default admission
+- [x] If worst-GPU memory reserve is acceptable, `ctx=262144` default admission
       is promoted to `32` slots and validated with launcher `--check` without
       the override.
-- [ ] If reserve is unacceptable or the run fails, the cap remains `16` and the
+- [x] If reserve is unacceptable or the run fails, the cap remains `16` and the
       blocker is documented.
-- [ ] Logs are copied to
+- [x] Logs are copied to
       `logs/from-cluster/sprint217-256k-32slot-gate/`.
-- [ ] `docs/sprints/STATUS.md`, `docs/sprints/VISION.md`, and the appliance
+- [x] `docs/sprints/STATUS.md`, `docs/sprints/VISION.md`, and the appliance
       runbook are updated.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Changes are committed with explicit `git add` paths.
 
 ## Verification Strategy
 
@@ -163,3 +163,94 @@ local model mounts, and persistent appliance pack.
 - Sprint 216 MTP decision, which moves the next practical lever back to slot
   admission/KV/attention.
 - V100 build pod `llm/llamacpp-build-8gpu`.
+
+## Execution
+
+Added `tools/ds4-v100-256k-32slot-gate.sh`, a focused admission probe that:
+
+- runs launcher `--check` with `DS4_V100_EXPERIMENTAL_CTX_SLOT_CAP=<slots>`;
+- exports the production TurboMind/F8 flags;
+- runs the sustained decode harness at `ctx=262144`;
+- writes `slot_gate_summary.json` and `slot_gate_summary.md`;
+- exits non-zero when the benchmark fails.
+
+Local validation:
+
+```text
+bash -n tools/ds4-v100-256k-32slot-gate.sh
+```
+
+## V100 Evidence
+
+The primary `32`-slot probe used:
+
+```text
+cd /workspace/ds4-sprint181
+./tools/ds4-v100-256k-32slot-gate.sh \
+  --log-dir /workspace/logs/sprint217-256k-32slot-gate \
+  --port-base 19100 \
+  --requests 32 \
+  --warmup-requests 0 \
+  --tokens 64 \
+  --ctx 262144 \
+  --slots 32
+```
+
+Launcher check with the experimental cap override passed:
+
+```text
+DS4_V100_EXPERIMENTAL_CTX_SLOT_CAP=32
+DS4_V100_CTX=262144
+DS4_V100_SLOTS=32
+DS4_V100_ACTIVE_MICROBATCH=32
+```
+
+The actual benchmark failed before any successful generation request:
+
+| Active slots | Status 200 | Status other | Token match | Max GPU util | Max memory used | Result |
+|---:|---:|---:|---:|---:|---:|---|
+| 18 | 0 | 18 | 0/18 | `68%` | `24076 MiB` | fail |
+| 20 | 0 | 20 | 0/20 | `76%` | `24084 MiB` | fail |
+| 24 | 0 | 24 | 0/24 | `81%` | `24096 MiB` | fail |
+| 32 | 0 | 32 | 0/32 | `90%` | `24124 MiB` | fail |
+
+The 32-slot failure is not a VRAM fit failure. Worst observed memory stayed
+near Sprint 215's successful `32`-slot/`128K` run. A manual single-request
+server at `slots=32`, `active_microbatch=32`, `ctx=262144` returned HTTP 200,
+which proves the resident pack can open and a single request can generate.
+
+The failing shape is the active batch above 16 at `256K`. A 32-concurrent
+manual reproduction with the production flags returned HTTP 500 for all
+requests:
+
+```text
+{"error":"output-head fast selected-token sequence failed"}
+```
+
+Disabling the output-head fastpath changed the error to:
+
+```text
+{"error":"output-head logits contained non-finite values"}
+```
+
+That makes the blocker upstream hidden-state/logit non-finites at the
+`256K`, active-batch-greater-than-16 shape, not the output-head fastpath alone.
+
+Evidence:
+
+```text
+logs/from-cluster/sprint217-256k-32slot-gate/
+logs/from-cluster/sprint217-256k-24slot-gate/
+logs/from-cluster/sprint217-256k-20slot-gate/
+logs/from-cluster/sprint217-256k-18slot-gate/
+```
+
+## Decision
+
+Do not promote `ctx=262144` admission above `16` slots. The cap is protecting a
+real correctness boundary, not only conservative VRAM accounting.
+
+The next practical-serving sprint should isolate the non-finite source for
+`256K` active batches above 16. The likely target is the long-context
+attention/KV path or a batch-width assumption in a fused projection/FFN stage,
+because single-request `slots=32` works and memory headroom remains adequate.

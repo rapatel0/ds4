@@ -133,6 +133,19 @@ fields were `target_forwards=16`, `effective_output_tokens=16`, and
 current replay batching is across slots at the same decode step, while MTP
 needs a one-slot multi-position target verification/state-advance primitive to
 save target forwards. MTP remains default-off for production throughput.
+Sprint 217 tested whether the `256K` slot cap was merely conservative. It is
+not. The launcher `--check` passes with
+`DS4_V100_EXPERIMENTAL_CTX_SLOT_CAP` for 18/20/24/32 active slots, and the
+resident pack opens, but real concurrent generation fails above the production
+cap. The 18/20/24/32-slot probes all returned `0` successful requests with
+HTTP 500s before any generation batch was counted; worst observed memory stayed
+around `24.1 GiB`, so this is not a VRAM-fit failure. Manual 32-concurrent
+reproduction reported `output-head fast selected-token sequence failed`; with
+the fastpath disabled it reported `output-head logits contained non-finite
+values`. A single request with `slots=32`, `active_microbatch=32`, and `256K`
+does return HTTP 200. The cap remains `16` slots at `256K`; the next practical
+serving target is isolating the non-finite source in the long-context
+active-batch-greater-than-16 path.
 
 Current maximum-context production mode remains the Sprint 215 16-slot/256K
 appliance result, while the best practical long-context throughput mode is now

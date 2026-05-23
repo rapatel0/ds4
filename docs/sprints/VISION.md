@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: sprint-execute
-revision: 216
+revision: 217
 ---
 
 # Vision: DS4 V100 Appliance
@@ -141,6 +141,17 @@ one slot, advance target KV/state over the accepted prefix, and avoid replaying
 the same target work serially. The practical-serving branch should now either
 build that MTP verification/state-advance primitive explicitly or pivot to the
 256K attention/KV execution boundary.
+Sprint 217 tests the second near-term practical lever: raising `256K` serving
+from 16 active slots toward the desired 32 active slots. This also rejects the
+easy path. The experimental launcher override proves admission can be requested
+and the model still fits in VRAM, but active batches above 16 fail correctness
+before generation completes. The 18/20/24/32-slot `256K` probes all returned
+HTTP 500 with zero successful generations while max observed memory stayed near
+`24.1 GiB`; manual reproduction shows non-finite logits when the output-head
+fastpath is disabled. The vision consequence is that `256K`/32-slot serving is
+blocked by a numerical or batch-width bug in the long-context active-batch path,
+not by capacity. The next sprint should isolate that non-finite source directly
+instead of changing admission caps or continuing MTP accounting.
 
 ## Current State
 

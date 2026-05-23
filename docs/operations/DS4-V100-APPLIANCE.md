@@ -276,6 +276,11 @@ Latest practical long-context matrix:
 
 The `32`-slot/`256K` rejection is intentional:
 `DS4_V100_SLOTS=32 exceeds ctx=262144 admission cap 16`.
+Sprint 217 tested the cap with `DS4_V100_EXPERIMENTAL_CTX_SLOT_CAP` at
+18/20/24/32 active slots. The model still opened and max observed memory stayed
+near `24.1 GiB`, but all active-batch widths above 16 failed generation with
+non-finite output/logit behavior. Keep the production cap at 16 until the
+`256K` long-context active-batch path is fixed.
 
 Focused MTP speculative gate:
 

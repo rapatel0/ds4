@@ -1,0 +1,7 @@
+{
+  "bench_exit_code": 1,
+  "decision": "fail_bench",
+  "launcher_check_exit_code": 0,
+  "memory_promote_max_mib": 30000.0,
+  "schema": "ds4_v100_256k_32slot_gate.v1"
+}
