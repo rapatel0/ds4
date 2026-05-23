@@ -54,6 +54,19 @@ int ds4_v100_mtp_forward_run_host(ds4_v100_mtp_forward *fwd,
                                   char *err,
                                   size_t errlen);
 
+int ds4_v100_mtp_forward_run_host_next_hc(ds4_v100_mtp_forward *fwd,
+                                          const float *embed,
+                                          const float *prev_hc,
+                                          uint32_t position,
+                                          uint32_t top_k,
+                                          uint32_t *tokens,
+                                          float *logits,
+                                          float *next_hc,
+                                          uint64_t next_hc_values,
+                                          ds4_v100_mtp_forward_report *report,
+                                          char *err,
+                                          size_t errlen);
+
 void ds4_v100_mtp_forward_close(ds4_v100_mtp_forward *fwd);
 
 #ifdef __cplusplus

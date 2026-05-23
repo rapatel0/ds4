@@ -1,7 +1,7 @@
 # Sprint 222 - MTP Draft Block Chaining Diagnostic
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete
 
 ## Overview
 
@@ -89,19 +89,68 @@ forward savings.
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists and is committed before implementation evidence.
-- [ ] Existing MTP forward ABI remains source-compatible.
-- [ ] New MTP forward path can return next-HC.
-- [ ] `tools/ds4-v100-replay --mtp-draft-block-smoke N` exists and fails
+- [x] Sprint plan exists and is committed before implementation evidence.
+- [x] Existing MTP forward ABI remains source-compatible.
+- [x] New MTP forward path can return next-HC.
+- [x] `tools/ds4-v100-replay --mtp-draft-block-smoke N` exists and fails
       closed unless MTP model and one-slot mode are configured.
-- [ ] Local validation passes.
-- [ ] V100 build passes.
-- [ ] V100 draft-block smoke runs on the production appliance pack.
-- [ ] Logs are copied to
+- [x] Local validation passes.
+- [x] V100 build passes.
+- [x] V100 draft-block smoke runs on the production appliance pack.
+- [x] Logs are copied to
       `logs/from-cluster/sprint222-mtp-draft-block-smoke/`.
-- [ ] Docs state whether chained MTP drafts justify the next MTP optimization
+- [x] Docs state whether chained MTP drafts justify the next MTP optimization
       sprint.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Changes are committed with explicit `git add` paths.
+
+## Execution Evidence
+
+Local validation:
+
+```text
+git diff --check
+make -j8 tools/ds4-v100-mtp-forward-common.o tools/ds4-v100-replay.o
+```
+
+V100 build:
+
+```text
+cd /workspace/ds4-sprint181
+make -j80 CUDA_ARCH=sm_70 tools/ds4-v100-replay
+```
+
+V100 draft-block smoke on the production appliance pack:
+
+```text
+ds4-v100-replay: mtp_draft_block_smoke block_tokens=4 first_token=926 first_hex=3136 draft_tokens=1,0,1,0 target_tokens=1,380,5,380 accepted_prefix_len=1 target_forwards=4 target_tokens_verified=4 effective_output_tokens=2 speculative_saves=0 snapshot_bytes=30107648 mtp_ms=18.081 verify_ms=231.553 mtp_raw_row=21 mtp_n_raw=1 ok
+```
+
+V100 negative guard:
+
+```text
+ds4-v100-replay: --mtp-draft-block-smoke currently requires --slots 1 --active-microbatch 1
+```
+
+Evidence is stored in
+`logs/from-cluster/sprint222-mtp-draft-block-smoke/`.
+
+## Decision
+
+Ship the diagnostic and keep production MTP throughput default-off.
+
+Sprint 222 proves that the MTP helper can expose next-HC and chain a real
+draft block without target forwards between draft steps. It also proves that
+the Sprint 221 target block verifier can check that block after snapshot
+restore.
+
+The first production-pack fixture is not strong enough to justify optimizing
+MTP serving yet. The 4-token draft block accepted only the first draft token
+(`accepted_prefix_len=1`), while forced target verification still performed
+`target_forwards=4` and reported `speculative_saves=0`. The next MTP-specific
+step should be an acceptance matrix across representative prompts and context
+tiers. If low accepted prefixes repeat, practical serving work should pivot
+back to attention/KV or a true persistent low-bit execution boundary rather
+than spending another sprint on MTP verifier speed.
 
 ## Verification Strategy
 

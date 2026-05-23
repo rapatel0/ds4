@@ -600,9 +600,16 @@ verification with KV/state commit or rollback for the accepted prefix. Sprint
 (`--target-block-smoke N`), with V100 proof that snapshot/restore and forced
 target-block replay match the greedy baseline. It is not a throughput path yet:
 the diagnostic still reports `target_forwards=effective_output_tokens` and
-`speculative_saves=0`. Do not treat MTP as a throughput feature until a true
-speculative verifier can batch or otherwise reduce target forwards over drafted
-tokens.
+`speculative_saves=0`. Sprint 222 adds the matching draft-side diagnostic:
+`--mtp-draft-block-smoke N` opens the real MTP sidecar, chains MTP drafts by
+feeding the previous MTP `next_hc`, then verifies the drafted block with the
+target verifier. The first production-pack 4-token fixture passed mechanically
+but accepted only one drafted token:
+`draft_tokens=1,0,1,0`, `target_tokens=1,380,5,380`,
+`accepted_prefix_len=1`, `target_forwards=4`, `effective_output_tokens=2`, and
+`speculative_saves=0`. Do not treat MTP as a throughput feature until a broader
+acceptance matrix proves useful accepted-prefix length and a true speculative
+verifier can batch or otherwise reduce target forwards over drafted tokens.
 
 ## Generate
 

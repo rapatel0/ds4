@@ -160,7 +160,18 @@ V100 production-pack smoke passed for a 4-token block: first token bytes
 `accepted_prefix_len=4`, `target_tokens_verified=4`,
 `effective_output_tokens=4`, and `speculative_saves=0`; a negative guard fails
 closed for multi-slot use. This is the right MTP boundary, but not yet an MTP
-speedup because the block body is still serial target execution.
+speedup because the block body is still serial target execution. Sprint 222
+then connected real chained MTP draft blocks to that boundary. The helper can
+now return MTP next-HC, and `--mtp-draft-block-smoke 4` produced a real draft
+sequence without target forwards between draft steps. The V100 production-pack
+fixture reported `draft_tokens=1,0,1,0`, `target_tokens=1,380,5,380`,
+`accepted_prefix_len=1`, `target_forwards=4`, `target_tokens_verified=4`,
+`effective_output_tokens=2`, `speculative_saves=0`, `mtp_ms=18.081`, and
+`verify_ms=231.553`; the multi-slot guard fails closed. This ships the
+diagnostic but does not promote MTP throughput. The next MTP decision requires
+a broader acceptance matrix; if accepted prefixes stay low, the practical
+serving branch should pivot back to attention/KV or persistent low-bit
+execution.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit

@@ -157,6 +157,22 @@ cold `STARTUP_WARMUP=0` path remains capped at 16. The vision consequence is
 positive: the practical 32-slot/256K target is usable in the warmed production
 appliance path, and the remaining issue is to replace the warmup dependency
 with an explicit initialization fix.
+Sprint 220 turns that warmed path into the documented operator default rather
+than an experiment-only mode. The env example and deployment smoke now launch
+the production appliance pack with `ctx=262144`, `slots=32`,
+`active_microbatch=32`, startup warmup `auto`, warmed readiness in status and
+metrics, and bounded generation returning token bytes `3136`.
+Sprints 221 and 222 then reopened MTP as a possible decode multiplier with the
+right accounting boundaries. Sprint 221 added target snapshot/restore and
+forced block verification. Sprint 222 added MTP next-HC readout and chained
+real MTP draft blocks through that verifier. The result is technically useful
+but not a throughput promotion: the first 4-token production-pack draft block
+accepted only one token (`draft_tokens=1,0,1,0` versus
+`target_tokens=1,380,5,380`, `accepted_prefix_len=1`) and still reported
+`speculative_saves=0`. MTP should stay default-off until a broader prompt
+matrix shows enough accepted prefix length to justify optimizing the verifier;
+otherwise the practical-serving branch should return to attention/KV or
+persistent low-bit execution.
 
 ## Current State
 
@@ -3126,6 +3142,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-23 | Completed Sprint 213 routed-FFN materialized split-reduce gate. | Added the opt-in `fused6_split_reduce` executor and `ggml_turbomind_ds4_reduce6_half_to_float` diagnostic reducer. V100 focused correctness passed and the six-route FFN sequence improved from `0.1391 ms` atomic to `0.1290 ms` materialized. Full scheduler smoke passed with `tm_layers=43`, and served 16-slot/256K A/B preserved `16/16` token match with `43` graph captures, `129` launches, and `0` failures. Served continuation improved only `60.236036 -> 60.655009` tok/s, below the promotion gate, so defaults remain `fused6_reduce + graph`. The next sprint should build a tile-local/persistent routed-FFN workbench, not another reducer wrapper. | Sprint 214 |
 | 2026-05-23 | Shipped Sprint 220 warmed production deployment defaults. | The operator env example now defaults to the Sprint 219 validated production appliance mode: `/workspace/packs/ds4-appliance-full-tm-gated-s181`, `ctx=262144`, `slots=32`, `active_microbatch=32`, and startup warmup `auto`. The production deployment smoke now supports `--appliance-dir`, accepts `32` warmed slots at `256K`, and validates `/v100/status` plus `/metrics` warmed-readiness fields. V100 deployment smoke passed with launcher, health, status, metrics, and two bounded generation requests returning first-token bytes `3136`. This does not change the throughput ceiling, but it makes the maximum-context production mode deployable through the documented operator path. | Sprint 221 |
 | 2026-05-23 | Completed Sprint 221 MTP target block verification primitive. | Added replay-level all-stage target snapshot wrappers and `ds4_v100_replay_verify_token_block()`, plus `tools/ds4-v100-replay --target-block-smoke N`. V100 validation on the production appliance pack passed for a 4-token forced block: greedy fixture bytes remained `3136`, snapshot size was `30107648` bytes, first and restored block passes matched the baseline, and accounting reported `target_forwards=4`, `accepted_prefix_len=4`, `target_tokens_verified=4`, `effective_output_tokens=4`, and `speculative_saves=0`. The negative guard fails closed for multi-slot use. This establishes the MTP verification/state boundary but does not yet improve throughput; Sprint 222 should replace the serial block body with graph-captured/batched target verification or connect real MTP draft blocks to this API under exact rollback semantics. | Sprint 222 |
+| 2026-05-23 | Completed Sprint 222 MTP draft block chaining diagnostic. | Added an MTP forward sibling API that can return `next_hc`, plus `tools/ds4-v100-replay --mtp-draft-block-smoke N` to chain real MTP drafts and verify them through the Sprint 221 target-block boundary. V100 production-pack validation passed mechanically: first token bytes remained `3136`, the 4-token draft block was `1,0,1,0`, target verification returned `1,380,5,380`, `accepted_prefix_len=1`, `target_forwards=4`, `effective_output_tokens=2`, and `speculative_saves=0`; the multi-slot guard fails closed. This ships the diagnostic but keeps MTP default-off for throughput. The next MTP step should be an acceptance matrix before any verifier-speed sprint; low acceptance should pivot practical serving back to attention/KV or persistent low-bit execution. | Sprint 223 |
 
 ## Open Questions
 

@@ -522,19 +522,24 @@ int ds4_v100_mtp_forward_open(ds4_v100_mtp_forward **out,
     return 0;
 }
 
-int ds4_v100_mtp_forward_run_host(ds4_v100_mtp_forward *fwd,
-                                  const float *embed,
-                                  const float *prev_hc,
-                                  uint32_t position,
-                                  uint32_t top_k,
-                                  uint32_t *tokens,
-                                  float *out_logits,
-                                  ds4_v100_mtp_forward_report *report,
-                                  char *err,
-                                  size_t errlen) {
+int ds4_v100_mtp_forward_run_host_next_hc(ds4_v100_mtp_forward *fwd,
+                                          const float *embed,
+                                          const float *prev_hc,
+                                          uint32_t position,
+                                          uint32_t top_k,
+                                          uint32_t *tokens,
+                                          float *out_logits,
+                                          float *next_hc,
+                                          uint64_t next_hc_values,
+                                          ds4_v100_mtp_forward_report *report,
+                                          char *err,
+                                          size_t errlen) {
     if (!fwd || !embed || !prev_hc || !tokens || !out_logits ||
         top_k == 0 || top_k > DS4_V100_MTP_FORWARD_MAX_TOPK) {
         return mtpf_error(err, errlen, "invalid MTP forward run input");
+    }
+    if (next_hc && next_hc_values < MTPF_HC_DIM) {
+        return mtpf_error(err, errlen, "MTP forward next_hc buffer is too small");
     }
     if (!ds4_gpu_set_device(fwd->gpu)) {
         return mtpf_error(err, errlen, "failed to set MTP forward device");
@@ -641,6 +646,7 @@ int ds4_v100_mtp_forward_run_host(ds4_v100_mtp_forward *fwd,
         ds4_gpu_arena_f32_rms_norm_f32(arena, &fwd->views.output_norm, row0, row1, MTPF_N_EMBD, 1, MTPF_RMS_EPS) != 0 ||
         ds4_gpu_arena_bf16_matmul_f32(fwd->output_arena, &fwd->output_view, row1, logits_t) != 0 ||
         !ds4_gpu_synchronize() ||
+        (next_hc && !ds4_gpu_tensor_read(ffn_next_t, 0, next_hc, hc_bytes)) ||
         !ds4_gpu_tensor_read(logits_t, 0, all_logits, logits_bytes)) {
         mtpf_error(err, errlen, "MTP forward GPU sequence failed");
         goto done;
@@ -663,6 +669,30 @@ int ds4_v100_mtp_forward_run_host(ds4_v100_mtp_forward *fwd,
 
 done:
     return rc;
+}
+
+int ds4_v100_mtp_forward_run_host(ds4_v100_mtp_forward *fwd,
+                                  const float *embed,
+                                  const float *prev_hc,
+                                  uint32_t position,
+                                  uint32_t top_k,
+                                  uint32_t *tokens,
+                                  float *out_logits,
+                                  ds4_v100_mtp_forward_report *report,
+                                  char *err,
+                                  size_t errlen) {
+    return ds4_v100_mtp_forward_run_host_next_hc(fwd,
+                                                 embed,
+                                                 prev_hc,
+                                                 position,
+                                                 top_k,
+                                                 tokens,
+                                                 out_logits,
+                                                 NULL,
+                                                 0,
+                                                 report,
+                                                 err,
+                                                 errlen);
 }
 
 void ds4_v100_mtp_forward_close(ds4_v100_mtp_forward *fwd) {
