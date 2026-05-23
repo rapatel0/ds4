@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-23
-last_updated_by: vision
-revision: 293
+last_updated_by: codex
+revision: 294
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -55,10 +55,19 @@ not a serial layer-chain.
   GPU utilization `96%`.
 - The TP/EP path is now operational as a resident diagnostic serving harness:
   coalesced `/v1/completions` requests can drive a 32-slot, 256K TP8/EP8
-  token-major loop and return vocab-sharded selected-token metadata. It is not
-  real DeepSeek text serving yet because prompt prefill, tokenizer text,
-  selected-token feedback, and the complete DS4 HC attention/FFN pre/post
-  sequence are still in progress.
+  token-major loop and return vocab-sharded selected-token metadata. Sprint
+  294 moved the routed expert input off fixed synthetic activations and onto a
+  current vector derived from real per-layer `hc_attn_*` controls and the
+  resident sharded HC state. It is still not real DeepSeek text serving because
+  prompt prefill, tokenizer text, selected-token feedback, exact attention/FFN
+  HC sequencing, and multi-token recurrent decode are not complete.
+- Current TP/EP prototype scaffold metric with HC-current input and HC final
+  expand enabled: `32` slots / `256K` / 1-token `/v1/completions` forms one
+  32-request batch, returns `32/32` HTTP 200 responses, and reports
+  `145.914985` wall generated tok/s / `225.722945` decode generated tok/s.
+  Direct all-layer validation reports `238.789977` projected decode tok/s,
+  with `40.646652 ms` spent in the HC-current bridge and `22.678353 ms` in HC
+  final expand. This is a serving scaffold, not a final performance target.
 - Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
   longer exposes PP/layer-split topology modes. Against the real production
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about

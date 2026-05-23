@@ -146,6 +146,22 @@ with `proxy_hc=0`, and reports `160.904882` wall generated tok/s /
 better HC semantic bridge than Sprint 292, but it still lacks the full DS4 HC
 attention/FFN pre/post sequence, prompt prefill, token feedback, and tokenizer
 text output.
+Sprint 294 added the next TP/EP HC semantic bridge:
+`--tp-hc-current-input-gate` / `DS4_V100_TP_EP_HC_CURRENT_INPUT=1`. The path
+loads real per-layer `hc_attn_*` controls, derives a current vector from the
+resident sharded HC state, and feeds that vector into the routed expert
+activations before the existing TurboMind MXFP4 EP compute. Dense diagnostic
+inputs are still bridge inputs, filled by repeat/truncate from the HC-derived
+current vector to match the existing diagnostic dense tensor widths. Direct
+32-slot / 256K / 1-token all-layer V100 validation passes with
+`sum_decode_ms=134.008975`, `238.789977` projected decode tok/s,
+`sum_hc_current_input_ms=40.646652`, `sum_final_hc_ms=22.678353`, and
+`8.530776 ms` output-head time. The launcher-level `/v1/completions` run with
+32 concurrent requests forms one 32-request batch, returns `32/32` HTTP 200
+responses, and reports `145.914985` wall generated tok/s /
+`225.722945` decode generated tok/s. This is now the best TP/EP prototype
+server scaffold, but it is still diagnostic: prompt prefill, tokenizer text,
+selected-token feedback, and exact DS4 attention/FFN HC sequencing remain.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

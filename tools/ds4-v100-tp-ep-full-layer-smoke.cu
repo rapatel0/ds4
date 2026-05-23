@@ -156,6 +156,8 @@ struct RankState {
     __half *d_ep_remote_half[kGpus] = {};
     float *d_ep_sum = nullptr;
     float *d_next_hidden = nullptr;
+    float *d_current_shard = nullptr;
+    float *d_current_full = nullptr;
     float *d_final_hc_shard = nullptr;
     float *d_hc_scratch_shard = nullptr;
     float *d_hc_split = nullptr;
@@ -306,6 +308,7 @@ struct LayerRunSummary {
     double decode_compose_reduce_ms_per_step = 0.0;
     double decode_compose_copy_ms_per_step = 0.0;
     double decode_compose_final_ms_per_step = 0.0;
+    double decode_hc_current_input_ms_per_step = 0.0;
     double decode_final_hc_ms_per_step = 0.0;
     uint64_t decode_checksum = 0;
 };
@@ -326,6 +329,7 @@ struct ServingBenchResult {
     double total_compose_reduce_ms = 0.0;
     double total_compose_copy_ms = 0.0;
     double total_compose_final_ms = 0.0;
+    double total_hc_current_input_ms = 0.0;
     double aggregate_generated_tok_s_decode = 0.0;
     double aggregate_generated_tok_s_wall = 0.0;
     double aggregate_continuation_tok_s_decode = 0.0;
@@ -393,6 +397,7 @@ struct DecodeLoopStats {
     double compose_reduce_ms_per_step = 0.0;
     double compose_copy_ms_per_step = 0.0;
     double compose_final_ms_per_step = 0.0;
+    double hc_current_input_ms_per_step = 0.0;
     double final_hc_ms_per_step = 0.0;
     int finite_bad = 0;
     uint64_t checksum = 0;
@@ -453,6 +458,7 @@ struct Options {
     bool final_hc_carry_gate = false;
     bool diagnostic_output_head = false;
     bool tp_hc_final_expand_gate = false;
+    bool tp_hc_current_input_gate = false;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -810,6 +816,81 @@ __global__ void hc_weighted_sum_rows_kernel(float *out,
              hc[base + 3ull * (uint64_t)kHidden + col] * w3;
 }
 
+__global__ void hc_weighted_sum_shard_kernel(float *out,
+                                             const float *hc,
+                                             const float *weights,
+                                             uint32_t slots) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint32_t shard_cols = kHidden / kGpus;
+    const uint64_t n = (uint64_t)slots * (uint64_t)shard_cols;
+    if (i >= n) return;
+    const uint32_t slot = (uint32_t)(i / shard_cols);
+    const uint32_t local_h = (uint32_t)(i % shard_cols);
+    const uint64_t base = (uint64_t)slot * 4ull * (uint64_t)shard_cols;
+    const float w0 = weights[(uint64_t)slot * kHcMix + 0ull];
+    const float w1 = weights[(uint64_t)slot * kHcMix + 1ull];
+    const float w2 = weights[(uint64_t)slot * kHcMix + 2ull];
+    const float w3 = weights[(uint64_t)slot * kHcMix + 3ull];
+    float v = hc[base + local_h] * w0 +
+              hc[base + (uint64_t)shard_cols + local_h] * w1 +
+              hc[base + 2ull * (uint64_t)shard_cols + local_h] * w2 +
+              hc[base + 3ull * (uint64_t)shard_cols + local_h] * w3;
+    if (!isfinite(v)) v = 0.0f;
+    v = fminf(1.0f, fmaxf(-1.0f, v * 0.125f));
+    out[i] = v;
+}
+
+__global__ void gather_current_shard_to_full_kernel(float *full,
+                                                    const float *shard,
+                                                    int rank,
+                                                    uint32_t slots) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint32_t shard_cols = kHidden / kGpus;
+    const uint64_t n = (uint64_t)slots * (uint64_t)shard_cols;
+    if (i >= n) return;
+    const uint32_t slot = (uint32_t)(i / shard_cols);
+    const uint32_t local_h = (uint32_t)(i % shard_cols);
+    full[(uint64_t)slot * kHidden + (uint64_t)rank * shard_cols + local_h] = shard[i];
+}
+
+__global__ void pack_current_full_to_routes_kernel(__half *routes,
+                                                   const float *current_full,
+                                                   const int *route_slots,
+                                                   int routes_n) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t n = (uint64_t)routes_n * (uint64_t)kHidden;
+    if (i >= n) return;
+    const int route = (int)(i / kHidden);
+    const int h = (int)(i % kHidden);
+    const int slot = route_slots[route];
+    routes[i] = __float2half(current_full[(uint64_t)slot * kHidden + h]);
+}
+
+__global__ void fill_dense_input_from_current_kernel(float *dst,
+                                                     const float *current_full,
+                                                     uint32_t cols,
+                                                     uint32_t slots) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t n = (uint64_t)slots * (uint64_t)cols;
+    if (i >= n) return;
+    const uint32_t slot = (uint32_t)(i / cols);
+    const uint32_t col = (uint32_t)(i % cols);
+    dst[i] = current_full[(uint64_t)slot * kHidden + (uint32_t)(col % kHidden)];
+}
+
+__global__ void fill_dense_input_half_from_current_kernel(__half *dst,
+                                                          const float *current_full,
+                                                          uint32_t cols,
+                                                          uint32_t slots) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t n = (uint64_t)slots * (uint64_t)cols;
+    if (i >= n) return;
+    const uint32_t slot = (uint32_t)(i / cols);
+    const uint32_t col = (uint32_t)(i % cols);
+    dst[i] = __float2half(current_full[(uint64_t)slot * kHidden +
+                                       (uint32_t)(col % kHidden)]);
+}
+
 __global__ void rms_norm_weight_rows_kernel(float *out,
                                             const float *in,
                                             const float *weight,
@@ -995,6 +1076,19 @@ __global__ void expand_hidden_to_proxy_hc_shard_kernel(float *hc,
     const float row_bias =
         ((float)(rank + 1) * 0.0001f) + ((float)row * 0.00001f);
     hc[i] = v * row_scale + row_bias;
+}
+
+__global__ void seed_initial_hc_shard_kernel(float *hc, int rank, int slots) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint32_t shard_cols = kHidden / kGpus;
+    const uint64_t elems = (uint64_t)slots * 4ull * shard_cols;
+    if (i >= elems) return;
+    const uint32_t local_h = (uint32_t)(i % shard_cols);
+    const uint32_t row = (uint32_t)((i / shard_cols) & 3ull);
+    const uint32_t slot = (uint32_t)(i / (4ull * shard_cols));
+    const uint32_t global_h = (uint32_t)rank * shard_cols + local_h;
+    const int m = (int)((slot * 97u + row * 31u + global_h * 17u) % 257u);
+    hc[i] = ((float)m - 128.0f) * 0.0025f;
 }
 
 __device__ void hc4_split_one_dev(float *out,
@@ -1241,6 +1335,7 @@ void usage(const char *argv0) {
                  "       [--microbatch-wait-us N]\n"
                  "       [--output-head-gate] [--output-head-resident-gate]\n"
                  "       [--final-hc-carry-gate] [--tp-hc-final-expand-gate]\n"
+                 "       [--tp-hc-current-input-gate]\n"
                  "       [--diagnostic-output-head]\n",
                  argv0);
 }
@@ -1390,6 +1485,10 @@ bool parse_args(int argc, char **argv, Options *opt) {
         } else if (std::strcmp(arg, "--final-hc-carry-gate") == 0) {
             opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--tp-hc-final-expand-gate") == 0) {
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--tp-hc-current-input-gate") == 0) {
+            opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--diagnostic-output-head") == 0) {
@@ -1990,6 +2089,10 @@ struct SharedHcControls {
     float *d_hc_norm = nullptr;
     float *d_mix = nullptr;
     float *d_split = nullptr;
+    float *d_current_full = nullptr;
+    float *d_attn_fn[43] = {};
+    float *d_attn_base[43] = {};
+    float *d_attn_scale[43] = {};
     float *d_ffn_fn[43] = {};
     float *d_ffn_base[43] = {};
     float *d_ffn_scale[43] = {};
@@ -2042,30 +2145,53 @@ int open_shared_hc_controls(const Options &opt,
     CHECK_CUDA(cudaMalloc(&out->d_hc_norm, (size_t)hc_elems * sizeof(float)));
     CHECK_CUDA(cudaMalloc(&out->d_mix, (size_t)opt.slots * kHcMix * sizeof(float)));
     CHECK_CUDA(cudaMalloc(&out->d_split, (size_t)opt.slots * kHcMix * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&out->d_current_full,
+                          (size_t)opt.slots * kHidden * sizeof(float)));
 
     for (int layer = 0; layer < 43; ++layer) {
+        std::vector<float> attn_fn;
+        std::vector<float> attn_base;
+        std::vector<float> attn_scale;
         std::vector<float> fn;
         std::vector<float> base;
         std::vector<float> scale;
+        const std::string attn_fn_name = layer_tensor_name(layer, "hc_attn_fn");
+        const std::string attn_base_name = layer_tensor_name(layer, "hc_attn_base");
+        const std::string attn_scale_name = layer_tensor_name(layer, "hc_attn_scale");
         const std::string fn_name = layer_tensor_name(layer, "hc_ffn_fn");
         const std::string base_name = layer_tensor_name(layer, "hc_ffn_base");
         const std::string scale_name = layer_tensor_name(layer, "hc_ffn_scale");
-        if (load_control_f32(opt, rows, fn_name.c_str(),
+        if (load_control_f32(opt, rows, attn_fn_name.c_str(),
+                             (size_t)kHcRows * (size_t)kHidden * kHcMix, &attn_fn) ||
+            load_control_f32(opt, rows, attn_base_name.c_str(), kHcMix, &attn_base) ||
+            load_control_f32(opt, rows, attn_scale_name.c_str(), 3, &attn_scale) ||
+            load_control_f32(opt, rows, fn_name.c_str(),
                              (size_t)kHcRows * (size_t)kHidden * kHcMix, &fn) ||
             load_control_f32(opt, rows, base_name.c_str(), kHcMix, &base) ||
             load_control_f32(opt, rows, scale_name.c_str(), 3, &scale)) {
             return 1;
         }
+        CHECK_CUDA(cudaMalloc(&out->d_attn_fn[layer], attn_fn.size() * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&out->d_attn_base[layer], attn_base.size() * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&out->d_attn_scale[layer], attn_scale.size() * sizeof(float)));
         CHECK_CUDA(cudaMalloc(&out->d_ffn_fn[layer], fn.size() * sizeof(float)));
         CHECK_CUDA(cudaMalloc(&out->d_ffn_base[layer], base.size() * sizeof(float)));
         CHECK_CUDA(cudaMalloc(&out->d_ffn_scale[layer], scale.size() * sizeof(float)));
+        CHECK_CUDA(cudaMemcpy(out->d_attn_fn[layer], attn_fn.data(),
+                              attn_fn.size() * sizeof(float), cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(out->d_attn_base[layer], attn_base.data(),
+                              attn_base.size() * sizeof(float), cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(out->d_attn_scale[layer], attn_scale.data(),
+                              attn_scale.size() * sizeof(float), cudaMemcpyHostToDevice));
         CHECK_CUDA(cudaMemcpy(out->d_ffn_fn[layer], fn.data(),
                               fn.size() * sizeof(float), cudaMemcpyHostToDevice));
         CHECK_CUDA(cudaMemcpy(out->d_ffn_base[layer], base.data(),
                               base.size() * sizeof(float), cudaMemcpyHostToDevice));
         CHECK_CUDA(cudaMemcpy(out->d_ffn_scale[layer], scale.data(),
                               scale.size() * sizeof(float), cudaMemcpyHostToDevice));
-        out->control_bytes += (fn.size() + base.size() + scale.size()) * sizeof(float);
+        out->control_bytes +=
+            (attn_fn.size() + attn_base.size() + attn_scale.size() +
+             fn.size() + base.size() + scale.size()) * sizeof(float);
     }
     out->initialized = true;
     return 0;
@@ -2078,7 +2204,11 @@ void close_shared_hc_controls(const Options &opt, SharedHcControls *out) {
         if (out->d_ffn_scale[layer]) CHECK_CUDA(cudaFree(out->d_ffn_scale[layer]));
         if (out->d_ffn_base[layer]) CHECK_CUDA(cudaFree(out->d_ffn_base[layer]));
         if (out->d_ffn_fn[layer]) CHECK_CUDA(cudaFree(out->d_ffn_fn[layer]));
+        if (out->d_attn_scale[layer]) CHECK_CUDA(cudaFree(out->d_attn_scale[layer]));
+        if (out->d_attn_base[layer]) CHECK_CUDA(cudaFree(out->d_attn_base[layer]));
+        if (out->d_attn_fn[layer]) CHECK_CUDA(cudaFree(out->d_attn_fn[layer]));
     }
+    if (out->d_current_full) CHECK_CUDA(cudaFree(out->d_current_full));
     if (out->d_split) CHECK_CUDA(cudaFree(out->d_split));
     if (out->d_mix) CHECK_CUDA(cudaFree(out->d_mix));
     if (out->d_hc_norm) CHECK_CUDA(cudaFree(out->d_hc_norm));
@@ -2146,6 +2276,151 @@ int run_shared_hc_final_expand(const Options &opt,
         CHECK_CUDA(cudaStreamSynchronize(r.stream));
         std::swap(r.d_final_hc_shard, r.d_hc_scratch_shard);
         r.hc_initialized = true;
+    }
+    return 0;
+}
+
+int run_shared_hc_current_input(const Options &opt,
+                                SharedHcControls *hc,
+                                RankState ranks[kGpus],
+                                const ResidentF8Dense &attn_op,
+                                const ResidentF8Dense &shared_op,
+                                int layer) {
+    if (!hc || !hc->initialized || hc->slots != opt.slots ||
+        layer < 0 || layer >= 43) {
+        return 1;
+    }
+    if (attn_op.cols <= 0 || shared_op.cols <= 0) return 2;
+    const uint64_t shard_elems =
+        (uint64_t)opt.slots * (uint64_t)(kHidden / kGpus);
+    const uint64_t hc_shard_elems = shard_elems * kHcRows;
+    const uint64_t full_elems = (uint64_t)opt.slots * kHidden;
+    const int block = 256;
+
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        if (!r.d_final_hc_shard || !r.d_current_shard || !r.d_current_full ||
+            !r.d_hc_split) {
+            return 3;
+        }
+        if (!r.hc_initialized) {
+            seed_initial_hc_shard_kernel<<<
+                (unsigned int)((hc_shard_elems + block - 1) / block), block,
+                0, r.stream>>>(r.d_final_hc_shard, rank, opt.slots);
+            CHECK_CUDA(cudaGetLastError());
+            r.hc_initialized = true;
+        }
+    }
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    }
+
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    for (int rank = 0; rank < kGpus; ++rank) {
+        gather_hc_shard_to_full_kernel<<<
+            (unsigned int)((hc_shard_elems + block - 1) / block), block>>>(
+            hc->d_hc, ranks[rank].d_final_hc_shard, rank, (uint32_t)opt.slots);
+    }
+    CHECK_CUDA(cudaGetLastError());
+    CHECK_CUDA(cudaDeviceSynchronize());
+
+    rms_norm_plain_rows_kernel<<<(unsigned int)opt.slots, 256>>>(
+        hc->d_hc_norm, hc->d_hc, kHcRows * (uint32_t)kHidden,
+        (uint32_t)opt.slots, 1.0e-6f);
+    const dim3 mix_grid((unsigned int)kHcMix, (unsigned int)opt.slots, 1u);
+    f32_dense_colmajor_kernel<<<mix_grid, 256>>>(
+        hc->d_mix, hc->d_attn_fn[layer], hc->d_hc_norm,
+        (uint32_t)kHcMix, kHcRows * (uint32_t)kHidden, (uint32_t)opt.slots);
+    hc_split_rows_kernel<<<(unsigned int)(((uint64_t)opt.slots + 255) / 256), 256>>>(
+        hc->d_split, hc->d_mix, hc->d_attn_scale[layer], hc->d_attn_base[layer],
+        (uint32_t)opt.slots);
+    CHECK_CUDA(cudaGetLastError());
+    CHECK_CUDA(cudaDeviceSynchronize());
+
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        if (rank == 0) {
+            CHECK_CUDA(cudaMemcpyAsync(r.d_hc_split, hc->d_split,
+                                       (size_t)opt.slots * kHcMix * sizeof(float),
+                                       cudaMemcpyDeviceToDevice, r.stream));
+        } else {
+            CHECK_CUDA(cudaMemcpyPeerAsync(r.d_hc_split, r.device,
+                                           hc->d_split, opt.devices[0],
+                                           (size_t)opt.slots * kHcMix * sizeof(float),
+                                           r.stream));
+        }
+        hc_weighted_sum_shard_kernel<<<
+            (unsigned int)((shard_elems + block - 1) / block), block,
+            0, r.stream>>>(r.d_current_shard, r.d_final_hc_shard,
+                           r.d_hc_split, (uint32_t)opt.slots);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    }
+
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    for (int rank = 0; rank < kGpus; ++rank) {
+        gather_current_shard_to_full_kernel<<<
+            (unsigned int)((shard_elems + block - 1) / block), block>>>(
+            hc->d_current_full, ranks[rank].d_current_shard, rank,
+            (uint32_t)opt.slots);
+    }
+    CHECK_CUDA(cudaGetLastError());
+    CHECK_CUDA(cudaDeviceSynchronize());
+
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        const size_t full_bytes = (size_t)full_elems * sizeof(float);
+        if (rank == 0) {
+            CHECK_CUDA(cudaMemcpyAsync(r.d_current_full, hc->d_current_full,
+                                       full_bytes, cudaMemcpyDeviceToDevice, r.stream));
+        } else {
+            CHECK_CUDA(cudaMemcpyPeerAsync(r.d_current_full, r.device,
+                                           hc->d_current_full, opt.devices[0],
+                                           full_bytes, r.stream));
+        }
+        const uint64_t attn_elems = (uint64_t)opt.slots * (uint64_t)attn_op.cols;
+        const uint64_t shared_elems = (uint64_t)opt.slots * (uint64_t)shared_op.cols;
+        if (attn_op.d_x[(size_t)rank]) {
+            fill_dense_input_from_current_kernel<<<
+                (unsigned int)((attn_elems + block - 1) / block), block,
+                0, r.stream>>>(attn_op.d_x[(size_t)rank], r.d_current_full,
+                               (uint32_t)attn_op.cols, (uint32_t)opt.slots);
+        }
+        if (shared_op.d_x[(size_t)rank]) {
+            fill_dense_input_from_current_kernel<<<
+                (unsigned int)((shared_elems + block - 1) / block), block,
+                0, r.stream>>>(shared_op.d_x[(size_t)rank], r.d_current_full,
+                               (uint32_t)shared_op.cols, (uint32_t)opt.slots);
+        }
+        if (attn_op.d_x_half[(size_t)rank]) {
+            fill_dense_input_half_from_current_kernel<<<
+                (unsigned int)((attn_elems + block - 1) / block), block,
+                0, r.stream>>>(attn_op.d_x_half[(size_t)rank], r.d_current_full,
+                               (uint32_t)attn_op.cols, (uint32_t)opt.slots);
+        }
+        if (shared_op.d_x_half[(size_t)rank]) {
+            fill_dense_input_half_from_current_kernel<<<
+                (unsigned int)((shared_elems + block - 1) / block), block,
+                0, r.stream>>>(shared_op.d_x_half[(size_t)rank],
+                               r.d_current_full, (uint32_t)shared_op.cols,
+                               (uint32_t)opt.slots);
+        }
+        const uint64_t route_elems = (uint64_t)r.routes * kHidden;
+        pack_current_full_to_routes_kernel<<<
+            (unsigned int)((route_elems + block - 1) / block), block,
+            0, r.stream>>>(r.d_a, r.d_current_full, r.d_route_slots, r.routes);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
     }
     return 0;
 }
@@ -4059,6 +4334,8 @@ void close_shared_rank_buffers(SharedRankBuffers *shared) {
         }
         if (r.d_ep_sum) CHECK_CUDA(cudaFree(r.d_ep_sum));
         if (r.d_next_hidden) CHECK_CUDA(cudaFree(r.d_next_hidden));
+        if (r.d_current_shard) CHECK_CUDA(cudaFree(r.d_current_shard));
+        if (r.d_current_full) CHECK_CUDA(cudaFree(r.d_current_full));
         if (r.d_final_hc_shard) CHECK_CUDA(cudaFree(r.d_final_hc_shard));
         if (r.d_hc_scratch_shard) CHECK_CUDA(cudaFree(r.d_hc_scratch_shard));
         if (r.d_hc_split) CHECK_CUDA(cudaFree(r.d_hc_split));
@@ -4125,6 +4402,13 @@ int ensure_compose_buffers(const Options &opt, RankState ranks[kGpus]) {
         }
         if (!r.d_ep_sum) CHECK_CUDA(cudaMalloc(&r.d_ep_sum, (size_t)shard_bytes));
         if (!r.d_next_hidden) CHECK_CUDA(cudaMalloc(&r.d_next_hidden, (size_t)shard_bytes));
+        if (opt.tp_hc_current_input_gate && !r.d_current_shard) {
+            CHECK_CUDA(cudaMalloc(&r.d_current_shard, (size_t)shard_bytes));
+        }
+        if (opt.tp_hc_current_input_gate && !r.d_current_full) {
+            CHECK_CUDA(cudaMalloc(&r.d_current_full,
+                                  (size_t)opt.slots * kHidden * sizeof(float)));
+        }
         if (opt.final_hc_carry_gate && !r.d_final_hc_shard) {
             CHECK_CUDA(cudaMalloc(&r.d_final_hc_shard, (size_t)(4ull * shard_bytes)));
         }
@@ -4445,7 +4729,24 @@ int run_decode_loop(const Options &opt,
                             double *compose_reduce_ms,
                             double *compose_copy_ms,
                             double *compose_final_ms,
+                            double *hc_current_input_ms,
                             double *final_hc_ms) -> int {
+        auto t_pre = std::chrono::steady_clock::now();
+        if (opt.tp_hc_current_input_gate) {
+            if (!shared_hc_controls || !shared_hc_controls->initialized) {
+                std::fprintf(stderr, "tp_hc_current_input_failed\tlayer\t%d\treason\tmissing_controls\n",
+                             opt.layer);
+                return 8;
+            }
+            const int hc_rc = run_shared_hc_current_input(opt, shared_hc_controls, ranks,
+                                                          *attn_op, *shared_op,
+                                                          opt.layer);
+            if (hc_rc != 0) {
+                std::fprintf(stderr, "tp_hc_current_input_failed\tlayer\t%d\trc\t%d\n",
+                             opt.layer, hc_rc);
+                return 9;
+            }
+        }
         auto t0 = std::chrono::steady_clock::now();
         for (int p = 0; p < kGpus; ++p) {
             if (run_gate(ranks[p], api) != 0 || run_down(ranks[p], api) != 0) return 1;
@@ -4744,6 +5045,7 @@ int run_decode_loop(const Options &opt,
             std::chrono::duration<double, std::milli>(t_copy_done - t_reduce_done).count();
         *compose_final_ms +=
             std::chrono::duration<double, std::milli>(t3 - t_copy_done).count();
+        *hc_current_input_ms += std::chrono::duration<double, std::milli>(t0 - t_pre).count();
         *final_hc_ms += std::chrono::duration<double, std::milli>(t4 - t3).count();
         return 0;
     };
@@ -4754,11 +5056,13 @@ int run_decode_loop(const Options &opt,
     double warm_compose_reduce = 0.0;
     double warm_compose_copy = 0.0;
     double warm_compose_final = 0.0;
+    double warm_hc_current_input = 0.0;
     double warm_final_hc = 0.0;
     for (int i = 0; i < opt.warmup; ++i) {
         if (run_one_step(&warm_ep, &warm_dense, &warm_compose,
                          &warm_compose_reduce, &warm_compose_copy,
-                         &warm_compose_final, &warm_final_hc) != 0) {
+                         &warm_compose_final, &warm_hc_current_input,
+                         &warm_final_hc) != 0) {
             if (!shared_dense_ops) {
                 free_resident_f8_dense(attn, opt);
                 free_resident_f8_dense(shared, opt);
@@ -4773,12 +5077,14 @@ int run_decode_loop(const Options &opt,
     double compose_reduce_ms = 0.0;
     double compose_copy_ms = 0.0;
     double compose_final_ms = 0.0;
+    double hc_current_input_ms = 0.0;
     double final_hc_ms = 0.0;
     const auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < opt.decode_steps; ++i) {
         if (run_one_step(&ep_ms, &dense_ms, &compose_ms,
                          &compose_reduce_ms, &compose_copy_ms,
-                         &compose_final_ms, &final_hc_ms) != 0) {
+                         &compose_final_ms, &hc_current_input_ms,
+                         &final_hc_ms) != 0) {
             if (!shared_dense_ops) {
                 free_resident_f8_dense(attn, opt);
                 free_resident_f8_dense(shared, opt);
@@ -4798,6 +5104,7 @@ int run_decode_loop(const Options &opt,
     stats->compose_reduce_ms_per_step = compose_reduce_ms / (double)opt.decode_steps;
     stats->compose_copy_ms_per_step = compose_copy_ms / (double)opt.decode_steps;
     stats->compose_final_ms_per_step = compose_final_ms / (double)opt.decode_steps;
+    stats->hc_current_input_ms_per_step = hc_current_input_ms / (double)opt.decode_steps;
     stats->final_hc_ms_per_step = final_hc_ms / (double)opt.decode_steps;
 
     if (opt.skip_decode_checksum) {
@@ -4926,6 +5233,8 @@ int run_resident_layer_decode(const Options &opt,
             decode_loop.compose_copy_ms_per_step;
         summary->decode_compose_final_ms_per_step =
             decode_loop.compose_final_ms_per_step;
+        summary->decode_hc_current_input_ms_per_step =
+            decode_loop.hc_current_input_ms_per_step;
         summary->decode_final_hc_ms_per_step = decode_loop.final_hc_ms_per_step;
         summary->decode_checksum = decode_loop.checksum;
     }
@@ -5347,6 +5656,7 @@ int run_layer(const Options &opt,
                     "compose_reduce_ms_per_step\t%.6f\t"
                     "compose_copy_ms_per_step\t%.6f\t"
                     "compose_final_ms_per_step\t%.6f\t"
+                    "hc_current_input_gate\t%d\thc_current_input_ms_per_step\t%.6f\t"
                     "final_hc_carry_gate\t%d\tfinal_hc_ms_per_step\t%.6f\t"
                     "dense_loaded_bytes\t%llu\t"
                     "ep_contribution_bytes\t%llu\tep_return_dtype\t%s\t"
@@ -5371,6 +5681,8 @@ int run_layer(const Options &opt,
                     decode_loop.compose_reduce_ms_per_step,
                     decode_loop.compose_copy_ms_per_step,
                     decode_loop.compose_final_ms_per_step,
+                    opt.tp_hc_current_input_gate ? 1 : 0,
+                    decode_loop.hc_current_input_ms_per_step,
                     opt.final_hc_carry_gate ? 1 : 0,
                     decode_loop.final_hc_ms_per_step,
                     (unsigned long long)decode_loop.dense_loaded_bytes,
@@ -5562,6 +5874,8 @@ int run_layer(const Options &opt,
             decode_loop.compose_copy_ms_per_step;
         summary->decode_compose_final_ms_per_step =
             decode_loop.compose_final_ms_per_step;
+        summary->decode_hc_current_input_ms_per_step =
+            decode_loop.hc_current_input_ms_per_step;
         summary->decode_final_hc_ms_per_step = decode_loop.final_hc_ms_per_step;
         summary->decode_checksum = decode_loop.checksum;
     }
@@ -5635,6 +5949,7 @@ int run_token_major_serving_loop(const Options &opt,
     double sum_compose_reduce_ms = 0.0;
     double sum_compose_copy_ms = 0.0;
     double sum_compose_final_ms = 0.0;
+    double sum_hc_current_input_ms = 0.0;
     double sum_final_hc_ms = 0.0;
     double first_token_decode_ms = 0.0;
     double continuation_decode_ms = 0.0;
@@ -5703,6 +6018,7 @@ int run_token_major_serving_loop(const Options &opt,
                         "decode_compose_reduce_ms_per_step\t%.6f\t"
                         "decode_compose_copy_ms_per_step\t%.6f\t"
                         "decode_compose_final_ms_per_step\t%.6f\t"
+                        "decode_hc_current_input_ms_per_step\t%.6f\t"
                         "decode_final_hc_ms_per_step\t%.6f\t"
                         "decode_checksum\t%llu\t%s\n",
                         step, s.layer, s.ratio,
@@ -5715,6 +6031,7 @@ int run_token_major_serving_loop(const Options &opt,
                         s.decode_compose_reduce_ms_per_step,
                         s.decode_compose_copy_ms_per_step,
                         s.decode_compose_final_ms_per_step,
+                        s.decode_hc_current_input_ms_per_step,
                         s.decode_final_hc_ms_per_step,
                         (unsigned long long)s.decode_checksum,
                         (rc == 0 && s.pass) ? "PASS" : "FAIL");
@@ -5728,6 +6045,7 @@ int run_token_major_serving_loop(const Options &opt,
                 sum_compose_reduce_ms += s.decode_compose_reduce_ms_per_step;
                 sum_compose_copy_ms += s.decode_compose_copy_ms_per_step;
                 sum_compose_final_ms += s.decode_compose_final_ms_per_step;
+                sum_hc_current_input_ms += s.decode_hc_current_input_ms_per_step;
                 sum_final_hc_ms += s.decode_final_hc_ms_per_step;
                 checksum ^= s.decode_checksum +
                             (uint64_t)(step + 1) * 1000003ull +
@@ -5778,6 +6096,7 @@ int run_token_major_serving_loop(const Options &opt,
                 "sum_ep_ms\t%.6f\tsum_dense_ms\t%.6f\tsum_compose_ms\t%.6f\t"
                 "sum_compose_reduce_ms\t%.6f\tsum_compose_copy_ms\t%.6f\t"
                 "sum_compose_final_ms\t%.6f\t"
+                "tp_hc_current_input_gate\t%d\tsum_hc_current_input_ms\t%.6f\t"
                 "final_hc_carry_gate\t%d\tsum_final_hc_ms\t%.6f\t"
                 "wall_ms\t%.6f\tchecksum\t%llu\tPASS\n",
                 opt.decode_steps, pass_invocations, opt.slots,
@@ -5796,6 +6115,7 @@ int run_token_major_serving_loop(const Options &opt,
                 sum_ep_ms, sum_dense_ms, sum_compose_ms,
                 sum_compose_reduce_ms, sum_compose_copy_ms,
                 sum_compose_final_ms,
+                opt.tp_hc_current_input_gate ? 1 : 0, sum_hc_current_input_ms,
                 opt.final_hc_carry_gate ? 1 : 0, sum_final_hc_ms,
                 wall_ms, (unsigned long long)checksum);
     if (opt.serving_bench || serving_result) {
@@ -5833,6 +6153,7 @@ int run_token_major_serving_loop(const Options &opt,
             serving_result->total_compose_reduce_ms = sum_compose_reduce_ms;
             serving_result->total_compose_copy_ms = sum_compose_copy_ms;
             serving_result->total_compose_final_ms = sum_compose_final_ms;
+            serving_result->total_hc_current_input_ms = sum_hc_current_input_ms;
             serving_result->aggregate_generated_tok_s_decode = generated_tok_s_decode;
             serving_result->aggregate_generated_tok_s_wall = generated_tok_s_wall;
             serving_result->aggregate_continuation_tok_s_decode = continuation_tok_s_decode;
@@ -6799,6 +7120,7 @@ int main(int argc, char **argv) {
     double sum_compose_reduce_ms = 0.0;
     double sum_compose_copy_ms = 0.0;
     double sum_compose_final_ms = 0.0;
+    double sum_hc_current_input_ms = 0.0;
     uint64_t checksum = 0;
     const auto start = std::chrono::steady_clock::now();
     for (int layer = 0; layer < 43; ++layer) {
@@ -6823,6 +7145,7 @@ int main(int argc, char **argv) {
                     "decode_compose_reduce_ms_per_step\t%.6f\t"
                     "decode_compose_copy_ms_per_step\t%.6f\t"
                     "decode_compose_final_ms_per_step\t%.6f\t"
+                    "decode_hc_current_input_ms_per_step\t%.6f\t"
                     "decode_checksum\t%llu\t%s\n",
                     s.layer, s.ratio,
                     (unsigned long long)s.total_rows,
@@ -6839,6 +7162,7 @@ int main(int argc, char **argv) {
                     s.decode_compose_reduce_ms_per_step,
                     s.decode_compose_copy_ms_per_step,
                     s.decode_compose_final_ms_per_step,
+                    s.decode_hc_current_input_ms_per_step,
                     (unsigned long long)s.decode_checksum,
                     (rc == 0 && s.pass) ? "PASS" : "FAIL");
         if (rc == 0 && s.pass) {
@@ -6850,6 +7174,7 @@ int main(int argc, char **argv) {
             sum_compose_reduce_ms += s.decode_compose_reduce_ms_per_step;
             sum_compose_copy_ms += s.decode_compose_copy_ms_per_step;
             sum_compose_final_ms += s.decode_compose_final_ms_per_step;
+            sum_hc_current_input_ms += s.decode_hc_current_input_ms_per_step;
             checksum ^= s.decode_checksum + (uint64_t)(layer + 1) * 104729ull;
         } else {
             const auto stop = std::chrono::steady_clock::now();
@@ -6906,6 +7231,7 @@ int main(int argc, char **argv) {
                 "sum_ep_ms\t%.6f\tsum_dense_ms\t%.6f\tsum_compose_ms\t%.6f\t"
                 "sum_compose_reduce_ms\t%.6f\tsum_compose_copy_ms\t%.6f\t"
                 "sum_compose_final_ms\t%.6f\t"
+                "tp_hc_current_input_gate\t%d\tsum_hc_current_input_ms\t%.6f\t"
                 "wall_ms\t%.6f\tchecksum\t%llu\tPASS\n",
                 pass_layers, opt.slots, opt.decode_steps,
                 opt.skip_descriptor_checks ? 0 : 1,
@@ -6922,7 +7248,9 @@ int main(int argc, char **argv) {
                 opt.multi_copy_streams ? 1 : 0,
                 sum_decode_ms, slot_step_tok_s, sum_ep_ms, sum_dense_ms,
                 sum_compose_ms, sum_compose_reduce_ms, sum_compose_copy_ms,
-                sum_compose_final_ms, wall_ms, (unsigned long long)checksum);
+                sum_compose_final_ms,
+                opt.tp_hc_current_input_gate ? 1 : 0, sum_hc_current_input_ms,
+                wall_ms, (unsigned long long)checksum);
     close_shared_hc_controls(opt, &shared_hc_controls);
     free_shared_dense_ops(&shared_dense_ops, opt);
     close_shared_expert_bindings(&shared_expert_bindings);
