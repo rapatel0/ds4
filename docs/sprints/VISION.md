@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 276
+revision: 277
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -258,6 +258,10 @@ not a serial layer-chain.
   generated tok/s and `751.645517` wall continuation tok/s at `32` slots /
   `256K` / `32` generated tokens/request. It is operational as a smoke-tested
   server path, but not yet wired into the production launcher/deployment.
+- Sprint 277 wired that server into `tools/ds4-v100-run-appliance.sh` via
+  `DS4_V100_SERVE_MODE=tp-ep`. The launcher smoke reports `728.744669` wall
+  generated tok/s and `753.022651` wall continuation tok/s at the same
+  `32` slot / `256K` / `32` token shape.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -1210,6 +1214,19 @@ one resident server and the generation POST returned `32/32` token match,
 continuation tok/s. Requests are currently serialized and the harness is not
 yet wired into the deployment launcher.
 
+### Sprint 277 - TP/EP Appliance Launcher Path [complete]
+
+Goal: Start the TP/EP resident HTTP server through the appliance launcher.
+
+Outcome: Complete. `tools/ds4-v100-run-appliance.sh` now supports
+`DS4_V100_SERVE_MODE=tp-ep`, resolves the promoted TP/EP server command, and
+fails closed outside the current target shape. The V100 launcher smoke used
+the launcher to start the resident TP/EP server, then exercised `/health`,
+`/v100/status`, `POST /v100/selected-token`, and `/metrics`. The POST returned
+`32/32` token match, `728.744669` wall generated tok/s, `753.022651` wall
+continuation tok/s, `939.787471` decode-only generated tok/s, and
+`976.290858` decode-only continuation tok/s.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1286,6 +1303,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 274 built the resident TP/EP serving loop. | Shared dense ops plus direct decode remove the scaffold wall bottleneck and produce useful serving-shaped wall tok/s. | Integrate the resident TP/EP backend with the HTTP sustained-decode harness. |
 | 2026-05-23 | Sprint 275 added a sustained-serving artifact wrapper over the resident TP/EP backend. | We need repeatable serving-shaped metrology before and during HTTP harness integration. | Wire the resident backend into the operational HTTP sustained-decode path. |
 | 2026-05-23 | Sprint 276 added a TP/EP-only resident HTTP harness. | The backend now stays loaded across HTTP health/status/metrics/generation requests. | Wire this server mode into the appliance launcher and run sustained HTTP matrices. |
+| 2026-05-23 | Sprint 277 wired the TP/EP HTTP server into the appliance launcher. | Operators can now start the TP/EP path with `DS4_V100_SERVE_MODE=tp-ep`. | Build and run sustained HTTP matrix tooling against the launcher path. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

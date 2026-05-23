@@ -12,13 +12,14 @@ copies, skip-self compose, and multi-copy streams resident across the
 token-major all-layer loop. Sprint 275 added a repeatable sustained-serving
 artifact wrapper. Sprint 276 added a TP/EP-only resident HTTP harness exposing
 `/health`, `/v100/status`, `/metrics`, and `POST /v100/selected-token` without
-using the PP replay server. On the V100 pod at `32` slots / `256K` /
-`32` generated tokens per request, the first HTTP smoke reports `32/32` token
-match, `719.275018` wall generated tok/s, `751.645517` wall continuation
-tok/s, `926.497242` decode-only generated tok/s, and `974.020201` decode-only
-continuation tok/s. This is operational as a bounded smoke-tested server path;
-the next implementation step is launcher/deployment wiring and sustained HTTP
-matrices from the same server surface.
+using the PP replay server. Sprint 277 wired that server into
+`tools/ds4-v100-run-appliance.sh` as `DS4_V100_SERVE_MODE=tp-ep`. On the V100
+pod at `32` slots / `256K` / `32` generated tokens per request, the launcher
+smoke reports `32/32` token match, `728.744669` wall generated tok/s,
+`753.022651` wall continuation tok/s, `939.787471` decode-only generated
+tok/s, and `976.290858` decode-only continuation tok/s. This is operational as
+a bounded launcher-started server path; the next implementation step is
+sustained HTTP matrix tooling and deployment manifest wiring.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s
