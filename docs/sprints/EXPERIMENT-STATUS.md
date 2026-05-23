@@ -445,3 +445,10 @@ reported `43` captures, `129` launches, and `0` launch/capture failures. A
 separate routed-executor-off production control measured `56.719099` generated
 / `55.832863` continuation tok/s, so the promoted stack is about `+19.7%`
 continuation versus the prior production control in this harness.
+After Sprint 200, the focused six-route TurboMind bench covers the exact
+production routed-FFN shape. It measured generic gated-SiLU at `0.0946 ms`,
+fixed `m16_6` gated-SiLU at `0.1196 ms`, generic down at `0.0512 ms`, output
+clear at `0.0022 ms`, and six-route down-reduce with clear at `0.0650 ms`.
+The fixed six-route probe is slower than generic, and the clear boundary is too
+small to justify a new wrapper ABI. This pushes the next material work toward
+bounded full-layer TP4/EP or a real non-atomic route-reduce epilogue rewrite.

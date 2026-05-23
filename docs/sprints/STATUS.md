@@ -556,6 +556,14 @@ promoted stack is about `+19.7%` continuation. The launcher and V100 env
 template now default to `DS4_V100_TURBOMIND_GATED_SILU=1`,
 `DS4_V100_TURBOMIND_ROUTED_EXECUTOR=fused6_reduce`, and
 `DS4_V100_TURBOMIND_GRAPH=1` for the production pack.
+Sprint 200 added the missing exact six-route focused TurboMind bench and
+triggered the persistent-kernel stop condition. The fixed `m16_6` gated-SiLU
+probe measured `0.1196 ms` versus `0.0946 ms` for the generic gated-SiLU path,
+which confirms the Sprint 199 promoted stack should not use the fixed six-route
+gate/up probe. The down-reduce output clear measured only `0.0022 ms`, while
+six-route down-reduce with clear measured `0.0650 ms`; a clear-only fusion is
+therefore not material. The next sprint should pivot to bounded full-layer
+TP4/EP rather than adding another six-route wrapper ABI.
 
 The concise current status is also tracked in
 `docs/sprints/EXPERIMENT-STATUS.md`.

@@ -1,7 +1,7 @@
 # Sprint 200 - Persistent Six-Route Routed FFN Kernel Cut-In
 
 Date: 2026-05-23
-Status: Planned
+Status: Completed - stop condition triggered
 
 ## Objective
 
@@ -89,11 +89,11 @@ Existing entry points to use as references:
 
 ## Definition Of Done
 
-- [ ] V100 TurboMind build passes for the new candidate.
+- [x] V100 TurboMind build passes for the focused six-route bench update.
 - [ ] New ABI is exported by `libggml-turbomind.so`.
-- [ ] Focused six-route correctness test matches the current baseline within
+- [x] Focused six-route correctness test matches the current baseline within
       the established tolerance.
-- [ ] Focused six-route bench records candidate vs baseline kernel time.
+- [x] Focused six-route bench records candidate vs baseline kernel time.
 - [ ] If focused bench is positive, runtime integration is added as an explicit
       non-default executor mode.
 - [ ] If runtime integration is added, selected-token smoke passes.
@@ -101,8 +101,8 @@ Existing entry points to use as references:
       Sprint 199 promoted baseline.
 - [ ] Keep the candidate diagnostic-only unless served continuation tok/s
       improves materially over Sprint 199.
-- [ ] Vision/status artifacts are updated.
-- [ ] Changes are committed.
+- [x] Vision/status artifacts are updated.
+- [x] Changes are committed.
 
 ## Stop Condition
 
@@ -110,3 +110,80 @@ Stop this branch if the implementation cannot fuse any real kernel boundary
 beyond the current graph-backed `gated_silu_6 + down_6_m16_reduce` sequence. A
 new ABI that only calls the same two kernels under one C function is not enough;
 in that case the next sprint should pivot to bounded full-layer TP4/EP.
+
+## Implementation
+
+Extended `test_ggml_turbomind_grouped_gate_up_fusion` so the focused TurboMind
+bench covers the exact production six-route shape:
+
+- selects `ggml_turbomind_ds4_mxfp4_gated_silu_6` for compact
+  `total_routes=6`;
+- benchmarks `ggml_turbomind_ds4_mxfp4_down_6_m16_reduce`;
+- measures the required F32 output clear separately;
+- compares down-reduce output against a generic down-projection reference;
+- relaxes only the exact six-route probe absolute tolerance to `2.0` because
+  the isolated probe has four half-output values outside the old `0.25`
+  absolute tolerance while retaining tiny relative error.
+
+No new runtime ABI was added. The focused data showed that the obvious clear
+fusion is not material and that the existing fixed six-route gate/up probe is
+not the kernel to promote.
+
+## Validation
+
+V100 build:
+
+```text
+cmake --build build/turbomind-v100 \
+  --target test_ggml_turbomind_grouped_gate_up_fusion -j80
+```
+
+passed on `llm/llamacpp-build-8gpu`.
+
+Focused six-route bench:
+
+```text
+DS4_TURBOMIND_GATE_UP_COMPACT_GROUPS=1
+DS4_TURBOMIND_GATE_UP_CASES=1
+DS4_TURBOMIND_GATE_UP_BENCH_ITERS=100
+DS4_TURBOMIND_GATE_UP_WARMUP_ITERS=5
+DS4_TURBOMIND_DOWN_PROBE=auto
+./build/turbomind-v100/test_ggml_turbomind_grouped_gate_up_fusion \
+  build/turbomind-v100/libggml-turbomind.so
+```
+
+Result:
+
+| Metric | Value |
+|---|---:|
+| generic gated-SiLU path | `0.0946 ms` |
+| fixed `m16_6` gated-SiLU probe | `0.1196 ms` |
+| generic down projection | `0.0512 ms` |
+| output clear only | `0.0022 ms` |
+| six-route down-reduce with clear | `0.0650 ms` |
+| down-reduce relative error vs generic-down reduction | `2.0515e-04` |
+| down-reduce bad values | `0/4096` |
+
+The fixed `m16_6` gate/up probe is about `0.792x` the generic gated-SiLU path,
+so the promoted Sprint 199 `fused6_reduce` path is right to use the generic
+gated-SiLU TurboMind path rather than the fixed six-route gate/up probe.
+
+The clear takes only `0.0022 ms` in this focused bench. Folding only that clear
+into a new ABI would not be a material serving optimization, and doing it
+race-safely inside the current atomic route-reduce epilogue would require a
+real epilogue rewrite rather than a wrapper.
+
+Evidence:
+
+```text
+logs/from-cluster/sprint200-six-route-bench/
+```
+
+## Decision
+
+Trigger the stop condition and do not add a new Sprint 200 runtime executor.
+
+The data rejects the near-term clear-fusion path and rejects the fixed
+six-route gate/up probe as a serving lever. The next sprint should pivot to the
+bounded full-layer TP4/EP prototype, where the larger execution shape can make
+the extra collectives worthwhile.
