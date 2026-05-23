@@ -1,7 +1,7 @@
 # Sprint 244 - TP/EP Resident Dense Tensor-Core Ceiling
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete
 
 ## Overview
 
@@ -76,19 +76,19 @@ all-layer/server integration or remaining synchronization collapse.
 
 ## Definition Of Done
 
-- [ ] Sprint plan is committed before implementation evidence.
-- [ ] Implementation stays in the separate TP/EP codepath.
-- [ ] No PP scheduler files are modified.
-- [ ] `--dense-f16-cublas-compose` builds on the V100 pod.
-- [ ] Scalar dense + fused compose/sum control still passes.
-- [ ] FP16/cuBLAS dense + fused compose/sum candidate passes finite/repeat
+- [x] Sprint plan is committed before implementation evidence.
+- [x] Implementation stays in the separate TP/EP codepath.
+- [x] No PP scheduler files are modified.
+- [x] `--dense-f16-cublas-compose` builds on the V100 pod.
+- [x] Scalar dense + fused compose/sum control still passes.
+- [x] FP16/cuBLAS dense + fused compose/sum candidate passes finite/repeat
       checks.
-- [ ] A/B evidence records `ms_per_step`, `slot_step_tok_s`, dense stage time,
+- [x] A/B evidence records `ms_per_step`, `slot_step_tok_s`, dense stage time,
       compose stage time, checksum, and selected dense backend.
-- [ ] Evidence is copied to
+- [x] Evidence is copied to
       `logs/from-cluster/sprint244-tp-ep-dense-f16-cublas/`.
-- [ ] Status, vision, and architecture docs are updated with the decision.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Status, vision, and architecture docs are updated with the decision.
+- [x] Changes are committed with explicit `git add` paths.
 
 ## Risks
 
@@ -99,6 +99,50 @@ all-layer/server integration or remaining synchronization collapse.
 - Numeric checksum will likely differ from scalar F8 FP32-dot output because
   inputs and weights are rounded to FP16.
 
+## Evidence
+
+V100 pod: `llm/llamacpp-build-8gpu`
+
+Command shape:
+
+```text
+slots=32
+ctx=262144
+top_k=6
+layer=2
+decode_steps=50
+MTP=off
+fuse_compose_sum=on
+dense_compute_all=on
+compose_next_hidden=on
+```
+
+Logs:
+
+- `logs/from-cluster/sprint244-tp-ep-dense-f16-cublas/layer2-decode-loop-scalar-dense-fused-compose-32slot-256k-50steps.log`
+- `logs/from-cluster/sprint244-tp-ep-dense-f16-cublas/layer2-decode-loop-f16-cublas-dense-fused-compose-32slot-256k-50steps.log`
+
+| Mode | F16/cuBLAS | ms/step | Slot-step tok/s | EP ms/step | Dense ms/step | Compose ms/step | Checksum | Result |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| Scalar dense + fused compose | 0 | 1.685018 | 18990.892348 | 0.316274 | 0.755645 | 0.613009 | 2382924023 | PASS |
+| Resident FP16/cuBLAS dense + fused compose | 1 | 1.050770 | 30453.870979 | 0.309605 | 0.175605 | 0.565442 | 2515001 | PASS |
+
+The one-shot compose gate also shows the dense ceiling:
+
+| Mode | F16/cuBLAS | Attn dense ms | Shared dense ms | Compose ms | Result |
+|---|---:|---:|---:|---:|---|
+| Scalar dense + fused compose | 0 | 0.556032 | 0.153702 | 2.713016 | PASS |
+| Resident FP16/cuBLAS dense + fused compose | 1 | 0.035533 | 0.012390 | 2.010860 | PASS |
+
 ## Decision
 
-Pending.
+Keep `--dense-f16-cublas-compose` as a diagnostic ceiling, not a production
+default. The result proves the dense stage is a real and removable bottleneck:
+resident tensor-core dense reduces dense time by `4.30x` and improves the
+representative resident layer-loop metric by `1.60x`.
+
+The next production sprint should not store the full model in expanded FP16.
+It should use this as the target compute shape and implement a packed low-bit
+dense path that amortizes F8 decode through prepacking, software-pipelined
+decode into FP16 fragments, or direct adaptation of the older shape-specific
+F8 HMMA kernels.

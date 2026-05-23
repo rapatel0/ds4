@@ -446,6 +446,18 @@ finite/repeat checks. Decision: reject this naive HMMA candidate as default;
 do not tune it blindly. The next dense optimization should adapt the older
 shape-specific F8 HMMA paths or introduce a prepacked/software-pipelined
 low-bit dense kernel that amortizes F8 decode.
+Sprint 244 measured that dense ceiling directly with an opt-in resident
+FP16/cuBLAS path for the two F8 composition tensors. This is diagnostic, not
+the final model format: setup expands packed F8 to resident FP16 on device and
+the decode loop uses FP16 Tensor Core GEMM with FP32 output. Same
+32-slot/256K/50-step fused-compose A/B: scalar dense measures
+`ms_per_step=1.685018`, `slot_step_tok_s=18990.892348`, and
+`dense_ms_per_step=0.755645`; resident FP16/cuBLAS dense measures
+`ms_per_step=1.050770`, `slot_step_tok_s=30453.870979`, and
+`dense_ms_per_step=0.175605`. Both pass finite/repeat checks. Decision: dense
+is a real removable bottleneck, but expanded FP16 is only a ceiling. The next
+production sprint should implement a packed low-bit dense path that preserves
+model residency while feeding tensor cores efficiently.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit

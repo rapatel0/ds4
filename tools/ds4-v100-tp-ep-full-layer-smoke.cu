@@ -5,6 +5,7 @@
 
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#include <cublas_v2.h>
 #include <dlfcn.h>
 #include <mma.h>
 
@@ -204,7 +205,10 @@ struct DeviceDenseOutputs {
 struct ResidentF8Dense {
     std::vector<uint8_t *> d_w;
     std::vector<float *> d_x;
+    std::vector<__half *> d_w_half;
+    std::vector<__half *> d_x_half;
     std::vector<float *> d_out;
+    std::vector<cublasHandle_t> cublas;
     int rows_per_gpu = 0;
     int cols = 0;
     int slots = 0;
@@ -227,6 +231,7 @@ struct ComposeStats {
     bool ep_return_fp16 = false;
     bool fused_compose_sum = false;
     bool dense_hmma_compose = false;
+    bool dense_f16_cublas_compose = false;
 };
 
 struct DecodeLoopStats {
@@ -249,6 +254,7 @@ struct DecodeLoopStats {
     bool ep_return_fp16 = false;
     bool fused_compose_sum = false;
     bool dense_hmma_compose = false;
+    bool dense_f16_cublas_compose = false;
 };
 
 struct Options {
@@ -272,6 +278,7 @@ struct Options {
     bool ep_return_fp16 = false;
     bool fuse_compose_sum = false;
     bool dense_hmma_compose = false;
+    bool dense_f16_cublas_compose = false;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -440,6 +447,23 @@ __global__ void f8_b128_dense_hmma_m16_kernel(float *out,
     (void)row_stride_bytes;
     (void)slots;
 #endif
+}
+
+__global__ void f8_b128_to_half_kernel(__half *out,
+                                       const uint8_t *weights,
+                                       uint32_t rows,
+                                       uint32_t cols,
+                                       uint32_t row_stride_bytes) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t n = (uint64_t)rows * cols;
+    if (i >= n) return;
+    const uint32_t row = (uint32_t)(i / cols);
+    const uint32_t col = (uint32_t)(i - (uint64_t)row * cols);
+    const uint8_t *row_base = weights + (uint64_t)row * row_stride_bytes;
+    const uint8_t *block = row_base + (uint64_t)(col >> 7u) * 129ull;
+    const float w = f8_e4m3fn_to_f32_dev(block[1u + (col & 127u)]) *
+                    f8_e8m0_to_f32_dev(block[0]);
+    out[i] = __float2half_rn(w);
 }
 
 __device__ float bf16_to_f32_dev(uint16_t v) {
@@ -666,7 +690,7 @@ void usage(const char *argv0) {
                  "       [--dense-compute-all-bf16] [--dense-compute-all]\n"
                  "       [--compose-next-hidden] [--decode-steps N]\n"
                  "       [--ep-return-fp16] [--fuse-compose-sum]\n"
-                 "       [--dense-hmma-compose]\n",
+                 "       [--dense-hmma-compose] [--dense-f16-cublas-compose]\n",
                  argv0);
 }
 
@@ -738,6 +762,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->fuse_compose_sum = true;
         } else if (std::strcmp(arg, "--dense-hmma-compose") == 0) {
             opt->dense_hmma_compose = true;
+        } else if (std::strcmp(arg, "--dense-f16-cublas-compose") == 0) {
+            opt->dense_f16_cublas_compose = true;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -747,6 +773,7 @@ bool parse_args(int argc, char **argv, Options *opt) {
     }
     return opt->pack_dir && opt->contract_path && opt->tm_index_path &&
            opt->top_k <= kActiveLocalExperts && opt->layer >= 0 &&
+           !(opt->dense_hmma_compose && opt->dense_f16_cublas_compose) &&
            !(opt->dense_compute_tensor &&
              (opt->dense_compute_all_f8 || opt->dense_compute_all_bf16));
 }
@@ -1327,7 +1354,16 @@ void free_resident_f8_dense(ResidentF8Dense &op, const Options &opt) {
         CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
         if (op.d_w[(size_t)gpu]) CHECK_CUDA(cudaFree(op.d_w[(size_t)gpu]));
         if (op.d_x[(size_t)gpu]) CHECK_CUDA(cudaFree(op.d_x[(size_t)gpu]));
+        if (gpu < (int)op.d_w_half.size() && op.d_w_half[(size_t)gpu]) {
+            CHECK_CUDA(cudaFree(op.d_w_half[(size_t)gpu]));
+        }
+        if (gpu < (int)op.d_x_half.size() && op.d_x_half[(size_t)gpu]) {
+            CHECK_CUDA(cudaFree(op.d_x_half[(size_t)gpu]));
+        }
         if (op.d_out[(size_t)gpu]) CHECK_CUDA(cudaFree(op.d_out[(size_t)gpu]));
+        if (gpu < (int)op.cublas.size() && op.cublas[(size_t)gpu]) {
+            (void)cublasDestroy(op.cublas[(size_t)gpu]);
+        }
     }
     op = ResidentF8Dense{};
 }
@@ -1354,7 +1390,10 @@ int prepare_resident_f8_dense(const Options &opt,
     const uint64_t shard_bytes = row_bytes * (uint64_t)rows_per_gpu;
     op->d_w.assign((size_t)kGpus, nullptr);
     op->d_x.assign((size_t)kGpus, nullptr);
+    op->d_w_half.assign((size_t)kGpus, nullptr);
+    op->d_x_half.assign((size_t)kGpus, nullptr);
     op->d_out.assign((size_t)kGpus, nullptr);
+    op->cublas.assign((size_t)kGpus, nullptr);
     op->rows_per_gpu = rows_per_gpu;
     op->cols = cols;
     op->slots = opt.slots;
@@ -1386,6 +1425,29 @@ int prepare_resident_f8_dense(const Options &opt,
                               cudaMemcpyHostToDevice));
         CHECK_CUDA(cudaMemcpy(op->d_x[(size_t)gpu], h_x.data(),
                               h_x.size() * sizeof(float), cudaMemcpyHostToDevice));
+        if (opt.dense_f16_cublas_compose) {
+            CHECK_CUDA(cudaMalloc(&op->d_w_half[(size_t)gpu],
+                                  (size_t)rows_per_gpu * cols * sizeof(__half)));
+            CHECK_CUDA(cudaMalloc(&op->d_x_half[(size_t)gpu],
+                                  h_x.size() * sizeof(__half)));
+            const uint64_t w_elems = (uint64_t)rows_per_gpu * cols;
+            f8_b128_to_half_kernel<<<(unsigned int)((w_elems + 255) / 256), 256>>>(
+                op->d_w_half[(size_t)gpu], op->d_w[(size_t)gpu],
+                rows_per_gpu, cols, (uint32_t)row_bytes);
+            CHECK_CUDA(cudaGetLastError());
+            const uint64_t x_elems = (uint64_t)opt.slots * cols;
+            cast_f32_to_half_kernel<<<(unsigned int)((x_elems + 255) / 256), 256>>>(
+                op->d_x_half[(size_t)gpu], op->d_x[(size_t)gpu], x_elems);
+            CHECK_CUDA(cudaGetLastError());
+            CHECK_CUDA(cudaDeviceSynchronize());
+            cublasStatus_t st = cublasCreate(&op->cublas[(size_t)gpu]);
+            if (st != CUBLAS_STATUS_SUCCESS) {
+                std::fprintf(stderr, "cublasCreate failed on gpu %d: %d\n", gpu, (int)st);
+                free_resident_f8_dense(*op, opt);
+                return 4;
+            }
+            (void)cublasSetMathMode(op->cublas[(size_t)gpu], CUBLAS_TENSOR_OP_MATH);
+        }
     }
     return 0;
 }
@@ -1396,7 +1458,40 @@ int launch_resident_f8_dense(const Options &opt,
     for (int gpu = 0; gpu < kGpus; ++gpu) {
         CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
         (void)cudaGetLastError();
-        if (opt.dense_hmma_compose) {
+        if (opt.dense_f16_cublas_compose) {
+            if (!op.cublas[(size_t)gpu] ||
+                !op.d_w_half[(size_t)gpu] ||
+                !op.d_x_half[(size_t)gpu]) {
+                return 1;
+            }
+            cublasStatus_t st = cublasSetStream(op.cublas[(size_t)gpu], ranks[gpu].stream);
+            if (st != CUBLAS_STATUS_SUCCESS) return 2;
+            const float alpha = 1.0f;
+            const float beta = 0.0f;
+            st = cublasGemmEx(op.cublas[(size_t)gpu],
+                              CUBLAS_OP_T,
+                              CUBLAS_OP_N,
+                              op.rows_per_gpu,
+                              op.slots,
+                              op.cols,
+                              &alpha,
+                              op.d_w_half[(size_t)gpu],
+                              CUDA_R_16F,
+                              op.cols,
+                              op.d_x_half[(size_t)gpu],
+                              CUDA_R_16F,
+                              op.cols,
+                              &beta,
+                              op.d_out[(size_t)gpu],
+                              CUDA_R_32F,
+                              op.rows_per_gpu,
+                              CUDA_R_32F,
+                              CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+            if (st != CUBLAS_STATUS_SUCCESS) {
+                std::fprintf(stderr, "cublasGemmEx failed gpu=%d status=%d\n", gpu, (int)st);
+                return 3;
+            }
+        } else if (opt.dense_hmma_compose) {
             const dim3 grid((unsigned int)((op.rows_per_gpu + 63) / 64),
                             (unsigned int)((op.slots + 15) / 16),
                             1);
@@ -1462,6 +1557,9 @@ int run_f8_dense_to_device(const Options &opt,
         (void)cudaGetLastError();
         uint8_t *d_w = nullptr;
         float *d_x = nullptr;
+        __half *d_w_half = nullptr;
+        __half *d_x_half = nullptr;
+        cublasHandle_t blas = nullptr;
         cudaEvent_t start = nullptr;
         cudaEvent_t stop = nullptr;
         CHECK_CUDA(cudaMalloc(&d_w, (size_t)shard_bytes));
@@ -1472,6 +1570,25 @@ int run_f8_dense_to_device(const Options &opt,
                               cudaMemcpyHostToDevice));
         CHECK_CUDA(cudaMemcpy(d_x, h_x.data(), h_x.size() * sizeof(float),
                               cudaMemcpyHostToDevice));
+        if (opt.dense_f16_cublas_compose) {
+            CHECK_CUDA(cudaMalloc(&d_w_half, (size_t)rows_per_gpu * cols * sizeof(__half)));
+            CHECK_CUDA(cudaMalloc(&d_x_half, h_x.size() * sizeof(__half)));
+            const uint64_t w_elems = (uint64_t)rows_per_gpu * cols;
+            f8_b128_to_half_kernel<<<(unsigned int)((w_elems + 255) / 256), 256>>>(
+                d_w_half, d_w, rows_per_gpu, cols, (uint32_t)row_bytes);
+            CHECK_CUDA(cudaGetLastError());
+            const uint64_t x_elems = (uint64_t)opt.slots * cols;
+            cast_f32_to_half_kernel<<<(unsigned int)((x_elems + 255) / 256), 256>>>(
+                d_x_half, d_x, x_elems);
+            CHECK_CUDA(cudaGetLastError());
+            CHECK_CUDA(cudaDeviceSynchronize());
+            cublasStatus_t st = cublasCreate(&blas);
+            if (st != CUBLAS_STATUS_SUCCESS) {
+                std::fprintf(stderr, "cublasCreate failed on gpu %d: %d\n", gpu, (int)st);
+                return 4;
+            }
+            (void)cublasSetMathMode(blas, CUBLAS_TENSOR_OP_MATH);
+        }
         CHECK_CUDA(cudaEventCreate(&start));
         CHECK_CUDA(cudaEventCreate(&stop));
         const dim3 scalar_grid((unsigned int)rows_per_gpu, (unsigned int)opt.slots, 1);
@@ -1479,7 +1596,18 @@ int run_f8_dense_to_device(const Options &opt,
                              (unsigned int)((opt.slots + 15) / 16),
                              1);
         for (int i = 0; i < opt.warmup; ++i) {
-            if (opt.dense_hmma_compose) {
+            if (opt.dense_f16_cublas_compose) {
+                const float alpha = 1.0f;
+                const float beta = 0.0f;
+                cublasStatus_t st = cublasGemmEx(blas, CUBLAS_OP_T, CUBLAS_OP_N,
+                                                  rows_per_gpu, opt.slots, cols,
+                                                  &alpha, d_w_half, CUDA_R_16F, cols,
+                                                  d_x_half, CUDA_R_16F, cols,
+                                                  &beta, out->d_out[(size_t)gpu],
+                                                  CUDA_R_32F, rows_per_gpu,
+                                                  CUDA_R_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+                if (st != CUBLAS_STATUS_SUCCESS) return 5;
+            } else if (opt.dense_hmma_compose) {
                 f8_b128_dense_hmma_m16_kernel<<<hmma_grid, 128>>>(
                     out->d_out[(size_t)gpu], d_w, d_x, rows_per_gpu, cols,
                     (uint32_t)row_bytes, opt.slots);
@@ -1493,7 +1621,18 @@ int run_f8_dense_to_device(const Options &opt,
         CHECK_CUDA(cudaDeviceSynchronize());
         CHECK_CUDA(cudaEventRecord(start));
         for (int i = 0; i < opt.iters; ++i) {
-            if (opt.dense_hmma_compose) {
+            if (opt.dense_f16_cublas_compose) {
+                const float alpha = 1.0f;
+                const float beta = 0.0f;
+                cublasStatus_t st = cublasGemmEx(blas, CUBLAS_OP_T, CUBLAS_OP_N,
+                                                  rows_per_gpu, opt.slots, cols,
+                                                  &alpha, d_w_half, CUDA_R_16F, cols,
+                                                  d_x_half, CUDA_R_16F, cols,
+                                                  &beta, out->d_out[(size_t)gpu],
+                                                  CUDA_R_32F, rows_per_gpu,
+                                                  CUDA_R_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+                if (st != CUBLAS_STATUS_SUCCESS) return 6;
+            } else if (opt.dense_hmma_compose) {
                 f8_b128_dense_hmma_m16_kernel<<<hmma_grid, 128>>>(
                     out->d_out[(size_t)gpu], d_w, d_x, rows_per_gpu, cols,
                     (uint32_t)row_bytes, opt.slots);
@@ -1512,6 +1651,9 @@ int run_f8_dense_to_device(const Options &opt,
         CHECK_CUDA(cudaEventDestroy(stop));
         CHECK_CUDA(cudaFree(d_w));
         CHECK_CUDA(cudaFree(d_x));
+        if (d_w_half) CHECK_CUDA(cudaFree(d_w_half));
+        if (d_x_half) CHECK_CUDA(cudaFree(d_x_half));
+        if (blas) (void)cublasDestroy(blas);
     }
     out->compute_ms = worst_ms;
     return 0;
@@ -1803,6 +1945,7 @@ int run_next_hidden_compose(const Options &opt,
     stats->ep_return_fp16 = opt.ep_return_fp16;
     stats->fused_compose_sum = opt.fuse_compose_sum && !opt.ep_return_fp16;
     stats->dense_hmma_compose = opt.dense_hmma_compose;
+    stats->dense_f16_cublas_compose = opt.dense_f16_cublas_compose;
 
     DeviceDenseOutputs attn;
     DeviceDenseOutputs shared;
@@ -1974,6 +2117,7 @@ int run_decode_loop(const Options &opt,
     stats->ep_return_fp16 = opt.ep_return_fp16;
     stats->fused_compose_sum = opt.fuse_compose_sum && !opt.ep_return_fp16;
     stats->dense_hmma_compose = opt.dense_hmma_compose;
+    stats->dense_f16_cublas_compose = opt.dense_f16_cublas_compose;
     stats->steps = opt.decode_steps;
     stats->slots = opt.slots;
     stats->slot_steps = (uint64_t)opt.decode_steps * (uint64_t)opt.slots;
@@ -2459,6 +2603,7 @@ int main(int argc, char **argv) {
         std::printf("tp_ep_next_hidden_compose\tslots\t%d\tctx\t%llu\t"
                     "hidden_shard\t%d\tep_contribution_bytes\t%llu\t"
                     "ep_return_dtype\t%s\tep_return_bytes\t%llu\tdense_hmma\t%d\t"
+                    "dense_f16_cublas\t%d\t"
                     "attn_dense_ms\t%.6f\t"
                     "shared_dense_ms\t%.6f\tfused_compose_sum\t%d\tcompose_ms\t%.6f\t"
                     "checksum\t%llu\tfinite_bad\t%d\trepeat_max_abs\t%.9f\t"
@@ -2468,6 +2613,7 @@ int main(int argc, char **argv) {
                     compose.ep_return_fp16 ? "fp16" : "fp32",
                     (unsigned long long)compose.ep_return_bytes,
                     compose.dense_hmma_compose ? 1 : 0,
+                    compose.dense_f16_cublas_compose ? 1 : 0,
                     compose.attn_dense_ms, compose.shared_dense_ms,
                     compose.fused_compose_sum ? 1 : 0,
                     compose.compose_ms, (unsigned long long)compose.checksum,
@@ -2484,7 +2630,7 @@ int main(int argc, char **argv) {
     if (decode_loop.enabled) {
         std::printf("tp_ep_decode_loop\tsteps\t%d\tslots\t%d\tslot_steps\t%llu\t"
                     "total_ms\t%.6f\tms_per_step\t%.6f\tslot_step_tok_s\t%.6f\t"
-                    "dense_hmma\t%d\t"
+                    "dense_hmma\t%d\tdense_f16_cublas\t%d\t"
                     "ep_ms_per_step\t%.6f\tdense_ms_per_step\t%.6f\t"
                     "fused_compose_sum\t%d\tcompose_ms_per_step\t%.6f\t"
                     "dense_loaded_bytes\t%llu\t"
@@ -2496,6 +2642,7 @@ int main(int argc, char **argv) {
                     decode_loop.total_ms, decode_loop.ms_per_step,
                     decode_loop.tok_s,
                     decode_loop.dense_hmma_compose ? 1 : 0,
+                    decode_loop.dense_f16_cublas_compose ? 1 : 0,
                     decode_loop.ep_ms_per_step,
                     decode_loop.dense_ms_per_step,
                     decode_loop.fused_compose_sum ? 1 : 0,
@@ -2567,7 +2714,8 @@ int main(int argc, char **argv) {
                 "bf16_compute_oracle_bad\t%d\tbf16_compute_pass\t%d\t"
                 "compose_next_hidden\t%d\tcompose_ep_contribution_bytes\t%llu\t"
                 "compose_ep_return_dtype\t%s\tcompose_ep_return_bytes\t%llu\t"
-                "compose_dense_hmma\t%d\tcompose_attn_dense_ms\t%.6f\t"
+                "compose_dense_hmma\t%d\tcompose_dense_f16_cublas\t%d\t"
+                "compose_attn_dense_ms\t%.6f\t"
                 "compose_shared_dense_ms\t%.6f\tcompose_fused_sum\t%d\t"
                 "compose_ms\t%.6f\t"
                 "compose_checksum\t%llu\tcompose_finite_bad\t%d\t"
@@ -2575,7 +2723,7 @@ int main(int argc, char **argv) {
                 "compose_pass\t%d\t"
                 "decode_steps\t%d\tdecode_slot_steps\t%llu\tdecode_total_ms\t%.6f\t"
                 "decode_ms_per_step\t%.6f\tdecode_slot_step_tok_s\t%.6f\t"
-                "decode_dense_hmma\t%d\t"
+                "decode_dense_hmma\t%d\tdecode_dense_f16_cublas\t%d\t"
                 "decode_ep_ms_per_step\t%.6f\tdecode_dense_ms_per_step\t%.6f\t"
                 "decode_fused_compose_sum\t%d\tdecode_compose_ms_per_step\t%.6f\t"
                 "decode_ep_return_dtype\t%s\t"
@@ -2626,6 +2774,7 @@ int main(int argc, char **argv) {
                 compose.ep_return_fp16 ? "fp16" : "fp32",
                 (unsigned long long)compose.ep_return_bytes,
                 compose.dense_hmma_compose ? 1 : 0,
+                compose.dense_f16_cublas_compose ? 1 : 0,
                 compose.attn_dense_ms,
                 compose.shared_dense_ms,
                 compose.fused_compose_sum ? 1 : 0,
@@ -2641,6 +2790,7 @@ int main(int argc, char **argv) {
                 decode_loop.ms_per_step,
                 decode_loop.tok_s,
                 decode_loop.dense_hmma_compose ? 1 : 0,
+                decode_loop.dense_f16_cublas_compose ? 1 : 0,
                 decode_loop.ep_ms_per_step,
                 decode_loop.dense_ms_per_step,
                 decode_loop.fused_compose_sum ? 1 : 0,

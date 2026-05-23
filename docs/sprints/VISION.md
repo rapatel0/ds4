@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 243
+revision: 244
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -95,6 +95,11 @@ not a serial layer-chain.
   is correct/finite but slower (`3.533215 ms/step`) than the scalar dense
   control (`1.620386 ms/step`), so naive per-tile F8 decode into WMMA
   fragments is rejected.
+- Sprint 244 measured the tensor-core dense ceiling for the same path:
+  resident FP16/cuBLAS dense reduces dense time from `0.755645 ms/step` to
+  `0.175605 ms/step` and improves the representative layer-loop metric to
+  `1.050770 ms/step` / `30453.870979` slot-step tok/s. This validates dense
+  as the next kernel target, while keeping expanded FP16 as diagnostic only.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -456,6 +461,29 @@ and `19748.386791` slot-step tok/s to `3.533215 ms/step` and
 reuse/adapt the older shape-specific F8 HMMA kernels or use a prepacked,
 software-pipelined low-bit dense design.
 
+### Sprint 244 - TP/EP Resident Dense Tensor-Core Ceiling [complete]
+
+Goal: Measure the best-case dense-stage improvement when the two F8
+composition tensors are expanded once into resident FP16 buffers and executed
+with cuBLAS FP16 Tensor Core GEMM.
+
+Rationale: Sprint 243 rejected the naive HMMA implementation, but did not
+answer whether dense tensor-core execution is worth pursuing. A resident FP16
+ceiling separates the value of the compute shape from the cost of low-bit
+decode/layout feeding.
+
+Outcome: Complete as a diagnostic ceiling. `--dense-f16-cublas-compose`
+expands packed F8 to resident FP16 during setup for the two layer-2
+composition tensors, converts resident activations to FP16, and uses
+`cublasGemmEx` to produce FP32 output shards. Same-binary A/B at `32` slots /
+`256K`, MTP off, fused compose enabled, and `50` resident steps: scalar dense
+passes at `1.685018 ms/step`, `18990.892348` slot-step tok/s, and
+`0.755645 ms/step` dense; resident FP16/cuBLAS passes at
+`1.050770 ms/step`, `30453.870979` slot-step tok/s, and `0.175605 ms/step`
+dense. This is a `1.60x` layer-loop improvement and a `4.30x` dense-stage
+improvement. Keep the path diagnostic; build a packed low-bit dense production
+kernel next.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -500,6 +528,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 241 proved FP16 EP return is correct but slower as a standalone pass. | Payload bytes are not the limiter; extra cast/expand kernels increase compose time. | Keep FP32 return default and target fused dense/compose kernel boundaries next. |
 | 2026-05-23 | Sprint 242 proved fused FP32 remote-sum compose improves the resident layer loop. | Removing zero/add kernels is more valuable than standalone EP return quantization at this shape. | Continue collapsing TP/EP dense, EP return, and compose boundaries, then move to all-layer/server integration. |
 | 2026-05-23 | Sprint 243 rejected the first naive TP/EP dense HMMA candidate. | HMMA is not enough by itself; per-tile F8 decode/staging made dense time worse than scalar. | Adapt the older shape-specific HMMA kernels or design a prepacked/software-pipelined dense path. |
+| 2026-05-23 | Sprint 244 proved a resident FP16 tensor-core dense ceiling is materially faster. | Dense is removable if low-bit feeding is efficient, but expanded FP16 is not the final memory format. | Implement a packed low-bit dense production kernel that approaches the FP16/cuBLAS ceiling. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

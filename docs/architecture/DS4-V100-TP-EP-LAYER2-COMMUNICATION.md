@@ -206,3 +206,28 @@ spends more time feeding HMMA than the scalar reference spends doing the dot
 products. Future dense work should adapt the older shape-specific F8 HMMA
 kernels or use a prepacked/software-pipelined layout where low-bit decode is
 amortized across more useful tensor-core work.
+
+## Sprint 244 Resident FP16/cuBLAS Ceiling
+
+Sprint 244 measured the dense tensor-core ceiling by expanding the two F8
+composition tensors once into resident FP16 device buffers and using
+`cublasGemmEx` for the decode-loop dense stage. This is a diagnostic ceiling,
+not a final storage format.
+
+Same-binary V100 A/B at `32` slots / `256K`, MTP off, fused compose enabled,
+`50` resident decode-loop steps:
+
+| Mode | Dense backend | ms/step | Slot-step tok/s | Dense ms/step | Compose ms/step | Result |
+|---|---|---:|---:|---:|---:|---|
+| Scalar dense | packed F8 scalar dot | 1.685018 | 18990.892348 | 0.755645 | 0.613009 | PASS |
+| Resident FP16/cuBLAS | expanded FP16 Tensor Core GEMM | 1.050770 | 30453.870979 | 0.175605 | 0.565442 | PASS |
+
+The one-shot dense timings move from `0.556032 ms` / `0.153702 ms` for the
+two scalar composition tensors to `0.035533 ms` / `0.012390 ms` with resident
+FP16/cuBLAS.
+
+Conclusion: dense compute is worth targeting. The final production path should
+not expand all weights to FP16 in memory, but it should aim for this compute
+shape: packed low-bit resident bytes, software-pipelined or prepacked decode
+into FP16 tensor-core operands, FP32 accumulation, and FP16/FP32 output chosen
+by validation.
