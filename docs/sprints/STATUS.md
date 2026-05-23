@@ -4,16 +4,15 @@ Last updated: 2026-05-23
 
 ## Topline
 
-Current TP/EP implementation status: Sprint 260 added resident all-layer
-TurboMind expert bindings. The scaffold now keeps shared dense cache, shared
-TurboMind API, shared rank buffers, and shared active MXFP4 expert weights
-resident while using local per-layer TP runtime as the decode-speed base. The
-50-step A/B at `32` slots / `256K` passes `43/43` layers with checksum
-`204721433`. Shared expert bindings allocate `3449290752` bytes/GPU, reduce
-wall time from `35770.339339 ms` to `14338.419135 ms`, and report
-`44.131138 ms/token` summed decode / `725.111599` projected slot-step tok/s.
-Local expert bindings remain available with `--local-expert-bindings` for
-diagnostics, but shared expert bindings are the production-shaped default.
+Current TP/EP implementation status: Sprint 261 added EP+dense overlap and
+promoted it as the default scaffold schedule. The path keeps shared dense
+cache, shared TurboMind API, shared rank buffers, resident active MXFP4 expert
+weights, local per-layer TP runtime, and overlapped routed EP plus dense
+cuBLAS work. The 50-step A/B at `32` slots / `256K` passes `43/43` layers with
+checksum `204721433`. Overlap improves the projected scaffold rate from
+`631.273270` to `846.062424` slot-step tok/s and reduces summed decode from
+`50.691201 ms/token` to `37.822268 ms/token`. The remaining dominant stage is
+compose/all-to-all.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s
