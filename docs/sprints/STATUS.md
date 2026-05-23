@@ -95,6 +95,20 @@ continuation only moved from `60.236036` to `60.655009` tok/s (`+0.7%`), below
 the promotion gate. Defaults stay on `fused6_reduce + graph`; the next sprint
 should stop reducer-wrapper tuning and build a true tile-local/persistent
 routed-FFN workbench.
+Sprint 214 built that standalone workbench and rejected the first tile-local
+candidate. The tool compares `gated_silu -> down_reduce`,
+`gated_silu -> down -> split_reduce`, and a diagnostic raw-MXFP4
+down+route-reduce kernel for the exact six-route production decode shape. On
+the V100 pod, the finite fixture passed baseline and candidate correctness
+(`split_bad=0/4096`, `candidate_bad=0/4096`), but timing was decisively below
+the gate: atomic sequence `0.184721 ms`, split sequence `0.165159 ms`,
+candidate sequence `0.370901 ms`, and candidate down-only `0.276122 ms`
+(`0.445x` versus best baseline). The branch is rejected because replacing the
+Tensor Core down GEMM with SIMT F32 accumulation loses more than it saves by
+removing the materialized down-route buffer. The next sprint should either move
+to practical serving levers such as MTP/continuous batching or build a real
+Tensor Core fused/persistent routed-FFN kernel rather than another reducer-only
+wrapper.
 
 Current long-context production throughput mode is the Sprint 121 16-slot/256K
 appliance with the Sprint 122 rendezvous fix. Sprint 137 adds an explicit

@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: sprint-execute
-revision: 213
+revision: 214
 ---
 
 # Vision: DS4 V100 Appliance
@@ -107,6 +107,17 @@ only from `60.236036` to `60.655009` tok/s with `16/16` token match and zero
 graph failures. Defaults remain `fused6_reduce + graph`. The next sprint must
 stop tuning reducer wrappers and build a real tile-local/persistent routed-FFN
 workbench that changes the gate/up -> activation -> down/reduce dataflow.
+Sprint 214 built that workbench and rejects the first tile-local diagnostic.
+The candidate keeps MXFP4 down-weight dequantization on device and writes the
+route-weighted F32 hidden row directly, but it replaces the TurboMind Tensor
+Core down projection with SIMT F32 accumulation. Correctness passes against the
+F32 atomic baseline, yet timing is far below the integration gate:
+`0.370901 ms` candidate sequence versus `0.165159 ms` split sequence and a
+`0.116100 ms` promotion threshold. The vision consequence is sharp: avoiding
+one global down-route buffer is not enough if the down GEMM leaves the Tensor
+Core path. Near-term practical serving should now prioritize MTP/continuous
+batching or a genuine Tensor Core fused/persistent routed-FFN kernel, not more
+reducer-only wrappers.
 
 ## Current State
 

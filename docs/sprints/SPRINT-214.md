@@ -1,7 +1,7 @@
 # Sprint 214 - Tile-Local Routed FFN Workbench
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete - rejected candidate
 
 ## Overview
 
@@ -96,26 +96,117 @@ changes, and do not edit TP/PP scheduler files for this sprint.
 - No GGUF or pack-format changes.
 - No model-weight logs.
 
+## Execution
+
+Implemented `tools/ds4-v100-routed-ffn-tile-workbench.cu` and a guarded
+Makefile target. The workbench uses the existing TurboMind public ABI for the
+two baselines:
+
+- `gated_silu -> down_reduce`;
+- `gated_silu -> down -> split_reduce`.
+
+It also adds a standalone tile-local diagnostic candidate that consumes the
+TurboMind gated activation and raw MXFP4 down blocks in one CUDA kernel,
+dequantizing the low-bit down weights on device and writing the final
+route-weighted F32 hidden row directly.
+
+This is not promoted production code and does not change the appliance default.
+It is a bounded test of whether removing the materialized down-route output is
+enough to enter the right performance class.
+
+## V100 Evidence
+
+Cluster target: `llm/llamacpp-build-8gpu` on `gpu-01`.
+
+Build:
+
+```text
+cd /workspace/ds4-sprint181
+make -j80 CUDA_ARCH=sm_70 tools/ds4-v100-routed-ffn-tile-workbench
+```
+
+Run:
+
+```text
+CUDA_VISIBLE_DEVICES=0 ./tools/ds4-v100-routed-ffn-tile-workbench \
+  --lib ./build/turbomind-v100/libggml-turbomind.so \
+  --warmup 50 \
+  --iters 500
+```
+
+Finite fixture result:
+
+```text
+atomic_sequence_ms=0.184721
+split_sequence_ms=0.165159
+candidate_sequence_ms=0.370901
+candidate_down_only_ms=0.276122
+candidate_vs_best=0.445x
+split_max_abs=4.6268e-05
+split_rel=2.0441e-04
+split_bad=0/4096
+candidate_max_abs=1.7881e-07
+candidate_rel=5.1380e-07
+candidate_bad=0/4096
+decision_gate_ms=0.116100
+```
+
+The first hot synthetic fixture run is also recorded. It overflowed the
+materialized half down-route split path (`split_bad=4096/4096`) while the F32
+atomic and F32 candidate remained finite. The fixture range was then tightened
+to the finite range already used by the TP low-bit smokes.
+
+Logs:
+
+- `logs/from-cluster/sprint214-routed-ffn-tile-workbench/workbench-sm70.log`
+- `logs/from-cluster/sprint214-routed-ffn-tile-workbench/workbench-sm70-finite.log`
+
+Profiler counters were skipped because the standalone candidate is already
+`0.445x` of the best same-executable baseline and does not meet the correctness
+plus timing promotion gate. Profiling a rejected SIMT diagnostic would not
+change the Sprint 215 decision.
+
+## Decision
+
+Reject this candidate for appliance integration.
+
+The candidate is numerically correct against the F32 atomic baseline, and it
+keeps low-bit down-weight dequantization on device, but it is far slower than
+the existing TurboMind sequence. The main reason is structural: the candidate
+is a SIMT F32 down/reduce diagnostic, not a Tensor Core fused gate/up+down
+kernel. Removing the materialized down-route buffer alone is not enough; the
+down projection must remain in a Tensor Core path or the routed FFN gets slower.
+
+This closes the narrow "tile-local down/reduce without Tensor Core down GEMM"
+branch. The next sprint should not integrate this workbench into serving. It
+should either:
+
+- return to high-level practical serving levers such as MTP and continuous
+  batching; or
+- build a real Tensor Core fused/persistent routed-FFN kernel that keeps the
+  down GEMM on the TurboMind/CUTLASS-style path rather than replacing it with
+  scalar SIMT accumulation.
+
 ## Definition Of Done
 
-- [ ] Sprint plan exists and is committed before execution evidence is staged.
-- [ ] New standalone tile-local routed-FFN workbench exists.
-- [ ] Makefile target exists with CUDA build and macOS CUDA-required guard.
-- [ ] V100 build passes with `CUDA_ARCH=sm_70`.
-- [ ] Baseline TurboMind sequence correctness passes.
-- [ ] Candidate correctness passes or the failure is root-caused.
-- [ ] Timing reports atomic sequence, split-reduce sequence, candidate path,
+- [x] Sprint plan exists and is committed before execution evidence is staged.
+- [x] New standalone tile-local routed-FFN workbench exists.
+- [x] Makefile target exists with CUDA build and macOS CUDA-required guard.
+- [x] V100 build passes with `CUDA_ARCH=sm_70`.
+- [x] Baseline TurboMind sequence correctness passes.
+- [x] Candidate correctness passes or the failure is root-caused.
+- [x] Timing reports atomic sequence, split-reduce sequence, candidate path,
       and speedups.
-- [ ] Profiler counters are captured or explicitly skipped with reason.
-- [ ] Decision is recorded:
+- [x] Profiler counters are captured or explicitly skipped with reason.
+- [x] Decision is recorded:
       - continue to appliance integration only if candidate beats the focused
         sequence by at least 10%;
       - otherwise reject this candidate and pivot away from routed-FFN
         microkernel work.
-- [ ] Logs are copied to
+- [x] Logs are copied to
       `logs/from-cluster/sprint214-routed-ffn-tile-workbench/`.
-- [ ] `docs/sprints/STATUS.md` and `docs/sprints/VISION.md` are updated.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] `docs/sprints/STATUS.md` and `docs/sprints/VISION.md` are updated.
+- [x] Changes are committed with explicit `git add` paths.
 
 ## Decision Gate
 
