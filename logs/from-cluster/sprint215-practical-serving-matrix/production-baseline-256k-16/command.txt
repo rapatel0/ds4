@@ -1,0 +1,8 @@
+case=production-baseline-256k-16
+ctx=262144
+slots=16
+requests=16
+tokens=64
+mtp=off
+started_utc=2026-05-23T05:31:27Z
+finished_utc=2026-05-23T05:33:02Z

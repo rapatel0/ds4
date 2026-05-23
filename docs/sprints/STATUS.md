@@ -109,9 +109,23 @@ removing the materialized down-route buffer. The next sprint should either move
 to practical serving levers such as MTP/continuous batching or build a real
 Tensor Core fused/persistent routed-FFN kernel rather than another reducer-only
 wrapper.
+Sprint 215 added a repeatable practical-serving matrix and ran it against the
+persistent production TurboMind pack. The best current practical long-context
+mode is now `32` slots at `128K`: `69.488893` generated tok/s and
+`68.403129` continuation tok/s with `32/32` token match, `45.88%` average GPU
+utilization, and `24124 MiB` max observed memory. The current `16`-slot/`256K`
+baseline remains valid at `62.602937` generated tok/s and `61.624766`
+continuation tok/s with `16/16` token match. `32` slots at `256K` still fails
+closed at the production launcher cap: `DS4_V100_SLOTS=32 exceeds ctx=262144
+admission cap 16`. MTP verify is compatible but not a speedup
+(`attempted=16`, `accepted=0`, `16.373227` generated tok/s), and one-slot MTP
+commit accepted `8/15` drafts but only reached `8.369430` generated tok/s /
+`7.846341` continuation tok/s. MTP is therefore not shipped as a speedup; the
+next MTP step must be true speculative target verification over drafted tokens.
 
-Current long-context production throughput mode is the Sprint 121 16-slot/256K
-appliance with the Sprint 122 rendezvous fix. Sprint 137 adds an explicit
+Current maximum-context production mode remains the Sprint 215 16-slot/256K
+appliance result, while the best practical long-context throughput mode is now
+Sprint 215's 32-slot/128K matrix result. Sprint 137 adds an explicit
 128-slot/32K short-context throughput mode. Sprint 139 raises the best observed
 gated-appliance 128-slot/32K run to `60.130047` generated tok/s, while showing
 the fixed-shape gate/up probe itself only contributes about `0.1%` end-to-end.

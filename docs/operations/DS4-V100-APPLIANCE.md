@@ -266,6 +266,17 @@ the planner-backed context cap, including 16-slot `ctx=1048576` configs,
 though the planner can fit more slots in some reserve configurations; served
 A/B shows the simple slot-width curve is nearly saturated after 128 slots.
 
+Latest practical long-context matrix:
+
+| Context | Slots | MTP | Generated tok/s | Prompt tok/s | Continuation tok/s | Correctness | Recommendation |
+|---:|---:|---|---:|---:|---:|---:|---|
+| 262,144 | 16 | off | `62.602937` | `17.607076` | `61.624766` | 16/16 | maximum-context production mode |
+| 131,072 | 32 | off | `69.488893` | `19.543751` | `68.403129` | 32/32 | best current practical long-context throughput |
+| 262,144 | 32 | off | n/a | n/a | n/a | n/a | rejected by admission cap |
+
+The `32`-slot/`256K` rejection is intentional:
+`DS4_V100_SLOTS=32 exceeds ctx=262144 admission cap 16`.
+
 Latest short-context served curve with split prefill/decode metrics:
 
 | Context | Slots | Generated tok/s | Prompt tok/s | Continuation tok/s | Correctness |
@@ -556,7 +567,11 @@ microbatch path as base serving. The verifier runs inside the generation
 critical section and reads each request's scheduler slot HC before the runtime
 can be reset for another batch. `DS4_V100_MTP_SERVING=commit` remains restricted
 to `active_microbatch=1` because the current exact-commit path still recomputes
-the base target token serially.
+the base target token serially. Sprint 215 measured production-pack MTP:
+verify attempted `16` drafts and accepted `0`, while one-slot commit accepted
+and counted `8/15` drafts but only reached `7.846341` continuation tok/s.
+Do not treat MTP as a throughput feature until a true speculative verifier can
+batch target verification over drafted tokens.
 
 ## Generate
 

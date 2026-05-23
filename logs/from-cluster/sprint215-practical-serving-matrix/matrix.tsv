@@ -1,0 +1,6 @@
+case	ctx	slots	active_microbatch	mtp	status	log_dir
+production-baseline-256k-16	262144	16	16	off	pass	/workspace/logs/sprint215-practical-serving-matrix/production-baseline-256k-16
+long-throughput-128k-32	131072	32	32	off	pass	/workspace/logs/sprint215-practical-serving-matrix/long-throughput-128k-32
+forced-256k-32-admission	262144	32	32	off	fail-closed:1	/workspace/logs/sprint215-practical-serving-matrix/forced-256k-32-admission
+mtp-verify-256k-16	262144	16	16	verify	pass	/workspace/logs/sprint215-practical-serving-matrix/mtp-verify-256k-16
+mtp-commit-256k-1	262144	1	1	commit	pass	/workspace/logs/sprint215-practical-serving-matrix/mtp-commit-256k-1

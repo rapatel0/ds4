@@ -1032,8 +1032,8 @@ IFS=',' read -r -a ctx_list <<<"$ctx_tiers"
 IFS=',' read -r -a slots_list <<<"$slot_tiers"
 for ctx in "${ctx_list[@]}"; do
     for slots in "${slots_list[@]}"; do
-        if [ "$slots" -lt 1 ] || [ "$slots" -gt 16 ]; then
-            fail "slot tier $slots must be in [1,16]"
+        if [ "$slots" -lt 1 ] || [ "$slots" -gt 256 ]; then
+            fail "slot tier $slots must be in [1,256]"
         fi
         for policy in "${policy_list[@]}"; do
             case_index=$((case_index + 1))

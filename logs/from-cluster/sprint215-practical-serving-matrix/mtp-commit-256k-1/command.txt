@@ -1,0 +1,8 @@
+case=mtp-commit-256k-1
+ctx=262144
+slots=1
+requests=1
+tokens=16
+mtp=commit
+started_utc=2026-05-23T05:36:09Z
+finished_utc=2026-05-23T05:37:35Z

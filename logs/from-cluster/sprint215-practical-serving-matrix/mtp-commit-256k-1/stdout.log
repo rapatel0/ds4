@@ -1,0 +1,24 @@
+ds4-v100-sustained-decode-bench: PASS case_1_ctx262144_s1_sequential_mtpcommit_tok16
+schema	ds4_v100_sustained_decode.v1
+model	/models/DSv4-Flash-256e-fixed.gguf
+pack_index	/workspace/packs/ds4-appliance-full-tm-gated-s181/pack-index.tsv
+appliance_dir	/workspace/packs/ds4-appliance-full-tm-gated-s181
+expected_token_hex	3136
+tokens_per_request	16
+requests_per_case	1
+warmup_requests	1
+replay_bin	./tools/ds4-v100-replay
+profile_decode	0
+cuda_profiler_window	0
+wavefront_decode	0
+async_pipeline_decode	1
+async_pipeline_mode	per-step
+async_event_handoff	1
+async_handoff	0
+microbatch_wait_us	200000
+mtp_serving	commit
+mtp_top_k	5
+
+ctx	slots	policy	mtp_serving	status_200	status_other	errors	token_match	token_mismatch	latency_avg_ms	latency_p50_ms	latency_p95_ms	latency_p99_ms	elapsed_s	aggregate_prompt_tokens_per_second	aggregate_generated_tokens_per_second	aggregate_continuation_tokens_per_second	avg_prompt_response_tokens_per_second	avg_continuation_response_tokens_per_second	avg_gpu_util_percent	max_gpu_util_percent	mtp_attempted	mtp_accepted	mtp_rejected	mtp_committed	mtp_draft_ms_avg	mtp_draft_ms_total	avg_async_total_ms	avg_async_setup_ms	avg_async_host_wait_ms	avg_async_complete_ms	avg_async_wait_prev_sum_ms	avg_async_handoff_sum_ms	avg_async_device_sync_sum_ms
+262144	1	sequential	commit	1	0	0	1	0	1911.062	1911.062	1911.062	1911.062	1.911719	9.415609	8.369430	7.846341	18.274198	18.102913	8.738	16.000	15	8	7	8	60.105	60.105	0.000	0.000	0.000	0.000	0.000	0.000	0.000
+ds4-v100-sustained-decode-bench: PASS cases=1 report=/workspace/logs/sprint215-practical-serving-matrix/mtp-commit-256k-1/sustained_decode.tsv json=/workspace/logs/sprint215-practical-serving-matrix/mtp-commit-256k-1/sustained_decode.json

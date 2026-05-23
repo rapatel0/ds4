@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: sprint-execute
-revision: 214
+revision: 215
 ---
 
 # Vision: DS4 V100 Appliance
@@ -118,6 +118,18 @@ one global down-route buffer is not enough if the down GEMM leaves the Tensor
 Core path. Near-term practical serving should now prioritize MTP/continuous
 batching or a genuine Tensor Core fused/persistent routed-FFN kernel, not more
 reducer-only wrappers.
+Sprint 215 turns that pivot into an operator-facing serving matrix. The best
+deployable long-context mode today is `32` slots at `128K`, with
+`69.488893` generated tok/s and `68.403129` continuation tok/s on the
+persistent production pack. The maximum-context mode remains `16` slots at
+`256K`, now remeasured at `62.602937` generated tok/s and `61.624766`
+continuation tok/s. `32` slots at `256K` still fails closed at the production
+admission cap. MTP is not a speedup yet: verify produced `0/16` accepts, while
+one-slot commit accepted and counted `8/15` drafts but only reached
+`7.846341` continuation tok/s. The high-throughput vision is therefore not
+realized; the next implementation lever should be true speculative MTP target
+verification over drafted tokens or a 256K attention/KV execution-boundary
+change, not more routed-FFN reducer wrappers.
 
 ## Current State
 

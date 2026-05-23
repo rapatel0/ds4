@@ -1,0 +1,8 @@
+case=long-throughput-128k-32
+ctx=131072
+slots=32
+requests=32
+tokens=64
+mtp=off
+started_utc=2026-05-23T05:33:02Z
+finished_utc=2026-05-23T05:34:40Z

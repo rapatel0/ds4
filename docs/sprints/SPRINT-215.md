@@ -1,7 +1,7 @@
 # Sprint 215 - Practical Serving Matrix And MTP Viability
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete
 
 ## Overview
 
@@ -83,25 +83,106 @@ sprint separate from TP-only files and PP scheduler files.
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists and is committed before execution evidence is staged.
-- [ ] Practical serving matrix wrapper exists and passes `bash -n`.
-- [ ] V100 build is run if any C/CUDA/replay code changes.
-- [ ] 16-slot/256K base production-pack run passes token match.
-- [ ] 32-slot/128K base production-pack run passes token match.
-- [ ] 32-slot/256K is either run with reserve evidence or fails closed with
+- [x] Sprint plan exists and is committed before execution evidence is staged.
+- [x] Practical serving matrix wrapper exists and passes `bash -n`.
+- [x] V100 build is run if any C/CUDA/replay code changes.
+- [x] 16-slot/256K base production-pack run passes token match.
+- [x] 32-slot/128K base production-pack run passes token match.
+- [x] 32-slot/256K is either run with reserve evidence or fails closed with
       the exact admission reason recorded.
-- [ ] MTP verify production-pack run records attempted/accepted counters.
-- [ ] MTP commit one-slot run records attempted/accepted/committed counters and
+- [x] MTP verify production-pack run records attempted/accepted counters.
+- [x] MTP commit one-slot run records attempted/accepted/committed counters and
       states whether it produces real effective-token speedup.
-- [ ] Prompt/prefill, generated, and continuation/decode tok/s are recorded
+- [x] Prompt/prefill, generated, and continuation/decode tok/s are recorded
       separately.
-- [ ] Best current practical operating mode is documented.
-- [ ] Next implementation lever is selected from evidence.
-- [ ] Logs are copied to
+- [x] Best current practical operating mode is documented.
+- [x] Next implementation lever is selected from evidence.
+- [x] Logs are copied to
       `logs/from-cluster/sprint215-practical-serving-matrix/`.
-- [ ] `docs/sprints/STATUS.md`, `docs/sprints/VISION.md`, and the appliance
+- [x] `docs/sprints/STATUS.md`, `docs/sprints/VISION.md`, and the appliance
       runbook are updated.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Changes are committed with explicit `git add` paths.
+
+## Execution
+
+Added `tools/ds4-v100-practical-serving-matrix.sh`, a production-serving
+wrapper around the sustained decode harness. The script runs the restored
+localpool appliance pack by default and exports the same TurboMind/F8 flags
+needed for the interleaved gated pack, including `fused6_reduce` and CUDA graph
+selection.
+
+Also widened `tools/ds4-v100-sustained-decode-bench.sh` so benchmark slot tiers
+can cover the existing served admission range up to 256 slots instead of
+failing at 16. The launcher still owns production admission caps.
+
+## V100 Evidence
+
+Cluster target: `llm/llamacpp-build-8gpu` on `gpu-01`.
+
+Command:
+
+```text
+cd /workspace/ds4-sprint181
+./tools/ds4-v100-practical-serving-matrix.sh \
+  --log-dir /workspace/logs/sprint215-practical-serving-matrix \
+  --port-base 18900
+```
+
+Topline:
+
+| Case | Ctx | Slots | MTP | Generated tok/s | Continuation tok/s | Prompt tok/s | Match | Notes |
+|---|---:|---:|---|---:|---:|---:|---:|---|
+| production-baseline | 256K | 16 | off | `62.602937` | `61.624766` | `17.607076` | 16/16 | current long-context baseline |
+| long-throughput | 128K | 32 | off | `69.488893` | `68.403129` | `19.543751` | 32/32 | best current practical long-context mode |
+| forced-256k-32 admission | 256K | 32 | off | n/a | n/a | n/a | n/a | fail-closed: `DS4_V100_SLOTS=32 exceeds ctx=262144 admission cap 16` |
+| mtp-verify | 256K | 16 | verify | `16.373227` | `12.279921` | `73.679524` | 16/16 | `attempted=16`, `accepted=0`, `rejected=16` |
+| mtp-commit | 256K | 1 | commit | `8.369430` | `7.846341` | `9.415609` | 1/1 | `attempted=15`, `accepted=8`, `committed=8` |
+
+GPU utilization:
+
+| Case | Avg GPU util | Max GPU util | Max memory used |
+|---|---:|---:|---:|
+| 16-slot/256K base | `36.30%` | `65%` | `24070 MiB` |
+| 32-slot/128K base | `45.88%` | `88%` | `24124 MiB` |
+| 16-slot/256K MTP verify | `30.92%` | `65%` | `24070 MiB` |
+| 1-slot/256K MTP commit | `8.74%` | `16%` | `24020 MiB` |
+
+Evidence:
+
+```text
+logs/from-cluster/sprint215-practical-serving-matrix/
+```
+
+## Decision
+
+The best deployable practical serving mode today is:
+
+```text
+ctx=131072
+slots=32
+active_microbatch=32
+async_pipeline_mode=per-step
+async_event_handoff=on
+TurboMind fused6_reduce + graph
+MTP off
+```
+
+This mode keeps a long context tier (`128K`) and improves continuation decode
+throughput over the 16-slot/256K mode by about `11.0%`
+(`68.403129` vs `61.624766` tok/s). It is still far below the desired
+`~1k-2k` aggregate tok/s serving target, so the high-throughput vision is not
+realized yet.
+
+Do not promote MTP as a speedup yet. MTP verify is operationally valid but slow
+because it runs after base generation. MTP commit accepts drafts (`8/15`) and
+reports committed tokens, but the current one-slot path still does serial base
+work and achieves only `7.846341` continuation tok/s. The next MTP sprint must
+be a true speculative verifier that batches target verification over drafted
+tokens; otherwise MTP remains observability, not throughput.
+
+The next implementation lever should be MTP true speculative verification or a
+256K attention/KV execution-boundary change. Another routed-FFN reducer wrapper
+is explicitly not indicated by the evidence.
 
 ## Decision Gates
 
