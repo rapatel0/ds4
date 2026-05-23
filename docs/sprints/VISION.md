@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 233
+revision: 242
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -86,6 +86,11 @@ not a serial layer-chain.
 - Sprint 233 validated real TP/EP contract ownership for layer `2`: dense TP,
   replicated control/router, EP experts, sharded KV, and compression state are
   present and balanced across all eight GPUs with zero ownership mismatches.
+- Sprints 239-242 now run a representative layer-2 TP/EP resident loop from
+  production packed bytes at `32` slots / `256K`, MTP off. Sprint 242 fused
+  the FP32 EP remote-sum into next-hidden compose, improving the 50-step
+  layer-loop metric from `1.784008 ms/step` to `1.641832 ms/step` and from
+  `17937.138290` to `19490.418145` slot-step tok/s while preserving checksum.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -410,15 +415,23 @@ cost more than the reduced peer payload saves. Keep FP32 return as default;
 keep FP16 return as an opt-in diagnostic and revisit only if fused into the
 EP reduction or next-hidden compose.
 
-### Sprint 242 - Multi-Slot MTP On TP/EP [tentative]
+### Sprint 242 - TP/EP Fused Remote-Sum Compose [complete]
 
-Goal: Add MTP to the TP/EP serving path only after TP/EP decode is correct and
-benchmarked.
+Goal: Fuse the FP32 EP remote contribution sum into next-hidden compose for
+the separate TP/EP full-layer smoke.
 
-Rationale: MTP should multiply a good decode runtime, not hide a topology
-problem. Single-slot MTP diagnostics are not throughput evidence.
+Rationale: Sprint 241 showed standalone FP16 EP return is correct but slower.
+The bottleneck is extra kernel/synchronization boundaries, not raw peer-copy
+payload bytes.
 
-Outcome: Pending.
+Outcome: Complete. `--fuse-compose-sum` removes the destination `ep_sum` zero
+kernel and eight add kernels per destination rank. Same-binary A/B at `32`
+slots / `256K`, MTP off, and `50` resident steps: baseline FP32 return passes
+at `1.784008 ms/step`, `17937.138290` slot-step tok/s, and
+`0.713663 ms/step` compose; fused compose/sum passes with the same checksum at
+`1.641832 ms/step`, `19490.418145` slot-step tok/s, and `0.568906 ms/step`
+compose. Keep FP32 return and continue fusing TP/EP synchronization boundaries
+before server integration.
 
 ## Experiment Backlog
 
@@ -462,8 +475,9 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 239 proved representative TP/EP next-hidden shard composition for layer `2`. | Dense outputs, EP returned contributions, KV update/check, and residual composition now run in one separate TP/EP execution. | Move from smoke composition to a TP/EP serving gate at `32` slots / `256K`, MTP off. |
 | 2026-05-23 | Sprint 240 proved a resident repeated TP/EP layer-loop benchmark at `32` slots / `256K`. | The path now reports stage costs without per-step pack reloads: dense and compose/sync dominate over EP. | Decide whether Sprint 241 optimizes dense/compose kernels first or starts server-loop integration with known bottlenecks. |
 | 2026-05-23 | Sprint 241 proved FP16 EP return is correct but slower as a standalone pass. | Payload bytes are not the limiter; extra cast/expand kernels increase compose time. | Keep FP32 return default and target fused dense/compose kernel boundaries next. |
+| 2026-05-23 | Sprint 242 proved fused FP32 remote-sum compose improves the resident layer loop. | Removing zero/add kernels is more valuable than standalone EP return quantization at this shape. | Continue collapsing TP/EP dense, EP return, and compose boundaries, then move to all-layer/server integration. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
-| 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit in Sprint 236 or equivalent after TP/EP serving exists. |
+| 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 
 ## Open Questions
 

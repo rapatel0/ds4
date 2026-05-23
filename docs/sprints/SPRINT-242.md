@@ -1,7 +1,7 @@
 # Sprint 242 - TP/EP Fused Remote-Sum Compose A/B
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete
 
 ## Overview
 
@@ -83,17 +83,17 @@ similar.
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists and is committed before implementation evidence.
-- [ ] Implementation stays in the separate TP/EP codepath.
-- [ ] No PP scheduler files are modified.
-- [ ] `--fuse-compose-sum` builds on the V100 pod.
-- [ ] Baseline unfused FP32 return still passes.
-- [ ] Fused FP32 return candidate passes finite/checksum checks.
-- [ ] A/B evidence records `ms_per_step`, `slot_step_tok_s`, and stage timings.
-- [ ] Evidence is copied to
+- [x] Sprint plan exists and is committed before implementation evidence.
+- [x] Implementation stays in the separate TP/EP codepath.
+- [x] No PP scheduler files are modified.
+- [x] `--fuse-compose-sum` builds on the V100 pod.
+- [x] Baseline unfused FP32 return still passes.
+- [x] Fused FP32 return candidate passes finite/checksum checks.
+- [x] A/B evidence records `ms_per_step`, `slot_step_tok_s`, and stage timings.
+- [x] Evidence is copied to
       `logs/from-cluster/sprint242-tp-ep-fused-compose/`.
-- [ ] Status and vision docs are updated with the decision.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Status and vision docs are updated with the decision.
+- [x] Changes are committed with explicit `git add` paths.
 
 ## Risks
 
@@ -102,6 +102,49 @@ similar.
 - If the fused path changes floating-point summation order, checksum may differ
   while finite validation still passes.
 
+## Evidence
+
+V100 pod: `llm/llamacpp-build-8gpu`
+
+Command shape:
+
+```text
+slots=32
+ctx=262144
+top_k=6
+layer=2
+decode_steps=50
+MTP=off
+dense_compute_all=on
+compose_next_hidden=on
+```
+
+Logs:
+
+- `logs/from-cluster/sprint242-tp-ep-fused-compose/layer2-decode-loop-unfused-compose-32slot-256k-50steps.log`
+- `logs/from-cluster/sprint242-tp-ep-fused-compose/layer2-decode-loop-fused-compose-32slot-256k-50steps.log`
+
+| Mode | Fused sum | ms/step | Slot-step tok/s | EP ms/step | Dense ms/step | Compose ms/step | Checksum | Result |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| FP32 return baseline | 0 | 1.784008 | 17937.138290 | 0.316384 | 0.753850 | 0.713663 | 2382924023 | PASS |
+| FP32 return fused compose/sum | 1 | 1.641832 | 19490.418145 | 0.317783 | 0.755056 | 0.568906 | 2382924023 | PASS |
+
+The one-shot compose gate also improved:
+
+| Mode | Compose ms | Checksum | Result |
+|---|---:|---:|---|
+| Unfused | 2.578263 | 4112649481 | PASS |
+| Fused compose/sum | 2.168121 | 4112649481 | PASS |
+
 ## Decision
 
-Pending.
+Promote `--fuse-compose-sum` as the default direction for the TP/EP smoke
+path, while keeping it explicit until server integration. It removes one zero
+kernel and eight add kernels per destination rank in the FP32 EP return path,
+preserves checksum and finite validation, reduces compose time by about
+`20.3%`, and improves the representative resident layer-loop metric by about
+`8.7%`.
+
+This confirms Sprint 241's diagnosis: the useful lever is not standalone
+payload quantization; it is removing extra synchronization and fusing the
+peer-return reduction into the next hidden compose boundary.

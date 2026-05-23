@@ -422,6 +422,18 @@ FP32 return measures `ms_per_step=1.788149`, `slot_step_tok_s=17895.603225`,
 `compose_ms_per_step=0.859697`. Both pass finite/checksum checks. Decision:
 keep FP32 return as default, keep `--ep-return-fp16` as a diagnostic, and only
 revisit FP16 return if cast/copy/sum is fused into a larger compose kernel.
+Sprint 242 fuses the FP32 EP remote-sum directly into the next-hidden compose
+kernel in the separate TP/EP full-layer smoke. The new opt-in
+`--fuse-compose-sum` removes the destination `ep_sum` zero kernel and eight
+standalone add kernels per destination rank. Same-binary 50-step A/B at
+`32` slots / `256K`, MTP off: baseline FP32 return measures
+`ms_per_step=1.784008`, `slot_step_tok_s=17937.138290`, and
+`compose_ms_per_step=0.713663`; fused compose/sum measures
+`ms_per_step=1.641832`, `slot_step_tok_s=19490.418145`, and
+`compose_ms_per_step=0.568906`. Both paths preserve checksum `2382924023` and
+pass finite validation. Decision: keep FP32 return, move fusion forward, and
+continue collapsing TP/EP synchronization boundaries before serving
+integration.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit

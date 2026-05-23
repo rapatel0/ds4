@@ -154,3 +154,27 @@ Conclusion: raw EP return bandwidth is not the limiter at this shape. FP16
 return is correct, but standalone conversion adds more synchronization/kernel
 cost than the peer-copy payload reduction saves. Keep FP32 return as the
 default until conversion is fused into the reduction or compose kernel.
+
+## Sprint 242 Fused Compose/Sum Measurement
+
+Sprint 242 tested the follow-up hypothesis: keep FP32 EP return, but remove
+the standalone destination `ep_sum` zero/add kernels by summing all eight
+remote EP return buffers inside the next-hidden compose kernel.
+
+Same-binary V100 A/B at `32` slots / `256K`, MTP off, `50` resident
+decode-loop steps:
+
+| Mode | Return dtype | Fused sum | ms/step | Slot-step tok/s | Compose ms/step | Result |
+|---|---|---:|---:|---:|---:|---|
+| Baseline | fp32 | 0 | 1.784008 | 17937.138290 | 0.713663 | PASS |
+| Fused compose/sum | fp32 | 1 | 1.641832 | 19490.418145 | 0.568906 | PASS |
+
+The checksum is identical (`2382924023`) across both decode-loop modes. The
+one-shot compose gate also improves from `2.578263 ms` to `2.168121 ms` with
+checksum `4112649481`.
+
+Conclusion: the first useful TP/EP boundary optimization is fusion, not
+standalone return quantization. The production direction should preserve
+low-bit weight loads, do FP16/FP32 math inside GPU kernels, and collapse
+peer-return reduction plus residual/dense composition into as few resident
+kernels as practical.

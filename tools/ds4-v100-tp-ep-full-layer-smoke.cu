@@ -224,6 +224,7 @@ struct ComposeStats {
     int repeat_bad = 0;
     uint64_t checksum = 0;
     bool ep_return_fp16 = false;
+    bool fused_compose_sum = false;
 };
 
 struct DecodeLoopStats {
@@ -244,6 +245,7 @@ struct DecodeLoopStats {
     int finite_bad = 0;
     uint64_t checksum = 0;
     bool ep_return_fp16 = false;
+    bool fused_compose_sum = false;
 };
 
 struct Options {
@@ -265,6 +267,7 @@ struct Options {
     bool compose_next_hidden = false;
     int decode_steps = 0;
     bool ep_return_fp16 = false;
+    bool fuse_compose_sum = false;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -417,6 +420,32 @@ __global__ void compose_next_hidden_kernel(float *next,
     next[i] = residual + attn[i] + shared[i] + ep_sum[i] * 0.125f;
 }
 
+__global__ void compose_next_hidden_sum8_kernel(float *next,
+                                                const float *attn,
+                                                const float *shared,
+                                                const float *r0,
+                                                const float *r1,
+                                                const float *r2,
+                                                const float *r3,
+                                                const float *r4,
+                                                const float *r5,
+                                                const float *r6,
+                                                const float *r7,
+                                                int rank,
+                                                int slots) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t elems = (uint64_t)slots * (kHidden / kGpus);
+    if (i >= elems) return;
+    const int slot = (int)(i / (kHidden / kGpus));
+    const int local_h = (int)(i % (kHidden / kGpus));
+    const float residual =
+        ((float)(rank + 1) * 0.01f) + ((float)slot * 0.001f) +
+        ((float)local_h * 0.00001f);
+    const float ep =
+        r0[i] + r1[i] + r2[i] + r3[i] + r4[i] + r5[i] + r6[i] + r7[i];
+    next[i] = residual + attn[i] + shared[i] + ep * 0.125f;
+}
+
 bool parse_int(const char *text, int *out) {
     if (!text || !*text) return false;
     char *end = nullptr;
@@ -534,7 +563,7 @@ void usage(const char *argv0) {
                  "       [--dense-compute-tensor NAME] [--dense-compute-all-f8]\n"
                  "       [--dense-compute-all-bf16] [--dense-compute-all]\n"
                  "       [--compose-next-hidden] [--decode-steps N]\n"
-                 "       [--ep-return-fp16]\n",
+                 "       [--ep-return-fp16] [--fuse-compose-sum]\n",
                  argv0);
 }
 
@@ -602,6 +631,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             ++i;
         } else if (std::strcmp(arg, "--ep-return-fp16") == 0) {
             opt->ep_return_fp16 = true;
+        } else if (std::strcmp(arg, "--fuse-compose-sum") == 0) {
+            opt->fuse_compose_sum = true;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -1641,6 +1672,7 @@ int run_next_hidden_compose(const Options &opt,
     if (!opt.compose_next_hidden) return 0;
     stats->enabled = true;
     stats->ep_return_fp16 = opt.ep_return_fp16;
+    stats->fused_compose_sum = opt.fuse_compose_sum && !opt.ep_return_fp16;
 
     DeviceDenseOutputs attn;
     DeviceDenseOutputs shared;
@@ -1730,22 +1762,30 @@ int run_next_hidden_compose(const Options &opt,
             CHECK_CUDA(cudaSetDevice(r.device));
             const int block = 256;
             int grid = (int)((shard_elems + block - 1) / block);
-            zero_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_sum, shard_elems);
-            CHECK_CUDA(cudaGetLastError());
-            for (int src = 0; src < kGpus; ++src) {
-                if (opt.ep_return_fp16) {
-                    add_half_to_f32_kernel<<<grid, block, 0, r.stream>>>(
-                        r.d_ep_sum, r.d_ep_remote_half[src], shard_elems);
-                } else {
-                    add_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_sum,
-                                                                 r.d_ep_remote[src],
-                                                                 shard_elems);
+            if (stats->fused_compose_sum) {
+                compose_next_hidden_sum8_kernel<<<grid, block, 0, r.stream>>>(
+                    r.d_next_hidden, attn.d_out[(size_t)dst], shared.d_out[(size_t)dst],
+                    r.d_ep_remote[0], r.d_ep_remote[1], r.d_ep_remote[2],
+                    r.d_ep_remote[3], r.d_ep_remote[4], r.d_ep_remote[5],
+                    r.d_ep_remote[6], r.d_ep_remote[7], dst, opt.slots);
+            } else {
+                zero_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_sum, shard_elems);
+                CHECK_CUDA(cudaGetLastError());
+                for (int src = 0; src < kGpus; ++src) {
+                    if (opt.ep_return_fp16) {
+                        add_half_to_f32_kernel<<<grid, block, 0, r.stream>>>(
+                            r.d_ep_sum, r.d_ep_remote_half[src], shard_elems);
+                    } else {
+                        add_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_sum,
+                                                                     r.d_ep_remote[src],
+                                                                     shard_elems);
+                    }
                 }
+                CHECK_CUDA(cudaGetLastError());
+                compose_next_hidden_kernel<<<grid, block, 0, r.stream>>>(
+                    r.d_next_hidden, attn.d_out[(size_t)dst], shared.d_out[(size_t)dst],
+                    r.d_ep_sum, dst, opt.slots);
             }
-            CHECK_CUDA(cudaGetLastError());
-            compose_next_hidden_kernel<<<grid, block, 0, r.stream>>>(
-                r.d_next_hidden, attn.d_out[(size_t)dst], shared.d_out[(size_t)dst],
-                r.d_ep_sum, dst, opt.slots);
             CHECK_CUDA(cudaGetLastError());
         }
         for (int dst = 0; dst < kGpus; ++dst) {
@@ -1802,6 +1842,7 @@ int run_decode_loop(const Options &opt,
     if (opt.decode_steps <= 0) return 0;
     stats->enabled = true;
     stats->ep_return_fp16 = opt.ep_return_fp16;
+    stats->fused_compose_sum = opt.fuse_compose_sum && !opt.ep_return_fp16;
     stats->steps = opt.decode_steps;
     stats->slots = opt.slots;
     stats->slot_steps = (uint64_t)opt.decode_steps * (uint64_t)opt.slots;
@@ -1903,22 +1944,30 @@ int run_decode_loop(const Options &opt,
             RankState &r = ranks[dst];
             CHECK_CUDA(cudaSetDevice(r.device));
             int grid = (int)((shard_elems + block - 1) / block);
-            zero_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_sum, shard_elems);
-            CHECK_CUDA(cudaGetLastError());
-            for (int src = 0; src < kGpus; ++src) {
-                if (opt.ep_return_fp16) {
-                    add_half_to_f32_kernel<<<grid, block, 0, r.stream>>>(
-                        r.d_ep_sum, r.d_ep_remote_half[src], shard_elems);
-                } else {
-                    add_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_sum,
-                                                                 r.d_ep_remote[src],
-                                                                 shard_elems);
+            if (stats->fused_compose_sum) {
+                compose_next_hidden_sum8_kernel<<<grid, block, 0, r.stream>>>(
+                    r.d_next_hidden, attn.d_out[(size_t)dst], shared.d_out[(size_t)dst],
+                    r.d_ep_remote[0], r.d_ep_remote[1], r.d_ep_remote[2],
+                    r.d_ep_remote[3], r.d_ep_remote[4], r.d_ep_remote[5],
+                    r.d_ep_remote[6], r.d_ep_remote[7], dst, opt.slots);
+            } else {
+                zero_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_sum, shard_elems);
+                CHECK_CUDA(cudaGetLastError());
+                for (int src = 0; src < kGpus; ++src) {
+                    if (opt.ep_return_fp16) {
+                        add_half_to_f32_kernel<<<grid, block, 0, r.stream>>>(
+                            r.d_ep_sum, r.d_ep_remote_half[src], shard_elems);
+                    } else {
+                        add_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_sum,
+                                                                     r.d_ep_remote[src],
+                                                                     shard_elems);
+                    }
                 }
+                CHECK_CUDA(cudaGetLastError());
+                compose_next_hidden_kernel<<<grid, block, 0, r.stream>>>(
+                    r.d_next_hidden, attn.d_out[(size_t)dst], shared.d_out[(size_t)dst],
+                    r.d_ep_sum, dst, opt.slots);
             }
-            CHECK_CUDA(cudaGetLastError());
-            compose_next_hidden_kernel<<<grid, block, 0, r.stream>>>(
-                r.d_next_hidden, attn.d_out[(size_t)dst], shared.d_out[(size_t)dst],
-                r.d_ep_sum, dst, opt.slots);
             CHECK_CUDA(cudaGetLastError());
         }
         sync_all();
@@ -2279,7 +2328,7 @@ int main(int argc, char **argv) {
         std::printf("tp_ep_next_hidden_compose\tslots\t%d\tctx\t%llu\t"
                     "hidden_shard\t%d\tep_contribution_bytes\t%llu\t"
                     "ep_return_dtype\t%s\tep_return_bytes\t%llu\tattn_dense_ms\t%.6f\t"
-                    "shared_dense_ms\t%.6f\tcompose_ms\t%.6f\t"
+                    "shared_dense_ms\t%.6f\tfused_compose_sum\t%d\tcompose_ms\t%.6f\t"
                     "checksum\t%llu\tfinite_bad\t%d\trepeat_max_abs\t%.9f\t"
                     "repeat_bad\t%d\t%s\n",
                     opt.slots, (unsigned long long)cfg.ctx, kHidden / kGpus,
@@ -2287,6 +2336,7 @@ int main(int argc, char **argv) {
                     compose.ep_return_fp16 ? "fp16" : "fp32",
                     (unsigned long long)compose.ep_return_bytes,
                     compose.attn_dense_ms, compose.shared_dense_ms,
+                    compose.fused_compose_sum ? 1 : 0,
                     compose.compose_ms, (unsigned long long)compose.checksum,
                     compose.finite_bad, compose.repeat_max_abs,
                     compose.repeat_bad, compose.pass ? "PASS" : "FAIL");
@@ -2302,7 +2352,8 @@ int main(int argc, char **argv) {
         std::printf("tp_ep_decode_loop\tsteps\t%d\tslots\t%d\tslot_steps\t%llu\t"
                     "total_ms\t%.6f\tms_per_step\t%.6f\tslot_step_tok_s\t%.6f\t"
                     "ep_ms_per_step\t%.6f\tdense_ms_per_step\t%.6f\t"
-                    "compose_ms_per_step\t%.6f\tdense_loaded_bytes\t%llu\t"
+                    "fused_compose_sum\t%d\tcompose_ms_per_step\t%.6f\t"
+                    "dense_loaded_bytes\t%llu\t"
                     "ep_contribution_bytes\t%llu\tep_return_dtype\t%s\t"
                     "ep_return_bytes\t%llu\t"
                     "checksum\t%llu\tfinite_bad\t%d\t%s\n",
@@ -2310,7 +2361,9 @@ int main(int argc, char **argv) {
                     (unsigned long long)decode_loop.slot_steps,
                     decode_loop.total_ms, decode_loop.ms_per_step,
                     decode_loop.tok_s, decode_loop.ep_ms_per_step,
-                    decode_loop.dense_ms_per_step, decode_loop.compose_ms_per_step,
+                    decode_loop.dense_ms_per_step,
+                    decode_loop.fused_compose_sum ? 1 : 0,
+                    decode_loop.compose_ms_per_step,
                     (unsigned long long)decode_loop.dense_loaded_bytes,
                     (unsigned long long)decode_loop.ep_contribution_bytes,
                     decode_loop.ep_return_fp16 ? "fp16" : "fp32",
@@ -2379,14 +2432,16 @@ int main(int argc, char **argv) {
                 "compose_next_hidden\t%d\tcompose_ep_contribution_bytes\t%llu\t"
                 "compose_ep_return_dtype\t%s\tcompose_ep_return_bytes\t%llu\t"
                 "compose_attn_dense_ms\t%.6f\t"
-                "compose_shared_dense_ms\t%.6f\tcompose_ms\t%.6f\t"
+                "compose_shared_dense_ms\t%.6f\tcompose_fused_sum\t%d\t"
+                "compose_ms\t%.6f\t"
                 "compose_checksum\t%llu\tcompose_finite_bad\t%d\t"
                 "compose_repeat_max_abs\t%.9f\tcompose_repeat_bad\t%d\t"
                 "compose_pass\t%d\t"
                 "decode_steps\t%d\tdecode_slot_steps\t%llu\tdecode_total_ms\t%.6f\t"
                 "decode_ms_per_step\t%.6f\tdecode_slot_step_tok_s\t%.6f\t"
                 "decode_ep_ms_per_step\t%.6f\tdecode_dense_ms_per_step\t%.6f\t"
-                "decode_compose_ms_per_step\t%.6f\tdecode_ep_return_dtype\t%s\t"
+                "decode_fused_compose_sum\t%d\tdecode_compose_ms_per_step\t%.6f\t"
+                "decode_ep_return_dtype\t%s\t"
                 "decode_ep_return_bytes\t%llu\tdecode_checksum\t%llu\t"
                 "decode_finite_bad\t%d\tdecode_pass\t%d\t"
                 "aggregate_routes\t%d\tdispatch_bytes\t%llu\treturn_bytes\t%llu\t"
@@ -2435,6 +2490,7 @@ int main(int argc, char **argv) {
                 (unsigned long long)compose.ep_return_bytes,
                 compose.attn_dense_ms,
                 compose.shared_dense_ms,
+                compose.fused_compose_sum ? 1 : 0,
                 compose.compose_ms,
                 (unsigned long long)compose.checksum,
                 compose.finite_bad,
@@ -2448,6 +2504,7 @@ int main(int argc, char **argv) {
                 decode_loop.tok_s,
                 decode_loop.ep_ms_per_step,
                 decode_loop.dense_ms_per_step,
+                decode_loop.fused_compose_sum ? 1 : 0,
                 decode_loop.compose_ms_per_step,
                 decode_loop.ep_return_fp16 ? "fp16" : "fp32",
                 (unsigned long long)decode_loop.ep_return_bytes,
