@@ -304,6 +304,21 @@ the expected EP8 spans: GPU0 `0..31`, GPU1 `32..63`, through GPU7 `224..255`.
 This proves descriptor ownership, not real descriptor-backed execution. The
 next step is binding those descriptor rows to actual production-pack byte spans
 and feeding descriptor-derived expert pointers into the one-layer TP/EP smoke.
+Sprint 234 completes that byte-binding gate. The TP/EP layer smoke now has an
+opt-in descriptor-backed expert mode that parses the real
+`turbomind-pack-index.tsv`, reads production-packed layer-2
+`ffn_gate_up_exps` and `ffn_down_exps` weight/scale bytes from
+`gpu0.weights`, copies the selected EP experts to each target V100, and builds
+TurboMind pointer tables from descriptor-derived strides and offsets. On the
+V100 pod at `32` slots / `256K` / `top_k=6`, descriptor-backed execution
+passes with `192` aggregate routes, `641728512` descriptor bytes read,
+runtime bytes per GPU `7122628608`, KV `max_abs=0.000000000`,
+`worst_ep_ms=0.246647`, `dense_kv_ms=1.121624`, `one_layer_ms=1.368271`,
+`repeat_max_abs=0`, `repeat_bad=0`, `repeat_nan=0`, and `PASS`. Same-binary
+synthetic regression also passes with `worst_ep_ms=0.247603`. TP/EP is still
+not serving; this proves real packed expert byte binding for one layer, while
+dense/control/router/attention descriptor execution and full 43-layer decode
+remain the next gates.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit

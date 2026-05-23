@@ -1,0 +1,11 @@
+rank	0	device	0	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.030174	down_ms	0.029730	ep_ms	0.059904
+rank	1	device	1	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.029969	down_ms	0.029764	ep_ms	0.059733
+rank	2	device	2	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.029833	down_ms	0.029764	ep_ms	0.059597
+rank	3	device	3	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.029730	down_ms	0.029730	ep_ms	0.059460
+rank	4	device	4	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.029628	down_ms	0.029764	ep_ms	0.059392
+rank	5	device	5	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.029594	down_ms	0.029730	ep_ms	0.059324
+rank	6	device	6	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.029457	down_ms	0.029764	ep_ms	0.059221
+rank	7	device	7	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.161109	down_ms	0.085538	ep_ms	0.246647
+runtime_bytes_per_gpu	hidden	524288	kv	3707940864	comp_state	1803550720	scratch	1610612736	total	7122628608
+dense_kv_slice	layer	2	ratio	4	slot	7	position	1024	attn_row	384	indexer_row	256	attn_row_bytes	65	indexer_row_bytes	17	max_abs	0.000000000	dense_kv_ms	1.121624
+tp_ep_layer_smoke	slots	32	ctx	262144	top_k	6	aggregate_routes	192	global_experts	256	local_experts	32	active_local_experts	6	dispatch_bytes	1572864	return_bytes	1572864	expert_source	descriptor	descriptor_bytes_read	641728512	route_imbalance	1.000000	worst_gate_ms	0.161109	worst_down_ms	0.085538	worst_ep_ms	0.246647	one_layer_ms	1.368271	repeat_max_abs	0.000000000	repeat_bad	0	repeat_nan	0	PASS

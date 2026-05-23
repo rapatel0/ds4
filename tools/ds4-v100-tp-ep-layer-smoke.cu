@@ -1,3 +1,5 @@
+#define _FILE_OFFSET_BITS 64
+
 #include "ds4_v100_tp_runtime.h"
 #include "kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h"
 
@@ -6,6 +8,7 @@
 #include <dlfcn.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -15,6 +18,7 @@
 #include <limits>
 #include <random>
 #include <string>
+#include <sys/types.h>
 #include <vector>
 
 namespace {
@@ -78,6 +82,32 @@ struct PackedExperts {
     int k_pack = 0;
 };
 
+struct TmIndexEntry {
+    std::string semantic_tensor_id;
+    std::string runtime_layout;
+    std::string sidecar_file;
+    int owning_gpu = -1;
+    int layer_id = -1;
+    int n = 0;
+    int k = 0;
+    int experts_packed = 0;
+    int experts_total = 0;
+    size_t weight_bytes_per_expert = 0;
+    size_t scale_bytes_per_expert = 0;
+    int k_pack = 0;
+    int weight_stride = 0;
+    int scale_stride = 0;
+    uint64_t weight_offset = 0;
+    uint64_t scale_offset = 0;
+};
+
+struct DescriptorBindings {
+    TmIndexEntry gated;
+    TmIndexEntry down;
+    bool have_gated = false;
+    bool have_down = false;
+};
+
 struct RankState {
     int rank = 0;
     int device = 0;
@@ -106,6 +136,9 @@ struct Options {
     uint64_t position = 1024;
     int warmup = 5;
     int iters = 30;
+    const char *pack_dir = nullptr;
+    const char *tm_index_path = nullptr;
+    bool descriptor_backed_experts = false;
 };
 
 bool parse_int(const char *text, int *out) {
@@ -126,6 +159,159 @@ bool parse_u64(const char *text, uint64_t *out) {
     if (end == text || *end != '\0') return false;
     *out = (uint64_t)v;
     return true;
+}
+
+bool parse_size(const char *text, size_t *out) {
+    uint64_t v = 0;
+    if (!parse_u64(text, &v)) return false;
+    if (v > (uint64_t)std::numeric_limits<size_t>::max()) return false;
+    *out = (size_t)v;
+    return true;
+}
+
+std::vector<std::string> split_tabs(const std::string &line) {
+    std::vector<std::string> fields;
+    size_t start = 0;
+    while (start <= line.size()) {
+        const size_t tab = line.find('\t', start);
+        if (tab == std::string::npos) {
+            fields.emplace_back(line.substr(start));
+            break;
+        }
+        fields.emplace_back(line.substr(start, tab - start));
+        start = tab + 1;
+    }
+    return fields;
+}
+
+bool safe_sidecar_name(const std::string &name) {
+    return !name.empty() &&
+           name.find('/') == std::string::npos &&
+           name.find('\\') == std::string::npos &&
+           name.find("..") == std::string::npos;
+}
+
+std::string path_join(const char *dir, const std::string &base) {
+    std::string out(dir ? dir : "");
+    if (!out.empty() && out.back() != '/') out.push_back('/');
+    out += base;
+    return out;
+}
+
+bool parse_tm_entry(const std::vector<std::string> &f, TmIndexEntry *out) {
+    if (f.size() < 25) return false;
+    TmIndexEntry e;
+    e.semantic_tensor_id = f[0];
+    e.runtime_layout = f[4];
+    if (!parse_int(f[5].c_str(), &e.owning_gpu)) return false;
+    if (!parse_int(f[6].c_str(), &e.layer_id)) return false;
+    if (!parse_int(f[8].c_str(), &e.n)) return false;
+    if (!parse_int(f[9].c_str(), &e.k)) return false;
+    if (!parse_int(f[10].c_str(), &e.experts_packed)) return false;
+    if (!parse_int(f[11].c_str(), &e.experts_total)) return false;
+    if (!parse_size(f[12].c_str(), &e.weight_bytes_per_expert)) return false;
+    if (!parse_size(f[13].c_str(), &e.scale_bytes_per_expert)) return false;
+    if (!parse_int(f[14].c_str(), &e.k_pack)) return false;
+    if (!parse_int(f[15].c_str(), &e.weight_stride)) return false;
+    if (!parse_int(f[16].c_str(), &e.scale_stride)) return false;
+    e.sidecar_file = f[17];
+    if (!parse_u64(f[18].c_str(), &e.weight_offset)) return false;
+    if (!parse_u64(f[19].c_str(), &e.scale_offset)) return false;
+    if (!safe_sidecar_name(e.sidecar_file)) return false;
+    *out = e;
+    return true;
+}
+
+bool valid_tm_entry(const TmIndexEntry &e, int n, int k, const char *layout) {
+    return e.n == n &&
+           e.k == k &&
+           e.experts_total == kGlobalExperts &&
+           e.experts_packed >= kGlobalExperts &&
+           e.weight_bytes_per_expert > 0 &&
+           e.scale_bytes_per_expert > 0 &&
+           e.k_pack > 0 &&
+           e.weight_stride > 0 &&
+           e.scale_stride > 0 &&
+           e.runtime_layout == layout;
+}
+
+int parse_tm_index(const char *path, int layer, DescriptorBindings *out) {
+    FILE *fp = std::fopen(path, "rb");
+    if (!fp) {
+        std::fprintf(stderr, "cannot open tm index %s: %s\n", path, std::strerror(errno));
+        return 1;
+    }
+    char gated_name[128];
+    char down_name[128];
+    std::snprintf(gated_name, sizeof(gated_name), "blk.%d.ffn_gate_up_exps.weight", layer);
+    std::snprintf(down_name, sizeof(down_name), "blk.%d.ffn_down_exps.weight", layer);
+
+    char buf[8192];
+    bool first = true;
+    while (std::fgets(buf, sizeof(buf), fp)) {
+        std::string line(buf);
+        while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
+        if (first) {
+            first = false;
+            continue;
+        }
+        if (line.empty()) continue;
+        std::vector<std::string> f = split_tabs(line);
+        TmIndexEntry e;
+        if (!parse_tm_entry(f, &e)) {
+            std::fprintf(stderr, "invalid tm index row for %s\n", path);
+            std::fclose(fp);
+            return 2;
+        }
+        if (e.layer_id != layer) continue;
+        if (e.semantic_tensor_id == gated_name) {
+            if (!valid_tm_entry(e, kFusedN, kHidden,
+                                "turbomind_mxfp4_grouped_gate_up_interleaved")) {
+                std::fprintf(stderr, "invalid gated descriptor for %s\n", gated_name);
+                std::fclose(fp);
+                return 3;
+            }
+            out->gated = e;
+            out->have_gated = true;
+        } else if (e.semantic_tensor_id == down_name) {
+            if (!valid_tm_entry(e, kHidden, kMid, "turbomind_mxfp4_grouped")) {
+                std::fprintf(stderr, "invalid down descriptor for %s\n", down_name);
+                std::fclose(fp);
+                return 4;
+            }
+            out->down = e;
+            out->have_down = true;
+        }
+    }
+    std::fclose(fp);
+    if (!out->have_gated || !out->have_down) {
+        std::fprintf(stderr, "missing layer %d gated/down descriptors in %s\n", layer, path);
+        return 5;
+    }
+    return 0;
+}
+
+int read_exact_at(const std::string &path, uint64_t offset, void *dst, size_t bytes) {
+    FILE *fp = std::fopen(path.c_str(), "rb");
+    if (!fp) {
+        std::fprintf(stderr, "cannot open sidecar %s: %s\n", path.c_str(), std::strerror(errno));
+        return 1;
+    }
+    if (fseeko(fp, (off_t)offset, SEEK_SET) != 0) {
+        std::fprintf(stderr, "cannot seek sidecar %s offset %llu: %s\n",
+                     path.c_str(), (unsigned long long)offset, std::strerror(errno));
+        std::fclose(fp);
+        return 2;
+    }
+    const size_t got = std::fread(dst, 1, bytes, fp);
+    if (got != bytes) {
+        std::fprintf(stderr, "short read sidecar %s offset %llu bytes %zu got %zu\n",
+                     path.c_str(), (unsigned long long)offset, bytes, got);
+        std::fclose(fp);
+        return 3;
+    }
+    std::fclose(fp);
+    return 0;
 }
 
 bool parse_devices(const char *text, int devices[kGpus]) {
@@ -159,7 +345,8 @@ void usage(const char *argv0) {
     std::fprintf(stderr,
                  "usage: %s [--lib PATH] [--devices 0,1,2,3,4,5,6,7]\n"
                  "       [--slots N] [--top-k N] [--layer N] [--kv-slot N]\n"
-                 "       [--position N] [--warmup N] [--iters N]\n",
+                 "       [--position N] [--warmup N] [--iters N]\n"
+                 "       [--descriptor-backed-experts --pack-dir DIR --tm-index PATH]\n",
                  argv0);
 }
 
@@ -197,6 +384,16 @@ bool parse_args(int argc, char **argv, Options *opt) {
         } else if (std::strcmp(arg, "--iters") == 0) {
             if (!val || !parse_int(val, &opt->iters) || opt->iters <= 0) return false;
             ++i;
+        } else if (std::strcmp(arg, "--pack-dir") == 0) {
+            if (!val) return false;
+            opt->pack_dir = val;
+            ++i;
+        } else if (std::strcmp(arg, "--tm-index") == 0) {
+            if (!val) return false;
+            opt->tm_index_path = val;
+            ++i;
+        } else if (std::strcmp(arg, "--descriptor-backed-experts") == 0) {
+            opt->descriptor_backed_experts = true;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -204,6 +401,7 @@ bool parse_args(int argc, char **argv, Options *opt) {
             return false;
         }
     }
+    if (opt->descriptor_backed_experts && (!opt->pack_dir || !opt->tm_index_path)) return false;
     return opt->top_k <= kActiveLocalExperts;
 }
 
@@ -308,6 +506,55 @@ int pack_fixture_set(int device, const Api &api, int n, int k,
     for (size_t i = 0; i < active.size(); ++i) {
         w_table[(size_t)active[i]] = StridedPtrH{out->d_w_active[i], k * 32};
         s_table[(size_t)active[i]] = StridedPtrH{out->d_s_active[i], n};
+    }
+    CHECK_CUDA(cudaMalloc(&out->d_w_table, w_table.size() * sizeof(StridedPtrH)));
+    CHECK_CUDA(cudaMemcpy(out->d_w_table, w_table.data(),
+                          w_table.size() * sizeof(StridedPtrH), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMalloc(&out->d_s_table, s_table.size() * sizeof(StridedPtrH)));
+    CHECK_CUDA(cudaMemcpy(out->d_s_table, s_table.data(),
+                          s_table.size() * sizeof(StridedPtrH), cudaMemcpyHostToDevice));
+    return 0;
+}
+
+int pack_descriptor_set(int device, const TmIndexEntry &entry, int rank,
+                        const std::vector<int> &active, const char *pack_dir,
+                        PackedExperts *out, uint64_t *host_bytes_read) {
+    CHECK_CUDA(cudaSetDevice(device));
+    const std::string sidecar_path = path_join(pack_dir, entry.sidecar_file);
+    out->d_w_active.assign(active.size(), nullptr);
+    out->d_s_active.assign(active.size(), nullptr);
+    out->k_pack = entry.k_pack;
+
+    std::vector<uint8_t> h_weight(entry.weight_bytes_per_expert);
+    std::vector<uint8_t> h_scale(entry.scale_bytes_per_expert);
+    for (size_t i = 0; i < active.size(); ++i) {
+        const int global_expert = rank * kLocalExperts + active[i];
+        const uint64_t w_off = entry.weight_offset +
+                               (uint64_t)global_expert * entry.weight_bytes_per_expert;
+        const uint64_t s_off = entry.scale_offset +
+                               (uint64_t)global_expert * entry.scale_bytes_per_expert;
+        if (read_exact_at(sidecar_path, w_off, h_weight.data(), h_weight.size()) != 0 ||
+            read_exact_at(sidecar_path, s_off, h_scale.data(), h_scale.size()) != 0) {
+            return 1;
+        }
+        CHECK_CUDA(cudaMalloc(&out->d_w_active[i], h_weight.size()));
+        CHECK_CUDA(cudaMalloc(&out->d_s_active[i], h_scale.size()));
+        CHECK_CUDA(cudaMemcpy(out->d_w_active[i], h_weight.data(), h_weight.size(),
+                              cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(out->d_s_active[i], h_scale.data(), h_scale.size(),
+                              cudaMemcpyHostToDevice));
+        *host_bytes_read += (uint64_t)h_weight.size() + (uint64_t)h_scale.size();
+    }
+
+    std::vector<StridedPtrH> w_table((size_t)kLocalExperts);
+    std::vector<StridedPtrH> s_table((size_t)kLocalExperts);
+    for (int e = 0; e < kLocalExperts; ++e) {
+        w_table[(size_t)e] = StridedPtrH{out->d_w_active[0], entry.weight_stride};
+        s_table[(size_t)e] = StridedPtrH{out->d_s_active[0], entry.scale_stride};
+    }
+    for (size_t i = 0; i < active.size(); ++i) {
+        w_table[(size_t)active[i]] = StridedPtrH{out->d_w_active[i], entry.weight_stride};
+        s_table[(size_t)active[i]] = StridedPtrH{out->d_s_active[i], entry.scale_stride};
     }
     CHECK_CUDA(cudaMalloc(&out->d_w_table, w_table.size() * sizeof(StridedPtrH)));
     CHECK_CUDA(cudaMemcpy(out->d_w_table, w_table.data(),
@@ -445,6 +692,16 @@ int main(int argc, char **argv) {
     Api api;
     load_api(lib, &api);
 
+    DescriptorBindings bindings;
+    uint64_t descriptor_bytes_read = 0;
+    if (opt.descriptor_backed_experts) {
+        const int rc = parse_tm_index(opt.tm_index_path, opt.layer, &bindings);
+        if (rc != 0) {
+            ds4_v100_tp_runtime_close(rt);
+            return 2;
+        }
+    }
+
     RankState ranks[kGpus];
     int aggregate_routes = 0;
     int min_routes = std::numeric_limits<int>::max();
@@ -489,23 +746,33 @@ int main(int argc, char **argv) {
 
         std::vector<int> active;
         for (int e = 0; e < kActiveLocalExperts; ++e) active.push_back(e);
-        std::vector<std::vector<block_mxfp4>> gated(active.size());
-        std::vector<std::vector<block_mxfp4>> down(active.size());
-        for (size_t i = 0; i < active.size(); ++i) {
-            std::vector<block_mxfp4> gate;
-            std::vector<block_mxfp4> up;
-            make_mxfp4_fixture(gate, kMid, kHidden,
-                               0x61000000u + (uint32_t)p * 1009u + (uint32_t)i * 37u);
-            make_mxfp4_fixture(up, kMid, kHidden,
-                               0x62000000u + (uint32_t)p * 1009u + (uint32_t)i * 41u);
-            make_fused_interleaved_fixture(gated[i], gate, up, kMid, kHidden);
-            make_mxfp4_fixture(down[i], kHidden, kMid,
-                               0x63000000u + (uint32_t)p * 1009u + (uint32_t)i * 43u);
-        }
-        if (pack_fixture_set(r.device, api, kFusedN, kHidden, active, gated, &r.gated) != 0 ||
-            pack_fixture_set(r.device, api, kHidden, kMid, active, down, &r.down) != 0) {
-            ds4_v100_tp_runtime_close(rt);
-            return 4;
+        if (opt.descriptor_backed_experts) {
+            if (pack_descriptor_set(r.device, bindings.gated, p, active, opt.pack_dir,
+                                    &r.gated, &descriptor_bytes_read) != 0 ||
+                pack_descriptor_set(r.device, bindings.down, p, active, opt.pack_dir,
+                                    &r.down, &descriptor_bytes_read) != 0) {
+                ds4_v100_tp_runtime_close(rt);
+                return 4;
+            }
+        } else {
+            std::vector<std::vector<block_mxfp4>> gated(active.size());
+            std::vector<std::vector<block_mxfp4>> down(active.size());
+            for (size_t i = 0; i < active.size(); ++i) {
+                std::vector<block_mxfp4> gate;
+                std::vector<block_mxfp4> up;
+                make_mxfp4_fixture(gate, kMid, kHidden,
+                                   0x61000000u + (uint32_t)p * 1009u + (uint32_t)i * 37u);
+                make_mxfp4_fixture(up, kMid, kHidden,
+                                   0x62000000u + (uint32_t)p * 1009u + (uint32_t)i * 41u);
+                make_fused_interleaved_fixture(gated[i], gate, up, kMid, kHidden);
+                make_mxfp4_fixture(down[i], kHidden, kMid,
+                                   0x63000000u + (uint32_t)p * 1009u + (uint32_t)i * 43u);
+            }
+            if (pack_fixture_set(r.device, api, kFusedN, kHidden, active, gated, &r.gated) != 0 ||
+                pack_fixture_set(r.device, api, kHidden, kMid, active, down, &r.down) != 0) {
+                ds4_v100_tp_runtime_close(rt);
+                return 4;
+            }
         }
     }
 
@@ -598,12 +865,15 @@ int main(int argc, char **argv) {
     std::printf("tp_ep_layer_smoke\tslots\t%d\tctx\t%llu\ttop_k\t%d\t"
                 "aggregate_routes\t%d\tglobal_experts\t%d\tlocal_experts\t%d\t"
                 "active_local_experts\t%d\tdispatch_bytes\t%llu\treturn_bytes\t%llu\t"
+                "expert_source\t%s\tdescriptor_bytes_read\t%llu\t"
                 "route_imbalance\t%.6f\tworst_gate_ms\t%.6f\tworst_down_ms\t%.6f\t"
                 "worst_ep_ms\t%.6f\tone_layer_ms\t%.6f\trepeat_max_abs\t%.9f\t"
                 "repeat_bad\t%d\trepeat_nan\t%d\t%s\n",
                 opt.slots, (unsigned long long)cfg.ctx, opt.top_k, aggregate_routes,
                 kGlobalExperts, kLocalExperts, kActiveLocalExperts,
                 (unsigned long long)dispatch_bytes, (unsigned long long)return_bytes,
+                opt.descriptor_backed_experts ? "descriptor" : "synthetic",
+                (unsigned long long)descriptor_bytes_read,
                 imbalance, worst_gate_ms, worst_down_ms, worst_ep_ms, one_layer_ms,
                 repeat_max_abs, repeat_bad, repeat_nan,
                 (kv_result.max_abs == 0.0 && repeat_bad == 0 && repeat_nan == 0) ? "PASS" : "FAIL");
