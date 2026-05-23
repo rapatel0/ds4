@@ -40,7 +40,11 @@ invocations and improves the proxy again to `45.770462 ms/token` /
 ran longer continuous token-major gates. The 32-step run passes `1376/1376`
 invocations at `39.290219 ms/token` proxy / `814.452062` projected slot-step
 tok/s. The measured steady bottleneck is compose/all-to-all:
-`742.079181 ms` summed compose versus `514.766496 ms` summed EP.
+`742.079181 ms` summed compose versus `514.766496 ms` summed EP. Sprint 270
+removed same-GPU staged compose copies on the FP32 return path. The 16-step
+A/B improves from `40.271428` to `38.503412 ms/token` proxy and reduces
+compose from `371.558564` to `342.417467 ms`; the 32-step skip-self topline
+is `37.912062 ms/token` proxy / `844.058544` projected slot-step tok/s.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

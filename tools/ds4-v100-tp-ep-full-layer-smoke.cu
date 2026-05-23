@@ -380,6 +380,7 @@ struct Options {
     bool source_copy_schedule = true;
     bool token_major_all_layers = false;
     bool share_dense_ops = false;
+    bool skip_self_compose_copy = true;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -804,7 +805,8 @@ void usage(const char *argv0) {
                  "       [--overlap-ep-dense] [--serial-ep-dense]\n"
                  "       [--direct-remote-compose]\n"
                  "       [--source-copy-schedule] [--dest-copy-schedule]\n"
-                 "       [--token-major-all-layers] [--shared-dense-ops]\n",
+                 "       [--token-major-all-layers] [--shared-dense-ops]\n"
+                 "       [--skip-self-compose-copy] [--copy-self-compose]\n",
                  argv0);
 }
 
@@ -910,6 +912,10 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->token_major_all_layers = true;
         } else if (std::strcmp(arg, "--shared-dense-ops") == 0) {
             opt->share_dense_ops = true;
+        } else if (std::strcmp(arg, "--skip-self-compose-copy") == 0) {
+            opt->skip_self_compose_copy = true;
+        } else if (std::strcmp(arg, "--copy-self-compose") == 0) {
+            opt->skip_self_compose_copy = false;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -2500,8 +2506,11 @@ int run_next_hidden_compose(const Options &opt,
         shard_elems * (opt.ep_return_fp16 ? sizeof(__half) : sizeof(float));
     const uint64_t all_contrib_elems = (uint64_t)kGpus * shard_elems;
     const uint64_t all_contrib_bytes = all_contrib_elems * sizeof(float);
+    const bool skip_self_copy = opt.skip_self_compose_copy && !opt.ep_return_fp16;
     stats->ep_contribution_bytes = all_contrib_bytes * kGpus;
-    stats->ep_return_bytes = return_shard_bytes * kGpus * kGpus;
+    stats->ep_return_bytes = return_shard_bytes *
+                             (skip_self_copy ? (kGpus * kGpus - kGpus)
+                                             : (kGpus * kGpus));
     if (ensure_compose_buffers(opt, ranks) != 0) {
         free_device_dense_outputs(attn, opt);
         free_device_dense_outputs(shared, opt);
@@ -2538,6 +2547,7 @@ int run_next_hidden_compose(const Options &opt,
     for (int dst = 0; dst < kGpus; ++dst) {
         CHECK_CUDA(cudaSetDevice(ranks[dst].device));
         for (int src = 0; src < kGpus; ++src) {
+            if (skip_self_copy && src == dst) continue;
             if (opt.ep_return_fp16) {
                 const __half *src_ptr =
                     ranks[src].d_ep_contrib_half_all + (uint64_t)dst * shard_elems;
@@ -2572,11 +2582,33 @@ int run_next_hidden_compose(const Options &opt,
             const int block = 256;
             int grid = (int)((shard_elems + block - 1) / block);
             if (stats->fused_compose_sum) {
+                const float *r0 = skip_self_copy && dst == 0
+                    ? ranks[0].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : r.d_ep_remote[0];
+                const float *r1 = skip_self_copy && dst == 1
+                    ? ranks[1].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : r.d_ep_remote[1];
+                const float *r2 = skip_self_copy && dst == 2
+                    ? ranks[2].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : r.d_ep_remote[2];
+                const float *r3 = skip_self_copy && dst == 3
+                    ? ranks[3].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : r.d_ep_remote[3];
+                const float *r4 = skip_self_copy && dst == 4
+                    ? ranks[4].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : r.d_ep_remote[4];
+                const float *r5 = skip_self_copy && dst == 5
+                    ? ranks[5].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : r.d_ep_remote[5];
+                const float *r6 = skip_self_copy && dst == 6
+                    ? ranks[6].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : r.d_ep_remote[6];
+                const float *r7 = skip_self_copy && dst == 7
+                    ? ranks[7].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : r.d_ep_remote[7];
                 compose_next_hidden_sum8_kernel<<<grid, block, 0, r.stream>>>(
                     r.d_next_hidden, attn.d_out[(size_t)dst], shared.d_out[(size_t)dst],
-                    r.d_ep_remote[0], r.d_ep_remote[1], r.d_ep_remote[2],
-                    r.d_ep_remote[3], r.d_ep_remote[4], r.d_ep_remote[5],
-                    r.d_ep_remote[6], r.d_ep_remote[7], dst, opt.slots);
+                    r0, r1, r2, r3, r4, r5, r6, r7, dst, opt.slots);
             } else {
                 zero_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_sum, shard_elems);
                 CHECK_CUDA(cudaGetLastError());
@@ -2585,8 +2617,11 @@ int run_next_hidden_compose(const Options &opt,
                         add_half_to_f32_kernel<<<grid, block, 0, r.stream>>>(
                             r.d_ep_sum, r.d_ep_remote_half[src], shard_elems);
                     } else {
+                        const float *src_contrib = skip_self_copy && src == dst
+                            ? ranks[src].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                            : r.d_ep_remote[src];
                         add_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_sum,
-                                                                     r.d_ep_remote[src],
+                                                                     src_contrib,
                                                                      shard_elems);
                     }
                 }
@@ -2688,8 +2723,11 @@ int run_decode_loop(const Options &opt,
         shard_elems * (opt.ep_return_fp16 ? sizeof(__half) : sizeof(float));
     const uint64_t all_contrib_elems = (uint64_t)kGpus * shard_elems;
     const uint64_t all_contrib_bytes = all_contrib_elems * sizeof(float);
+    const bool skip_self_copy = opt.skip_self_compose_copy && !opt.ep_return_fp16;
     stats->ep_contribution_bytes = all_contrib_bytes * kGpus;
-    stats->ep_return_bytes = return_shard_bytes * kGpus * kGpus;
+    stats->ep_return_bytes = return_shard_bytes *
+                             (skip_self_copy ? (kGpus * kGpus - kGpus)
+                                             : (kGpus * kGpus));
     if (ensure_compose_buffers(opt, ranks) != 0) {
         if (!shared_dense_ops) {
             free_resident_f8_dense(attn, opt);
@@ -2766,6 +2804,7 @@ int run_decode_loop(const Options &opt,
                     cudaStream_t copy_stream = ranks[src].copy_stream ? ranks[src].copy_stream
                                                                       : ranks[src].stream;
                     for (int dst = 0; dst < kGpus; ++dst) {
+                        if (skip_self_copy && src == dst) continue;
                         if (opt.ep_return_fp16) {
                             const __half *src_ptr =
                                 ranks[src].d_ep_contrib_half_all + (uint64_t)dst * shard_elems;
@@ -2797,6 +2836,7 @@ int run_decode_loop(const Options &opt,
                 for (int dst = 0; dst < kGpus; ++dst) {
                     CHECK_CUDA(cudaSetDevice(ranks[dst].device));
                     for (int src = 0; src < kGpus; ++src) {
+                        if (skip_self_copy && src == dst) continue;
                         if (opt.ep_return_fp16) {
                             const __half *src_ptr =
                                 ranks[src].d_ep_contrib_half_all + (uint64_t)dst * shard_elems;
@@ -2827,28 +2867,44 @@ int run_decode_loop(const Options &opt,
             CHECK_CUDA(cudaSetDevice(r.device));
             int grid = (int)((shard_elems + block - 1) / block);
             if (stats->fused_compose_sum) {
-                const float *r0 = opt.direct_remote_compose && !opt.ep_return_fp16
+                const float *r0 = skip_self_copy && dst == 0
+                    ? ranks[0].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : opt.direct_remote_compose && !opt.ep_return_fp16
                     ? ranks[0].d_ep_contrib_all + (uint64_t)dst * shard_elems
                     : r.d_ep_remote[0];
-                const float *r1 = opt.direct_remote_compose && !opt.ep_return_fp16
+                const float *r1 = skip_self_copy && dst == 1
+                    ? ranks[1].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : opt.direct_remote_compose && !opt.ep_return_fp16
                     ? ranks[1].d_ep_contrib_all + (uint64_t)dst * shard_elems
                     : r.d_ep_remote[1];
-                const float *r2 = opt.direct_remote_compose && !opt.ep_return_fp16
+                const float *r2 = skip_self_copy && dst == 2
+                    ? ranks[2].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : opt.direct_remote_compose && !opt.ep_return_fp16
                     ? ranks[2].d_ep_contrib_all + (uint64_t)dst * shard_elems
                     : r.d_ep_remote[2];
-                const float *r3 = opt.direct_remote_compose && !opt.ep_return_fp16
+                const float *r3 = skip_self_copy && dst == 3
+                    ? ranks[3].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : opt.direct_remote_compose && !opt.ep_return_fp16
                     ? ranks[3].d_ep_contrib_all + (uint64_t)dst * shard_elems
                     : r.d_ep_remote[3];
-                const float *r4 = opt.direct_remote_compose && !opt.ep_return_fp16
+                const float *r4 = skip_self_copy && dst == 4
+                    ? ranks[4].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : opt.direct_remote_compose && !opt.ep_return_fp16
                     ? ranks[4].d_ep_contrib_all + (uint64_t)dst * shard_elems
                     : r.d_ep_remote[4];
-                const float *r5 = opt.direct_remote_compose && !opt.ep_return_fp16
+                const float *r5 = skip_self_copy && dst == 5
+                    ? ranks[5].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : opt.direct_remote_compose && !opt.ep_return_fp16
                     ? ranks[5].d_ep_contrib_all + (uint64_t)dst * shard_elems
                     : r.d_ep_remote[5];
-                const float *r6 = opt.direct_remote_compose && !opt.ep_return_fp16
+                const float *r6 = skip_self_copy && dst == 6
+                    ? ranks[6].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : opt.direct_remote_compose && !opt.ep_return_fp16
                     ? ranks[6].d_ep_contrib_all + (uint64_t)dst * shard_elems
                     : r.d_ep_remote[6];
-                const float *r7 = opt.direct_remote_compose && !opt.ep_return_fp16
+                const float *r7 = skip_self_copy && dst == 7
+                    ? ranks[7].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : opt.direct_remote_compose && !opt.ep_return_fp16
                     ? ranks[7].d_ep_contrib_all + (uint64_t)dst * shard_elems
                     : r.d_ep_remote[7];
                 compose_next_hidden_sum8_kernel<<<grid, block, 0, r.stream>>>(
@@ -2862,8 +2918,11 @@ int run_decode_loop(const Options &opt,
                         add_half_to_f32_kernel<<<grid, block, 0, r.stream>>>(
                             r.d_ep_sum, r.d_ep_remote_half[src], shard_elems);
                     } else {
+                        const float *src_contrib = skip_self_copy && src == dst
+                            ? ranks[src].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                            : r.d_ep_remote[src];
                         add_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_sum,
-                                                                     r.d_ep_remote[src],
+                                                                     src_contrib,
                                                                      shard_elems);
                     }
                 }
@@ -3799,6 +3858,7 @@ int main(int argc, char **argv) {
                     "shared_expert_bindings\t%d\toverlap_ep_dense\t%d\t"
                     "shared_dense_ops\t%d\t"
                     "direct_remote_compose\t%d\tsource_copy_schedule\t%d\t"
+                    "skip_self_compose_copy\t%d\t"
                     "sum_decode_ms\t%.6f\tms_per_token\t%.6f\t"
                     "projected_slot_step_tok_s\t%.6f\t"
                     "sum_ep_ms\t%.6f\tsum_dense_ms\t%.6f\tsum_compose_ms\t%.6f\t"
@@ -3812,6 +3872,7 @@ int main(int argc, char **argv) {
                     shared_dense_ops.initialized ? 1 : 0,
                     opt.direct_remote_compose ? 1 : 0,
                     opt.source_copy_schedule ? 1 : 0,
+                    opt.skip_self_compose_copy ? 1 : 0,
                     sum_decode_ms, ms_per_token, slot_step_tok_s,
                     sum_ep_ms, sum_dense_ms, sum_compose_ms,
                     wall_ms, (unsigned long long)checksum);
@@ -3883,7 +3944,7 @@ int main(int argc, char **argv) {
                         "shared_expert_bindings\t%d\t"
                         "shared_dense_ops\t%d\t"
                         "overlap_ep_dense\t%d\tdirect_remote_compose\t%d\t"
-                        "source_copy_schedule\t%d\t"
+                        "source_copy_schedule\t%d\tskip_self_compose_copy\t%d\t"
                         "wall_ms\t%.6f\tFAIL\n",
                         pass_layers, layer, opt.skip_descriptor_checks ? 0 : 1,
                         opt.skip_predecode_probes ? 0 : 1, shared_api.initialized ? 1 : 0,
@@ -3894,6 +3955,7 @@ int main(int argc, char **argv) {
                         opt.overlap_ep_dense ? 1 : 0,
                         opt.direct_remote_compose ? 1 : 0,
                         opt.source_copy_schedule ? 1 : 0,
+                        opt.skip_self_compose_copy ? 1 : 0,
                         wall_ms);
             free_shared_dense_ops(&shared_dense_ops, opt);
             close_shared_expert_bindings(&shared_expert_bindings);
@@ -3919,7 +3981,7 @@ int main(int argc, char **argv) {
                 "shared_expert_bindings\t%d\t"
                 "shared_dense_ops\t%d\t"
                 "overlap_ep_dense\t%d\tdirect_remote_compose\t%d\t"
-                "source_copy_schedule\t%d\t"
+                "source_copy_schedule\t%d\tskip_self_compose_copy\t%d\t"
                 "sum_decode_ms_per_token\t%.6f\tprojected_slot_step_tok_s\t%.6f\t"
                 "sum_ep_ms\t%.6f\tsum_dense_ms\t%.6f\tsum_compose_ms\t%.6f\t"
                 "wall_ms\t%.6f\tchecksum\t%llu\tPASS\n",
@@ -3934,6 +3996,7 @@ int main(int argc, char **argv) {
                 opt.overlap_ep_dense ? 1 : 0,
                 opt.direct_remote_compose ? 1 : 0,
                 opt.source_copy_schedule ? 1 : 0,
+                opt.skip_self_compose_copy ? 1 : 0,
                 sum_decode_ms, slot_step_tok_s, sum_ep_ms, sum_dense_ms,
                 sum_compose_ms, wall_ms, (unsigned long long)checksum);
     free_shared_dense_ops(&shared_dense_ops, opt);

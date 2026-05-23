@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 269
+revision: 270
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -224,6 +224,10 @@ not a serial layer-chain.
   `1376/1376` layer invocations at `39.290219 ms/token` proxy and
   `814.452062` projected slot-step tok/s. Compose/all-to-all is now the
   dominant measured stage: `742.079181 ms` compose versus `514.766496 ms` EP.
+- Sprint 270 skipped same-GPU compose copies on the FP32 EP-return path. The
+  16-step A/B improves from `40.271428` to `38.503412 ms/token` proxy, and the
+  new 32-step topline is `37.912062 ms/token` / `844.058544` projected
+  slot-step tok/s.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -1071,6 +1075,25 @@ wall, and checksum `8297177632`. The bottleneck is now clearly the
 compose/all-to-all boundary plus remaining orchestration, not the routed EP
 kernel in isolation.
 
+### Sprint 270 - TP/EP Skip Self Compose Copy [complete]
+
+Goal: Remove same-GPU staged compose copies from the FP32 EP-return path.
+
+Rationale: Sprint 269 showed compose/all-to-all dominates the continuous
+token-major scaffold. The staged path still copied `src == dst` shards even
+though each destination GPU can read its local EP contribution directly.
+
+Outcome: Complete. `tools/ds4-v100-tp-ep-full-layer-smoke` now supports
+`--skip-self-compose-copy` and `--copy-self-compose`; skip-self is the default.
+On the FP32 return path, same-GPU copy traffic is skipped and compose reads the
+local `d_ep_contrib_all` slice for that source. The V100 16-step A/B at `32`
+slots / `256K` passes with checksum `8244145680` in both modes and improves
+from `40.271428` to `38.503412 ms/token` proxy. Compose time drops from
+`371.558564` to `342.417467 ms`. The 32-step skip-self run passes
+`1376/1376` invocations at `37.912062 ms/token` proxy, `844.058544` projected
+slot-step tok/s, `522.914003 ms` EP, `689.877521 ms` compose, and checksum
+`8297177632`.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1141,6 +1164,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 267 promoted shared TP runtime for token-major all-layer runs. | In serving order, TP/KV runtime residency improves both wall/setup and summed decode proxy. | Reduce token-major compose/all-to-all and bridge the scaffold into generated/continuation serving measurement. |
 | 2026-05-23 | Sprint 268 added token-major position advance. | The scaffold now progresses logical context position across token steps and remains correct. | Run a longer continuous token-major gate, then bridge to generated/continuation serving measurement. |
 | 2026-05-23 | Sprint 269 established the longer continuous token-major scaffold baseline. | At 32 steps the path reaches `814.452062` projected slot-step tok/s and compose dominates EP. | Collapse compose/all-to-all or bridge to generated/continuation serving measurement. |
+| 2026-05-23 | Sprint 270 removed same-GPU staged compose copies. | Self-copy traffic was a measurable part of compose cost, but compose remains dominant after removal. | Target destination-side reduction/synchronization or bridge to generated/continuation serving measurement. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 
