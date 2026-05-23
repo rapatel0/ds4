@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 228
+revision: 229
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -69,6 +69,9 @@ not a serial layer-chain.
   The contract has dense TP rows, replicated control/router rows, EP expert
   ownership, and KV/state descriptors, with a balanced `27.024 GiB` per-GPU
   estimate at `32` slots / `256K` / F8 KV.
+- Sprint 229 added the first separate TP runtime skeleton. It opens all eight
+  GPUs, enables peer access, allocates target hidden/KV/compression/scratch
+  arenas for `32` slots / `256K`, runs a fixture pass, and tears down cleanly.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -137,7 +140,7 @@ Outcome: Complete. `tools/ds4-v100-tp-ep-pack-contract` emits
 `5496` replicated control/router rows, `688` EP expert rows, and `840`
 KV/state rows. Per-GPU total is `27.024 GiB` at the target shape.
 
-### Sprint 229 - TP Runtime Skeleton [planned]
+### Sprint 229 - TP Runtime Skeleton [complete]
 
 Goal: Add a new TP-only runtime skeleton that opens all eight GPUs, allocates
 resident hidden/KV/scratch arenas, and executes no-op or fixture layer passes.
@@ -145,7 +148,11 @@ resident hidden/KV/scratch arenas, and executes no-op or fixture layer passes.
 Rationale: The runtime must prove ownership, lifecycle, and memory residency
 without touching `ds4_v100_scheduler.*` as a shared abstraction.
 
-Outcome: Pending.
+Outcome: Complete. `ds4_v100_tp_runtime.{h,cu}` and
+`tools/ds4-v100-tp-runtime-smoke.cu` now provide a separate TP runtime
+skeleton. The V100 smoke allocates `7061329920` runtime bytes per GPU before
+weights at the target shape and verifies fixture output with
+`fixture_max_abs=0`.
 
 ### Sprint 230 - TP Dense And KV Slice [planned]
 

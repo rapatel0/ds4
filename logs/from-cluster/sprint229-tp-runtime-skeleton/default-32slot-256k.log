@@ -1,0 +1,9 @@
+tp_runtime_smoke	ctx=262144	slots=32	hidden=4096	scratch_bytes=1610612736	fixture_max_abs=0.000000000
+gpu	0	hidden_bytes	524288	kv_bytes	3646642176	comp_state_bytes	1803550720	scratch_bytes	1610612736	total_bytes	7061329920
+gpu	1	hidden_bytes	524288	kv_bytes	3646642176	comp_state_bytes	1803550720	scratch_bytes	1610612736	total_bytes	7061329920
+gpu	2	hidden_bytes	524288	kv_bytes	3646642176	comp_state_bytes	1803550720	scratch_bytes	1610612736	total_bytes	7061329920
+gpu	3	hidden_bytes	524288	kv_bytes	3646642176	comp_state_bytes	1803550720	scratch_bytes	1610612736	total_bytes	7061329920
+gpu	4	hidden_bytes	524288	kv_bytes	3646642176	comp_state_bytes	1803550720	scratch_bytes	1610612736	total_bytes	7061329920
+gpu	5	hidden_bytes	524288	kv_bytes	3646642176	comp_state_bytes	1803550720	scratch_bytes	1610612736	total_bytes	7061329920
+gpu	6	hidden_bytes	524288	kv_bytes	3646642176	comp_state_bytes	1803550720	scratch_bytes	1610612736	total_bytes	7061329920
+gpu	7	hidden_bytes	524288	kv_bytes	3646642176	comp_state_bytes	1803550720	scratch_bytes	1610612736	total_bytes	7061329920

@@ -244,6 +244,15 @@ and `2.0 GiB` reserve: `1.006 GiB` dense TP, `0.310 GiB` replicated control,
 `17.133 GiB` EP experts, `3.396 GiB` KV, and `1.680 GiB` compression state.
 This is a contract, not a byte-repacked TP loader; the next step is the
 separate TP runtime skeleton.
+Sprint 229 adds that first separate TP runtime skeleton in
+`ds4_v100_tp_runtime.{h,cu}` plus `tools/ds4-v100-tp-runtime-smoke.cu`.
+No PP scheduler files are touched. The V100 smoke opens all eight GPUs,
+enables peer access, allocates the target runtime arenas at `32` slots /
+`256K` / F8 KV, runs a fixture pass, and closes cleanly. Per GPU it allocates
+`524288` hidden bytes, `3646642176` KV bytes, `1803550720` compression-state
+bytes, and `1610612736` scratch bytes, for `7061329920` runtime bytes before
+weights. The fixture reports `fixture_max_abs=0.000000000`, and `nvidia-smi`
+shows `0 MiB` used on all eight GPUs after teardown.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit

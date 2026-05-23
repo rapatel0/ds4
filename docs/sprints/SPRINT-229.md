@@ -1,7 +1,7 @@
 # Sprint 229 - TP Runtime Skeleton
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete - TP Runtime Skeleton Allocates Target Arenas
 
 ## Overview
 
@@ -77,19 +77,75 @@ allocation, and closes cleanly.
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists and is committed before implementation evidence.
-- [ ] TP runtime code lives in new TP-specific files.
-- [ ] No PP scheduler files are modified.
-- [ ] Smoke tool builds on the V100 pod for `sm_70`.
-- [ ] Smoke opens all eight GPUs and enables peer access.
-- [ ] Smoke allocates hidden, KV, and scratch arenas on all eight GPUs.
-- [ ] Smoke runs a fixture pass and verifies output on all GPUs.
-- [ ] Smoke reports per-GPU allocation summary.
-- [ ] Evidence is copied to
+- [x] Sprint plan exists and is committed before implementation evidence.
+- [x] TP runtime code lives in new TP-specific files.
+- [x] No PP scheduler files are modified.
+- [x] Smoke tool builds on the V100 pod for `sm_70`.
+- [x] Smoke opens all eight GPUs and enables peer access.
+- [x] Smoke allocates hidden, KV, and scratch arenas on all eight GPUs.
+- [x] Smoke runs a fixture pass and verifies output on all GPUs.
+- [x] Smoke reports per-GPU allocation summary.
+- [x] Evidence is copied to
       `logs/from-cluster/sprint229-tp-runtime-skeleton/`.
-- [ ] Status and vision docs are updated with the decision.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Status and vision docs are updated with the decision.
+- [x] Changes are committed with explicit `git add` paths.
+
+## Execution Evidence
+
+Local validation:
+
+```text
+make tools/ds4-v100-tp-runtime-smoke
+  -> Darwin guard reports CUDA build required
+git diff --check
+```
+
+V100 build:
+
+```text
+cd /workspace/ds4-sprint181
+make -B -j80 CUDA_ARCH=sm_70 tools/ds4-v100-tp-runtime-smoke
+```
+
+V100 default target smoke:
+
+```text
+./tools/ds4-v100-tp-runtime-smoke \
+  --ctx 262144 \
+  --slots 32 \
+  --kv-dtype f8 \
+  --scratch-mib 1536
+```
+
+Result:
+
+```text
+tp_runtime_smoke ctx=262144 slots=32 hidden=4096
+scratch_bytes=1610612736 fixture_max_abs=0.000000000
+
+per GPU:
+  hidden_bytes:      524288
+  kv_bytes:      3646642176
+  comp_state:    1803550720
+  scratch:       1610612736
+  total:         7061329920
+```
+
+All eight GPUs reported the same allocation and the fixture verified with
+`fixture_max_abs=0`. After close, `nvidia-smi` showed `0 MiB` used on all
+eight GPUs in the pod, confirming clean teardown.
+
+Evidence is stored in
+`logs/from-cluster/sprint229-tp-runtime-skeleton/`.
 
 ## Decision
 
-Pending.
+Sprint 229 ships the first separate TP runtime skeleton. It does not execute a
+DS4 layer yet, but it proves the TP runtime can own all eight GPUs, enable peer
+access, allocate the target 32-slot/256K sharded KV and compression-state
+arenas, touch hidden/scratch memory, verify a fixture pass, and release all
+GPU allocations cleanly.
+
+Next sprint should implement the first TP dense/KV slice inside this runtime:
+resident hidden state plus a bounded DS4 compressed-KV update/read path,
+without using the PP scheduler.
