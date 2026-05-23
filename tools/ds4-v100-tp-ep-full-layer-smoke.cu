@@ -342,6 +342,8 @@ struct ServingBenchResult {
     double output_head_broadcast_ms = 0.0;
     double output_head_projection_ms = 0.0;
     double output_head_top1_ms = 0.0;
+    bool token_input_seed = false;
+    uint32_t first_input_token = UINT32_MAX;
     std::vector<uint32_t> selected_tokens;
     std::vector<float> selected_logits;
     uint64_t checksum = 0;
@@ -732,6 +734,24 @@ __global__ void gather_hc_shard_to_full_kernel(float *full_hc,
         ((uint64_t)slot * 4ull + (uint64_t)row) * (uint64_t)kHidden +
         (uint64_t)rank * shard_cols + local_h;
     full_hc[dst] = shard_hc[i];
+}
+
+__global__ void seed_hc_shard_from_token_embedding_kernel(float *shard_hc,
+                                                          const uint16_t *embedding,
+                                                          const uint32_t *tokens,
+                                                          uint32_t slots,
+                                                          uint32_t vocab,
+                                                          int rank) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint32_t shard_cols = kHidden / kGpus;
+    const uint64_t elems = (uint64_t)slots * 4ull * shard_cols;
+    if (i >= elems) return;
+    const uint32_t local_h = (uint32_t)(i % shard_cols);
+    const uint32_t slot = (uint32_t)(i / (4ull * shard_cols));
+    uint32_t token = tokens[slot];
+    if (token >= vocab) token = 0;
+    const uint32_t hidden_col = (uint32_t)rank * shard_cols + local_h;
+    shard_hc[i] = bf16_to_f32_dev(embedding[(uint64_t)token * kHidden + hidden_col]);
 }
 
 __global__ void synthetic_hc_kernel(float *hc, uint32_t slots) {
@@ -2514,6 +2534,105 @@ struct OutputHeadRunResult {
     uint64_t checksum = 0;
     int finite_bad = 0;
 };
+
+struct SharedTokenEmbedding {
+    bool initialized = false;
+    int slots = 0;
+    int vocab = 0;
+    int rows_per_gpu = 0;
+    uint16_t *d_w_full = nullptr;
+    uint32_t *d_tokens = nullptr;
+    uint64_t weight_bytes = 0;
+};
+
+int open_shared_token_embedding(const Options &opt,
+                                const std::vector<ContractRow> &rows,
+                                SharedTokenEmbedding *out) {
+    out->slots = opt.slots;
+    std::vector<ContractRow> emb_rows;
+    int cols = 0;
+    int vocab = 0;
+    if (!select_bf16_dense_rows(rows, "token_embd.weight", &emb_rows, &cols, &vocab)) {
+        std::fprintf(stderr, "shared token embedding failed to select token_embd.weight shards\n");
+        return 1;
+    }
+    if (cols != kHidden || vocab <= 0 || vocab % kGpus != 0) {
+        std::fprintf(stderr, "shared token embedding invalid shape cols=%d vocab=%d\n",
+                     cols, vocab);
+        return 2;
+    }
+    out->vocab = vocab;
+    out->rows_per_gpu = vocab / kGpus;
+    const uint64_t shard_elems = (uint64_t)out->rows_per_gpu * (uint64_t)kHidden;
+    const uint64_t shard_bytes = shard_elems * sizeof(uint16_t);
+    const uint64_t full_bytes = shard_bytes * kGpus;
+
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    CHECK_CUDA(cudaMalloc(&out->d_w_full, (size_t)full_bytes));
+    CHECK_CUDA(cudaMalloc(&out->d_tokens, (size_t)opt.slots * sizeof(uint32_t)));
+
+    std::vector<uint16_t> host((size_t)shard_elems);
+    for (int shard = 0; shard < kGpus; ++shard) {
+        const ContractRow &r = emb_rows[(size_t)shard];
+        const int shard_index = r.shard_index >= 0 ? r.shard_index : shard;
+        const std::string path = path_join(opt.pack_dir, r.source_pack_file);
+        if (read_exact_at(path, physical_row_offset(r), host.data(),
+                          (size_t)shard_bytes) != 0) {
+            return 3;
+        }
+        CHECK_CUDA(cudaMemcpy(out->d_w_full + (uint64_t)shard_index * shard_elems,
+                              host.data(), (size_t)shard_bytes,
+                              cudaMemcpyHostToDevice));
+        out->weight_bytes += shard_bytes;
+    }
+    out->initialized = true;
+    return 0;
+}
+
+void close_shared_token_embedding(const Options &opt, SharedTokenEmbedding *out) {
+    if (!out || !out->initialized) return;
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    if (out->d_tokens) CHECK_CUDA(cudaFree(out->d_tokens));
+    if (out->d_w_full) CHECK_CUDA(cudaFree(out->d_w_full));
+    *out = SharedTokenEmbedding{};
+}
+
+int seed_rank_hc_from_input_tokens(const Options &opt,
+                                   SharedTokenEmbedding *embedding,
+                                   RankState ranks[kGpus],
+                                   const std::vector<uint32_t> &tokens) {
+    if (!embedding || !embedding->initialized ||
+        (int)tokens.size() < opt.slots || !embedding->d_w_full ||
+        !embedding->d_tokens) {
+        return 1;
+    }
+    const uint64_t shard_elems =
+        (uint64_t)opt.slots * 4ull * (uint64_t)(kHidden / kGpus);
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    CHECK_CUDA(cudaMemcpy(embedding->d_tokens, tokens.data(),
+                          (size_t)opt.slots * sizeof(uint32_t),
+                          cudaMemcpyHostToDevice));
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        if (!r.d_final_hc_shard) return 2;
+        CHECK_CUDA(cudaSetDevice(r.device));
+        seed_hc_shard_from_token_embedding_kernel<<<
+            (unsigned int)((shard_elems + 255) / 256), 256, 0, r.stream>>>(
+            r.d_final_hc_shard,
+            embedding->d_w_full,
+            embedding->d_tokens,
+            (uint32_t)opt.slots,
+            (uint32_t)embedding->vocab,
+            rank);
+        CHECK_CUDA(cudaGetLastError());
+        r.hc_initialized = true;
+    }
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    }
+    return 0;
+}
 
 int run_output_head_gate(const Options &opt,
                          const std::vector<ContractRow> &rows,
@@ -5951,6 +6070,8 @@ int run_token_major_serving_loop(const Options &opt,
                                  const SharedDenseOps *shared_dense_ops,
                                  SharedOutputHead *shared_output_head,
                                  SharedHcControls *shared_hc_controls,
+                                 SharedTokenEmbedding *shared_token_embedding,
+                                 const std::vector<uint32_t> *decode_input_tokens,
                                  std::vector<ContractRow> resident_rows[43],
                                  LayerStats resident_stats[43],
                                  bool resident_serving_loop,
@@ -5980,6 +6101,22 @@ int run_token_major_serving_loop(const Options &opt,
     for (int step = 0; step < opt.decode_steps; ++step) {
         const auto step_start = std::chrono::steady_clock::now();
         double step_decode_ms = 0.0;
+        if (step == 0 && shared_token_embedding && decode_input_tokens &&
+            !decode_input_tokens->empty()) {
+            if (!shared_rank_buffers || !shared_rank_buffers->initialized ||
+                ensure_compose_buffers(opt, shared_rank_buffers->ranks) != 0) {
+                std::fprintf(stderr, "tp_ep_token_embedding_seed_failed\treason\tmissing_rank_buffers\n");
+                return 15;
+            }
+            const int seed_rc = seed_rank_hc_from_input_tokens(
+                opt, shared_token_embedding, shared_rank_buffers->ranks,
+                *decode_input_tokens);
+            if (seed_rc != 0) {
+                std::fprintf(stderr, "tp_ep_token_embedding_seed_failed\trc\t%d\n",
+                             seed_rc);
+                return 15;
+            }
+        }
         for (int layer = 0; layer < 43; ++layer) {
             Options layer_opt = opt;
             layer_opt.layer = layer;
@@ -6169,6 +6306,13 @@ int run_token_major_serving_loop(const Options &opt,
             serving_result->total_compose_copy_ms = sum_compose_copy_ms;
             serving_result->total_compose_final_ms = sum_compose_final_ms;
             serving_result->total_hc_current_input_ms = sum_hc_current_input_ms;
+            serving_result->token_input_seed =
+                shared_token_embedding && decode_input_tokens &&
+                !decode_input_tokens->empty();
+            serving_result->first_input_token =
+                decode_input_tokens && !decode_input_tokens->empty()
+                    ? (*decode_input_tokens)[0]
+                    : UINT32_MAX;
             serving_result->aggregate_generated_tok_s_decode = generated_tok_s_decode;
             serving_result->aggregate_generated_tok_s_wall = generated_tok_s_wall;
             serving_result->aggregate_continuation_tok_s_decode = continuation_tok_s_decode;
@@ -6286,12 +6430,14 @@ struct HttpParsedRequest {
     bool cache_key_explicit = false;
     bool prompt_fingerprint_present = false;
     uint64_t prompt_fingerprint = 0;
+    std::vector<uint32_t> prompt_token_ids;
     uint64_t cache_position = 0;
     int cache_slot = -1;
     bool cache_hit = false;
     bool cache_prompt_match = true;
     bool cache_evicted = false;
     std::string evicted_key;
+    uint32_t decode_input_token = UINT32_MAX;
 };
 
 static int http_content_length(const char *req) {
@@ -6446,11 +6592,66 @@ static std::string http_request_cache_key(const HttpParsedRequest &req,
     return buf;
 }
 
+static bool json_find_uint_array(const char *body,
+                                 const char *key,
+                                 std::vector<uint32_t> *out,
+                                 size_t limit) {
+    out->clear();
+    if (!body || !key) return false;
+    const char *p = std::strstr(body, key);
+    if (!p) return false;
+    p += std::strlen(key);
+    while (*p && *p != '[' && *p != '{' && *p != '"' && *p != '\'') ++p;
+    if (*p != '[') return false;
+    ++p;
+    while (*p && *p != ']') {
+        while (*p == ' ' || *p == '\t' || *p == '\n' ||
+               *p == '\r' || *p == ',') ++p;
+        if (*p == ']') break;
+        char *end = nullptr;
+        unsigned long v = std::strtoul(p, &end, 10);
+        if (end == p || v > UINT32_MAX || out->size() >= limit) {
+            out->clear();
+            return false;
+        }
+        out->push_back((uint32_t)v);
+        p = end;
+        while (*p == ' ' || *p == '\t' || *p == '\n' ||
+               *p == '\r') ++p;
+        if (*p && *p != ',' && *p != ']') {
+            out->clear();
+            return false;
+        }
+    }
+    return *p == ']' && !out->empty();
+}
+
+static uint64_t fnv1a64_u32(const std::vector<uint32_t> &tokens) {
+    uint64_t h = 1469598103934665603ull;
+    for (uint32_t token : tokens) {
+        for (int i = 0; i < 4; ++i) {
+            h ^= (uint64_t)((token >> (8 * i)) & 0xffu);
+            h *= 1099511628211ull;
+        }
+    }
+    return h;
+}
+
 static void http_request_prompt_fingerprint(HttpParsedRequest *req) {
+    if (json_find_uint_array(req->body.c_str(), "\"prompt_tokens\"",
+                             &req->prompt_token_ids, 262144) ||
+        json_find_uint_array(req->body.c_str(), "\"prompt\"",
+                             &req->prompt_token_ids, 262144)) {
+        req->prompt_fingerprint_present = true;
+        req->prompt_fingerprint = fnv1a64_u32(req->prompt_token_ids);
+        return;
+    }
+
     const std::string prompt = json_find_string(req->body.c_str(), "\"prompt\"");
     if (prompt.empty()) {
         req->prompt_fingerprint_present = false;
         req->prompt_fingerprint = 0;
+        req->prompt_token_ids.clear();
         return;
     }
     req->prompt_fingerprint_present = true;
@@ -6465,12 +6666,15 @@ struct TpEpHttpSessionSlot {
     bool prompt_fingerprint_known = false;
     std::string key;
     uint64_t prompt_fingerprint = 0;
+    std::vector<uint32_t> prompt_token_ids;
+    std::vector<uint32_t> generated_token_ids;
     uint64_t pos = 0;
     uint64_t prompt_tokens = 0;
     uint64_t generated_tokens = 0;
     uint64_t hits = 0;
     uint64_t misses = 0;
     uint64_t last_used = 0;
+    uint32_t last_selected_token = UINT32_MAX;
 };
 
 struct TpEpHttpSessionAssignment {
@@ -6531,6 +6735,7 @@ struct TpEpHttpSessionTable {
     TpEpHttpSessionAssignment assign(const std::string &key,
                                      bool prompt_present,
                                      uint64_t prompt_fingerprint,
+                                     const std::vector<uint32_t> &prompt_tokens,
                                      uint64_t base_pos,
                                      const std::vector<bool> &protected_slots) {
         TpEpHttpSessionAssignment a;
@@ -6559,6 +6764,11 @@ struct TpEpHttpSessionTable {
                     slot.prompt_fingerprint_known = true;
                     slot.prompt_fingerprint = prompt_fingerprint;
                 }
+                slot.prompt_token_ids = prompt_tokens;
+                slot.generated_token_ids.clear();
+                slot.prompt_tokens = 0;
+                slot.generated_tokens = 0;
+                slot.last_selected_token = UINT32_MAX;
             }
             return a;
         }
@@ -6596,12 +6806,15 @@ struct TpEpHttpSessionTable {
         slot.prompt_fingerprint_known = prompt_present;
         slot.key = key;
         slot.prompt_fingerprint = prompt_present ? prompt_fingerprint : 0;
+        slot.prompt_token_ids = prompt_tokens;
+        slot.generated_token_ids.clear();
         slot.pos = base_pos;
         slot.prompt_tokens = 0;
         slot.generated_tokens = 0;
         slot.hits = 0;
         slot.misses = 1;
         slot.last_used = clock;
+        slot.last_selected_token = UINT32_MAX;
         misses++;
 
         a.slot = idx;
@@ -6613,7 +6826,8 @@ struct TpEpHttpSessionTable {
 
     void commit(const TpEpHttpSessionAssignment &a,
                 uint64_t prompt_tokens,
-                uint64_t generated_tokens) {
+                uint64_t generated_tokens,
+                uint32_t selected_token) {
         if (a.slot < 0 || a.slot >= (int)slots.size()) return;
         auto &slot = slots[(size_t)a.slot];
         slot.kv_valid = true;
@@ -6621,6 +6835,10 @@ struct TpEpHttpSessionTable {
         slot.pos = a.pos_in + generated_tokens;
         slot.prompt_tokens += prompt_tokens;
         slot.generated_tokens += generated_tokens;
+        if (selected_token != UINT32_MAX) {
+            slot.generated_token_ids.push_back(selected_token);
+            slot.last_selected_token = selected_token;
+        }
         slot.last_used = ++clock;
     }
 
@@ -6651,6 +6869,9 @@ struct TpEpHttpSessionTable {
                               "\"prompt_fingerprint_known\":%d,"
                               "\"prompt_fingerprint\":%llu,"
                               "\"prompt_tokens\":%llu,\"generated_tokens\":%llu,"
+                              "\"prompt_token_ids\":%zu,"
+                              "\"generated_token_ids\":%zu,"
+                              "\"last_selected_token\":%u,"
                               "\"hits\":%llu,\"misses\":%llu}",
                               i == 0 ? "" : ",",
                               slot.id, slot.occupied ? 1 : 0, key.c_str(),
@@ -6661,6 +6882,9 @@ struct TpEpHttpSessionTable {
                               (unsigned long long)slot.prompt_fingerprint,
                               (unsigned long long)slot.prompt_tokens,
                               (unsigned long long)slot.generated_tokens,
+                              slot.prompt_token_ids.size(),
+                              slot.generated_token_ids.size(),
+                              slot.last_selected_token,
                               (unsigned long long)slot.hits,
                               (unsigned long long)slot.misses);
             if (n < 0) break;
@@ -6712,6 +6936,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           const SharedDenseOps *shared_dense_ops,
                           SharedOutputHead *shared_output_head,
                           SharedHcControls *shared_hc_controls,
+                          SharedTokenEmbedding *shared_token_embedding,
                           std::vector<ContractRow> resident_rows[43],
                           LayerStats resident_stats[43]) {
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -7045,6 +7270,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                 assignments[i] = sessions.assign(batch[i].cache_key,
                                                  batch[i].prompt_fingerprint_present,
                                                  batch[i].prompt_fingerprint,
+                                                 batch[i].prompt_token_ids,
                                                  base_opt.position,
                                                  protected_slots);
                 if (assignments[i].slot < 0) {
@@ -7073,6 +7299,30 @@ int run_tp_ep_http_server(const Options &base_opt,
             req_opt.slots = base_opt.slots;
             req_opt.position = first_req.cache_position;
             req_opt.serving_bench = false;
+            std::vector<uint32_t> decode_input_tokens((size_t)req_opt.slots, 0u);
+            for (size_t i = 0; i < batch.size(); ++i) {
+                uint32_t input_token = 0;
+                if (assignments[i].slot >= 0 &&
+                    assignments[i].slot < (int)sessions.slots.size()) {
+                    const TpEpHttpSessionSlot &slot =
+                        sessions.slots[(size_t)assignments[i].slot];
+                    if (assignments[i].hit &&
+                        slot.last_selected_token != UINT32_MAX) {
+                        input_token = slot.last_selected_token;
+                    } else if (!batch[i].prompt_token_ids.empty()) {
+                        input_token = batch[i].prompt_token_ids.back();
+                    } else if (!slot.prompt_token_ids.empty()) {
+                        input_token = slot.prompt_token_ids.back();
+                    }
+                } else if (!batch[i].prompt_token_ids.empty()) {
+                    input_token = batch[i].prompt_token_ids.back();
+                }
+                batch[i].decode_input_token = input_token;
+                if (batch[i].cache_slot >= 0 &&
+                    batch[i].cache_slot < req_opt.slots) {
+                    decode_input_tokens[(size_t)batch[i].cache_slot] = input_token;
+                }
+            }
             ServingBenchResult result;
             const int rc = run_token_major_serving_loop(req_opt,
                                                         shared_dense_f16_cache,
@@ -7083,6 +7333,8 @@ int run_tp_ep_http_server(const Options &base_opt,
                                                         shared_dense_ops,
                                                         shared_output_head,
                                                         shared_hc_controls,
+                                                        shared_token_embedding,
+                                                        &decode_input_tokens,
                                                         resident_rows,
                                                         resident_stats,
                                                         true,
@@ -7095,7 +7347,12 @@ int run_tp_ep_http_server(const Options &base_opt,
                 }
             } else {
                 const uint64_t batch_id = generation_batches + 1;
-                const uint64_t client_prompt_tokens = (uint64_t)batch.size();
+                uint64_t client_prompt_tokens = 0;
+                for (const HttpParsedRequest &request : batch) {
+                    client_prompt_tokens += request.prompt_token_ids.empty()
+                        ? 1ull
+                        : (uint64_t)request.prompt_token_ids.size();
+                }
                 const uint64_t client_generated_tokens =
                     (uint64_t)batch.size() * (uint64_t)req_opt.decode_steps;
                 const uint64_t client_continuation_tokens = req_opt.decode_steps > 1
@@ -7121,7 +7378,6 @@ int run_tp_ep_http_server(const Options &base_opt,
                 total_compose_final_ms += result.total_compose_final_ms;
                 last = result;
                 for (size_t i = 0; i < batch.size(); ++i) {
-                    sessions.commit(assignments[i], 1, (uint64_t)req_opt.decode_steps);
                     const uint64_t request_generated = (uint64_t)req_opt.decode_steps;
                     const uint64_t request_continuation = req_opt.decode_steps > 1
                         ? (uint64_t)(req_opt.decode_steps - 1)
@@ -7137,15 +7393,40 @@ int run_tp_ep_http_server(const Options &base_opt,
                     const float selected_logit = have_output_head
                         ? result.selected_logits[(size_t)batch[i].cache_slot]
                         : 0.0f;
+                    const uint64_t request_prompt_tokens = batch[i].prompt_token_ids.empty()
+                        ? 1ull
+                        : (uint64_t)batch[i].prompt_token_ids.size();
+                    const uint64_t committed_prompt_tokens =
+                        assignments[i].hit ? 0ull : request_prompt_tokens;
+                    sessions.commit(assignments[i],
+                                    committed_prompt_tokens,
+                                    request_generated,
+                                    have_output_head ? selected_token : UINT32_MAX);
+                    const TpEpHttpSessionSlot *slot_state = nullptr;
+                    if (batch[i].cache_slot >= 0 &&
+                        batch[i].cache_slot < (int)sessions.slots.size()) {
+                        slot_state = &sessions.slots[(size_t)batch[i].cache_slot];
+                    }
+                    const size_t slot_prompt_token_ids = slot_state
+                        ? slot_state->prompt_token_ids.size()
+                        : 0u;
+                    const size_t slot_generated_token_ids = slot_state
+                        ? slot_state->generated_token_ids.size()
+                        : 0u;
+                    const uint32_t slot_last_selected = slot_state
+                        ? slot_state->last_selected_token
+                        : UINT32_MAX;
                     const std::string escaped_key = http_json_escape(batch[i].cache_key);
                     const std::string escaped_evicted = http_json_escape(batch[i].evicted_key);
                     char meta[6144];
                     std::snprintf(meta, sizeof(meta),
                                   "\"backend\":\"tp_ep_resident\","
                                   "\"diagnostic\":true,"
-                                  "\"diagnostic_note\":\"prompt prefill, tokenizer text, and true HC semantics are not fully wired in this TP/EP endpoint yet\","
+                                  "\"diagnostic_note\":\"tokenized request-boundary feedback is wired; tokenizer text, prompt prefill, and per-step multi-token feedback are not fully wired yet\","
                                   "\"diagnostic_output_head\":%d,"
                                   "\"diagnostic_output_head_proxy_hc\":%d,"
+                                  "\"token_input_seed\":%d,"
+                                  "\"decode_input_token\":%u,"
                                   "\"selected_token\":%u,"
                                   "\"selected_logit\":%.9f,"
                                   "\"output_head_ms\":%.6f,"
@@ -7167,12 +7448,16 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   "\"cache_pos_out\":%llu,"
                                   "\"cache_evicted\":%d,"
                                   "\"cache_evicted_key\":\"%s\","
+                                  "\"request_prompt_token_ids\":%zu,"
+                                  "\"slot_prompt_token_ids\":%zu,"
+                                  "\"slot_generated_token_ids\":%zu,"
+                                  "\"slot_last_selected_token\":%u,"
                                   "\"microbatch_wait_us\":%d,"
                                   "\"kv_runtime_resident\":%d,"
                                   "\"kv_all_slots_gate\":%d,"
                                   "\"hc_persist_state_gate\":%d,"
                                   "\"decode_slots\":%d,"
-                                  "\"prompt_tokens\":1,"
+                                  "\"prompt_tokens\":%llu,"
                                   "\"generated_tokens\":%llu,"
                                   "\"continuation_tokens\":%llu,"
                                   "\"batch_prompt_tokens\":%llu,"
@@ -7197,6 +7482,8 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   "\"checksum\":%llu",
                                   have_output_head ? 1 : 0,
                                   result.diagnostic_output_head_proxy_hc ? 1 : 0,
+                                  result.token_input_seed ? 1 : 0,
+                                  batch[i].decode_input_token,
                                   selected_token,
                                   selected_logit,
                                   result.output_head_ms,
@@ -7218,11 +7505,16 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   (unsigned long long)(assignments[i].pos_in + request_generated),
                                   batch[i].cache_evicted ? 1 : 0,
                                   escaped_evicted.c_str(),
+                                  batch[i].prompt_token_ids.size(),
+                                  slot_prompt_token_ids,
+                                  slot_generated_token_ids,
+                                  slot_last_selected,
                                   base_opt.microbatch_wait_us,
                                   shared_tp_runtime && shared_tp_runtime->initialized ? 1 : 0,
                                   req_opt.tp_kv_all_slots_gate ? 1 : 0,
                                   req_opt.tp_hc_persist_state_gate ? 1 : 0,
                                   req_opt.slots,
+                                  (unsigned long long)request_prompt_tokens,
                                   (unsigned long long)request_generated,
                                   (unsigned long long)request_continuation,
                                   (unsigned long long)client_prompt_tokens,
@@ -7258,15 +7550,16 @@ int run_tp_ep_http_server(const Options &base_opt,
                                       "\"choices\":[{\"text\":\"\","
                                       "\"index\":0,\"logprobs\":null,"
                                       "\"finish_reason\":\"length\"}],"
-                                      "\"usage\":{\"prompt_tokens\":1,"
+                                      "\"usage\":{\"prompt_tokens\":%llu,"
                                       "\"completion_tokens\":%llu,"
                                       "\"total_tokens\":%llu},"
                                       "\"ds4_v100\":{%s}}\n",
                                       (unsigned long long)batch_id,
                                       i,
                                       http_epoch_seconds(),
+                                      (unsigned long long)request_prompt_tokens,
                                       (unsigned long long)request_generated,
-                                      (unsigned long long)(request_generated + 1),
+                                      (unsigned long long)(request_generated + request_prompt_tokens),
                                       meta);
                     } else {
                         std::snprintf(out, sizeof(out), "{%s}\n", meta);
@@ -7530,6 +7823,37 @@ int main(int argc, char **argv) {
     SharedOutputHead *shared_output_head_arg =
         shared_output_head.initialized ? &shared_output_head : nullptr;
 
+    SharedTokenEmbedding shared_token_embedding;
+    if (opt.serve_http) {
+        std::vector<ContractRow> all_rows;
+        LayerStats all_stats;
+        if (parse_contract(opt.contract_path, -1, &all_rows, &all_stats) != 0 ||
+            all_stats.bad_rows != 0 ||
+            open_shared_token_embedding(opt, all_rows, &shared_token_embedding) != 0) {
+            std::fprintf(stderr, "tp_ep token embedding open failed\n");
+            close_shared_output_head(opt, &shared_output_head);
+            close_shared_hc_controls(opt, &shared_hc_controls);
+            free_shared_dense_ops(&shared_dense_ops, opt);
+            close_shared_expert_bindings(&shared_expert_bindings);
+            close_shared_tp_runtime(&shared_tp_runtime);
+            close_shared_rank_buffers(&shared_rank_buffers);
+            close_shared_api(&shared_api);
+            if (shared_dense_f16_cache) {
+                free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+            }
+            return 13;
+        }
+        std::printf("tp_ep_token_embedding_shared\tslots\t%d\tvocab\t%d\t"
+                    "rows_per_gpu\t%d\tweight_bytes\t%llu\tdevice\t%d\tPASS\n",
+                    opt.slots,
+                    shared_token_embedding.vocab,
+                    shared_token_embedding.rows_per_gpu,
+                    (unsigned long long)shared_token_embedding.weight_bytes,
+                    opt.devices[0]);
+    }
+    SharedTokenEmbedding *shared_token_embedding_arg =
+        shared_token_embedding.initialized ? &shared_token_embedding : nullptr;
+
     if (opt.serve_http) {
         int rc = 0;
         if (!resident_serving_loop || !shared_dense_ops.initialized) {
@@ -7546,9 +7870,11 @@ int main(int argc, char **argv) {
                                        &shared_dense_ops,
                                        shared_output_head_arg,
                                        shared_hc_controls_arg,
+                                       shared_token_embedding_arg,
                                        resident_rows,
                                        resident_stats);
         }
+        close_shared_token_embedding(opt, &shared_token_embedding);
         close_shared_output_head(opt, &shared_output_head);
         close_shared_hc_controls(opt, &shared_hc_controls);
         free_shared_dense_ops(&shared_dense_ops, opt);
@@ -7572,6 +7898,8 @@ int main(int argc, char **argv) {
                                                     &shared_dense_ops,
                                                     shared_output_head_arg,
                                                     shared_hc_controls_arg,
+                                                    nullptr,
+                                                    nullptr,
                                                     resident_rows,
                                                     resident_stats,
                                                     resident_serving_loop,

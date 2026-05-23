@@ -210,6 +210,29 @@ generated throughput was `329.048680`, `340.196025`, and `338.142261` tok/s.
 The KV all-slot readback verifier was intentionally off for this throughput
 run. GPU utilization remained low at roughly `7.4-8.4%` average and `36-37%`
 max.
+Sprint 299 added tokenized prompt acceptance and per-session generated-token
+timeline tracking to the TP/EP diagnostic completion endpoint, following the
+slot/session model in `ds4.c` and llama.cpp. `prompt_tokens:[...]` and numeric
+`prompt:[...]` now drive token-sequence prompt fingerprints; resident slots
+record prompt token ID count, generated token ID count, and last selected
+token; `/v100/slots`, `/v100/status`, and response metadata expose those
+counters. The V100 smoke with `session_id=tokalpha` and
+`prompt_tokens=[1,2,3,4]` shows first request miss, second request hit, slot
+cursor `100000 -> 100001 -> 100002`, slot prompt-token IDs held at `4`,
+generated-token IDs advancing from `1` to `2`, status
+`cache_hits/cache_misses=1/1`, and `total_generated_tokens=2`. This is still a
+diagnostic endpoint: full tokenizer prefill and selected-token feedback into
+the next CUDA decode input remain before real DeepSeek text serving.
+Sprint 300 added the first selected-token feedback bridge. The TP/EP HTTP path
+now loads resident BF16 `token_embd.weight` on GPU0
+(`1059061760` bytes) and seeds each rank's layer-0 HC shard from a real token
+embedding. On a cache miss, the decode input token is the prompt tail; on a
+cache hit, it is the slot's previous selected token. The V100 smoke shows
+request 1 using input token `4` and selecting token `77960`; request 2 hits
+the same session and uses `77960` as `decode_input_token`, with generated-token
+history advancing to `2`. This is request-boundary feedback only. The next
+serving gap is a per-step output-head/sample/feed loop for `max_tokens > 1`,
+plus tokenizer text I/O and prompt prefill.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

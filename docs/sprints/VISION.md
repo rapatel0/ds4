@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: codex
-revision: 297
+revision: 300
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -93,6 +93,28 @@ not a serial layer-chain.
   different prompt resets the slot and records a miss. This is a temporary
   string-level guardrail until tokenizer-level prefix matching and suffix
   prefill are implemented.
+- Sprint 298 ran the first longer `/v1/completions` diagnostic benchmark after
+  those API guardrails. At `32` concurrent requests, `32` slots, `256K`
+  context, diagnostic output head, HC-current input, HC final expand, and
+  persistent HC state, the `16/32/64` token cases each formed one coalesced
+  batch and returned `32/32` HTTP 200 responses. Wall generated throughput
+  plateaued near `195-200` tok/s and decode generated throughput near
+  `329-340` tok/s, with low average GPU utilization. This is the current
+  diagnostic API throughput baseline, not the final optimized serving target.
+- Sprint 299 added tokenized prompt acceptance and per-session generated-token
+  timelines to the TP/EP completion endpoint. Numeric `prompt_tokens` now feed
+  token-sequence prompt fingerprints, resident slots expose prompt-token and
+  generated-token counts, and a V100 smoke shows a repeated `session_id`
+  reusing the slot while generated-token history advances from `1` to `2`.
+  The next hard serving gap is real tokenizer/prompt prefill plus selected
+  token feedback into the next CUDA decode input.
+- Sprint 300 added the first request-boundary selected-token feedback bridge.
+  The TP/EP HTTP path now loads source BF16 `token_embd.weight` once, seeds
+  layer-0 HC shards from the prompt tail on a miss, and seeds from the previous
+  selected token on a cache hit. This matches the core serving loop direction
+  in `ds4.c` and llama.cpp, but only across one-token HTTP requests. A true
+  completion endpoint still needs prompt prefill and an internal
+  output-head/sample/feed loop for multi-token generation.
 - Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
   longer exposes PP/layer-split topology modes. Against the real production
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about
