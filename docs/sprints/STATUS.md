@@ -12,8 +12,13 @@ first full-layer TP4 boundary envelope. A 43-layer, 4-collective/layer TP4
 proxy costs `22-24 ms` at 16 active tokens, or about `655-724 tok/s`
 overhead-only before DS4 compute. The same boundary improves to
 `1837 tok/s` overhead-only at 64 active tokens and `2509 tok/s` at 128 active
-tokens. This keeps full-layer TP4/EP viable only if dense and routed work stay
-inside the TP boundary; routed-only overlays remain rejected.
+tokens. Sprint 202 then measured real TurboMind MXFP4 routed-FFN TP4 compute,
+after fixing a benchmark lifecycle bug where the full reference and shard 0
+crossed streams on GPU0 and shared one TurboMind workspace. Corrected
+compute-only speedup reaches `2.350x` at 96 routes and `3.636x` at 768 routes,
+but conservative copy-inclusive timing regresses to `0.783x` and `0.682x`.
+This keeps full-layer TP4/EP viable only if dense and routed work stay inside
+the TP boundary; routed-only overlays remain rejected.
 
 Current long-context production throughput mode is the Sprint 121 16-slot/256K
 appliance with the Sprint 122 rendezvous fix. Sprint 137 adds an explicit
@@ -301,6 +306,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 
 | Sprint | Experiment | Result | Decision |
 |---|---|---|---|
+| 202 | TP4 routed-FFN compute envelope | V100 build passed; fixed a GPU0 stream/workspace overlap in the benchmark warmup; real TurboMind MXFP4 TP4 split correctness passed at 6/96/768 routes; corrected compute-only speedup was `2.686x`, `2.350x`, `3.636x`; copy-inclusive speedup was `0.986x`, `0.783x`, `0.682x` | TP4 compute is strong enough for full-layer TP/EP, but routed-only full-hidden copy overlays are rejected |
 | 201 | TP4 full-layer boundary proxy | V100 build passed; 16-token/43-layer/4-collective boundary measured `22.113369 ms` root and `24.414061 ms` doubling, both verified; 64-token doubling measured `34.830881 ms`, 128-token doubling measured `51.026125 ms` | Full-layer TP4/EP remains plausible only as a broad topology that keeps dense+routed compute inside the boundary; do not expand routed-only TP overlays |
 | 103 | Exact-bit E4M3 F8 decode replacing `ldexpf()` | Improved 8-slot/256K to `30.862791` generated tok/s and 4-slot/1M to `19.733742` | Shipped |
 | 104 | Warp-shuffle reductions for hot F8 arena kernels | Improved 8-slot/256K repeat to `31.451185`; 4-slot/1M to `20.026385` | Shipped; current baseline |
@@ -583,6 +589,13 @@ changes the whole layer execution shape. Larger active-token runs improve the
 overhead-only envelope to `1837 tok/s` at 64 tokens and `2509 tok/s` at
 128 tokens, so TP4 is more promising for high-batch throughput/prefill than
 low-batch decode latency.
+Sprint 202 measured the matching routed-expert compute side with a four-GPU
+TurboMind MXFP4 split. It also fixed a benchmark warmup bug where the full
+reference and shard 0 shared the GPU0 workspace on different streams. TP4
+compute itself is strong (`2.35x-3.64x` at practical route counts), but
+conservative routed-only input/output copies erase it (`0.68x-0.78x`). This
+confirms that the next TP sprint must be a full-layer resident boundary or not
+TP at all.
 
 The concise current status is also tracked in
 `docs/sprints/EXPERIMENT-STATUS.md`.

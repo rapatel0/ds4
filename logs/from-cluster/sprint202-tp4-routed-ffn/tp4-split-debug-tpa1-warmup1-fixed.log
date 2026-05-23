@@ -1,0 +1,12 @@
+[tp_split_4gpu] start tpa=1 gpus=0,1,2,3 warmup=1 iters=3
+[tp_split_4gpu] initialized tpa=1
+[tp_split_4gpu] fixtures ready tpa=1
+[tp_split_4gpu] full pack ready tpa=1
+[tp_split_4gpu] shard packs ready tpa=1
+[tp_split_4gpu] full warmup done tpa=1
+[tp_split_4gpu] warmup done tpa=1
+[tp_split_4gpu] full bench done tpa=1 full_ms=0.1478
+[tp_split_4gpu] shard bench done tpa=1 concurrent_ms=0.0655
+[tp_split_4gpu] copy-inclusive bench done tpa=1 total_ms=0.1595
+[tp_split_4gpu tpa=1] gpus=0,1,2,3 routes=6 full_ms=0.1478 part_ms=0.0594,0.0621,0.0642,0.0655 concurrent_compute_ms=0.0655 compute_speedup=2.255x total_with_copy_ms=0.1595 total_with_copy_speedup=0.927x input_payload_mib=0.14 output_payload_mib=0.14
+[tp_split_4gpu tpa=1] correctness total_routes=6 values=24576 max_abs=4.0054e-05 rel=2.6915e-04 bad=0 bad_frac=0.0000e+00 nan=0 status=PASS

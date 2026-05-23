@@ -1,0 +1,5 @@
+[tp_split_4gpu] start tpa=1 gpus=0,1,2,3 warmup=1 iters=3
+[tp_split_4gpu] initialized tpa=1
+[tp_split_4gpu] fixtures ready tpa=1
+[tp_split_4gpu] full pack ready tpa=1
+[tp_split_4gpu] shard packs ready tpa=1

@@ -12,6 +12,11 @@ proxy costs `22-24 ms` at 16 active tokens (`655-724 tok/s` overhead-only),
 `34.830881 ms` at 64 tokens (`1837 tok/s` overhead-only), and `51.026125 ms`
 at 128 tokens (`2509 tok/s` overhead-only). TP4 is still worth exploring only
 as a broad full-layer TP/EP topology, not as another routed-only overlay.
+Sprint 202 confirms that interpretation from the compute side, after fixing a
+benchmark warmup bug where the full reference and shard 0 shared the GPU0
+TurboMind workspace on different streams. Corrected real TurboMind MXFP4 TP4
+routed-FFN compute reaches `2.350x-3.636x` speedup at 96-768 routes, but
+conservative full-hidden copies reduce those same cases to `0.783x-0.682x`.
 
 The appliance is correct and served on the 8x V100 node, but it is not yet in
 the practical throughput range from the vision. The current 8-slot default is
@@ -204,6 +209,7 @@ to slightly worse.
 
 | Sprint | Change | Result | Decision |
 |---|---|---|---|
+| 202 | TP4 routed-FFN compute envelope | Correct on V100 after fixing a benchmark stream/workspace overlap; corrected 6/96/768-route compute-only speedups were `2.686x`, `2.350x`, `3.636x`; copy-inclusive speedups were `0.986x`, `0.783x`, `0.682x` | TP4 expert compute is worth pursuing only inside a full-layer resident TP/EP topology; reject routed-only TP overlay expansion |
 | 201 | TP4 full-layer boundary proxy | Correct on V100; 16-token default verified at `22.113369 ms` root and `24.414061 ms` doubling for the full 43-layer boundary; larger doubling cases reached `1837` overhead-only tok/s at 64 tokens and `2509` at 128 tokens | Use only for a full-layer TP4/EP prototype that keeps dense+routed compute inside the boundary; do not expand routed-only TP overlays |
 | 103 | Exact-bit E4M3 F8 decode | Raised 8-slot/256K to `30.862791` | Shipped |
 | 104 | Warp reductions for F8 arena kernels | Raised 8-slot/256K repeat to `31.451185` | Shipped |
@@ -468,3 +474,10 @@ verifies and costs `22-24 ms` before compute, while 64-token and 128-token
 shapes improve to `1837` and `2509` overhead-only tok/s. That result does not
 justify another partial TP overlay; it supports either a bounded full-layer
 TP4/EP slice or a return to a persistent fused routed-FFN kernel.
+After Sprint 202, `test_ggml_turbomind_tp_split_4gpu` proves real four-way
+TurboMind MXFP4 routed-FFN compute can scale, but only if the runtime avoids
+routed-only hidden-state copies. The sprint also caught and fixed a benchmark
+lifecycle bug where full-reference and shard work crossed streams on GPU0. At
+96/768 routes, corrected compute-only TP4 is `2.350x/3.636x`;
+copy-inclusive TP4 is `0.783x/0.682x`. This pushes the next TP implementation toward a
+bounded full-layer resident TP4/EP slice.

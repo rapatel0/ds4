@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: sprint-execute
-revision: 201
+revision: 202
 ---
 
 # Vision: DS4 V100 Appliance
@@ -30,6 +30,12 @@ kernel-wrapper cut-ins are rejected, and full-layer TP4/EP remains viable only
 if the runtime keeps dense and routed computation inside the TP boundary. The
 measured 16-token TP4 boundary costs `22-24 ms` for 43 layers before compute,
 so a partial routed-only overlay is the wrong target.
+Sprint 202 confirms this from the compute side, after fixing a benchmark
+warmup bug where full-reference and shard work crossed streams on GPU0:
+four-way TurboMind MXFP4 expert compute scales to `2.35x-3.64x` at practical
+route counts, but routed-only full-hidden copies erase the win. The next TP
+sprint must therefore be a bounded full-layer resident TP4/EP slice or the TP
+branch should pause.
 
 ## Current State
 
@@ -2986,6 +2992,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-23 | Shipped Sprint 199 served graph replay promotion. | Ran the missing production-shaped served gate for the current `fused6_reduce` executor. At 16-slot/256K with 16 requests x 64 tokens, `fused6_reduce` graph off measured `54.725463` generated / `53.870377` continuation tok/s, while graph on measured `67.886268` / `66.825545`, both `16/16` correct. The graph server log showed `43` captures, `129` launches, and `0` launch/capture failures. A separate routed-executor-off production control measured `56.719099` / `55.832863`, so the promoted stack is about `+19.7%` continuation versus prior production control in this harness. The V100 appliance defaults now select `DS4_V100_TURBOMIND_GATED_SILU=1`, `DS4_V100_TURBOMIND_ROUTED_EXECUTOR=fused6_reduce`, and `DS4_V100_TURBOMIND_GRAPH=1` for the Sprint 181+ production pack. This is a real shipped serving improvement, but throughput is still only in the `~67` tok/s band, so the next stage must target a persistent routed-FFN kernel or full-layer TP/EP rather than more wrapper-level graph work. | Sprint 200+ |
 | 2026-05-23 | Completed Sprint 200 six-route kernel cut-in stop gate. | Extended the focused TurboMind bench to cover the exact production six-route routed-FFN shape, including `ggml_turbomind_ds4_mxfp4_gated_silu_6`, `ggml_turbomind_ds4_mxfp4_down_6_m16_reduce`, output-clear timing, and down-reduce correctness versus a generic-down reduction reference. The V100 result rejects the easy six-route cut-ins: fixed `m16_6` gated-SiLU measured `0.1196 ms` versus `0.0946 ms` for the generic gated path, and the required F32 output clear measured only `0.0022 ms` versus `0.0650 ms` for clear+down-reduce. Do not add a wrapper ABI or clear-only fusion; pivot the next sprint to bounded full-layer TP4/EP or a real non-atomic route-reduce epilogue rewrite. | Sprint 201+ |
 | 2026-05-23 | Completed Sprint 201 TP4 layer-boundary proxy. | Added `tools/ds4-v100-tp4-layer-proxy`, built it on the V100 pod, and measured the full 43-layer TP4 boundary with four hidden collectives per layer. At 16 active tokens the boundary costs `22.113369 ms` root or `24.414061 ms` doubling, both verified, which is an overhead-only ceiling of `655-724 tok/s` before DS4 compute. Larger doubling runs improve to `1837 tok/s` overhead-only at 64 active tokens and `2509 tok/s` at 128 active tokens. This keeps full-layer TP4/EP plausible for high-batch/prefill or a broad topology slice, but rejects any further routed-only TP overlay expansion. | Sprint 202+ |
+| 2026-05-23 | Completed Sprint 202 TP4 routed-FFN compute envelope. | Added `test_ggml_turbomind_tp_split_4gpu`, built it on the V100 pod, and measured real TurboMind MXFP4 routed-FFN TP4 splits at 6/96/768 routes after fixing a benchmark warmup bug where the full reference and shard 0 shared the GPU0 workspace on different streams. Correctness passed for all measured shapes. Corrected compute-only TP4 speedup reached `2.686x`, `2.350x`, and `3.636x`, but conservative full-hidden copy-inclusive speedup was only `0.986x`, `0.783x`, and `0.682x`. This proves TP4 expert compute is attractive, but only inside a resident full-layer TP/EP boundary. Do not build another routed-only TP overlay. | Sprint 203+ |
 
 ## Open Questions
 

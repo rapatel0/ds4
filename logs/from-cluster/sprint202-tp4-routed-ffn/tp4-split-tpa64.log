@@ -1,0 +1,2 @@
+[tp_split_4gpu tpa=64] gpus=0,1,2,3 routes=384 full_ms=0.5959 part_ms=0.1635,0.1644,0.1650,0.1658 concurrent_compute_ms=0.1658 compute_speedup=3.594x total_with_copy_ms=0.8734 total_with_copy_speedup=0.682x input_payload_mib=9.00 output_payload_mib=9.00
+[tp_split_4gpu tpa=64] correctness total_routes=384 values=1572864 max_abs=5.2452e-05 rel=2.6924e-04 bad=0 bad_frac=0.0000e+00 nan=0 status=PASS
