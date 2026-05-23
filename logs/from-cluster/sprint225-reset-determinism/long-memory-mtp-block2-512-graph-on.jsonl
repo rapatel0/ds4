@@ -1,0 +1,5 @@
+ds4: CUDA loading model tensors into device cache
+ds4: TurboMind down-reduce epilogue selected total_routes=6
+ds4: CUDA loading model tensors 1.13 GiB cached
+{"mtp_block2_commit_smoke":true,"prompt_tokens":512,"generated_tokens":8,"baseline_tokens":8,"token_match":true,"blocks":4,"block2_full_accepts":2,"block2_partial_accepts":0,"block2_rejects":2,"accepted_prefix_total":4,"draft_tokens_proposed":8,"draft_tokens_accepted":4,"target_forwards":7,"target_tokens_verified":6,"effective_output_tokens":8,"speculative_saves":1,"mtp_ms":34.966,"verify_ms":428.016,"block2_total_ms":30246.052,"baseline_total_ms":31667.526,"block2_generated_tps":0.264497,"baseline_generated_tps":0.252625,"last_mtp_raw_row":6,"last_mtp_n_raw":1}
+rc=0

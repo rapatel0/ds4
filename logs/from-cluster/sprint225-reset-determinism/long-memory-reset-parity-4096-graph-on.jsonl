@@ -1,0 +1,4 @@
+ds4: CUDA loading model tensors into device cache
+ds4: TurboMind down-reduce epilogue selected total_routes=6
+killed_for_shorter_prefixes
+rc=143

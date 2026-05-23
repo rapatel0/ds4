@@ -192,6 +192,24 @@ fails the existing target-block reset smoke. The high-throughput vision cannot
 promote MTP serving until long-prompt replay reset/snapshot determinism is
 fixed. The next sprint should repair that determinism gap, then rerun the
 block-2 gate before any serving integration.
+Sprint 225 repairs that diagnosis and tightens the benchmark contract. Full
+`long_memory_archive` reset parity and target-block snapshot/restore parity now
+pass on the V100 production pack, so the Sprint 224 reset blocker is cleared.
+Bounded MTP block-2 checks remain token-correct through a 1024-token prefix and
+still report `speculative_saves=1`, but MTP serving is not promoted because the
+commit path is still a one-slot diagnostic. The vision consequence is a
+methodology correction: single-slot replay is only a correctness gate. Practical
+throughput must be measured as multi-slot server serving with
+`active_microbatch == slots`, separate generated and continuation tok/s, and
+GPU utilization. The sustained-serving harness now defaults to `32` slots at
+`256K`, startup warmup, `200 ms` microbatch wait, and per-step async event
+handoff, and it rejects slot tier `1` unless explicitly marked diagnostic. The
+current Sprint 225 production-shaped repeat is correct but below the earlier
+best run: `50.434232` generated tok/s and `47.282093` continuation tok/s at
+`32` slots / `256K`, with average GPU utilization `47.076%` and max `96%`.
+The next sprint should pursue a multi-slot production lever, not more
+single-slot MTP diagnostics. TP remains separate prototype work and is not an
+operational serving mode.
 
 ## Current State
 

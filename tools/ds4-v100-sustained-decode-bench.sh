@@ -7,28 +7,30 @@ pack_index=""
 appliance_dir=""
 prompt_file="tests/test-vectors/prompts/short_reasoning_plain.txt"
 expected_hex="3136"
-ctx_tiers="1048576"
-slot_tiers="1"
+ctx_tiers="262144"
+slot_tiers="32"
 queue_policies="sequential"
 tokens="16"
-requests="8"
-warmup_requests="1"
+requests="64"
+warmup_requests="4"
 host="127.0.0.1"
 port_base="18220"
 sample_ms="500"
-microbatch_wait_us=""
+microbatch_wait_us="200000"
 log_dir=""
 profile_decode="0"
 cuda_profiler_window="0"
+startup_warmup="1"
 wavefront_decode="0"
-async_pipeline_decode="0"
-async_pipeline_mode="off"
+async_pipeline_decode="1"
+async_pipeline_mode="per-step"
 async_handoff="0"
-async_event_handoff="0"
+async_event_handoff="1"
 mtp_serving="off"
 mtp_top_k="5"
 mtp_gpu="7"
 mtp_reserve_mib="4096"
+allow_single_slot_diagnostic="0"
 replay_bin="${DS4_V100_REPLAY_BIN:-./tools/ds4-v100-replay}"
 
 usage() {
@@ -43,24 +45,25 @@ Options:
                             turbomind-pack-index.tsv, and gpuN.weights shards
   --prompt-file FILE        prompt file
   --expected-token-hex HEX  expected first response token bytes, default 3136
-  --ctx-tiers LIST          comma list of ctx tiers, default 1048576
-  --slot-tiers LIST         comma list of slot tiers, default 1
+  --ctx-tiers LIST          comma list of ctx tiers, default 262144
+  --slot-tiers LIST         comma list of slot tiers, default 32
   --queue-policies LIST     comma list: sequential,reject-busy, default sequential
   --tokens N                generated tokens per request, default 16
-  --requests N              timed requests per case, default 8
-  --warmup-requests N       sequential warmup requests per case, default 1
+  --requests N              timed requests per case, default 64
+  --warmup-requests N       sequential warmup requests per case, default 4
   --host ADDR               bind/probe address, default 127.0.0.1
   --port-base N             base port for case runs, default 18220
   --sample-ms N             nvidia-smi sample period in ms, default 500
-  --microbatch-wait-us N    pass --microbatch-wait-us to the server
+  --microbatch-wait-us N    pass --microbatch-wait-us to the server, default 200000
   --log-dir DIR             write benchmark artifacts
+  --no-startup-warmup       disable the internal replay startup warmup
   --profile-decode          pass --profile-decode to the replay server and
                             preserve averaged stage_profile timing
   --cuda-profiler-window    call cudaProfilerStart/Stop around generation so
                             nvprof --profile-from-start off captures decode
   --wavefront-decode        pass --wavefront-decode to the replay server
   --async-pipeline-decode   pass preferred async pipeline mode to the server
-  --async-pipeline-mode M   off, persistent, per-step, or mailbox
+  --async-pipeline-mode M   off, persistent, per-step, or mailbox; default per-step
   --async-pipeline-per-step pass --async-pipeline-mode per-step
   --async-handoff           queue HC peer handoff copies on the destination stream
   --async-event-handoff     use CUDA events for per-step stage handoff ordering
@@ -68,6 +71,9 @@ Options:
   --mtp-top-k N             MTP draft candidates to report, default 5
   --mtp-gpu N               MTP sidecar GPU, default 7
   --mtp-reserve-mib N       MTP free-memory reserve, default 4096
+  --allow-single-slot-diagnostic
+                            allow slot tier 1; reports from this mode are not
+                            practical throughput claims
   --help                    show this help
 
 Environment:
@@ -76,6 +82,9 @@ Environment:
 Each case starts one resident replay server with:
   active_microbatch = slots
   concurrency        = slots
+
+Practical throughput claims should use slot tiers >= 16. Single-slot runs are
+reserved for correctness and latency diagnostics.
 
 The benchmark writes:
   sustained_decode.tsv
@@ -200,6 +209,10 @@ while [ "$#" -gt 0 ]; do
             log_dir="$2"
             shift 2
             ;;
+        --no-startup-warmup)
+            startup_warmup="0"
+            shift
+            ;;
         --profile-decode)
             profile_decode="1"
             shift
@@ -282,6 +295,10 @@ while [ "$#" -gt 0 ]; do
             mtp_reserve_mib="$2"
             shift 2
             ;;
+        --allow-single-slot-diagnostic)
+            allow_single_slot_diagnostic="1"
+            shift
+            ;;
         --help|-h)
             usage
             exit 0
@@ -325,6 +342,12 @@ case "$mtp_reserve_mib" in ''|*[!0-9]*) fail "--mtp-reserve-mib must be an integ
 
 parse_csv_numbers "$ctx_tiers" "--ctx-tiers"
 parse_csv_numbers "$slot_tiers" "--slot-tiers"
+IFS=',' read -r -a slot_list_for_guard <<<"$slot_tiers"
+for slot in "${slot_list_for_guard[@]}"; do
+    if [ "$slot" -eq 1 ] && [ "$allow_single_slot_diagnostic" != "1" ]; then
+        fail "--slot-tiers includes 1; use --allow-single-slot-diagnostic for correctness/latency probes, not throughput"
+    fi
+done
 
 IFS=',' read -r -a policy_list <<<"$queue_policies"
 if [ "${#policy_list[@]}" -eq 0 ]; then
@@ -942,6 +965,9 @@ load_case() {
     if [ -n "$microbatch_wait_us" ]; then
         cmd+=(--microbatch-wait-us "$microbatch_wait_us")
     fi
+    if [ "$startup_warmup" = "1" ]; then
+        cmd+=(--startup-warmup)
+    fi
     if [ -n "$appliance_dir" ]; then
         cmd+=(--appliance-dir "$appliance_dir")
     else
@@ -1046,6 +1072,7 @@ printf 'async_pipeline_mode\t%s\n' "$async_pipeline_mode" >>"$summary_tsv"
 printf 'async_event_handoff\t%s\n' "$async_event_handoff" >>"$summary_tsv"
 printf 'async_handoff\t%s\n' "$async_handoff" >>"$summary_tsv"
 printf 'microbatch_wait_us\t%s\n' "${microbatch_wait_us:-default}" >>"$summary_tsv"
+printf 'startup_warmup\t%s\n' "$startup_warmup" >>"$summary_tsv"
 printf 'mtp_serving\t%s\n' "$mtp_serving" >>"$summary_tsv"
 printf 'mtp_top_k\t%s\n' "$mtp_top_k" >>"$summary_tsv"
 printf '\nctx\tslots\tpolicy\tmtp_serving\tstatus_200\tstatus_other\terrors\ttoken_match\ttoken_mismatch\tlatency_avg_ms\tlatency_p50_ms\tlatency_p95_ms\tlatency_p99_ms\telapsed_s\taggregate_prompt_tokens_per_second\taggregate_generated_tokens_per_second\taggregate_continuation_tokens_per_second\tavg_prompt_response_tokens_per_second\tavg_continuation_response_tokens_per_second\tavg_gpu_util_percent\tmax_gpu_util_percent\tmtp_attempted\tmtp_accepted\tmtp_rejected\tmtp_committed\tmtp_draft_tokens_proposed\tmtp_draft_tokens_accepted\tmtp_accepted_prefix_len_max\tmtp_target_tokens_verified\tmtp_target_forwards\tmtp_effective_output_tokens\tmtp_speculative_saves\tmtp_draft_ms_avg\tmtp_draft_ms_total\tavg_async_total_ms\tavg_async_setup_ms\tavg_async_host_wait_ms\tavg_async_complete_ms\tavg_async_wait_prev_sum_ms\tavg_async_handoff_sum_ms\tavg_async_device_sync_sum_ms\n' >>"$summary_tsv"

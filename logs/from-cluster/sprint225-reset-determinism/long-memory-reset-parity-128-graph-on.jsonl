@@ -1,0 +1,4 @@
+ds4: CUDA loading model tensors into device cache
+ds4: TurboMind down-reduce epilogue selected total_routes=6
+{"reset_parity_smoke":true,"prompt_tokens":128,"generated_tokens":8,"match":true,"mismatch_index":null,"first_token":18954,"second_token":18954,"first_hex":"206b65657073","second_hex":"206b65657073","first_total_ms":8972.130,"second_total_ms":7684.184,"first_prompt_ms":8546.650,"second_prompt_ms":7260.071}
+rc=0

@@ -190,6 +190,23 @@ parity at token 1 (`baseline=16`, `got=8773`), and a follow-up
 `--target-block-smoke 2` on that same prompt also failed target replay reset
 determinism (`got=32085 want=10220`). The next sprint should fix long-prompt
 replay reset/snapshot determinism, then rerun the block-2 gate.
+Sprint 225 cleared that reset/snapshot blocker and tightened throughput
+methodology. `tools/ds4-v100-replay` now has `--reset-parity-smoke` and
+`--prompt-token-limit`; full `long_memory_archive` reset parity passes with
+`prompt_tokens=3353`, `generated_tokens=1`, `first_token=32085`, and
+`match=true`. Full `--target-block-smoke 2` also passes on that prompt with
+`snapshot_bytes=907214848`. Bounded MTP block-2 checks pass through the 1024
+token prefix with `token_match=true` and `speculative_saves=1`, but the full
+single-slot MTP run was stopped after the methodology review and is not
+promotion evidence. Practical throughput claims are now guarded:
+`tools/ds4-v100-sustained-decode-bench.sh` defaults to `32` slots at `256K`,
+`active_microbatch=slots`, startup warmup, `200000 us` microbatch wait, and
+per-step async event handoff; slot tier `1` requires
+`--allow-single-slot-diagnostic`. The current Sprint 225 practical serving
+repeat measured `50.434232` generated tok/s and `47.282093` continuation tok/s
+at `32` slots / `256K`, with `64/64` token match, average GPU utilization
+`47.076%`, and max GPU utilization `96%`. TP remains prototype-only and is not
+operational in production serving.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit

@@ -53,9 +53,11 @@ typedef struct {
     uint32_t microbatch_wait_us;
     uint32_t synthetic_prompt_token;
     uint32_t synthetic_prompt_len;
+    uint32_t prompt_token_limit;
     uint32_t target_block_smoke;
     uint32_t mtp_draft_block_smoke;
     uint32_t mtp_block2_commit_smoke;
+    uint32_t reset_parity_smoke;
     uint32_t mtp_top_k;
     int mtp_gpu;
     int mtp_reserve_mib;
@@ -615,8 +617,10 @@ static void usage(FILE *fp) {
             "  --synthetic-prompt-token ID\n"
             "                            build prompt from repeated token ID\n"
             "  --synthetic-prompt-len N  synthetic repeated-token prompt length\n"
+            "  --prompt-token-limit N    truncate encoded prompt to N tokens for diagnostics\n"
             "  --system TEXT             system prompt, default empty\n"
             "  --tokens N                greedy tokens to generate, default 1\n"
+            "  --reset-parity-smoke N    generate, reset, regenerate, and compare N tokens\n"
             "  --target-block-smoke N    verify/restore a forced one-slot target block\n"
             "  --mtp-draft-block-smoke N chain MTP drafts and verify the block\n"
             "  --mtp-block2-commit-smoke N\n"
@@ -749,6 +753,13 @@ static replay_cli_options parse_options(int argc, char **argv) {
                 exit(2);
             }
             opt.synthetic_prompt_len = (uint32_t)v;
+        } else if (!strcmp(arg, "--prompt-token-limit")) {
+            uint64_t v = parse_u64_arg(need_arg(&i, argc, argv, arg), arg);
+            if (v == 0 || v > INT32_MAX) {
+                fprintf(stderr, "ds4-v100-replay: invalid --prompt-token-limit\n");
+                exit(2);
+            }
+            opt.prompt_token_limit = (uint32_t)v;
         } else if (!strcmp(arg, "--system")) {
             opt.system = need_arg(&i, argc, argv, arg);
         } else if (!strcmp(arg, "--tokens")) {
@@ -760,6 +771,15 @@ static replay_cli_options parse_options(int argc, char **argv) {
                 exit(2);
             }
             opt.tokens = (uint32_t)v;
+        } else if (!strcmp(arg, "--reset-parity-smoke")) {
+            uint64_t v = parse_u64_arg(need_arg(&i, argc, argv, arg), arg);
+            if (v == 0 || v > DS4_V100_REPLAY_MAX_TOKENS) {
+                fprintf(stderr,
+                        "ds4-v100-replay: --reset-parity-smoke must be in [1,%d]\n",
+                        DS4_V100_REPLAY_MAX_TOKENS);
+                exit(2);
+            }
+            opt.reset_parity_smoke = (uint32_t)v;
         } else if (!strcmp(arg, "--target-block-smoke")) {
             uint64_t v = parse_u64_arg(need_arg(&i, argc, argv, arg), arg);
             if (v >= DS4_V100_REPLAY_MAX_TOKENS) {
@@ -931,6 +951,9 @@ static replay_cli_options parse_options(int argc, char **argv) {
         }
     }
     bool synthetic_prompt = opt.synthetic_prompt_len != 0;
+    if (opt.reset_parity_smoke && opt.tokens < opt.reset_parity_smoke) {
+        opt.tokens = opt.reset_parity_smoke;
+    }
     if (opt.mtp_block2_commit_smoke && opt.tokens < opt.mtp_block2_commit_smoke) {
         opt.tokens = opt.mtp_block2_commit_smoke;
     }
@@ -959,6 +982,24 @@ static replay_cli_options parse_options(int argc, char **argv) {
     if (opt.mtp_serving == REPLAY_MTP_SERVING_COMMIT && opt.active_microbatch != 1) {
         fprintf(stderr, "ds4-v100-replay: --mtp-serving commit currently requires --active-microbatch 1\n");
         exit(2);
+    }
+    if (opt.reset_parity_smoke) {
+        if (opt.slots != 1 || opt.active_microbatch != 1) {
+            fprintf(stderr, "ds4-v100-replay: --reset-parity-smoke currently requires --slots 1 --active-microbatch 1\n");
+            exit(2);
+        }
+        if (opt.serve || opt.open_only) {
+            fprintf(stderr, "ds4-v100-replay: use --reset-parity-smoke without --serve or --open-only\n");
+            exit(2);
+        }
+        if (opt.mtp_serving != REPLAY_MTP_SERVING_OFF) {
+            fprintf(stderr, "ds4-v100-replay: --reset-parity-smoke validates the target path; do not combine it with --mtp-serving\n");
+            exit(2);
+        }
+        if (opt.target_block_smoke || opt.mtp_draft_block_smoke || opt.mtp_block2_commit_smoke) {
+            fprintf(stderr, "ds4-v100-replay: --reset-parity-smoke cannot be combined with other smoke modes\n");
+            exit(2);
+        }
     }
     if (opt.target_block_smoke) {
         if (opt.slots != 1 || opt.active_microbatch != 1) {
@@ -1786,6 +1827,166 @@ static int replay_output_token_matches(const char *label,
         return 1;
     }
     return 0;
+}
+
+static int run_reset_parity_smoke(ds4_v100_replay *rt,
+                                  const ds4_tokens *prompt,
+                                  uint32_t max_tokens,
+                                  const unsigned char *expected,
+                                  size_t expected_len,
+                                  bool json,
+                                  char *err,
+                                  size_t errlen) {
+    if (!rt || !prompt || prompt->len <= 0 || max_tokens == 0 ||
+        max_tokens > DS4_V100_REPLAY_MAX_TOKENS) {
+        snprintf(err, errlen, "invalid reset parity smoke input");
+        return 1;
+    }
+
+    ds4_v100_replay_output first[DS4_V100_REPLAY_MAX_TOKENS];
+    ds4_v100_replay_output second[DS4_V100_REPLAY_MAX_TOKENS];
+    memset(first, 0, sizeof(first));
+    memset(second, 0, sizeof(second));
+
+    ds4_v100_replay_counters first_counters;
+    ds4_v100_replay_counters second_counters;
+    memset(&first_counters, 0, sizeof(first_counters));
+    memset(&second_counters, 0, sizeof(second_counters));
+
+    uint32_t first_count = 0;
+    uint32_t second_count = 0;
+    uint32_t mismatch_index = UINT32_MAX;
+    int rc = 1;
+
+    if (ds4_v100_replay_generate(rt,
+                                 prompt,
+                                 max_tokens,
+                                 first,
+                                 DS4_V100_REPLAY_MAX_TOKENS,
+                                 &first_count,
+                                 &first_counters,
+                                 err,
+                                 errlen) ||
+        first_count != max_tokens) {
+        if (err[0] == '\0') snprintf(err, errlen, "reset parity first generation failed");
+        goto done;
+    }
+    if (expected) {
+        if (!first[0].text ||
+            first[0].text_len != expected_len ||
+            memcmp(first[0].text, expected, expected_len) != 0) {
+            fprintf(stderr, "ds4-v100-replay: reset-parity selected token mismatch expected=");
+            print_hex(stderr, expected, expected_len);
+            fprintf(stderr, " got=");
+            if (first[0].text) {
+                print_hex(stderr, (const unsigned char *)first[0].text, first[0].text_len);
+            } else {
+                fprintf(stderr, "none");
+            }
+            fprintf(stderr, " token=%" PRIu32 " logit=%.8g\n",
+                    first[0].token,
+                    first[0].logit);
+            snprintf(err, errlen, "reset parity expected first token mismatch");
+            goto done;
+        }
+    }
+
+    if (ds4_v100_replay_reset(rt, err, errlen)) goto done;
+
+    if (ds4_v100_replay_generate(rt,
+                                 prompt,
+                                 max_tokens,
+                                 second,
+                                 DS4_V100_REPLAY_MAX_TOKENS,
+                                 &second_count,
+                                 &second_counters,
+                                 err,
+                                 errlen) ||
+        second_count != max_tokens) {
+        if (err[0] == '\0') snprintf(err, errlen, "reset parity second generation failed");
+        goto done;
+    }
+
+    for (uint32_t i = 0; i < max_tokens; i++) {
+        if (first[i].token != second[i].token) {
+            mismatch_index = i;
+            break;
+        }
+    }
+    const bool match = mismatch_index == UINT32_MAX;
+
+    if (json) {
+        printf("{\"reset_parity_smoke\":true,"
+               "\"prompt_tokens\":%d,"
+               "\"generated_tokens\":%" PRIu32 ","
+               "\"match\":%s,"
+               "\"mismatch_index\":",
+               prompt->len,
+               max_tokens,
+               match ? "true" : "false");
+        if (match) printf("null");
+        else printf("%" PRIu32, mismatch_index);
+        printf(",\"first_token\":%" PRIu32
+               ",\"second_token\":%" PRIu32
+               ",\"first_hex\":\"",
+               first_count ? first[0].token : UINT32_MAX,
+               second_count ? second[0].token : UINT32_MAX);
+        if (first_count && first[0].text) {
+            print_hex(stdout, (const unsigned char *)first[0].text, first[0].text_len);
+        }
+        printf("\",\"second_hex\":\"");
+        if (second_count && second[0].text) {
+            print_hex(stdout, (const unsigned char *)second[0].text, second[0].text_len);
+        }
+        printf("\",\"first_total_ms\":%.3f,"
+               "\"second_total_ms\":%.3f,"
+               "\"first_prompt_ms\":%.3f,"
+               "\"second_prompt_ms\":%.3f}\n",
+               first_counters.total_ms,
+               second_counters.total_ms,
+               first_counters.prompt_replay_ms,
+               second_counters.prompt_replay_ms);
+    } else {
+        printf("ds4-v100-replay: reset_parity_smoke prompt_tokens=%d"
+               " generated_tokens=%" PRIu32
+               " match=%s mismatch_index=",
+               prompt->len,
+               max_tokens,
+               match ? "true" : "false");
+        if (match) printf("none");
+        else printf("%" PRIu32, mismatch_index);
+        printf(" first_token=%" PRIu32
+               " second_token=%" PRIu32
+               " first_total_ms=%.3f second_total_ms=%.3f"
+               " first_prompt_ms=%.3f second_prompt_ms=%.3f %s\n",
+               first_count ? first[0].token : UINT32_MAX,
+               second_count ? second[0].token : UINT32_MAX,
+               first_counters.total_ms,
+               second_counters.total_ms,
+               first_counters.prompt_replay_ms,
+               second_counters.prompt_replay_ms,
+               match ? "ok" : "mismatch");
+    }
+
+    if (!match) {
+        snprintf(err,
+                 errlen,
+                 "reset parity mismatch at token %" PRIu32 ": first=%" PRIu32 " second=%" PRIu32,
+                 mismatch_index,
+                 first[mismatch_index].token,
+                 second[mismatch_index].token);
+        goto done;
+    }
+    rc = 0;
+
+done:
+    for (uint32_t i = 0; i < first_count && i < DS4_V100_REPLAY_MAX_TOKENS; i++) {
+        ds4_v100_replay_output_free(&first[i]);
+    }
+    for (uint32_t i = 0; i < second_count && i < DS4_V100_REPLAY_MAX_TOKENS; i++) {
+        ds4_v100_replay_output_free(&second[i]);
+    }
+    return rc;
 }
 
 static int run_target_block_smoke(ds4_v100_replay *rt,
@@ -3616,8 +3817,12 @@ int main(int argc, char **argv) {
         ropts.attn_comp_cap = (uint32_t)comp_cap;
         ropts.index_comp_cap = (uint32_t)comp_cap;
     } else if (prompt_text) {
-        uint64_t comp_cap = ((uint64_t)strlen(prompt_text) + (uint64_t)strlen(opt.system) +
-                             (uint64_t)opt.tokens + 1ull) / 2ull + 64ull;
+        uint64_t prompt_cap_basis = ((uint64_t)strlen(prompt_text) +
+                                     (uint64_t)strlen(opt.system) + 1ull) / 2ull;
+        if (opt.prompt_token_limit && opt.prompt_token_limit < prompt_cap_basis) {
+            prompt_cap_basis = opt.prompt_token_limit;
+        }
+        uint64_t comp_cap = prompt_cap_basis + (uint64_t)opt.tokens + 64ull;
         if (comp_cap < ropts.attn_comp_cap) comp_cap = ropts.attn_comp_cap;
         if (comp_cap > UINT32_MAX) {
             fprintf(stderr, "ds4-v100-replay: prompt compressed cache cap is too large\n");
@@ -3683,6 +3888,9 @@ int main(int argc, char **argv) {
     } else {
         ds4_v100_replay_encode_prompt(rt, opt.system, prompt_text, DS4_THINK_NONE, &prompt);
     }
+    if (opt.prompt_token_limit && prompt.len > (int)opt.prompt_token_limit) {
+        prompt.len = (int)opt.prompt_token_limit;
+    }
     if (opt.ctx && (uint64_t)prompt.len + opt.tokens > opt.ctx) {
         fprintf(stderr, "ds4-v100-replay: prompt exceeds configured context\n");
         replay_mtp_service_close(mtp);
@@ -3691,6 +3899,27 @@ int main(int argc, char **argv) {
         free(expected);
         free(prompt_owned);
         return 1;
+    }
+    if (opt.reset_parity_smoke) {
+        int smoke_rc = run_reset_parity_smoke(rt,
+                                              &prompt,
+                                              opt.reset_parity_smoke,
+                                              expected,
+                                              expected_len,
+                                              opt.json,
+                                              err,
+                                              sizeof(err));
+        if (smoke_rc) {
+            fprintf(stderr,
+                    "ds4-v100-replay: %s\n",
+                    err[0] ? err : "reset parity smoke failed");
+        }
+        replay_mtp_service_close(mtp);
+        ds4_v100_replay_close(rt);
+        ds4_tokens_free(&prompt);
+        free(expected);
+        free(prompt_owned);
+        return smoke_rc;
     }
     if (opt.target_block_smoke) {
         int smoke_rc = run_target_block_smoke(rt,
