@@ -1,0 +1,6 @@
+[tp_split_4gpu tpa=16] gpus=0,1,2,3 routes=96 full_ms=0.2924 part_ms=0.1235,0.1243,0.1255,0.1258 concurrent_compute_ms=0.1258 compute_speedup=2.323x total_with_copy_ms=0.3740 total_with_copy_speedup=0.782x input_payload_mib=2.25 output_payload_mib=2.25
+[tp_split_4gpu tpa=16] correctness total_routes=96 values=393216 max_abs=4.9591e-05 rel=2.6929e-04 bad=0 bad_frac=0.0000e+00 nan=0 status=PASS
+[tp_split_4gpu tpa=32] gpus=0,1,2,3 routes=192 full_ms=0.3466 part_ms=0.1326,0.1331,0.1334,0.1337 concurrent_compute_ms=0.1337 compute_speedup=2.592x total_with_copy_ms=0.5487 total_with_copy_speedup=0.632x input_payload_mib=4.50 output_payload_mib=4.50
+[tp_split_4gpu tpa=32] correctness total_routes=192 values=786432 max_abs=4.9591e-05 rel=2.6868e-04 bad=0 bad_frac=0.0000e+00 nan=0 status=PASS
+[tp_split_4gpu tpa=64] gpus=0,1,2,3 routes=384 full_ms=0.6070 part_ms=0.1609,0.1614,0.1622,0.1626 concurrent_compute_ms=0.1626 compute_speedup=3.733x total_with_copy_ms=0.8878 total_with_copy_speedup=0.684x input_payload_mib=9.00 output_payload_mib=9.00
+[tp_split_4gpu tpa=64] correctness total_routes=384 values=1572864 max_abs=5.2452e-05 rel=2.6924e-04 bad=0 bad_frac=0.0000e+00 nan=0 status=PASS

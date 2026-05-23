@@ -1,0 +1,4 @@
+=== tokens_per_active=16 ===
+correctness_host_sum routes=96 values=393216 max_abs=5.34058e-05 rel=0.000268987 bad=0 bad_frac=0 nan=0 ok
+ds4-v100-tp4-turbomind-layer-smoke devices=0,1,2,3 tokens_per_active=16 routes=96 experts=6 hidden=4096 full_mid=2048 mid_shard=512 dtype=mxfp4 group_size=32 warmup=3 iters=20
+latency_ms full=0.292096 tp4_compute=0.125082 tp4_reduce=0.145972 tp4_total=0.271054 compute_speedup=2.335 total_speedup=1.078 input_mib=0.750 output_mib=0.750

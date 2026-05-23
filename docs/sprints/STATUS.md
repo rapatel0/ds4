@@ -77,6 +77,15 @@ shows `2.333x-3.676x` compute speedup, although copy-inclusive timing is still
 below `1.0x`. Next work should pivot to TP4/PP1 low-bit layer ownership with a
 better reduction boundary, or explicitly design a TP8 MXFP4 shard-256 kernel
 before returning to TP8.
+Sprint 212 executed that TP4/PP1 low-bit layer-body gate in a separate TP-only
+tool. Correctness passes at 96/192/384 routes after fixing two benchmark bugs
+(synthetic fixture overflow and a missing `cudaSetDevice()` before TurboMind
+calls). Compute-only TP4 speedup is still strong (`2.335x/2.597x/3.707x`), but
+the resident root reduction only wins at 96 routes (`1.078x`) and regresses at
+192/384 routes (`0.932x/0.967x`). This rejects TP4/PP1 runtime ownership as
+the next implementation step; TP should stay parked for prefill/larger-batch
+work or until a fused/NCCL-grade collective exists. The next sprint should
+return to a monolithic/persistent low-bit routed-FFN executor.
 
 Current long-context production throughput mode is the Sprint 121 16-slot/256K
 appliance with the Sprint 122 rendezvous fix. Sprint 137 adds an explicit
@@ -364,6 +373,11 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 
 | Sprint | Experiment | Result | Decision |
 |---|---|---|---|
+| 212 | TP4/PP1 low-bit layer body pivot | New separate TP-only `tools/ds4-v100-tp4-turbomind-layer-smoke` built on V100; correctness passed at 96/192/384 routes; TP4 compute speedups were `2.335x`, `2.597x`, `3.707x`; resident-reduce total speedups were `1.078x`, `0.932x`, `0.967x` | Do not build TP4/PP1 runtime ownership next; return to monolithic/persistent low-bit routed-FFN or a better collective |
+| 211 | TP8 TurboMind MXFP4 expert body | Separate TP-only TP8 low-bit smoke ran the public TurboMind ABI, but `mid_shard=256` failed correctness at 96/192/384 routes with NaNs despite `3.927x-4.189x` compute-only speedup | Reject current TP8 MXFP4 shard shape; pivot to TP4 control or design a shard-256 kernel |
+| 210 | TP8 real layer-body fixture | Separate TP-only FP16 Tensor Core layer body passed 32/64/128 token gates with `0.614750/0.709350/0.796927 ms` total latency | Continue TP8 only by replacing the FP16 fixture with real low-bit expert work |
+| 209 | TP8 one-layer prototype | Separate TP-only one-layer smoke passed 32/64/128 token gates with sharded 32-slot/256K F8 KV and total latencies `0.739408/0.876011/1.098461 ms` | Continue TP8 in new TP-only files; no PP scheduler integration |
+| 208 | Separate TP8 investigation path | TP8 planner/probes showed 32-slot/256K fits with sharded KV at `26.84 GiB` worst GPU and the 43-layer boundary proxy measured `29.381/32.605/37.995 ms` at 32/64/128 tokens | Continue bounded TP8 prototypes in separate files |
 | 205 | Async root resident TP4 reduction | V100 build passed; `root_async` correctness passed; speedups were `0.970x` at 96 routes x 4 layers, `0.866x` at 768 routes x 4 layers, and `0.860x` at 96 routes x 43 layers | Reject root_async; pause TP4 production decode branch and pivot to persistent fused routed-FFN |
 | 204 | Concurrent resident TP4 reduction | V100 build passed; `doubling_async` correctness passed at 96/768 routes; 43-layer 768-route speedup was `1.071x`, but 43-layer 96-route repeat was `0.896x` | Keep TP4 for larger batched/prefill investigation only; do not integrate production decode scheduler without a fused/NCCL-grade collective |
 | 203 | Resident TP4 layer-slice gate | V100 build passed; resident TP4 correctness passed at 6/96/768 routes; 43-layer root speedup was `0.825x` at 96 routes and `0.589x` at 768 routes; hand-rolled doubling was slower than root in 4-layer tests | Do not wire this TP4 boundary into production; next TP work needs a real concurrent collective/fused reduction, otherwise pivot back to persistent fused routed-FFN |

@@ -1,0 +1,12 @@
+$ cmake --build build/turbomind-v100 --target test_ggml_turbomind_tp_split_4gpu -j80
+[  3%] Built target parser
+[  8%] Built target fmt
+[ 13%] Built target cuda_utils
+[ 40%] Built target core
+[ 86%] Built target gemm2
+Consolidate compiler generated dependencies of target ggml-turbomind
+[ 96%] Built target ggml-turbomind
+Consolidate compiler generated dependencies of target test_ggml_turbomind_tp_split_4gpu
+[ 98%] Building CXX object CMakeFiles/test_ggml_turbomind_tp_split_4gpu.dir/test_tp_split_4gpu.cpp.o
+[100%] Linking CXX executable test_ggml_turbomind_tp_split_4gpu
+[100%] Built target test_ggml_turbomind_tp_split_4gpu
