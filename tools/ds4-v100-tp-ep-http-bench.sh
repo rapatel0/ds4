@@ -16,6 +16,7 @@ run_appliance="./tools/ds4-v100-run-appliance.sh"
 copy_event_compose="1"
 ep_return_fp16="0"
 compact_route_compose="1"
+concurrent_requests="1"
 
 usage() {
     cat <<'USAGE'
@@ -42,6 +43,8 @@ Options:
   --ep-return-fp16
   --compact-route-compose
   --no-compact-route-compose
+  --concurrent-requests
+  --sequential-requests
   --help
 USAGE
 }
@@ -70,6 +73,8 @@ while [ "$#" -gt 0 ]; do
         --ep-return-fp16) ep_return_fp16="1"; shift ;;
         --compact-route-compose) compact_route_compose="1"; shift ;;
         --no-compact-route-compose) compact_route_compose="0"; shift ;;
+        --concurrent-requests) concurrent_requests="1"; shift ;;
+        --sequential-requests) concurrent_requests="0"; shift ;;
         --help|-h) usage; exit 0 ;;
         *) fail "unknown option: $1" ;;
     esac
@@ -101,7 +106,7 @@ summary_tsv="$log_dir/sustained_http.tsv"
 summary_json="$log_dir/sustained_http.json"
 printf 'schema\tds4_v100_tp_ep_sustained_http.v3\n' >"$summary_tsv"
 printf 'backend\ttp_ep_launcher_http\n\n' >>"$summary_tsv"
-printf 'tokens\tctx\tslots\tgeneration_requests\tstatus_200\tgenerated_tokens\tcontinuation_tokens\telapsed_s\tgenerated_tok_s\tcontinuation_tok_s\tgenerated_tok_s_decode\tcontinuation_tok_s_decode\tep_ms\tdense_ms\tcompose_ms\tcompose_reduce_ms\tcompose_copy_ms\tcompose_final_ms\tgpu_util_avg\tgpu_util_max\tgpu_mem_used_max_mib\n' >>"$summary_tsv"
+printf 'tokens\tctx\tslots\tgeneration_requests\tcoalesced_batches\tcoalesced_batch_max\tstatus_200\tgenerated_tokens\tcontinuation_tokens\telapsed_s\tgenerated_tok_s\tcontinuation_tok_s\tgenerated_tok_s_decode\tcontinuation_tok_s_decode\tep_ms\tdense_ms\tcompose_ms\tcompose_reduce_ms\tcompose_copy_ms\tcompose_final_ms\tgpu_util_avg\tgpu_util_max\tgpu_mem_used_max_mib\n' >>"$summary_tsv"
 
 case_jsons=()
 case_index=0
@@ -146,7 +151,7 @@ for tokens in "${token_values[@]}"; do
     done
     grep -q "tp_ep_http_serving" "$server_log" || fail "server did not listen for token case $tokens"
 
-    python3 - "$case_dir" "$port" "$tokens" "$generation_requests" <<'PY'
+    python3 - "$case_dir" "$port" "$tokens" "$generation_requests" "$concurrent_requests" <<'PY'
 import json
 import shutil
 import subprocess
@@ -155,9 +160,10 @@ import threading
 import time
 import urllib.request
 
-case_dir, port, tokens, generation_requests = sys.argv[1:]
+case_dir, port, tokens, generation_requests, concurrent_requests = sys.argv[1:]
 tokens = int(tokens)
 generation_requests = int(generation_requests)
+concurrent_requests = int(concurrent_requests)
 base = f"http://127.0.0.1:{port}"
 
 def fetch(name, path, data=None, suffix="json"):
@@ -201,14 +207,36 @@ def sample_gpu():
 thread = threading.Thread(target=sample_gpu, daemon=True)
 thread.start()
 responses = []
+errors = []
 try:
-    for i in range(generation_requests):
-        body = fetch(
-            f"response_{i:03d}",
-            "/v100/selected-token",
-            json.dumps({"max_tokens": tokens, "request_index": i}).encode(),
-        )
-        responses.append(json.loads(body.decode("utf-8")))
+    if concurrent_requests:
+        responses = [None] * generation_requests
+        def post_one(i):
+            try:
+                body = fetch(
+                    f"response_{i:03d}",
+                    "/v100/selected-token",
+                    json.dumps({"max_tokens": tokens, "request_index": i}).encode(),
+                )
+                responses[i] = json.loads(body.decode("utf-8"))
+            except Exception as exc:
+                errors.append(f"request {i}: {exc}")
+        workers = [threading.Thread(target=post_one, args=(i,)) for i in range(generation_requests)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+        responses = [r for r in responses if r is not None]
+    else:
+        for i in range(generation_requests):
+            body = fetch(
+                f"response_{i:03d}",
+                "/v100/selected-token",
+                json.dumps({"max_tokens": tokens, "request_index": i}).encode(),
+            )
+            responses.append(json.loads(body.decode("utf-8")))
+    if errors:
+        raise RuntimeError("; ".join(errors))
 finally:
     stop.set()
     thread.join(timeout=2.0)
@@ -236,16 +264,22 @@ if len(responses) != int(generation_requests):
     raise SystemExit(f"expected {generation_requests} responses, found {len(responses)}")
 total_generated = sum(r["generated_tokens"] for r in responses)
 total_continuation = sum(r["continuation_tokens"] for r in responses)
-total_wall_ms = sum(r["timing_ms"]["total_wall"] for r in responses)
-total_decode_ms = sum(r["timing_ms"]["total_decode"] for r in responses)
-total_cont_wall_ms = sum(r["timing_ms"]["continuation_wall"] for r in responses)
-total_cont_decode_ms = sum(r["timing_ms"]["continuation_decode"] for r in responses)
-total_ep_ms = sum(r["timing_ms"].get("ep", 0.0) for r in responses)
-total_dense_ms = sum(r["timing_ms"].get("dense", 0.0) for r in responses)
-total_compose_ms = sum(r["timing_ms"].get("compose", 0.0) for r in responses)
-total_compose_reduce_ms = sum(r["timing_ms"].get("compose_reduce", 0.0) for r in responses)
-total_compose_copy_ms = sum(r["timing_ms"].get("compose_copy", 0.0) for r in responses)
-total_compose_final_ms = sum(r["timing_ms"].get("compose_final", 0.0) for r in responses)
+batch_rows = {}
+for i, r in enumerate(responses):
+    batch_rows.setdefault(r.get("coalesced_batch_id", i + 1), r)
+unique_batches = list(batch_rows.values())
+total_wall_ms = sum(r["timing_ms"]["total_wall"] for r in unique_batches)
+total_decode_ms = sum(r["timing_ms"]["total_decode"] for r in unique_batches)
+total_cont_wall_ms = sum(r["timing_ms"]["continuation_wall"] for r in unique_batches)
+total_cont_decode_ms = sum(r["timing_ms"]["continuation_decode"] for r in unique_batches)
+total_ep_ms = sum(r["timing_ms"].get("ep", 0.0) for r in unique_batches)
+total_dense_ms = sum(r["timing_ms"].get("dense", 0.0) for r in unique_batches)
+total_compose_ms = sum(r["timing_ms"].get("compose", 0.0) for r in unique_batches)
+total_compose_reduce_ms = sum(r["timing_ms"].get("compose_reduce", 0.0) for r in unique_batches)
+total_compose_copy_ms = sum(r["timing_ms"].get("compose_copy", 0.0) for r in unique_batches)
+total_compose_final_ms = sum(r["timing_ms"].get("compose_final", 0.0) for r in unique_batches)
+coalesced_batches = len(unique_batches)
+coalesced_batch_max = max((int(r.get("coalesced_batch_size", 1)) for r in responses), default=0)
 token_match = sum(r["token_match"] for r in responses)
 token_mismatch = sum(r["token_mismatch"] for r in responses)
 gpu_utils = []
@@ -278,6 +312,8 @@ row = {
     "ctx": int(ctx),
     "slots": int(slots),
     "generation_requests": int(generation_requests),
+    "coalesced_batches": coalesced_batches,
+    "coalesced_batch_max": coalesced_batch_max,
     "status_200": token_match,
     "generated_tokens": total_generated,
     "continuation_tokens": total_continuation,
@@ -304,7 +340,8 @@ with open(f"{case_dir}/result.json", "w", encoding="utf-8") as f:
 with open(summary_tsv, "a", encoding="utf-8") as f:
     f.write(
         f"{row['tokens_per_request']}\t{row['ctx']}\t{row['slots']}\t"
-        f"{row['generation_requests']}\t{row['status_200']}\t"
+        f"{row['generation_requests']}\t{row['coalesced_batches']}\t"
+        f"{row['coalesced_batch_max']}\t{row['status_200']}\t"
         f"{row['generated_tokens']}\t{row['continuation_tokens']}\t"
         f"{row['elapsed_s']:.6f}\t{row['generated_tok_s']:.6f}\t"
         f"{row['continuation_tok_s']:.6f}\t{row['generated_tok_s_decode']:.6f}\t"

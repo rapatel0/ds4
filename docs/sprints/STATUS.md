@@ -52,7 +52,19 @@ launcher topline: at `32` slots / `256K` / three resident requests, the V100
 pod reports `771.036527` wall generated tok/s and `781.922821` wall
 continuation tok/s for `32` tokens/request, and `794.694599` wall generated
 tok/s and `799.391755` wall continuation tok/s for `64` tokens/request. Both
-cases return aggregate `96/96` token match.
+cases return aggregate `96/96` token match. Sprint 286 added true TP/EP HTTP
+request coalescing for the selected-token harness. The server now admits
+concurrent generation requests into one resident decode batch, reports
+`generation_batches` / `coalesced_requests`, and returns per-client responses
+with `coalesced_batch_id` and `coalesced_batch_size`. The new serving-shaped
+matrix at `32` slots / `256K` with `32` concurrent HTTP requests forms one
+`coalesced_batch_size=32` batch in both cases: `32` tokens/request reports
+`721.446441` wall generated tok/s and `950.363316` decode generated tok/s,
+and `64` tokens/request reports `787.316214` wall generated tok/s and
+`1030.972573` decode generated tok/s. Both cases return aggregate `32/32`
+token match. This is the current practical-serving semantic baseline; the
+next gap is replacing the selected-token harness with the real prompt/token
+API and bucketed admission queues.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

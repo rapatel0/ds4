@@ -23,6 +23,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/select.h>
 #include <sys/types.h>
 #include <unistd.h>
 #include <vector>
@@ -426,6 +427,7 @@ struct Options {
     const char *host = "127.0.0.1";
     int port = 18082;
     int max_requests = 0;
+    int microbatch_wait_us = 5000;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -921,7 +923,8 @@ void usage(const char *argv0) {
                  "       [--skip-self-compose-copy] [--copy-self-compose]\n"
                  "       [--multi-copy-streams] [--serving-bench]\n"
                  "       [--skip-decode-checksum]\n"
-                 "       [--serve-http] [--host ADDR] [--port N] [--max-requests N]\n",
+                 "       [--serve-http] [--host ADDR] [--port N] [--max-requests N]\n"
+                 "       [--microbatch-wait-us N]\n",
                  argv0);
 }
 
@@ -1058,6 +1061,10 @@ bool parse_args(int argc, char **argv, Options *opt) {
             ++i;
         } else if (std::strcmp(arg, "--max-requests") == 0) {
             if (!val || !parse_int(val, &opt->max_requests) || opt->max_requests < 0) return false;
+            ++i;
+        } else if (std::strcmp(arg, "--microbatch-wait-us") == 0) {
+            if (!val || !parse_int(val, &opt->microbatch_wait_us) ||
+                opt->microbatch_wait_us < 0 || opt->microbatch_wait_us > 1000000) return false;
             ++i;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
@@ -4328,6 +4335,48 @@ static int json_find_int(const char *body, const char *key, int fallback) {
     return (int)v;
 }
 
+struct HttpParsedRequest {
+    int fd = -1;
+    std::string method;
+    std::string path;
+    std::string body;
+    int requested_tokens = 0;
+};
+
+static bool http_read_request(int fd, HttpParsedRequest *out) {
+    char req[8192];
+    const ssize_t nr = read(fd, req, sizeof(req) - 1);
+    if (nr <= 0) return false;
+    req[nr] = '\0';
+    char method[16] = {};
+    char path[256] = {};
+    if (std::sscanf(req, "%15s %255s", method, path) != 2) return false;
+    const char *body = std::strstr(req, "\r\n\r\n");
+    out->fd = fd;
+    out->method = method;
+    out->path = path;
+    out->body = body ? body + 4 : "";
+    return true;
+}
+
+static bool http_is_generation_post(const HttpParsedRequest &req) {
+    return req.method == "POST" &&
+           (req.path == "/v100/selected-token" ||
+            req.path == "/v1/v100/selected-token");
+}
+
+static bool http_wait_for_connection(int listen_fd, int wait_us) {
+    if (wait_us <= 0) return false;
+    fd_set rfds;
+    FD_ZERO(&rfds);
+    FD_SET(listen_fd, &rfds);
+    timeval tv = {};
+    tv.tv_sec = wait_us / 1000000;
+    tv.tv_usec = wait_us % 1000000;
+    const int rc = select(listen_fd + 1, &rfds, nullptr, nullptr, &tv);
+    return rc > 0 && FD_ISSET(listen_fd, &rfds);
+}
+
 int run_tp_ep_http_server(const Options &base_opt,
                           const DenseF16Cache *shared_dense_f16_cache,
                           const SharedApi *shared_api,
@@ -4362,6 +4411,8 @@ int run_tp_ep_http_server(const Options &base_opt,
 
     uint64_t served = 0;
     uint64_t generation_requests = 0;
+    uint64_t generation_batches = 0;
+    uint64_t coalesced_requests = 0;
     uint64_t rejected = 0;
     uint64_t next_position = base_opt.position;
     uint64_t total_prompt_tokens = 0;
@@ -4390,23 +4441,16 @@ int run_tp_ep_http_server(const Options &base_opt,
             break;
         }
         served++;
-        char req[8192];
-        const ssize_t nr = read(fd, req, sizeof(req) - 1);
-        if (nr <= 0) {
+        HttpParsedRequest first_req;
+        if (!http_read_request(fd, &first_req)) {
             close(fd);
             continue;
         }
-        req[nr] = '\0';
-        char method[16] = {};
-        char path[256] = {};
-        std::sscanf(req, "%15s %255s", method, path);
-        const char *body = std::strstr(req, "\r\n\r\n");
-        body = body ? body + 4 : "";
 
-        if (std::strcmp(method, "GET") == 0 && std::strcmp(path, "/health") == 0) {
+        if (first_req.method == "GET" && first_req.path == "/health") {
             http_write_json(fd, 200, "{\"status\":\"ok\",\"backend\":\"tp_ep_resident\"}\n");
-        } else if (std::strcmp(method, "GET") == 0 &&
-                   (std::strcmp(path, "/status") == 0 || std::strcmp(path, "/v100/status") == 0)) {
+        } else if (first_req.method == "GET" &&
+                   (first_req.path == "/status" || first_req.path == "/v100/status")) {
             const double cumulative_generated_tok_s_wall = total_wall_ms > 0.0
                 ? (double)total_generated_tokens * 1000.0 / total_wall_ms
                 : 0.0;
@@ -4424,7 +4468,9 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "{\"status\":\"ok\",\"backend\":\"tp_ep_resident\","
                           "\"tp\":8,\"ep\":8,\"pp\":1,\"ctx\":262144,"
                           "\"slots\":%d,\"served_requests\":%llu,"
-                          "\"generation_requests\":%llu,\"rejected_requests\":%llu,"
+                          "\"generation_requests\":%llu,\"generation_batches\":%llu,"
+                          "\"coalesced_requests\":%llu,\"microbatch_wait_us\":%d,"
+                          "\"rejected_requests\":%llu,"
                           "\"total_prompt_tokens\":%llu,"
                           "\"total_generated_tokens\":%llu,"
                           "\"total_continuation_tokens\":%llu,"
@@ -4446,6 +4492,9 @@ int run_tp_ep_http_server(const Options &base_opt,
                           base_opt.slots,
                           (unsigned long long)served,
                           (unsigned long long)generation_requests,
+                          (unsigned long long)generation_batches,
+                          (unsigned long long)coalesced_requests,
+                          base_opt.microbatch_wait_us,
                           (unsigned long long)rejected,
                           (unsigned long long)total_prompt_tokens,
                           (unsigned long long)total_generated_tokens,
@@ -4465,7 +4514,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           total_compose_copy_ms,
                           total_compose_final_ms);
             http_write_json(fd, 200, out);
-        } else if (std::strcmp(method, "GET") == 0 && std::strcmp(path, "/metrics") == 0) {
+        } else if (first_req.method == "GET" && first_req.path == "/metrics") {
             const double cumulative_generated_tok_s_wall = total_wall_ms > 0.0
                 ? (double)total_generated_tokens * 1000.0 / total_wall_ms
                 : 0.0;
@@ -4484,6 +4533,9 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "ds4_v100_tp_ep_slots %d\n"
                           "ds4_v100_tp_ep_served_requests %llu\n"
                           "ds4_v100_tp_ep_generation_requests %llu\n"
+                          "ds4_v100_tp_ep_generation_batches %llu\n"
+                          "ds4_v100_tp_ep_coalesced_requests %llu\n"
+                          "ds4_v100_tp_ep_microbatch_wait_us %d\n"
                           "ds4_v100_tp_ep_rejected_requests %llu\n"
                           "ds4_v100_tp_ep_total_prompt_tokens %llu\n"
                           "ds4_v100_tp_ep_total_generated_tokens %llu\n"
@@ -4505,6 +4557,9 @@ int run_tp_ep_http_server(const Options &base_opt,
                           base_opt.slots,
                           (unsigned long long)served,
                           (unsigned long long)generation_requests,
+                          (unsigned long long)generation_batches,
+                          (unsigned long long)coalesced_requests,
+                          base_opt.microbatch_wait_us,
                           (unsigned long long)rejected,
                           (unsigned long long)total_prompt_tokens,
                           (unsigned long long)total_generated_tokens,
@@ -4524,13 +4579,48 @@ int run_tp_ep_http_server(const Options &base_opt,
                           total_compose_copy_ms,
                           total_compose_final_ms);
             http_write_text(fd, out);
-        } else if (std::strcmp(method, "POST") == 0 &&
-                   (std::strcmp(path, "/v100/selected-token") == 0 ||
-                    std::strcmp(path, "/v1/v100/selected-token") == 0)) {
+        } else if (http_is_generation_post(first_req)) {
+            first_req.requested_tokens =
+                json_find_int(first_req.body.c_str(), "max_tokens", base_opt.decode_steps);
+            if (first_req.requested_tokens <= 0) first_req.requested_tokens = base_opt.decode_steps;
+            if (first_req.requested_tokens <= 0) first_req.requested_tokens = 1;
+
+            std::vector<HttpParsedRequest> batch;
+            batch.push_back(first_req);
+            while ((int)batch.size() < base_opt.slots &&
+                   http_wait_for_connection(listen_fd, base_opt.microbatch_wait_us)) {
+                int extra_fd = accept(listen_fd, nullptr, nullptr);
+                if (extra_fd < 0) {
+                    if (errno == EINTR) continue;
+                    break;
+                }
+                served++;
+                HttpParsedRequest extra_req;
+                if (!http_read_request(extra_fd, &extra_req)) {
+                    close(extra_fd);
+                    continue;
+                }
+                if (!http_is_generation_post(extra_req)) {
+                    rejected++;
+                    http_write_json(extra_fd, 404, "{\"error\":\"not_found_during_coalesce\"}\n");
+                    close(extra_fd);
+                    continue;
+                }
+                extra_req.requested_tokens =
+                    json_find_int(extra_req.body.c_str(), "max_tokens", first_req.requested_tokens);
+                if (extra_req.requested_tokens <= 0) extra_req.requested_tokens = first_req.requested_tokens;
+                if (extra_req.requested_tokens != first_req.requested_tokens) {
+                    rejected++;
+                    http_write_json(extra_fd, 409, "{\"error\":\"mixed_token_batch_rejected\"}\n");
+                    close(extra_fd);
+                    continue;
+                }
+                batch.push_back(extra_req);
+            }
+
             Options req_opt = base_opt;
-            const int requested_tokens = json_find_int(body, "max_tokens", base_opt.decode_steps);
-            req_opt.decode_steps = requested_tokens > 0 ? requested_tokens : base_opt.decode_steps;
-            if (req_opt.decode_steps <= 0) req_opt.decode_steps = 1;
+            req_opt.decode_steps = first_req.requested_tokens;
+            req_opt.slots = (int)batch.size();
             req_opt.position = next_position;
             req_opt.serving_bench = false;
             ServingBenchResult result;
@@ -4546,10 +4636,16 @@ int run_tp_ep_http_server(const Options &base_opt,
                                                         true,
                                                         &result);
             if (rc != 0) {
-                rejected++;
-                http_write_json(fd, 500, "{\"error\":\"tp_ep_decode_failed\"}\n");
+                rejected += (uint64_t)batch.size();
+                for (HttpParsedRequest &queued : batch) {
+                    http_write_json(queued.fd, 500, "{\"error\":\"tp_ep_decode_failed\"}\n");
+                    close(queued.fd);
+                }
             } else {
-                generation_requests++;
+                const uint64_t batch_id = generation_batches + 1;
+                generation_batches++;
+                generation_requests += (uint64_t)batch.size();
+                if (batch.size() > 1) coalesced_requests += (uint64_t)batch.size();
                 next_position += (uint64_t)req_opt.decode_steps;
                 total_prompt_tokens += result.prompt_tokens;
                 total_generated_tokens += result.generated_tokens;
@@ -4565,54 +4661,74 @@ int run_tp_ep_http_server(const Options &base_opt,
                 total_compose_copy_ms += result.total_compose_copy_ms;
                 total_compose_final_ms += result.total_compose_final_ms;
                 last = result;
-                char out[4096];
-                std::snprintf(out, sizeof(out),
-                              "{\"backend\":\"tp_ep_resident\","
-                              "\"prompt_tokens\":%llu,\"generated_tokens\":%llu,"
-                              "\"continuation_tokens\":%llu,"
-                              "\"tokens_per_request\":%d,\"slots\":%d,\"ctx\":262144,"
-                              "\"token_match\":%d,\"token_mismatch\":0,"
-                              "\"timing_ms\":{\"first_token_decode\":%.6f,"
-                              "\"continuation_decode\":%.6f,"
-                              "\"first_token_wall\":%.6f,"
-                              "\"continuation_wall\":%.6f,"
-                              "\"total_decode\":%.6f,\"total_wall\":%.6f,"
-                              "\"ep\":%.6f,\"dense\":%.6f,"
-                              "\"compose\":%.6f,\"compose_reduce\":%.6f,"
-                              "\"compose_copy\":%.6f,\"compose_final\":%.6f,"
-                              "\"generated_tokens_per_second\":%.6f,"
-                              "\"continuation_tokens_per_second\":%.6f,"
-                              "\"generated_tokens_per_second_decode\":%.6f,"
-                              "\"continuation_tokens_per_second_decode\":%.6f},"
-                              "\"checksum\":%llu}\n",
-                              (unsigned long long)result.prompt_tokens,
-                              (unsigned long long)result.generated_tokens,
-                              (unsigned long long)result.continuation_tokens,
-                              req_opt.decode_steps, req_opt.slots,
-                              req_opt.slots,
-                              result.first_token_decode_ms,
-                              result.continuation_decode_ms,
-                              result.first_token_wall_ms,
-                              result.continuation_wall_ms,
-                              result.total_decode_ms,
-                              result.total_wall_ms,
-                              result.total_ep_ms,
-                              result.total_dense_ms,
-                              result.total_compose_ms,
-                              result.total_compose_reduce_ms,
-                              result.total_compose_copy_ms,
-                              result.total_compose_final_ms,
-                              result.aggregate_generated_tok_s_wall,
-                              result.aggregate_continuation_tok_s_wall,
-                              result.aggregate_generated_tok_s_decode,
-                              result.aggregate_continuation_tok_s_decode,
-                              (unsigned long long)result.checksum);
-                http_write_json(fd, 200, out);
+                for (size_t i = 0; i < batch.size(); ++i) {
+                    const uint64_t request_generated = (uint64_t)req_opt.decode_steps;
+                    const uint64_t request_continuation = req_opt.decode_steps > 1
+                        ? (uint64_t)(req_opt.decode_steps - 1)
+                        : 0ull;
+                    char out[4096];
+                    std::snprintf(out, sizeof(out),
+                                  "{\"backend\":\"tp_ep_resident\","
+                                  "\"coalesced_batch_id\":%llu,"
+                                  "\"coalesced_batch_size\":%zu,"
+                                  "\"coalesced_slot_index\":%zu,"
+                                  "\"microbatch_wait_us\":%d,"
+                                  "\"prompt_tokens\":1,"
+                                  "\"generated_tokens\":%llu,"
+                                  "\"continuation_tokens\":%llu,"
+                                  "\"batch_prompt_tokens\":%llu,"
+                                  "\"batch_generated_tokens\":%llu,"
+                                  "\"batch_continuation_tokens\":%llu,"
+                                  "\"tokens_per_request\":%d,\"slots\":%d,\"ctx\":262144,"
+                                  "\"token_match\":1,\"token_mismatch\":0,"
+                                  "\"timing_ms\":{\"first_token_decode\":%.6f,"
+                                  "\"continuation_decode\":%.6f,"
+                                  "\"first_token_wall\":%.6f,"
+                                  "\"continuation_wall\":%.6f,"
+                                  "\"total_decode\":%.6f,\"total_wall\":%.6f,"
+                                  "\"ep\":%.6f,\"dense\":%.6f,"
+                                  "\"compose\":%.6f,\"compose_reduce\":%.6f,"
+                                  "\"compose_copy\":%.6f,\"compose_final\":%.6f,"
+                                  "\"generated_tokens_per_second\":%.6f,"
+                                  "\"continuation_tokens_per_second\":%.6f,"
+                                  "\"generated_tokens_per_second_decode\":%.6f,"
+                                  "\"continuation_tokens_per_second_decode\":%.6f},"
+                                  "\"checksum\":%llu}\n",
+                                  (unsigned long long)batch_id,
+                                  batch.size(),
+                                  i,
+                                  base_opt.microbatch_wait_us,
+                                  (unsigned long long)request_generated,
+                                  (unsigned long long)request_continuation,
+                                  (unsigned long long)result.prompt_tokens,
+                                  (unsigned long long)result.generated_tokens,
+                                  (unsigned long long)result.continuation_tokens,
+                                  req_opt.decode_steps, req_opt.slots,
+                                  result.first_token_decode_ms,
+                                  result.continuation_decode_ms,
+                                  result.first_token_wall_ms,
+                                  result.continuation_wall_ms,
+                                  result.total_decode_ms,
+                                  result.total_wall_ms,
+                                  result.total_ep_ms,
+                                  result.total_dense_ms,
+                                  result.total_compose_ms,
+                                  result.total_compose_reduce_ms,
+                                  result.total_compose_copy_ms,
+                                  result.total_compose_final_ms,
+                                  result.aggregate_generated_tok_s_wall,
+                                  result.aggregate_continuation_tok_s_wall,
+                                  result.aggregate_generated_tok_s_decode,
+                                  result.aggregate_continuation_tok_s_decode,
+                                  (unsigned long long)result.checksum);
+                    http_write_json(batch[i].fd, 200, out);
+                    close(batch[i].fd);
+                }
             }
         } else {
             http_write_json(fd, 404, "{\"error\":\"not_found\"}\n");
+            close(fd);
         }
-        close(fd);
     }
     close(listen_fd);
     return 0;

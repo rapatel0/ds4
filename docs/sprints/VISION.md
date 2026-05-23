@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 285
+revision: 286
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -300,6 +300,12 @@ not a serial layer-chain.
   `256K` / three resident generation requests, the normal launcher path now
   reports `771.036527` wall generated tok/s for 32 tokens/request and
   `794.694599` for 64 tokens/request, both with aggregate `96/96` token match.
+- Sprint 286 replaced the synthetic repeated-request serving measurement with
+  true TP/EP HTTP request coalescing. At `32` slots / `256K`, `32`
+  concurrent selected-token requests form one `coalesced_batch_size=32` batch.
+  The practical-serving semantic baseline is now `721.446441` wall generated
+  tok/s for 32 tokens/request and `787.316214` for 64 tokens/request, both
+  with aggregate `32/32` token match.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -1378,6 +1384,31 @@ and `781.922821` wall continuation tok/s for `32` tokens/request, and
 `794.694599` wall generated tok/s and `799.391755` wall continuation tok/s for
 `64` tokens/request. Both cases return aggregate `96/96` token match.
 
+### Sprint 286 - TP/EP HTTP Request Coalescing [complete]
+
+Goal: Make the TP/EP HTTP serving path admit concurrent selected-token
+requests into one resident decode batch instead of treating every HTTP request
+as an independent synthetic 32-slot run.
+
+Outcome: Complete. The TP/EP HTTP server now accepts pending generation
+requests during a bounded `--microbatch-wait-us` window, runs one resident
+decode with `slots = coalesced_batch_size`, and returns per-client responses
+with `coalesced_batch_id`, `coalesced_batch_size`, per-client token counts, and
+batch token counts. `/v100/status` and `/metrics` expose generation batch and
+coalesced request counters. The launcher passes the resolved
+`DS4_V100_MICROBATCH_WAIT_US` value into the TP/EP server.
+
+The V100 pod matrix at `32` slots / `256K` / `32` concurrent HTTP requests
+formed one `coalesced_batch_size=32` batch in both token cases:
+`721.446441` wall generated tok/s and `950.363316` decode generated tok/s for
+32 tokens/request, and `787.316214` wall generated tok/s and `1030.972573`
+decode generated tok/s for 64 tokens/request. Both cases return aggregate
+`32/32` token match.
+
+This is now the practical-serving semantic baseline for the selected-token
+harness. The next gap is a real prompt/token API and bucketed admission queues
+on top of this coalescing path.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1463,6 +1494,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 283 rejected FP16 EP return under event-wait compose. | Reduced payload bytes do not pay for the extra cast/add/final-compose work on V100. | Stay on FP32 return and attack staged contribution traffic/fusion directly. |
 | 2026-05-23 | Sprint 284 promoted compact route-compose. | Route-major EP contribution packing reduces staged FP32 traffic and improves same-binary serving throughput by about `11%`. | Re-establish promoted 32/64 topline and add true request coalescing/admission. |
 | 2026-05-23 | Sprint 285 established the promoted HTTP serving topline. | The normal TP/EP launcher path now reports about `771-795` wall generated tok/s at `32` slots / `256K`. | Add true request coalescing/admission, then revisit MTP. |
+| 2026-05-23 | Sprint 286 added TP/EP HTTP request coalescing. | `32` independent concurrent selected-token requests now form one 32-slot resident decode batch, with `721-787` wall generated tok/s depending on tokens/request. | Replace the selected-token harness with the real prompt/token API and bucketed admission queues. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

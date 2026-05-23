@@ -807,6 +807,7 @@ if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
         --all-layers
         --host "$DS4_V100_HOST"
         --port "$DS4_V100_PORT"
+        --microbatch-wait-us "$microbatch_wait_us"
     )
     if [ "$DS4_V100_TP_EP_COPY_EVENT_COMPOSE" -eq 1 ]; then
         cmd+=(--copy-event-compose)
