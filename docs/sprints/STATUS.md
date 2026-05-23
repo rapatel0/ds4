@@ -292,6 +292,18 @@ fixture one-layer envelope is `1.321812 ms`: `1.078032 ms` dense/KV fixture
 time plus `0.243780 ms` worst-rank EP time. Rank `7` remains the slow EP rank.
 TP/EP is still not serving; the next step is descriptor-driven one-real-layer
 TP/EP correctness before scaling to all 43 layers.
+Sprint 233 starts that descriptor-driven path with a TP/EP-only contract
+smoke, `tools/ds4-v100-tp-ep-layer-descriptor-smoke.c`. Against the real
+Sprint 228 production-pack contract on the V100 pod, layer `2` reports
+`288` total rows: `112` dense TP rows, `136` replicated control/router rows,
+`16` EP expert rows, `16` KV shard rows, and `8` compression-state rows, with
+`bad_rows=0`. Every GPU reports `36` rows, `711945176` estimated layer bytes,
+`14` dense rows, `17` control rows, `2` expert rows, `2` KV rows, `1`
+compression row, and zero ownership mismatches. Expert ownership resolves to
+the expected EP8 spans: GPU0 `0..31`, GPU1 `32..63`, through GPU7 `224..255`.
+This proves descriptor ownership, not real descriptor-backed execution. The
+next step is binding those descriptor rows to actual production-pack byte spans
+and feeding descriptor-derived expert pointers into the one-layer TP/EP smoke.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit

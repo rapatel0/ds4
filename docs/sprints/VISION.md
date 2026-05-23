@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 232
+revision: 233
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -83,6 +83,9 @@ not a serial layer-chain.
   opens the target TP runtime, verifies a ratio-4 sharded KV row, and runs
   real TurboMind MXFP4 EP experts on all eight GPUs at `32` slots / `256K` /
   `top_k=6`.
+- Sprint 233 validated real TP/EP contract ownership for layer `2`: dense TP,
+  replicated control/router, EP experts, sharded KV, and compression state are
+  present and balanced across all eight GPUs with zero ownership mismatches.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -205,11 +208,12 @@ per-rank timing must remain visible in Sprint 232.
 
 ### Sprint 232 - One-Layer TP/EP Correctness Gate [complete]
 
-Goal: Execute one real DS4 layer end to end in the TP/EP runtime and compare
-against the frozen PP baseline.
+Goal: Execute one TP/EP fixture layer that combines the separate TP runtime,
+sharded KV, and real low-bit EP expert kernels.
 
-Rationale: This is the first point where dense TP, sharded KV, router, EP
-experts, shared path, collectives, and residual state meet.
+Rationale: This is the first point where the separate TP runtime lifecycle,
+sharded KV, and EP experts meet in one process before descriptor-backed real
+layer data is introduced.
 
 Outcome: Complete as a fixture gate. `tools/ds4-v100-tp-ep-layer-smoke.cu`
 links the separate TP runtime with the TurboMind MXFP4 ABI in one process. At
@@ -221,17 +225,46 @@ repeat output. The fixture one-layer envelope is `1.321812 ms`, with
 Next: replace fixture weights/routes with descriptor-driven one-real-layer
 TP/EP correctness while preserving the separate codepath.
 
-### Sprint 233 - Full-Layer TP/EP Decode [planned]
+### Sprint 233 - Descriptor Driven TP/EP Layer Gate [complete]
 
-Goal: Scale the TP/EP runtime from one layer to all 43 layers with MTP off and
-prove selected-token/decode correctness.
+Goal: Validate real production-pack TP/EP contract descriptors for one
+representative layer.
+
+Rationale: Sprint 232 proved fixture execution. Before running real layer data,
+the TP/EP path must prove that the production pack contract contains the dense,
+control/router, EP expert, KV, and compression rows needed by the separate
+runtime.
+
+Outcome: Complete as a descriptor ownership gate. Layer `2` resolves to
+`288` rows: `112` dense TP, `136` replicated control/router, `16` EP expert,
+`16` KV shard, and `8` compression-state rows. Each GPU owns `36` rows and
+`711945176` estimated bytes, with expert spans `0..31` through `224..255` and
+zero ownership mismatches. This does not yet bind real bytes into execution;
+that is the next sprint.
+
+### Sprint 234 - Descriptor-Backed One-Layer Execution [planned]
+
+Goal: Bind the layer-2 TP/EP descriptor rows to actual production-pack byte
+spans and feed descriptor-derived expert pointers into the one-layer TP/EP
+smoke.
+
+Rationale: Descriptor ownership is now proven, but the runtime still executes
+synthetic MXFP4 fixtures. The next gate must load real descriptor-backed
+weights for at least the routed expert path before scaling layers.
+
+Outcome: Pending.
+
+### Sprint 235 - Full-Layer TP/EP Decode [planned]
+
+Goal: Scale the TP/EP runtime from one descriptor-backed layer to all 43 layers
+with MTP off and prove selected-token/decode correctness.
 
 Rationale: TP is not operational until all layers run in the TP/EP ownership
 model without gathering hidden state back to PP layout between layers.
 
 Outcome: Pending.
 
-### Sprint 234 - TP/EP Serving Gate [planned]
+### Sprint 236 - TP/EP Serving Gate [planned]
 
 Goal: Serve continuous multi-slot requests through the TP/EP runtime at
 `32` slots / `256K`, MTP off.
@@ -242,7 +275,7 @@ GPU utilization, collective time, expert time, and correctness.
 
 Outcome: Pending.
 
-### Sprint 235 - TP/EP Throughput Optimization [tentative]
+### Sprint 237 - TP/EP Throughput Optimization [tentative]
 
 Goal: Optimize the measured TP/EP bottleneck after Sprint 234 identifies it.
 
@@ -252,7 +285,7 @@ sprint should follow measured evidence, not guesswork.
 
 Outcome: Pending.
 
-### Sprint 236 - Multi-Slot MTP On TP/EP [tentative]
+### Sprint 238 - Multi-Slot MTP On TP/EP [tentative]
 
 Goal: Add MTP to the TP/EP serving path only after TP/EP decode is correct and
 benchmarked.
@@ -295,6 +328,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 230 proved TP sharded KV row ownership at `32` slots / `256K`. | TP/EP needs resident hidden/KV state before EP expert work is meaningful. | Build the bounded EP routed-expert slice in separate TP/EP files. |
 | 2026-05-23 | Sprint 231 proved bounded EP8 routed expert execution with real TurboMind MXFP4 kernels. | The EP low-bit kernel path is live outside the PP scheduler, but rank skew is visible. | Build the one-layer TP/EP correctness gate and preserve per-rank timing. |
 | 2026-05-23 | Sprint 232 proved the combined TP runtime plus EP expert fixture in one process. | The TP/EP lifecycle works at the target shape, but it is still fixture data. | Move to descriptor-driven one-real-layer TP/EP correctness. |
+| 2026-05-23 | Sprint 233 proved descriptor ownership for layer `2` from the real production-pack contract. | The contract has the rows and TP/EP ownership needed, but execution still uses fixture weights. | Bind descriptor rows to actual pack bytes and feed real expert pointers into the one-layer smoke. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit in Sprint 236 or equivalent after TP/EP serving exists. |
 

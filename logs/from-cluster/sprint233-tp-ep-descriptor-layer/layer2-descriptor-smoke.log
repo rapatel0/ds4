@@ -1,0 +1,18 @@
+sample	record_type	replicated_control	tensor_id	blk.2.attn_sinks	family	control_or_router	owning_gpu	0	tp_rank	0	ep_rank	-1	split_axis	replicate	expert_first	-1	expert_count	0	kv_ratio	-1	bytes	256	kernel	ds4_attention_control
+sample	record_type	replicated_control	tensor_id	blk.2.attn_sinks	family	control_or_router	owning_gpu	1	tp_rank	1	ep_rank	-1	split_axis	replicate	expert_first	-1	expert_count	0	kv_ratio	-1	bytes	256	kernel	ds4_attention_control
+sample	record_type	replicated_control	tensor_id	blk.2.attn_sinks	family	control_or_router	owning_gpu	2	tp_rank	2	ep_rank	-1	split_axis	replicate	expert_first	-1	expert_count	0	kv_ratio	-1	bytes	256	kernel	ds4_attention_control
+sample	record_type	replicated_control	tensor_id	blk.2.attn_sinks	family	control_or_router	owning_gpu	3	tp_rank	3	ep_rank	-1	split_axis	replicate	expert_first	-1	expert_count	0	kv_ratio	-1	bytes	256	kernel	ds4_attention_control
+sample	record_type	replicated_control	tensor_id	blk.2.attn_sinks	family	control_or_router	owning_gpu	4	tp_rank	4	ep_rank	-1	split_axis	replicate	expert_first	-1	expert_count	0	kv_ratio	-1	bytes	256	kernel	ds4_attention_control
+sample	record_type	replicated_control	tensor_id	blk.2.attn_sinks	family	control_or_router	owning_gpu	5	tp_rank	5	ep_rank	-1	split_axis	replicate	expert_first	-1	expert_count	0	kv_ratio	-1	bytes	256	kernel	ds4_attention_control
+sample	record_type	replicated_control	tensor_id	blk.2.attn_sinks	family	control_or_router	owning_gpu	6	tp_rank	6	ep_rank	-1	split_axis	replicate	expert_first	-1	expert_count	0	kv_ratio	-1	bytes	256	kernel	ds4_attention_control
+sample	record_type	replicated_control	tensor_id	blk.2.attn_sinks	family	control_or_router	owning_gpu	7	tp_rank	7	ep_rank	-1	split_axis	replicate	expert_first	-1	expert_count	0	kv_ratio	-1	bytes	256	kernel	ds4_attention_control
+layer_descriptor_summary	layer	2	total_rows	288	dense_rows	112	control_rows	136	expert_rows	16	kv_rows	16	comp_rows	8	bad_rows	0
+gpu	0	rows	36	bytes	711945176	dense_rows	14	control_rows	17	expert_rows	2	kv_rows	2	comp_rows	1	expert_first	0	expert_count	32	mismatches	0
+gpu	1	rows	36	bytes	711945176	dense_rows	14	control_rows	17	expert_rows	2	kv_rows	2	comp_rows	1	expert_first	32	expert_count	32	mismatches	0
+gpu	2	rows	36	bytes	711945176	dense_rows	14	control_rows	17	expert_rows	2	kv_rows	2	comp_rows	1	expert_first	64	expert_count	32	mismatches	0
+gpu	3	rows	36	bytes	711945176	dense_rows	14	control_rows	17	expert_rows	2	kv_rows	2	comp_rows	1	expert_first	96	expert_count	32	mismatches	0
+gpu	4	rows	36	bytes	711945176	dense_rows	14	control_rows	17	expert_rows	2	kv_rows	2	comp_rows	1	expert_first	128	expert_count	32	mismatches	0
+gpu	5	rows	36	bytes	711945176	dense_rows	14	control_rows	17	expert_rows	2	kv_rows	2	comp_rows	1	expert_first	160	expert_count	32	mismatches	0
+gpu	6	rows	36	bytes	711945176	dense_rows	14	control_rows	17	expert_rows	2	kv_rows	2	comp_rows	1	expert_first	192	expert_count	32	mismatches	0
+gpu	7	rows	36	bytes	711945176	dense_rows	14	control_rows	17	expert_rows	2	kv_rows	2	comp_rows	1	expert_first	224	expert_count	32	mismatches	0
+tp_ep_layer_descriptor_smoke	layer	2	pp	1	tp	8	ep	8	global_experts	256	local_experts	32	kv	sharded	PASS
