@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 270
+revision: 272
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -228,6 +228,14 @@ not a serial layer-chain.
   16-step A/B improves from `40.271428` to `38.503412 ms/token` proxy, and the
   new 32-step topline is `37.912062 ms/token` / `844.058544` projected
   slot-step tok/s.
+- Sprint 271 split compose timing into reduce/copy/final buckets and showed
+  copy dominates. Sprint 272 tested per-destination copy streams and improved
+  the 32-step scaffold topline to `36.911097 ms/token` / `866.947964`
+  projected slot-step tok/s.
+- Steering update: stop spending the next work cycle on compose/kernel
+  micro-optimization. Focus on making TP/EP operational end-to-end with
+  generated and continuation tok/s, then return to kernel selection/fusion
+  with serving data.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -1094,6 +1102,29 @@ from `40.271428` to `38.503412 ms/token` proxy. Compose time drops from
 slot-step tok/s, `522.914003 ms` EP, `689.877521 ms` compose, and checksum
 `8297177632`.
 
+### Sprint 271 - TP/EP Compose Stage Breakdown [complete]
+
+Goal: Split token-major compose timing into actionable buckets.
+
+Outcome: Complete. The tool now reports compose reduce, copy, and final
+compose timing. At `32` slots / `256K`, `16` token steps, the passing run
+reports `327.657087 ms` compose total: `49.805028 ms` reduce,
+`242.803068 ms` copy, and `35.048991 ms` final compose. Copy/all-to-all is
+the dominant part of compose.
+
+### Sprint 272 - TP/EP Multi Copy Streams Probe [complete]
+
+Goal: Test whether source-scheduled peer copies benefit from multiple copy
+streams per source rank.
+
+Outcome: Complete. `tools/ds4-v100-tp-ep-full-layer-smoke` now supports
+`--multi-copy-streams`. The 16-step A/B at `32` slots / `256K` improves from
+`39.288036` to `37.395624 ms/token` proxy and reduces copy time from
+`248.331836` to `219.221398 ms`. The 32-step opt-in run passes `1376/1376`
+invocations at `36.911097 ms/token` proxy and `866.947964` projected
+slot-step tok/s. Per steering, the next sprint pivots to end-to-end TP/EP
+serving rather than continuing compose micro-optimization.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1165,6 +1196,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 268 added token-major position advance. | The scaffold now progresses logical context position across token steps and remains correct. | Run a longer continuous token-major gate, then bridge to generated/continuation serving measurement. |
 | 2026-05-23 | Sprint 269 established the longer continuous token-major scaffold baseline. | At 32 steps the path reaches `814.452062` projected slot-step tok/s and compose dominates EP. | Collapse compose/all-to-all or bridge to generated/continuation serving measurement. |
 | 2026-05-23 | Sprint 270 removed same-GPU staged compose copies. | Self-copy traffic was a measurable part of compose cost, but compose remains dominant after removal. | Target destination-side reduction/synchronization or bridge to generated/continuation serving measurement. |
+| 2026-05-23 | Sprint 271 split compose timing and Sprint 272 tested multi-copy streams. | Copy/all-to-all dominates compose, and per-destination copy streams improve the scaffold. | Pivot to TP/EP generated/continuation serving before more kernel micro-optimization. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

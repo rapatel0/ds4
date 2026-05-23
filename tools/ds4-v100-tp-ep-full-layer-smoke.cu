@@ -133,6 +133,7 @@ struct RankState {
     cudaStream_t stream = nullptr;
     cudaStream_t dense_stream = nullptr;
     cudaStream_t copy_stream = nullptr;
+    cudaStream_t copy_streams[kGpus] = {};
     int *d_offsets = nullptr;
     int *d_route_slots = nullptr;
     __half *d_a = nullptr;
@@ -287,6 +288,9 @@ struct LayerRunSummary {
     double decode_ep_ms_per_step = 0.0;
     double decode_dense_ms_per_step = 0.0;
     double decode_compose_ms_per_step = 0.0;
+    double decode_compose_reduce_ms_per_step = 0.0;
+    double decode_compose_copy_ms_per_step = 0.0;
+    double decode_compose_final_ms_per_step = 0.0;
     uint64_t decode_checksum = 0;
 };
 
@@ -337,6 +341,9 @@ struct DecodeLoopStats {
     double ep_ms_per_step = 0.0;
     double dense_ms_per_step = 0.0;
     double compose_ms_per_step = 0.0;
+    double compose_reduce_ms_per_step = 0.0;
+    double compose_copy_ms_per_step = 0.0;
+    double compose_final_ms_per_step = 0.0;
     int finite_bad = 0;
     uint64_t checksum = 0;
     bool ep_return_fp16 = false;
@@ -381,6 +388,7 @@ struct Options {
     bool token_major_all_layers = false;
     bool share_dense_ops = false;
     bool skip_self_compose_copy = true;
+    bool multi_copy_streams = false;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -806,7 +814,8 @@ void usage(const char *argv0) {
                  "       [--direct-remote-compose]\n"
                  "       [--source-copy-schedule] [--dest-copy-schedule]\n"
                  "       [--token-major-all-layers] [--shared-dense-ops]\n"
-                 "       [--skip-self-compose-copy] [--copy-self-compose]\n",
+                 "       [--skip-self-compose-copy] [--copy-self-compose]\n"
+                 "       [--multi-copy-streams]\n",
                  argv0);
 }
 
@@ -916,6 +925,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->skip_self_compose_copy = true;
         } else if (std::strcmp(arg, "--copy-self-compose") == 0) {
             opt->skip_self_compose_copy = false;
+        } else if (std::strcmp(arg, "--multi-copy-streams") == 0) {
+            opt->multi_copy_streams = true;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -2351,6 +2362,9 @@ int open_shared_rank_buffers(const Options &opt, SharedRankBuffers *shared) {
         CHECK_CUDA(cudaStreamCreate(&r.stream));
         CHECK_CUDA(cudaStreamCreate(&r.dense_stream));
         CHECK_CUDA(cudaStreamCreate(&r.copy_stream));
+        for (int q = 0; q < kGpus; ++q) {
+            CHECK_CUDA(cudaStreamCreate(&r.copy_streams[q]));
+        }
         CHECK_CUDA(cudaEventCreate(&r.start));
         CHECK_CUDA(cudaEventCreate(&r.mid));
         CHECK_CUDA(cudaEventCreate(&r.stop));
@@ -2411,6 +2425,9 @@ void close_shared_rank_buffers(SharedRankBuffers *shared) {
         if (r.start) CHECK_CUDA(cudaEventDestroy(r.start));
         if (r.mid) CHECK_CUDA(cudaEventDestroy(r.mid));
         if (r.stop) CHECK_CUDA(cudaEventDestroy(r.stop));
+        for (int q = 0; q < kGpus; ++q) {
+            if (r.copy_streams[q]) CHECK_CUDA(cudaStreamDestroy(r.copy_streams[q]));
+        }
         if (r.copy_stream) CHECK_CUDA(cudaStreamDestroy(r.copy_stream));
         if (r.dense_stream) CHECK_CUDA(cudaStreamDestroy(r.dense_stream));
         if (r.stream) CHECK_CUDA(cudaStreamDestroy(r.stream));
@@ -2746,7 +2763,12 @@ int run_decode_loop(const Options &opt,
         }
     };
 
-    auto run_one_step = [&](double *ep_ms, double *dense_ms, double *compose_ms) -> int {
+    auto run_one_step = [&](double *ep_ms,
+                            double *dense_ms,
+                            double *compose_ms,
+                            double *compose_reduce_ms,
+                            double *compose_copy_ms,
+                            double *compose_final_ms) -> int {
         auto t0 = std::chrono::steady_clock::now();
         for (int p = 0; p < kGpus; ++p) {
             if (run_gate(ranks[p], api) != 0 || run_down(ranks[p], api) != 0) return 1;
@@ -2796,15 +2818,20 @@ int run_decode_loop(const Options &opt,
             }
         }
         sync_all();
+        auto t_reduce_done = std::chrono::steady_clock::now();
+        auto t_copy_done = t_reduce_done;
 
         if (!opt.direct_remote_compose || opt.ep_return_fp16) {
             if (opt.source_copy_schedule) {
                 for (int src = 0; src < kGpus; ++src) {
                     CHECK_CUDA(cudaSetDevice(ranks[src].device));
-                    cudaStream_t copy_stream = ranks[src].copy_stream ? ranks[src].copy_stream
-                                                                      : ranks[src].stream;
                     for (int dst = 0; dst < kGpus; ++dst) {
                         if (skip_self_copy && src == dst) continue;
+                        cudaStream_t copy_stream =
+                            opt.multi_copy_streams && ranks[src].copy_streams[dst]
+                                ? ranks[src].copy_streams[dst]
+                                : ranks[src].copy_stream ? ranks[src].copy_stream
+                                                         : ranks[src].stream;
                         if (opt.ep_return_fp16) {
                             const __half *src_ptr =
                                 ranks[src].d_ep_contrib_half_all + (uint64_t)dst * shard_elems;
@@ -2828,9 +2855,16 @@ int run_decode_loop(const Options &opt,
                 }
                 for (int src = 0; src < kGpus; ++src) {
                     CHECK_CUDA(cudaSetDevice(ranks[src].device));
-                    CHECK_CUDA(cudaStreamSynchronize(ranks[src].copy_stream ?
-                                                    ranks[src].copy_stream :
-                                                    ranks[src].stream));
+                    if (opt.multi_copy_streams) {
+                        for (int dst = 0; dst < kGpus; ++dst) {
+                            if (skip_self_copy && src == dst) continue;
+                            CHECK_CUDA(cudaStreamSynchronize(ranks[src].copy_streams[dst]));
+                        }
+                    } else {
+                        CHECK_CUDA(cudaStreamSynchronize(ranks[src].copy_stream ?
+                                                        ranks[src].copy_stream :
+                                                        ranks[src].stream));
+                    }
                 }
             } else {
                 for (int dst = 0; dst < kGpus; ++dst) {
@@ -2860,6 +2894,7 @@ int run_decode_loop(const Options &opt,
                 }
                 sync_all();
             }
+            t_copy_done = std::chrono::steady_clock::now();
         }
 
         for (int dst = 0; dst < kGpus; ++dst) {
@@ -2938,14 +2973,25 @@ int run_decode_loop(const Options &opt,
         *ep_ms += ep_stage_ms;
         *dense_ms += dense_stage_ms;
         *compose_ms += std::chrono::duration<double, std::milli>(t3 - t2).count();
+        *compose_reduce_ms +=
+            std::chrono::duration<double, std::milli>(t_reduce_done - t2).count();
+        *compose_copy_ms +=
+            std::chrono::duration<double, std::milli>(t_copy_done - t_reduce_done).count();
+        *compose_final_ms +=
+            std::chrono::duration<double, std::milli>(t3 - t_copy_done).count();
         return 0;
     };
 
     double warm_ep = 0.0;
     double warm_dense = 0.0;
     double warm_compose = 0.0;
+    double warm_compose_reduce = 0.0;
+    double warm_compose_copy = 0.0;
+    double warm_compose_final = 0.0;
     for (int i = 0; i < opt.warmup; ++i) {
-        if (run_one_step(&warm_ep, &warm_dense, &warm_compose) != 0) {
+        if (run_one_step(&warm_ep, &warm_dense, &warm_compose,
+                         &warm_compose_reduce, &warm_compose_copy,
+                         &warm_compose_final) != 0) {
             if (!shared_dense_ops) {
                 free_resident_f8_dense(attn, opt);
                 free_resident_f8_dense(shared, opt);
@@ -2957,9 +3003,14 @@ int run_decode_loop(const Options &opt,
     double ep_ms = 0.0;
     double dense_ms = 0.0;
     double compose_ms = 0.0;
+    double compose_reduce_ms = 0.0;
+    double compose_copy_ms = 0.0;
+    double compose_final_ms = 0.0;
     const auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < opt.decode_steps; ++i) {
-        if (run_one_step(&ep_ms, &dense_ms, &compose_ms) != 0) {
+        if (run_one_step(&ep_ms, &dense_ms, &compose_ms,
+                         &compose_reduce_ms, &compose_copy_ms,
+                         &compose_final_ms) != 0) {
             if (!shared_dense_ops) {
                 free_resident_f8_dense(attn, opt);
                 free_resident_f8_dense(shared, opt);
@@ -2976,6 +3027,9 @@ int run_decode_loop(const Options &opt,
     stats->ep_ms_per_step = ep_ms / (double)opt.decode_steps;
     stats->dense_ms_per_step = dense_ms / (double)opt.decode_steps;
     stats->compose_ms_per_step = compose_ms / (double)opt.decode_steps;
+    stats->compose_reduce_ms_per_step = compose_reduce_ms / (double)opt.decode_steps;
+    stats->compose_copy_ms_per_step = compose_copy_ms / (double)opt.decode_steps;
+    stats->compose_final_ms_per_step = compose_final_ms / (double)opt.decode_steps;
 
     for (int dst = 0; dst < kGpus; ++dst) {
         RankState &r = ranks[dst];
@@ -3225,6 +3279,9 @@ int run_layer(const Options &opt,
             CHECK_CUDA(cudaStreamCreate(&r.stream));
             CHECK_CUDA(cudaStreamCreate(&r.dense_stream));
             CHECK_CUDA(cudaStreamCreate(&r.copy_stream));
+            for (int q = 0; q < kGpus; ++q) {
+                CHECK_CUDA(cudaStreamCreate(&r.copy_streams[q]));
+            }
             CHECK_CUDA(cudaEventCreate(&r.start));
             CHECK_CUDA(cudaEventCreate(&r.mid));
             CHECK_CUDA(cudaEventCreate(&r.stop));
@@ -3397,9 +3454,13 @@ int run_layer(const Options &opt,
                     "total_ms\t%.6f\tms_per_step\t%.6f\tslot_step_tok_s\t%.6f\t"
                     "dense_hmma\t%d\tdense_f16_cublas\t%d\tdense_f16_cache\t%d\t"
                     "overlap_ep_dense\t%d\tdirect_remote_compose\t%d\t"
-                    "source_copy_schedule\t%d\t"
+                    "source_copy_schedule\t%d\tskip_self_compose_copy\t%d\t"
+                    "multi_copy_streams\t%d\t"
                     "ep_ms_per_step\t%.6f\tdense_ms_per_step\t%.6f\t"
                     "fused_compose_sum\t%d\tcompose_ms_per_step\t%.6f\t"
+                    "compose_reduce_ms_per_step\t%.6f\t"
+                    "compose_copy_ms_per_step\t%.6f\t"
+                    "compose_final_ms_per_step\t%.6f\t"
                     "dense_loaded_bytes\t%llu\t"
                     "ep_contribution_bytes\t%llu\tep_return_dtype\t%s\t"
                     "ep_return_bytes\t%llu\t"
@@ -3414,10 +3475,15 @@ int run_layer(const Options &opt,
                     opt.overlap_ep_dense ? 1 : 0,
                     opt.direct_remote_compose ? 1 : 0,
                     opt.source_copy_schedule ? 1 : 0,
+                    opt.skip_self_compose_copy ? 1 : 0,
+                    opt.multi_copy_streams ? 1 : 0,
                     decode_loop.ep_ms_per_step,
                     decode_loop.dense_ms_per_step,
                     decode_loop.fused_compose_sum ? 1 : 0,
                     decode_loop.compose_ms_per_step,
+                    decode_loop.compose_reduce_ms_per_step,
+                    decode_loop.compose_copy_ms_per_step,
+                    decode_loop.compose_final_ms_per_step,
                     (unsigned long long)decode_loop.dense_loaded_bytes,
                     (unsigned long long)decode_loop.ep_contribution_bytes,
                     decode_loop.ep_return_fp16 ? "fp16" : "fp32",
@@ -3601,6 +3667,12 @@ int run_layer(const Options &opt,
         summary->decode_ep_ms_per_step = decode_loop.ep_ms_per_step;
         summary->decode_dense_ms_per_step = decode_loop.dense_ms_per_step;
         summary->decode_compose_ms_per_step = decode_loop.compose_ms_per_step;
+        summary->decode_compose_reduce_ms_per_step =
+            decode_loop.compose_reduce_ms_per_step;
+        summary->decode_compose_copy_ms_per_step =
+            decode_loop.compose_copy_ms_per_step;
+        summary->decode_compose_final_ms_per_step =
+            decode_loop.compose_final_ms_per_step;
         summary->decode_checksum = decode_loop.checksum;
     }
 
@@ -3628,6 +3700,9 @@ int run_layer(const Options &opt,
             CHECK_CUDA(cudaEventDestroy(r.start));
             CHECK_CUDA(cudaEventDestroy(r.mid));
             CHECK_CUDA(cudaEventDestroy(r.stop));
+            for (int q = 0; q < kGpus; ++q) {
+                if (r.copy_streams[q]) CHECK_CUDA(cudaStreamDestroy(r.copy_streams[q]));
+            }
             CHECK_CUDA(cudaStreamDestroy(r.copy_stream));
             CHECK_CUDA(cudaStreamDestroy(r.dense_stream));
             CHECK_CUDA(cudaStreamDestroy(r.stream));
@@ -3780,6 +3855,9 @@ int main(int argc, char **argv) {
         double sum_ep_ms = 0.0;
         double sum_dense_ms = 0.0;
         double sum_compose_ms = 0.0;
+        double sum_compose_reduce_ms = 0.0;
+        double sum_compose_copy_ms = 0.0;
+        double sum_compose_final_ms = 0.0;
         uint64_t checksum = 0;
         const auto start = std::chrono::steady_clock::now();
         for (int step = 0; step < opt.decode_steps; ++step) {
@@ -3803,7 +3881,11 @@ int main(int argc, char **argv) {
                             "position\t%llu\t"
                             "decode_ms_per_step\t%.6f\tdecode_slot_step_tok_s\t%.6f\t"
                             "decode_ep_ms_per_step\t%.6f\tdecode_dense_ms_per_step\t%.6f\t"
-                            "decode_compose_ms_per_step\t%.6f\tdecode_checksum\t%llu\t%s\n",
+                            "decode_compose_ms_per_step\t%.6f\t"
+                            "decode_compose_reduce_ms_per_step\t%.6f\t"
+                            "decode_compose_copy_ms_per_step\t%.6f\t"
+                            "decode_compose_final_ms_per_step\t%.6f\t"
+                            "decode_checksum\t%llu\t%s\n",
                             step, s.layer, s.ratio,
                             (unsigned long long)layer_opt.position,
                             s.decode_ms_per_step,
@@ -3811,6 +3893,9 @@ int main(int argc, char **argv) {
                             s.decode_ep_ms_per_step,
                             s.decode_dense_ms_per_step,
                             s.decode_compose_ms_per_step,
+                            s.decode_compose_reduce_ms_per_step,
+                            s.decode_compose_copy_ms_per_step,
+                            s.decode_compose_final_ms_per_step,
                             (unsigned long long)s.decode_checksum,
                             (rc == 0 && s.pass) ? "PASS" : "FAIL");
                 if (rc == 0 && s.pass) {
@@ -3819,6 +3904,9 @@ int main(int argc, char **argv) {
                     sum_ep_ms += s.decode_ep_ms_per_step;
                     sum_dense_ms += s.decode_dense_ms_per_step;
                     sum_compose_ms += s.decode_compose_ms_per_step;
+                    sum_compose_reduce_ms += s.decode_compose_reduce_ms_per_step;
+                    sum_compose_copy_ms += s.decode_compose_copy_ms_per_step;
+                    sum_compose_final_ms += s.decode_compose_final_ms_per_step;
                     checksum ^= s.decode_checksum +
                                 (uint64_t)(step + 1) * 1000003ull +
                                 (uint64_t)(layer + 1) * 104729ull;
@@ -3859,9 +3947,12 @@ int main(int argc, char **argv) {
                     "shared_dense_ops\t%d\t"
                     "direct_remote_compose\t%d\tsource_copy_schedule\t%d\t"
                     "skip_self_compose_copy\t%d\t"
+                    "multi_copy_streams\t%d\t"
                     "sum_decode_ms\t%.6f\tms_per_token\t%.6f\t"
                     "projected_slot_step_tok_s\t%.6f\t"
                     "sum_ep_ms\t%.6f\tsum_dense_ms\t%.6f\tsum_compose_ms\t%.6f\t"
+                    "sum_compose_reduce_ms\t%.6f\tsum_compose_copy_ms\t%.6f\t"
+                    "sum_compose_final_ms\t%.6f\t"
                     "wall_ms\t%.6f\tchecksum\t%llu\tPASS\n",
                     opt.decode_steps, pass_invocations, opt.slots,
                     shared_api.initialized ? 1 : 0,
@@ -3873,8 +3964,11 @@ int main(int argc, char **argv) {
                     opt.direct_remote_compose ? 1 : 0,
                     opt.source_copy_schedule ? 1 : 0,
                     opt.skip_self_compose_copy ? 1 : 0,
+                    opt.multi_copy_streams ? 1 : 0,
                     sum_decode_ms, ms_per_token, slot_step_tok_s,
                     sum_ep_ms, sum_dense_ms, sum_compose_ms,
+                    sum_compose_reduce_ms, sum_compose_copy_ms,
+                    sum_compose_final_ms,
                     wall_ms, (unsigned long long)checksum);
         free_shared_dense_ops(&shared_dense_ops, opt);
         close_shared_expert_bindings(&shared_expert_bindings);
@@ -3892,6 +3986,9 @@ int main(int argc, char **argv) {
     double sum_ep_ms = 0.0;
     double sum_dense_ms = 0.0;
     double sum_compose_ms = 0.0;
+    double sum_compose_reduce_ms = 0.0;
+    double sum_compose_copy_ms = 0.0;
+    double sum_compose_final_ms = 0.0;
     uint64_t checksum = 0;
     const auto start = std::chrono::steady_clock::now();
     for (int layer = 0; layer < 43; ++layer) {
@@ -3912,7 +4009,11 @@ int main(int argc, char **argv) {
                     "expert_rows\t%llu\tkv_rows\t%llu\tcomp_rows\t%llu\t"
                     "decode_ms_per_step\t%.6f\tdecode_slot_step_tok_s\t%.6f\t"
                     "decode_ep_ms_per_step\t%.6f\tdecode_dense_ms_per_step\t%.6f\t"
-                    "decode_compose_ms_per_step\t%.6f\tdecode_checksum\t%llu\t%s\n",
+                    "decode_compose_ms_per_step\t%.6f\t"
+                    "decode_compose_reduce_ms_per_step\t%.6f\t"
+                    "decode_compose_copy_ms_per_step\t%.6f\t"
+                    "decode_compose_final_ms_per_step\t%.6f\t"
+                    "decode_checksum\t%llu\t%s\n",
                     s.layer, s.ratio,
                     (unsigned long long)s.total_rows,
                     (unsigned long long)s.dense_rows,
@@ -3925,6 +4026,9 @@ int main(int argc, char **argv) {
                     s.decode_ep_ms_per_step,
                     s.decode_dense_ms_per_step,
                     s.decode_compose_ms_per_step,
+                    s.decode_compose_reduce_ms_per_step,
+                    s.decode_compose_copy_ms_per_step,
+                    s.decode_compose_final_ms_per_step,
                     (unsigned long long)s.decode_checksum,
                     (rc == 0 && s.pass) ? "PASS" : "FAIL");
         if (rc == 0 && s.pass) {
@@ -3933,6 +4037,9 @@ int main(int argc, char **argv) {
             sum_ep_ms += s.decode_ep_ms_per_step;
             sum_dense_ms += s.decode_dense_ms_per_step;
             sum_compose_ms += s.decode_compose_ms_per_step;
+            sum_compose_reduce_ms += s.decode_compose_reduce_ms_per_step;
+            sum_compose_copy_ms += s.decode_compose_copy_ms_per_step;
+            sum_compose_final_ms += s.decode_compose_final_ms_per_step;
             checksum ^= s.decode_checksum + (uint64_t)(layer + 1) * 104729ull;
         } else {
             const auto stop = std::chrono::steady_clock::now();
@@ -3945,6 +4052,7 @@ int main(int argc, char **argv) {
                         "shared_dense_ops\t%d\t"
                         "overlap_ep_dense\t%d\tdirect_remote_compose\t%d\t"
                         "source_copy_schedule\t%d\tskip_self_compose_copy\t%d\t"
+                        "multi_copy_streams\t%d\t"
                         "wall_ms\t%.6f\tFAIL\n",
                         pass_layers, layer, opt.skip_descriptor_checks ? 0 : 1,
                         opt.skip_predecode_probes ? 0 : 1, shared_api.initialized ? 1 : 0,
@@ -3956,6 +4064,7 @@ int main(int argc, char **argv) {
                         opt.direct_remote_compose ? 1 : 0,
                         opt.source_copy_schedule ? 1 : 0,
                         opt.skip_self_compose_copy ? 1 : 0,
+                        opt.multi_copy_streams ? 1 : 0,
                         wall_ms);
             free_shared_dense_ops(&shared_dense_ops, opt);
             close_shared_expert_bindings(&shared_expert_bindings);
@@ -3982,8 +4091,11 @@ int main(int argc, char **argv) {
                 "shared_dense_ops\t%d\t"
                 "overlap_ep_dense\t%d\tdirect_remote_compose\t%d\t"
                 "source_copy_schedule\t%d\tskip_self_compose_copy\t%d\t"
+                "multi_copy_streams\t%d\t"
                 "sum_decode_ms_per_token\t%.6f\tprojected_slot_step_tok_s\t%.6f\t"
                 "sum_ep_ms\t%.6f\tsum_dense_ms\t%.6f\tsum_compose_ms\t%.6f\t"
+                "sum_compose_reduce_ms\t%.6f\tsum_compose_copy_ms\t%.6f\t"
+                "sum_compose_final_ms\t%.6f\t"
                 "wall_ms\t%.6f\tchecksum\t%llu\tPASS\n",
                 pass_layers, opt.slots, opt.decode_steps,
                 opt.skip_descriptor_checks ? 0 : 1,
@@ -3997,8 +4109,10 @@ int main(int argc, char **argv) {
                 opt.direct_remote_compose ? 1 : 0,
                 opt.source_copy_schedule ? 1 : 0,
                 opt.skip_self_compose_copy ? 1 : 0,
+                opt.multi_copy_streams ? 1 : 0,
                 sum_decode_ms, slot_step_tok_s, sum_ep_ms, sum_dense_ms,
-                sum_compose_ms, wall_ms, (unsigned long long)checksum);
+                sum_compose_ms, sum_compose_reduce_ms, sum_compose_copy_ms,
+                sum_compose_final_ms, wall_ms, (unsigned long long)checksum);
     free_shared_dense_ops(&shared_dense_ops, opt);
     close_shared_expert_bindings(&shared_expert_bindings);
     close_shared_tp_runtime(&shared_tp_runtime);

@@ -45,6 +45,13 @@ removed same-GPU staged compose copies on the FP32 return path. The 16-step
 A/B improves from `40.271428` to `38.503412 ms/token` proxy and reduces
 compose from `371.558564` to `342.417467 ms`; the 32-step skip-self topline
 is `37.912062 ms/token` proxy / `844.058544` projected slot-step tok/s.
+Sprint 271 split compose timing and showed peer-copy dominates compose
+(`242.803068 ms` copy out of `327.657087 ms` total compose for the 16-step
+run). Sprint 272 tested per-destination copy streams; the 16-step A/B improves
+from `39.288036` to `37.395624 ms/token`, and the 32-step opt-in topline is
+`36.911097 ms/token` proxy / `866.947964` projected slot-step tok/s. Per
+steering, the next focus is TP/EP end-to-end generated/continuation serving,
+not more compose micro-optimization.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s
