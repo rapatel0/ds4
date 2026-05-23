@@ -1,7 +1,7 @@
 # Sprint 240 - TP/EP Resident Decode Loop Gate
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete
 
 ## Overview
 
@@ -107,20 +107,20 @@ sync boundaries, EP kernels, or dense kernels.
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists and is committed before implementation evidence.
-- [ ] Implementation stays in the separate TP/EP codepath.
-- [ ] No PP scheduler files are modified.
-- [ ] `--decode-steps N` builds on the V100 pod.
-- [ ] The timed loop keeps dense composition weights resident.
-- [ ] The timed loop keeps EP and composition buffers resident.
-- [ ] The loop executes at `32` slots / `256K`, MTP off.
-- [ ] The run reports aggregate slot-step tok/s and ms/step.
-- [ ] The run reports finite/checksum/repeat status.
-- [ ] Existing combined dense coverage and Sprint 239 composition still pass.
-- [ ] Evidence is copied to
+- [x] Sprint plan exists and is committed before implementation evidence.
+- [x] Implementation stays in the separate TP/EP codepath.
+- [x] No PP scheduler files are modified.
+- [x] `--decode-steps N` builds on the V100 pod.
+- [x] The timed loop keeps dense composition weights resident.
+- [x] The timed loop keeps EP and composition buffers resident.
+- [x] The loop executes at `32` slots / `256K`, MTP off.
+- [x] The run reports aggregate slot-step tok/s and ms/step.
+- [x] The run reports finite/checksum/repeat status.
+- [x] Existing combined dense coverage and Sprint 239 composition still pass.
+- [x] Evidence is copied to
       `logs/from-cluster/sprint240-tp-ep-resident-decode-loop/`.
-- [ ] Status and vision docs are updated with the decision.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Status and vision docs are updated with the decision.
+- [x] Changes are committed with explicit `git add` paths.
 
 ## Risks
 
@@ -133,4 +133,51 @@ sync boundaries, EP kernels, or dense kernels.
 
 ## Decision
 
-Pending.
+Complete. The TP/EP full-layer smoke now has a resident `--decode-steps N`
+mode. It loads the two F8 dense composition tensors once, keeps TurboMind EP
+weights resident, keeps route-slot and composition buffers allocated, and
+repeats the representative layer-2 step without rereading pack bytes.
+
+The V100 run at `32` slots / `256K`, MTP off, `50` resident steps reports:
+
+```text
+tp_ep_decode_loop
+steps 50
+slots 32
+slot_steps 1600
+total_ms 92.277411
+ms_per_step 1.845548
+slot_step_tok_s 17339.021356
+ep_ms_per_step 0.319095
+dense_ms_per_step 0.756244
+compose_ms_per_step 0.770121
+dense_loaded_bytes 42270720
+ep_contribution_bytes 4194304
+ep_return_bytes 4194304
+checksum 2382924023
+finite_bad 0
+PASS
+```
+
+The same run preserves Sprint 238 and Sprint 239 checks:
+
+```text
+dense_compute_pass 1
+bf16_compute_pass 1
+compose_pass 1
+decode_pass 1
+kv max_abs 0.000000000
+repeat_bad 0
+repeat_nan 0
+PASS
+```
+
+This is a **representative layer-loop metric**, not end-to-end generated
+tok/s. It excludes full attention semantics, all layers, logits, sampling, and
+server scheduling. The stage split is still useful: the current resident loop
+is dominated by scalar dense kernels plus compose/peer synchronization, not by
+TurboMind EP kernels alone.
+
+Evidence:
+
+- `logs/from-cluster/sprint240-tp-ep-resident-decode-loop/layer2-resident-decode-loop-32slot-256k-50steps.log`

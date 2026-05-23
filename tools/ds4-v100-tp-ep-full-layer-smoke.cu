@@ -198,6 +198,17 @@ struct DeviceDenseOutputs {
     double compute_ms = 0.0;
 };
 
+struct ResidentF8Dense {
+    std::vector<uint8_t *> d_w;
+    std::vector<float *> d_x;
+    std::vector<float *> d_out;
+    int rows_per_gpu = 0;
+    int cols = 0;
+    int slots = 0;
+    uint64_t row_bytes = 0;
+    uint64_t loaded_bytes = 0;
+};
+
 struct ComposeStats {
     bool enabled = false;
     bool pass = true;
@@ -209,6 +220,25 @@ struct ComposeStats {
     double repeat_max_abs = 0.0;
     int finite_bad = 0;
     int repeat_bad = 0;
+    uint64_t checksum = 0;
+};
+
+struct DecodeLoopStats {
+    bool enabled = false;
+    bool pass = true;
+    int steps = 0;
+    int slots = 0;
+    uint64_t slot_steps = 0;
+    uint64_t dense_loaded_bytes = 0;
+    uint64_t ep_contribution_bytes = 0;
+    uint64_t ep_return_bytes = 0;
+    double total_ms = 0.0;
+    double ms_per_step = 0.0;
+    double tok_s = 0.0;
+    double ep_ms_per_step = 0.0;
+    double dense_ms_per_step = 0.0;
+    double compose_ms_per_step = 0.0;
+    int finite_bad = 0;
     uint64_t checksum = 0;
 };
 
@@ -229,6 +259,7 @@ struct Options {
     bool dense_compute_all_f8 = false;
     bool dense_compute_all_bf16 = false;
     bool compose_next_hidden = false;
+    int decode_steps = 0;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -487,7 +518,7 @@ void usage(const char *argv0) {
                  "       [--position N] [--warmup N] [--iters N]\n"
                  "       [--dense-compute-tensor NAME] [--dense-compute-all-f8]\n"
                  "       [--dense-compute-all-bf16] [--dense-compute-all]\n"
-                 "       [--compose-next-hidden]\n",
+                 "       [--compose-next-hidden] [--decode-steps N]\n",
                  argv0);
 }
 
@@ -550,6 +581,9 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->dense_compute_all_bf16 = true;
         } else if (std::strcmp(arg, "--compose-next-hidden") == 0) {
             opt->compose_next_hidden = true;
+        } else if (std::strcmp(arg, "--decode-steps") == 0) {
+            if (!val || !parse_int(val, &opt->decode_steps) || opt->decode_steps < 0) return false;
+            ++i;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -1134,6 +1168,89 @@ void free_device_dense_outputs(DeviceDenseOutputs &out, const Options &opt) {
     out = DeviceDenseOutputs{};
 }
 
+void free_resident_f8_dense(ResidentF8Dense &op, const Options &opt) {
+    for (int gpu = 0; gpu < (int)op.d_w.size(); ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        if (op.d_w[(size_t)gpu]) CHECK_CUDA(cudaFree(op.d_w[(size_t)gpu]));
+        if (op.d_x[(size_t)gpu]) CHECK_CUDA(cudaFree(op.d_x[(size_t)gpu]));
+        if (op.d_out[(size_t)gpu]) CHECK_CUDA(cudaFree(op.d_out[(size_t)gpu]));
+    }
+    op = ResidentF8Dense{};
+}
+
+int prepare_resident_f8_dense(const Options &opt,
+                              const std::vector<ContractRow> &rows,
+                              const char *tensor,
+                              int seed,
+                              ResidentF8Dense *op) {
+    std::vector<ContractRow> selected;
+    int cols = 0;
+    int total_rows = 0;
+    if (!select_dense_rows(rows, tensor, &selected, &cols, &total_rows)) {
+        std::fprintf(stderr, "resident dense tensor validation failed for %s\n", tensor);
+        return 1;
+    }
+    const int rows_per_gpu = total_rows / kGpus;
+    if (rows_per_gpu != kHidden / kGpus) {
+        std::fprintf(stderr, "resident dense tensor %s rows_per_gpu=%d expected=%d\n",
+                     tensor, rows_per_gpu, kHidden / kGpus);
+        return 2;
+    }
+    const uint64_t row_bytes = f8_row_bytes(cols);
+    const uint64_t shard_bytes = row_bytes * (uint64_t)rows_per_gpu;
+    op->d_w.assign((size_t)kGpus, nullptr);
+    op->d_x.assign((size_t)kGpus, nullptr);
+    op->d_out.assign((size_t)kGpus, nullptr);
+    op->rows_per_gpu = rows_per_gpu;
+    op->cols = cols;
+    op->slots = opt.slots;
+    op->row_bytes = row_bytes;
+
+    std::vector<float> h_x((size_t)opt.slots * cols);
+    for (int slot = 0; slot < opt.slots; ++slot) {
+        for (int c = 0; c < cols; ++c) {
+            const int m = (slot * (17 + seed) + c * (13 + seed * 3)) % 269;
+            h_x[(size_t)slot * cols + c] = ((float)m - 134.0f) * 0.0002f;
+        }
+    }
+
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        const ContractRow &r = selected[(size_t)gpu];
+        std::vector<uint8_t> h_w((size_t)shard_bytes);
+        const std::string path = path_join(opt.pack_dir, r.source_pack_file);
+        if (read_exact_at(path, physical_row_offset(r), h_w.data(), h_w.size()) != 0) {
+            free_resident_f8_dense(*op, opt);
+            return 3;
+        }
+        op->loaded_bytes += shard_bytes;
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        CHECK_CUDA(cudaMalloc(&op->d_w[(size_t)gpu], (size_t)shard_bytes));
+        CHECK_CUDA(cudaMalloc(&op->d_x[(size_t)gpu], h_x.size() * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&op->d_out[(size_t)gpu],
+                              (size_t)opt.slots * rows_per_gpu * sizeof(float)));
+        CHECK_CUDA(cudaMemcpy(op->d_w[(size_t)gpu], h_w.data(), (size_t)shard_bytes,
+                              cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(op->d_x[(size_t)gpu], h_x.data(),
+                              h_x.size() * sizeof(float), cudaMemcpyHostToDevice));
+    }
+    return 0;
+}
+
+int launch_resident_f8_dense(const Options &opt,
+                             const ResidentF8Dense &op,
+                             RankState ranks[kGpus]) {
+    const dim3 grid((unsigned int)op.rows_per_gpu, (unsigned int)op.slots, 1);
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        (void)cudaGetLastError();
+        f8_b128_dense_kernel<<<grid, 256, 0, ranks[gpu].stream>>>(
+            op.d_out[(size_t)gpu], op.d_w[(size_t)gpu], op.d_x[(size_t)gpu],
+            op.rows_per_gpu, op.cols, (uint32_t)op.row_bytes, op.slots);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    return 0;
+}
+
 int run_f8_dense_to_device(const Options &opt,
                            const std::vector<ContractRow> &rows,
                            const char *tensor,
@@ -1471,6 +1588,26 @@ void build_offsets_for_rank(int rank, int slots, int top_k,
     *max_routes_per_expert = max_routes;
 }
 
+int ensure_compose_buffers(const Options &opt, RankState ranks[kGpus]) {
+    const uint64_t shard_elems = (uint64_t)opt.slots * (kHidden / kGpus);
+    const uint64_t shard_bytes = shard_elems * sizeof(float);
+    const uint64_t all_contrib_elems = (uint64_t)kGpus * shard_elems;
+    const uint64_t all_contrib_bytes = all_contrib_elems * sizeof(float);
+    for (int p = 0; p < kGpus; ++p) {
+        RankState &r = ranks[p];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        if (!r.d_ep_contrib_all) CHECK_CUDA(cudaMalloc(&r.d_ep_contrib_all,
+                                                        (size_t)all_contrib_bytes));
+        if (!r.d_ep_sum) CHECK_CUDA(cudaMalloc(&r.d_ep_sum, (size_t)shard_bytes));
+        if (!r.d_next_hidden) CHECK_CUDA(cudaMalloc(&r.d_next_hidden, (size_t)shard_bytes));
+        for (int src = 0; src < kGpus; ++src) {
+            if (!r.d_ep_remote[src]) CHECK_CUDA(cudaMalloc(&r.d_ep_remote[src],
+                                                           (size_t)shard_bytes));
+        }
+    }
+    return 0;
+}
+
 int run_next_hidden_compose(const Options &opt,
                             const std::vector<ContractRow> &rows,
                             RankState ranks[kGpus],
@@ -1495,18 +1632,17 @@ int run_next_hidden_compose(const Options &opt,
     const uint64_t all_contrib_bytes = all_contrib_elems * sizeof(float);
     stats->ep_contribution_bytes = all_contrib_bytes * kGpus;
     stats->ep_return_bytes = shard_bytes * kGpus * kGpus;
+    if (ensure_compose_buffers(opt, ranks) != 0) {
+        free_device_dense_outputs(attn, opt);
+        free_device_dense_outputs(shared, opt);
+        return 2;
+    }
 
     const auto compose_start = std::chrono::steady_clock::now();
 
     for (int p = 0; p < kGpus; ++p) {
         RankState &r = ranks[p];
         CHECK_CUDA(cudaSetDevice(r.device));
-        CHECK_CUDA(cudaMalloc(&r.d_ep_contrib_all, (size_t)all_contrib_bytes));
-        CHECK_CUDA(cudaMalloc(&r.d_ep_sum, (size_t)shard_bytes));
-        CHECK_CUDA(cudaMalloc(&r.d_next_hidden, (size_t)shard_bytes));
-        for (int src = 0; src < kGpus; ++src) {
-            CHECK_CUDA(cudaMalloc(&r.d_ep_remote[src], (size_t)shard_bytes));
-        }
         const int block = 256;
         int grid = (int)((all_contrib_elems + block - 1) / block);
         zero_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_contrib_all,
@@ -1604,6 +1740,173 @@ int run_next_hidden_compose(const Options &opt,
     free_device_dense_outputs(attn, opt);
     free_device_dense_outputs(shared, opt);
     return stats->pass ? 0 : 2;
+}
+
+int run_decode_loop(const Options &opt,
+                    const std::vector<ContractRow> &rows,
+                    RankState ranks[kGpus],
+                    const Api &api,
+                    DecodeLoopStats *stats) {
+    if (opt.decode_steps <= 0) return 0;
+    stats->enabled = true;
+    stats->steps = opt.decode_steps;
+    stats->slots = opt.slots;
+    stats->slot_steps = (uint64_t)opt.decode_steps * (uint64_t)opt.slots;
+
+    ResidentF8Dense attn;
+    ResidentF8Dense shared;
+    if (prepare_resident_f8_dense(opt, rows, "blk.2.attn_output_b.weight", 1, &attn) != 0 ||
+        prepare_resident_f8_dense(opt, rows, "blk.2.ffn_down_shexp.weight", 2, &shared) != 0) {
+        free_resident_f8_dense(attn, opt);
+        free_resident_f8_dense(shared, opt);
+        return 1;
+    }
+    stats->dense_loaded_bytes = attn.loaded_bytes + shared.loaded_bytes;
+
+    const uint64_t shard_elems = (uint64_t)opt.slots * (kHidden / kGpus);
+    const uint64_t shard_bytes = shard_elems * sizeof(float);
+    const uint64_t all_contrib_elems = (uint64_t)kGpus * shard_elems;
+    const uint64_t all_contrib_bytes = all_contrib_elems * sizeof(float);
+    stats->ep_contribution_bytes = all_contrib_bytes * kGpus;
+    stats->ep_return_bytes = shard_bytes * kGpus * kGpus;
+    if (ensure_compose_buffers(opt, ranks) != 0) {
+        free_resident_f8_dense(attn, opt);
+        free_resident_f8_dense(shared, opt);
+        return 2;
+    }
+
+    auto sync_all = [&]() {
+        for (int p = 0; p < kGpus; ++p) {
+            CHECK_CUDA(cudaSetDevice(ranks[p].device));
+            CHECK_CUDA(cudaStreamSynchronize(ranks[p].stream));
+        }
+    };
+
+    auto run_one_step = [&](double *ep_ms, double *dense_ms, double *compose_ms) -> int {
+        auto t0 = std::chrono::steady_clock::now();
+        for (int p = 0; p < kGpus; ++p) {
+            if (run_gate(ranks[p], api) != 0 || run_down(ranks[p], api) != 0) return 1;
+        }
+        sync_all();
+        auto t1 = std::chrono::steady_clock::now();
+        if (launch_resident_f8_dense(opt, attn, ranks) != 0 ||
+            launch_resident_f8_dense(opt, shared, ranks) != 0) {
+            return 2;
+        }
+        sync_all();
+        auto t2 = std::chrono::steady_clock::now();
+
+        const int block = 256;
+        for (int p = 0; p < kGpus; ++p) {
+            RankState &r = ranks[p];
+            CHECK_CUDA(cudaSetDevice(r.device));
+            int grid = (int)((all_contrib_elems + block - 1) / block);
+            zero_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_contrib_all,
+                                                          all_contrib_elems);
+            CHECK_CUDA(cudaGetLastError());
+            const uint64_t route_hidden_elems = (uint64_t)r.routes * kHidden;
+            grid = (int)((route_hidden_elems + block - 1) / block);
+            ep_reduce_all_dest_shards_kernel<<<grid, block, 0, r.stream>>>(
+                r.d_ep_contrib_all, r.d_down, r.d_route_slots, r.routes, opt.slots);
+            CHECK_CUDA(cudaGetLastError());
+        }
+        sync_all();
+
+        for (int dst = 0; dst < kGpus; ++dst) {
+            CHECK_CUDA(cudaSetDevice(ranks[dst].device));
+            for (int src = 0; src < kGpus; ++src) {
+                const float *src_ptr = ranks[src].d_ep_contrib_all +
+                                       (uint64_t)dst * shard_elems;
+                CHECK_CUDA(cudaMemcpyPeerAsync(ranks[dst].d_ep_remote[src],
+                                               ranks[dst].device,
+                                               src_ptr,
+                                               ranks[src].device,
+                                               (size_t)shard_bytes,
+                                               ranks[dst].stream));
+            }
+        }
+        sync_all();
+
+        for (int dst = 0; dst < kGpus; ++dst) {
+            RankState &r = ranks[dst];
+            CHECK_CUDA(cudaSetDevice(r.device));
+            int grid = (int)((shard_elems + block - 1) / block);
+            zero_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_sum, shard_elems);
+            CHECK_CUDA(cudaGetLastError());
+            for (int src = 0; src < kGpus; ++src) {
+                add_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_sum,
+                                                             r.d_ep_remote[src],
+                                                             shard_elems);
+            }
+            CHECK_CUDA(cudaGetLastError());
+            compose_next_hidden_kernel<<<grid, block, 0, r.stream>>>(
+                r.d_next_hidden, attn.d_out[(size_t)dst], shared.d_out[(size_t)dst],
+                r.d_ep_sum, dst, opt.slots);
+            CHECK_CUDA(cudaGetLastError());
+        }
+        sync_all();
+        auto t3 = std::chrono::steady_clock::now();
+        *ep_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+        *dense_ms += std::chrono::duration<double, std::milli>(t2 - t1).count();
+        *compose_ms += std::chrono::duration<double, std::milli>(t3 - t2).count();
+        return 0;
+    };
+
+    double warm_ep = 0.0;
+    double warm_dense = 0.0;
+    double warm_compose = 0.0;
+    for (int i = 0; i < opt.warmup; ++i) {
+        if (run_one_step(&warm_ep, &warm_dense, &warm_compose) != 0) {
+            free_resident_f8_dense(attn, opt);
+            free_resident_f8_dense(shared, opt);
+            return 3;
+        }
+    }
+
+    double ep_ms = 0.0;
+    double dense_ms = 0.0;
+    double compose_ms = 0.0;
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < opt.decode_steps; ++i) {
+        if (run_one_step(&ep_ms, &dense_ms, &compose_ms) != 0) {
+            free_resident_f8_dense(attn, opt);
+            free_resident_f8_dense(shared, opt);
+            return 4;
+        }
+    }
+    const auto stop = std::chrono::steady_clock::now();
+    stats->total_ms = std::chrono::duration<double, std::milli>(stop - start).count();
+    stats->ms_per_step = stats->total_ms / (double)opt.decode_steps;
+    stats->tok_s = stats->total_ms > 0.0
+        ? (double)stats->slot_steps * 1000.0 / stats->total_ms
+        : 0.0;
+    stats->ep_ms_per_step = ep_ms / (double)opt.decode_steps;
+    stats->dense_ms_per_step = dense_ms / (double)opt.decode_steps;
+    stats->compose_ms_per_step = compose_ms / (double)opt.decode_steps;
+
+    for (int dst = 0; dst < kGpus; ++dst) {
+        RankState &r = ranks[dst];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        std::vector<float> host((size_t)shard_elems);
+        CHECK_CUDA(cudaMemcpy(host.data(), r.d_next_hidden, (size_t)shard_bytes,
+                              cudaMemcpyDeviceToHost));
+        for (uint64_t i = 0; i < shard_elems; ++i) {
+            const float v = host[(size_t)i];
+            if (!std::isfinite(v)) {
+                stats->finite_bad++;
+                stats->pass = false;
+            }
+            uint32_t bits = 0;
+            std::memcpy(&bits, &v, sizeof(bits));
+            stats->checksum ^=
+                (uint64_t)bits + (uint64_t)(dst + 1) * 2000003ull + i * 7907ull;
+        }
+    }
+    if (stats->checksum == 0 || stats->finite_bad != 0) stats->pass = false;
+
+    free_resident_f8_dense(attn, opt);
+    free_resident_f8_dense(shared, opt);
+    return stats->pass ? 0 : 5;
 }
 
 } // namespace
@@ -1915,6 +2218,32 @@ int main(int argc, char **argv) {
         return 13;
     }
 
+    DecodeLoopStats decode_loop;
+    const int decode_rc = run_decode_loop(opt, rows, ranks, api, &decode_loop);
+    if (decode_loop.enabled) {
+        std::printf("tp_ep_decode_loop\tsteps\t%d\tslots\t%d\tslot_steps\t%llu\t"
+                    "total_ms\t%.6f\tms_per_step\t%.6f\tslot_step_tok_s\t%.6f\t"
+                    "ep_ms_per_step\t%.6f\tdense_ms_per_step\t%.6f\t"
+                    "compose_ms_per_step\t%.6f\tdense_loaded_bytes\t%llu\t"
+                    "ep_contribution_bytes\t%llu\tep_return_bytes\t%llu\t"
+                    "checksum\t%llu\tfinite_bad\t%d\t%s\n",
+                    decode_loop.steps, decode_loop.slots,
+                    (unsigned long long)decode_loop.slot_steps,
+                    decode_loop.total_ms, decode_loop.ms_per_step,
+                    decode_loop.tok_s, decode_loop.ep_ms_per_step,
+                    decode_loop.dense_ms_per_step, decode_loop.compose_ms_per_step,
+                    (unsigned long long)decode_loop.dense_loaded_bytes,
+                    (unsigned long long)decode_loop.ep_contribution_bytes,
+                    (unsigned long long)decode_loop.ep_return_bytes,
+                    (unsigned long long)decode_loop.checksum,
+                    decode_loop.finite_bad,
+                    decode_loop.pass ? "PASS" : "FAIL");
+    }
+    if (decode_rc != 0) {
+        ds4_v100_tp_runtime_close(rt);
+        return 14;
+    }
+
     const uint64_t dispatch_bytes = (uint64_t)aggregate_routes * kHidden * sizeof(__half);
     const uint64_t return_bytes = dispatch_bytes;
     const double imbalance = min_routes > 0 ? (double)max_routes / (double)min_routes : 0.0;
@@ -1930,7 +2259,8 @@ int main(int argc, char **argv) {
                       repeat_nan == 0 &&
                       (!dense_compute.enabled || dense_compute.pass) &&
                       (!bf16_compute.enabled || bf16_compute.pass) &&
-                      (!compose.enabled || compose.pass);
+                      (!compose.enabled || compose.pass) &&
+                      (!decode_loop.enabled || decode_loop.pass);
 
     std::printf("runtime_bytes_per_gpu\thidden\t%llu\tkv\t%llu\tcomp_state\t%llu\t"
                 "scratch\t%llu\ttotal\t%llu\n",
@@ -1972,6 +2302,11 @@ int main(int argc, char **argv) {
                 "compose_checksum\t%llu\tcompose_finite_bad\t%d\t"
                 "compose_repeat_max_abs\t%.9f\tcompose_repeat_bad\t%d\t"
                 "compose_pass\t%d\t"
+                "decode_steps\t%d\tdecode_slot_steps\t%llu\tdecode_total_ms\t%.6f\t"
+                "decode_ms_per_step\t%.6f\tdecode_slot_step_tok_s\t%.6f\t"
+                "decode_ep_ms_per_step\t%.6f\tdecode_dense_ms_per_step\t%.6f\t"
+                "decode_compose_ms_per_step\t%.6f\tdecode_checksum\t%llu\t"
+                "decode_finite_bad\t%d\tdecode_pass\t%d\t"
                 "aggregate_routes\t%d\tdispatch_bytes\t%llu\treturn_bytes\t%llu\t"
                 "route_imbalance\t%.6f\tdescriptor_ms\t%.6f\tdense_kv_ms\t%.6f\t"
                 "worst_gate_ms\t%.6f\tworst_down_ms\t%.6f\tworst_ep_ms\t%.6f\t"
@@ -2023,6 +2358,17 @@ int main(int argc, char **argv) {
                 compose.repeat_max_abs,
                 compose.repeat_bad,
                 compose.enabled && compose.pass ? 1 : 0,
+                decode_loop.steps,
+                (unsigned long long)decode_loop.slot_steps,
+                decode_loop.total_ms,
+                decode_loop.ms_per_step,
+                decode_loop.tok_s,
+                decode_loop.ep_ms_per_step,
+                decode_loop.dense_ms_per_step,
+                decode_loop.compose_ms_per_step,
+                (unsigned long long)decode_loop.checksum,
+                decode_loop.finite_bad,
+                decode_loop.enabled && decode_loop.pass ? 1 : 0,
                 aggregate_routes,
                 (unsigned long long)dispatch_bytes,
                 (unsigned long long)return_bytes,

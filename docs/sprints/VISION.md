@@ -373,16 +373,25 @@ The same run preserves combined F8/BF16 dense coverage, KV `max_abs=0`,
 serving or logits equivalence, but it is the first resident TP/EP layer
 composition gate.
 
-### Sprint 240 - TP/EP Serving Gate [planned]
+### Sprint 240 - TP/EP Resident Decode Loop Gate [complete]
 
-Goal: Serve continuous multi-slot requests through the TP/EP runtime at
-`32` slots / `256K`, MTP off.
+Goal: Convert the Sprint 239 one-shot TP/EP composition path into a resident
+repeated decode-loop benchmark at `32` slots / `256K`, MTP off.
 
-Rationale: This is the first true replacement candidate for the frozen PP
-baseline. It must report generated tok/s, continuation tok/s, prompt tok/s,
-GPU utilization, collective time, expert time, and correctness.
+Rationale: Before server integration, the TP/EP path needs a benchmarkable
+resident loop that avoids pack-byte reloads and per-step allocation.
 
-Outcome: Pending.
+Outcome: Complete for a representative layer-2 resident loop. The TP/EP
+full-layer smoke now supports `--decode-steps N`, keeps the two F8 dense
+composition tensors resident, keeps TurboMind EP weights and composition
+buffers resident, and repeats EP+dense+peer-return+compose without rereading
+pack bytes. The V100 pod run at `32` slots / `256K`, MTP off, `50` steps
+passes with `ms_per_step=1.845548`, `slot_step_tok_s=17339.021356`,
+`ep_ms_per_step=0.319095`, `dense_ms_per_step=0.756244`,
+`compose_ms_per_step=0.770121`, checksum `2382924023`, `finite_bad=0`, and
+`decode_pass=1`. Existing F8/BF16 dense coverage, KV check, and Sprint 239
+composition still pass. This is not generated tok/s; it is the first resident
+TP/EP layer-loop metric.
 
 ### Sprint 241 - TP/EP Throughput Optimization [tentative]
 
@@ -444,6 +453,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 237 proved packed-F8 dense compute coverage for all compatible layer-2 F8 dense tensors. | F8 dense families execute from production bytes; BF16 compressor/indexer math and real layer dataflow remain. | Add BF16 compute coverage or compose dense outputs into representative full-layer decode. |
 | 2026-05-23 | Sprint 238 proved BF16 compressor/indexer dense coverage and combined F8+BF16 coverage for layer `2`. | Layer-2 dense families now execute from production bytes in the separate TP/EP path. | Compose dense, KV, control/router, and EP expert outputs into representative full-layer decode. |
 | 2026-05-23 | Sprint 239 proved representative TP/EP next-hidden shard composition for layer `2`. | Dense outputs, EP returned contributions, KV update/check, and residual composition now run in one separate TP/EP execution. | Move from smoke composition to a TP/EP serving gate at `32` slots / `256K`, MTP off. |
+| 2026-05-23 | Sprint 240 proved a resident repeated TP/EP layer-loop benchmark at `32` slots / `256K`. | The path now reports stage costs without per-step pack reloads: dense and compose/sync dominate over EP. | Decide whether Sprint 241 optimizes dense/compose kernels first or starts server-loop integration with known bottlenecks. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit in Sprint 236 or equivalent after TP/EP serving exists. |
 

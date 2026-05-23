@@ -395,6 +395,21 @@ coverage (`dense_compute_pass=1`, `bf16_compute_pass=1`), KV `max_abs=0`,
 EP `worst_ep_ms=0.255590`, and final `PASS`. TP/EP is still not production
 serving and still not logits-equivalent, but the separate path now composes a
 real resident next-hidden shard from production bytes and explicit EP return.
+Sprint 240 adds a resident repeated decode-loop gate to the separate TP/EP
+path. The full-layer smoke now supports `--decode-steps N`, loads the two F8
+dense composition tensors once, keeps TurboMind EP weights and composition
+buffers resident, and repeats the representative layer-2 step without rereading
+pack bytes. On the V100 pod at `32` slots / `256K`, MTP off, `50` resident
+steps pass with `1600` slot-steps, `total_ms=92.277411`,
+`ms_per_step=1.845548`, and `slot_step_tok_s=17339.021356`. Stage timing is
+`ep_ms_per_step=0.319095`, `dense_ms_per_step=0.756244`, and
+`compose_ms_per_step=0.770121`, with `finite_bad=0` and non-zero checksum
+`2382924023`. The same run preserves combined dense coverage
+(`dense_compute_pass=1`, `bf16_compute_pass=1`), Sprint 239 composition
+(`compose_pass=1`), KV `max_abs=0`, and final `PASS`. This is not end-to-end
+generated tok/s; it is a representative layer-loop metric showing the current
+TP/EP resident path is dominated by scalar dense kernels plus compose/peer
+synchronization rather than EP alone.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit
