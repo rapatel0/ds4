@@ -232,6 +232,18 @@ tokens and `3332.257` tok/s at 128 tokens; EP reduce reaches `1745.157` and
 (`32.361613 ms`, `988.826` tok/s at 32 tokens), so it is not the first runtime
 boundary candidate. NVLink status snapshots show all links at `25.781 GB/s`,
 but byte counters remain `N/A` in the pod.
+Sprint 228 adds the TP/EP pack contract generator. The new
+`tools/ds4-v100-tp-ep-pack-contract` reads the production pack metadata and
+emits `tp-ep-pack-contract.tsv`, `tp-ep-memory-summary.tsv`, and
+`tp-ep-pack-contract.md`. Against
+`/workspace/packs/ds4-appliance-full-tm-gated-s181` at `32` slots / `256K` /
+F8 KV, it emits `11121` manifest lines: `4096` dense TP rows, `5496`
+replicated control/router rows, `688` EP expert rows, and `840` KV/state rows.
+The per-GPU contract is balanced at `27.024 GiB` including `1.5 GiB` scratch
+and `2.0 GiB` reserve: `1.006 GiB` dense TP, `0.310 GiB` replicated control,
+`17.133 GiB` EP experts, `3.396 GiB` KV, and `1.680 GiB` compression state.
+This is a contract, not a byte-repacked TP loader; the next step is the
+separate TP runtime skeleton.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit

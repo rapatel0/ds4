@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 227
+revision: 228
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -65,6 +65,10 @@ not a serial layer-chain.
   32 tokens, `2119` at 64, and `3332` at 128 for the 43-layer,
   two-collective proxy. Root/direct RS+AG is correct but slower and is not the
   first runtime boundary candidate.
+- Sprint 228 emitted the TP/EP pack contract from the real production pack.
+  The contract has dense TP rows, replicated control/router rows, EP expert
+  ownership, and KV/state descriptors, with a balanced `27.024 GiB` per-GPU
+  estimate at `32` slots / `256K` / F8 KV.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -119,7 +123,7 @@ At 32 tokens, the hidden all-reduce proxy is `26.904544 ms` and the EP reduce
 proxy is `27.436756 ms`; both pass correctness. At 128 tokens they improve to
 `3332.257` and `3253.920` overhead-only tok/s respectively.
 
-### Sprint 228 - TP/EP Pack Contract [planned]
+### Sprint 228 - TP/EP Pack Contract [complete]
 
 Goal: Emit a TP/EP pack layout with dense TP shards, EP expert ownership, KV
 shard descriptors, and per-GPU memory accounting.
@@ -127,7 +131,11 @@ shard descriptors, and per-GPU memory accounting.
 Rationale: Runtime work should not reinterpret PP pack metadata. The pack
 format must encode the TP/EP ownership model directly.
 
-Outcome: Pending.
+Outcome: Complete. `tools/ds4-v100-tp-ep-pack-contract` emits
+`tp-ep-pack-contract.tsv`, `tp-ep-memory-summary.tsv`, and
+`tp-ep-pack-contract.md`. The real-pack contract has `4096` dense TP rows,
+`5496` replicated control/router rows, `688` EP expert rows, and `840`
+KV/state rows. Per-GPU total is `27.024 GiB` at the target shape.
 
 ### Sprint 229 - TP Runtime Skeleton [planned]
 

@@ -1,7 +1,7 @@
 # Sprint 228 - TP/EP Pack Contract
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete - TP/EP Pack Contract Emitted
 
 ## Overview
 
@@ -90,19 +90,107 @@ This is still a contract sprint, not a byte-repacking sprint.
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists and is committed before implementation evidence.
-- [ ] Tool builds locally.
-- [ ] Tool builds/runs on the V100 pod.
-- [ ] Tool emits all three contract artifacts.
-- [ ] Manifest includes dense TP, replicated control, EP expert, and KV shard
+- [x] Sprint plan exists and is committed before implementation evidence.
+- [x] Tool builds locally.
+- [x] Tool builds/runs on the V100 pod.
+- [x] Tool emits all three contract artifacts.
+- [x] Manifest includes dense TP, replicated control, EP expert, and KV shard
       records.
-- [ ] Memory summary reports all eight GPUs and the target 32-slot/256K config.
-- [ ] Contract explicitly rejects PP/layer ownership.
-- [ ] Evidence is copied to
+- [x] Memory summary reports all eight GPUs and the target 32-slot/256K config.
+- [x] Contract explicitly rejects PP/layer ownership.
+- [x] Evidence is copied to
       `logs/from-cluster/sprint228-tp-ep-pack-contract/`.
-- [ ] Status and vision docs are updated with the decision.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Status and vision docs are updated with the decision.
+- [x] Changes are committed with explicit `git add` paths.
+
+## Execution Evidence
+
+Local validation:
+
+```text
+make -B -j8 tools/ds4-v100-tp-ep-pack-contract
+git diff --check
+synthetic minimal pack smoke:
+  pack_rows=3 dense_rows=8 control_rows=8 expert_rows=8 kv_rows=840
+```
+
+V100 validation:
+
+```text
+cd /workspace/ds4-sprint181
+make -B -j80 tools/ds4-v100-tp-ep-pack-contract
+
+./tools/ds4-v100-tp-ep-pack-contract \
+  --pack-dir /workspace/packs/ds4-appliance-full-tm-gated-s181 \
+  --out-dir /workspace/logs/sprint228-tp-ep-pack-contract/contract \
+  --ctx 262144 \
+  --slots 32 \
+  --kv-dtype f8 \
+  --reserve-gib 2 \
+  --scratch-gib 1.5
+```
+
+Generated artifacts:
+
+```text
+tp-ep-pack-contract.tsv       11121 lines
+tp-ep-memory-summary.tsv          9 lines
+tp-ep-pack-contract.md           35 lines
+```
+
+Record counts:
+
+```text
+pack_rows=1199
+dense_rows=4096
+control_rows=5496
+expert_rows=688
+kv_rows=840
+```
+
+Example manifest rows exist for each required class:
+
+```text
+dense_tp              token_embd.weight      split_axis=vocab
+replicated_control    blk.0.attn_sinks       split_axis=replicate
+ep_expert             blk.0.ffn_down_exps    expert_first=0 expert_count=32
+kv_shard              kv.attn.blk.0          split_axis=kv_dim
+kv_comp_state         kv.comp_state.blk.2    split_axis=state_dim
+```
+
+Per-GPU summary for the target `32` slot / `256K` / F8-KV contract:
+
+```text
+dense_tp:             1.006 GiB
+replicated_control:   0.310 GiB
+ep_expert:           17.133 GiB
+kv:                   3.396 GiB
+comp_state:           1.680 GiB
+scratch:              1.500 GiB
+reserve:              2.000 GiB
+total:               27.024 GiB
+```
+
+Every GPU reports the same total because this contract is TP8/EP8 balanced:
+`32` experts/GPU, dense shards split across all ranks, and KV sharded across
+all ranks.
+
+Evidence is stored in
+`logs/from-cluster/sprint228-tp-ep-pack-contract/`.
 
 ## Decision
 
-Pending.
+Sprint 228 ships the TP/EP pack contract generator. This does not emit new
+weight shard bytes yet, but it makes the future TP/EP pack layout concrete:
+dense tensors are TP-sharded, small F32/I32 control/router tensors are
+replicated, routed experts are EP-sharded by expert id, and KV/cache ownership
+is represented explicitly.
+
+The generated real-pack contract stays inside the same memory envelope as
+Sprint 226: `27.024 GiB` per GPU including reserve and scratch at
+`32` slots / `256K`. This clears the pack-contract gate for the next sprint.
+
+Next sprint should add the TP runtime skeleton that consumes this ownership
+model, opens all eight GPUs, allocates resident hidden/KV/scratch arenas, and
+executes no-op or fixture layer passes without touching the frozen PP
+scheduler.
