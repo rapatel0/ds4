@@ -1,7 +1,7 @@
 # Sprint 232 - One-Layer TP/EP Correctness Gate
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete
 
 ## Overview
 
@@ -79,21 +79,64 @@ sprint can scale from a fixture layer to DS4 layer descriptors and then to all
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists and is committed before implementation evidence.
-- [ ] New smoke tool is TP/EP-only and does not modify PP scheduler files.
-- [ ] Tool opens the separate TP runtime at `32` slots / `256K` / F8 KV.
-- [ ] Tool updates/verifies a ratio-4 dense/KV row through the TP runtime.
-- [ ] Tool runs real TurboMind MXFP4 grouped gated-SiLU and down kernels on all
+- [x] Sprint plan exists and is committed before implementation evidence.
+- [x] New smoke tool is TP/EP-only and does not modify PP scheduler files.
+- [x] Tool opens the separate TP runtime at `32` slots / `256K` / F8 KV.
+- [x] Tool updates/verifies a ratio-4 dense/KV row through the TP runtime.
+- [x] Tool runs real TurboMind MXFP4 grouped gated-SiLU and down kernels on all
       eight GPUs.
-- [ ] Tool reports route distribution, dispatch bytes, return bytes, and
+- [x] Tool reports route distribution, dispatch bytes, return bytes, and
       per-rank latency.
-- [ ] Tool validates finite deterministic repeat output.
-- [ ] V100 build passes with `CUDA_ARCH=sm_70`.
-- [ ] V100 smoke passes at `32` slots / `256K` / `top_k=6`.
-- [ ] Evidence is copied to
+- [x] Tool validates finite deterministic repeat output.
+- [x] V100 build passes with `CUDA_ARCH=sm_70`.
+- [x] V100 smoke passes at `32` slots / `256K` / `top_k=6`.
+- [x] Evidence is copied to
       `logs/from-cluster/sprint232-tp-ep-layer-smoke/`.
-- [ ] Status and vision docs are updated with the decision.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Status and vision docs are updated with the decision.
+- [x] Changes are committed with explicit `git add` paths.
+
+## Evidence
+
+Build on V100:
+
+```text
+cd /workspace/ds4-sprint181
+make -B -j80 CUDA_ARCH=sm_70 tools/ds4-v100-tp-ep-layer-smoke
+```
+
+Target one-layer fixture:
+
+```text
+./tools/ds4-v100-tp-ep-layer-smoke \
+  --lib ./build/turbomind-v100/libggml-turbomind.so \
+  --slots 32 --top-k 6 --layer 2 --kv-slot 7 --position 1024 \
+  --warmup 5 --iters 30
+```
+
+Result:
+
+```text
+runtime_bytes_per_gpu hidden 524288 kv 3707940864 comp_state 1803550720 scratch 1610612736 total 7122628608
+dense_kv_slice layer 2 ratio 4 slot 7 position 1024 attn_row 384 indexer_row 256 attn_row_bytes 65 indexer_row_bytes 17 max_abs 0.000000000 dense_kv_ms 1.078032
+tp_ep_layer_smoke slots 32 ctx 262144 top_k 6 aggregate_routes 192 dispatch_bytes 1572864 return_bytes 1572864 route_imbalance 1.000000 worst_gate_ms 0.161143 worst_down_ms 0.082637 worst_ep_ms 0.243780 one_layer_ms 1.321812 repeat_max_abs 0.000000000 repeat_bad 0 repeat_nan 0 PASS
+```
+
+Per-rank EP timing:
+
+```text
+rank 0 routes 24 ep_ms 0.068164
+rank 1 routes 24 ep_ms 0.067891
+rank 2 routes 24 ep_ms 0.067482
+rank 3 routes 24 ep_ms 0.067072
+rank 4 routes 24 ep_ms 0.066731
+rank 5 routes 24 ep_ms 0.066423
+rank 6 routes 24 ep_ms 0.066219
+rank 7 routes 24 ep_ms 0.243780
+```
+
+Logs:
+
+- `logs/from-cluster/sprint232-tp-ep-layer-smoke/layer2-ratio4-32slot-top6.log`
 
 ## Risks
 
@@ -107,4 +150,15 @@ sprint can scale from a fixture layer to DS4 layer descriptors and then to all
 
 ## Decision
 
-Pending.
+Sprint 232 passes. The separate TP/EP path can now open the target TP runtime,
+verify a ratio-4 DS4-style sharded KV row, and run the real TurboMind MXFP4
+EP routed expert kernels in the same process at `32` slots / `256K` /
+`top_k=6`. This is still a fixture layer, not DS4 descriptor equivalence or
+serving, but it proves the combined lifecycle and accounting boundary needed
+for the next sprint.
+
+The one-layer envelope is `1.321812 ms`, dominated by the dense/KV fixture API
+at `1.078032 ms`; the EP worst rank is `0.243780 ms`. Rank `7` remains the
+slow EP rank. Sprint 233 should replace fixture weights/routes with
+descriptor-driven layer data for one real DS4 layer while preserving per-rank
+timing and the TP/EP-only codepath.

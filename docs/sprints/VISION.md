@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 231
+revision: 232
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -79,6 +79,10 @@ not a serial layer-chain.
   runs the real TurboMind MXFP4 grouped gated-SiLU and grouped down kernels on
   all eight V100s at the `32` slot / `top_k=6` target, with finite exact repeat
   output and explicit route/latency reporting.
+- Sprint 232 added the first one-layer TP/EP fixture gate. The same process
+  opens the target TP runtime, verifies a ratio-4 sharded KV row, and runs
+  real TurboMind MXFP4 EP experts on all eight GPUs at `32` slots / `256K` /
+  `top_k=6`.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -199,7 +203,7 @@ eight V100s. At `32` slots / `top_k=6`, it reports `192` aggregate routes,
 the slow rank at `0.249378 ms` versus roughly `0.059 ms` on ranks `0-6`, so
 per-rank timing must remain visible in Sprint 232.
 
-### Sprint 232 - One-Layer TP/EP Correctness Gate [planned]
+### Sprint 232 - One-Layer TP/EP Correctness Gate [complete]
 
 Goal: Execute one real DS4 layer end to end in the TP/EP runtime and compare
 against the frozen PP baseline.
@@ -207,7 +211,15 @@ against the frozen PP baseline.
 Rationale: This is the first point where dense TP, sharded KV, router, EP
 experts, shared path, collectives, and residual state meet.
 
-Outcome: Pending.
+Outcome: Complete as a fixture gate. `tools/ds4-v100-tp-ep-layer-smoke.cu`
+links the separate TP runtime with the TurboMind MXFP4 ABI in one process. At
+`32` slots / `256K` / `top_k=6`, it opens the target runtime arenas, verifies
+layer-2 ratio-4 KV with `max_abs=0`, executes `192` aggregate EP routes,
+reports `1.5 MiB` dispatch and `1.5 MiB` return, and passes finite deterministic
+repeat output. The fixture one-layer envelope is `1.321812 ms`, with
+`1.078032 ms` in the dense/KV fixture and `0.243780 ms` worst-rank EP time.
+Next: replace fixture weights/routes with descriptor-driven one-real-layer
+TP/EP correctness while preserving the separate codepath.
 
 ### Sprint 233 - Full-Layer TP/EP Decode [planned]
 
@@ -282,6 +294,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Archived the prior PP-era vision to `docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md`. | The accumulated roadmap still documents history, but it no longer reflects the strategy. | Use this file as the active alignment document. |
 | 2026-05-23 | Sprint 230 proved TP sharded KV row ownership at `32` slots / `256K`. | TP/EP needs resident hidden/KV state before EP expert work is meaningful. | Build the bounded EP routed-expert slice in separate TP/EP files. |
 | 2026-05-23 | Sprint 231 proved bounded EP8 routed expert execution with real TurboMind MXFP4 kernels. | The EP low-bit kernel path is live outside the PP scheduler, but rank skew is visible. | Build the one-layer TP/EP correctness gate and preserve per-rank timing. |
+| 2026-05-23 | Sprint 232 proved the combined TP runtime plus EP expert fixture in one process. | The TP/EP lifecycle works at the target shape, but it is still fixture data. | Move to descriptor-driven one-real-layer TP/EP correctness. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit in Sprint 236 or equivalent after TP/EP serving exists. |
 

@@ -1,0 +1,11 @@
+rank	0	device	0	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.038912	down_ms	0.029252	ep_ms	0.068164
+rank	1	device	1	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.038605	down_ms	0.029286	ep_ms	0.067891
+rank	2	device	2	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.038229	down_ms	0.029252	ep_ms	0.067482
+rank	3	device	3	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.037854	down_ms	0.029218	ep_ms	0.067072
+rank	4	device	4	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.037478	down_ms	0.029252	ep_ms	0.066731
+rank	5	device	5	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.037171	down_ms	0.029252	ep_ms	0.066423
+rank	6	device	6	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.037001	down_ms	0.029218	ep_ms	0.066219
+rank	7	device	7	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.161143	down_ms	0.082637	ep_ms	0.243780
+runtime_bytes_per_gpu	hidden	524288	kv	3707940864	comp_state	1803550720	scratch	1610612736	total	7122628608
+dense_kv_slice	layer	2	ratio	4	slot	7	position	1024	attn_row	384	indexer_row	256	attn_row_bytes	65	indexer_row_bytes	17	max_abs	0.000000000	dense_kv_ms	1.078032
+tp_ep_layer_smoke	slots	32	ctx	262144	top_k	6	aggregate_routes	192	global_experts	256	local_experts	32	active_local_experts	6	dispatch_bytes	1572864	return_bytes	1572864	route_imbalance	1.000000	worst_gate_ms	0.161143	worst_down_ms	0.082637	worst_ep_ms	0.243780	one_layer_ms	1.321812	repeat_max_abs	0.000000000	repeat_bad	0	repeat_nan	0	PASS

@@ -279,6 +279,19 @@ latency is skewed: ranks `0-6` are about `0.059 ms`, while rank `7` is
 and rank `7` at `0.268049 ms`. TP/EP is still not serving, but the EP
 low-bit kernel gate is now live; the next step is a one-layer TP/EP
 correctness gate that combines dense/KV, routing, EP experts, and reduction.
+Sprint 232 adds that one-layer TP/EP fixture gate as
+`tools/ds4-v100-tp-ep-layer-smoke.cu`. The tool links the separate TP runtime
+with the TurboMind MXFP4 ABI in one process, opens `32` slots / `256K` /
+F8-KV runtime arenas, verifies a layer-2 ratio-4 KV slice, and then runs the
+EP8 routed expert fixture on all eight V100s. The V100 run passes with
+`kv_bytes=3707940864`, `comp_state_bytes=1803550720`, `total=7122628608`
+runtime bytes per GPU, KV `max_abs=0`, `192` aggregate routes, `1572864`
+dispatch bytes, `1572864` return bytes, route imbalance `1.000000`,
+`repeat_max_abs=0`, `repeat_bad=0`, `repeat_nan=0`, and `PASS`. The measured
+fixture one-layer envelope is `1.321812 ms`: `1.078032 ms` dense/KV fixture
+time plus `0.243780 ms` worst-rank EP time. Rank `7` remains the slow EP rank.
+TP/EP is still not serving; the next step is descriptor-driven one-real-layer
+TP/EP correctness before scaling to all 43 layers.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit
