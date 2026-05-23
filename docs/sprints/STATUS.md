@@ -4,18 +4,16 @@ Last updated: 2026-05-23
 
 ## Topline
 
-Current TP/EP implementation status: Sprint 257 hoisted the TP runtime/KV
-allocator across the `--all-layers` TP/EP scaffold. With shared dense cache,
-shared TurboMind API, shared rank buffers, shared TP runtime, descriptor checks
-off, predecode probes off, and no one-shot compose validation, the separate
-TP/EP all-layer smoke passes all `43` transformer layers at `32` slots /
-`256K`, MTP off. The 10-step gate reports `46.024692 ms/token` summed decode
-proxy and `695.278962` projected slot-step tok/s, with stage sums of
-`13.353038 ms` EP, `7.838466 ms` dense, and `24.829097 ms` compose. Wall time
-is now `28437.257957 ms`. This is not generated-token serving throughput. The
-runtime hoist is correct and materially reduces setup wall time, but decode
-timing regressed versus Sprint 256 and needs a repeat/longer gate before
-promotion as a performance base.
+Current TP/EP implementation status: Sprint 258 repeated the shared TP runtime
+path with a longer 50-step all-layer decode gate. Correctness holds at `43/43`
+layers and checksum `204721433`, but the decode proxy regression persists:
+`45.672166 ms/token` summed decode and `700.645557` projected slot-step tok/s,
+versus Sprint 256's `43.895297 ms/token` and `729.007483` without shared TP
+runtime. Wall time remains much lower (`30289.004553 ms` for the 50-step gate),
+so shared runtime is correct residency progress but not yet the decode-speed
+base. Next work should isolate the EP timing rise under shared TP runtime or
+keep Sprint 256 as the performance base while hoisting expert descriptor
+bindings.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

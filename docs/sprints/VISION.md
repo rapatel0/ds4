@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 257
+revision: 258
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -176,6 +176,11 @@ not a serial layer-chain.
   `46.024692 ms/token` / `695.278962` projected slot-step tok/s, so this is
   correct residency progress but needs repeat timing before performance
   promotion.
+- Sprint 258 repeated the shared TP runtime path with a 50-step all-layer
+  gate. The regression persisted at `45.672166 ms/token` /
+  `700.645557` projected slot-step tok/s, while checksum stayed fixed. Shared
+  runtime is correct residency progress, but Sprint 256 remains the current
+  decode-speed base.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -813,6 +818,21 @@ decode proxy, `695.278962` projected slot-step tok/s, and `28437.257957 ms`
 wall time. The checksum matches prior gates, but decode timing regressed versus
 Sprint 256; repeat before treating this as a performance promotion.
 
+### Sprint 258 - TP/EP Shared Runtime Repeat Gate [complete]
+
+Goal: Repeat the shared TP runtime path with a longer decode loop.
+
+Rationale: Sprint 257 reduced wall time but regressed the decode proxy. A
+longer gate is needed before deciding whether that regression is just short-run
+noise.
+
+Outcome: Complete. The 50-step all-layer gate passes `43/43` layers at `32`
+slots / `256K` with `shared_tp_runtime=1` and checksum `204721433`. It reports
+`45.672166 ms/token` summed decode proxy and `700.645557` projected slot-step
+tok/s. This confirms the shared-runtime decode regression is persistent enough
+to respect. Keep the shared runtime as correct residency work, but use Sprint
+256 as the current decode-speed base unless the EP timing interaction is fixed.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -871,6 +891,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 255 hoisted TurboMind API lifecycle across the all-layer TP/EP loop. | Removing per-layer library/API setup cuts scaffold wall time while preserving decode checksums. | Hoist route buffers, streams/events, expert bindings, and TP runtime/KV state. |
 | 2026-05-23 | Sprint 256 hoisted fixed rank buffers and stream/event lifecycle across the all-layer TP/EP loop. | Removing per-layer route/core buffer allocation cuts wall time and keeps checksum stable. | Hoist TP runtime/KV state or expert descriptor bindings. |
 | 2026-05-23 | Sprint 257 hoisted TP runtime/KV allocation across the all-layer TP/EP loop. | Correctness holds and wall time drops, but decode proxy regresses and needs repeat timing. | Repeat/longer gate, then decide whether to keep shared TP runtime as the performance base before expert binding hoist. |
+| 2026-05-23 | Sprint 258 repeated the shared TP runtime path with a 50-step all-layer gate. | The decode regression persisted while checksum stayed stable. | Investigate EP timing under shared runtime, or keep Sprint 256 as decode-speed base while hoisting expert bindings. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 
