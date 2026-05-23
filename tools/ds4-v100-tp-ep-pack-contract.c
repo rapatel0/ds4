@@ -1,6 +1,7 @@
 #define _FILE_OFFSET_BITS 64
 
 #include <errno.h>
+#include <ctype.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -44,6 +45,10 @@ typedef struct {
 
 typedef struct {
     uint64_t dense_tp;
+    uint64_t dense_f8_cacheable_packed;
+    uint64_t dense_bf16_shadowable_packed;
+    uint64_t dense_f16_cache;
+    uint64_t dense_bf16_f16_shadow;
     uint64_t replicated_control;
     uint64_t ep_expert;
     uint64_t kv;
@@ -58,6 +63,8 @@ typedef struct {
     gpu_summary gpu[DS4_N_GPU];
     uint64_t pack_rows;
     uint64_t dense_rows;
+    uint64_t dense_f8_cacheable_rows;
+    uint64_t dense_bf16_shadowable_rows;
     uint64_t control_rows;
     uint64_t expert_rows;
     uint64_t kv_rows;
@@ -119,6 +126,37 @@ static int parse_i32_field(const char *s) {
 static uint64_t parse_u64_field(const char *s) {
     if (!s || !*s) return 0;
     return (uint64_t)strtoull(s, NULL, 10);
+}
+
+static bool parse_shape2_u64(const char *shape, uint64_t *cols, uint64_t *rows) {
+    if (!shape) return false;
+    const char *p = shape;
+    while (isspace((unsigned char)*p)) p++;
+    if (*p++ != '[') return false;
+    while (isspace((unsigned char)*p)) p++;
+
+    char *end = NULL;
+    errno = 0;
+    const unsigned long long c = strtoull(p, &end, 10);
+    if (errno || end == p || c == 0) return false;
+    p = end;
+    while (isspace((unsigned char)*p)) p++;
+    if (*p != 'x' && *p != 'X') return false;
+    p++;
+    while (isspace((unsigned char)*p)) p++;
+
+    errno = 0;
+    const unsigned long long r = strtoull(p, &end, 10);
+    if (errno || end == p || r == 0) return false;
+    p = end;
+    while (isspace((unsigned char)*p)) p++;
+    if (*p++ != ']') return false;
+    while (isspace((unsigned char)*p)) p++;
+    if (*p) return false;
+
+    *cols = (uint64_t)c;
+    *rows = (uint64_t)r;
+    return true;
 }
 
 static double parse_double(const char *s, const char *name) {
@@ -381,12 +419,28 @@ static void emit_pack_row(emit_state *st, char **c, int n) {
     }
 
     const uint64_t shard_bytes = ceil_div_u64(bytes, DS4_N_TP);
+    uint64_t expanded_f16_shard_bytes = 0;
+    uint64_t shape_cols = 0;
+    uint64_t shape_rows = 0;
+    if (parse_shape2_u64(shape, &shape_cols, &shape_rows)) {
+        const uint64_t rows_per_gpu = ceil_div_u64(shape_rows, DS4_N_TP);
+        expanded_f16_shard_bytes = checked_mul(checked_mul(shape_cols, rows_per_gpu), 2);
+    }
     for (int gpu = 0; gpu < DS4_N_GPU; gpu++) {
         emit_row(st, "dense_tp", semantic, source, layer, "dense_or_embedding",
                  dtype, shape, layout, gpu, gpu, -1, dense_split_axis(semantic, kernel),
                  gpu, DS4_N_TP, -1, 0, -1, 0, shard_bytes, shard_file, shard_offset,
                  bytes, kernel);
         st->gpu[gpu].dense_tp += shard_bytes;
+        if (expanded_f16_shard_bytes && !strcmp(dtype, "f8_e4m3_b128")) {
+            st->gpu[gpu].dense_f8_cacheable_packed += shard_bytes;
+            st->gpu[gpu].dense_f16_cache += expanded_f16_shard_bytes;
+            st->dense_f8_cacheable_rows++;
+        } else if (expanded_f16_shard_bytes && !strcmp(dtype, "bf16")) {
+            st->gpu[gpu].dense_bf16_shadowable_packed += shard_bytes;
+            st->gpu[gpu].dense_bf16_f16_shadow += expanded_f16_shard_bytes;
+            st->dense_bf16_shadowable_rows++;
+        }
         st->dense_rows++;
     }
 }
@@ -518,20 +572,43 @@ static uint64_t gpu_total(const gpu_summary *g) {
            g->comp_state + g->scratch + g->reserve;
 }
 
+static uint64_t gpu_total_with_dense_f16_keep(const gpu_summary *g) {
+    return gpu_total(g) + g->dense_f16_cache + g->dense_bf16_f16_shadow;
+}
+
+static uint64_t gpu_total_with_dense_f16_replace(const gpu_summary *g) {
+    return gpu_total(g) - g->dense_f8_cacheable_packed - g->dense_bf16_shadowable_packed +
+           g->dense_f16_cache + g->dense_bf16_f16_shadow;
+}
+
 static void write_summary(const options *opt, const emit_state *st) {
     FILE *fp = open_write_joined(opt->out_dir, "tp-ep-memory-summary.tsv");
     fprintf(fp,
             "gpu\tdense_tp_bytes\treplicated_control_bytes\tep_expert_bytes\t"
-            "kv_bytes\tcomp_state_bytes\tscratch_bytes\treserve_bytes\ttotal_bytes\t"
-            "total_gib\trows\n");
+            "kv_bytes\tcomp_state_bytes\tscratch_bytes\treserve_bytes\tbase_total_bytes\t"
+            "base_total_gib\tdense_f8_cacheable_packed_bytes\tdense_f16_cache_bytes\t"
+            "dense_bf16_shadowable_packed_bytes\tdense_bf16_f16_shadow_bytes\t"
+            "dense_f16_keep_total_bytes\tdense_f16_keep_total_gib\t"
+            "dense_f16_replace_total_bytes\tdense_f16_replace_total_gib\t"
+            "headroom_replace_gib\trows\n");
     for (int gpu = 0; gpu < DS4_N_GPU; gpu++) {
         const gpu_summary *g = &st->gpu[gpu];
+        const uint64_t base_total = gpu_total(g);
+        const uint64_t keep_total = gpu_total_with_dense_f16_keep(g);
+        const uint64_t replace_total = gpu_total_with_dense_f16_replace(g);
+        const double headroom_replace_gib = 32.0 - as_gib(replace_total);
         fprintf(fp,
                 "%d\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64
-                "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%.3f\t%" PRIu64 "\n",
+                "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%.3f\t%" PRIu64
+                "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%.3f"
+                "\t%" PRIu64 "\t%.3f\t%.3f\t%" PRIu64 "\n",
                 gpu, g->dense_tp, g->replicated_control, g->ep_expert, g->kv,
-                g->comp_state, g->scratch, g->reserve, gpu_total(g),
-                as_gib(gpu_total(g)), g->rows);
+                g->comp_state, g->scratch, g->reserve, base_total,
+                as_gib(base_total), g->dense_f8_cacheable_packed,
+                g->dense_f16_cache, g->dense_bf16_shadowable_packed,
+                g->dense_bf16_f16_shadow, keep_total, as_gib(keep_total),
+                replace_total, as_gib(replace_total), headroom_replace_gib,
+                g->rows);
     }
     fclose(fp);
 }
@@ -546,6 +623,10 @@ static void write_markdown(const options *opt, const emit_state *st) {
     fprintf(fp, "## Record Counts\n\n");
     fprintf(fp, "- source pack rows read: `%" PRIu64 "`\n", st->pack_rows);
     fprintf(fp, "- dense TP contract rows: `%" PRIu64 "`\n", st->dense_rows);
+    fprintf(fp, "- F8 dense rows eligible for FP16 cache: `%" PRIu64 "`\n",
+            st->dense_f8_cacheable_rows);
+    fprintf(fp, "- BF16 dense rows eligible for FP16 shadow: `%" PRIu64 "`\n",
+            st->dense_bf16_shadowable_rows);
     fprintf(fp, "- replicated control rows: `%" PRIu64 "`\n", st->control_rows);
     fprintf(fp, "- EP expert rows: `%" PRIu64 "`\n", st->expert_rows);
     fprintf(fp, "- KV/state rows: `%" PRIu64 "`\n\n", st->kv_rows);
@@ -559,11 +640,33 @@ static void write_markdown(const options *opt, const emit_state *st) {
                 as_gib(g->ep_expert), as_gib(g->kv), as_gib(g->comp_state),
                 as_gib(g->scratch), as_gib(g->reserve), as_gib(gpu_total(g)));
     }
+    fprintf(fp, "\n## Dense FP16 Runtime Cache Admission\n\n");
+    fprintf(fp, "The base plan keeps source packed dense weights resident. Sprint 244 showed a\n");
+    fprintf(fp, "resident FP16/cuBLAS dense path is much faster for the representative TP/EP\n");
+    fprintf(fp, "layer loop, so this section estimates the memory cost of materializing dense\n");
+    fprintf(fp, "runtime FP16 weights on each TP rank.\n\n");
+    fprintf(fp, "| GPU | F8 packed eligible | F8->FP16 cache | BF16 packed shadowable | BF16->FP16 shadow | Keep-packed total | Replace-source total | Replace headroom vs 32 GiB |\n");
+    fprintf(fp, "|---:|---:|---:|---:|---:|---:|---:|---:|\n");
+    for (int gpu = 0; gpu < DS4_N_GPU; gpu++) {
+        const gpu_summary *g = &st->gpu[gpu];
+        const uint64_t replace_total = gpu_total_with_dense_f16_replace(g);
+        fprintf(fp, "| %d | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f |\n",
+                gpu, as_gib(g->dense_f8_cacheable_packed),
+                as_gib(g->dense_f16_cache),
+                as_gib(g->dense_bf16_shadowable_packed),
+                as_gib(g->dense_bf16_f16_shadow),
+                as_gib(gpu_total_with_dense_f16_keep(g)),
+                as_gib(replace_total),
+                32.0 - as_gib(replace_total));
+    }
     fprintf(fp, "\n## Contract Rules\n\n");
     fprintf(fp, "- Dense low-bit tensors are TP8 sharded; PP/layer ownership is rejected.\n");
     fprintf(fp, "- Small F32/I32 control and router tensors are replicated across TP ranks.\n");
     fprintf(fp, "- Routed experts are EP8 sharded by expert id, `32` experts per GPU.\n");
     fprintf(fp, "- KV/cache records use the corrected DS4 compression schedule.\n");
+    fprintf(fp, "- Dense FP16 cache admission is a runtime option, not a source-format change.\n");
+    fprintf(fp, "  The practical serving target replaces cacheable dense source tensors in\n");
+    fprintf(fp, "  VRAM with the FP16 runtime cache instead of keeping both copies.\n");
     fclose(fp);
 }
 
@@ -599,13 +702,16 @@ int main(int argc, char **argv) {
            st.expert_rows, st.kv_rows);
     for (int gpu = 0; gpu < DS4_N_GPU; gpu++) {
         printf("gpu\t%d\ttotal_gib\t%.3f\tdense_gib\t%.3f\tcontrol_gib\t%.3f\t"
-               "expert_gib\t%.3f\tkv_gib\t%.3f\tcomp_gib\t%.3f\n",
+               "expert_gib\t%.3f\tkv_gib\t%.3f\tcomp_gib\t%.3f\t"
+               "dense_f16_replace_total_gib\t%.3f\tdense_f16_replace_headroom_gib\t%.3f\n",
                gpu, as_gib(gpu_total(&st.gpu[gpu])),
                as_gib(st.gpu[gpu].dense_tp),
                as_gib(st.gpu[gpu].replicated_control),
                as_gib(st.gpu[gpu].ep_expert),
                as_gib(st.gpu[gpu].kv),
-               as_gib(st.gpu[gpu].comp_state));
+               as_gib(st.gpu[gpu].comp_state),
+               as_gib(gpu_total_with_dense_f16_replace(&st.gpu[gpu])),
+               32.0 - as_gib(gpu_total_with_dense_f16_replace(&st.gpu[gpu])));
     }
     return 0;
 }

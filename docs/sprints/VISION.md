@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 244
+revision: 245
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -100,6 +100,12 @@ not a serial layer-chain.
   `0.175605 ms/step` and improves the representative layer-loop metric to
   `1.050770 ms/step` / `30453.870979` slot-step tok/s. This validates dense
   as the next kernel target, while keeping expanded FP16 as diagnostic only.
+- Sprint 245 added real memory admission for turning that diagnostic into a
+  runtime option. At `32` slots / `256K` / F8 KV, the TP/EP contract reports
+  `27.024 GiB` base per GPU including reserve and `27.701 GiB` per GPU if
+  cacheable dense source tensors are replaced by FP16 runtime weights, leaving
+  `4.299 GiB` physical headroom. Dense FP16 cache is therefore admissible as a
+  runtime fallback/ceiling path, not a source-format change.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -484,6 +490,26 @@ dense. This is a `1.60x` layer-loop improvement and a `4.30x` dense-stage
 improvement. Keep the path diagnostic; build a packed low-bit dense production
 kernel next.
 
+### Sprint 245 - TP/EP Dense FP16 Cache Admission Gate [complete]
+
+Goal: Decide whether the Sprint 244 resident FP16 dense ceiling can fit inside
+the target `32` slot / `256K` TP/EP appliance memory budget.
+
+Rationale: V100 cannot execute BF16/FP8/FP4 natively. The source model should
+remain quantized, but a practical runtime can materialize selected dense
+execution weights into FP16 if that materially improves tensor-core utilization
+and still fits in VRAM.
+
+Outcome: Complete. `tools/ds4-v100-tp-ep-pack-contract` now reports dense
+FP16 runtime cache admission from real pack metadata. Against the production
+pack at `32` slots / `256K` / F8 KV, base memory is `27.024 GiB` per GPU
+including the `2.0 GiB` reserve. F8 dense packed bytes eligible for FP16 cache
+are `0.687 GiB` per GPU, the FP16 cache is `1.364 GiB`, BF16 dense shadow is
+`0.319 GiB`, and the practical replace-source total is `27.701 GiB` per GPU.
+That leaves `4.299 GiB` physical headroom. Dense FP16 cache is memory
+admissible as a runtime option; next implement the dense-cache loader/runtime
+path for all dense tensors, then benchmark the resident all-layer path.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -529,6 +555,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 242 proved fused FP32 remote-sum compose improves the resident layer loop. | Removing zero/add kernels is more valuable than standalone EP return quantization at this shape. | Continue collapsing TP/EP dense, EP return, and compose boundaries, then move to all-layer/server integration. |
 | 2026-05-23 | Sprint 243 rejected the first naive TP/EP dense HMMA candidate. | HMMA is not enough by itself; per-tile F8 decode/staging made dense time worse than scalar. | Adapt the older shape-specific HMMA kernels or design a prepacked/software-pipelined dense path. |
 | 2026-05-23 | Sprint 244 proved a resident FP16 tensor-core dense ceiling is materially faster. | Dense is removable if low-bit feeding is efficient, but expanded FP16 is not the final memory format. | Implement a packed low-bit dense production kernel that approaches the FP16/cuBLAS ceiling. |
+| 2026-05-23 | Sprint 245 proved dense FP16 runtime cache fits the `32` slot / `256K` TP/EP budget when replacing dense source tensors in VRAM. | This gives us a working tensor-core dense fallback while preserving the quantized source pack offline. | Build the TP/EP dense-cache loader/runtime path for all dense tensors and benchmark resident all-layer decode. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

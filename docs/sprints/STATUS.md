@@ -458,6 +458,19 @@ the decode loop uses FP16 Tensor Core GEMM with FP32 output. Same
 is a real removable bottleneck, but expanded FP16 is only a ceiling. The next
 production sprint should implement a packed low-bit dense path that preserves
 model residency while feeding tensor cores efficiently.
+Sprint 245 added the corresponding memory admission gate to the separate
+TP/EP pack contract. Against the real production pack at `32` slots / `256K`
+/ F8 KV, the base TP/EP plan remains `27.024 GiB` per GPU including the
+existing `2.0 GiB` reserve. The contract now reports `0.687 GiB` of cacheable
+F8 dense packed bytes per GPU, `1.364 GiB` for the F8-to-FP16 runtime cache,
+`0.319 GiB` of BF16 dense shadow bytes, and a practical replace-source total
+of `27.701 GiB` per GPU. That leaves `4.299 GiB` physical headroom versus
+32 GiB while preserving the source quantized pack as the offline artifact.
+Decision: dense FP16 runtime caching is memory-admissible for the target TP/EP
+shape if cacheable dense source tensors are not kept twice in VRAM. The next
+implementation should add the TP/EP dense-cache loader/runtime path for all
+dense tensors and then benchmark the resident all-layer path before returning
+to custom packed low-bit dense kernels.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit

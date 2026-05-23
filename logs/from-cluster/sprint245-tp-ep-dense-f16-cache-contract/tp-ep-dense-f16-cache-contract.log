@@ -1,0 +1,9 @@
+tp_ep_pack_contract	out_dir=/workspace/logs/sprint245-tp-ep-dense-f16-cache-contract/contract	pack_rows=1199	dense_rows=4096	control_rows=5496	expert_rows=688	kv_rows=840
+gpu	0	total_gib	27.024	dense_gib	1.006	control_gib	0.310	expert_gib	17.133	kv_gib	3.396	comp_gib	1.680	dense_f16_replace_total_gib	27.701	dense_f16_replace_headroom_gib	4.299
+gpu	1	total_gib	27.024	dense_gib	1.006	control_gib	0.310	expert_gib	17.133	kv_gib	3.396	comp_gib	1.680	dense_f16_replace_total_gib	27.701	dense_f16_replace_headroom_gib	4.299
+gpu	2	total_gib	27.024	dense_gib	1.006	control_gib	0.310	expert_gib	17.133	kv_gib	3.396	comp_gib	1.680	dense_f16_replace_total_gib	27.701	dense_f16_replace_headroom_gib	4.299
+gpu	3	total_gib	27.024	dense_gib	1.006	control_gib	0.310	expert_gib	17.133	kv_gib	3.396	comp_gib	1.680	dense_f16_replace_total_gib	27.701	dense_f16_replace_headroom_gib	4.299
+gpu	4	total_gib	27.024	dense_gib	1.006	control_gib	0.310	expert_gib	17.133	kv_gib	3.396	comp_gib	1.680	dense_f16_replace_total_gib	27.701	dense_f16_replace_headroom_gib	4.299
+gpu	5	total_gib	27.024	dense_gib	1.006	control_gib	0.310	expert_gib	17.133	kv_gib	3.396	comp_gib	1.680	dense_f16_replace_total_gib	27.701	dense_f16_replace_headroom_gib	4.299
+gpu	6	total_gib	27.024	dense_gib	1.006	control_gib	0.310	expert_gib	17.133	kv_gib	3.396	comp_gib	1.680	dense_f16_replace_total_gib	27.701	dense_f16_replace_headroom_gib	4.299
+gpu	7	total_gib	27.024	dense_gib	1.006	control_gib	0.310	expert_gib	17.133	kv_gib	3.396	comp_gib	1.680	dense_f16_replace_total_gib	27.701	dense_f16_replace_headroom_gib	4.299
