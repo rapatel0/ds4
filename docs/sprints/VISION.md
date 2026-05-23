@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: sprint-execute
-revision: 210
+revision: 211
 ---
 
 # Vision: DS4 V100 Appliance
@@ -81,6 +81,15 @@ with `0.614750/0.709350/0.796927 ms` total latency, and a denser
 `mid_shard=2048` sweep reached `62.956` fixture TFLOP/s at 128 tokens. The
 next TP sprint should adapt the TurboMind MXFP4/FP8 expert body into this
 separate TP8 codepath; scheduler integration remains premature.
+Sprint 211 rejects that exact TP8 low-bit expert path with the current
+TurboMind shard shape. A new separate TP-only MXFP4 routed-FFN smoke runs the
+real TurboMind ABI, but `mid_shard=256` produces invalid/NaN TP8 partial sums
+at 96/192/384 routes. TP8 compute-only speedup is visible (`3.927x-4.189x`),
+but simple gather/reduce makes total time slower than the full reference and
+correctness fails. The TP4 MXFP4 control remains correct at the same route
+shapes, so the near-term TP branch should pivot to TP4/PP1 low-bit layer
+ownership with a better reduction boundary, or design a new shard-256 MXFP4
+kernel before returning to TP8.
 
 ## Current State
 
@@ -3045,6 +3054,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-23 | Completed Sprint 208 separate TP8 investigation path. | Added separate TP8 planner/probe files and ran the first all-8-GPU V100 gates. `PP1/TP8` at 32 slots/256K fits with F8 KV sharding (`26.84 GiB` worst GPU) and fails with replicated KV (`50.63 GiB`), so sharded KV is mandatory. TP8 FP16 recursive-doubling collectives passed at 32/64/128 tokens and measured `0.322599/0.372364/0.436299 ms`. The 43-layer, 2-reduction/layer resident proxy measured `29.381000 ms` at 32 tokens, `32.605223 ms` at 64, and `37.994584 ms` at 128, with all correctness checks passing. Per-link NVLink byte counters were unavailable (`N/A`) in the pod, but link status and effective-wire timing were recorded. Continue to a bounded one-layer TP8 prototype in new TP-only files; do not build a generic scheduler. | Sprint 209 |
 | 2026-05-23 | Completed Sprint 209 TP8 one-layer prototype. | Added `tools/ds4-v100-tp8-layer-smoke.cu` as a completely separate TP-only executable. It allocates TP8-sharded DS4 KV inside the boundary, runs two resident compute phases and two recursive-doubling hidden reductions, and verifies identical reduced hidden state across all eight V100s. At 32 slots/256K/ratio-4 F8 KV, each GPU owns a `169347072` byte layer KV shard instead of replicated logical KV. The 32/64/128 token runs passed correctness with total one-layer latencies `0.739408/0.876011/1.098461 ms`. Continue TP8 in new TP-only files by replacing synthetic compute with a real DS4 attention/FFN layer slice; do not wire TP into the PP scheduler. | Sprint 210 |
 | 2026-05-23 | Completed Sprint 210 TP8 real layer-body fixture. | Added `tools/ds4-v100-tp8-real-layer-smoke.cu` as a separate TP-only Tensor Core layer-body prototype. It allocates sharded KV, runs FP16 fixture gate/up GEMMs, gated SiLU, down GEMM, and recursive-doubling TP8 reduction, with phase timing and correctness. The required `mid_shard=1024` 32/64/128 token gates passed with total latencies `0.614750/0.709350/0.796927 ms`; the denser `mid_shard=2048` sweep also passed and reached `62.956` fixture TFLOP/s at 128 tokens. This supports continuing TP8, but only by replacing the FP16 fixture with the real low-bit TurboMind MXFP4/FP8 expert path in TP-only files. | Sprint 211 |
+| 2026-05-23 | Rejected Sprint 211 TP8 TurboMind MXFP4 expert body. | Added `tools/ds4-v100-tp8-turbomind-ffn-smoke.cu` as a separate TP-only low-bit expert gate using the public TurboMind ABI. The corrected descriptor path runs, but TP8 `mid_shard=256` fails correctness at 96/192/384 routes with large NaN counts. Compute-only speedup versus the full reference is `3.927x/4.152x/4.189x`, but simple gather/reduce makes total speedup `0.524x/0.368x/0.317x`. The TP4 TurboMind control remains correct and reaches `2.333x-3.676x` compute speedup at the same route shapes, so the next TP sprint should pivot to TP4/PP1 low-bit layer ownership with a better reduction boundary or explicitly design a shard-256 MXFP4 kernel before returning to TP8. | Sprint 212 |
 
 ## Open Questions
 

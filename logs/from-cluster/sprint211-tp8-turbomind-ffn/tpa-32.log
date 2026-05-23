@@ -1,0 +1,4 @@
+=== tokens_per_active=32 ===
+correctness routes=192 values=786432 max_abs=186624 rel=1.63082 bad=29266 bad_frac=0.0372136 nan=756305 FAIL
+ds4-v100-tp8-turbomind-ffn-smoke devices=0,1,2,3,4,5,6,7 tokens_per_active=32 routes=192 experts=6 hidden=4096 full_mid=2048 mid_shard=256 dtype=mxfp4 group_size=32 warmup=3 iters=20
+latency_ms full=0.347750 tp8_compute=0.083763 tp8_reduce=0.860789 tp8_total=0.944552 compute_speedup=4.152 total_speedup=0.368 input_mib=1.500 output_mib=1.500

@@ -1,0 +1,3 @@
+=== tp4 tokens_per_active=32 ===
+[tp_split_4gpu tpa=32] gpus=0,1,2,3 routes=192 full_ms=0.3462 part_ms=0.1318,0.1337,0.1340,0.1342 concurrent_compute_ms=0.1342 compute_speedup=2.579x total_with_copy_ms=0.5502 total_with_copy_speedup=0.629x input_payload_mib=4.50 output_payload_mib=4.50
+[tp_split_4gpu tpa=32] correctness total_routes=192 values=786432 max_abs=4.9591e-05 rel=2.6868e-04 bad=0 bad_frac=0.0000e+00 nan=0 status=PASS

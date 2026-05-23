@@ -1,0 +1,2 @@
+$ make -j80 tools/ds4-v100-tp8-turbomind-ffn-smoke CUDA_ARCH=sm_70
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread --std=c++17 -I. -o tools/ds4-v100-tp8-turbomind-ffn-smoke tools/ds4-v100-tp8-turbomind-ffn-smoke.cu -lm -Xcompiler -pthread -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/local/cuda/lib64 -lcudart -lcublas -ldl

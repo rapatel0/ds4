@@ -1,7 +1,7 @@
 # Sprint 211 - TP8 TurboMind MXFP4 Expert Body
 
 Date: 2026-05-23
-Status: Planned
+Status: Rejected
 
 ## Overview
 
@@ -121,20 +121,98 @@ full reference output.
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists.
-- [ ] New TP-only TurboMind MXFP4 FFN smoke exists.
-- [ ] No PP scheduler files are modified.
-- [ ] CUDA target is added to `Makefile`, including macOS CUDA-required branch.
-- [ ] Local hygiene passes.
-- [ ] V100 build passes with `CUDA_ARCH=sm_70`.
+- [x] Sprint plan exists.
+- [x] New TP-only TurboMind MXFP4 FFN smoke exists.
+- [x] No PP scheduler files are modified.
+- [x] CUDA target is added to `Makefile`, including macOS CUDA-required branch.
+- [x] Local hygiene passes.
+- [x] V100 build passes with `CUDA_ARCH=sm_70`.
 - [ ] `tokens_per_active=16` and `32` runs pass correctness on all eight V100s.
-- [ ] Timing output reports full, TP8 compute, TP8 reduce/copy, total, and
+- [x] Timing output reports full, TP8 compute, TP8 reduce/copy, total, and
   speedups.
-- [ ] Results are copied to
+- [x] Results are copied to
   `logs/from-cluster/sprint211-tp8-turbomind-ffn/`.
-- [ ] Sprint 211 document records validation and decision.
-- [ ] Status/Vision documents are updated.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Sprint 211 document records validation and decision.
+- [x] Status/Vision documents are updated.
+- [x] Changes are committed with explicit `git add` paths.
+
+## Execution
+
+Implemented `tools/ds4-v100-tp8-turbomind-ffn-smoke.cu` as a separate TP-only
+low-bit routed-FFN executable. It uses the public TurboMind C ABI through
+`dlopen`, packs deterministic synthetic MXFP4 fixtures, builds a full-width
+reference on GPU0, builds eight TP middle shards, runs TurboMind gated-SiLU and
+down GEMMs, and reduces the eight partial outputs back to GPU0 for comparison.
+
+During bring-up, the first version used raw device pointer tables and hit an
+illegal access. The fix was to match the proven TurboMind tests and pass
+16-byte `StridedPtrH` descriptors for packed weights/scales. After that fix,
+the tool ran and produced meaningful TP8 low-bit evidence.
+
+## Validation
+
+Build:
+
+```text
+make -j80 tools/ds4-v100-tp8-turbomind-ffn-smoke CUDA_ARCH=sm_70
+```
+
+Cluster evidence is in `logs/from-cluster/sprint211-tp8-turbomind-ffn/`.
+
+### TP8 MXFP4 Result
+
+Configuration:
+
+```text
+experts=6
+hidden=4096
+full_mid=2048
+mid_shard=256
+dtype=mxfp4
+group_size=32
+```
+
+| Tokens/active expert | Routes | Correctness | Full | TP8 compute | TP8 reduce | TP8 total | Compute speedup | Total speedup |
+|---:|---:|---|---:|---:|---:|---:|---:|---:|
+| 16 | 96 | FAIL, `nan=378153` | `0.293581 ms` | `0.074752 ms` | `0.485761 ms` | `0.560513 ms` | `3.927x` | `0.524x` |
+| 32 | 192 | FAIL, `nan=756305` | `0.347750 ms` | `0.083763 ms` | `0.860789 ms` | `0.944552 ms` | `4.152x` | `0.368x` |
+| 64 | 384 | FAIL, `nan=1512469` | `0.603904 ms` | `0.144179 ms` | `1.759132 ms` | `1.903312 ms` | `4.189x` | `0.317x` |
+
+TP8 compute itself is fast, but the current TurboMind MXFP4 path at
+`mid_shard=256` produces invalid partials and the simple gather/reduce path
+erases the compute win even before addressing correctness.
+
+### TP4 Reference Check
+
+The existing four-GPU TurboMind split test was run as a control to distinguish
+generic low-bit TP viability from the TP8 shard-width failure.
+
+| Tokens/active expert | Routes | Correctness | Full | TP4 compute | Copy-inclusive | Compute speedup | Total speedup |
+|---:|---:|---|---:|---:|---:|---:|---:|
+| 16 | 96 | PASS | `0.2925 ms` | `0.1253 ms` | `0.3761 ms` | `2.333x` | `0.778x` |
+| 32 | 192 | PASS | `0.3462 ms` | `0.1342 ms` | `0.5502 ms` | `2.579x` | `0.629x` |
+| 64 | 384 | PASS | `0.6019 ms` | `0.1637 ms` | `0.8926 ms` | `3.676x` | `0.674x` |
+
+This means the rejection is specific to the TP8 `mid_shard=256` low-bit path
+and/or the simple TP8 output reduction, not to TurboMind MXFP4 TP splitting in
+general.
+
+## Decision
+
+Reject TP8 MXFP4 expert execution with the current TurboMind shard shape.
+
+The current best interpretation is:
+
+- TP8 topology and FP16 fixture compute remain viable from Sprints 209-210.
+- The real MXFP4 expert path does not currently support a clean TP8
+  `mid_shard=256` split.
+- TP4 `mid_shard=512` remains correct and shows material compute speedup.
+- Simple output gather/reduce is already too expensive at these route counts,
+  so future TP work needs either TP4 with a better reduction boundary or a new
+  TP8 MXFP4 kernel shape that is explicitly designed for `K/N=256` shards.
+
+Next sprint should pivot to a TP4/PP1 low-bit layer-body path or a new
+MXFP4 shard-256 kernel investigation. Do not integrate TP8 into serving.
 
 ## Decision Gate
 

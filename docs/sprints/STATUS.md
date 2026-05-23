@@ -65,6 +65,18 @@ tokens. This confirms TP8 can put useful resident GEMM work inside the boundary,
 but it is still an FP16 fixture; the next TP sprint should adapt the low-bit
 TurboMind MXFP4 expert path to the separate TP8 codepath before any serving
 integration.
+Sprint 211 did that low-bit TP8 gate and rejected the current TP8 MXFP4 shard
+shape. The new separate TP-only `ds4-v100-tp8-turbomind-ffn-smoke` runs through
+the public TurboMind ABI with synthetic MXFP4 fixtures, but TP8
+`mid_shard=256` produces invalid partial sums: 96/192/384-route runs all fail
+correctness with large NaN counts. The compute-only timing is attractive
+(`3.927x-4.189x` versus full reference), but the simple output gather/reduce is
+already slower than the reference (`0.524x`, `0.368x`, `0.317x` total speedup).
+The existing TP4 TurboMind control remains correct at the same route shapes and
+shows `2.333x-3.676x` compute speedup, although copy-inclusive timing is still
+below `1.0x`. Next work should pivot to TP4/PP1 low-bit layer ownership with a
+better reduction boundary, or explicitly design a TP8 MXFP4 shard-256 kernel
+before returning to TP8.
 
 Current long-context production throughput mode is the Sprint 121 16-slot/256K
 appliance with the Sprint 122 rendezvous fix. Sprint 137 adds an explicit
