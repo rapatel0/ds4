@@ -1,0 +1,7 @@
+=== served-candidate-fused6-split-reduce-graph ===
+{"aggregate_continuation_tokens_per_second":60.655009,"aggregate_generated_tokens_per_second":61.617787,"aggregate_prompt_tokens_per_second":17.330003,"async_event_handoff":true,"async_handoff":false,"async_pipeline_decode":true,"async_pipeline_mode":"per-step","continuation_decode_ms_avg":11173.414,"continuation_response_tokens_per_second_avg":5.638384,"continuation_tokens":1008,"elapsed_s":16.618578,"errors":0,"generated_response_tokens_per_second_avg":3.880137,"generated_tokens":1024,"latency_ms_avg":16554.047,"prefill_prompt_replay_ms_avg":3275.217,"prompt_response_tokens_per_second_avg":5.495819,"prompt_tokens":288,"requests":16,"schema":"ds4_v100_appliance_soak.v1","status_200":16,"token_match":16,"warmup_requests":1}
+
+captured 43
+launched 129
+launch_failed 0
+capture_failed 0

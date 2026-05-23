@@ -572,6 +572,21 @@ int ggml_turbomind_ds4_mxfp4_down_6_m16_reduce(
     void*              stream  /* cudaStream_t */);
 
 /**
+ * DS4/V100 six-route materialized down reducer. This consumes a half
+ * [6, hidden] down projection and writes one F32 [1, hidden] route-weighted
+ * output without atomics. It is intended as a Sprint 207 comparison against
+ * the atomic down-reduce epilogue above.
+ */
+int ggml_turbomind_ds4_reduce6_half_to_float(
+    const void*        down_routes_half,
+    float*             route_out,
+    const int*         sorted_pairs,
+    const float*       route_weights,
+    int                n_routes,
+    int                hidden,
+    void*              stream  /* cudaStream_t */);
+
+/**
  * Same DS4/V100 down projection route-reduce epilogue for the 256-slot
  * compact routed shape: total_tokens = 1536, N = 4096, K = 2048.
  */

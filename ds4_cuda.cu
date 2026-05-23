@@ -192,8 +192,10 @@ typedef int  (*tm_pfn_ds4_mxfp4_gated_silu)(const void *, const int *, int, int,
                                             const void * const *, const void * const *,
                                             int, void *, void *);
 typedef int  (*tm_pfn_ds4_mxfp4_down_reduce)(const void *, const int *, int, int,
-                                             const void * const *, const void * const *,
-                                             int, float *, const int *, const float *, int, void *);
+                                              const void * const *, const void * const *,
+                                              int, float *, const int *, const float *, int, void *);
+typedef int  (*tm_pfn_ds4_reduce6_half_to_float)(const void *, float *, const int *, const float *,
+                                                 int, int, void *);
 
 typedef struct {
     void *handle;
@@ -231,6 +233,7 @@ typedef struct {
     tm_pfn_ds4_mxfp4_down_reduce ds4_mxfp4_down_6_m16_reduce;
     tm_pfn_ds4_mxfp4_down_reduce ds4_mxfp4_down_768_m128_reduce;
     tm_pfn_ds4_mxfp4_down_reduce ds4_mxfp4_down_1536_m128_reduce;
+    tm_pfn_ds4_reduce6_half_to_float ds4_reduce6_half_to_float;
     int attempted;
     int available;
     int warned;
@@ -1197,6 +1200,9 @@ static int cuda_tm_load_api(void) {
     g_tm_api.ds4_mxfp4_down_6_m16_reduce =
         (tm_pfn_ds4_mxfp4_down_reduce)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_down_6_m16_reduce");
+    g_tm_api.ds4_reduce6_half_to_float =
+        (tm_pfn_ds4_reduce6_half_to_float)dlsym(
+            g_tm_api.handle, "ggml_turbomind_ds4_reduce6_half_to_float");
     g_tm_api.ds4_mxfp4_down_768_m128_reduce =
         (tm_pfn_ds4_mxfp4_down_reduce)dlsym(
             g_tm_api.handle, "ggml_turbomind_ds4_mxfp4_down_768_m128_reduce");
@@ -6059,7 +6065,8 @@ enum {
     DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED768 = 3,
     DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED6 = 4,
     DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6 = 5,
-    DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6_REDUCE = 6
+    DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6_REDUCE = 6,
+    DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6_SPLIT_REDUCE = 7
 };
 
 typedef enum {
@@ -6139,6 +6146,13 @@ static int cuda_tm_routed_executor_mode(void) {
         strcmp(mode, "reduce6") == 0) {
         return DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6_REDUCE;
     }
+    if (strcmp(mode, "fused6_split_reduce") == 0 ||
+        strcmp(mode, "fused_6_split_reduce") == 0 ||
+        strcmp(mode, "ffn_fused6_split_reduce") == 0 ||
+        strcmp(mode, "split_reduce6") == 0 ||
+        strcmp(mode, "materialized6_reduce") == 0) {
+        return DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6_SPLIT_REDUCE;
+    }
     return DS4_CUDA_TM_ROUTED_EXECUTOR_OFF;
 }
 
@@ -6150,6 +6164,7 @@ static const char *cuda_tm_routed_executor_mode_name(int mode) {
         case DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED6: return "fixed6";
         case DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6: return "fused6";
         case DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6_REDUCE: return "fused6_reduce";
+        case DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6_SPLIT_REDUCE: return "fused6_split_reduce";
         default: return "off";
     }
 }
@@ -6230,7 +6245,8 @@ static void cuda_tm_routed_executor_log_liveness_once(
     int *printed = nullptr;
     if (total_routes == 6u &&
         (mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6 ||
-         mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6_REDUCE)) {
+         mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6_REDUCE ||
+         mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6_SPLIT_REDUCE)) {
         printed = &printed6_fused;
     } else if (total_routes == 6u) {
         printed = &printed6_other;
@@ -7485,6 +7501,7 @@ static int cuda_tm_routed_mxfp4_packed_impl(
         !use_indexed_a &&
         routed_executor_mode != DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6 &&
         routed_executor_mode != DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6_REDUCE &&
+        routed_executor_mode != DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6_SPLIT_REDUCE &&
         cuda_tm_group_pipeline_enabled();
     const uint32_t group_pipeline_stream_limit =
         group_pipeline_requested ? cuda_tm_group_pipeline_stream_limit() : 0u;
@@ -7504,7 +7521,8 @@ static int cuda_tm_routed_mxfp4_packed_impl(
           (routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_AUTO ||
            routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED6 ||
            routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6 ||
-           routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6_REDUCE)) ||
+           routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6_REDUCE ||
+           routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6_SPLIT_REDUCE)) ||
          (total_routes == 96u &&
           (routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_AUTO ||
            routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FIXED96)) ||
@@ -7514,7 +7532,8 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     const int use_fused6_unexpanded_a =
         routed_executor_candidate_shape &&
         (routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6 ||
-         routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6_REDUCE) &&
+         routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6_REDUCE ||
+         routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6_SPLIT_REDUCE) &&
         total_routes == 6u &&
         hidden == 4096u &&
         mid == 2048u;
@@ -7525,6 +7544,14 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     const int use_fused6_reduce =
         fused6_reduce_requested &&
         g_tm_api.ds4_mxfp4_down_6_m16_reduce != nullptr;
+    const int fused6_split_reduce_requested =
+        use_fused6_unexpanded_a &&
+        routed_executor_mode == DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6_SPLIT_REDUCE &&
+        use_gated_silu &&
+        !accumulate_out;
+    const int use_fused6_split_reduce =
+        fused6_split_reduce_requested &&
+        g_tm_api.ds4_reduce6_half_to_float != nullptr;
     const int use_unexpanded_a = use_indexed_a || use_fused6_unexpanded_a;
     const uint32_t tm_group_capacity =
         use_compact_schedule
@@ -8030,7 +8057,7 @@ static int cuda_tm_routed_mxfp4_packed_impl(
         if (ok) tm_prof.mark(&tm_prof.swiglu_ms);
     }
     const int use_down_reduce_epilogue =
-        ok && !used_group_pipeline && use_gated_silu &&
+        ok && !used_group_pipeline && use_gated_silu && !use_fused6_split_reduce &&
         cuda_tm_ds4_down_reduce_probe(nullptr,
                                       total_routes,
                                       gemm_group_count,
@@ -8043,6 +8070,11 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     if (ok && fused6_reduce_requested && !use_down_reduce_epilogue) {
         fprintf(stderr,
                 "ds4: fused6_reduce requested but down-reduce epilogue is unavailable\n");
+        ok = 0;
+    }
+    if (ok && fused6_split_reduce_requested && !use_fused6_split_reduce) {
+        fprintf(stderr,
+                "ds4: fused6_split_reduce requested but split reducer is unavailable\n");
         ok = 0;
     }
     if (ok && use_down_reduce_epilogue) {
@@ -8075,6 +8107,34 @@ static int cuda_tm_routed_mxfp4_packed_impl(
         ok = cuda_tm_grouped_matmul(
             mid_half, nullptr, gemm_offsets, &down_run_pack, total_routes, gemm_group_count, (int)hidden, (int)mid,
             down_routes, tm_stream, "packed down");
+    }
+    if (ok && use_fused6_split_reduce) {
+        if (!accumulate_out) {
+            ok = cuda_ok(cudaMemsetAsync(out_f32->ptr,
+                                         0,
+                                         (size_t)n_tokens * hidden * sizeof(float),
+                                         tm_stream),
+                         "turbomind DS4 split reduce output clear");
+        }
+        if (ok) {
+            const int reduce_rc = g_tm_api.ds4_reduce6_half_to_float(
+                down_routes,
+                (float *)out_f32->ptr,
+                sorted_pairs,
+                sorted_weights,
+                (int)n_routes,
+                (int)hidden,
+                tm_stream);
+            if (reduce_rc != 0) {
+                fprintf(stderr,
+                        "ds4: TurboMind split reduce failed rc=%d\n",
+                        reduce_rc);
+                ok = 0;
+            }
+        }
+        if (ok) {
+            ok = cuda_ok(cudaGetLastError(), "turbomind DS4 split reduce launch");
+        }
     }
     if (ok) tm_prof.mark(&tm_prof.down_ms);
     cuda_tm_matrix_pack_table_free(&down_pack);
@@ -8395,7 +8455,8 @@ static int cuda_tm_graph_capture_supported(void) {
     const int executor_mode = cuda_tm_routed_executor_mode();
     if (executor_mode != DS4_CUDA_TM_ROUTED_EXECUTOR_OFF &&
         executor_mode != DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6 &&
-        executor_mode != DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6_REDUCE) {
+        executor_mode != DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6_REDUCE &&
+        executor_mode != DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6_SPLIT_REDUCE) {
         return 0;
     }
     return 1;

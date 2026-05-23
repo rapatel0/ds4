@@ -427,6 +427,14 @@ extern int ggml_turbomind_ds4_mxfp4_down_6_m16_reduce_launch(
     size_t             partials_size,
     int*               flags,
     void*              stream);
+extern int ggml_turbomind_ds4_reduce6_half_to_float_launch(
+    const void*        down_routes_half,
+    float*             route_out,
+    const int*         sorted_pairs,
+    const float*       route_weights,
+    int                n_routes,
+    int                hidden,
+    void*              stream);
 extern int ggml_turbomind_ds4_mxfp4_down_1536_m128_reduce_launch(
     const void*        A,
     const int*         expert_offsets,
@@ -2181,6 +2189,33 @@ extern "C" GGML_TM_EXPORT int ggml_turbomind_ds4_mxfp4_down_6_m16_reduce(
         s->d_partials,
         s->partials_size,
         s->d_flags,
+        stream_v);
+}
+
+extern "C" GGML_TM_EXPORT int ggml_turbomind_ds4_reduce6_half_to_float(
+    const void*        down_routes_half,
+    float*             route_out,
+    const int*         sorted_pairs,
+    const float*       route_weights,
+    int                n_routes,
+    int                hidden,
+    void*              stream_v)
+{
+    int cur_dev = -1;
+    cudaGetDevice(&cur_dev);
+    State * s = get_state(cur_dev);
+    if (!s || !s->initialized) return 100;
+    if (!down_routes_half || !route_out || !sorted_pairs || !route_weights) {
+        return 1;
+    }
+    if (n_routes != 6 || hidden != 4096) return 2;
+    return ggml_turbomind_ds4_reduce6_half_to_float_launch(
+        down_routes_half,
+        route_out,
+        sorted_pairs,
+        route_weights,
+        n_routes,
+        hidden,
         stream_v);
 }
 

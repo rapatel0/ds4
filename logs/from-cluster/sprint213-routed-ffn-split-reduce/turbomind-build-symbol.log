@@ -1,0 +1,34 @@
+$ cmake --build build/turbomind-v100 --target ggml-turbomind test_ggml_turbomind_grouped_gate_up_fusion -j80
+[  3%] Built target parser
+[  8%] Built target fmt
+[ 13%] Built target cuda_utils
+[ 62%] Built target gemm2
+[ 89%] Built target core
+[ 91%] Building CXX object CMakeFiles/ggml-turbomind.dir/api.cc.o
+[ 93%] Building CUDA object CMakeFiles/ggml-turbomind.dir/ggml-turbomind-ds4-probe.cu.o
+/workspace/ds4-sprint181/kernels/turbomind/ggml-turbomind/../lmdeploy/src/turbomind/kernels/gemm/kernel_impl.h(263): warning #177-D: structured binding "m" was declared but never referenced
+          const auto& [m, n, k, l] = shape;
+                       ^
+          detected during:
+            implicit generation of "turbomind::gemm::KernelImpl<Gemm>::~KernelImpl() noexcept [with Gemm=turbomind::gemm::GemmUniversal<turbomind::gemm::Sm70, turbomind::gemm::MainloopSm70<turbomind::gemm::Tiled_MMA_v2<turbomind::gemm::SM70_MMA_884, turbomind::gemm::MMA_Map<16, 128, 32, 8, 32, 8, turbomind::gemm::Blocked<1, 4, turbomind::gemm::Order::kColMajor>, 1, false>, turbomind::gemm::Order::kColMajor>, turbomind::gemm::sm70_s884::Operand_A<half>, turbomind::gemm::IteratorSm70<turbomind::gemm::Striding::kIndexed, turbomind::cache_policy::Default>, turbomind::gemm::Transform_Default, turbomind::gemm::VoidOperand, 1, turbomind::gemm::sm70_s884::Operand_B_Pack<turbomind::fp4_e2m1_t>, turbomind::gemm::IteratorSm70<turbomind::gemm::Striding::kBlocked, turbomind::cache_policy::Stream>, turbomind::gemm::Transform_HMMA_SIMT_B, turbomind::gemm::sm70_s884::Operand_V_Pack<uint8_t>, 32, 2, true>, turbomind::gemm::Epilogue_<half, 16, 128, 16, 128, 128, turbomind::gemm::Rearrange<turbomind::gemm::Tiled_MMA_v2<turbomind::gemm::SM70_MMA_884, turbomind::gemm::MMA_Map<16, 128, 32, 8, 32, 8, turbomind::gemm::Blocked<1, 4, turbomind::gemm::Order::kColMajor>, 1, false>, turbomind::gemm::Order::kColMajor>>, turbomind::gemm::sm70_s884::Operand_C<float, turbomind::gemm::Order::kRowMajor>, turbomind::gemm::Striding::kBlocked, true>, turbomind::gemm::SchedulerSm70<turbomind::gemm::Order::kColMajor, 16, 128, 32, 32, 1, 0>>]" at line 109
+            instantiation of class "turbomind::gemm::KernelImpl<Gemm> [with Gemm=turbomind::gemm::GemmUniversal<turbomind::gemm::Sm70, turbomind::gemm::MainloopSm70<turbomind::gemm::Tiled_MMA_v2<turbomind::gemm::SM70_MMA_884, turbomind::gemm::MMA_Map<16, 128, 32, 8, 32, 8, turbomind::gemm::Blocked<1, 4, turbomind::gemm::Order::kColMajor>, 1, false>, turbomind::gemm::Order::kColMajor>, turbomind::gemm::sm70_s884::Operand_A<half>, turbomind::gemm::IteratorSm70<turbomind::gemm::Striding::kIndexed, turbomind::cache_policy::Default>, turbomind::gemm::Transform_Default, turbomind::gemm::VoidOperand, 1, turbomind::gemm::sm70_s884::Operand_B_Pack<turbomind::fp4_e2m1_t>, turbomind::gemm::IteratorSm70<turbomind::gemm::Striding::kBlocked, turbomind::cache_policy::Stream>, turbomind::gemm::Transform_HMMA_SIMT_B, turbomind::gemm::sm70_s884::Operand_V_Pack<uint8_t>, 32, 2, true>, turbomind::gemm::Epilogue_<half, 16, 128, 16, 128, 128, turbomind::gemm::Rearrange<turbomind::gemm::Tiled_MMA_v2<turbomind::gemm::SM70_MMA_884, turbomind::gemm::MMA_Map<16, 128, 32, 8, 32, 8, turbomind::gemm::Blocked<1, 4, turbomind::gemm::Order::kColMajor>, 1, false>, turbomind::gemm::Order::kColMajor>>, turbomind::gemm::sm70_s884::Operand_C<float, turbomind::gemm::Order::kRowMajor>, turbomind::gemm::Striding::kBlocked, true>, turbomind::gemm::SchedulerSm70<turbomind::gemm::Order::kColMajor, 16, 128, 32, 32, 1, 0>>]" at line 109
+            instantiation of "turbomind::gemm::KernelImpl<Gemm>::KernelImpl() [with Gemm=turbomind::gemm::GemmUniversal<turbomind::gemm::Sm70, turbomind::gemm::MainloopSm70<turbomind::gemm::Tiled_MMA_v2<turbomind::gemm::SM70_MMA_884, turbomind::gemm::MMA_Map<16, 128, 32, 8, 32, 8, turbomind::gemm::Blocked<1, 4, turbomind::gemm::Order::kColMajor>, 1, false>, turbomind::gemm::Order::kColMajor>, turbomind::gemm::sm70_s884::Operand_A<half>, turbomind::gemm::IteratorSm70<turbomind::gemm::Striding::kIndexed, turbomind::cache_policy::Default>, turbomind::gemm::Transform_Default, turbomind::gemm::VoidOperand, 1, turbomind::gemm::sm70_s884::Operand_B_Pack<turbomind::fp4_e2m1_t>, turbomind::gemm::IteratorSm70<turbomind::gemm::Striding::kBlocked, turbomind::cache_policy::Stream>, turbomind::gemm::Transform_HMMA_SIMT_B, turbomind::gemm::sm70_s884::Operand_V_Pack<uint8_t>, 32, 2, true>, turbomind::gemm::Epilogue_<half, 16, 128, 16, 128, 128, turbomind::gemm::Rearrange<turbomind::gemm::Tiled_MMA_v2<turbomind::gemm::SM70_MMA_884, turbomind::gemm::MMA_Map<16, 128, 32, 8, 32, 8, turbomind::gemm::Blocked<1, 4, turbomind::gemm::Order::kColMajor>, 1, false>, turbomind::gemm::Order::kColMajor>>, turbomind::gemm::sm70_s884::Operand_C<float, turbomind::gemm::Order::kRowMajor>, turbomind::gemm::Striding::kBlocked, true>, turbomind::gemm::SchedulerSm70<turbomind::gemm::Order::kColMajor, 16, 128, 32, 32, 1, 0>>]" at line 100 of /workspace/ds4-sprint181/kernels/turbomind/ggml-turbomind/ggml-turbomind-ds4-probe.cu
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+[ 94%] Linking CUDA device code CMakeFiles/ggml-turbomind.dir/cmake_device_link.o
+[ 96%] Linking CXX shared library libggml-turbomind.so
+[100%] Built target ggml-turbomind
+[  3%] Built target parser
+[  8%] Built target fmt
+[ 13%] Built target cuda_utils
+[ 40%] Built target core
+[ 86%] Built target gemm2
+Consolidate compiler generated dependencies of target ggml-turbomind
+[ 96%] Built target ggml-turbomind
+Consolidate compiler generated dependencies of target test_ggml_turbomind_grouped_gate_up_fusion
+[ 98%] Building CXX object CMakeFiles/test_ggml_turbomind_grouped_gate_up_fusion.dir/test_grouped_gate_up_fusion.cpp.o
+[100%] Linking CXX executable test_ggml_turbomind_grouped_gate_up_fusion
+[100%] Built target test_ggml_turbomind_grouped_gate_up_fusion
+$ nm -D build/turbomind-v100/libggml-turbomind.so | grep ggml_turbomind_ds4_reduce6_half_to_float
+00000000000333d0 T ggml_turbomind_ds4_reduce6_half_to_float

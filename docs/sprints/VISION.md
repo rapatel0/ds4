@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: sprint-execute
-revision: 212
+revision: 213
 ---
 
 # Vision: DS4 V100 Appliance
@@ -99,6 +99,14 @@ slower at 192/384 routes (`0.932x/0.967x`). TP remains useful evidence for
 future prefill/larger-batch work or a better collective, but the next
 practical-serving sprint should return to a monolithic/persistent low-bit
 routed-FFN executor rather than building TP4/PP1 runtime ownership.
+Sprint 213 closes the first routed-FFN return path: a materialized six-route
+split-reduce diagnostic. It is correct, graph-compatible, and mildly positive
+in the focused six-route FFN benchmark (`0.1391 ms` atomic versus `0.1290 ms`
+materialized), but not material in served mode: 16-slot/256K continuation moves
+only from `60.236036` to `60.655009` tok/s with `16/16` token match and zero
+graph failures. Defaults remain `fused6_reduce + graph`. The next sprint must
+stop tuning reducer wrappers and build a real tile-local/persistent routed-FFN
+workbench that changes the gate/up -> activation -> down/reduce dataflow.
 
 ## Current State
 
@@ -3065,6 +3073,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-23 | Completed Sprint 210 TP8 real layer-body fixture. | Added `tools/ds4-v100-tp8-real-layer-smoke.cu` as a separate TP-only Tensor Core layer-body prototype. It allocates sharded KV, runs FP16 fixture gate/up GEMMs, gated SiLU, down GEMM, and recursive-doubling TP8 reduction, with phase timing and correctness. The required `mid_shard=1024` 32/64/128 token gates passed with total latencies `0.614750/0.709350/0.796927 ms`; the denser `mid_shard=2048` sweep also passed and reached `62.956` fixture TFLOP/s at 128 tokens. This supports continuing TP8, but only by replacing the FP16 fixture with the real low-bit TurboMind MXFP4/FP8 expert path in TP-only files. | Sprint 211 |
 | 2026-05-23 | Rejected Sprint 211 TP8 TurboMind MXFP4 expert body. | Added `tools/ds4-v100-tp8-turbomind-ffn-smoke.cu` as a separate TP-only low-bit expert gate using the public TurboMind ABI. The corrected descriptor path runs, but TP8 `mid_shard=256` fails correctness at 96/192/384 routes with large NaN counts. Compute-only speedup versus the full reference is `3.927x/4.152x/4.189x`, but simple gather/reduce makes total speedup `0.524x/0.368x/0.317x`. The TP4 TurboMind control remains correct and reaches `2.333x-3.676x` compute speedup at the same route shapes, so the next TP sprint should pivot to TP4/PP1 low-bit layer ownership with a better reduction boundary or explicitly design a shard-256 MXFP4 kernel before returning to TP8. | Sprint 212 |
 | 2026-05-23 | Completed Sprint 212 TP4/PP1 low-bit layer-body pivot. | Added `tools/ds4-v100-tp4-turbomind-layer-smoke.cu` as a separate TP-only layer-body smoke. V100 correctness passed at 96/192/384 routes after fixing benchmark-local fixture overflow and missing `cudaSetDevice()` bugs. TP4 compute-only speedup remained strong at `2.335x/2.597x/3.707x`, but resident root-reduce total speedup was only `1.078x/0.932x/0.967x`. Do not build TP4/PP1 runtime ownership next; return to monolithic/persistent low-bit routed-FFN work or a genuinely better collective before revisiting TP runtime integration. | Sprint 213 |
+| 2026-05-23 | Completed Sprint 213 routed-FFN materialized split-reduce gate. | Added the opt-in `fused6_split_reduce` executor and `ggml_turbomind_ds4_reduce6_half_to_float` diagnostic reducer. V100 focused correctness passed and the six-route FFN sequence improved from `0.1391 ms` atomic to `0.1290 ms` materialized. Full scheduler smoke passed with `tm_layers=43`, and served 16-slot/256K A/B preserved `16/16` token match with `43` graph captures, `129` launches, and `0` failures. Served continuation improved only `60.236036 -> 60.655009` tok/s, below the promotion gate, so defaults remain `fused6_reduce + graph`. The next sprint should build a tile-local/persistent routed-FFN workbench, not another reducer wrapper. | Sprint 214 |
 
 ## Open Questions
 

@@ -1,7 +1,7 @@
 # Sprint 213 - Routed FFN Materialized-Reduce Gate And Persistent Kernel Workbench
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete
 
 ## Overview
 
@@ -100,22 +100,22 @@ abstraction.
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists and is committed before execution evidence is staged.
-- [ ] Current dirty split-reduce implementation is audited and either fixed or
+- [x] Sprint plan exists and is committed before execution evidence is staged.
+- [x] Current dirty split-reduce implementation is audited and either fixed or
       explicitly rejected.
-- [ ] V100 TurboMind build passes with `sm_70`.
-- [ ] Symbol export for `ggml_turbomind_ds4_reduce6_half_to_float` is verified.
-- [ ] Focused split-reduce correctness passes on V100.
-- [ ] Focused timing compares materialized split-reduce against atomic
+- [x] V100 TurboMind build passes with `sm_70`.
+- [x] Symbol export for `ggml_turbomind_ds4_reduce6_half_to_float` is verified.
+- [x] Focused split-reduce correctness passes on V100.
+- [x] Focused timing compares materialized split-reduce against atomic
       down-reduce epilogue.
-- [ ] Full scheduler smoke passes or the failure is root-caused and recorded.
-- [ ] Served 16-slot/256K A/B is run with generated and continuation tok/s.
-- [ ] Default serving mode remains unchanged unless the candidate clears the
+- [x] Full scheduler smoke passes or the failure is root-caused and recorded.
+- [x] Served 16-slot/256K A/B is run with generated and continuation tok/s.
+- [x] Default serving mode remains unchanged unless the candidate clears the
       promotion gate.
-- [ ] Logs are copied to `logs/from-cluster/sprint213-routed-ffn-split-reduce/`.
-- [ ] Sprint 213 records validation, decision, and next action.
-- [ ] `docs/sprints/STATUS.md` and `docs/sprints/VISION.md` are updated.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Logs are copied to `logs/from-cluster/sprint213-routed-ffn-split-reduce/`.
+- [x] Sprint 213 records validation, decision, and next action.
+- [x] `docs/sprints/STATUS.md` and `docs/sprints/VISION.md` are updated.
+- [x] Changes are committed with explicit `git add` paths.
 
 ## Decision Gate
 
@@ -153,3 +153,83 @@ weights or prompts should be copied into logs.
 - Sprint 199 promoted baseline.
 - Sprint 212 TP4 rejection and decision to return to routed-FFN work.
 - Existing V100 pod `llm/llamacpp-build-8gpu` and persistent appliance pack.
+
+## Implementation
+
+The existing dirty split-reduce artifacts were completed as a default-off
+diagnostic routed executor:
+
+- `ggml_turbomind_ds4_reduce6_half_to_float` exports a six-route half-to-F32
+  route-weighted reducer from TurboMind;
+- `DS4_V100_TURBOMIND_ROUTED_EXECUTOR=fused6_split_reduce` selects the
+  materialized half down-route path in the appliance runtime;
+- graph capture remains allowed for the opt-in mode;
+- launcher allowlist accepts the mode, but production defaults remain
+  `fused6_reduce + graph`.
+
+## Validation
+
+V100 pod: `llm/llamacpp-build-8gpu`, node `gpu-01`.
+
+Build and symbol:
+
+```text
+cmake --build build/turbomind-v100 --target ggml-turbomind test_ggml_turbomind_grouped_gate_up_fusion -j80
+nm -D build/turbomind-v100/libggml-turbomind.so | grep ggml_turbomind_ds4_reduce6_half_to_float
+```
+
+Runtime build:
+
+```text
+make -j80 CUDA_ARCH=sm_70 tools/ds4-v100-replay tests/cuda_v100_full_scheduler_smoke
+```
+
+Focused six-route TurboMind result:
+
+| Mode | Time |
+|---|---:|
+| atomic down-reduce sequence | `0.1391 ms` |
+| materialized split-reduce sequence | `0.1290 ms` |
+| materialized / atomic | `0.927x` |
+
+The focused split-reduce correctness check passed with
+`split_reduce_bad=0/4096` and `split_reduce_rel=0`.
+
+Full scheduler smoke:
+
+```text
+DS4_V100_TURBOMIND_ROUTED_EXECUTOR=fused6_split_reduce \
+DS4_V100_TURBOMIND_GRAPH=1 \
+./tests/cuda_v100_full_scheduler_smoke \
+  --appliance-dir /workspace/packs/ds4-appliance-full-tm-gated-s181 \
+  --slots 16 --ctx 262144 --expect-tm-layers 43
+```
+
+passed with `tm_layers=43`.
+
+Same-binary served A/B at 16-slot/256K, 16 requests x 64 generated tokens,
+per-step async + event handoff:
+
+| Mode | Prompt tok/s | Generated tok/s | Continuation tok/s | Token match | Graph captures | Graph launches | Graph failures |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `fused6_reduce + graph` | `17.210296` | `61.192163` | `60.236036` | `16/16` | `43` | `129` | `0` |
+| `fused6_split_reduce + graph` | `17.330003` | `61.617787` | `60.655009` | `16/16` | `43` | `129` | `0` |
+
+Evidence is stored in
+`logs/from-cluster/sprint213-routed-ffn-split-reduce/`.
+
+## Decision
+
+Do not promote `fused6_split_reduce`.
+
+The focused benchmark is positive, but the served gain is only about `+0.7%`
+continuation throughput over the same-binary control, below the `3%` promotion
+gate and well inside the historical noise band for this path. Production
+defaults remain unchanged.
+
+The diagnostic code is still useful because it closes the materialized
+split-reduce question with a real served gate. The next sprint should stop
+tuning reducer wrappers and build a true tile-local routed-FFN workbench:
+gate/up, activation, and down/reduce must be fused or persistently scheduled so
+the intermediate routed activation does not become a separate global-memory
+boundary.

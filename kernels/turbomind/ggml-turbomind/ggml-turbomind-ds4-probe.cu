@@ -1,6 +1,7 @@
 // DS4/V100 fixed-shape TurboMind probe kernels.
 
 #include <cuda_runtime.h>
+#include <cuda_fp16.h>
 
 #include <algorithm>
 
@@ -10,6 +11,34 @@
 #include "src/turbomind/kernels/gemm/kernel_impl.h"
 
 namespace tmg = turbomind::gemm;
+
+namespace ds4_probe_kernels {
+__global__ void ds4_reduce6_half_to_float_kernel(
+    const half* __restrict__ down_routes,
+    float* __restrict__ route_out,
+    const int* __restrict__ sorted_pairs,
+    const float* __restrict__ route_weights,
+    int n_routes,
+    int hidden)
+{
+    const int col = (int)(blockIdx.x * blockDim.x + threadIdx.x);
+    if (col >= hidden) {
+        return;
+    }
+
+    float acc = 0.0f;
+#pragma unroll
+    for (int row = 0; row < 6; ++row) {
+        const int pair = __ldg(sorted_pairs + row);
+        const int tok = pair / n_routes;
+        if (tok == 0) {
+            const float w = __ldg(route_weights + row);
+            acc += __half2float(__ldg(down_routes + (int64_t)row * hidden + col)) * w;
+        }
+    }
+    route_out[col] = acc;
+}
+}  // namespace ds4_probe_kernels
 
 namespace {
 
@@ -425,6 +454,28 @@ int launch_ds4_mxfp4_gated_silu(
 }
 
 }  // namespace
+
+int ggml_turbomind_ds4_reduce6_half_to_float_launch(
+    const void*  down_routes_half,
+    float*       route_out,
+    const int*   sorted_pairs,
+    const float* route_weights,
+    int          n_routes,
+    int          hidden,
+    void*        stream_v)
+{
+    if (!down_routes_half || !route_out || !sorted_pairs || !route_weights) return 1;
+    if (n_routes != 6 || hidden != 4096) return 2;
+    cudaStream_t stream = (cudaStream_t)stream_v;
+    ds4_probe_kernels::ds4_reduce6_half_to_float_kernel<<<(hidden + 255) / 256, 256, 0, stream>>>(
+        (const half*)down_routes_half,
+        route_out,
+        sorted_pairs,
+        route_weights,
+        n_routes,
+        hidden);
+    return 0;
+}
 
 // Per-request 6-route decode shape: the production per-step async pipeline
 // calls the routed FFN one slot at a time, so each active expert receives a

@@ -40,6 +40,8 @@ typedef int  (*pfn_ds4_mxfp4_gated_silu_96)(const void *, const int *, int, int,
 typedef int  (*pfn_ds4_mxfp4_down_reduce)(const void *, const int *, int, int,
                                            const void * const *, const void * const *,
                                            int, float *, const int *, const float *, int, void *);
+typedef int  (*pfn_ds4_reduce6_half_to_float)(const void *, float *, const int *, const float *,
+                                              int, int, void *);
 
 struct block_mxfp4 {
     uint8_t e;
@@ -342,6 +344,8 @@ static int run_case(void * lib, const Case & c) {
         dlsym(lib, "ggml_turbomind_ds4_mxfp4_down_768_m64n256");
     auto down_reduce6 = (pfn_ds4_mxfp4_down_reduce)
         dlsym(lib, "ggml_turbomind_ds4_mxfp4_down_6_m16_reduce");
+    auto reduce6_half = (pfn_ds4_reduce6_half_to_float)
+        dlsym(lib, "ggml_turbomind_ds4_reduce6_half_to_float");
     if (!in || !sh || !pb || !pw || !mmgt || !mmgs) {
         fprintf(stderr, "[gate_up_fusion] dlsym failed\n");
         return 1;
@@ -490,6 +494,10 @@ static int run_case(void * lib, const Case & c) {
         total_tokens == 6 &&
         down_reduce6 &&
         (!down_probe_mode || std::strcmp(down_probe_mode, "off") != 0);
+    const bool run_split_reduce =
+        run_down_reduce &&
+        reduce6_half &&
+        env_flag("DS4_TURBOMIND_GATE_UP_SPLIT_REDUCE6", true);
     const int logical_tokens = c.tokens_per_active;
     const int routes_per_token = (int)active.size();
 
@@ -617,6 +625,9 @@ static int run_case(void * lib, const Case & c) {
     __half * d_down_probe = nullptr;
     float * d_down_reduce = nullptr;
     float * d_ffn_reduce = nullptr;
+    float * d_down_reduce_split = nullptr;
+    __half * d_ffn_down_routes = nullptr;
+    float * d_ffn_reduce_split = nullptr;
     int * d_sorted_pairs = nullptr;
     float * d_route_weights = nullptr;
     __half * d_tp_gated0 = nullptr;
@@ -658,6 +669,11 @@ static int run_case(void * lib, const Case & c) {
                               h_route_weights.size() * sizeof(float),
                               cudaMemcpyHostToDevice));
     }
+    if (run_split_reduce) {
+        CHECK_CUDA(cudaMalloc(&d_down_reduce_split, (size_t) logical_tokens * K * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&d_ffn_down_routes, (size_t) total_tokens * K * sizeof(__half)));
+        CHECK_CUDA(cudaMalloc(&d_ffn_reduce_split, (size_t) logical_tokens * K * sizeof(float)));
+    }
     if (run_tp_split) {
         CHECK_CUDA(cudaMalloc(&d_tp_gated0, (size_t) total_tokens * tp_N * sizeof(__half)));
         CHECK_CUDA(cudaMalloc(&d_tp_gated1, (size_t) total_tokens * tp_N * sizeof(__half)));
@@ -680,6 +696,11 @@ static int run_case(void * lib, const Case & c) {
     if (run_down_reduce) {
         CHECK_CUDA(cudaMemset(d_down_reduce, 0, (size_t) logical_tokens * K * sizeof(float)));
         CHECK_CUDA(cudaMemset(d_ffn_reduce, 0, (size_t) logical_tokens * K * sizeof(float)));
+    }
+    if (run_split_reduce) {
+        CHECK_CUDA(cudaMemset(d_down_reduce_split, 0, (size_t) logical_tokens * K * sizeof(float)));
+        CHECK_CUDA(cudaMemset(d_ffn_down_routes, 0, (size_t) total_tokens * K * sizeof(__half)));
+        CHECK_CUDA(cudaMemset(d_ffn_reduce_split, 0, (size_t) logical_tokens * K * sizeof(float)));
     }
     if (run_tp_split) {
         CHECK_CUDA(cudaMemset(d_tp_gated0, 0, (size_t) total_tokens * tp_N * sizeof(__half)));
@@ -788,6 +809,40 @@ static int run_case(void * lib, const Case & c) {
                 return 7;
             }
         }
+        if (run_split_reduce) {
+            CHECK_CUDA(cudaMemsetAsync(d_down_reduce_split, 0, (size_t) logical_tokens * K * sizeof(float), nullptr));
+            rc = reduce6_half(d_down,
+                              d_down_reduce_split,
+                              d_sorted_pairs,
+                              d_route_weights,
+                              routes_per_token,
+                              K,
+                              nullptr);
+            if (rc != 0) {
+                fprintf(stderr, "[gate_up_fusion] split reduce warmup rc=%d\n", rc);
+                return 7;
+            }
+            rc = mmgt(d_gated, nullptr, d_offsets, num_experts, total_tokens,
+                      (const void * const *) down_packed.d_w_table,
+                      (const void * const *) down_packed.d_s_table,
+                      ggml_type, K, N, group_size, down_packed.k_pack, d_ffn_down_routes, nullptr);
+            if (rc != 0) {
+                fprintf(stderr, "[gate_up_fusion] ffn split down warmup rc=%d\n", rc);
+                return 7;
+            }
+            CHECK_CUDA(cudaMemsetAsync(d_ffn_reduce_split, 0, (size_t) logical_tokens * K * sizeof(float), nullptr));
+            rc = reduce6_half(d_ffn_down_routes,
+                              d_ffn_reduce_split,
+                              d_sorted_pairs,
+                              d_route_weights,
+                              routes_per_token,
+                              K,
+                              nullptr);
+            if (rc != 0) {
+                fprintf(stderr, "[gate_up_fusion] ffn split reduce warmup rc=%d\n", rc);
+                return 7;
+            }
+        }
         if (run_tp_split) {
             rc = mmgs(d_A, nullptr, d_offsets, num_experts, total_tokens,
                       (const void * const *) gated_half0_packed.d_w_table,
@@ -847,6 +902,10 @@ static int run_case(void * lib, const Case & c) {
     cudaEvent_t ffn_reduce_stop = nullptr;
     cudaEvent_t ffn_graph_start = nullptr;
     cudaEvent_t ffn_graph_stop = nullptr;
+    cudaEvent_t split_reduce_start = nullptr;
+    cudaEvent_t split_reduce_stop = nullptr;
+    cudaEvent_t ffn_split_reduce_start = nullptr;
+    cudaEvent_t ffn_split_reduce_stop = nullptr;
     cudaEvent_t route_clear_start = nullptr;
     cudaEvent_t route_clear_stop = nullptr;
     cudaEvent_t tp_half0_start = nullptr;
@@ -880,6 +939,12 @@ static int run_case(void * lib, const Case & c) {
         CHECK_CUDA(cudaEventCreate(&ffn_graph_stop));
         CHECK_CUDA(cudaEventCreate(&route_clear_start));
         CHECK_CUDA(cudaEventCreate(&route_clear_stop));
+    }
+    if (run_split_reduce) {
+        CHECK_CUDA(cudaEventCreate(&split_reduce_start));
+        CHECK_CUDA(cudaEventCreate(&split_reduce_stop));
+        CHECK_CUDA(cudaEventCreate(&ffn_split_reduce_start));
+        CHECK_CUDA(cudaEventCreate(&ffn_split_reduce_stop));
     }
     if (run_tp_split) {
         CHECK_CUDA(cudaEventCreate(&tp_half0_start));
@@ -1043,6 +1108,60 @@ static int run_case(void * lib, const Case & c) {
         CHECK_CUDA(cudaEventSynchronize(ffn_reduce_stop));
     }
 
+    if (run_split_reduce) {
+        CHECK_CUDA(cudaEventRecord(split_reduce_start, nullptr));
+        for (int iter = 0; iter < bench_iters; ++iter) {
+            CHECK_CUDA(cudaMemsetAsync(d_down_reduce_split, 0, (size_t) logical_tokens * K * sizeof(float), nullptr));
+            rc = reduce6_half(d_down,
+                              d_down_reduce_split,
+                              d_sorted_pairs,
+                              d_route_weights,
+                              routes_per_token,
+                              K,
+                              nullptr);
+            if (rc != 0) {
+                fprintf(stderr, "[gate_up_fusion] split reduce rc=%d\n", rc);
+                return 10;
+            }
+        }
+        CHECK_CUDA(cudaEventRecord(split_reduce_stop, nullptr));
+        CHECK_CUDA(cudaEventSynchronize(split_reduce_stop));
+
+        CHECK_CUDA(cudaEventRecord(ffn_split_reduce_start, nullptr));
+        for (int iter = 0; iter < bench_iters; ++iter) {
+            rc = mmgs(d_A, nullptr, d_offsets, num_experts, total_tokens,
+                      (const void * const *) gated_packed.d_w_table,
+                      (const void * const *) gated_packed.d_s_table,
+                      ggml_type, fused_N, K, group_size, gated_packed.k_pack, d_gated, nullptr);
+            if (rc != 0) {
+                fprintf(stderr, "[gate_up_fusion] ffn split gated rc=%d\n", rc);
+                return 10;
+            }
+            rc = mmgt(d_gated, nullptr, d_offsets, num_experts, total_tokens,
+                      (const void * const *) down_packed.d_w_table,
+                      (const void * const *) down_packed.d_s_table,
+                      ggml_type, K, N, group_size, down_packed.k_pack, d_ffn_down_routes, nullptr);
+            if (rc != 0) {
+                fprintf(stderr, "[gate_up_fusion] ffn split down rc=%d\n", rc);
+                return 10;
+            }
+            CHECK_CUDA(cudaMemsetAsync(d_ffn_reduce_split, 0, (size_t) logical_tokens * K * sizeof(float), nullptr));
+            rc = reduce6_half(d_ffn_down_routes,
+                              d_ffn_reduce_split,
+                              d_sorted_pairs,
+                              d_route_weights,
+                              routes_per_token,
+                              K,
+                              nullptr);
+            if (rc != 0) {
+                fprintf(stderr, "[gate_up_fusion] ffn split reduce rc=%d\n", rc);
+                return 10;
+            }
+        }
+        CHECK_CUDA(cudaEventRecord(ffn_split_reduce_stop, nullptr));
+        CHECK_CUDA(cudaEventSynchronize(ffn_split_reduce_stop));
+    }
+
     float ffn_graph_ms = 0.0f;
     int ffn_graph_status = 0;
     if (run_down_reduce && env_flag("DS4_TURBOMIND_GATE_UP_GRAPH_FFN", true)) {
@@ -1195,6 +1314,10 @@ static int run_case(void * lib, const Case & c) {
         run_down_reduce ? elapsed_ms(down_reduce_start, down_reduce_stop) / (float) bench_iters : 0.0f;
     const float ffn_reduce_ms =
         run_down_reduce ? elapsed_ms(ffn_reduce_start, ffn_reduce_stop) / (float) bench_iters : 0.0f;
+    const float split_reduce_ms =
+        run_split_reduce ? elapsed_ms(split_reduce_start, split_reduce_stop) / (float) bench_iters : 0.0f;
+    const float ffn_split_reduce_ms =
+        run_split_reduce ? elapsed_ms(ffn_split_reduce_start, ffn_split_reduce_stop) / (float) bench_iters : 0.0f;
     const float tp_half0_ms =
         run_tp_split ? elapsed_ms(tp_half0_start, tp_half0_stop) / (float) bench_iters : 0.0f;
     const float tp_half1_ms =
@@ -1227,6 +1350,12 @@ static int run_case(void * lib, const Case & c) {
         CHECK_CUDA(cudaEventDestroy(route_clear_start));
         CHECK_CUDA(cudaEventDestroy(route_clear_stop));
     }
+    if (run_split_reduce) {
+        CHECK_CUDA(cudaEventDestroy(split_reduce_start));
+        CHECK_CUDA(cudaEventDestroy(split_reduce_stop));
+        CHECK_CUDA(cudaEventDestroy(ffn_split_reduce_start));
+        CHECK_CUDA(cudaEventDestroy(ffn_split_reduce_stop));
+    }
     if (run_tp_split) {
         CHECK_CUDA(cudaEventDestroy(tp_half0_start));
         CHECK_CUDA(cudaEventDestroy(tp_half0_stop));
@@ -1244,6 +1373,7 @@ static int run_case(void * lib, const Case & c) {
     std::vector<__half> h_down((size_t) total_tokens * K);
     std::vector<__half> h_down_probe(run_down_probe ? (size_t) total_tokens * K : 0);
     std::vector<float> h_down_reduce(run_down_reduce ? (size_t) logical_tokens * K : 0);
+    std::vector<float> h_down_reduce_split(run_split_reduce ? (size_t) logical_tokens * K : 0);
     CHECK_CUDA(cudaMemcpy(h_gate.data(), d_gate, h_gate.size() * sizeof(__half), cudaMemcpyDeviceToHost));
     CHECK_CUDA(cudaMemcpy(h_up.data(), d_up, h_up.size() * sizeof(__half), cudaMemcpyDeviceToHost));
     CHECK_CUDA(cudaMemcpy(h_fused.data(), d_fused, h_fused.size() * sizeof(__half), cudaMemcpyDeviceToHost));
@@ -1257,6 +1387,9 @@ static int run_case(void * lib, const Case & c) {
     }
     if (run_down_reduce) {
         CHECK_CUDA(cudaMemcpy(h_down_reduce.data(), d_down_reduce, h_down_reduce.size() * sizeof(float), cudaMemcpyDeviceToHost));
+    }
+    if (run_split_reduce) {
+        CHECK_CUDA(cudaMemcpy(h_down_reduce_split.data(), d_down_reduce_split, h_down_reduce_split.size() * sizeof(float), cudaMemcpyDeviceToHost));
     }
 
     float max_abs_gate = 0.0f;
@@ -1275,11 +1408,15 @@ static int run_case(void * lib, const Case & c) {
     float down_reduce_max_abs = 0.0f;
     float down_reduce_sum_abs = 0.0f;
     float down_reduce_sum_ref = 0.0f;
+    float split_reduce_max_abs = 0.0f;
+    float split_reduce_sum_abs = 0.0f;
+    float split_reduce_sum_ref = 0.0f;
     int bad = 0;
     int gated_bad = 0;
     int probe_bad = 0;
     int down_probe_bad = 0;
     int down_reduce_bad = 0;
+    int split_reduce_bad = 0;
     constexpr float gated_abs_tol = 16.0f;
     const float probe_abs_tol = (compact_groups && total_tokens == 6) ? 2.0f : 0.25f;
     const size_t values_per_half = (size_t) total_tokens * N;
@@ -1363,9 +1500,24 @@ static int run_case(void * lib, const Case & c) {
                 down_reduce_bad++;
             }
         }
+        if (run_split_reduce) {
+            for (size_t i = 0; i < h_down_reduce_split.size(); ++i) {
+                const float ref = h_down_reduce_ref[i];
+                const float got = h_down_reduce_split[i];
+                const float d = fabsf(got - ref);
+                split_reduce_max_abs = std::max(split_reduce_max_abs, d);
+                split_reduce_sum_abs += d;
+                split_reduce_sum_ref += fabsf(ref);
+                if (!std::isfinite(got) || d > down_reduce_abs_tol) {
+                    split_reduce_bad++;
+                }
+            }
+        }
     }
     const float down_reduce_rel =
         down_reduce_sum_ref > 0 ? down_reduce_sum_abs / down_reduce_sum_ref : 0.0f;
+    const float split_reduce_rel =
+        split_reduce_sum_ref > 0 ? split_reduce_sum_abs / split_reduce_sum_ref : 0.0f;
     fprintf(stderr,
             "[gate_up_fusion tpa=%d] total_routes=%d active=%zu separate_ms=%.4f fused_ms=%.4f gated_ms=%.4f probe_label=%s probe_ms=%.4f down_probe_label=%s down_ms=%.4f down_probe_ms=%.4f route_clear_ms=%.4f down_reduce_ms=%.4f fused_speedup=%.3fx gated_speedup=%.3fx probe_vs_gated=%.3fx down_probe_vs_generic=%.3fx down_reduce_vs_generic=%.3fx max_abs_gate=%.4e max_abs_up=%.4e rel=%.4e bad=%d/%zu gated_max_abs=%.4e gated_abs_tol=%.1f gated_rel=%.4e gated_bad=%d/%zu probe_max_abs=%.4e probe_abs_tol=%.1f probe_rel=%.4e probe_bad=%d/%zu down_probe_max_abs=%.4e down_probe_rel=%.4e down_probe_bad=%d/%zu down_reduce_max_abs=%.4e down_reduce_rel=%.4e down_reduce_bad=%d/%zu k_pack_sep=0x%x k_pack_fused=0x%x k_pack_gated=0x%x k_pack_down=0x%x\n",
             c.tokens_per_active, total_tokens, active.size(),
@@ -1394,6 +1546,27 @@ static int run_case(void * lib, const Case & c) {
                 ffn_graph_status,
                 logical_tokens,
                 routes_per_token);
+    }
+    if (run_split_reduce) {
+        const float materialized_down_reduce_ms = down_ms + split_reduce_ms;
+        const float materialized_vs_atomic =
+            down_reduce_ms > 0.0f ? materialized_down_reduce_ms / down_reduce_ms : 0.0f;
+        const float ffn_materialized_vs_atomic =
+            ffn_reduce_ms > 0.0f ? ffn_split_reduce_ms / ffn_reduce_ms : 0.0f;
+        fprintf(stderr,
+                "[gate_up_fusion tpa=%d] split_reduce6 split_reduce_ms=%.4f materialized_down_reduce_ms=%.4f atomic_down_reduce_ms=%.4f materialized_vs_atomic=%.3fx ffn_split_reduce_ms=%.4f ffn_atomic_reduce_ms=%.4f ffn_materialized_vs_atomic=%.3fx split_reduce_max_abs=%.4e split_reduce_rel=%.4e split_reduce_bad=%d/%zu\n",
+                c.tokens_per_active,
+                split_reduce_ms,
+                materialized_down_reduce_ms,
+                down_reduce_ms,
+                materialized_vs_atomic,
+                ffn_split_reduce_ms,
+                ffn_reduce_ms,
+                ffn_materialized_vs_atomic,
+                split_reduce_max_abs,
+                split_reduce_rel,
+                split_reduce_bad,
+                h_down_reduce_split.size());
     }
     if (run_tp_split) {
         const float full_routed_ms = gated_ms + down_ms;
@@ -1441,6 +1614,9 @@ static int run_case(void * lib, const Case & c) {
     if (d_down_probe) CHECK_CUDA(cudaFree(d_down_probe));
     if (d_down_reduce) CHECK_CUDA(cudaFree(d_down_reduce));
     if (d_ffn_reduce) CHECK_CUDA(cudaFree(d_ffn_reduce));
+    if (d_down_reduce_split) CHECK_CUDA(cudaFree(d_down_reduce_split));
+    if (d_ffn_down_routes) CHECK_CUDA(cudaFree(d_ffn_down_routes));
+    if (d_ffn_reduce_split) CHECK_CUDA(cudaFree(d_ffn_reduce_split));
     if (d_sorted_pairs) CHECK_CUDA(cudaFree(d_sorted_pairs));
     if (d_route_weights) CHECK_CUDA(cudaFree(d_route_weights));
     if (d_tp_gated0) CHECK_CUDA(cudaFree(d_tp_gated0));
@@ -1452,14 +1628,17 @@ static int run_case(void * lib, const Case & c) {
     if (bad != 0 || gated_bad != 0 || probe_bad != 0 ||
         down_probe_bad != 0 ||
         down_reduce_bad != 0 ||
+        split_reduce_bad != 0 ||
         rel > 1e-3f || gated_rel > 1e-3f ||
         (run_probe && probe_rel > 1e-3f) ||
         (run_down_probe && down_probe_rel > 1e-3f) ||
         (run_down_reduce && down_reduce_rel > 1e-3f) ||
+        (run_split_reduce && split_reduce_rel > 1e-3f) ||
         max_abs_gate > 0.25f || max_abs_up > 0.25f || gated_max_abs > gated_abs_tol ||
         (run_probe && probe_max_abs > probe_abs_tol) ||
         (run_down_probe && down_probe_max_abs > 0.25f) ||
-        (run_down_reduce && down_reduce_max_abs > 256.0f)) {
+        (run_down_reduce && down_reduce_max_abs > 256.0f) ||
+        (run_split_reduce && split_reduce_max_abs > 256.0f)) {
         fprintf(stderr, "[gate_up_fusion tpa=%d] FAIL\n", c.tokens_per_active);
         return 11;
     }
