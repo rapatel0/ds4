@@ -104,6 +104,18 @@ and 64-slot resident gates also pass, at `3563.755123` and `3877.433386`
 output-head tok/s respectively. Full-logit readback is rejected for serving;
 the next gap remains carrying final HC `[slots,4,4096]` through the TP/EP
 token-major loop and feeding this resident output-head primitive.
+Sprint 291 added a TP/EP-only final-HC carry scaffold behind
+`--final-hc-carry-gate`. Each GPU owns `[slots][4][512]` F32, giving a logical
+`[slots][4][4096]` output-head input. This is explicitly a proxy carry layout,
+not yet true DS4 HC row semantics. The 1-token all-layer V100 gate passes with
+`43/43` invocations, `75.554825 ms` summed decode, `2.100054 ms` summed
+final-HC carry cost, and `423.533507` decode tok/s. The matching control pass
+without HC carry reports `70.923652 ms` summed decode and `451.189400` decode
+tok/s. A 4-token carry run passes `172/172` invocations with `8.113938 ms`
+summed final-HC carry cost, `712.985252` aggregate decode tok/s, and
+`960.823272` continuation decode tok/s. The next gap is replacing the proxy HC
+expansion with true DS4 HC row semantics, then feeding the resident output head
+from this sharded HC state.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s
