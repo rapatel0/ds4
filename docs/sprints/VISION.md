@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 248
+revision: 249
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -123,6 +123,13 @@ not a serial layer-chain.
   `51.003671 ms/iteration`, `7.738345` dense-table TFLOP/s, and zero
   nonfinite outputs. The remaining gap is composing dense, EP, KV, and
   hidden-state flow into a resident all-layer TP/EP loop.
+- Sprint 249 made the representative TP/EP full-layer smoke layer-parametric.
+  Layers `0`, `1`, `2`, `3`, and `42` pass at `32` slots / `256K` with
+  cache-backed FP16 dense compose, real TurboMind MXFP4 EP experts, sharded KV,
+  and fused next-hidden composition. The representative decode-loop proxy now
+  spans SWA-only, ratio-4, ratio-128, and late-layer cases with `0.999333` to
+  `1.181511 ms/step`. The remaining gap is a resident all-layer TP/EP loop
+  that preserves hidden shards across all 43 layers in one process.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -588,6 +595,28 @@ checksum `15841839914005485`, and zero nonfinite outputs. Next compose this
 dense table with EP routed experts, KV/update, and hidden-state flow in a
 resident all-layer TP/EP loop.
 
+### Sprint 249 - TP/EP Layer-Parametric Resident Loop [complete]
+
+Goal: Remove layer-2 hardcoding from the representative TP/EP full-layer smoke
+and validate the DS4 layer families needed for an all-layer loop.
+
+Rationale: Sprint 248 proved all-layer dense table enumeration, but the
+resident decode loop still selected layer-2 composition tensors and ratio-4 KV
+behavior. The next all-layer loop needs layer-local tensor names and the DS4
+SWA/ratio-4/ratio-128 compression schedule to be correct before iterating all
+43 layers.
+
+Outcome: Complete. `tools/ds4-v100-tp-ep-full-layer-smoke` now derives
+composition tensors from `--layer N` and selects indexer KV only for ratio-4
+layers. The V100 representative gate at `32` slots / `256K`, MTP off,
+cache-backed FP16 dense compose, real TurboMind MXFP4 EP experts, and fused
+compose passes layers `0`, `1`, `2`, `3`, and `42`. Decode-loop proxy timing
+ranges from `0.999333` to `1.181511 ms/step`, or `27083.969701` to
+`32021.345429` slot-step tok/s. The final scaffold accepts `comp_rows=0` only
+for SWA-only layers and still requires compression rows for ratio-4/ratio-128
+layers. Next build the resident all-layer TP/EP loop with hidden shards carried
+through all layers in one process.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -637,6 +666,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 246 materialized all dense TP rows into FP16 cache arenas on the V100 pod. | The dense-cache path is now an executable runtime primitive, not just an estimate. | Wire dense cache lookup into resident layer execution and benchmark all-layer decode. |
 | 2026-05-23 | Sprint 247 wired dense cache lookup into the representative TP/EP decode loop. | Execution can now consume cache-resident FP16 dense weights instead of private per-op copies. | Build a descriptor-selected dense execution table across all layers. |
 | 2026-05-23 | Sprint 248 built the descriptor-selected all-layer dense execution table. | Dense no longer depends on hardcoded layer-2 tensor selection. | Compose dense, EP, KV, and hidden-state flow in a resident all-layer TP/EP loop. |
+| 2026-05-23 | Sprint 249 made the representative TP/EP full-layer smoke layer-parametric across SWA-only, ratio-4, ratio-128, and late layers. | The all-layer loop no longer has layer-2 tensor-name and ratio-4 KV assumptions as blockers. | Build a resident all-layer TP/EP loop that carries hidden shards through all 43 layers in one process. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

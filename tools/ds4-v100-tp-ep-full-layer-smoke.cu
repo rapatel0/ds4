@@ -914,6 +914,17 @@ bool parse_shape2(const std::string &shape, int *cols, int *rows) {
            *cols > 0 && *rows > 0;
 }
 
+std::string layer_tensor_name(int layer, const char *suffix) {
+    char buf[128];
+    std::snprintf(buf, sizeof(buf), "blk.%d.%s", layer, suffix);
+    return std::string(buf);
+}
+
+int ds4_layer_ratio(int layer) {
+    if (layer < 2) return 0;
+    return (layer % 2) == 0 ? 4 : 128;
+}
+
 uint64_t f8_row_bytes(int cols) {
     return (uint64_t)(cols / 128) * 129ull;
 }
@@ -2131,8 +2142,10 @@ int run_next_hidden_compose(const Options &opt,
 
     DeviceDenseOutputs attn;
     DeviceDenseOutputs shared;
-    if (run_f8_dense_to_device(opt, rows, "blk.2.attn_output_b.weight", 1, &attn) != 0 ||
-        run_f8_dense_to_device(opt, rows, "blk.2.ffn_down_shexp.weight", 2, &shared) != 0) {
+    const std::string attn_tensor = layer_tensor_name(opt.layer, "attn_output_b.weight");
+    const std::string shared_tensor = layer_tensor_name(opt.layer, "ffn_down_shexp.weight");
+    if (run_f8_dense_to_device(opt, rows, attn_tensor.c_str(), 1, &attn) != 0 ||
+        run_f8_dense_to_device(opt, rows, shared_tensor.c_str(), 2, &shared) != 0) {
         free_device_dense_outputs(attn, opt);
         free_device_dense_outputs(shared, opt);
         return 1;
@@ -2308,8 +2321,10 @@ int run_decode_loop(const Options &opt,
 
     ResidentF8Dense attn;
     ResidentF8Dense shared;
-    if (prepare_resident_f8_dense(opt, rows, "blk.2.attn_output_b.weight", 1, cache, &attn) != 0 ||
-        prepare_resident_f8_dense(opt, rows, "blk.2.ffn_down_shexp.weight", 2, cache, &shared) != 0) {
+    const std::string attn_tensor = layer_tensor_name(opt.layer, "attn_output_b.weight");
+    const std::string shared_tensor = layer_tensor_name(opt.layer, "ffn_down_shexp.weight");
+    if (prepare_resident_f8_dense(opt, rows, attn_tensor.c_str(), 1, cache, &attn) != 0 ||
+        prepare_resident_f8_dense(opt, rows, shared_tensor.c_str(), 2, cache, &shared) != 0) {
         free_resident_f8_dense(attn, opt);
         free_resident_f8_dense(shared, opt);
         return 1;
@@ -2647,8 +2662,9 @@ int main(int argc, char **argv) {
 
     ds4_v100_tp_dense_kv_result kv_result;
     const auto kv_start = std::chrono::steady_clock::now();
+    const int write_indexer = ds4_layer_ratio(opt.layer) == 4 ? 1 : 0;
     if (ds4_v100_tp_runtime_dense_kv_slice(rt, opt.layer, opt.kv_slot, opt.position,
-                                           1, &kv_result, err, sizeof(err)) != 0) {
+                                           write_indexer, &kv_result, err, sizeof(err)) != 0) {
         std::fprintf(stderr, "tp_runtime_dense_kv_slice_failed\t%s\n", err);
         ds4_v100_tp_runtime_close(rt);
         return 5;
@@ -2866,11 +2882,12 @@ int main(int argc, char **argv) {
     const uint64_t return_bytes = dispatch_bytes;
     const double imbalance = min_routes > 0 ? (double)max_routes / (double)min_routes : 0.0;
     const double scaffold_ms = descriptor_ms + dense_kv_ms + worst_ep_ms;
+    const bool comp_rows_expected = ds4_layer_ratio(opt.layer) != 0;
     const bool pass = layer_stats.dense_rows > 0 &&
                       layer_stats.control_rows > 0 &&
                       layer_stats.expert_rows > 0 &&
                       layer_stats.kv_rows > 0 &&
-                      layer_stats.comp_rows > 0 &&
+                      (!comp_rows_expected || layer_stats.comp_rows > 0) &&
                       layer_stats.checksum != 0 &&
                       kv_result.max_abs == 0.0 &&
                       repeat_bad == 0 &&
