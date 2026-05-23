@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 258
+revision: 259
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -181,6 +181,10 @@ not a serial layer-chain.
   `700.645557` projected slot-step tok/s, while checksum stayed fixed. Shared
   runtime is correct residency progress, but Sprint 256 remains the current
   decode-speed base.
+- Sprint 259 added a same-binary TP runtime A/B. Local per-layer TP runtime is
+  the current decode-speed base at `42.723359 ms/token` /
+  `749.004771` projected slot-step tok/s. Shared TP runtime remains opt-in
+  because it regresses decode to `681.247356` projected slot-step tok/s.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -833,6 +837,24 @@ tok/s. This confirms the shared-runtime decode regression is persistent enough
 to respect. Keep the shared runtime as correct residency work, but use Sprint
 256 as the current decode-speed base unless the EP timing interaction is fixed.
 
+### Sprint 259 - TP Runtime A/B Gate [complete]
+
+Goal: Add a same-binary TP runtime sharing toggle and choose the current
+decode-speed base.
+
+Rationale: Shared TP runtime reduces setup wall time but appears to disturb
+the decode proxy. A same-binary A/B avoids comparing across commits or cluster
+conditions.
+
+Outcome: Complete. The tool now supports `--share-tp-runtime` and
+`--local-tp-runtime`, with local TP runtime as the default. The V100 50-step
+A/B passes `43/43` layers and checksum `204721433` in both modes. Local
+per-layer TP runtime reports `42.723359 ms/token` summed decode and
+`749.004771` projected slot-step tok/s. Shared TP runtime reports
+`46.972659 ms/token` and `681.247356` projected slot-step tok/s. Keep shared
+runtime as an opt-in diagnostic; do not use it as the performance base until
+the EP/dense timing interaction is fixed.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -892,6 +914,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 256 hoisted fixed rank buffers and stream/event lifecycle across the all-layer TP/EP loop. | Removing per-layer route/core buffer allocation cuts wall time and keeps checksum stable. | Hoist TP runtime/KV state or expert descriptor bindings. |
 | 2026-05-23 | Sprint 257 hoisted TP runtime/KV allocation across the all-layer TP/EP loop. | Correctness holds and wall time drops, but decode proxy regresses and needs repeat timing. | Repeat/longer gate, then decide whether to keep shared TP runtime as the performance base before expert binding hoist. |
 | 2026-05-23 | Sprint 258 repeated the shared TP runtime path with a 50-step all-layer gate. | The decode regression persisted while checksum stayed stable. | Investigate EP timing under shared runtime, or keep Sprint 256 as decode-speed base while hoisting expert bindings. |
+| 2026-05-23 | Sprint 259 added a same-binary TP runtime A/B and made local TP runtime the default. | Shared TP runtime is correct but slower for decode in the same executable. | Hoist expert descriptor bindings or collapse EP/dense/compose boundaries while preserving the local-runtime performance base. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

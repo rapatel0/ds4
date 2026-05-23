@@ -344,6 +344,7 @@ struct Options {
     bool all_layers = false;
     bool skip_descriptor_checks = false;
     bool skip_predecode_probes = false;
+    bool share_tp_runtime = false;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -762,7 +763,8 @@ void usage(const char *argv0) {
                  "       [--ep-return-fp16] [--fuse-compose-sum]\n"
                  "       [--dense-hmma-compose] [--dense-f16-cublas-compose]\n"
                  "       [--dense-f16-cache-compose] [--all-layers]\n"
-                 "       [--skip-descriptor-checks] [--skip-predecode-probes]\n",
+                 "       [--skip-descriptor-checks] [--skip-predecode-probes]\n"
+                 "       [--share-tp-runtime] [--local-tp-runtime]\n",
                  argv0);
 }
 
@@ -844,6 +846,10 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->skip_descriptor_checks = true;
         } else if (std::strcmp(arg, "--skip-predecode-probes") == 0) {
             opt->skip_predecode_probes = true;
+        } else if (std::strcmp(arg, "--share-tp-runtime") == 0) {
+            opt->share_tp_runtime = true;
+        } else if (std::strcmp(arg, "--local-tp-runtime") == 0) {
+            opt->share_tp_runtime = false;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -3354,7 +3360,7 @@ int main(int argc, char **argv) {
                 kGpus, (unsigned long long)shared_rank_buffers.core_bytes);
 
     SharedTpRuntime shared_tp_runtime;
-    if (open_shared_tp_runtime(opt, &shared_tp_runtime) != 0) {
+    if (opt.share_tp_runtime && open_shared_tp_runtime(opt, &shared_tp_runtime) != 0) {
         close_shared_rank_buffers(&shared_rank_buffers);
         close_shared_api(&shared_api);
         if (shared_dense_f16_cache) {
@@ -3362,14 +3368,19 @@ int main(int argc, char **argv) {
         }
         return 8;
     }
-    std::printf("tp_ep_all_layer_tp_runtime_shared\tdevices\t%d\tslots\t%d\tctx\t262144\t"
-                "kv_bytes_per_gpu\t%llu\tcomp_state_bytes_per_gpu\t%llu\t"
-                "scratch_bytes_per_gpu\t%llu\ttotal_bytes_per_gpu\t%llu\tPASS\n",
-                kGpus, opt.slots,
-                (unsigned long long)shared_tp_runtime.report.gpu[0].kv_bytes,
-                (unsigned long long)shared_tp_runtime.report.gpu[0].comp_state_bytes,
-                (unsigned long long)shared_tp_runtime.report.gpu[0].scratch_bytes,
-                (unsigned long long)shared_tp_runtime.report.gpu[0].total_bytes);
+    if (shared_tp_runtime.initialized) {
+        std::printf("tp_ep_all_layer_tp_runtime_shared\tdevices\t%d\tslots\t%d\tctx\t262144\t"
+                    "kv_bytes_per_gpu\t%llu\tcomp_state_bytes_per_gpu\t%llu\t"
+                    "scratch_bytes_per_gpu\t%llu\ttotal_bytes_per_gpu\t%llu\tPASS\n",
+                    kGpus, opt.slots,
+                    (unsigned long long)shared_tp_runtime.report.gpu[0].kv_bytes,
+                    (unsigned long long)shared_tp_runtime.report.gpu[0].comp_state_bytes,
+                    (unsigned long long)shared_tp_runtime.report.gpu[0].scratch_bytes,
+                    (unsigned long long)shared_tp_runtime.report.gpu[0].total_bytes);
+    } else {
+        std::printf("tp_ep_all_layer_tp_runtime_shared\tdevices\t%d\tslots\t%d\tctx\t262144\t"
+                    "mode\tlocal_per_layer\tPASS\n", kGpus, opt.slots);
+    }
 
     int pass_layers = 0;
     double sum_decode_ms = 0.0;
@@ -3382,8 +3393,10 @@ int main(int argc, char **argv) {
         Options layer_opt = opt;
         layer_opt.layer = layer;
         LayerRunSummary s;
+        SharedTpRuntime *tp_runtime_arg =
+            shared_tp_runtime.initialized ? &shared_tp_runtime : nullptr;
         const int rc = run_layer(layer_opt, &s, shared_dense_f16_cache, &shared_api,
-                                 &shared_rank_buffers, &shared_tp_runtime);
+                                 &shared_rank_buffers, tp_runtime_arg);
         std::printf("tp_ep_all_layer_item\tlayer\t%d\tratio\t%d\t"
                     "total_rows\t%llu\tdense_rows\t%llu\tcontrol_rows\t%llu\t"
                     "expert_rows\t%llu\tkv_rows\t%llu\tcomp_rows\t%llu\t"

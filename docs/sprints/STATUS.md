@@ -4,16 +4,14 @@ Last updated: 2026-05-23
 
 ## Topline
 
-Current TP/EP implementation status: Sprint 258 repeated the shared TP runtime
-path with a longer 50-step all-layer decode gate. Correctness holds at `43/43`
-layers and checksum `204721433`, but the decode proxy regression persists:
-`45.672166 ms/token` summed decode and `700.645557` projected slot-step tok/s,
-versus Sprint 256's `43.895297 ms/token` and `729.007483` without shared TP
-runtime. Wall time remains much lower (`30289.004553 ms` for the 50-step gate),
-so shared runtime is correct residency progress but not yet the decode-speed
-base. Next work should isolate the EP timing rise under shared TP runtime or
-keep Sprint 256 as the performance base while hoisting expert descriptor
-bindings.
+Current TP/EP implementation status: Sprint 259 added a same-binary TP runtime
+sharing toggle and ran a direct 50-step A/B. Local per-layer TP runtime is the
+current decode-speed base: `43/43` layers pass at `32` slots / `256K`, checksum
+`204721433`, `42.723359 ms/token` summed decode, and `749.004771` projected
+slot-step tok/s. Shared TP runtime is correct and lowers setup wall time, but
+it regresses projected decode throughput to `681.247356` slot-step tok/s in
+the same binary. The tool now defaults to local TP runtime and exposes
+`--share-tp-runtime` as an opt-in diagnostic.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s
