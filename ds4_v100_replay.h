@@ -63,6 +63,11 @@ typedef struct {
     double stage_decode_ms[DS4_V100_EXPECTED_GPUS];
     double stage_hc_attn_ms[DS4_V100_EXPECTED_GPUS];
     double stage_attention_ms[DS4_V100_EXPECTED_GPUS];
+    double stage_attn_proj_ms[DS4_V100_EXPECTED_GPUS];
+    double stage_attn_cache_ms[DS4_V100_EXPECTED_GPUS];
+    double stage_attn_softmax_ms[DS4_V100_EXPECTED_GPUS];
+    double stage_attn_inverse_rope_ms[DS4_V100_EXPECTED_GPUS];
+    double stage_attn_output_ms[DS4_V100_EXPECTED_GPUS];
     double stage_hc_ffn_ms[DS4_V100_EXPECTED_GPUS];
     double stage_ffn_ms[DS4_V100_EXPECTED_GPUS];
     double stage_hc_final_ms[DS4_V100_EXPECTED_GPUS];

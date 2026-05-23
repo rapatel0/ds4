@@ -1403,6 +1403,11 @@ int ds4_v100_stage_scheduler_decode_hc_layer_span(
     ds4_v100_layer_execute_report last[DS4_V100_SCHED_MAX_SLOTS];
     double timing_hc_attn_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
     double timing_attention_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
+    double timing_attn_proj_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
+    double timing_attn_cache_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
+    double timing_attn_softmax_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
+    double timing_attn_inverse_rope_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
+    double timing_attn_output_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
     double timing_hc_ffn_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
     double timing_ffn_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
     double timing_hc_final_ms[DS4_V100_SCHED_MAX_SLOTS] = {0};
@@ -1510,6 +1515,11 @@ int ds4_v100_stage_scheduler_decode_hc_layer_span(
         for (uint32_t rel = 0; rel < n_slots; rel++) {
             timing_hc_attn_ms[rel] += last[rel].timing_hc_attn_ms;
             timing_attention_ms[rel] += last[rel].timing_attention_ms;
+            timing_attn_proj_ms[rel] += last[rel].timing_attn_proj_ms;
+            timing_attn_cache_ms[rel] += last[rel].timing_attn_cache_ms;
+            timing_attn_softmax_ms[rel] += last[rel].timing_attn_softmax_ms;
+            timing_attn_inverse_rope_ms[rel] += last[rel].timing_attn_inverse_rope_ms;
+            timing_attn_output_ms[rel] += last[rel].timing_attn_output_ms;
             timing_hc_ffn_ms[rel] += last[rel].timing_hc_ffn_ms;
             timing_ffn_ms[rel] += last[rel].timing_ffn_ms;
             timing_hc_final_ms[rel] += last[rel].timing_hc_final_ms;
@@ -1555,6 +1565,11 @@ int ds4_v100_stage_scheduler_decode_hc_layer_span(
             r->turbomind_tp2_routed_layers_executed = turbomind_tp2_layers[rel];
             r->timing_hc_attn_ms = timing_hc_attn_ms[rel];
             r->timing_attention_ms = timing_attention_ms[rel];
+            r->timing_attn_proj_ms = timing_attn_proj_ms[rel];
+            r->timing_attn_cache_ms = timing_attn_cache_ms[rel];
+            r->timing_attn_softmax_ms = timing_attn_softmax_ms[rel];
+            r->timing_attn_inverse_rope_ms = timing_attn_inverse_rope_ms[rel];
+            r->timing_attn_output_ms = timing_attn_output_ms[rel];
             r->timing_hc_ffn_ms = timing_hc_ffn_ms[rel];
             r->timing_ffn_ms = timing_ffn_ms[rel];
             r->timing_hc_final_ms = timing_hc_final_ms[rel];

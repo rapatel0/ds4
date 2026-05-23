@@ -185,6 +185,11 @@ typedef struct {
     double timing_tp2_total_ms;
     double timing_hc_attn_ms;
     double timing_attention_ms;
+    double timing_attn_proj_ms;
+    double timing_attn_cache_ms;
+    double timing_attn_softmax_ms;
+    double timing_attn_inverse_rope_ms;
+    double timing_attn_output_ms;
     double timing_hc_ffn_ms;
     double timing_ffn_ms;
     double timing_hc_final_ms;

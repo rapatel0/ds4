@@ -408,6 +408,11 @@ static void counters_add_report(ds4_v100_replay_counters *c,
     c->layers_executed += r->layers_executed;
     c->stage_hc_attn_ms[stage] += r->timing_hc_attn_ms;
     c->stage_attention_ms[stage] += r->timing_attention_ms;
+    c->stage_attn_proj_ms[stage] += r->timing_attn_proj_ms;
+    c->stage_attn_cache_ms[stage] += r->timing_attn_cache_ms;
+    c->stage_attn_softmax_ms[stage] += r->timing_attn_softmax_ms;
+    c->stage_attn_inverse_rope_ms[stage] += r->timing_attn_inverse_rope_ms;
+    c->stage_attn_output_ms[stage] += r->timing_attn_output_ms;
     c->stage_hc_ffn_ms[stage] += r->timing_hc_ffn_ms;
     c->stage_ffn_ms[stage] += r->timing_ffn_ms;
     c->stage_hc_final_ms[stage] += r->timing_hc_final_ms;
@@ -1514,6 +1519,11 @@ static void replay_step_pipeline_report_accum(
     dst->timing_tp2_total_ms += src->timing_tp2_total_ms;
     dst->timing_hc_attn_ms += src->timing_hc_attn_ms;
     dst->timing_attention_ms += src->timing_attention_ms;
+    dst->timing_attn_proj_ms += src->timing_attn_proj_ms;
+    dst->timing_attn_cache_ms += src->timing_attn_cache_ms;
+    dst->timing_attn_softmax_ms += src->timing_attn_softmax_ms;
+    dst->timing_attn_inverse_rope_ms += src->timing_attn_inverse_rope_ms;
+    dst->timing_attn_output_ms += src->timing_attn_output_ms;
     dst->timing_hc_ffn_ms += src->timing_hc_ffn_ms;
     dst->timing_ffn_ms += src->timing_ffn_ms;
     dst->timing_hc_final_ms += src->timing_hc_final_ms;

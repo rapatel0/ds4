@@ -1493,6 +1493,31 @@ static void print_json_fp(FILE *fp,
         if (i) fprintf(fp, ",");
         fprintf(fp, "%.3f", c->stage_attention_ms[i]);
     }
+    fprintf(fp, "],\"attn_proj\":[");
+    for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
+        if (i) fprintf(fp, ",");
+        fprintf(fp, "%.3f", c->stage_attn_proj_ms[i]);
+    }
+    fprintf(fp, "],\"attn_cache\":[");
+    for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
+        if (i) fprintf(fp, ",");
+        fprintf(fp, "%.3f", c->stage_attn_cache_ms[i]);
+    }
+    fprintf(fp, "],\"attn_softmax\":[");
+    for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
+        if (i) fprintf(fp, ",");
+        fprintf(fp, "%.3f", c->stage_attn_softmax_ms[i]);
+    }
+    fprintf(fp, "],\"attn_inverse_rope\":[");
+    for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
+        if (i) fprintf(fp, ",");
+        fprintf(fp, "%.3f", c->stage_attn_inverse_rope_ms[i]);
+    }
+    fprintf(fp, "],\"attn_output\":[");
+    for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
+        if (i) fprintf(fp, ",");
+        fprintf(fp, "%.3f", c->stage_attn_output_ms[i]);
+    }
     fprintf(fp, "],\"hc_ffn\":[");
     for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
         if (i) fprintf(fp, ",");

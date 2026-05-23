@@ -1413,6 +1413,7 @@ static int execute_attention_output(const ds4_v100_layer_state *state,
                                     const ds4_v100_layer_execute_config *cfg,
                                     const ds4_gpu_tensor *hidden,
                                     ds4_gpu_tensor *attn_out,
+                                    ds4_v100_layer_execute_report *report,
                                     char *err,
                                     size_t errlen) {
     const uint32_t hidden_n = state->hidden_size;
@@ -1486,6 +1487,24 @@ static int execute_attention_output(const ds4_v100_layer_state *state,
         goto done;
     }
 
+    const bool detail_profile =
+        report &&
+        env_flag_enabled("DS4_V100_PROFILE_DECODE") &&
+        env_flag_enabled("DS4_V100_PROFILE_ATTENTION_DETAIL");
+    double detail_last_ms = 0.0;
+    double timing_attn_proj_ms = 0.0;
+    double timing_attn_cache_ms = 0.0;
+    double timing_attn_softmax_ms = 0.0;
+    double timing_attn_inverse_rope_ms = 0.0;
+    double timing_attn_output_ms = 0.0;
+    if (detail_profile) {
+        if (!ds4_gpu_synchronize()) {
+            exec_error(err, errlen, "attention detail profile start sync failed");
+            goto done;
+        }
+        detail_last_ms = monotonic_ms();
+    }
+
     const bool fused_q_norm_rope = env_flag_enabled("DS4_V100_FUSED_Q_NORM_ROPE");
     if (!ds4_gpu_rms_norm_weight_tensor(attn_norm,
                                         hidden,
@@ -1493,48 +1512,73 @@ static int execute_attention_output(const ds4_v100_layer_state *state,
                                         cfg->model_size,
                                         model_offset_for_binding(cfg, &state->attn_norm),
                                         hidden_n,
-                                        DS4_V100_RMS_EPS) ||
-        ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena, &q_a_v, attn_norm, q_a) != 0 ||
-        !ds4_gpu_rms_norm_weight_tensor(q_a_norm,
+                                        DS4_V100_RMS_EPS)) {
+        exec_error(err, errlen, "attention projection sequence failed");
+        goto done;
+    }
+    if (ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena, &q_a_v, attn_norm, q_a) != 0) {
+        exec_error(err, errlen, "attention projection sequence failed");
+        goto done;
+    }
+    if (!ds4_gpu_rms_norm_weight_tensor(q_a_norm,
                                         q_a,
                                         cfg->model_map,
                                         cfg->model_size,
                                         model_offset_for_binding(cfg, &state->attn_q_a_norm),
                                         q_rank,
-                                        DS4_V100_RMS_EPS) ||
-        ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena, &q_b_v, q_a_norm, q) != 0 ||
-        !(fused_q_norm_rope
-            ? q_head_norm_rope_tail_layer_tensor(q,
-                                                 DS4_V100_N_HEAD,
-                                                 DS4_V100_HEAD_DIM,
-                                                 cfg->position,
-                                                 state)
-            : (ds4_gpu_head_rms_norm_tensor(q,
-                                            1,
-                                            DS4_V100_N_HEAD,
-                                            DS4_V100_HEAD_DIM,
-                                            DS4_V100_RMS_EPS) &&
-               rope_tail_layer_tensor(q,
-                                      DS4_V100_N_HEAD,
-                                      DS4_V100_HEAD_DIM,
-                                      cfg->position,
-                                      state,
-                                      false))) ||
-        ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena, &kv_v, attn_norm, kv_raw) != 0 ||
-        !ds4_gpu_rms_norm_weight_tensor(kv,
+                                        DS4_V100_RMS_EPS)) {
+        exec_error(err, errlen, "attention projection sequence failed");
+        goto done;
+    }
+    if (ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena, &q_b_v, q_a_norm, q) != 0) {
+        exec_error(err, errlen, "attention projection sequence failed");
+        goto done;
+    }
+    if (!(fused_q_norm_rope
+              ? q_head_norm_rope_tail_layer_tensor(q,
+                                                   DS4_V100_N_HEAD,
+                                                   DS4_V100_HEAD_DIM,
+                                                   cfg->position,
+                                                   state)
+              : (ds4_gpu_head_rms_norm_tensor(q,
+                                              1,
+                                              DS4_V100_N_HEAD,
+                                              DS4_V100_HEAD_DIM,
+                                              DS4_V100_RMS_EPS) &&
+                 rope_tail_layer_tensor(q,
+                                        DS4_V100_N_HEAD,
+                                        DS4_V100_HEAD_DIM,
+                                        cfg->position,
+                                        state,
+                                        false)))) {
+        exec_error(err, errlen, "attention projection sequence failed");
+        goto done;
+    }
+    if (ds4_gpu_arena_f8_e4m3_b128_matmul_f32(cfg->arena, &kv_v, attn_norm, kv_raw) != 0) {
+        exec_error(err, errlen, "attention projection sequence failed");
+        goto done;
+    }
+    if (!ds4_gpu_rms_norm_weight_tensor(kv,
                                         kv_raw,
                                         cfg->model_map,
                                         cfg->model_size,
                                         model_offset_for_binding(cfg, &state->attn_kv_a_norm),
                                         kv_width,
-                                        DS4_V100_RMS_EPS) ||
-        !rope_tail_layer_tensor(kv,
+                                        DS4_V100_RMS_EPS)) {
+        exec_error(err, errlen, "attention projection sequence failed");
+        goto done;
+    }
+    if (!rope_tail_layer_tensor(kv,
                                 1,
                                 DS4_V100_HEAD_DIM,
                                 cfg->position,
                                 state,
                                 false)) {
         exec_error(err, errlen, "attention projection sequence failed");
+        goto done;
+    }
+    if (detail_profile && !profile_mark(&detail_last_ms, &timing_attn_proj_ms)) {
+        exec_error(err, errlen, "attention projection detail profile sync failed");
         goto done;
     }
 
@@ -1559,6 +1603,10 @@ static int execute_attention_output(const ds4_v100_layer_state *state,
                                        &attn_inputs,
                                        err,
                                        errlen)) {
+        goto done;
+    }
+    if (detail_profile && !profile_mark(&detail_last_ms, &timing_attn_cache_ms)) {
+        exec_error(err, errlen, "attention cache detail profile sync failed");
         goto done;
     }
 
@@ -1605,6 +1653,10 @@ static int execute_attention_output(const ds4_v100_layer_state *state,
         exec_error(err, errlen, "attention softmax failed");
         goto done;
     }
+    if (detail_profile && !profile_mark(&detail_last_ms, &timing_attn_softmax_ms)) {
+        exec_error(err, errlen, "attention softmax detail profile sync failed");
+        goto done;
+    }
     if (!rope_tail_layer_tensor(heads,
                                 DS4_V100_N_HEAD,
                                 DS4_V100_HEAD_DIM,
@@ -1614,9 +1666,24 @@ static int execute_attention_output(const ds4_v100_layer_state *state,
         exec_error(err, errlen, "attention inverse rope failed");
         goto done;
     }
+    if (detail_profile && !profile_mark(&detail_last_ms, &timing_attn_inverse_rope_ms)) {
+        exec_error(err, errlen, "attention inverse rope detail profile sync failed");
+        goto done;
+    }
 
     if (grouped_attention_output(state, cfg, heads, low, attn_out, err, errlen)) {
         goto done;
+    }
+    if (detail_profile && !profile_mark(&detail_last_ms, &timing_attn_output_ms)) {
+        exec_error(err, errlen, "attention output detail profile sync failed");
+        goto done;
+    }
+    if (detail_profile) {
+        report->timing_attn_proj_ms = timing_attn_proj_ms;
+        report->timing_attn_cache_ms = timing_attn_cache_ms;
+        report->timing_attn_softmax_ms = timing_attn_softmax_ms;
+        report->timing_attn_inverse_rope_ms = timing_attn_inverse_rope_ms;
+        report->timing_attn_output_ms = timing_attn_output_ms;
     }
     rc = 0;
 
@@ -1657,6 +1724,7 @@ static int execute_attention_output_batch(const ds4_v100_layer_state *state,
                                          &cfgs[slot],
                                          hidden[slot],
                                          attn_out[slot],
+                                         NULL,
                                          err,
                                          errlen)) {
                 return 1;
@@ -2325,6 +2393,11 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
         const double tp2_copy_out_ms = report->timing_tp2_copy_out_ms;
         const double tp2_reduce_ms = report->timing_tp2_reduce_ms;
         const double tp2_total_ms = report->timing_tp2_total_ms;
+        const double timing_attn_proj_ms = report->timing_attn_proj_ms;
+        const double timing_attn_cache_ms = report->timing_attn_cache_ms;
+        const double timing_attn_softmax_ms = report->timing_attn_softmax_ms;
+        const double timing_attn_inverse_rope_ms = report->timing_attn_inverse_rope_ms;
+        const double timing_attn_output_ms = report->timing_attn_output_ms;
         memset(report, 0, sizeof(*report));
         report->routes = routes;
         report->turbomind_routed = state->has_turbomind_routed ? 1u : 0u;
@@ -2335,6 +2408,11 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
         report->timing_tp2_copy_out_ms = tp2_copy_out_ms;
         report->timing_tp2_reduce_ms = tp2_reduce_ms;
         report->timing_tp2_total_ms = tp2_total_ms;
+        report->timing_attn_proj_ms = timing_attn_proj_ms;
+        report->timing_attn_cache_ms = timing_attn_cache_ms;
+        report->timing_attn_softmax_ms = timing_attn_softmax_ms;
+        report->timing_attn_inverse_rope_ms = timing_attn_inverse_rope_ms;
+        report->timing_attn_output_ms = timing_attn_output_ms;
         if (readback_routes) {
             for (uint32_t i = 0; i < routes && i < 6u; i++) {
                 report->selected_experts[i] = selected[i];
@@ -2981,7 +3059,7 @@ int ds4_v100_layer_execute_decode(
         goto done;
     }
 
-    if (execute_attention_output(state, cfg, hidden, attn_out, err, errlen) ||
+    if (execute_attention_output(state, cfg, hidden, attn_out, report, err, errlen) ||
         !ds4_gpu_add_tensor(residual, hidden, attn_out, hidden_n) ||
         !ds4_gpu_rms_norm_weight_tensor(ffn_norm,
                                         residual,
@@ -3132,7 +3210,7 @@ int ds4_v100_layer_execute_hc_decode(
         goto done;
     }
 
-    if (execute_attention_output(state, cfg, attn_cur, attn_out, err, errlen)) {
+    if (execute_attention_output(state, cfg, attn_cur, attn_out, report, err, errlen)) {
         goto done;
     }
     if (profile && !profile_mark(&profile_last_ms, &timing_attention_ms)) {
@@ -3331,7 +3409,7 @@ int ds4_v100_layer_execute_hc_prepare_ffn(
                                               DS4_V100_N_HC,
                                               DS4_V100_HC_SINKHORN_ITERS,
                                               DS4_V100_RMS_EPS) ||
-        execute_attention_output(state, cfg, attn_cur, attn_out, err, errlen) ||
+        execute_attention_output(state, cfg, attn_cur, attn_out, NULL, err, errlen) ||
         !ds4_gpu_hc_expand_split_tensor(after_attn_hc,
                                         attn_out,
                                         hidden_hc,
