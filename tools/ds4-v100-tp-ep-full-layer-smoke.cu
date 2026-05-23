@@ -308,6 +308,12 @@ struct ServingBenchResult {
     double continuation_wall_ms = 0.0;
     double total_decode_ms = 0.0;
     double total_wall_ms = 0.0;
+    double total_ep_ms = 0.0;
+    double total_dense_ms = 0.0;
+    double total_compose_ms = 0.0;
+    double total_compose_reduce_ms = 0.0;
+    double total_compose_copy_ms = 0.0;
+    double total_compose_final_ms = 0.0;
     double aggregate_generated_tok_s_decode = 0.0;
     double aggregate_generated_tok_s_wall = 0.0;
     double aggregate_continuation_tok_s_decode = 0.0;
@@ -4036,6 +4042,12 @@ int run_token_major_serving_loop(const Options &opt,
             serving_result->continuation_wall_ms = continuation_wall_ms;
             serving_result->total_decode_ms = sum_decode_ms;
             serving_result->total_wall_ms = wall_ms;
+            serving_result->total_ep_ms = sum_ep_ms;
+            serving_result->total_dense_ms = sum_dense_ms;
+            serving_result->total_compose_ms = sum_compose_ms;
+            serving_result->total_compose_reduce_ms = sum_compose_reduce_ms;
+            serving_result->total_compose_copy_ms = sum_compose_copy_ms;
+            serving_result->total_compose_final_ms = sum_compose_final_ms;
             serving_result->aggregate_generated_tok_s_decode = generated_tok_s_decode;
             serving_result->aggregate_generated_tok_s_wall = generated_tok_s_wall;
             serving_result->aggregate_continuation_tok_s_decode = continuation_tok_s_decode;
@@ -4148,6 +4160,12 @@ int run_tp_ep_http_server(const Options &base_opt,
     double total_wall_ms = 0.0;
     double total_continuation_decode_ms = 0.0;
     double total_continuation_wall_ms = 0.0;
+    double total_ep_ms = 0.0;
+    double total_dense_ms = 0.0;
+    double total_compose_ms = 0.0;
+    double total_compose_reduce_ms = 0.0;
+    double total_compose_copy_ms = 0.0;
+    double total_compose_final_ms = 0.0;
     ServingBenchResult last = {};
     std::printf("tp_ep_http_serving\thttp://%s:%d/v100/selected-token\tPASS\n",
                 base_opt.host, base_opt.port);
@@ -4203,10 +4221,17 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "\"warmed_ready\":true,\"resident_ready\":true,"
                           "\"last_generated_tok_s_wall\":%.6f,"
                           "\"last_continuation_tok_s_wall\":%.6f,"
+                          "\"last_compose_copy_ms\":%.6f,"
                           "\"cumulative_generated_tok_s_wall\":%.6f,"
                           "\"cumulative_continuation_tok_s_wall\":%.6f,"
                           "\"cumulative_generated_tok_s_decode\":%.6f,"
-                          "\"cumulative_continuation_tok_s_decode\":%.6f}\n",
+                          "\"cumulative_continuation_tok_s_decode\":%.6f,"
+                          "\"cumulative_ep_ms\":%.6f,"
+                          "\"cumulative_dense_ms\":%.6f,"
+                          "\"cumulative_compose_ms\":%.6f,"
+                          "\"cumulative_compose_reduce_ms\":%.6f,"
+                          "\"cumulative_compose_copy_ms\":%.6f,"
+                          "\"cumulative_compose_final_ms\":%.6f}\n",
                           base_opt.slots,
                           (unsigned long long)served,
                           (unsigned long long)generation_requests,
@@ -4217,10 +4242,17 @@ int run_tp_ep_http_server(const Options &base_opt,
                           (unsigned long long)next_position,
                           last.aggregate_generated_tok_s_wall,
                           last.aggregate_continuation_tok_s_wall,
+                          last.total_compose_copy_ms,
                           cumulative_generated_tok_s_wall,
                           cumulative_continuation_tok_s_wall,
                           cumulative_generated_tok_s_decode,
-                          cumulative_continuation_tok_s_decode);
+                          cumulative_continuation_tok_s_decode,
+                          total_ep_ms,
+                          total_dense_ms,
+                          total_compose_ms,
+                          total_compose_reduce_ms,
+                          total_compose_copy_ms,
+                          total_compose_final_ms);
             http_write_json(fd, 200, out);
         } else if (std::strcmp(method, "GET") == 0 && std::strcmp(path, "/metrics") == 0) {
             const double cumulative_generated_tok_s_wall = total_wall_ms > 0.0
@@ -4248,10 +4280,17 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "ds4_v100_tp_ep_next_position %llu\n"
                           "ds4_v100_tp_ep_generated_tok_s_wall %.6f\n"
                           "ds4_v100_tp_ep_continuation_tok_s_wall %.6f\n"
+                          "ds4_v100_tp_ep_last_compose_copy_ms %.6f\n"
                           "ds4_v100_tp_ep_cumulative_generated_tok_s_wall %.6f\n"
                           "ds4_v100_tp_ep_cumulative_continuation_tok_s_wall %.6f\n"
                           "ds4_v100_tp_ep_cumulative_generated_tok_s_decode %.6f\n"
-                          "ds4_v100_tp_ep_cumulative_continuation_tok_s_decode %.6f\n",
+                          "ds4_v100_tp_ep_cumulative_continuation_tok_s_decode %.6f\n"
+                          "ds4_v100_tp_ep_cumulative_ep_ms %.6f\n"
+                          "ds4_v100_tp_ep_cumulative_dense_ms %.6f\n"
+                          "ds4_v100_tp_ep_cumulative_compose_ms %.6f\n"
+                          "ds4_v100_tp_ep_cumulative_compose_reduce_ms %.6f\n"
+                          "ds4_v100_tp_ep_cumulative_compose_copy_ms %.6f\n"
+                          "ds4_v100_tp_ep_cumulative_compose_final_ms %.6f\n",
                           base_opt.slots,
                           (unsigned long long)served,
                           (unsigned long long)generation_requests,
@@ -4262,10 +4301,17 @@ int run_tp_ep_http_server(const Options &base_opt,
                           (unsigned long long)next_position,
                           last.aggregate_generated_tok_s_wall,
                           last.aggregate_continuation_tok_s_wall,
+                          last.total_compose_copy_ms,
                           cumulative_generated_tok_s_wall,
                           cumulative_continuation_tok_s_wall,
                           cumulative_generated_tok_s_decode,
-                          cumulative_continuation_tok_s_decode);
+                          cumulative_continuation_tok_s_decode,
+                          total_ep_ms,
+                          total_dense_ms,
+                          total_compose_ms,
+                          total_compose_reduce_ms,
+                          total_compose_copy_ms,
+                          total_compose_final_ms);
             http_write_text(fd, out);
         } else if (std::strcmp(method, "POST") == 0 &&
                    (std::strcmp(path, "/v100/selected-token") == 0 ||
@@ -4301,6 +4347,12 @@ int run_tp_ep_http_server(const Options &base_opt,
                 total_wall_ms += result.total_wall_ms;
                 total_continuation_decode_ms += result.continuation_decode_ms;
                 total_continuation_wall_ms += result.continuation_wall_ms;
+                total_ep_ms += result.total_ep_ms;
+                total_dense_ms += result.total_dense_ms;
+                total_compose_ms += result.total_compose_ms;
+                total_compose_reduce_ms += result.total_compose_reduce_ms;
+                total_compose_copy_ms += result.total_compose_copy_ms;
+                total_compose_final_ms += result.total_compose_final_ms;
                 last = result;
                 char out[4096];
                 std::snprintf(out, sizeof(out),
@@ -4314,6 +4366,9 @@ int run_tp_ep_http_server(const Options &base_opt,
                               "\"first_token_wall\":%.6f,"
                               "\"continuation_wall\":%.6f,"
                               "\"total_decode\":%.6f,\"total_wall\":%.6f,"
+                              "\"ep\":%.6f,\"dense\":%.6f,"
+                              "\"compose\":%.6f,\"compose_reduce\":%.6f,"
+                              "\"compose_copy\":%.6f,\"compose_final\":%.6f,"
                               "\"generated_tokens_per_second\":%.6f,"
                               "\"continuation_tokens_per_second\":%.6f,"
                               "\"generated_tokens_per_second_decode\":%.6f,"
@@ -4330,6 +4385,12 @@ int run_tp_ep_http_server(const Options &base_opt,
                               result.continuation_wall_ms,
                               result.total_decode_ms,
                               result.total_wall_ms,
+                              result.total_ep_ms,
+                              result.total_dense_ms,
+                              result.total_compose_ms,
+                              result.total_compose_reduce_ms,
+                              result.total_compose_copy_ms,
+                              result.total_compose_final_ms,
                               result.aggregate_generated_tok_s_wall,
                               result.aggregate_continuation_tok_s_wall,
                               result.aggregate_generated_tok_s_decode,

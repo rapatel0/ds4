@@ -22,11 +22,14 @@ current V100 matrix at `32` slots / `256K` with three generation requests per
 case reports `751.114404` wall generated tok/s and `760.078310` wall
 continuation tok/s for `32` tokens/request, and `762.277426` wall generated
 tok/s and `766.925593` wall continuation tok/s for `64` tokens/request.
-Decode-only rates are `972.107940` and `988.565789` generated tok/s. Both
-cases return aggregate `96/96` token match. GPU utilization peaks at `40-41%`
-and averages `19-20%` across the generation windows, so the remaining gap is
-now practical continuous request batching/coalescing and reduction of the
-dominant compose-copy overhead, not proof that the TP/EP server path exists.
+Sprint 281 then exposed EP/dense/compose stage timing through HTTP artifacts.
+The stage-metric rerun reports `742.897231` and `739.612937` wall generated
+tok/s for 32-token and 64-token cases. In the 64-token case, EP is
+`2663.985462 ms`, compose is `3626.650073 ms`, and compose-copy alone is
+`2569.208878 ms`, or `70.8%` of compose time. Both cases return aggregate
+`96/96` token match. GPU utilization remains low, peaking at `33-40%`, so the
+remaining performance gap is compose-copy movement/synchronization; true HTTP
+request coalescing remains the serving-semantics gap.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

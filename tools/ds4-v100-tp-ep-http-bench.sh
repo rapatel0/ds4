@@ -86,9 +86,9 @@ esac
 mkdir -p "$log_dir/cases"
 summary_tsv="$log_dir/sustained_http.tsv"
 summary_json="$log_dir/sustained_http.json"
-printf 'schema\tds4_v100_tp_ep_sustained_http.v2\n' >"$summary_tsv"
+printf 'schema\tds4_v100_tp_ep_sustained_http.v3\n' >"$summary_tsv"
 printf 'backend\ttp_ep_launcher_http\n\n' >>"$summary_tsv"
-printf 'tokens\tctx\tslots\tgeneration_requests\tstatus_200\tgenerated_tokens\tcontinuation_tokens\telapsed_s\tgenerated_tok_s\tcontinuation_tok_s\tgenerated_tok_s_decode\tcontinuation_tok_s_decode\tgpu_util_avg\tgpu_util_max\tgpu_mem_used_max_mib\n' >>"$summary_tsv"
+printf 'tokens\tctx\tslots\tgeneration_requests\tstatus_200\tgenerated_tokens\tcontinuation_tokens\telapsed_s\tgenerated_tok_s\tcontinuation_tok_s\tgenerated_tok_s_decode\tcontinuation_tok_s_decode\tep_ms\tdense_ms\tcompose_ms\tcompose_reduce_ms\tcompose_copy_ms\tcompose_final_ms\tgpu_util_avg\tgpu_util_max\tgpu_mem_used_max_mib\n' >>"$summary_tsv"
 
 case_jsons=()
 case_index=0
@@ -224,6 +224,12 @@ total_wall_ms = sum(r["timing_ms"]["total_wall"] for r in responses)
 total_decode_ms = sum(r["timing_ms"]["total_decode"] for r in responses)
 total_cont_wall_ms = sum(r["timing_ms"]["continuation_wall"] for r in responses)
 total_cont_decode_ms = sum(r["timing_ms"]["continuation_decode"] for r in responses)
+total_ep_ms = sum(r["timing_ms"].get("ep", 0.0) for r in responses)
+total_dense_ms = sum(r["timing_ms"].get("dense", 0.0) for r in responses)
+total_compose_ms = sum(r["timing_ms"].get("compose", 0.0) for r in responses)
+total_compose_reduce_ms = sum(r["timing_ms"].get("compose_reduce", 0.0) for r in responses)
+total_compose_copy_ms = sum(r["timing_ms"].get("compose_copy", 0.0) for r in responses)
+total_compose_final_ms = sum(r["timing_ms"].get("compose_final", 0.0) for r in responses)
 token_match = sum(r["token_match"] for r in responses)
 token_mismatch = sum(r["token_mismatch"] for r in responses)
 gpu_utils = []
@@ -250,7 +256,7 @@ gpu_util_avg = sum(gpu_utils) / len(gpu_utils) if gpu_utils else 0.0
 gpu_util_max = max(gpu_utils) if gpu_utils else 0.0
 gpu_mem_used_max = max(gpu_mem_used) if gpu_mem_used else 0.0
 row = {
-    "schema": "ds4_v100_tp_ep_sustained_http_case.v2",
+    "schema": "ds4_v100_tp_ep_sustained_http_case.v3",
     "backend": "tp_ep_launcher_http",
     "tokens_per_request": int(tokens),
     "ctx": int(ctx),
@@ -264,6 +270,12 @@ row = {
     "continuation_tok_s": (total_continuation * 1000.0 / total_cont_wall_ms) if total_cont_wall_ms > 0 else 0.0,
     "generated_tok_s_decode": (total_generated * 1000.0 / total_decode_ms) if total_decode_ms > 0 else 0.0,
     "continuation_tok_s_decode": (total_continuation * 1000.0 / total_cont_decode_ms) if total_cont_decode_ms > 0 else 0.0,
+    "ep_ms": total_ep_ms,
+    "dense_ms": total_dense_ms,
+    "compose_ms": total_compose_ms,
+    "compose_reduce_ms": total_compose_reduce_ms,
+    "compose_copy_ms": total_compose_copy_ms,
+    "compose_final_ms": total_compose_final_ms,
     "token_match": token_match,
     "token_mismatch": token_mismatch,
     "gpu_util_avg": gpu_util_avg,
@@ -281,6 +293,9 @@ with open(summary_tsv, "a", encoding="utf-8") as f:
         f"{row['elapsed_s']:.6f}\t{row['generated_tok_s']:.6f}\t"
         f"{row['continuation_tok_s']:.6f}\t{row['generated_tok_s_decode']:.6f}\t"
         f"{row['continuation_tok_s_decode']:.6f}\t"
+        f"{row['ep_ms']:.6f}\t{row['dense_ms']:.6f}\t"
+        f"{row['compose_ms']:.6f}\t{row['compose_reduce_ms']:.6f}\t"
+        f"{row['compose_copy_ms']:.6f}\t{row['compose_final_ms']:.6f}\t"
         f"{row['gpu_util_avg']:.6f}\t{row['gpu_util_max']:.6f}\t"
         f"{row['gpu_mem_used_max_mib']:.6f}\n"
     )
@@ -299,7 +314,7 @@ for path in sys.argv[2:]:
     with open(path, "r", encoding="utf-8") as f:
         cases.append(json.load(f))
 with open(summary_path, "w", encoding="utf-8") as f:
-    json.dump({"schema": "ds4_v100_tp_ep_sustained_http.v2", "cases": cases}, f, sort_keys=True)
+    json.dump({"schema": "ds4_v100_tp_ep_sustained_http.v3", "cases": cases}, f, sort_keys=True)
     f.write("\n")
 PY
 
