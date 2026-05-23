@@ -29,7 +29,12 @@ tok/s for 32-token and 64-token cases. In the 64-token case, EP is
 `2569.208878 ms`, or `70.8%` of compose time. Both cases return aggregate
 `96/96` token match. GPU utilization remains low, peaking at `33-40%`, so the
 remaining performance gap is compose-copy movement/synchronization; true HTTP
-request coalescing remains the serving-semantics gap.
+request coalescing remains the serving-semantics gap. Sprint 282 added and
+promoted event-wait compose copy. Same-binary 64-token serving A/B improves
+wall generated throughput from `752.669235` to `771.276064` tok/s and wall
+continuation throughput from `757.403683` to `775.670776` tok/s, with
+aggregate `96/96` token match. The current promoted TP/EP serving default is
+therefore `DS4_V100_TP_EP_COPY_EVENT_COMPOSE=1`.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

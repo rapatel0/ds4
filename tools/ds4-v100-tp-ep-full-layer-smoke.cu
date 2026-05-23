@@ -138,6 +138,7 @@ struct RankState {
     cudaStream_t dense_stream = nullptr;
     cudaStream_t copy_stream = nullptr;
     cudaStream_t copy_streams[kGpus] = {};
+    cudaEvent_t copy_done[kGpus] = {};
     int *d_offsets = nullptr;
     int *d_route_slots = nullptr;
     __half *d_a = nullptr;
@@ -412,6 +413,7 @@ struct Options {
     bool overlap_ep_dense = true;
     bool direct_remote_compose = false;
     bool source_copy_schedule = true;
+    bool copy_event_compose = false;
     bool token_major_all_layers = false;
     bool share_dense_ops = false;
     bool skip_self_compose_copy = true;
@@ -846,6 +848,7 @@ void usage(const char *argv0) {
                  "       [--overlap-ep-dense] [--serial-ep-dense]\n"
                  "       [--direct-remote-compose]\n"
                  "       [--source-copy-schedule] [--dest-copy-schedule]\n"
+                 "       [--copy-event-compose]\n"
                  "       [--token-major-all-layers] [--shared-dense-ops]\n"
                  "       [--skip-self-compose-copy] [--copy-self-compose]\n"
                  "       [--multi-copy-streams] [--serving-bench]\n"
@@ -952,6 +955,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->source_copy_schedule = true;
         } else if (std::strcmp(arg, "--dest-copy-schedule") == 0) {
             opt->source_copy_schedule = false;
+        } else if (std::strcmp(arg, "--copy-event-compose") == 0) {
+            opt->copy_event_compose = true;
         } else if (std::strcmp(arg, "--token-major-all-layers") == 0) {
             opt->token_major_all_layers = true;
         } else if (std::strcmp(arg, "--shared-dense-ops") == 0) {
@@ -2421,6 +2426,7 @@ int open_shared_rank_buffers(const Options &opt, SharedRankBuffers *shared) {
         CHECK_CUDA(cudaStreamCreate(&r.copy_stream));
         for (int q = 0; q < kGpus; ++q) {
             CHECK_CUDA(cudaStreamCreate(&r.copy_streams[q]));
+            CHECK_CUDA(cudaEventCreateWithFlags(&r.copy_done[q], cudaEventDisableTiming));
         }
         CHECK_CUDA(cudaEventCreate(&r.start));
         CHECK_CUDA(cudaEventCreate(&r.mid));
@@ -2483,6 +2489,7 @@ void close_shared_rank_buffers(SharedRankBuffers *shared) {
         if (r.mid) CHECK_CUDA(cudaEventDestroy(r.mid));
         if (r.stop) CHECK_CUDA(cudaEventDestroy(r.stop));
         for (int q = 0; q < kGpus; ++q) {
+            if (r.copy_done[q]) CHECK_CUDA(cudaEventDestroy(r.copy_done[q]));
             if (r.copy_streams[q]) CHECK_CUDA(cudaStreamDestroy(r.copy_streams[q]));
         }
         if (r.copy_stream) CHECK_CUDA(cudaStreamDestroy(r.copy_stream));
@@ -2908,19 +2915,25 @@ int run_decode_loop(const Options &opt,
                                                            (size_t)return_shard_bytes,
                                                            copy_stream));
                         }
+                        if (opt.copy_event_compose) {
+                            CHECK_CUDA(cudaEventRecord(ranks[src].copy_done[dst],
+                                                       copy_stream));
+                        }
                     }
                 }
-                for (int src = 0; src < kGpus; ++src) {
-                    CHECK_CUDA(cudaSetDevice(ranks[src].device));
-                    if (opt.multi_copy_streams) {
-                        for (int dst = 0; dst < kGpus; ++dst) {
-                            if (skip_self_copy && src == dst) continue;
-                            CHECK_CUDA(cudaStreamSynchronize(ranks[src].copy_streams[dst]));
+                if (!opt.copy_event_compose) {
+                    for (int src = 0; src < kGpus; ++src) {
+                        CHECK_CUDA(cudaSetDevice(ranks[src].device));
+                        if (opt.multi_copy_streams) {
+                            for (int dst = 0; dst < kGpus; ++dst) {
+                                if (skip_self_copy && src == dst) continue;
+                                CHECK_CUDA(cudaStreamSynchronize(ranks[src].copy_streams[dst]));
+                            }
+                        } else {
+                            CHECK_CUDA(cudaStreamSynchronize(ranks[src].copy_stream ?
+                                                            ranks[src].copy_stream :
+                                                            ranks[src].stream));
                         }
-                    } else {
-                        CHECK_CUDA(cudaStreamSynchronize(ranks[src].copy_stream ?
-                                                        ranks[src].copy_stream :
-                                                        ranks[src].stream));
                     }
                 }
             } else {
@@ -2957,6 +2970,13 @@ int run_decode_loop(const Options &opt,
         for (int dst = 0; dst < kGpus; ++dst) {
             RankState &r = ranks[dst];
             CHECK_CUDA(cudaSetDevice(r.device));
+            if (opt.copy_event_compose && opt.source_copy_schedule &&
+                (!opt.direct_remote_compose || opt.ep_return_fp16)) {
+                for (int src = 0; src < kGpus; ++src) {
+                    if (skip_self_copy && src == dst) continue;
+                    CHECK_CUDA(cudaStreamWaitEvent(r.stream, ranks[src].copy_done[dst], 0));
+                }
+            }
             int grid = (int)((shard_elems + block - 1) / block);
             if (stats->fused_compose_sum) {
                 const float *r0 = skip_self_copy && dst == 0
@@ -3407,6 +3427,7 @@ int run_layer(const Options &opt,
             CHECK_CUDA(cudaStreamCreate(&r.copy_stream));
             for (int q = 0; q < kGpus; ++q) {
                 CHECK_CUDA(cudaStreamCreate(&r.copy_streams[q]));
+                CHECK_CUDA(cudaEventCreateWithFlags(&r.copy_done[q], cudaEventDisableTiming));
             }
             CHECK_CUDA(cudaEventCreate(&r.start));
             CHECK_CUDA(cudaEventCreate(&r.mid));
@@ -3827,6 +3848,7 @@ int run_layer(const Options &opt,
             CHECK_CUDA(cudaEventDestroy(r.mid));
             CHECK_CUDA(cudaEventDestroy(r.stop));
             for (int q = 0; q < kGpus; ++q) {
+                if (r.copy_done[q]) CHECK_CUDA(cudaEventDestroy(r.copy_done[q]));
                 if (r.copy_streams[q]) CHECK_CUDA(cudaStreamDestroy(r.copy_streams[q]));
             }
             CHECK_CUDA(cudaStreamDestroy(r.copy_stream));

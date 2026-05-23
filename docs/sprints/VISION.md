@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 281
+revision: 282
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -283,6 +283,10 @@ not a serial layer-chain.
   32 tokens/request and `739.612937` for 64 tokens/request. The 64-token case
   shows compose-copy at `2569.208878 ms`, or `70.8%` of compose time, making
   compose-copy the next concrete performance target.
+- Sprint 282 added event-wait compose copy and promoted it as the TP/EP
+  appliance default. Same-binary 64-token serving A/B improves wall generated
+  throughput from `752.669235` to `771.276064` tok/s while preserving
+  aggregate `96/96` token match.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -1307,6 +1311,20 @@ generation requests per case reports `742.897231` wall generated tok/s for
 case, compose-copy accounts for `2569.208878 ms` of `3626.650073 ms` compose
 time.
 
+### Sprint 282 - TP/EP Event-Wait Compose Copy [complete]
+
+Goal: Reduce TP/EP compose-copy host synchronization by making destination
+compose streams wait on peer-copy events.
+
+Outcome: Complete. `--copy-event-compose` records per-source/per-destination
+copy completion events and has destination streams wait on those events before
+final compose, avoiding a global host-side copy-stream synchronization barrier.
+The appliance launcher and Kubernetes defaults now enable
+`DS4_V100_TP_EP_COPY_EVENT_COMPOSE=1`. Same-binary 64-token HTTP A/B at
+`32` slots / `256K` / three generation requests improves wall generated tok/s
+from `752.669235` to `771.276064` and wall continuation tok/s from
+`757.403683` to `775.670776`, with aggregate `96/96` token match.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1388,6 +1406,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 279 wired Kubernetes defaults to the TP/EP path and added GPU-util sampling. | The deployment example no longer points at the frozen PP path, and the HTTP matrix now exposes utilization as well as tok/s. | Build continuous request batching/coalescing for practical serving and keep optimizing compose/copy once metrology is stable. |
 | 2026-05-23 | Sprint 280 added resident multi-request HTTP metrology. | One loaded TP/EP server now serves repeated generation requests and exposes cumulative counters. | Add request coalescing/admission so independent HTTP requests can fill the 32 active slots. |
 | 2026-05-23 | Sprint 281 exposed TP/EP stage timing in HTTP artifacts. | Operational metrology now shows compose-copy as the largest individual stage. | Optimize compose-copy movement/synchronization, then add true request coalescing. |
+| 2026-05-23 | Sprint 282 promoted event-wait compose copy. | Moving copy dependency waits onto CUDA events improves same-binary serving throughput by about `2.5%`. | Reduce FP32 contribution traffic or fuse staged all-to-all reduction more aggressively. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 
