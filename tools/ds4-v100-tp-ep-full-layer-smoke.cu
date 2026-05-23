@@ -373,6 +373,7 @@ struct Options {
     bool skip_descriptor_checks = false;
     bool skip_predecode_probes = false;
     bool share_tp_runtime = false;
+    bool tp_runtime_explicit = false;
     bool share_expert_bindings = true;
     bool overlap_ep_dense = true;
     bool direct_remote_compose = false;
@@ -887,8 +888,10 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->skip_predecode_probes = true;
         } else if (std::strcmp(arg, "--share-tp-runtime") == 0) {
             opt->share_tp_runtime = true;
+            opt->tp_runtime_explicit = true;
         } else if (std::strcmp(arg, "--local-tp-runtime") == 0) {
             opt->share_tp_runtime = false;
+            opt->tp_runtime_explicit = true;
         } else if (std::strcmp(arg, "--shared-expert-bindings") == 0) {
             opt->share_expert_bindings = true;
         } else if (std::strcmp(arg, "--local-expert-bindings") == 0) {
@@ -3585,6 +3588,9 @@ int main(int argc, char **argv) {
     if (!parse_args(argc, argv, &opt)) {
         usage(argv[0]);
         return 2;
+    }
+    if (opt.token_major_all_layers && opt.all_layers && !opt.tp_runtime_explicit) {
+        opt.share_tp_runtime = true;
     }
 
     if (!opt.all_layers) {

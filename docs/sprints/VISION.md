@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 266
+revision: 267
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -213,6 +213,10 @@ not a serial layer-chain.
   It remains correct but is not promoted: the shared-op cache regressed the
   token-major proxy from `51.991980` to `56.085843 ms/token`. Keep it as an
   opt-in diagnostic and keep the default dense op lifecycle local per layer.
+- Sprint 267 rechecked shared TP runtime in token-major order and promoted it
+  for token-major all-layer runs. The 4-step scaffold improves from
+  `51.289549` to `47.902324 ms/token` proxy and cuts wall time from
+  `34880.753622` to `11661.323548 ms`, with checksum preserved.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -1000,6 +1004,27 @@ tok/s. Shared dense ops report `56.085843 ms/token` proxy and `570.553966`
 projected slot-step tok/s. Shared dense ops slightly reduce wall time but
 regress decode timing by `7.3%`, so the default remains local dense ops.
 
+### Sprint 267 - TP/EP Token-Major Shared TP Runtime [complete]
+
+Goal: Recheck shared TP runtime in token-major serving order and promote it
+only if the serving-order proxy improves.
+
+Rationale: Shared TP runtime was previously rejected in layer-major mode, but
+token-major execution reuses KV/runtime state across token steps. That changes
+the cost model enough to warrant a same-binary A/B before moving to generated
+serving integration.
+
+Outcome: Complete. `tools/ds4-v100-tp-ep-full-layer-smoke` now defaults
+token-major all-layer runs to shared TP runtime unless `--local-tp-runtime` is
+explicitly requested. Layer-major defaults are unchanged. On the V100 pod at
+`32` slots / `256K`, `4` token steps, resident expert bindings, EP+dense
+overlap, source-scheduled staged copies, and local dense ops, shared TP runtime
+improves the token-major proxy from `51.289549` to `47.902324 ms/token` and
+projected slot-step throughput from `623.908781` to `668.026047 tok/s`.
+Wall time drops from `34880.753622` to `11661.323548 ms`, with checksum
+`296236348` preserved. A default one-step check confirms token-major runs now
+select `shared_tp_runtime=1`.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1067,6 +1092,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 264 changed staged peer-copy scheduling to source copy streams. | Source-scheduled copies materially reduce compose time and raise projected scaffold throughput. | Convert scaffold into serving loop or continue destination-side compose kernel optimization. |
 | 2026-05-23 | Sprint 265 added a token-major serving-order scaffold. | It exposes the real decode order and shows the next gap is resident token-loop state, not only layer-major kernel speed. | Reduce token-major setup/wall cost and then integrate generated/continuation serving measurement. |
 | 2026-05-23 | Sprint 266 tested shared dense-op residency in token-major order. | Correctness holds, but decode proxy regresses despite slightly lower wall time. | Keep dense ops local per layer and target TP runtime/KV orchestration or serving integration next. |
+| 2026-05-23 | Sprint 267 promoted shared TP runtime for token-major all-layer runs. | In serving order, TP/KV runtime residency improves both wall/setup and summed decode proxy. | Reduce token-major compose/all-to-all and bridge the scaffold into generated/continuation serving measurement. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

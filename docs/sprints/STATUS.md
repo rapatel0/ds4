@@ -28,7 +28,12 @@ closer to serving order, but still not generated-token serving throughput.
 Sprint 266 tested shared dense-op residency in that token-major scaffold.
 Correctness holds, but the shared dense-op cache regresses the proxy from
 `51.991980` to `56.085843 ms/token`; it remains an opt-in diagnostic and the
-default stays local dense ops per layer.
+default stays local dense ops per layer. Sprint 267 rechecked shared TP
+runtime in token-major order and promoted it for token-major all-layer runs:
+the 4-step scaffold improves from `51.289549` to `47.902324 ms/token` proxy,
+projected slot-step throughput improves from `623.908781` to `668.026047`,
+and wall time drops from `34880.753622` to `11661.323548 ms` with checksum
+preserved.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s
