@@ -146,7 +146,12 @@ matches, max memory `24124 MiB`, max GPU util `88%`, `58.241743` generated
 tok/s, `16.380490` prompt tok/s, and `57.331715` continuation tok/s. The
 launcher admits `ctx=262144`, `slots=32` only when startup warmup resolves
 enabled; the cold `DS4_V100_STARTUP_WARMUP=0` path still fails closed at cap
-`16`.
+`16`. Sprint 220 then aligned the operator deployment path with that result:
+the env example now defaults to the production appliance dir, `ctx=262144`,
+`slots=32`, `active_microbatch=32`, and `DS4_V100_STARTUP_WARMUP=auto`; the
+production deployment smoke now accepts `--appliance-dir`, checks warmed
+readiness in status and metrics, and passed on the V100 pod with two bounded
+generation requests returning `3136`.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit

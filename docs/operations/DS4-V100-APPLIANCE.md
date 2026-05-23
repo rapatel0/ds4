@@ -258,11 +258,13 @@ tok/s is fine.
 
 For throughput serving, `ctx=16384` admits up to 256 slots, `ctx=32768`
 admits up to 128 slots, `ctx=65536` admits up to 64 slots, `ctx=131072`
-admits up to 32 slots, and `ctx=262144` remains capped at 16 slots. The
-launcher keeps the long-context tier memory-safe by rejecting slot counts above
-the planner-backed context cap, including 16-slot `ctx=1048576` configs,
-32-slot `ctx=262144` configs, 64-slot `ctx=131072` configs, and 128-slot
-`ctx=65536` configs. The 32K launcher cap intentionally stays at 128 even
+admits up to 32 slots, and the warmed appliance path now admits `ctx=262144`
+with 32 slots. The cold `DS4_V100_STARTUP_WARMUP=0` path remains capped at 16
+slots for `ctx=262144` because Sprint 218 localized a cold first-request NaN
+before the output head. The launcher keeps the long-context tier memory-safe
+by rejecting slot counts above the planner-backed context cap, including
+16-slot `ctx=1048576` configs and any higher-than-admitted slot count for the
+shorter context tiers. The 32K launcher cap intentionally stays at 128 even
 though the planner can fit more slots in some reserve configurations; served
 A/B shows the simple slot-width curve is nearly saturated after 128 slots.
 
@@ -720,20 +722,21 @@ Run the production deployment smoke:
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 ./tools/ds4-v100-production-deployment-gate.sh \
-  --index docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv \
   --model /models/DSv4-Flash-256e-fixed.gguf \
+  --appliance-dir /workspace/packs/ds4-appliance-full-tm-gated-s181 \
   --mtp-model /models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf \
   --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt \
-  --ctx 1048576 \
-  --slots 1 \
-  --active-microbatch 1 \
-  --queue-policy reject-busy \
+  --ctx 262144 \
+  --slots 32 \
+  --active-microbatch 32 \
+  --queue-policy sequential \
   --tokens 2 \
-  --requests 1 \
+  --requests 2 \
+  --startup-warmup auto \
   --expected-token-hex 3136 \
   --host 127.0.0.1 \
   --port 18082 \
-  --log-dir docs/sprints/drafts/SPRINT-045-PRODUCTION-DEPLOYMENT
+  --log-dir logs/from-cluster/sprint220-production-deployment-warmed
 ```
 
 The smoke proves:
@@ -742,6 +745,10 @@ The smoke proves:
 - GPU reserve checks run before upload;
 - `/health`, `/v100/status`, and `/metrics` respond;
 - status reports the configured slot/microbatch limits and `mtp_enabled=false`;
+- warmed `32`-slot/`256K` deployments report `startup_warmup=true`,
+  `warmup_required=true`, and `warmed_ready=true`;
+- metrics expose `ds4_v100_startup_warmup_enabled 1`,
+  `ds4_v100_warmup_required 1`, and `ds4_v100_warmed_ready 1`;
 - the official fixture still produces first-token bytes `3136`;
 - `served_requests` advances in the running service.
 

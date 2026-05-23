@@ -1,7 +1,7 @@
 # Sprint 220 - Production Deployment Defaults For Warmed 256K Serving
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete
 
 ## Overview
 
@@ -78,17 +78,17 @@ configuration matches the validated production mode.
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists and is committed before execution evidence is staged.
-- [ ] Env example defaults to warmed `32`-slot/`256K` appliance serving.
-- [ ] Deployment gate accepts appliance dirs and `32` slots at `256K` through
+- [x] Sprint plan exists and is committed before execution evidence is staged.
+- [x] Env example defaults to warmed `32`-slot/`256K` appliance serving.
+- [x] Deployment gate accepts appliance dirs and `32` slots at `256K` through
       launcher admission.
-- [ ] Deployment gate validates warmed readiness in status and metrics.
-- [ ] Local shell validation passes.
-- [ ] V100 deployment smoke passes with the production pack.
-- [ ] Logs are copied to
+- [x] Deployment gate validates warmed readiness in status and metrics.
+- [x] Local shell validation passes.
+- [x] V100 deployment smoke passes with the production pack.
+- [x] Logs are copied to
       `logs/from-cluster/sprint220-production-deployment-warmed/`.
-- [ ] Docs are updated.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Docs are updated.
+- [x] Changes are committed with explicit `git add` paths.
 
 ## Verification Strategy
 
@@ -141,3 +141,86 @@ weights.
 
 - Sprint 219 warmed readiness and 64-request production gate.
 - Production pack `/workspace/packs/ds4-appliance-full-tm-gated-s181`.
+
+## Execution
+
+Local validation:
+
+```text
+bash -n tools/ds4-v100-production-deployment-gate.sh
+git diff --check
+```
+
+V100 production deployment smoke:
+
+```text
+pod: llm/llamacpp-build-8gpu
+workspace: /workspace/ds4-sprint181
+log_dir: /workspace/logs/sprint220-production-deployment-warmed
+```
+
+Command:
+
+```text
+./tools/ds4-v100-production-deployment-gate.sh \
+  --model /models/DSv4-Flash-256e-fixed.gguf \
+  --appliance-dir /workspace/packs/ds4-appliance-full-tm-gated-s181 \
+  --ctx 262144 \
+  --slots 32 \
+  --active-microbatch 32 \
+  --queue-policy sequential \
+  --tokens 2 \
+  --requests 2 \
+  --startup-warmup auto \
+  --port 19520 \
+  --log-dir /workspace/logs/sprint220-production-deployment-warmed
+```
+
+Result:
+
+```text
+ds4-v100-production-deployment-gate: request=1 prompt_tokens=18 generated_tokens=2 first_token=926 first_hex=3136 ok
+ds4-v100-production-deployment-gate: request=2 prompt_tokens=18 generated_tokens=2 first_token=926 first_hex=3136 ok
+ds4-v100-production-deployment-gate: launcher=ok health=ok status=ok metrics=ok requests=2 prompt_tokens=18 generated_tokens=2 first_token=926 first_hex=3136 ok
+```
+
+## Evidence
+
+`/v100/status` reported:
+
+```text
+mode=base_slots_32
+ctx_tokens=262144
+configured_slots=32
+active_microbatch=32
+queue_policy=sequential
+async_pipeline_mode=per-step
+async_event_handoff=true
+startup_warmup=true
+warmup_required=true
+warmed_ready=true
+mtp_enabled=false
+```
+
+`/metrics` reported:
+
+```text
+ds4_v100_readiness_level 2
+ds4_v100_ctx_tokens 262144
+ds4_v100_configured_slots 32
+ds4_v100_active_microbatch 32
+ds4_v100_startup_warmup_enabled 1
+ds4_v100_warmup_required 1
+ds4_v100_warmed_ready 1
+ds4_v100_mtp_enabled 0
+```
+
+Logs were copied to
+`logs/from-cluster/sprint220-production-deployment-warmed/`.
+
+## Decision
+
+Ship the warmed `32`-slot/`256K` production deployment defaults and the updated
+deployment smoke. Sprint 220 is not a new throughput proof; Sprint 219 remains
+the throughput gate for this mode. Sprint 220 proves the operator path now
+launches the same warmed appliance contract that Sprint 219 validated.
