@@ -139,14 +139,16 @@ failure: without launcher startup warmup, an `18`-slot/`256K` run first reports
 NaN HC at `stage=1`, `gpu=1`, `layer=6`, `slot=0`, `token=0`, `position=0`.
 Pre-output-head checking shows NaN HC reaches the output stage before logits,
 so the output-head fastpath is not the first source. With launcher startup
-warmup enabled, the same warmed appliance path passes the full target shape:
-`32` slots at `256K` returns `32/32` matches, max memory stays near
-`24.1 GiB`, and the appliance soak measures `68.631068` generated tok/s,
-`19.302488` prompt tok/s, and `67.558707` continuation tok/s. The launcher now
-admits `ctx=262144`, `slots=32` only when startup warmup resolves enabled; the
-cold `DS4_V100_STARTUP_WARMUP=0` path still fails closed at cap `16`.
+warmup enabled, the same warmed appliance path passes the full target shape.
+Sprint 219 made that warmed-readiness contract explicit in `/v100/status` and
+metrics, then ran the longer production gate at `64` requests: `64/64`
+matches, max memory `24124 MiB`, max GPU util `88%`, `58.241743` generated
+tok/s, `16.380490` prompt tok/s, and `57.331715` continuation tok/s. The
+launcher admits `ctx=262144`, `slots=32` only when startup warmup resolves
+enabled; the cold `DS4_V100_STARTUP_WARMUP=0` path still fails closed at cap
+`16`.
 
-Current maximum-context production mode is now the Sprint 218 warmed
+Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit
 128-slot/32K short-context throughput mode. Sprint 139 raises the best observed
 gated-appliance 128-slot/32K run to `60.130047` generated tok/s, while showing

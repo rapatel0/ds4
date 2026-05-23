@@ -1836,6 +1836,9 @@ static void write_status_json(FILE *fp,
                               const replay_mtp_service *mtp,
                               const replay_server_stats *stats) {
     const bool mtp_enabled = mtp && mtp->enabled;
+    const bool warmup_required =
+        opt && opt->ctx == 262144 && opt->active_microbatch > 16;
+    const bool warmed_ready = !warmup_required || (opt && opt->startup_warmup);
     const uint64_t served = stats ? stats->accepted_connections : 0;
     char mode[64] = "base";
     format_mode(mode, sizeof(mode), mtp_enabled, opt);
@@ -1861,6 +1864,8 @@ static void write_status_json(FILE *fp,
     fprintf(fp, "\"async_handoff\":%s,", opt->async_handoff ? "true" : "false");
     fprintf(fp, "\"async_event_handoff\":%s,", opt->async_event_handoff ? "true" : "false");
     fprintf(fp, "\"startup_warmup\":%s,", opt->startup_warmup ? "true" : "false");
+    fprintf(fp, "\"warmup_required\":%s,", warmup_required ? "true" : "false");
+    fprintf(fp, "\"warmed_ready\":%s,", warmed_ready ? "true" : "false");
     fprintf(fp, "\"microbatch_wait_us\":%" PRIu32 ",", opt->microbatch_wait_us);
     fprintf(fp,
             "\"limits\":{\"slots\":%" PRIu32 ",\"configured_slots\":%" PRIu32
@@ -1916,6 +1921,9 @@ static void write_metrics_text(FILE *fp,
                                const replay_mtp_service *mtp,
                                const replay_server_stats *stats) {
     const bool mtp_enabled = mtp && mtp->enabled;
+    const bool warmup_required =
+        opt && opt->ctx == 262144 && opt->active_microbatch > 16;
+    const bool warmed_ready = !warmup_required || (opt && opt->startup_warmup);
     const uint64_t served = stats ? stats->accepted_connections : 0;
     fprintf(fp, "# HELP ds4_v100_readiness_level Deployment readiness level exposed by the replay service.\n");
     fprintf(fp, "# TYPE ds4_v100_readiness_level gauge\n");
@@ -1971,6 +1979,12 @@ static void write_metrics_text(FILE *fp,
     fprintf(fp, "# HELP ds4_v100_startup_warmup_enabled Whether the server warmed the appliance before accepting traffic.\n");
     fprintf(fp, "# TYPE ds4_v100_startup_warmup_enabled gauge\n");
     fprintf(fp, "ds4_v100_startup_warmup_enabled %d\n", opt->startup_warmup ? 1 : 0);
+    fprintf(fp, "# HELP ds4_v100_warmup_required Whether this context/slot shape requires startup warmup for production readiness.\n");
+    fprintf(fp, "# TYPE ds4_v100_warmup_required gauge\n");
+    fprintf(fp, "ds4_v100_warmup_required %d\n", warmup_required ? 1 : 0);
+    fprintf(fp, "# HELP ds4_v100_warmed_ready Whether the server satisfies the warmed-readiness contract before accepting traffic.\n");
+    fprintf(fp, "# TYPE ds4_v100_warmed_ready gauge\n");
+    fprintf(fp, "ds4_v100_warmed_ready %d\n", warmed_ready ? 1 : 0);
     fprintf(fp, "# HELP ds4_v100_concurrent_request_capacity Concurrent generation request capacity.\n");
     fprintf(fp, "# TYPE ds4_v100_concurrent_request_capacity gauge\n");
     fprintf(fp, "ds4_v100_concurrent_request_capacity %" PRIu32 "\n", opt->active_microbatch);

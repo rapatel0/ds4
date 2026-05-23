@@ -1,7 +1,7 @@
 # Sprint 219 - Explicit Warmed Runtime Readiness
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete
 
 ## Overview
 
@@ -77,18 +77,18 @@ admission decisions.
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists and is committed before execution evidence is staged.
-- [ ] Warmed readiness is visible in status/metrics or documented as already
+- [x] Sprint plan exists and is committed before execution evidence is staged.
+- [x] Warmed readiness is visible in status/metrics or documented as already
       sufficiently visible.
-- [ ] A repeatable warmed production gate exists for `32` slots at `256K`.
-- [ ] The warmed gate records generated tok/s, prompt tok/s, continuation tok/s,
+- [x] A repeatable warmed production gate exists for `32` slots at `256K`.
+- [x] The warmed gate records generated tok/s, prompt tok/s, continuation tok/s,
       correctness, GPU utilization, and max memory.
-- [ ] The warmed `32`-slot/`256K` run passes at `requests>=64`.
-- [ ] A negative check proves cold `32`-slot/`256K` launch still fails closed
+- [x] The warmed `32`-slot/`256K` run passes at `requests>=64`.
+- [x] A negative check proves cold `32`-slot/`256K` launch still fails closed
       without an experimental override.
-- [ ] V100 logs are copied to `logs/from-cluster/sprint219-*`.
-- [ ] Status, vision, and operations docs are updated.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] V100 logs are copied to `logs/from-cluster/sprint219-*`.
+- [x] Status, vision, and operations docs are updated.
+- [x] Changes are committed with explicit `git add` paths.
 
 ## Verification Strategy
 
@@ -151,3 +151,100 @@ metadata, status, metrics, and GPU utilization.
 - Sprint 218 warmed `32`-slot/`256K` pass and cold-path NaN localization.
 - Production pack `/workspace/packs/ds4-appliance-full-tm-gated-s181`.
 - V100 build pod `llm/llamacpp-build-8gpu`.
+
+## Execution
+
+Added explicit warmed-readiness fields to `/v100/status`:
+
+```json
+"warmup_required": true,
+"warmed_ready": true
+```
+
+and matching metrics:
+
+```text
+ds4_v100_warmup_required 1
+ds4_v100_warmed_ready 1
+```
+
+The requirement is scoped to the known production-sensitive shape:
+`ctx=262144` with `active_microbatch > 16`. The server only reports
+`warmed_ready=true` for that shape when startup warmup ran before accepting
+traffic.
+
+Added `tools/ds4-v100-256k-warmed-production-gate.sh`, which:
+
+- runs a negative cold launcher check with `DS4_V100_STARTUP_WARMUP=0`;
+- requires the expected cap failure for `ctx=262144`, `slots=32`;
+- runs the real production launcher path through `ds4-v100-appliance-soak.sh`;
+- requires status/metric warmed-readiness fields;
+- records generated, prompt, and continuation tok/s separately;
+- records correctness, GPU utilization, and max memory.
+
+Local validation:
+
+```text
+bash -n tools/ds4-v100-256k-warmed-production-gate.sh
+git diff --check
+```
+
+V100 build validation:
+
+```text
+cd /workspace/ds4-sprint181
+make -j80 CUDA_ARCH=sm_70 tools/ds4-v100-replay
+```
+
+## V100 Evidence
+
+Primary warmed production gate:
+
+```text
+./tools/ds4-v100-256k-warmed-production-gate.sh \
+  --log-dir /workspace/logs/sprint219-256k-32slot-warmed-gate \
+  --port 19460 \
+  --requests 64 \
+  --tokens 64 \
+  --ctx 262144 \
+  --slots 32
+```
+
+Result:
+
+| Ctx | Slots | Requests | Generated tok/s | Prompt tok/s | Continuation tok/s | Match | Avg GPU util | Max GPU util | Max memory |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 262,144 | 32 | 64 | `58.241743` | `16.380490` | `57.331715` | 64/64 | `24.810%` | `88.000%` | `24124 MiB` |
+
+Readiness contract:
+
+```text
+warmup_required=true
+warmed_ready=true
+ds4_v100_warmup_required 1
+ds4_v100_warmed_ready 1
+```
+
+The same gate records the negative cold check:
+
+```text
+DS4_V100_STARTUP_WARMUP=0
+DS4_V100_SLOTS=32 exceeds ctx=262144 admission cap 16
+```
+
+Evidence:
+
+```text
+logs/from-cluster/sprint219-256k-32slot-warmed-gate/
+```
+
+## Decision
+
+Keep warmed `32`-slot/`256K` as the maximum-context production serving mode.
+Use the Sprint 219 64-request gate as the conservative published number:
+`58.241743` generated tok/s and `57.331715` continuation tok/s. Sprint 218's
+shorter 32-request run remains evidence that the same mode can peak around
+`68.6` generated tok/s, but the longer gate is the operational baseline.
+
+Do not replace full startup warmup yet. It is now explicit and observable in
+status/metrics, and the cold path remains gated off for `32` slots at `256K`.

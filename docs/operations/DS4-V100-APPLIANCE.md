@@ -270,7 +270,7 @@ Latest practical long-context matrix:
 
 | Context | Slots | MTP | Generated tok/s | Prompt tok/s | Continuation tok/s | Correctness | Recommendation |
 |---:|---:|---|---:|---:|---:|---:|---|
-| 262,144 | 32 | off | `68.631068` | `19.302488` | `67.558707` | 32/32 | maximum-context production mode; requires startup warmup |
+| 262,144 | 32 | off | `58.241743` | `16.380490` | `57.331715` | 64/64 | maximum-context production mode; requires startup warmup |
 | 131,072 | 32 | off | `69.488893` | `19.543751` | `68.403129` | 32/32 | slightly faster shorter-context mode |
 | 262,144 | 16 | off | `62.602937` | `17.607076` | `61.624766` | 16/16 | conservative fallback |
 
@@ -279,7 +279,9 @@ found that the cold path without launcher startup warmup can produce NaN HC at
 `stage=1`, `gpu=1`, `layer=6`, `slot=0`, `token=0`, `position=0`. The launcher
 therefore keeps `DS4_V100_STARTUP_WARMUP=0` at the old `16`-slot cap for
 `256K`, while the default `auto` warmup policy admits the validated `32`-slot
-production mode.
+production mode. `/v100/status` must report `"warmup_required":true` and
+`"warmed_ready":true`; `/metrics` must expose `ds4_v100_warmup_required 1` and
+`ds4_v100_warmed_ready 1`.
 
 Focused MTP speculative gate:
 

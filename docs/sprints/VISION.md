@@ -147,14 +147,16 @@ like a correctness rejection, but Sprint 218 shows the sharper truth: the
 failure is in the cold, non-warmed runtime path. Without launcher startup
 warmup, an `18`-slot/`256K` run first exposes NaN HC at `stage=1`, `gpu=1`,
 `layer=6`, `slot=0`, `token=0`, `position=0`; pre-output-head checking proves
-bad HC reaches the output stage before logits. With the warmed appliance path,
-`32` slots at `256K` passes `32/32` correctness, uses about `24.1 GiB` max
-VRAM, and measures `68.631068` generated tok/s with `67.558707` continuation
-tok/s. The launcher now admits `ctx=262144`, `slots=32` only when startup
-warmup resolves enabled, while the cold `STARTUP_WARMUP=0` path remains capped
-at 16. The vision consequence is positive: the practical 32-slot/256K target is
-usable in the warmed production appliance path, and the remaining issue is to
-replace the warmup dependency with an explicit initialization fix.
+bad HC reaches the output stage before logits. Sprint 219 then made warmed
+readiness explicit in `/v100/status` and metrics and ran the longer production
+gate. With the warmed appliance path, `32` slots at `256K` passes `64/64`
+correctness, uses `24124 MiB` max VRAM, and measures `58.241743` generated
+tok/s with `57.331715` continuation tok/s over 64 requests. The launcher admits
+`ctx=262144`, `slots=32` only when startup warmup resolves enabled, while the
+cold `STARTUP_WARMUP=0` path remains capped at 16. The vision consequence is
+positive: the practical 32-slot/256K target is usable in the warmed production
+appliance path, and the remaining issue is to replace the warmup dependency
+with an explicit initialization fix.
 
 ## Current State
 
