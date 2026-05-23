@@ -325,6 +325,16 @@ struct ServingBenchResult {
     double aggregate_generated_tok_s_wall = 0.0;
     double aggregate_continuation_tok_s_decode = 0.0;
     double aggregate_continuation_tok_s_wall = 0.0;
+    bool diagnostic_output_head = false;
+    bool diagnostic_output_head_proxy_hc = false;
+    double output_head_ms = 0.0;
+    double output_head_gather_ms = 0.0;
+    double output_head_prep_ms = 0.0;
+    double output_head_broadcast_ms = 0.0;
+    double output_head_projection_ms = 0.0;
+    double output_head_top1_ms = 0.0;
+    std::vector<uint32_t> selected_tokens;
+    std::vector<float> selected_logits;
     uint64_t checksum = 0;
 };
 
@@ -436,6 +446,7 @@ struct Options {
     bool output_head_gate = false;
     bool output_head_resident_gate = false;
     bool final_hc_carry_gate = false;
+    bool diagnostic_output_head = false;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -690,6 +701,23 @@ __global__ void shard_top1_kernel(uint32_t *out_token,
         out_token[slot] = shard_base + s_idx[0];
         out_logit[slot] = s_val[0];
     }
+}
+
+__global__ void gather_hc_shard_to_full_kernel(float *full_hc,
+                                               const float *shard_hc,
+                                               int rank,
+                                               uint32_t slots) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint32_t shard_cols = kHidden / kGpus;
+    const uint64_t elems = (uint64_t)slots * 4ull * shard_cols;
+    if (i >= elems) return;
+    const uint32_t local_h = (uint32_t)(i % shard_cols);
+    const uint32_t row = (uint32_t)((i / shard_cols) & 3ull);
+    const uint32_t slot = (uint32_t)(i / (4ull * shard_cols));
+    const uint64_t dst =
+        ((uint64_t)slot * 4ull + (uint64_t)row) * (uint64_t)kHidden +
+        (uint64_t)rank * shard_cols + local_h;
+    full_hc[dst] = shard_hc[i];
 }
 
 __global__ void synthetic_hc_kernel(float *hc, uint32_t slots) {
@@ -1098,7 +1126,7 @@ void usage(const char *argv0) {
                  "       [--serve-http] [--host ADDR] [--port N] [--max-requests N]\n"
                  "       [--microbatch-wait-us N]\n"
                  "       [--output-head-gate] [--output-head-resident-gate]\n"
-                 "       [--final-hc-carry-gate]\n",
+                 "       [--final-hc-carry-gate] [--diagnostic-output-head]\n",
                  argv0);
 }
 
@@ -1245,6 +1273,9 @@ bool parse_args(int argc, char **argv, Options *opt) {
         } else if (std::strcmp(arg, "--output-head-resident-gate") == 0) {
             opt->output_head_resident_gate = true;
         } else if (std::strcmp(arg, "--final-hc-carry-gate") == 0) {
+            opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--diagnostic-output-head") == 0) {
+            opt->diagnostic_output_head = true;
             opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
@@ -1910,6 +1941,48 @@ struct OutputHeadResidentGateStats {
     int finite_bad = 0;
 };
 
+struct SharedOutputHead {
+    bool initialized = false;
+    int slots = 0;
+    int vocab = 0;
+    int rows_per_gpu = 0;
+    ContractRow output_rows[kGpus];
+    float *d_hc = nullptr;
+    float *d_hc_norm = nullptr;
+    float *d_head_pre = nullptr;
+    float *d_head_weights = nullptr;
+    float *d_embd = nullptr;
+    float *d_embd_norm = nullptr;
+    float *d_head_fn = nullptr;
+    float *d_head_base = nullptr;
+    float *d_head_scale = nullptr;
+    float *d_output_norm = nullptr;
+    uint16_t *d_w[kGpus] = {};
+    float *d_x[kGpus] = {};
+    float *d_logits[kGpus] = {};
+    uint32_t *d_best_token[kGpus] = {};
+    float *d_best_logit[kGpus] = {};
+    cudaEvent_t projection_start[kGpus] = {};
+    cudaEvent_t projection_stop[kGpus] = {};
+    uint64_t output_weight_bytes = 0;
+    uint64_t logits_bytes = 0;
+};
+
+struct OutputHeadRunResult {
+    bool pass = true;
+    double total_ms = 0.0;
+    double gather_ms = 0.0;
+    double prep_ms = 0.0;
+    double broadcast_ms = 0.0;
+    double projection_ms = 0.0;
+    double projection_kernel_worst_ms = 0.0;
+    double top1_ms = 0.0;
+    std::vector<uint32_t> tokens;
+    std::vector<float> logits;
+    uint64_t checksum = 0;
+    int finite_bad = 0;
+};
+
 int run_output_head_gate(const Options &opt,
                          const std::vector<ContractRow> &rows,
                          OutputHeadGateStats *stats) {
@@ -2515,6 +2588,288 @@ int run_output_head_resident_gate(const Options &opt,
                 (unsigned long long)stats->checksum,
                 stats->pass ? "PASS" : "FAIL");
     return stats->pass ? 0 : 5;
+}
+
+int open_shared_output_head(const Options &opt,
+                            const std::vector<ContractRow> &rows,
+                            SharedOutputHead *out) {
+    out->slots = opt.slots;
+    std::vector<ContractRow> output_rows;
+    int output_cols = 0;
+    int vocab = 0;
+    if (!select_bf16_dense_rows(rows, "output.weight", &output_rows,
+                                &output_cols, &vocab)) {
+        std::fprintf(stderr, "shared output-head failed to select output.weight shards\n");
+        return 1;
+    }
+    if (output_cols != kHidden || vocab <= 0 || vocab % kGpus != 0) {
+        std::fprintf(stderr, "shared output-head invalid output.weight shape cols=%d vocab=%d\n",
+                     output_cols, vocab);
+        return 2;
+    }
+    out->vocab = vocab;
+    out->rows_per_gpu = vocab / kGpus;
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        out->output_rows[gpu] = output_rows[(size_t)gpu];
+    }
+
+    std::vector<float> hc_head_fn;
+    std::vector<float> hc_head_base;
+    std::vector<float> hc_head_scale;
+    std::vector<float> output_norm;
+    if (load_control_f32(opt, rows, "hc_head_fn", (size_t)4 * 4 * kHidden,
+                         &hc_head_fn) ||
+        load_control_f32(opt, rows, "hc_head_base", 4, &hc_head_base) ||
+        load_control_f32(opt, rows, "hc_head_scale", 1, &hc_head_scale) ||
+        load_control_f32(opt, rows, "output_norm.weight", kHidden, &output_norm)) {
+        return 3;
+    }
+
+    const uint64_t hc_elems = (uint64_t)opt.slots * 4ull * (uint64_t)kHidden;
+    const uint64_t embd_elems = (uint64_t)opt.slots * (uint64_t)kHidden;
+    const uint64_t logits_elems = (uint64_t)opt.slots * (uint64_t)out->rows_per_gpu;
+    const uint64_t output_shard_bytes =
+        (uint64_t)out->rows_per_gpu * (uint64_t)kHidden * sizeof(uint16_t);
+
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    CHECK_CUDA(cudaMalloc(&out->d_hc, (size_t)hc_elems * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&out->d_hc_norm, (size_t)hc_elems * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&out->d_head_pre, (size_t)opt.slots * 4 * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&out->d_head_weights, (size_t)opt.slots * 4 * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&out->d_embd, (size_t)embd_elems * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&out->d_embd_norm, (size_t)embd_elems * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&out->d_head_fn, hc_head_fn.size() * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&out->d_head_base, hc_head_base.size() * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&out->d_head_scale, hc_head_scale.size() * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&out->d_output_norm, output_norm.size() * sizeof(float)));
+    CHECK_CUDA(cudaMemcpy(out->d_head_fn, hc_head_fn.data(),
+                          hc_head_fn.size() * sizeof(float), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(out->d_head_base, hc_head_base.data(),
+                          hc_head_base.size() * sizeof(float), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(out->d_head_scale, hc_head_scale.data(),
+                          hc_head_scale.size() * sizeof(float), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(out->d_output_norm, output_norm.data(),
+                          output_norm.size() * sizeof(float), cudaMemcpyHostToDevice));
+
+    std::vector<uint16_t> host_w((size_t)out->rows_per_gpu * (size_t)kHidden);
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        const ContractRow &r = out->output_rows[gpu];
+        const std::string path = path_join(opt.pack_dir, r.source_pack_file);
+        if (read_exact_at(path, physical_row_offset(r), host_w.data(),
+                          (size_t)output_shard_bytes) != 0) {
+            return 4;
+        }
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        CHECK_CUDA(cudaMalloc(&out->d_w[gpu], (size_t)output_shard_bytes));
+        CHECK_CUDA(cudaMalloc(&out->d_x[gpu], (size_t)embd_elems * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&out->d_logits[gpu],
+                              (size_t)logits_elems * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&out->d_best_token[gpu],
+                              (size_t)opt.slots * sizeof(uint32_t)));
+        CHECK_CUDA(cudaMalloc(&out->d_best_logit[gpu],
+                              (size_t)opt.slots * sizeof(float)));
+        CHECK_CUDA(cudaEventCreate(&out->projection_start[gpu]));
+        CHECK_CUDA(cudaEventCreate(&out->projection_stop[gpu]));
+        CHECK_CUDA(cudaMemcpy(out->d_w[gpu], host_w.data(),
+                              (size_t)output_shard_bytes, cudaMemcpyHostToDevice));
+        out->output_weight_bytes += output_shard_bytes;
+    }
+    out->logits_bytes = logits_elems * sizeof(float) * kGpus;
+    out->initialized = true;
+    return 0;
+}
+
+void close_shared_output_head(const Options &opt, SharedOutputHead *out) {
+    if (!out || !out->initialized) return;
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        if (out->projection_stop[gpu]) CHECK_CUDA(cudaEventDestroy(out->projection_stop[gpu]));
+        if (out->projection_start[gpu]) CHECK_CUDA(cudaEventDestroy(out->projection_start[gpu]));
+        if (out->d_best_logit[gpu]) CHECK_CUDA(cudaFree(out->d_best_logit[gpu]));
+        if (out->d_best_token[gpu]) CHECK_CUDA(cudaFree(out->d_best_token[gpu]));
+        if (out->d_logits[gpu]) CHECK_CUDA(cudaFree(out->d_logits[gpu]));
+        if (out->d_x[gpu]) CHECK_CUDA(cudaFree(out->d_x[gpu]));
+        if (out->d_w[gpu]) CHECK_CUDA(cudaFree(out->d_w[gpu]));
+    }
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    if (out->d_output_norm) CHECK_CUDA(cudaFree(out->d_output_norm));
+    if (out->d_head_scale) CHECK_CUDA(cudaFree(out->d_head_scale));
+    if (out->d_head_base) CHECK_CUDA(cudaFree(out->d_head_base));
+    if (out->d_head_fn) CHECK_CUDA(cudaFree(out->d_head_fn));
+    if (out->d_embd_norm) CHECK_CUDA(cudaFree(out->d_embd_norm));
+    if (out->d_embd) CHECK_CUDA(cudaFree(out->d_embd));
+    if (out->d_head_weights) CHECK_CUDA(cudaFree(out->d_head_weights));
+    if (out->d_head_pre) CHECK_CUDA(cudaFree(out->d_head_pre));
+    if (out->d_hc_norm) CHECK_CUDA(cudaFree(out->d_hc_norm));
+    if (out->d_hc) CHECK_CUDA(cudaFree(out->d_hc));
+    *out = SharedOutputHead{};
+}
+
+int run_shared_output_head_from_rank_hc(const Options &opt,
+                                        SharedOutputHead *head,
+                                        RankState ranks[kGpus],
+                                        OutputHeadRunResult *result) {
+    if (!head || !head->initialized || head->slots != opt.slots) return 1;
+    const auto total_start = std::chrono::steady_clock::now();
+    const uint64_t hc_shard_elems =
+        (uint64_t)opt.slots * 4ull * (uint64_t)(kHidden / kGpus);
+    const uint64_t hc_elems = (uint64_t)opt.slots * 4ull * (uint64_t)kHidden;
+    const uint64_t embd_elems = (uint64_t)opt.slots * (uint64_t)kHidden;
+    const uint64_t logits_elems =
+        (uint64_t)opt.slots * (uint64_t)head->rows_per_gpu;
+
+    const auto gather_start = std::chrono::steady_clock::now();
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    for (int rank = 0; rank < kGpus; ++rank) {
+        if (!ranks[rank].d_final_hc_shard) {
+            std::fprintf(stderr, "diagnostic output-head missing final HC shard rank=%d\n",
+                         rank);
+            return 2;
+        }
+        gather_hc_shard_to_full_kernel<<<(unsigned int)((hc_shard_elems + 255) / 256), 256>>>(
+            head->d_hc, ranks[rank].d_final_hc_shard, rank, (uint32_t)opt.slots);
+    }
+    CHECK_CUDA(cudaGetLastError());
+    CHECK_CUDA(cudaDeviceSynchronize());
+    const auto gather_stop = std::chrono::steady_clock::now();
+
+    const auto prep_start = std::chrono::steady_clock::now();
+    rms_norm_plain_rows_kernel<<<(unsigned int)opt.slots, 256>>>(
+        head->d_hc_norm, head->d_hc, 4u * (uint32_t)kHidden,
+        (uint32_t)opt.slots, 1.0e-6f);
+    const dim3 head_grid(4u, (unsigned int)opt.slots, 1u);
+    f32_dense_kernel<<<head_grid, 256>>>(head->d_head_pre, head->d_head_fn,
+                                         head->d_hc_norm, 4u,
+                                         4u * (uint32_t)kHidden,
+                                         (uint32_t)opt.slots);
+    output_hc_weights_rows_kernel<<<(unsigned int)(((uint64_t)opt.slots * 4ull + 255) / 256), 256>>>(
+        head->d_head_weights, head->d_head_pre, head->d_head_scale,
+        head->d_head_base, (uint32_t)opt.slots);
+    hc_weighted_sum_rows_kernel<<<(unsigned int)((embd_elems + 255) / 256), 256>>>(
+        head->d_embd, head->d_hc, head->d_head_weights, (uint32_t)opt.slots);
+    rms_norm_weight_rows_kernel<<<(unsigned int)opt.slots, 256>>>(
+        head->d_embd_norm, head->d_embd, head->d_output_norm,
+        (uint32_t)kHidden, (uint32_t)opt.slots, 1.0e-6f);
+    CHECK_CUDA(cudaGetLastError());
+    CHECK_CUDA(cudaDeviceSynchronize());
+    const auto prep_stop = std::chrono::steady_clock::now();
+
+    const auto broadcast_start = std::chrono::steady_clock::now();
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        if (gpu == 0) {
+            CHECK_CUDA(cudaMemcpyAsync(head->d_x[gpu], head->d_embd_norm,
+                                       (size_t)embd_elems * sizeof(float),
+                                       cudaMemcpyDeviceToDevice));
+        } else {
+            CHECK_CUDA(cudaMemcpyPeerAsync(head->d_x[gpu], opt.devices[gpu],
+                                           head->d_embd_norm, opt.devices[0],
+                                           (size_t)embd_elems * sizeof(float)));
+        }
+    }
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        CHECK_CUDA(cudaDeviceSynchronize());
+    }
+    const auto broadcast_stop = std::chrono::steady_clock::now();
+
+    const auto projection_start_wall = std::chrono::steady_clock::now();
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        const dim3 grid((unsigned int)head->rows_per_gpu, (unsigned int)opt.slots, 1u);
+        CHECK_CUDA(cudaEventRecord(head->projection_start[gpu]));
+        bf16_dense_kernel<<<grid, 256>>>(head->d_logits[gpu], head->d_w[gpu],
+                                         head->d_x[gpu],
+                                         (uint32_t)head->rows_per_gpu,
+                                         (uint32_t)kHidden,
+                                         (uint32_t)kHidden,
+                                         (uint32_t)opt.slots);
+        CHECK_CUDA(cudaEventRecord(head->projection_stop[gpu]));
+        CHECK_CUDA(cudaGetLastError());
+    }
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        CHECK_CUDA(cudaDeviceSynchronize());
+        float kernel_ms = 0.0f;
+        CHECK_CUDA(cudaEventElapsedTime(&kernel_ms,
+                                        head->projection_start[gpu],
+                                        head->projection_stop[gpu]));
+        result->projection_kernel_worst_ms =
+            std::max(result->projection_kernel_worst_ms, (double)kernel_ms);
+    }
+    const auto projection_stop_wall = std::chrono::steady_clock::now();
+
+    const auto top1_start = std::chrono::steady_clock::now();
+    std::vector<std::vector<uint32_t>> host_tokens((size_t)kGpus);
+    std::vector<std::vector<float>> host_logits((size_t)kGpus);
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        host_tokens[(size_t)gpu].resize((size_t)opt.slots);
+        host_logits[(size_t)gpu].resize((size_t)opt.slots);
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        const int shard_index = head->output_rows[gpu].shard_index >= 0
+            ? head->output_rows[gpu].shard_index
+            : gpu;
+        shard_top1_kernel<<<(unsigned int)opt.slots, 256>>>(
+            head->d_best_token[gpu], head->d_best_logit[gpu],
+            head->d_logits[gpu], (uint32_t)head->rows_per_gpu,
+            (uint32_t)(shard_index * head->rows_per_gpu), (uint32_t)opt.slots);
+        CHECK_CUDA(cudaGetLastError());
+    }
+
+    result->tokens.assign((size_t)opt.slots, UINT32_MAX);
+    result->logits.assign((size_t)opt.slots, -std::numeric_limits<float>::max());
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        CHECK_CUDA(cudaDeviceSynchronize());
+        CHECK_CUDA(cudaMemcpy(host_tokens[(size_t)gpu].data(), head->d_best_token[gpu],
+                              (size_t)opt.slots * sizeof(uint32_t),
+                              cudaMemcpyDeviceToHost));
+        CHECK_CUDA(cudaMemcpy(host_logits[(size_t)gpu].data(), head->d_best_logit[gpu],
+                              (size_t)opt.slots * sizeof(float),
+                              cudaMemcpyDeviceToHost));
+        for (int slot = 0; slot < opt.slots; ++slot) {
+            const float logit = host_logits[(size_t)gpu][(size_t)slot];
+            if (!std::isfinite(logit)) {
+                result->finite_bad++;
+                result->pass = false;
+                continue;
+            }
+            if (logit > result->logits[(size_t)slot]) {
+                result->logits[(size_t)slot] = logit;
+                result->tokens[(size_t)slot] = host_tokens[(size_t)gpu][(size_t)slot];
+            }
+        }
+    }
+    const auto top1_stop = std::chrono::steady_clock::now();
+    const auto total_stop = std::chrono::steady_clock::now();
+
+    for (int slot = 0; slot < opt.slots; ++slot) {
+        if (result->tokens[(size_t)slot] >= (uint32_t)head->vocab ||
+            !std::isfinite(result->logits[(size_t)slot])) {
+            result->pass = false;
+        }
+        uint32_t bits = 0;
+        std::memcpy(&bits, &result->logits[(size_t)slot], sizeof(bits));
+        result->checksum ^= (uint64_t)result->tokens[(size_t)slot] * 1000003ull +
+                            (uint64_t)bits + (uint64_t)(slot + 1) * 7907ull;
+    }
+    if (result->checksum == 0 || result->finite_bad != 0) result->pass = false;
+
+    result->gather_ms =
+        std::chrono::duration<double, std::milli>(gather_stop - gather_start).count();
+    result->prep_ms =
+        std::chrono::duration<double, std::milli>(prep_stop - prep_start).count();
+    result->broadcast_ms =
+        std::chrono::duration<double, std::milli>(broadcast_stop - broadcast_start).count();
+    result->projection_ms =
+        std::chrono::duration<double, std::milli>(projection_stop_wall - projection_start_wall).count();
+    result->top1_ms =
+        std::chrono::duration<double, std::milli>(top1_stop - top1_start).count();
+    result->total_ms =
+        std::chrono::duration<double, std::milli>(total_stop - total_start).count();
+    (void)hc_elems;
+    (void)logits_elems;
+    return result->pass ? 0 : 5;
 }
 
 void free_device_dense_outputs(DeviceDenseOutputs &out, const Options &opt) {
@@ -4991,6 +5346,7 @@ int run_token_major_serving_loop(const Options &opt,
                                  SharedTpRuntime *shared_tp_runtime,
                                  const SharedExpertBindings *shared_expert_bindings,
                                  const SharedDenseOps *shared_dense_ops,
+                                 SharedOutputHead *shared_output_head,
                                  std::vector<ContractRow> resident_rows[43],
                                  LayerStats resident_stats[43],
                                  bool resident_serving_loop,
@@ -5201,6 +5557,41 @@ int run_token_major_serving_loop(const Options &opt,
             serving_result->aggregate_continuation_tok_s_wall = continuation_tok_s_wall;
             serving_result->checksum = checksum;
         }
+        if (shared_output_head && shared_output_head->initialized &&
+            shared_rank_buffers && shared_rank_buffers->initialized) {
+            OutputHeadRunResult head_result;
+            const int head_rc = run_shared_output_head_from_rank_hc(
+                opt, shared_output_head, shared_rank_buffers->ranks, &head_result);
+            std::printf("tp_ep_diagnostic_output_head\tsteps\t%d\tslots\t%d\t"
+                        "proxy_hc\t1\ttotal_ms\t%.6f\tgather_ms\t%.6f\t"
+                        "prep_ms\t%.6f\tbroadcast_ms\t%.6f\tprojection_ms\t%.6f\t"
+                        "projection_kernel_worst_ms\t%.6f\ttop1_ms\t%.6f\t"
+                        "first_token\t%u\tfirst_logit\t%.9f\tfinite_bad\t%d\t"
+                        "checksum\t%llu\t%s\n",
+                        opt.decode_steps, opt.slots, head_result.total_ms,
+                        head_result.gather_ms, head_result.prep_ms,
+                        head_result.broadcast_ms, head_result.projection_ms,
+                        head_result.projection_kernel_worst_ms, head_result.top1_ms,
+                        head_result.tokens.empty() ? UINT32_MAX : head_result.tokens[0],
+                        head_result.logits.empty() ? 0.0f : head_result.logits[0],
+                        head_result.finite_bad,
+                        (unsigned long long)head_result.checksum,
+                        head_rc == 0 && head_result.pass ? "PASS" : "FAIL");
+            if (head_rc != 0 || !head_result.pass) return head_rc == 0 ? 14 : head_rc;
+            if (serving_result) {
+                serving_result->diagnostic_output_head = true;
+                serving_result->diagnostic_output_head_proxy_hc = true;
+                serving_result->output_head_ms = head_result.total_ms;
+                serving_result->output_head_gather_ms = head_result.gather_ms;
+                serving_result->output_head_prep_ms = head_result.prep_ms;
+                serving_result->output_head_broadcast_ms = head_result.broadcast_ms;
+                serving_result->output_head_projection_ms = head_result.projection_ms;
+                serving_result->output_head_top1_ms = head_result.top1_ms;
+                serving_result->selected_tokens = head_result.tokens;
+                serving_result->selected_logits = head_result.logits;
+                serving_result->checksum ^= head_result.checksum + 0x0A17EADull;
+            }
+        }
         if (opt.serving_bench) {
             std::printf("tp_ep_serving_bench\tschema\tds4_v100_tp_ep_serving_bench.v1\t"
                         "requests\t%d\tslots\t%d\tctx\t262144\tgenerated_per_request\t%d\t"
@@ -5371,6 +5762,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           SharedTpRuntime *shared_tp_runtime,
                           const SharedExpertBindings *shared_expert_bindings,
                           const SharedDenseOps *shared_dense_ops,
+                          SharedOutputHead *shared_output_head,
                           std::vector<ContractRow> resident_rows[43],
                           LayerStats resident_stats[43]) {
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -5636,6 +6028,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                                         shared_tp_runtime,
                                                         shared_expert_bindings,
                                                         shared_dense_ops,
+                                                        shared_output_head,
                                                         resident_rows,
                                                         resident_stats,
                                                         true,
@@ -5677,11 +6070,31 @@ int run_tp_ep_http_server(const Options &base_opt,
                     const uint64_t request_continuation = req_opt.decode_steps > 1
                         ? (uint64_t)(req_opt.decode_steps - 1)
                         : 0ull;
-                    char meta[4096];
+                    const bool have_output_head =
+                        result.diagnostic_output_head &&
+                        i < result.selected_tokens.size() &&
+                        i < result.selected_logits.size();
+                    const uint32_t selected_token = have_output_head
+                        ? result.selected_tokens[i]
+                        : UINT32_MAX;
+                    const float selected_logit = have_output_head
+                        ? result.selected_logits[i]
+                        : 0.0f;
+                    char meta[6144];
                     std::snprintf(meta, sizeof(meta),
                                   "\"backend\":\"tp_ep_resident\","
                                   "\"diagnostic\":true,"
-                                  "\"diagnostic_note\":\"prompt prefill and output head are not wired in this TP/EP endpoint yet\","
+                                  "\"diagnostic_note\":\"prompt prefill, tokenizer text, and true HC semantics are not fully wired in this TP/EP endpoint yet\","
+                                  "\"diagnostic_output_head\":%d,"
+                                  "\"diagnostic_output_head_proxy_hc\":%d,"
+                                  "\"selected_token\":%u,"
+                                  "\"selected_logit\":%.9f,"
+                                  "\"output_head_ms\":%.6f,"
+                                  "\"output_head_gather_ms\":%.6f,"
+                                  "\"output_head_prep_ms\":%.6f,"
+                                  "\"output_head_broadcast_ms\":%.6f,"
+                                  "\"output_head_projection_ms\":%.6f,"
+                                  "\"output_head_top1_ms\":%.6f,"
                                   "\"coalesced_batch_id\":%llu,"
                                   "\"coalesced_batch_size\":%zu,"
                                   "\"coalesced_slot_index\":%zu,"
@@ -5710,6 +6123,16 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   "\"generated_tokens_per_second_decode\":%.6f,"
                                   "\"continuation_tokens_per_second_decode\":%.6f},"
                                   "\"checksum\":%llu",
+                                  have_output_head ? 1 : 0,
+                                  result.diagnostic_output_head_proxy_hc ? 1 : 0,
+                                  selected_token,
+                                  selected_logit,
+                                  result.output_head_ms,
+                                  result.output_head_gather_ms,
+                                  result.output_head_prep_ms,
+                                  result.output_head_broadcast_ms,
+                                  result.output_head_projection_ms,
+                                  result.output_head_top1_ms,
                                   (unsigned long long)batch_id,
                                   batch.size(),
                                   i,
@@ -5740,7 +6163,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   result.aggregate_generated_tok_s_decode,
                                   result.aggregate_continuation_tok_s_decode,
                                   (unsigned long long)result.checksum);
-                    char out[8192];
+                    char out[12288];
                     if (http_is_completion_post(batch[i])) {
                         std::snprintf(out, sizeof(out),
                                       "{\"id\":\"cmpl-ds4-v100-diagnostic-%llu-%zu\","
@@ -5964,11 +6387,41 @@ int main(int argc, char **argv) {
         std::printf("tp_ep_resident_serving_loop\tlayers\t43\tmode\tdirect_decode\tPASS\n");
     }
 
+    SharedOutputHead shared_output_head;
+    if (opt.diagnostic_output_head) {
+        std::vector<ContractRow> all_rows;
+        LayerStats all_stats;
+        if (parse_contract(opt.contract_path, -1, &all_rows, &all_stats) != 0 ||
+            all_stats.bad_rows != 0 ||
+            open_shared_output_head(opt, all_rows, &shared_output_head) != 0) {
+            std::fprintf(stderr, "tp_ep diagnostic output-head open failed\n");
+            free_shared_dense_ops(&shared_dense_ops, opt);
+            close_shared_expert_bindings(&shared_expert_bindings);
+            close_shared_tp_runtime(&shared_tp_runtime);
+            close_shared_rank_buffers(&shared_rank_buffers);
+            close_shared_api(&shared_api);
+            if (shared_dense_f16_cache) {
+                free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+            }
+            return 12;
+        }
+        std::printf("tp_ep_diagnostic_output_head_shared\tslots\t%d\tvocab\t%d\t"
+                    "rows_per_gpu\t%d\toutput_weight_bytes\t%llu\t"
+                    "logits_bytes\t%llu\tproxy_hc\t1\tPASS\n",
+                    opt.slots,
+                    shared_output_head.vocab,
+                    shared_output_head.rows_per_gpu,
+                    (unsigned long long)shared_output_head.output_weight_bytes,
+                    (unsigned long long)shared_output_head.logits_bytes);
+    }
+    SharedOutputHead *shared_output_head_arg =
+        shared_output_head.initialized ? &shared_output_head : nullptr;
+
     if (opt.serve_http) {
         int rc = 0;
         if (!resident_serving_loop || !shared_dense_ops.initialized) {
             std::fprintf(stderr, "tp_ep_http requires resident serving loop and shared dense ops\n");
-            rc = 12;
+            rc = 13;
         } else {
             if (opt.decode_steps <= 0) opt.decode_steps = 32;
             rc = run_tp_ep_http_server(opt,
@@ -5978,9 +6431,11 @@ int main(int argc, char **argv) {
                                        &shared_tp_runtime,
                                        &shared_expert_bindings,
                                        &shared_dense_ops,
+                                       shared_output_head_arg,
                                        resident_rows,
                                        resident_stats);
         }
+        close_shared_output_head(opt, &shared_output_head);
         free_shared_dense_ops(&shared_dense_ops, opt);
         close_shared_expert_bindings(&shared_expert_bindings);
         close_shared_tp_runtime(&shared_tp_runtime);
@@ -6000,10 +6455,12 @@ int main(int argc, char **argv) {
                                                     &shared_tp_runtime,
                                                     &shared_expert_bindings,
                                                     &shared_dense_ops,
+                                                    shared_output_head_arg,
                                                     resident_rows,
                                                     resident_stats,
                                                     resident_serving_loop,
                                                     nullptr);
+        close_shared_output_head(opt, &shared_output_head);
         free_shared_dense_ops(&shared_dense_ops, opt);
         close_shared_expert_bindings(&shared_expert_bindings);
         close_shared_tp_runtime(&shared_tp_runtime);

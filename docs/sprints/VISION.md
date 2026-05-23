@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 291
+revision: 292
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -1551,6 +1551,39 @@ first output-head integration path. The next work must replace the proxy HC
 expansion with true DS4 HC row semantics or wire the proxy into the output head
 only under an explicitly diagnostic endpoint.
 
+### Sprint 292 - TP/EP Diagnostic Output-Head Serving Bridge [complete]
+
+Goal: Wire the TP/EP sharded HC carry into the resident vocab-sharded output
+head and surface diagnostic selected token IDs through the HTTP completions
+path.
+
+Outcome: Complete. `tools/ds4-v100-tp-ep-full-layer-smoke.cu` now has
+`--diagnostic-output-head`, which implies HC carry. The new resident
+`SharedOutputHead` loads real output controls and BF16 `output.weight` vocab
+shards once, gathers per-rank `[slots][4][512]` HC shards into a logical
+`[slots][4][4096]` tensor on GPU0, runs the DS4 output-head collapse and
+vocab-sharded BF16 projection, performs GPU-side shard top-1, and returns
+diagnostic token IDs/logits through the serving result.
+
+The launcher supports `DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD=1`, and the HTTP
+bench supports `--diagnostic-output-head`. `/v1/completions` responses now
+include `diagnostic_output_head`, `diagnostic_output_head_proxy_hc`,
+`selected_token`, `selected_logit`, and output-head timing fields under
+`ds4_v100` when the flag is enabled.
+
+Direct 32-slot V100 validation reports output-head `total_ms=8.903469`,
+`projection_ms=7.690283`, `top1_ms=0.497101`, first token `122445`, finite
+logits, and PASS. A launcher-level 32-concurrent completions run forms one
+coalesced 32-request batch, returns `32/32` HTTP 200 responses with selected
+token metadata, and reports output-head `total_ms=8.586224`,
+`projection_ms=7.592902`, `top1_ms=0.341194`, `158.576748` wall generated
+tok/s, and `294.331849` decode generated tok/s for the 1-token diagnostic
+case.
+
+Decision: this is the correct operational bridge, but it remains diagnostic.
+The selected token IDs come from proxy HC rows, so they prove wiring and timing
+rather than model-correct text generation.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1642,6 +1675,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 289 added the TP/EP vocab-sharded output-head gate. | Real `output.weight` shards and output controls now produce a global top-1 token across 8 GPUs; the missing piece is final HC from the serving loop. | Carry final HC through the TP/EP token-major loop and call output-head from `/v1/completions`. |
 | 2026-05-23 | Sprint 290 added a resident TP/EP output-head gate and GPU-side shard top-1. | Full-logit host readback roughly doubled output-head latency; device-side top-1 raises the 32-slot resident gate to `3752.194257` output-head tok/s. | Add the TP/EP final-HC carry contract, then feed the resident output head from `/v1/completions`. |
 | 2026-05-23 | Sprint 291 added a TP/EP final-HC carry scaffold. | The sharded `[slots][4][512]` per-GPU carry buffer passes 1-token and 4-token all-layer gates with about `0.047 ms/layer` overhead, but currently uses proxy HC rows. | Replace proxy HC with true DS4 HC semantics or wire it only through an explicitly diagnostic output-head path. |
+| 2026-05-23 | Sprint 292 wired proxy-HC carry into resident TP/EP output-head serving. | `/v1/completions` can now return diagnostic selected token IDs/logits from the vocab-sharded output head, and a 32-concurrent launcher run passes. | Replace proxy HC rows with true DS4 HC row semantics and feed selected tokens back into decode. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

@@ -116,6 +116,22 @@ summed final-HC carry cost, `712.985252` aggregate decode tok/s, and
 `960.823272` continuation decode tok/s. The next gap is replacing the proxy HC
 expansion with true DS4 HC row semantics, then feeding the resident output head
 from this sharded HC state.
+Sprint 292 wired that sharded HC carry into a resident TP/EP output-head
+service and exposed diagnostic selected-token metadata through HTTP
+completions. The new `--diagnostic-output-head` flag implies HC carry, loads
+real output controls plus BF16 vocab shards once, gathers per-rank
+`[slots][4][512]` HC shards into logical `[slots][4][4096]`, runs the
+vocab-sharded output head, and returns `selected_token` / `selected_logit` in
+`ds4_v100`. The launcher now accepts
+`DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD=1`, and the HTTP bench has
+`--diagnostic-output-head`. Direct 32-slot V100 validation reports
+`8.903469 ms` output-head time with token `122445`. A full launcher-level
+32-concurrent completions run forms one 32-request batch, returns `32/32`
+HTTP 200 responses with diagnostic output-head metadata, and reports
+`8.586224 ms` output-head time, `7.592902 ms` projection time,
+`0.341194 ms` top-1 time, `158.576748` wall generated tok/s, and
+`294.331849` decode generated tok/s for the 1-token diagnostic case. This is
+still proxy-HC diagnostic serving, not real DeepSeek text serving.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

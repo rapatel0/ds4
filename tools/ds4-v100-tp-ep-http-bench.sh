@@ -16,6 +16,7 @@ run_appliance="./tools/ds4-v100-run-appliance.sh"
 copy_event_compose="1"
 ep_return_fp16="0"
 compact_route_compose="1"
+diagnostic_output_head="0"
 concurrent_requests="1"
 request_token_pattern=""
 endpoint="selected-token"
@@ -45,6 +46,7 @@ Options:
   --ep-return-fp16
   --compact-route-compose
   --no-compact-route-compose
+  --diagnostic-output-head
   --concurrent-requests
   --sequential-requests
   --request-token-pattern CSV
@@ -77,6 +79,7 @@ while [ "$#" -gt 0 ]; do
         --ep-return-fp16) ep_return_fp16="1"; shift ;;
         --compact-route-compose) compact_route_compose="1"; shift ;;
         --no-compact-route-compose) compact_route_compose="0"; shift ;;
+        --diagnostic-output-head) diagnostic_output_head="1"; shift ;;
         --concurrent-requests) concurrent_requests="1"; shift ;;
         --sequential-requests) concurrent_requests="0"; shift ;;
         --request-token-pattern) request_token_pattern="$2"; shift 2 ;;
@@ -157,6 +160,7 @@ for tokens in "${token_values[@]}"; do
     DS4_V100_TP_EP_COPY_EVENT_COMPOSE="$copy_event_compose" \
     DS4_V100_TP_EP_RETURN_FP16="$ep_return_fp16" \
     DS4_V100_TP_EP_COMPACT_ROUTE_COMPOSE="$compact_route_compose" \
+    DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD="$diagnostic_output_head" \
     DS4_V100_LOG_DIR="$case_dir/runtime" \
     "$run_appliance" >"$server_log" 2>"$server_err" &
     server_pid=$!

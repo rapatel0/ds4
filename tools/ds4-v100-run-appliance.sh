@@ -146,6 +146,7 @@ fi
 : "${DS4_V100_TP_EP_COPY_EVENT_COMPOSE:=1}"
 : "${DS4_V100_TP_EP_RETURN_FP16:=0}"
 : "${DS4_V100_TP_EP_COMPACT_ROUTE_COMPOSE:=1}"
+: "${DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD:=0}"
 : "${DS4_V100_TP_EP_VERBOSE:=0}"
 : "${DS4_V100_TP_EP_BIN:=./tools/ds4-v100-tp-ep-full-layer-smoke}"
 : "${DS4_V100_TP_EP_CONTRACT:=/workspace/logs/sprint245-tp-ep-dense-f16-cache-contract/contract/tp-ep-pack-contract.tsv}"
@@ -817,6 +818,9 @@ if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
     fi
     if [ "$DS4_V100_TP_EP_COMPACT_ROUTE_COMPOSE" -eq 1 ]; then
         cmd+=(--compact-route-compose)
+    fi
+    if [ "$DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD" -eq 1 ]; then
+        cmd+=(--diagnostic-output-head)
     fi
 else
     cmd=(
