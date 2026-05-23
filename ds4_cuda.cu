@@ -7676,7 +7676,7 @@ static int cuda_tm_routed_mxfp4_packed_impl(
     const int skip_compact_active_host_sync =
         routed_executor_candidate_shape &&
         use_compact_schedule &&
-        cuda_tm_compact_no_host_sync_enabled() &&
+        (cuda_tm_compact_no_host_sync_enabled() || g_tm_graph_inner) &&
         !tm_prof.enabled &&
         !group_pipeline_auto_groups;
     if (skip_compact_active_host_sync) {
@@ -8331,6 +8331,7 @@ static uint32_t cuda_tm_graph_mode_flags(
     if (cuda_tm_compact_schedule_enabled()) flags |= 1u << 5;
     if (cuda_tm_gated_silu_enabled()) flags |= 1u << 6;
     if (cuda_env_flag_enabled("DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE")) flags |= 1u << 7;
+    flags |= ((uint32_t)cuda_tm_routed_executor_mode() & 0xFFu) << 8;
     return flags;
 }
 
@@ -8391,7 +8392,12 @@ static int cuda_tm_graph_capture_supported(void) {
     if (cuda_tm_route_validation_sync_enabled()) return 0;
     if (cuda_tm_group_pipeline_enabled()) return 0;
     if (cuda_tm_group_pipeline_auto_groups_enabled()) return 0;
-    if (cuda_tm_routed_executor_mode() != DS4_CUDA_TM_ROUTED_EXECUTOR_OFF) return 0;
+    const int executor_mode = cuda_tm_routed_executor_mode();
+    if (executor_mode != DS4_CUDA_TM_ROUTED_EXECUTOR_OFF &&
+        executor_mode != DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6 &&
+        executor_mode != DS4_CUDA_TM_ROUTED_EXECUTOR_FUSED6_REDUCE) {
+        return 0;
+    }
     return 1;
 }
 
@@ -8433,6 +8439,14 @@ static int cuda_tm_graph_launch_entry(cuda_tm_graph_entry *entry) {
         return -1;
     }
     entry->launches++;
+    if (cuda_tm_graph_verbose() && entry->launches <= 3u) {
+        fprintf(stderr,
+                "ds4: turbomind_graph launched gpu=%d tokens=%u routes=%u launches=%llu\n",
+                gpu,
+                entry->key.n_tokens,
+                entry->key.n_tokens * entry->key.n_routes,
+                (unsigned long long)entry->launches);
+    }
     return 0;
 }
 

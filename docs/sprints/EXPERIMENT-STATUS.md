@@ -429,3 +429,11 @@ counters. The current `fused6_reduce` path has `compact_a_calls == calls`,
 `mid_half_calls == calls`. The six-route `mid_half` allocation is `24576` bytes
 per call, which means the next routed-FFN optimization needs to reduce the
 gate/up and down execution boundary rather than only shrinking scratch memory.
+After Sprint 198, `DS4_V100_TURBOMIND_GRAPH=1` can capture and replay the
+current `DS4_V100_TURBOMIND_ROUTED_EXECUTOR=fused6_reduce` path. The graph key
+includes routed-executor mode and capture skips the compact active-expert host
+readback. Short direct replay on V100 matched output IDs
+`201,200,84921,200,18,90,926,14` and improved continuation from `16.022442` to
+`17.980888` tok/s, with `43` captures, `129` launches, and `0` failures. Keep
+graph replay default-off until the same-binary 16-slot/256K served A/B passes;
+the older Sprint 169 graph path regressed served throughput.

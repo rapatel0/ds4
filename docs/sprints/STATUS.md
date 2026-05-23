@@ -538,6 +538,14 @@ move serving throughput. The next implementation should target a persistent or
 tile-level gate/up+down executor that reduces launch/GEMM boundary cost, or
 use the TP4 doubling collective for larger batched/prefill shapes where it
 actually wins.
+Sprint 198 reopened CUDA graph replay for the current `fused6` /
+`fused6_reduce` routed executor path. Direct replay with `fused6_reduce`
+matched output IDs and improved continuation throughput from `16.022442` to
+`17.980888` tok/s, with `43` graph captures, `129` launches, and `0` failures.
+This is not promoted: Sprint 169 showed graph replay can help direct replay
+while regressing served throughput. The required next gate is a same-binary
+16-slot/256K served A/B before treating graph replay as a practical serving
+optimization.
 
 The concise current status is also tracked in
 `docs/sprints/EXPERIMENT-STATUS.md`.
