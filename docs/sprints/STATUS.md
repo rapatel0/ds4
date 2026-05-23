@@ -1,8 +1,19 @@
 # DS4 V100 Appliance Status
 
-Last updated: 2026-05-21
+Last updated: 2026-05-23
 
 ## Topline
+
+Current promoted serving baseline is Sprint 199's graph-backed
+`fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s
+and `66.825545` continuation tok/s with `16/16` token match. Sprint 200 then
+rejected the easy exact six-route kernel cut-ins, and Sprint 201 measured the
+first full-layer TP4 boundary envelope. A 43-layer, 4-collective/layer TP4
+proxy costs `22-24 ms` at 16 active tokens, or about `655-724 tok/s`
+overhead-only before DS4 compute. The same boundary improves to
+`1837 tok/s` overhead-only at 64 active tokens and `2509 tok/s` at 128 active
+tokens. This keeps full-layer TP4/EP viable only if dense and routed work stay
+inside the TP boundary; routed-only overlays remain rejected.
 
 Current long-context production throughput mode is the Sprint 121 16-slot/256K
 appliance with the Sprint 122 rendezvous fix. Sprint 137 adds an explicit
@@ -290,6 +301,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 
 | Sprint | Experiment | Result | Decision |
 |---|---|---|---|
+| 201 | TP4 full-layer boundary proxy | V100 build passed; 16-token/43-layer/4-collective boundary measured `22.113369 ms` root and `24.414061 ms` doubling, both verified; 64-token doubling measured `34.830881 ms`, 128-token doubling measured `51.026125 ms` | Full-layer TP4/EP remains plausible only as a broad topology that keeps dense+routed compute inside the boundary; do not expand routed-only TP overlays |
 | 103 | Exact-bit E4M3 F8 decode replacing `ldexpf()` | Improved 8-slot/256K to `30.862791` generated tok/s and 4-slot/1M to `19.733742` | Shipped |
 | 104 | Warp-shuffle reductions for hot F8 arena kernels | Improved 8-slot/256K repeat to `31.451185`; 4-slot/1M to `20.026385` | Shipped; current baseline |
 | 105 | Extend warp reductions to BF16/F32 matmuls | Correct, but repeat result was inside Sprint 104 band | Rejected and reverted |
@@ -564,6 +576,13 @@ gate/up probe. The down-reduce output clear measured only `0.0022 ms`, while
 six-route down-reduce with clear measured `0.0650 ms`; a clear-only fusion is
 therefore not material. The next sprint should pivot to bounded full-layer
 TP4/EP rather than adding another six-route wrapper ABI.
+Sprint 201 added the bounded TP4 layer-boundary proxy and measured the full
+43-layer communication envelope directly on the V100 pod. The 16-token target
+shape costs `22-24 ms` before any DS4 compute, which is acceptable only if TP4
+changes the whole layer execution shape. Larger active-token runs improve the
+overhead-only envelope to `1837 tok/s` at 64 tokens and `2509 tok/s` at
+128 tokens, so TP4 is more promising for high-batch throughput/prefill than
+low-batch decode latency.
 
 The concise current status is also tracked in
 `docs/sprints/EXPERIMENT-STATUS.md`.

@@ -1,8 +1,17 @@
 # DS4 V100 Experiment Status
 
-Last updated: 2026-05-21
+Last updated: 2026-05-23
 
 ## Topline
+
+Current promoted serving baseline is Sprint 199's graph-backed
+`fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s
+and `66.825545` continuation tok/s with `16/16` token match. Sprint 201 adds a
+bounded full-layer TP4 boundary measurement: the 43-layer, 4-collective/layer
+proxy costs `22-24 ms` at 16 active tokens (`655-724 tok/s` overhead-only),
+`34.830881 ms` at 64 tokens (`1837 tok/s` overhead-only), and `51.026125 ms`
+at 128 tokens (`2509 tok/s` overhead-only). TP4 is still worth exploring only
+as a broad full-layer TP/EP topology, not as another routed-only overlay.
 
 The appliance is correct and served on the 8x V100 node, but it is not yet in
 the practical throughput range from the vision. The current 8-slot default is
@@ -195,6 +204,7 @@ to slightly worse.
 
 | Sprint | Change | Result | Decision |
 |---|---|---|---|
+| 201 | TP4 full-layer boundary proxy | Correct on V100; 16-token default verified at `22.113369 ms` root and `24.414061 ms` doubling for the full 43-layer boundary; larger doubling cases reached `1837` overhead-only tok/s at 64 tokens and `2509` at 128 tokens | Use only for a full-layer TP4/EP prototype that keeps dense+routed compute inside the boundary; do not expand routed-only TP overlays |
 | 103 | Exact-bit E4M3 F8 decode | Raised 8-slot/256K to `30.862791` | Shipped |
 | 104 | Warp reductions for F8 arena kernels | Raised 8-slot/256K repeat to `31.451185` | Shipped |
 | 105 | BF16/F32 warp reductions | Correct but no gain | Rejected |
@@ -452,3 +462,9 @@ clear at `0.0022 ms`, and six-route down-reduce with clear at `0.0650 ms`.
 The fixed six-route probe is slower than generic, and the clear boundary is too
 small to justify a new wrapper ABI. This pushes the next material work toward
 bounded full-layer TP4/EP or a real non-atomic route-reduce epilogue rewrite.
+After Sprint 201, `tools/ds4-v100-tp4-layer-proxy` measures the full 43-layer
+TP4 boundary rather than an isolated collective. The default 16-token shape
+verifies and costs `22-24 ms` before compute, while 64-token and 128-token
+shapes improve to `1837` and `2509` overhead-only tok/s. That result does not
+justify another partial TP overlay; it supports either a bounded full-layer
+TP4/EP slice or a return to a persistent fused routed-FFN kernel.

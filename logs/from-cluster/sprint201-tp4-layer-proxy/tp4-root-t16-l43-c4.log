@@ -1,0 +1,3 @@
+ds4-v100-tp4-layer-proxy algo=root devices=0,1,2,3 root=0 tokens=16 hidden=4096 bytes_per_tensor=262144 layers=43 collectives_per_layer=4 local_op_repeats=0 warmup=3 iters=20
+latency_ms boundary_avg=22.113369 min=21.997694 max=22.268178 per_layer=0.514264 per_collective=0.128566 effective_wire_gbps=12.234 overhead_only_tok_s=723.544
+verify cross_device_max_abs=0.000000000 ok
