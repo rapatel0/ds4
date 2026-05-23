@@ -3102,6 +3102,18 @@ int main(int argc, char **argv) {
         }
         ropts.attn_comp_cap = (uint32_t)comp_cap;
         ropts.index_comp_cap = (uint32_t)comp_cap;
+    } else if (prompt_text) {
+        uint64_t comp_cap = ((uint64_t)strlen(prompt_text) + (uint64_t)strlen(opt.system) +
+                             (uint64_t)opt.tokens + 1ull) / 2ull + 64ull;
+        if (comp_cap < ropts.attn_comp_cap) comp_cap = ropts.attn_comp_cap;
+        if (comp_cap > UINT32_MAX) {
+            fprintf(stderr, "ds4-v100-replay: prompt compressed cache cap is too large\n");
+            free(expected);
+            free(prompt_owned);
+            return 2;
+        }
+        ropts.attn_comp_cap = (uint32_t)comp_cap;
+        ropts.index_comp_cap = (uint32_t)comp_cap;
     }
     if (opt.profile_decode) {
         setenv("DS4_V100_PROFILE_DECODE", "1", 1);

@@ -172,7 +172,15 @@ accepted only one token (`draft_tokens=1,0,1,0` versus
 `speculative_saves=0`. MTP should stay default-off until a broader prompt
 matrix shows enough accepted prefix length to justify optimizing the verifier;
 otherwise the practical-serving branch should return to attention/KV or
-persistent low-bit execution.
+persistent low-bit execution. Sprint 223 ran that broader matrix and gives MTP
+one narrow continuation path. After fixing real-prompt compressed-cache cap
+sizing, all `15/15` V100 production-pack cases passed across five prompts and
+block sizes `2,4,8`. Average accepted prefix was `1.533`, max was `2`, and
+`10/15` cases accepted at least two drafted tokens. The important constraint is
+that longer blocks did not improve acceptance: block-4 and block-8 never
+accepted more than two tokens. The next MTP work should therefore target an
+exact block-2 speculative commit/verify path and measure real continuation
+throughput; do not spend another sprint optimizing longer MTP draft blocks yet.
 
 ## Current State
 
@@ -3143,6 +3151,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-23 | Shipped Sprint 220 warmed production deployment defaults. | The operator env example now defaults to the Sprint 219 validated production appliance mode: `/workspace/packs/ds4-appliance-full-tm-gated-s181`, `ctx=262144`, `slots=32`, `active_microbatch=32`, and startup warmup `auto`. The production deployment smoke now supports `--appliance-dir`, accepts `32` warmed slots at `256K`, and validates `/v100/status` plus `/metrics` warmed-readiness fields. V100 deployment smoke passed with launcher, health, status, metrics, and two bounded generation requests returning first-token bytes `3136`. This does not change the throughput ceiling, but it makes the maximum-context production mode deployable through the documented operator path. | Sprint 221 |
 | 2026-05-23 | Completed Sprint 221 MTP target block verification primitive. | Added replay-level all-stage target snapshot wrappers and `ds4_v100_replay_verify_token_block()`, plus `tools/ds4-v100-replay --target-block-smoke N`. V100 validation on the production appliance pack passed for a 4-token forced block: greedy fixture bytes remained `3136`, snapshot size was `30107648` bytes, first and restored block passes matched the baseline, and accounting reported `target_forwards=4`, `accepted_prefix_len=4`, `target_tokens_verified=4`, `effective_output_tokens=4`, and `speculative_saves=0`. The negative guard fails closed for multi-slot use. This establishes the MTP verification/state boundary but does not yet improve throughput; Sprint 222 should replace the serial block body with graph-captured/batched target verification or connect real MTP draft blocks to this API under exact rollback semantics. | Sprint 222 |
 | 2026-05-23 | Completed Sprint 222 MTP draft block chaining diagnostic. | Added an MTP forward sibling API that can return `next_hc`, plus `tools/ds4-v100-replay --mtp-draft-block-smoke N` to chain real MTP drafts and verify them through the Sprint 221 target-block boundary. V100 production-pack validation passed mechanically: first token bytes remained `3136`, the 4-token draft block was `1,0,1,0`, target verification returned `1,380,5,380`, `accepted_prefix_len=1`, `target_forwards=4`, `effective_output_tokens=2`, and `speculative_saves=0`; the multi-slot guard fails closed. This ships the diagnostic but keeps MTP default-off for throughput. The next MTP step should be an acceptance matrix before any verifier-speed sprint; low acceptance should pivot practical serving back to attention/KV or persistent low-bit execution. | Sprint 223 |
+| 2026-05-23 | Completed Sprint 223 MTP acceptance matrix pivot gate. | Added `tools/ds4-v100-mtp-acceptance-matrix.sh` and fixed real-prompt replay compressed-cache cap sizing so long prompt diagnostics no longer fail at layer 2. The V100 production-pack matrix passed `15/15` cases across five prompt fixtures and block sizes `2,4,8`: average accepted prefix `1.533`, max accepted prefix `2`, `10/15` cases with accepted prefix `>=2`, and total speculative saves `4`. The decision is to continue MTP only for a block-2 exact speculative commit/verify path: block-2 accepted both drafted tokens in `4/5` prompts, while block-4 and block-8 never accepted more than two tokens and mostly add verifier work. | Sprint 224 |
 
 ## Open Questions
 

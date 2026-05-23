@@ -610,6 +610,15 @@ but accepted only one drafted token:
 `speculative_saves=0`. Do not treat MTP as a throughput feature until a broader
 acceptance matrix proves useful accepted-prefix length and a true speculative
 verifier can batch or otherwise reduce target forwards over drafted tokens.
+Sprint 223 ran that matrix with
+`tools/ds4-v100-mtp-acceptance-matrix.sh` on the production pack. The matrix
+passed `15/15` cases across five prompt fixtures and block sizes `2,4,8`, with
+average accepted prefix `1.533`, max accepted prefix `2`, and `10/15` cases at
+accepted prefix `>=2`. The only currently plausible MTP throughput shape is
+block-2: `4/5` block-2 cases accepted both drafted tokens and reported
+`speculative_saves=1`; block-4 and block-8 never accepted more than two tokens.
+Keep MTP off by default until a block-2 exact speculative commit/verify serving
+path demonstrates real continuation tok/s improvement.
 
 ## Generate
 

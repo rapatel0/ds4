@@ -1,0 +1,1 @@
+{"mtp_draft_block_smoke":true,"prompt_tokens":27,"block_tokens":2,"first_token":9854,"first_hex":"606060","draft_tokens":[69,201],"target_tokens":[69,201],"accepted_prefix_len":2,"target_forwards":2,"target_tokens_verified":2,"effective_output_tokens":3,"speculative_saves":1,"snapshot_bytes":35696128,"mtp_ms":8.954,"verify_ms":117.089,"mtp_raw_row":28,"mtp_n_raw":1}

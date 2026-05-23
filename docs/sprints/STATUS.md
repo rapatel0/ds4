@@ -171,7 +171,16 @@ fixture reported `draft_tokens=1,0,1,0`, `target_tokens=1,380,5,380`,
 diagnostic but does not promote MTP throughput. The next MTP decision requires
 a broader acceptance matrix; if accepted prefixes stay low, the practical
 serving branch should pivot back to attention/KV or persistent low-bit
-execution.
+execution. Sprint 223 ran that matrix on five prompt fixtures and block sizes
+`2,4,8` after fixing real-prompt replay compressed-cache cap sizing. The full
+V100 production-pack matrix passed `15/15` cases with average accepted prefix
+`1.533`, max accepted prefix `2`, `10/15` cases at accepted prefix `>=2`, and
+total speculative saves `4`. The decision is to continue MTP only in the
+block-2 shape: block-2 accepted both drafted tokens in `4/5` cases and reported
+`speculative_saves=1`, while block-4 and block-8 never accepted more than two
+tokens and mostly add verifier work. The next MTP sprint should build and
+measure a block-2 exact speculative commit/verify path, not longer draft
+blocks.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit

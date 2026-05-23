@@ -1,0 +1,16 @@
+case	prompt	block_tokens	status	prompt_tokens	first_token	first_hex	draft_tokens	target_tokens	accepted_prefix_len	target_forwards	target_tokens_verified	effective_output_tokens	speculative_saves	snapshot_bytes	mtp_ms	verify_ms	mtp_raw_row	mtp_n_raw
+short_reasoning_plain_block2	tests/test-vectors/prompts/short_reasoning_plain.txt	2	ok	18	926	3136	1,0	1,380	1	2	2	2	0	33328128	9.008	116.08	19	1
+short_reasoning_plain_block4	tests/test-vectors/prompts/short_reasoning_plain.txt	4	ok	18	926	3136	1,0,0,1	1,380,5,5	1	4	4	2	0	33328128	17.957	232.268	21	1
+short_reasoning_plain_block8	tests/test-vectors/prompts/short_reasoning_plain.txt	8	ok	18	926	3136	1,0,1,0,1613,539,1124,75	1,380,5,380,5,1,926,270	1	8	8	2	0	33328128	36.232	464.872	25	1
+short_code_completion_block2	tests/test-vectors/prompts/short_code_completion.txt	2	ok	27	9854	606060	69,201	69,201	2	2	2	3	1	35696128	8.954	117.089	28	1
+short_code_completion_block4	tests/test-vectors/prompts/short_code_completion.txt	4	ok	27	9854	606060	69,201,85,51846	69,201,3916,15626	2	4	4	3	0	35696128	17.682	233.452	30	1
+short_code_completion_block8	tests/test-vectors/prompts/short_code_completion.txt	8	ok	27	9854	606060	69,201,85,51846,5610,28,223,939	69,201,3916,15626,201,201,19600,18	2	8	8	3	0	35696128	34.85	470.269	34	1
+short_italian_fact_block2	tests/test-vectors/prompts/short_italian_fact.txt	2	ok	21	108149	416461	47121,317	47121,317	2	2	2	3	1	33612288	9.032	115.639	22	1
+short_italian_fact_block4	tests/test-vectors/prompts/short_italian_fact.txt	4	ok	21	108149	416461	47121,317,2091,65	47121,317,805,75004	2	4	4	3	0	33612288	17.714	232.562	24	1
+short_italian_fact_block8	tests/test-vectors/prompts/short_italian_fact.txt	8	ok	21	108149	416461	47121,317,2091,65,560,68217,108122,14	47121,317,805,75004,4205,9861,9861,65	2	8	8	3	0	33612288	34.894	464.583	28	1
+long_code_audit_block2	tests/test-vectors/prompts/long_code_audit.txt	2	ok	3844	671	546865	1473,2239	1473,2239	2	2	2	3	1	923696128	9.22	136.933	5	1
+long_code_audit_block4	tests/test-vectors/prompts/long_code_audit.txt	4	ok	3844	671	546865	1473,2239,4368,344	1473,2239,4181,304	2	4	4	3	0	923696128	17.764	279.052	7	1
+long_code_audit_block8	tests/test-vectors/prompts/long_code_audit.txt	8	ok	3844	671	546865	1473,2239,4368,344,260,223,20,14	1473,2239,4181,304,396,14534,1457,14	2	8	8	3	0	923696128	34.858	549.446	11	1
+long_memory_archive_block2	tests/test-vectors/prompts/long_memory_archive.txt	2	ok	3353	32085	47616d6d61	16,1	16,1	2	2	2	3	1	907214848	9.164	136.448	26	1
+long_memory_archive_block4	tests/test-vectors/prompts/long_memory_archive.txt	4	ok	3353	32085	47616d6d61	16,1,0,0	8773,1,0,5	0	4	4	1	0	907214848	17.781	275.263	28	1
+long_memory_archive_block8	tests/test-vectors/prompts/long_memory_archive.txt	8	ok	3353	10220	436f6d706f6e656e74	77722,16,32617,377,270,223,1059,33	37149,16,1,52405,270,21323,643,463	0	8	8	1	0	907214848	34.93	541.3	32	1
