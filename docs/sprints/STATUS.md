@@ -207,6 +207,19 @@ repeat measured `50.434232` generated tok/s and `47.282093` continuation tok/s
 at `32` slots / `256K`, with `64/64` token match, average GPU utilization
 `47.076%`, and max GPU utilization `96%`. TP remains prototype-only and is not
 operational in production serving.
+Sprint 226 implements the hard-cut TP/EP planner contract. The old
+`tools/ds4-v100-plan-tp.c` PP-style topology variants are removed; the tool now
+plans only `PP=1` (no pipeline), `TP=8`, `EP=8`, with sharded KV. Built on the
+V100 pod against `/workspace/packs/ds4-appliance-full-tm-gated-s181`, the real
+pack bytes sum to `145.42 GiB`, or `18.18 GiB` per TP rank. The target
+`32` slots / `256K` / F8-KV plan fits at `27.00 GiB` per GPU including a
+`2.00 GiB` reserve, leaving `5.00 GiB` post-reserve headroom. The planner
+reports admission of `126` slots at `128K`, `63` at `256K`, `31` at `512K`,
+and `15` at `1M` under current assumptions. It also records the expected
+decode traffic shape: `37.625 MiB` hidden collective wire per decode step and
+`3.000 MiB` aggregate EP dispatch+return at 32 slots. TP/EP is still not a
+serving runtime, but the memory/topology contract is now explicit and PP modes
+cannot be selected from the TP planner.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit

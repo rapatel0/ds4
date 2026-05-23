@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 218
+revision: 226
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -55,6 +55,11 @@ not a serial layer-chain.
   GPU utilization `96%`.
 - Existing TP work is prototype-only. TP is not operational in production
   serving.
+- Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
+  longer exposes PP/layer-split topology modes. Against the real production
+  pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about
+  `27.00 GiB` per GPU including a `2.00 GiB` reserve, with `5.00 GiB`
+  headroom.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -79,7 +84,7 @@ not a serial layer-chain.
 
 ## Sprint Sequence
 
-### Sprint 226 - TP/EP Planner And Topology Contract [planned]
+### Sprint 226 - TP/EP Planner And Topology Contract [complete]
 
 Goal: Create a TP-only planner and topology report for `PP1/TP8/EP8` at
 `32` slots / `256K`.
@@ -88,7 +93,11 @@ Rationale: The PP planner carries legacy assumptions that will fight the new
 topology. The TP path needs its own memory, KV, expert, collective, and slot
 admission contract before runtime work starts.
 
-Outcome: Pending.
+Outcome: Complete. `tools/ds4-v100-plan-tp.c` is now a TP8/EP8-only planner
+with sharded KV, expert ownership, route-density, admission-tier, and
+collective/EP traffic reporting. The real-pack V100 run reports `145.42 GiB`
+total resident weight bytes, `27.00 GiB` per-GPU total at `32` slots / `256K`
+/ F8 KV, and admission of `63` slots at `256K` under current assumptions.
 
 ### Sprint 227 - TP8 Collective Workbench [planned]
 
