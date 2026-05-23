@@ -1,0 +1,8 @@
+[  3%] Built target parser
+[  8%] Built target fmt
+[ 13%] Built target cuda_utils
+[ 60%] Built target gemm2
+[ 86%] Built target core
+[ 96%] Built target ggml-turbomind
+Consolidate compiler generated dependencies of target test_ggml_turbomind_tp4_resident_layer_slice
+[100%] Built target test_ggml_turbomind_tp4_resident_layer_slice

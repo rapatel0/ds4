@@ -36,6 +36,13 @@ four-way TurboMind MXFP4 expert compute scales to `2.35x-3.64x` at practical
 route counts, but routed-only full-hidden copies erase the win. The next TP
 sprint must therefore be a bounded full-layer resident TP4/EP slice or the TP
 branch should pause.
+Sprint 203 built that resident slice and moved the uncertainty to the actual
+boundary: correctness passes, but naive root reduction is still slower than
+one-GPU routed FFN (`0.825x` at `96 routes x 43 layers`, `0.589x` at
+`768 routes x 43 layers`), and the simple sequential doubling variant is worse.
+Production TP4 should pause until a real concurrent collective/fused reduction
+exists; otherwise the next sprint should return to a persistent fused routed-FFN
+executor.
 
 ## Current State
 
@@ -2993,6 +3000,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-23 | Completed Sprint 200 six-route kernel cut-in stop gate. | Extended the focused TurboMind bench to cover the exact production six-route routed-FFN shape, including `ggml_turbomind_ds4_mxfp4_gated_silu_6`, `ggml_turbomind_ds4_mxfp4_down_6_m16_reduce`, output-clear timing, and down-reduce correctness versus a generic-down reduction reference. The V100 result rejects the easy six-route cut-ins: fixed `m16_6` gated-SiLU measured `0.1196 ms` versus `0.0946 ms` for the generic gated path, and the required F32 output clear measured only `0.0022 ms` versus `0.0650 ms` for clear+down-reduce. Do not add a wrapper ABI or clear-only fusion; pivot the next sprint to bounded full-layer TP4/EP or a real non-atomic route-reduce epilogue rewrite. | Sprint 201+ |
 | 2026-05-23 | Completed Sprint 201 TP4 layer-boundary proxy. | Added `tools/ds4-v100-tp4-layer-proxy`, built it on the V100 pod, and measured the full 43-layer TP4 boundary with four hidden collectives per layer. At 16 active tokens the boundary costs `22.113369 ms` root or `24.414061 ms` doubling, both verified, which is an overhead-only ceiling of `655-724 tok/s` before DS4 compute. Larger doubling runs improve to `1837 tok/s` overhead-only at 64 active tokens and `2509 tok/s` at 128 active tokens. This keeps full-layer TP4/EP plausible for high-batch/prefill or a broad topology slice, but rejects any further routed-only TP overlay expansion. | Sprint 202+ |
 | 2026-05-23 | Completed Sprint 202 TP4 routed-FFN compute envelope. | Added `test_ggml_turbomind_tp_split_4gpu`, built it on the V100 pod, and measured real TurboMind MXFP4 routed-FFN TP4 splits at 6/96/768 routes after fixing a benchmark warmup bug where the full reference and shard 0 shared the GPU0 workspace on different streams. Correctness passed for all measured shapes. Corrected compute-only TP4 speedup reached `2.686x`, `2.350x`, and `3.636x`, but conservative full-hidden copy-inclusive speedup was only `0.986x`, `0.783x`, and `0.682x`. This proves TP4 expert compute is attractive, but only inside a resident full-layer TP/EP boundary. Do not build another routed-only TP overlay. | Sprint 203+ |
+| 2026-05-23 | Completed Sprint 203 resident TP4 layer-slice gate. | Added `test_ggml_turbomind_tp4_resident_layer_slice`, which combines the real TurboMind MXFP4 TP4 routed-FFN split with a resident per-layer hidden reduction loop. V100 correctness passed at 6/96/768 routes. The 43-layer root boundary measured `0.825x` speedup at 96 routes and `0.589x` at 768 routes versus the one-GPU full-width reference, and the simple hand-rolled doubling variant was slower than root in 4-layer tests. Do not integrate this TP4 boundary into the scheduler. Next TP work must first provide a real concurrent collective/fused reduction; otherwise pivot back to a persistent fused routed-FFN executor. | Sprint 204+ |
 
 ## Open Questions
 

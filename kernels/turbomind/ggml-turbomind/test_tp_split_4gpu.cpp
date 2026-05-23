@@ -23,8 +23,8 @@
 
 #include "ggml-turbomind-api.h"
 
-#define CHECK_CUDA(x) do { cudaError_t e = (x); if (e != cudaSuccess) { \
-    fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(e)); \
+#define CHECK_CUDA(x) do { cudaError_t err__ = (x); if (err__ != cudaSuccess) { \
+    fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err__)); \
     std::exit(1); \
 } } while (0)
 
@@ -749,6 +749,7 @@ static int run_case(void * lib, const Case & c) {
 
 } // namespace
 
+#ifndef DS4_TP_SPLIT_4GPU_NO_MAIN
 int main(int argc, char ** argv) {
     const char * lib_path = argc > 1 ? argv[1] : "./libggml-turbomind.so";
     void * lib = dlopen(lib_path, RTLD_LAZY | RTLD_LOCAL);
@@ -764,3 +765,4 @@ int main(int argc, char ** argv) {
     dlclose(lib);
     return failures ? 1 : 0;
 }
+#endif

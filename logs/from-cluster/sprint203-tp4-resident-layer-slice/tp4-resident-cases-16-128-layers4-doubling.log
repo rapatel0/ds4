@@ -1,0 +1,6 @@
+[tp4_resident] start tpa=16 routes=96 layers=4 algo=doubling gpus=0,1,2,3 warmup=2 iters=10
+[tp4_resident tpa=16 layers=4] correctness total_routes=96 values=393216 max_abs=5.9605e-08 rel=8.6667e-01 bad=0 bad_frac=0.0000e+00 nan=0 status=PASS
+[tp4_resident tpa=16] algo=doubling gpus=0,1,2,3 routes=96 layers=4 full_total_ms=1.2657 tp4_resident_ms=2.1035 full_ms_per_layer=0.3164 tp4_ms_per_layer=0.5259 speedup=0.602x boundary_mib_per_iter=18.00
+[tp4_resident] start tpa=128 routes=768 layers=4 algo=doubling gpus=0,1,2,3 warmup=2 iters=10
+[tp4_resident tpa=128 layers=4] correctness total_routes=768 values=3145728 max_abs=5.9605e-08 rel=9.9099e-01 bad=0 bad_frac=0.0000e+00 nan=0 status=PASS
+[tp4_resident tpa=128] algo=doubling gpus=0,1,2,3 routes=768 layers=4 full_total_ms=4.7441 tp4_resident_ms=9.4932 full_ms_per_layer=1.1860 tp4_ms_per_layer=2.3733 speedup=0.500x boundary_mib_per_iter=144.00
