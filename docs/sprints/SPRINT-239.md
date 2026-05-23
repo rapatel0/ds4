@@ -1,7 +1,7 @@
 # Sprint 239 - TP/EP Layer-2 Next-Hidden Composition
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete
 
 ## Overview
 
@@ -131,23 +131,23 @@ the dataflow is correct.
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists and is committed before implementation evidence.
-- [ ] Implementation stays in the separate TP/EP codepath.
-- [ ] No PP scheduler files are modified.
-- [ ] `--compose-next-hidden` builds on the V100 pod.
-- [ ] Route-to-slot mapping matches the existing EP route counts.
-- [ ] TurboMind EP down output is reduced into hidden shards.
-- [ ] Expert shard contributions are peer-copied across all eight GPUs.
-- [ ] Next-hidden shards include dense attention output, shared FFN output,
+- [x] Sprint plan exists and is committed before implementation evidence.
+- [x] Implementation stays in the separate TP/EP codepath.
+- [x] No PP scheduler files are modified.
+- [x] `--compose-next-hidden` builds on the V100 pod.
+- [x] Route-to-slot mapping matches the existing EP route counts.
+- [x] TurboMind EP down output is reduced into hidden shards.
+- [x] Expert shard contributions are peer-copied across all eight GPUs.
+- [x] Next-hidden shards include dense attention output, shared FFN output,
       EP contribution, and residual input.
-- [ ] The run reports contribution bytes, peer return bytes, composition time,
+- [x] The run reports contribution bytes, peer return bytes, composition time,
       finite/checksum status, and final `PASS`.
-- [ ] Existing combined dense coverage and KV scaffold checks still pass in the
+- [x] Existing combined dense coverage and KV scaffold checks still pass in the
       same run.
-- [ ] Evidence is copied to
+- [x] Evidence is copied to
       `logs/from-cluster/sprint239-tp-ep-next-hidden-composition/`.
-- [ ] Status and vision docs are updated with the decision.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Status and vision docs are updated with the decision.
+- [x] Changes are committed with explicit `git add` paths.
 
 ## Risks
 
@@ -163,4 +163,43 @@ the dataflow is correct.
 
 ## Decision
 
-Pending.
+Complete. The TP/EP-only full-layer smoke now has an opt-in
+`--compose-next-hidden` mode that connects real layer-2 pieces into resident
+next-hidden shards. The V100 pod run at `32` slots / `256K` passes with:
+
+```text
+tp_ep_next_hidden_compose
+hidden_shard 512
+ep_contribution_bytes 4194304
+ep_return_bytes 4194304
+attn_dense_ms 0.555213
+shared_dense_ms 0.153702
+compose_ms 3.707477
+checksum 4112649481
+finite_bad 0
+repeat_max_abs 0.000000000
+repeat_bad 0
+PASS
+```
+
+The same run preserves the Sprint 238 combined coverage gates:
+
+```text
+dense_compute_pass 1
+bf16_compute_pass 1
+compose_pass 1
+kv max_abs 0.000000000
+worst_ep_ms 0.255590
+repeat_bad 0
+repeat_nan 0
+PASS
+```
+
+This is not production serving and not logits equivalence. It is the first
+separate TP/EP path where production dense bytes, TurboMind EP outputs,
+explicit peer return, KV update/check, and next-hidden shard composition all
+run in one V100 execution.
+
+Evidence:
+
+- `logs/from-cluster/sprint239-tp-ep-next-hidden-composition/layer2-compose-next-hidden-32slot-256k.log`

@@ -348,7 +348,7 @@ keeps KV `max_abs=0`, measures `worst_ep_ms=0.250368`, and ends in final
 `PASS`. The next gap is no longer dense coverage; it is composing the real
 layer dataflow into a next hidden state.
 
-### Sprint 239 - Full-Layer TP/EP Decode [planned]
+### Sprint 239 - Full-Layer TP/EP Decode [complete]
 
 Goal: Combine descriptor-backed dense coverage, control/router handling,
 sharded KV, and EP experts into a representative full layer that produces a
@@ -358,7 +358,20 @@ Rationale: The current path proves bytes, KV, experts, and one dense compute
 gate independently. Full-layer decode must connect those pieces into the layer
 dataflow before serving.
 
-Outcome: Pending.
+Outcome: Complete for representative layer-2 next-hidden composition. The
+TP/EP full-layer smoke now supports `--compose-next-hidden`, builds route-slot
+mapping for the EP schedule, reduces TurboMind routed expert down outputs into
+512-wide TP destination hidden shards, peer-copies those contributions across
+all eight V100s, and composes resident next-hidden shards from
+`blk.2.attn_output_b.weight`, `blk.2.ffn_down_shexp.weight`, returned EP
+contributions, and deterministic residual input. The 32-slot/256K V100 run
+passes with `ep_contribution_bytes=4194304`, `ep_return_bytes=4194304`,
+`attn_dense_ms=0.555213`, `shared_dense_ms=0.153702`, `compose_ms=3.707477`,
+checksum `4112649481`, `finite_bad=0`, exact repeat, and `compose_pass=1`.
+The same run preserves combined F8/BF16 dense coverage, KV `max_abs=0`,
+`worst_ep_ms=0.255590`, and final `PASS`. This is still not production
+serving or logits equivalence, but it is the first resident TP/EP layer
+composition gate.
 
 ### Sprint 240 - TP/EP Serving Gate [planned]
 
@@ -430,6 +443,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 236 proved real packed-F8 dense compute for `blk.2.attn_q_a.weight` in the TP/EP path. | The runtime can now compute from packed dense bytes, but only for one representative tensor and with a straightforward FP32 dot kernel. | Extend dense compute coverage or replace this gate with fused HMMA/CUTLASS dense blocks. |
 | 2026-05-23 | Sprint 237 proved packed-F8 dense compute coverage for all compatible layer-2 F8 dense tensors. | F8 dense families execute from production bytes; BF16 compressor/indexer math and real layer dataflow remain. | Add BF16 compute coverage or compose dense outputs into representative full-layer decode. |
 | 2026-05-23 | Sprint 238 proved BF16 compressor/indexer dense coverage and combined F8+BF16 coverage for layer `2`. | Layer-2 dense families now execute from production bytes in the separate TP/EP path. | Compose dense, KV, control/router, and EP expert outputs into representative full-layer decode. |
+| 2026-05-23 | Sprint 239 proved representative TP/EP next-hidden shard composition for layer `2`. | Dense outputs, EP returned contributions, KV update/check, and residual composition now run in one separate TP/EP execution. | Move from smoke composition to a TP/EP serving gate at `32` slots / `256K`, MTP off. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit in Sprint 236 or equivalent after TP/EP serving exists. |
 

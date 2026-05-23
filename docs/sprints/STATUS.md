@@ -380,6 +380,21 @@ nine Sprint 237 F8 dense checks with `dense_compute_pass=1`, reports
 and ends in final `PASS`. TP/EP still is not serving and still needs real
 layer dataflow composition, but layer-2 F8 and BF16 dense families now execute
 from production bytes in the TP/EP-only codepath.
+Sprint 239 adds the first TP/EP-only next-hidden composition gate. The
+full-layer smoke now supports `--compose-next-hidden`, materializes route-slot
+mapping for the EP schedule, reduces TurboMind routed expert down outputs into
+512-wide destination hidden shards, peer-copies those expert contributions
+across all eight V100s, and composes resident next-hidden shards from
+`blk.2.attn_output_b.weight`, `blk.2.ffn_down_shexp.weight`, returned EP
+contributions, and deterministic residual input. The 32-slot/256K V100 run
+passes with `ep_contribution_bytes=4194304`, `ep_return_bytes=4194304`,
+`attn_dense_ms=0.555213`, `shared_dense_ms=0.153702`,
+`compose_ms=3.707477`, non-zero checksum `4112649481`, `finite_bad=0`,
+exact repeat, and `compose_pass=1`. The same run preserves combined dense
+coverage (`dense_compute_pass=1`, `bf16_compute_pass=1`), KV `max_abs=0`,
+EP `worst_ep_ms=0.255590`, and final `PASS`. TP/EP is still not production
+serving and still not logits-equivalent, but the separate path now composes a
+real resident next-hidden shard from production bytes and explicit EP return.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit
