@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 278
+revision: 279
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -266,6 +266,12 @@ not a serial layer-chain.
   current matrix reports `737.091414` wall generated tok/s at 32 tokens/request
   and `739.774102` at 64 tokens/request, both at `32` slots / `256K` with
   `32/32` token match.
+- Sprint 279 made the Kubernetes deployment example point at the TP/EP
+  appliance path and added GPU-utilization capture to the sustained HTTP
+  matrix. The current V100 run reports `745.699174` wall generated tok/s for
+  32 tokens/request and `753.708353` for 64 tokens/request, both at
+  `32` slots / `256K` with `32/32` token match. GPU utilization during the
+  short POST windows remains low: `15-19%` average and `38-40%` max.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -1243,6 +1249,23 @@ writes matrix artifacts. The V100 run at `32` slots / `256K` reports
 wall continuation tok/s for `64` tokens/request. Both cases return `32/32`
 token match.
 
+### Sprint 279 - TP/EP Deployment Defaults And GPU Utilization [complete]
+
+Goal: Point the Kubernetes appliance example at the TP/EP serving path and
+capture GPU utilization during the sustained HTTP matrix.
+
+Outcome: Complete. The deployment example now uses `DS4_V100_SERVE_MODE=tp-ep`,
+the current TP/EP production pack and contract, `32` slots / `256K` context,
+the localpool workspace, and the `llm-models-local` PVC. The launcher keeps
+loopback as the default bind and requires `DS4_V100_ALLOW_NONLOCAL_HOST=1` for
+Kubernetes service binds. The sustained HTTP bench now samples `nvidia-smi`
+during the generation POST and writes per-case GPU-util artifacts. The V100
+run reports `745.699174` wall generated tok/s and `771.902910` wall
+continuation tok/s for `32` tokens/request, and `753.708353` wall generated
+tok/s and `766.803086` wall continuation tok/s for `64` tokens/request, with
+`32/32` token match. GPU utilization peaks at `38-40%` and averages
+`15-19%` across the sampled POST windows.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1321,6 +1344,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 276 added a TP/EP-only resident HTTP harness. | The backend now stays loaded across HTTP health/status/metrics/generation requests. | Wire this server mode into the appliance launcher and run sustained HTTP matrices. |
 | 2026-05-23 | Sprint 277 wired the TP/EP HTTP server into the appliance launcher. | Operators can now start the TP/EP path with `DS4_V100_SERVE_MODE=tp-ep`. | Build and run sustained HTTP matrix tooling against the launcher path. |
 | 2026-05-23 | Sprint 278 added sustained HTTP matrix tooling for the launcher path. | The TP/EP server now has repeatable operational metrology. | Wire Kubernetes defaults and capture GPU utilization around the matrix. |
+| 2026-05-23 | Sprint 279 wired Kubernetes defaults to the TP/EP path and added GPU-util sampling. | The deployment example no longer points at the frozen PP path, and the HTTP matrix now exposes utilization as well as tok/s. | Build continuous request batching/coalescing for practical serving and keep optimizing compose/copy once metrology is stable. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

@@ -8,10 +8,11 @@ data:
     DS4_V100_BIN=./tools/ds4-v100-replay
     DS4_V100_MODEL=/models/DSv4-Flash-256e-fixed.gguf
     DS4_V100_MTP_MODEL=/models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf
+    DS4_V100_APPLIANCE_DIR=/workspace/packs/ds4-appliance-full-tm-gated-s181
     DS4_V100_PACK_INDEX=docs/sprints/drafts/SPRINT-003-PACK-INDEX.tsv
-    DS4_V100_CTX=1048576
-    DS4_V100_SLOTS=4
-    DS4_V100_ACTIVE_MICROBATCH=4
+    DS4_V100_CTX=262144
+    DS4_V100_SLOTS=32
+    DS4_V100_ACTIVE_MICROBATCH=32
     DS4_V100_MICROBATCH_WAIT_US=auto
     DS4_V100_QUEUE_POLICY=sequential
     DS4_V100_TOKENS=16
@@ -31,14 +32,21 @@ data:
     DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS=1
     DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC=0
     DS4_V100_TURBOMIND_FUSED_GATE_UP=1
-    DS4_V100_HOST=127.0.0.1
+    DS4_V100_HOST=0.0.0.0
     DS4_V100_PORT=18080
+    DS4_V100_ALLOW_NONLOCAL_HOST=1
     DS4_V100_CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
     DS4_V100_REQUIRE_GPUS=8
     DS4_V100_RESERVE_MIB=4096
     DS4_V100_MAX_REQUESTS=0
     DS4_V100_LOG_DIR=logs/v100-appliance
-    DS4_V100_SERVE_MODE=base
+    DS4_V100_SERVE_MODE=tp-ep
+    DS4_V100_TP_EP_BIN=./tools/ds4-v100-tp-ep-full-layer-smoke
+    DS4_V100_TP_EP_CONTRACT=/workspace/logs/sprint245-tp-ep-dense-f16-cache-contract/contract/tp-ep-pack-contract.tsv
+    DS4_V100_TP_EP_TM_INDEX=
+    DS4_V100_TP_EP_TOP_K=6
+    DS4_V100_TP_EP_KV_SLOT=7
+    DS4_V100_TP_EP_POSITION=100000
     DS4_V100_MTP_SERVING=off
 ---
 apiVersion: apps/v1
@@ -62,7 +70,7 @@ spec:
         - name: appliance
           image: nvidia/cuda:12.4.1-devel-ubuntu22.04
           imagePullPolicy: IfNotPresent
-          workingDir: /workspace/ds4
+          workingDir: /workspace/ds4-sprint181
           command: ["/bin/bash", "-lc"]
           args:
             - exec ./tools/ds4-v100-run-appliance.sh --env /etc/ds4-v100/appliance.env
@@ -89,18 +97,17 @@ spec:
               mountPath: /models
               readOnly: true
             - name: workspace
-              mountPath: /workspace/ds4
+              mountPath: /workspace
             - name: config
               mountPath: /etc/ds4-v100
               readOnly: true
       volumes:
         - name: models
-          hostPath:
-            path: /models
-            type: Directory
+          persistentVolumeClaim:
+            claimName: llm-models-local
         - name: workspace
           hostPath:
-            path: /srv/dev/ds4
+            path: /localpool/ds4/workspace
             type: Directory
         - name: config
           configMap:

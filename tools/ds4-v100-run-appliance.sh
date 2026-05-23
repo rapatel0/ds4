@@ -153,6 +153,7 @@ fi
 : "${DS4_V100_TURBOMIND_LIB:=./build/turbomind-v100/libggml-turbomind.so}"
 : "${DS4_V100_HOST:=127.0.0.1}"
 : "${DS4_V100_PORT:=18080}"
+: "${DS4_V100_ALLOW_NONLOCAL_HOST:=0}"
 : "${DS4_V100_CUDA_VISIBLE_DEVICES:=0,1,2,3,4,5,6,7}"
 : "${DS4_V100_REQUIRE_GPUS:=8}"
 : "${DS4_V100_RESERVE_MIB:=4096}"
@@ -294,6 +295,7 @@ fi
 is_uint "$DS4_V100_ASYNC_FFN_WAVEFRONT_CHUNK" || fail "DS4_V100_ASYNC_FFN_WAVEFRONT_CHUNK must be a positive integer"
 is_uint "$DS4_V100_TOKENS" || fail "DS4_V100_TOKENS must be a positive integer"
 is_uint "$DS4_V100_PORT" || fail "DS4_V100_PORT must be a positive integer"
+is_uint "$DS4_V100_ALLOW_NONLOCAL_HOST" || fail "DS4_V100_ALLOW_NONLOCAL_HOST must be an integer"
 is_uint "$DS4_V100_REQUIRE_GPUS" || fail "DS4_V100_REQUIRE_GPUS must be an integer"
 is_uint "$DS4_V100_RESERVE_MIB" || fail "DS4_V100_RESERVE_MIB must be an integer"
 if [ -n "$DS4_V100_EXPERIMENTAL_CTX_SLOT_CAP" ]; then
@@ -392,7 +394,10 @@ fi
 [ -n "$DS4_V100_HOST" ] || fail "DS4_V100_HOST must not be empty"
 case "$DS4_V100_HOST" in
     127.*|localhost) ;;
-    *) fail "default deployment must bind loopback only; got DS4_V100_HOST=$DS4_V100_HOST" ;;
+    *)
+        [ "$DS4_V100_ALLOW_NONLOCAL_HOST" -eq 1 ] ||
+            fail "non-loopback bind requires DS4_V100_ALLOW_NONLOCAL_HOST=1; got DS4_V100_HOST=$DS4_V100_HOST"
+        ;;
 esac
 case "$DS4_V100_QUEUE_POLICY" in
     reject-busy|sequential) ;;
@@ -944,6 +949,7 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_TURBOMIND_LIB=$DS4_V100_TURBOMIND_LIB"
     echo "DS4_V100_HOST=$DS4_V100_HOST"
     echo "DS4_V100_PORT=$DS4_V100_PORT"
+    echo "DS4_V100_ALLOW_NONLOCAL_HOST=$DS4_V100_ALLOW_NONLOCAL_HOST"
     echo "DS4_V100_CUDA_VISIBLE_DEVICES=$DS4_V100_CUDA_VISIBLE_DEVICES"
     echo "DS4_V100_REQUIRE_GPUS=$DS4_V100_REQUIRE_GPUS"
     echo "DS4_V100_RESERVE_MIB=$DS4_V100_RESERVE_MIB"

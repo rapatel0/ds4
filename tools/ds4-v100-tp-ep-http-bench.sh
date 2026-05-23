@@ -81,7 +81,7 @@ summary_tsv="$log_dir/sustained_http.tsv"
 summary_json="$log_dir/sustained_http.json"
 printf 'schema\tds4_v100_tp_ep_sustained_http.v1\n' >"$summary_tsv"
 printf 'backend\ttp_ep_launcher_http\n\n' >>"$summary_tsv"
-printf 'tokens\tctx\tslots\tstatus_200\tgenerated_tokens\tcontinuation_tokens\telapsed_s\tgenerated_tok_s\tcontinuation_tok_s\tgenerated_tok_s_decode\tcontinuation_tok_s_decode\n' >>"$summary_tsv"
+printf 'tokens\tctx\tslots\tstatus_200\tgenerated_tokens\tcontinuation_tokens\telapsed_s\tgenerated_tok_s\tcontinuation_tok_s\tgenerated_tok_s_decode\tcontinuation_tok_s_decode\tgpu_util_avg\tgpu_util_max\tgpu_mem_used_max_mib\n' >>"$summary_tsv"
 
 case_jsons=()
 case_index=0
@@ -125,18 +125,17 @@ for tokens in "${token_values[@]}"; do
 
     python3 - "$case_dir" "$port" "$tokens" <<'PY'
 import json
+import shutil
+import subprocess
 import sys
+import threading
+import time
 import urllib.request
 
 case_dir, port, tokens = sys.argv[1:]
 base = f"http://127.0.0.1:{port}"
-requests = [
-    ("health", "/health", None, "json"),
-    ("status_before", "/v100/status", None, "json"),
-    ("response", "/v100/selected-token", json.dumps({"max_tokens": int(tokens)}).encode(), "json"),
-    ("metrics", "/metrics", None, "txt"),
-]
-for name, path, data, suffix in requests:
+
+def fetch(name, path, data=None, suffix="json"):
     req = urllib.request.Request(
         base + path,
         data=data,
@@ -146,6 +145,42 @@ for name, path, data, suffix in requests:
         body = r.read()
     with open(f"{case_dir}/{name}.{suffix}", "wb") as f:
         f.write(body)
+
+fetch("health", "/health")
+fetch("status_before", "/v100/status")
+
+stop = threading.Event()
+gpu_csv = f"{case_dir}/gpu_util.csv"
+def sample_gpu():
+    if not shutil.which("nvidia-smi"):
+        with open(gpu_csv, "w", encoding="utf-8") as f:
+            f.write("timestamp,index,utilization.gpu,memory.used,memory.total\n")
+        return
+    with open(gpu_csv, "w", encoding="utf-8") as f:
+        f.write("timestamp,index,utilization.gpu,memory.used,memory.total\n")
+        while not stop.is_set():
+            try:
+                out = subprocess.check_output([
+                    "nvidia-smi",
+                    "--query-gpu=timestamp,index,utilization.gpu,memory.used,memory.total",
+                    "--format=csv,noheader,nounits",
+                ], text=True, stderr=subprocess.DEVNULL)
+                f.write(out)
+                f.flush()
+            except Exception as exc:
+                f.write(f"sample_error,-1,0,0,0 # {exc}\n")
+                f.flush()
+            stop.wait(0.2)
+
+thread = threading.Thread(target=sample_gpu, daemon=True)
+thread.start()
+try:
+    fetch("response", "/v100/selected-token", json.dumps({"max_tokens": int(tokens)}).encode())
+finally:
+    stop.set()
+    thread.join(timeout=2.0)
+
+fetch("metrics", "/metrics", None, "txt")
 PY
     wait "$server_pid"
 
@@ -157,6 +192,29 @@ case_dir, tokens, ctx, slots, summary_tsv = sys.argv[1:]
 with open(f"{case_dir}/response.json", "r", encoding="utf-8") as f:
     result = json.load(f)
 timing = result["timing_ms"]
+gpu_utils = []
+gpu_mem_used = []
+try:
+    with open(f"{case_dir}/gpu_util.csv", "r", encoding="utf-8") as f:
+        next(f, None)
+        for line in f:
+            parts = [p.strip() for p in line.strip().split(",")]
+            if len(parts) < 5:
+                continue
+            try:
+                idx = int(parts[1])
+                util = float(parts[2])
+                mem = float(parts[3])
+            except ValueError:
+                continue
+            if idx >= 0:
+                gpu_utils.append(util)
+                gpu_mem_used.append(mem)
+except FileNotFoundError:
+    pass
+gpu_util_avg = sum(gpu_utils) / len(gpu_utils) if gpu_utils else 0.0
+gpu_util_max = max(gpu_utils) if gpu_utils else 0.0
+gpu_mem_used_max = max(gpu_mem_used) if gpu_mem_used else 0.0
 row = {
     "schema": "ds4_v100_tp_ep_sustained_http_case.v1",
     "backend": "tp_ep_launcher_http",
@@ -173,6 +231,9 @@ row = {
     "continuation_tok_s_decode": timing["continuation_tokens_per_second_decode"],
     "token_match": result["token_match"],
     "token_mismatch": result["token_mismatch"],
+    "gpu_util_avg": gpu_util_avg,
+    "gpu_util_max": gpu_util_max,
+    "gpu_mem_used_max_mib": gpu_mem_used_max,
 }
 with open(f"{case_dir}/result.json", "w", encoding="utf-8") as f:
     json.dump(row, f, sort_keys=True)
@@ -183,7 +244,9 @@ with open(summary_tsv, "a", encoding="utf-8") as f:
         f"{row['status_200']}\t{row['generated_tokens']}\t{row['continuation_tokens']}\t"
         f"{row['elapsed_s']:.6f}\t{row['generated_tok_s']:.6f}\t"
         f"{row['continuation_tok_s']:.6f}\t{row['generated_tok_s_decode']:.6f}\t"
-        f"{row['continuation_tok_s_decode']:.6f}\n"
+        f"{row['continuation_tok_s_decode']:.6f}\t"
+        f"{row['gpu_util_avg']:.6f}\t{row['gpu_util_max']:.6f}\t"
+        f"{row['gpu_mem_used_max_mib']:.6f}\n"
     )
 PY
     case_jsons+=("$case_dir/result.json")

@@ -13,18 +13,18 @@ token-major all-layer loop. Sprint 275 added a repeatable sustained-serving
 artifact wrapper. Sprint 276 added a TP/EP-only resident HTTP harness exposing
 `/health`, `/v100/status`, `/metrics`, and `POST /v100/selected-token` without
 using the PP replay server. Sprint 277 wired that server into
-`tools/ds4-v100-run-appliance.sh` as `DS4_V100_SERVE_MODE=tp-ep`. On the V100
-pod at `32` slots / `256K` / `32` generated tokens per request, the launcher
-smoke reports `32/32` token match, `728.744669` wall generated tok/s,
-`753.022651` wall continuation tok/s, `939.787471` decode-only generated
-tok/s, and `976.290858` decode-only continuation tok/s. Sprint 278 added the
-sustained HTTP matrix driver. The current launcher-backed matrix at `32` slots
-/ `256K` reports `737.091414` wall generated tok/s and `766.964251` wall
-continuation tok/s for `32` tokens/request, and `739.774102` wall generated
-tok/s and `755.504630` wall continuation tok/s for `64` tokens/request. This
-is now an operational TP/EP server path with repeatable metrology; remaining
-work is Kubernetes/deployment wiring, GPU-util capture, and optimization of
-the dominant compose-copy stage.
+`tools/ds4-v100-run-appliance.sh` as `DS4_V100_SERVE_MODE=tp-ep`. Sprint 278
+added the sustained HTTP matrix driver. Sprint 279 made the Kubernetes example
+point at the TP/EP serving path and added GPU-utilization capture around the
+HTTP matrix. The current V100 matrix at `32` slots / `256K` reports
+`745.699174` wall generated tok/s and `771.902910` wall continuation tok/s for
+`32` tokens/request, and `753.708353` wall generated tok/s and `766.803086`
+wall continuation tok/s for `64` tokens/request. Decode-only rates remain
+near `961-977` generated tok/s and `996-1000` continuation tok/s. Both cases
+return `32/32` token match. GPU utilization peaks at `38-40%` and averages
+`15-19%` across the short POST windows, so the remaining gap is now practical
+continuous request batching/coalescing and reduction of the dominant
+compose-copy overhead, not proof that the TP/EP server path exists.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s
