@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 256
+revision: 257
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -170,6 +170,12 @@ not a serial layer-chain.
   `shared_rank_buffers=1`, passes `43/43` layers, and reduces wall time to
   `33978.379725 ms`. The summed decode proxy is `43.895297 ms/token` /
   `729.007483` projected slot-step tok/s.
+- Sprint 257 hoisted the TP runtime/KV allocator across the all-layer TP/EP
+  loop. The gate now records `shared_tp_runtime=1`, passes `43/43` layers, and
+  reduces wall time to `28437.257957 ms`. The summed decode proxy regressed to
+  `46.024692 ms/token` / `695.278962` projected slot-step tok/s, so this is
+  correct residency progress but needs repeat timing before performance
+  promotion.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -789,6 +795,24 @@ summed decode proxy, `729.007483` projected slot-step tok/s, and
 `33978.379725 ms` wall time. Next hoist TP runtime/KV state or expert
 descriptor bindings.
 
+### Sprint 257 - TP/EP Shared TP Runtime [complete]
+
+Goal: Hoist the TP runtime/KV allocator across the all-layer TP/EP scaffold.
+
+Rationale: The 256K KV/compression/scratch arenas are serving state. Reopening
+them once per layer is setup churn and obscures the cost of the resident
+decode loop.
+
+Outcome: Complete. `--all-layers` now opens the TP runtime once, allocates
+sharded KV/compression/scratch arenas once, runs `dense_kv_slice()` per layer,
+and closes the runtime once. With shared dense cache, shared TurboMind API,
+shared rank buffers, descriptor checks disabled, predecode probes disabled,
+and decode-only all-layer mode, the V100 gate passes `43/43` layers at `32`
+slots / `256K`. It reports `shared_tp_runtime=1`, `46.024692 ms/token` summed
+decode proxy, `695.278962` projected slot-step tok/s, and `28437.257957 ms`
+wall time. The checksum matches prior gates, but decode timing regressed versus
+Sprint 256; repeat before treating this as a performance promotion.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -846,6 +870,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 254 added opt-in pre-decode probe bypass for benchmark runs. | Extra isolated TurboMind probes are validation work, not serving work. | Hoist TurboMind/API handles, route buffers, expert bindings, and stream/event lifecycle. |
 | 2026-05-23 | Sprint 255 hoisted TurboMind API lifecycle across the all-layer TP/EP loop. | Removing per-layer library/API setup cuts scaffold wall time while preserving decode checksums. | Hoist route buffers, streams/events, expert bindings, and TP runtime/KV state. |
 | 2026-05-23 | Sprint 256 hoisted fixed rank buffers and stream/event lifecycle across the all-layer TP/EP loop. | Removing per-layer route/core buffer allocation cuts wall time and keeps checksum stable. | Hoist TP runtime/KV state or expert descriptor bindings. |
+| 2026-05-23 | Sprint 257 hoisted TP runtime/KV allocation across the all-layer TP/EP loop. | Correctness holds and wall time drops, but decode proxy regresses and needs repeat timing. | Repeat/longer gate, then decide whether to keep shared TP runtime as the performance base before expert binding hoist. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

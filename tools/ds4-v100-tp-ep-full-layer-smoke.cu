@@ -288,6 +288,12 @@ struct SharedRankBuffers {
     uint64_t core_bytes = 0;
 };
 
+struct SharedTpRuntime {
+    ds4_v100_tp_runtime *rt = nullptr;
+    ds4_v100_tp_runtime_report report = {};
+    bool initialized = false;
+};
+
 struct DecodeLoopStats {
     bool enabled = false;
     bool pass = true;
@@ -2244,6 +2250,35 @@ void close_shared_rank_buffers(SharedRankBuffers *shared) {
     *shared = SharedRankBuffers{};
 }
 
+void fill_tp_runtime_config(const Options &opt, ds4_v100_tp_runtime_config *cfg) {
+    ds4_v100_tp_runtime_default_config(cfg);
+    cfg->slots = (uint32_t)opt.slots;
+    cfg->ctx = 262144;
+    cfg->kv_dtype = DS4_V100_TP_KV_F8_E4M3_B128;
+    cfg->scratch_bytes = 1536ull * 1024ull * 1024ull;
+    for (int i = 0; i < kGpus; ++i) cfg->devices[i] = opt.devices[i];
+}
+
+int open_shared_tp_runtime(const Options &opt, SharedTpRuntime *shared) {
+    ds4_v100_tp_runtime_config cfg;
+    fill_tp_runtime_config(opt, &cfg);
+    char err[512] = {0};
+    if (ds4_v100_tp_runtime_open(&shared->rt, &cfg, err, sizeof(err)) != 0) {
+        std::fprintf(stderr, "tp_runtime_open_failed\t%s\n", err);
+        *shared = SharedTpRuntime{};
+        return 1;
+    }
+    ds4_v100_tp_runtime_get_report(shared->rt, &shared->report);
+    shared->initialized = true;
+    return 0;
+}
+
+void close_shared_tp_runtime(SharedTpRuntime *shared) {
+    if (!shared || !shared->rt) return;
+    ds4_v100_tp_runtime_close(shared->rt);
+    *shared = SharedTpRuntime{};
+}
+
 int ensure_compose_buffers(const Options &opt, RankState ranks[kGpus]) {
     const uint64_t shard_elems = (uint64_t)opt.slots * (kHidden / kGpus);
     const uint64_t shard_bytes = shard_elems * sizeof(float);
@@ -2658,7 +2693,8 @@ int run_layer(const Options &opt,
               LayerRunSummary *summary,
               const DenseF16Cache *shared_dense_f16_cache,
               const SharedApi *shared_api,
-              SharedRankBuffers *shared_rank_buffers) {
+              SharedRankBuffers *shared_rank_buffers,
+              SharedTpRuntime *shared_tp_runtime) {
     std::vector<ContractRow> rows;
     LayerStats layer_stats;
     if (parse_contract(opt.contract_path, opt.layer, &rows, &layer_stats) != 0 ||
@@ -2791,22 +2827,24 @@ int run_layer(const Options &opt,
     }
 
     ds4_v100_tp_runtime_config cfg;
-    ds4_v100_tp_runtime_default_config(&cfg);
-    cfg.slots = (uint32_t)opt.slots;
-    cfg.ctx = 262144;
-    cfg.kv_dtype = DS4_V100_TP_KV_F8_E4M3_B128;
-    cfg.scratch_bytes = 1536ull * 1024ull * 1024ull;
-    for (int i = 0; i < kGpus; ++i) cfg.devices[i] = opt.devices[i];
+    fill_tp_runtime_config(opt, &cfg);
 
     char err[512] = {0};
     ds4_v100_tp_runtime *rt = nullptr;
-    if (ds4_v100_tp_runtime_open(&rt, &cfg, err, sizeof(err)) != 0) {
-        std::fprintf(stderr, "tp_runtime_open_failed\t%s\n", err);
-        return 4;
-    }
-
     ds4_v100_tp_runtime_report runtime_report;
-    ds4_v100_tp_runtime_get_report(rt, &runtime_report);
+    if (shared_tp_runtime) {
+        rt = shared_tp_runtime->rt;
+        runtime_report = shared_tp_runtime->report;
+    } else {
+        if (ds4_v100_tp_runtime_open(&rt, &cfg, err, sizeof(err)) != 0) {
+            std::fprintf(stderr, "tp_runtime_open_failed\t%s\n", err);
+            return 4;
+        }
+        ds4_v100_tp_runtime_get_report(rt, &runtime_report);
+    }
+    auto close_local_runtime = [&]() {
+        if (!shared_tp_runtime && rt) ds4_v100_tp_runtime_close(rt);
+    };
 
     ds4_v100_tp_dense_kv_result kv_result;
     const auto kv_start = std::chrono::steady_clock::now();
@@ -2814,7 +2852,7 @@ int run_layer(const Options &opt,
     if (ds4_v100_tp_runtime_dense_kv_slice(rt, opt.layer, opt.kv_slot, opt.position,
                                            write_indexer, &kv_result, err, sizeof(err)) != 0) {
         std::fprintf(stderr, "tp_runtime_dense_kv_slice_failed\t%s\n", err);
-        ds4_v100_tp_runtime_close(rt);
+        close_local_runtime();
         return 5;
     }
     const auto kv_stop = std::chrono::steady_clock::now();
@@ -2830,7 +2868,7 @@ int run_layer(const Options &opt,
         lib = dlopen(opt.lib_path, RTLD_LAZY | RTLD_LOCAL);
         if (!lib) {
             std::fprintf(stderr, "dlopen failed for %s: %s\n", opt.lib_path, dlerror());
-            ds4_v100_tp_runtime_close(rt);
+            close_local_runtime();
             return 6;
         }
         load_api(lib, &local_api);
@@ -2855,7 +2893,7 @@ int run_layer(const Options &opt,
                 api->shutdown();
                 dlclose(lib);
             }
-            ds4_v100_tp_runtime_close(rt);
+            close_local_runtime();
             return 7;
         }
         if (!shared_rank_buffers) {
@@ -2896,8 +2934,8 @@ int run_layer(const Options &opt,
         if (pack_descriptor_set(r.device, bindings.gated, p, active, opt.pack_dir,
                                 &r.gated, &ep_loaded_bytes) != 0 ||
             pack_descriptor_set(r.device, bindings.down, p, active, opt.pack_dir,
-                                &r.down, &ep_loaded_bytes) != 0) {
-            ds4_v100_tp_runtime_close(rt);
+                               &r.down, &ep_loaded_bytes) != 0) {
+            close_local_runtime();
             return 8;
         }
         layer_stats.gpu[p].ep_loaded_bytes = ep_loaded_bytes;
@@ -2908,7 +2946,7 @@ int run_layer(const Options &opt,
         for (int i = 0; i < opt.warmup; ++i) {
             for (int p = 0; p < kGpus; ++p) {
                 if (run_gate(ranks[p], *api) != 0 || run_down(ranks[p], *api) != 0) {
-                    ds4_v100_tp_runtime_close(rt);
+                    close_local_runtime();
                     return 9;
                 }
             }
@@ -2978,7 +3016,7 @@ int run_layer(const Options &opt,
     if (!opt.skip_predecode_probes) {
         for (int p = 0; p < kGpus; ++p) {
             if (check_repeat(ranks[p], *api, &repeat_max_abs, &repeat_bad, &repeat_nan) != 0) {
-                ds4_v100_tp_runtime_close(rt);
+                close_local_runtime();
                 return 12;
             }
         }
@@ -3008,7 +3046,7 @@ int run_layer(const Options &opt,
                     compose.repeat_bad, compose.pass ? "PASS" : "FAIL");
     }
     if (compose_rc != 0) {
-        ds4_v100_tp_runtime_close(rt);
+        close_local_runtime();
         return 13;
     }
 
@@ -3044,7 +3082,7 @@ int run_layer(const Options &opt,
                     decode_loop.pass ? "PASS" : "FAIL");
     }
     if (decode_rc != 0) {
-        ds4_v100_tp_runtime_close(rt);
+        close_local_runtime();
         return 14;
     }
 
@@ -3247,7 +3285,7 @@ int run_layer(const Options &opt,
         api->shutdown();
         dlclose(lib);
     }
-    ds4_v100_tp_runtime_close(rt);
+    close_local_runtime();
     if (!shared_dense_f16_cache) free_dense_f16_cache(local_dense_f16_cache, opt);
     return pass ? 0 : 1;
 }
@@ -3260,7 +3298,7 @@ int main(int argc, char **argv) {
     }
 
     if (!opt.all_layers) {
-        return run_layer(opt, nullptr, nullptr, nullptr, nullptr);
+        return run_layer(opt, nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 
     DenseF16Cache all_layer_dense_f16_cache;
@@ -3315,6 +3353,24 @@ int main(int argc, char **argv) {
     std::printf("tp_ep_all_layer_rank_buffers_shared\tdevices\t%d\tcore_bytes\t%llu\tPASS\n",
                 kGpus, (unsigned long long)shared_rank_buffers.core_bytes);
 
+    SharedTpRuntime shared_tp_runtime;
+    if (open_shared_tp_runtime(opt, &shared_tp_runtime) != 0) {
+        close_shared_rank_buffers(&shared_rank_buffers);
+        close_shared_api(&shared_api);
+        if (shared_dense_f16_cache) {
+            free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+        }
+        return 8;
+    }
+    std::printf("tp_ep_all_layer_tp_runtime_shared\tdevices\t%d\tslots\t%d\tctx\t262144\t"
+                "kv_bytes_per_gpu\t%llu\tcomp_state_bytes_per_gpu\t%llu\t"
+                "scratch_bytes_per_gpu\t%llu\ttotal_bytes_per_gpu\t%llu\tPASS\n",
+                kGpus, opt.slots,
+                (unsigned long long)shared_tp_runtime.report.gpu[0].kv_bytes,
+                (unsigned long long)shared_tp_runtime.report.gpu[0].comp_state_bytes,
+                (unsigned long long)shared_tp_runtime.report.gpu[0].scratch_bytes,
+                (unsigned long long)shared_tp_runtime.report.gpu[0].total_bytes);
+
     int pass_layers = 0;
     double sum_decode_ms = 0.0;
     double sum_ep_ms = 0.0;
@@ -3327,7 +3383,7 @@ int main(int argc, char **argv) {
         layer_opt.layer = layer;
         LayerRunSummary s;
         const int rc = run_layer(layer_opt, &s, shared_dense_f16_cache, &shared_api,
-                                 &shared_rank_buffers);
+                                 &shared_rank_buffers, &shared_tp_runtime);
         std::printf("tp_ep_all_layer_item\tlayer\t%d\tratio\t%d\t"
                     "total_rows\t%llu\tdense_rows\t%llu\tcontrol_rows\t%llu\t"
                     "expert_rows\t%llu\tkv_rows\t%llu\tcomp_rows\t%llu\t"
@@ -3361,10 +3417,13 @@ int main(int argc, char **argv) {
                 std::chrono::duration<double, std::milli>(stop - start).count();
             std::printf("tp_ep_all_layer_scaffold\tlayers\t43\tpass_layers\t%d\t"
                         "failed_layer\t%d\tdescriptor_checks\t%d\tpredecode_probes\t%d\t"
-                        "shared_api\t%d\tshared_rank_buffers\t%d\twall_ms\t%.6f\tFAIL\n",
+                        "shared_api\t%d\tshared_rank_buffers\t%d\tshared_tp_runtime\t%d\t"
+                        "wall_ms\t%.6f\tFAIL\n",
                         pass_layers, layer, opt.skip_descriptor_checks ? 0 : 1,
                         opt.skip_predecode_probes ? 0 : 1, shared_api.initialized ? 1 : 0,
-                        shared_rank_buffers.initialized ? 1 : 0, wall_ms);
+                        shared_rank_buffers.initialized ? 1 : 0,
+                        shared_tp_runtime.initialized ? 1 : 0, wall_ms);
+            close_shared_tp_runtime(&shared_tp_runtime);
             close_shared_rank_buffers(&shared_rank_buffers);
             close_shared_api(&shared_api);
             if (shared_dense_f16_cache) {
@@ -3382,7 +3441,7 @@ int main(int argc, char **argv) {
     std::printf("tp_ep_all_layer_scaffold\tlayers\t43\tpass_layers\t%d\t"
                 "slots\t%d\tctx\t262144\tdecode_steps_per_layer\t%d\t"
                 "descriptor_checks\t%d\tpredecode_probes\t%d\tshared_api\t%d\t"
-                "shared_rank_buffers\t%d\t"
+                "shared_rank_buffers\t%d\tshared_tp_runtime\t%d\t"
                 "sum_decode_ms_per_token\t%.6f\tprojected_slot_step_tok_s\t%.6f\t"
                 "sum_ep_ms\t%.6f\tsum_dense_ms\t%.6f\tsum_compose_ms\t%.6f\t"
                 "wall_ms\t%.6f\tchecksum\t%llu\tPASS\n",
@@ -3391,8 +3450,10 @@ int main(int argc, char **argv) {
                 opt.skip_predecode_probes ? 0 : 1,
                 shared_api.initialized ? 1 : 0,
                 shared_rank_buffers.initialized ? 1 : 0,
+                shared_tp_runtime.initialized ? 1 : 0,
                 sum_decode_ms, slot_step_tok_s, sum_ep_ms, sum_dense_ms,
                 sum_compose_ms, wall_ms, (unsigned long long)checksum);
+    close_shared_tp_runtime(&shared_tp_runtime);
     close_shared_rank_buffers(&shared_rank_buffers);
     close_shared_api(&shared_api);
     if (shared_dense_f16_cache) {
