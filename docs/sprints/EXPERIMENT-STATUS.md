@@ -418,3 +418,8 @@ verifies on both four-GPU NVLink islands, but measures about `0.11 ms` for the
 bandwidth at larger payloads. Do not use it as the production TP4 collective;
 the next TP step needs NCCL, ring/tree peer-copy all-reduce, or a fused resident
 boundary that avoids repeated full-hidden materialization.
+After Sprint 196, the same tool supports `--algo doubling`, a recursive
+pairwise all-reduce. It verifies on V100 and reaches `81.065 GB/s` effective
+wire bandwidth at 1024 tokens, but it is slower than root at the current
+16-token decode payload (`0.133761 ms` versus `0.110762 ms`). Treat this as a
+prefill/batched-TP primitive, not a direct decode-serving win.

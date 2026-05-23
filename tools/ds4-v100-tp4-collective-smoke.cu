@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
 #include <limits>
 #include <string>
 #include <vector>
@@ -38,6 +39,19 @@ __global__ void reduce_sum_kernel(float * dst, const float * staging, int partic
     dst[i] = sum;
 }
 
+__global__ void add_inplace_kernel(float * dst, const float * src, size_t elems) {
+    size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= elems) {
+        return;
+    }
+    dst[i] += src[i];
+}
+
+enum class Algorithm {
+    Root,
+    Doubling,
+};
+
 struct Options {
     int devices[kParticipants] = {0, 1, 2, 3};
     int tokens = 16;
@@ -45,6 +59,7 @@ struct Options {
     int warmup = 10;
     int iters = 100;
     int root_index = 0;
+    Algorithm algo = Algorithm::Root;
 };
 
 bool parse_int(const char * text, int * out) {
@@ -102,7 +117,8 @@ bool parse_devices(const char * text, int devices[kParticipants]) {
 void usage(const char * argv0) {
     std::fprintf(stderr,
                  "usage: %s [--devices 0,1,2,3] [--tokens N] [--hidden N] "
-                 "[--warmup N] [--iters N] [--root-index 0..3]\n",
+                 "[--warmup N] [--iters N] [--root-index 0..3] "
+                 "[--algo root|doubling]\n",
                  argv0);
 }
 
@@ -144,6 +160,20 @@ bool parse_args(int argc, char ** argv, Options * opt) {
             if (val == nullptr || !parse_int(val, &opt->root_index) || opt->root_index < 0 ||
                 opt->root_index >= kParticipants) {
                 std::fprintf(stderr, "invalid --root-index value\n");
+                return false;
+            }
+            ++i;
+        } else if (std::strcmp(arg, "--algo") == 0) {
+            if (val == nullptr) {
+                std::fprintf(stderr, "invalid --algo value\n");
+                return false;
+            }
+            if (std::strcmp(val, "root") == 0) {
+                opt->algo = Algorithm::Root;
+            } else if (std::strcmp(val, "doubling") == 0) {
+                opt->algo = Algorithm::Doubling;
+            } else {
+                std::fprintf(stderr, "invalid --algo value; expected root or doubling\n");
                 return false;
             }
             ++i;
@@ -194,6 +224,16 @@ void enable_peer_access_or_die(const Options & opt) {
     }
 }
 
+const char * algo_name(Algorithm algo) {
+    switch (algo) {
+    case Algorithm::Root:
+        return "root";
+    case Algorithm::Doubling:
+        return "doubling";
+    }
+    return "unknown";
+}
+
 void fill_host_input(std::vector<float> * h, int participant) {
     for (size_t i = 0; i < h->size(); ++i) {
         (*h)[i] = (float) (participant + 1) + (float) (i % 97) * 0.001f;
@@ -239,6 +279,56 @@ void run_collective(const Options & opt, float ** inputs, float ** outputs, floa
     }
 }
 
+void sync_streams(const Options & opt, cudaStream_t streams[kParticipants]) {
+    for (int p = 0; p < kParticipants; ++p) {
+        CUDA_CHECK(cudaSetDevice(opt.devices[p]));
+        CUDA_CHECK(cudaStreamSynchronize(streams[p]));
+    }
+}
+
+void run_doubling_collective(const Options & opt, float ** inputs, float ** outputs,
+                             float ** recv, cudaStream_t streams[kParticipants],
+                             size_t elems, size_t bytes) {
+    const int block = 256;
+    const int grid = (int) ((elems + block - 1) / block);
+
+    for (int p = 0; p < kParticipants; ++p) {
+        CUDA_CHECK(cudaSetDevice(opt.devices[p]));
+        CUDA_CHECK(cudaMemcpyAsync(outputs[p], inputs[p], bytes, cudaMemcpyDeviceToDevice,
+                                   streams[p]));
+    }
+    sync_streams(opt, streams);
+
+    for (int step = 1; step < kParticipants; step <<= 1) {
+        for (int p = 0; p < kParticipants; ++p) {
+            int peer = p ^ step;
+            CUDA_CHECK(cudaSetDevice(opt.devices[peer]));
+            CUDA_CHECK(cudaMemcpyPeerAsync(recv[peer], opt.devices[peer], outputs[p],
+                                           opt.devices[p], bytes, streams[peer]));
+        }
+        sync_streams(opt, streams);
+
+        for (int p = 0; p < kParticipants; ++p) {
+            CUDA_CHECK(cudaSetDevice(opt.devices[p]));
+            add_inplace_kernel<<<grid, block, 0, streams[p]>>>(outputs[p], recv[p], elems);
+            CUDA_CHECK(cudaGetLastError());
+        }
+        sync_streams(opt, streams);
+    }
+}
+
+void run_selected_collective(const Options & opt, float ** inputs, float ** outputs,
+                             float * staging, float ** recv, cudaStream_t root_stream,
+                             cudaStream_t streams[kParticipants], size_t elems,
+                             size_t bytes) {
+    if (opt.algo == Algorithm::Doubling) {
+        run_doubling_collective(opt, inputs, outputs, recv, streams, elems, bytes);
+    } else {
+        run_collective(opt, inputs, outputs, staging, root_stream, elems, bytes);
+        CUDA_CHECK(cudaStreamSynchronize(root_stream));
+    }
+}
+
 float verify_outputs(const Options & opt, float ** outputs, size_t elems, size_t bytes) {
     std::vector<float> h(elems);
     float max_abs = 0.0f;
@@ -272,73 +362,80 @@ int main(int argc, char ** argv) {
 
     float * inputs[kParticipants] = {};
     float * outputs[kParticipants] = {};
+    float * recv[kParticipants] = {};
     float * staging = nullptr;
 
     for (int p = 0; p < kParticipants; ++p) {
         CUDA_CHECK(cudaSetDevice(opt.devices[p]));
         CUDA_CHECK(cudaMalloc(&inputs[p], bytes));
         CUDA_CHECK(cudaMalloc(&outputs[p], bytes));
+        CUDA_CHECK(cudaMalloc(&recv[p], bytes));
 
         std::vector<float> h(elems);
         fill_host_input(&h, p);
         CUDA_CHECK(cudaMemcpy(inputs[p], h.data(), bytes, cudaMemcpyHostToDevice));
         CUDA_CHECK(cudaMemset(outputs[p], 0, bytes));
+        CUDA_CHECK(cudaMemset(recv[p], 0, bytes));
     }
 
     CUDA_CHECK(cudaSetDevice(root_dev));
     CUDA_CHECK(cudaMalloc(&staging, bytes * kParticipants));
     cudaStream_t root_stream = nullptr;
     CUDA_CHECK(cudaStreamCreate(&root_stream));
-
-    for (int i = 0; i < opt.warmup; ++i) {
-        run_collective(opt, inputs, outputs, staging, root_stream, elems, bytes);
-        CUDA_CHECK(cudaStreamSynchronize(root_stream));
+    cudaStream_t streams[kParticipants] = {};
+    for (int p = 0; p < kParticipants; ++p) {
+        CUDA_CHECK(cudaSetDevice(opt.devices[p]));
+        CUDA_CHECK(cudaStreamCreate(&streams[p]));
     }
 
-    cudaEvent_t start = nullptr;
-    cudaEvent_t stop = nullptr;
-    CUDA_CHECK(cudaEventCreate(&start));
-    CUDA_CHECK(cudaEventCreate(&stop));
+    for (int i = 0; i < opt.warmup; ++i) {
+        run_selected_collective(opt, inputs, outputs, staging, recv, root_stream, streams,
+                                elems, bytes);
+    }
 
     double total_ms = 0.0;
-    float min_ms = std::numeric_limits<float>::max();
-    float max_ms = 0.0f;
+    double min_ms = std::numeric_limits<double>::max();
+    double max_ms = 0.0;
 
     for (int i = 0; i < opt.iters; ++i) {
-        CUDA_CHECK(cudaEventRecord(start, root_stream));
-        run_collective(opt, inputs, outputs, staging, root_stream, elems, bytes);
-        CUDA_CHECK(cudaEventRecord(stop, root_stream));
-        CUDA_CHECK(cudaEventSynchronize(stop));
-
-        float ms = 0.0f;
-        CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
+        auto start = std::chrono::steady_clock::now();
+        run_selected_collective(opt, inputs, outputs, staging, recv, root_stream, streams,
+                                elems, bytes);
+        auto stop = std::chrono::steady_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(stop - start).count();
         total_ms += ms;
         min_ms = std::min(min_ms, ms);
         max_ms = std::max(max_ms, ms);
     }
 
-    CUDA_CHECK(cudaStreamSynchronize(root_stream));
     const float max_abs = verify_outputs(opt, outputs, elems, bytes);
     const double avg_ms = total_ms / (double) opt.iters;
-    const double wire_bytes = (double) bytes * (double) (kParticipants - 1) * 2.0;
+    const double wire_factor = opt.algo == Algorithm::Doubling
+                                   ? (double) kParticipants * 2.0
+                                   : (double) (kParticipants - 1) * 2.0;
+    const double wire_bytes = (double) bytes * wire_factor;
     const double effective_gbps = wire_bytes / (avg_ms / 1000.0) / 1.0e9;
 
-    std::printf("ds4-v100-tp4-collective-smoke devices=%d,%d,%d,%d root=%d tokens=%d "
+    std::printf("ds4-v100-tp4-collective-smoke algo=%s devices=%d,%d,%d,%d root=%d tokens=%d "
                 "hidden=%d bytes_per_tensor=%zu warmup=%d iters=%d\n",
-                opt.devices[0], opt.devices[1], opt.devices[2], opt.devices[3], root_dev,
-                opt.tokens, opt.hidden, bytes, opt.warmup, opt.iters);
+                algo_name(opt.algo), opt.devices[0], opt.devices[1], opt.devices[2],
+                opt.devices[3], root_dev, opt.tokens, opt.hidden, bytes, opt.warmup,
+                opt.iters);
     std::printf("latency_ms avg=%.6f min=%.6f max=%.6f effective_wire_gbps=%.3f\n",
                 avg_ms, min_ms, max_ms, effective_gbps);
     std::printf("verify max_abs=%.9f %s\n", max_abs, max_abs <= 1.0e-5f ? "ok" : "FAIL");
 
-    CUDA_CHECK(cudaEventDestroy(start));
-    CUDA_CHECK(cudaEventDestroy(stop));
+    for (int p = 0; p < kParticipants; ++p) {
+        CUDA_CHECK(cudaSetDevice(opt.devices[p]));
+        CUDA_CHECK(cudaStreamDestroy(streams[p]));
+    }
     CUDA_CHECK(cudaStreamDestroy(root_stream));
     CUDA_CHECK(cudaFree(staging));
     for (int p = 0; p < kParticipants; ++p) {
         CUDA_CHECK(cudaSetDevice(opt.devices[p]));
         CUDA_CHECK(cudaFree(inputs[p]));
         CUDA_CHECK(cudaFree(outputs[p]));
+        CUDA_CHECK(cudaFree(recv[p]));
     }
 
     return max_abs <= 1.0e-5f ? 0 : 1;

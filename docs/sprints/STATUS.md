@@ -521,6 +521,14 @@ wire bandwidth at larger payloads. The next sprint should not build production
 TP4 on that root collective. It should either implement a real ring/tree/NCCL
 TP4 collective inside one four-GPU NVLink island, or return to the monolithic
 routed-FFN kernel that removes the global `mid_half` boundary.
+Sprint 196 implemented the repo-owned tree-style option as recursive doubling.
+It is correct and materially faster for larger payloads (`1.656 ms` vs
+`3.676 ms` root at 1024 x 4096), but it is slower at the actual 16-token decode
+payload (`0.134 ms` vs `0.111 ms`). That narrows the next production path:
+direct TP4 collectives are not the decode lever unless fused into a larger
+persistent boundary. The next sprint should prioritize the monolithic
+routed-FFN or persistent layer boundary, while keeping the doubling collective
+as the baseline for later TP4/prefill work.
 
 The concise current status is also tracked in
 `docs/sprints/EXPERIMENT-STATUS.md`.
