@@ -1,7 +1,7 @@
 # Sprint 238 - Layer-2 BF16 Dense Coverage Gate
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete
 
 ## Overview
 
@@ -99,20 +99,20 @@ but keep format-specific loaders and kernels simple and explicit.
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists and is committed before implementation evidence.
-- [ ] BF16 coverage mode is implemented only in the separate TP/EP tool.
-- [ ] No PP scheduler files are modified.
-- [ ] Tool discovers all layer-2 BF16 dense TP tensor groups from the real
+- [x] Sprint plan exists and is committed before implementation evidence.
+- [x] BF16 coverage mode is implemented only in the separate TP/EP tool.
+- [x] No PP scheduler files are modified.
+- [x] Tool discovers all layer-2 BF16 dense TP tensor groups from the real
       contract.
-- [ ] Tool executes every compatible BF16 dense tensor group.
-- [ ] Each executed tensor passes finite repeat checks.
-- [ ] Each executed tensor passes bounded CPU oracle comparison.
-- [ ] Existing full-layer scaffold, KV, EP, and F8 coverage checks still pass
+- [x] Tool executes every compatible BF16 dense tensor group.
+- [x] Each executed tensor passes finite repeat checks.
+- [x] Each executed tensor passes bounded CPU oracle comparison.
+- [x] Existing full-layer scaffold, KV, EP, and F8 coverage checks still pass
       when combined coverage is enabled.
-- [ ] Evidence is copied to
+- [x] Evidence is copied to
       `logs/from-cluster/sprint238-tp-bf16-dense-coverage/`.
-- [ ] Status and vision docs are updated with the decision.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Status and vision docs are updated with the decision.
+- [x] Changes are committed with explicit `git add` paths.
 
 ## Risks
 
@@ -124,4 +124,44 @@ but keep format-specific loaders and kernels simple and explicit.
 
 ## Decision
 
-Pending.
+Complete. Sprint 238 adds BF16 dense coverage to the separate TP/EP
+full-layer smoke without touching the frozen PP scheduler. The V100 pod run at
+`32` slots / `256K` executes all five layer-2 BF16 dense TP tensor groups from
+production pack bytes:
+
+| Tensor | Rows/GPU | Cols | Loaded bytes | Compute ms | Oracle max abs |
+|---|---:|---:|---:|---:|---:|
+| `blk.2.attn_compress_gate.weight` | 128 | 4096 | 8388608 | 0.047104 | 0.000000015 |
+| `blk.2.attn_compress_kv.weight` | 128 | 4096 | 8388608 | 0.047206 | 0.000000007 |
+| `blk.2.indexer.compress_gate.weight` | 32 | 4096 | 2097152 | 0.018944 | 0.000000030 |
+| `blk.2.indexer.compress_kv.weight` | 32 | 4096 | 2097152 | 0.018944 | 0.000000007 |
+| `blk.2.indexer.proj.weight` | 8 | 4096 | 524288 | 0.007885 | 0.000000119 |
+
+The combined `--dense-compute-all` run also preserves Sprint 237 F8 coverage:
+all nine compatible layer-2 F8 dense groups pass, all five BF16 groups pass,
+KV remains exact for the tested dense KV slice, EP repeat remains exact, and
+the final scaffold reports `PASS`.
+
+Topline combined evidence:
+
+```text
+dense_compute_tensor all_f8
+dense_compute_loaded_bytes 141606912
+dense_compute_ms 0.654029
+dense_compute_oracle_max_abs 0.000000015
+dense_compute_pass 1
+bf16_compute_tensor all_bf16
+bf16_compute_loaded_bytes 21495808
+bf16_compute_ms 0.047206
+bf16_compute_oracle_max_abs 0.000000119
+bf16_compute_pass 1
+worst_ep_ms 0.250368
+repeat_bad 0
+repeat_nan 0
+PASS
+```
+
+Evidence:
+
+- `logs/from-cluster/sprint238-tp-bf16-dense-coverage/layer2-all-bf16-dense-coverage-32slot-top6.log`
+- `logs/from-cluster/sprint238-tp-bf16-dense-coverage/layer2-all-dense-coverage-32slot-top6.log`

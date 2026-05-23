@@ -364,6 +364,22 @@ rows, KV `max_abs=0`, EP `worst_ep_ms=0.241766`, and final `PASS`. TP/EP is
 still not serving and still excludes BF16 compressor/indexer dense math, but
 the F8 dense tensor families for layer `2` now execute from packed bytes in
 the separate TP/EP path.
+Sprint 238 closes the layer-2 dense coverage gap by adding BF16
+compressor/indexer coverage to the same separate TP/EP smoke. The new
+`--dense-compute-all-bf16` path discovers all compatible BF16 `dense_tp`
+tensors, loads production pack bytes, expands BF16 inside CUDA code on the
+GPU, and validates repeat plus bounded CPU oracle checks. At `32` slots /
+`256K`, all five BF16 groups pass:
+`blk.2.attn_compress_gate.weight`, `blk.2.attn_compress_kv.weight`,
+`blk.2.indexer.compress_gate.weight`, `blk.2.indexer.compress_kv.weight`, and
+`blk.2.indexer.proj.weight`. Aggregate BF16 bytes loaded are `21495808`, worst
+BF16 compute time is `0.047206 ms`, repeat is exact, and worst CPU oracle error
+is `0.000000119`. The combined `--dense-compute-all` run also preserves all
+nine Sprint 237 F8 dense checks with `dense_compute_pass=1`, reports
+`bf16_compute_pass=1`, keeps KV `max_abs=0`, measures `worst_ep_ms=0.250368`,
+and ends in final `PASS`. TP/EP still is not serving and still needs real
+layer dataflow composition, but layer-2 F8 and BF16 dense families now execute
+from production bytes in the TP/EP-only codepath.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit
