@@ -326,7 +326,19 @@ V100 run passes with `141606912` packed bytes loaded, worst dense compute time
 `max_abs=0`, EP `worst_ep_ms=0.241766`, and final `PASS`. BF16 dense/control
 math and real layer dataflow remain open.
 
-### Sprint 238 - Full-Layer TP/EP Decode [planned]
+### Sprint 238 - Layer-2 BF16 Dense Coverage Gate [planned]
+
+Goal: Extend dense coverage to layer-2 BF16 compressor/indexer TP tensors,
+expanding BF16 inside CUDA kernels and validating repeat plus CPU oracle checks
+on all V100s.
+
+Rationale: Sprint 237 covered F8 dense families. BF16 compressor/indexer
+tensors are the remaining dense coverage gap before representative full-layer
+dataflow can be composed.
+
+Outcome: Pending.
+
+### Sprint 239 - Full-Layer TP/EP Decode [planned]
 
 Goal: Combine descriptor-backed dense coverage, control/router handling,
 sharded KV, and EP experts into a representative full layer that produces a
@@ -338,7 +350,7 @@ dataflow before serving.
 
 Outcome: Pending.
 
-### Sprint 239 - TP/EP Serving Gate [planned]
+### Sprint 240 - TP/EP Serving Gate [planned]
 
 Goal: Serve continuous multi-slot requests through the TP/EP runtime at
 `32` slots / `256K`, MTP off.
@@ -349,7 +361,7 @@ GPU utilization, collective time, expert time, and correctness.
 
 Outcome: Pending.
 
-### Sprint 240 - TP/EP Throughput Optimization [tentative]
+### Sprint 241 - TP/EP Throughput Optimization [tentative]
 
 Goal: Optimize the measured TP/EP bottleneck after Sprint 234 identifies it.
 
@@ -359,7 +371,7 @@ sprint should follow measured evidence, not guesswork.
 
 Outcome: Pending.
 
-### Sprint 241 - Multi-Slot MTP On TP/EP [tentative]
+### Sprint 242 - Multi-Slot MTP On TP/EP [tentative]
 
 Goal: Add MTP to the TP/EP serving path only after TP/EP decode is correct and
 benchmarked.
