@@ -1,0 +1,1112 @@
+ds4: CUDA model direct I/O enabled (align=1048576)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model arena allocated 1792.00 MiB (arenas 1.75 GiB)
+ds4: CUDA fd-cached token_embd 1010.00 MiB (total 0.99 GiB)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA fd-cached f32 1.50 MiB (total 0.99 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 0.99 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 0.99 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 0.99 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 0.99 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 0.99 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 0.99 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=0 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached f32 1.50 MiB (total 0.99 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 0.99 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 0.99 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 0.99 GiB)
+ds4: CUDA fd-cached router_hash 2.96 MiB (total 0.99 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached f32 1.50 MiB (total 0.99 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 0.99 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 0.99 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 0.99 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 0.99 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 0.99 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 0.99 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=0 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.00 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.00 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.00 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.00 GiB)
+ds4: CUDA fd-cached router_hash 2.96 MiB (total 1.00 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.00 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.00 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.00 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.00 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.00 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.00 GiB)
+ds4: CUDA fd-cached compressor_ape 0.02 MiB (total 1.00 GiB)
+ds4: CUDA fd-cached compressor_ape 0.00 MiB (total 1.00 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.00 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.00 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.00 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.00 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.00 GiB)
+ds4: CUDA fd-cached router_hash 2.96 MiB (total 1.00 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.01 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.01 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached compressor_ape 0.25 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.01 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=0 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.01 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached compressor_ape 0.02 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached compressor_ape 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached compressor_ape 0.25 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.01 GiB)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model arena allocated 1792.00 MiB (arenas 3.50 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.01 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.01 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached compressor_ape 0.02 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached compressor_ape 0.00 MiB (total 1.01 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.01 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=1 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.02 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.02 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.02 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached compressor_ape 0.25 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.02 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=1 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.02 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached compressor_ape 0.02 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached compressor_ape 0.00 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.02 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.02 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached compressor_ape 0.25 MiB (total 1.02 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.02 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=1 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.03 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached compressor_ape 0.02 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached compressor_ape 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached compressor_ape 0.25 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.03 GiB)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model arena allocated 1792.00 MiB (arenas 5.25 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.03 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.03 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached compressor_ape 0.02 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached compressor_ape 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.03 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=2 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.03 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.03 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.04 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.04 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached compressor_ape 0.25 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.04 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=2 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.04 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached compressor_ape 0.02 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached compressor_ape 0.00 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.04 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.04 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached compressor_ape 0.25 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.04 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=2 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.04 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.04 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached compressor_ape 0.02 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached compressor_ape 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached compressor_ape 0.25 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.05 GiB)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model arena allocated 1792.00 MiB (arenas 7.00 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.05 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.05 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached compressor_ape 0.02 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached compressor_ape 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.05 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=3 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.05 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.05 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.05 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.05 GiB)
+ds4: CUDA fd-cached compressor_ape 0.25 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.06 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=3 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.06 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached compressor_ape 0.02 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached compressor_ape 0.00 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.06 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.06 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached compressor_ape 0.25 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.06 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=3 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.06 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached compressor_ape 0.02 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached compressor_ape 0.00 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.06 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached compressor_ape 0.25 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.07 GiB)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model arena allocated 1792.00 MiB (arenas 8.75 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.07 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.07 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached compressor_ape 0.02 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached compressor_ape 0.00 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.07 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=4 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.07 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.07 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.07 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached compressor_ape 0.25 MiB (total 1.07 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.07 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=4 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.08 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached compressor_ape 0.02 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached compressor_ape 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.08 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.08 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached compressor_ape 0.25 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.08 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=4 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.08 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached compressor_ape 0.02 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached compressor_ape 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.08 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached compressor_ape 0.25 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.09 GiB)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model arena allocated 1792.00 MiB (arenas 10.50 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.09 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.09 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached compressor_ape 0.02 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached compressor_ape 0.00 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.09 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=5 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.09 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.09 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.09 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached compressor_ape 0.25 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.09 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=5 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.09 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.09 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached compressor_ape 0.02 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached compressor_ape 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.10 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.10 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached compressor_ape 0.25 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.10 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=5 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.10 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached compressor_ape 0.02 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached compressor_ape 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.10 GiB)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model arena allocated 1792.00 MiB (arenas 12.25 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.10 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.10 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached compressor_ape 0.25 MiB (total 1.10 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.10 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=6 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.11 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.11 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.11 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached compressor_ape 0.02 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached compressor_ape 0.00 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.11 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=6 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.11 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached compressor_ape 0.25 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.11 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.11 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached compressor_ape 0.02 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached compressor_ape 0.00 MiB (total 1.11 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.11 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=6 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.12 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached compressor_ape 0.25 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.12 GiB)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model arena allocated 1792.00 MiB (arenas 14.00 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.12 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.12 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached compressor_ape 0.02 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached compressor_ape 0.00 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.12 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=7 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.12 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=1
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.12 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.12 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached compressor_ape 0.25 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.12 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=7 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=2
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.12 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.12 GiB)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=2
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached compressor_ape 0.02 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached compressor_ape 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached attn_sinks 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached f32 1.50 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached hc_scale 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached hc_base 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached router_bias 0.00 MiB (total 1.13 GiB)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=0 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=1 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=2 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=3 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=4 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=5 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=6 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=7 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=4
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=0 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=1 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=2 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=3 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=4 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=7 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=8
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=5 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=6 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.00 MiB (total 1.13 GiB)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=0 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=64
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=1 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=64
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=2 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=64
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=3 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=64
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=4 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=64
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=7 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=16
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=5 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=64
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=6 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=64
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=32
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA fd-cached f32 0.25 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached output_hc_scale 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached output_hc_base 0.00 MiB (total 1.13 GiB)
+ds4: CUDA fd-cached rms_weight 0.02 MiB (total 1.13 GiB)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: CUDA model direct I/O enabled (align=131072)
+ds4: f8_shape_trace_summary begin entries=56
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=0 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=108
+ds4: f8_shape_trace kind=plain path=rows1 gpu=0 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=1 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=108
+ds4: f8_shape_trace kind=plain path=rows1 gpu=1 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=2 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=108
+ds4: f8_shape_trace kind=plain path=rows1 gpu=2 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=3 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=108
+ds4: f8_shape_trace kind=plain path=rows1 gpu=3 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=4 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=108
+ds4: f8_shape_trace kind=plain path=rows1 gpu=4 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=45
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=45
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=45
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=5 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=45
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=45
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=90
+ds4: f8_shape_trace kind=plain path=rows1 gpu=5 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=45
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=45
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=45
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=45
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=6 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=45
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=45
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=90
+ds4: f8_shape_trace kind=plain path=rows1 gpu=6 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=45
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=1024 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=27
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=32768 cols=1024 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=27
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=512 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=27
+ds4: f8_shape_trace kind=grouped path=rows1 gpu=7 rows=8192 cols=4096 n_tokens=1 groups=8 rows_per_group=1024 cols_per_group=4096 calls=27
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=4096 cols=8192 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=27
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=2048 cols=4096 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=54
+ds4: f8_shape_trace kind=plain path=rows1 gpu=7 rows=4096 cols=2048 n_tokens=1 groups=0 rows_per_group=0 cols_per_group=0 calls=27
+ds4: f8_shape_trace_summary end
