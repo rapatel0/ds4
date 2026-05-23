@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 284
+revision: 285
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -296,6 +296,10 @@ not a serial layer-chain.
   tok/s from `711.177884` to `791.453850`, with aggregate `96/96` token
   match. The 32-token compact sanity run reaches `802.701663` wall generated
   tok/s and `813.475877` wall continuation tok/s.
+- Sprint 285 re-established the promoted default HTTP topline. At `32` slots /
+  `256K` / three resident generation requests, the normal launcher path now
+  reports `771.036527` wall generated tok/s for 32 tokens/request and
+  `794.694599` for 64 tokens/request, both with aggregate `96/96` token match.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -1360,6 +1364,20 @@ destination GPU. The launcher, bench, and Kubernetes defaults now enable
 from `711.177884` to `791.453850` and wall continuation tok/s from
 `719.489689` to `796.894336`, with aggregate `96/96` token match.
 
+### Sprint 285 - TP/EP Promoted Serving Topline [complete]
+
+Goal: Re-establish the normal promoted TP/EP HTTP serving topline after
+Sprint 282 and Sprint 284 defaults.
+
+Outcome: Complete. The normal launcher-backed HTTP bench now runs with
+`DS4_V100_TP_EP_COPY_EVENT_COMPOSE=1`,
+`DS4_V100_TP_EP_COMPACT_ROUTE_COMPOSE=1`, and
+`DS4_V100_TP_EP_RETURN_FP16=0`. At `32` slots / `256K` / three resident
+generation requests, the V100 pod reports `771.036527` wall generated tok/s
+and `781.922821` wall continuation tok/s for `32` tokens/request, and
+`794.694599` wall generated tok/s and `799.391755` wall continuation tok/s for
+`64` tokens/request. Both cases return aggregate `96/96` token match.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1444,6 +1462,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 282 promoted event-wait compose copy. | Moving copy dependency waits onto CUDA events improves same-binary serving throughput by about `2.5%`. | Reduce FP32 contribution traffic or fuse staged all-to-all reduction more aggressively. |
 | 2026-05-23 | Sprint 283 rejected FP16 EP return under event-wait compose. | Reduced payload bytes do not pay for the extra cast/add/final-compose work on V100. | Stay on FP32 return and attack staged contribution traffic/fusion directly. |
 | 2026-05-23 | Sprint 284 promoted compact route-compose. | Route-major EP contribution packing reduces staged FP32 traffic and improves same-binary serving throughput by about `11%`. | Re-establish promoted 32/64 topline and add true request coalescing/admission. |
+| 2026-05-23 | Sprint 285 established the promoted HTTP serving topline. | The normal TP/EP launcher path now reports about `771-795` wall generated tok/s at `32` slots / `256K`. | Add true request coalescing/admission, then revisit MTP. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

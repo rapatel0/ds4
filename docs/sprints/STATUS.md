@@ -47,7 +47,12 @@ sanity run reaches `802.701663` wall generated tok/s and `813.475877` wall
 continuation tok/s. The current promoted TP/EP serving defaults are therefore
 `DS4_V100_TP_EP_COPY_EVENT_COMPOSE=1`,
 `DS4_V100_TP_EP_COMPACT_ROUTE_COMPOSE=1`, and
-`DS4_V100_TP_EP_RETURN_FP16=0`.
+`DS4_V100_TP_EP_RETURN_FP16=0`. Sprint 285 re-established the promoted normal
+launcher topline: at `32` slots / `256K` / three resident requests, the V100
+pod reports `771.036527` wall generated tok/s and `781.922821` wall
+continuation tok/s for `32` tokens/request, and `794.694599` wall generated
+tok/s and `799.391755` wall continuation tok/s for `64` tokens/request. Both
+cases return aggregate `96/96` token match.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s
