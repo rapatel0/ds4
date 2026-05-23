@@ -1,0 +1,27 @@
+=== ctx=131072 slots=32 ===
+DS4 V100 TP8 KV shard smoke
+tp=8 ctx=131072 slots=32
+| Layer class | KV dtype | Context | Slots | Per-layer / slot | Replicated / layer | TP8 shard / layer / GPU | Coverage |
+|---|---|---:|---:|---:|---:|---:|---|
+| ratio-4 | f8_e4m3_b128 | 131072 | 32 | 20.219 MiB | 0.632 GiB | 0.079 GiB | ok |
+| ratio-128 | f8_e4m3_b128 | 131072 | 32 | 0.567 MiB | 0.018 GiB | 0.002 GiB | ok |
+| ratio-4 | q8_0 | 131072 | 32 | 21.316 MiB | 0.666 GiB | 0.083 GiB | ok |
+| ratio-128 | q8_0 | 131072 | 32 | 0.598 MiB | 0.019 GiB | 0.002 GiB | ok |
+| ratio-4 | f16 | 131072 | 32 | 40.125 MiB | 1.254 GiB | 0.157 GiB | ok |
+| ratio-128 | f16 | 131072 | 32 | 1.125 MiB | 0.035 GiB | 0.004 GiB | ok |
+
+verdict: ok - TP8 shard descriptors cover replicated logical KV without allocating replicated KV
+
+=== ctx=262144 slots=32 ===
+DS4 V100 TP8 KV shard smoke
+tp=8 ctx=262144 slots=32
+| Layer class | KV dtype | Context | Slots | Per-layer / slot | Replicated / layer | TP8 shard / layer / GPU | Coverage |
+|---|---|---:|---:|---:|---:|---:|---|
+| ratio-4 | f8_e4m3_b128 | 262144 | 32 | 40.375 MiB | 1.262 GiB | 0.158 GiB | ok |
+| ratio-128 | f8_e4m3_b128 | 262144 | 32 | 1.071 MiB | 0.033 GiB | 0.004 GiB | ok |
+| ratio-4 | q8_0 | 262144 | 32 | 42.566 MiB | 1.330 GiB | 0.166 GiB | ok |
+| ratio-128 | q8_0 | 262144 | 32 | 1.129 MiB | 0.035 GiB | 0.004 GiB | ok |
+| ratio-4 | f16 | 262144 | 32 | 80.125 MiB | 2.504 GiB | 0.313 GiB | ok |
+| ratio-128 | f16 | 262144 | 32 | 2.125 MiB | 0.066 GiB | 0.008 GiB | ok |
+
+verdict: ok - TP8 shard descriptors cover replicated logical KV without allocating replicated KV

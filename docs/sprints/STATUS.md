@@ -47,6 +47,14 @@ at 64 tokens (`1962.876` tok/s), and `37.994584 ms` at 128 tokens
 (`3368.901` tok/s). This clears the first TP8 investigation gate but does not
 prove serving; the next TP sprint should build a bounded one-layer TP8
 prototype in new TP-only files with sharded KV ownership inside the boundary.
+Sprint 209 built that bounded prototype without touching the PP scheduler. At
+32 slots / 256K / ratio-4 F8 KV, each GPU allocates a `169347072` byte KV shard
+for the layer instead of a replicated `1.262 GiB` logical KV allocation. The
+one-layer TP8 smoke passed correctness at 32/64/128 tokens with total average
+latencies of `0.739408 ms`, `0.876011 ms`, and `1.098461 ms`; reduction time
+was `0.634680 ms`, `0.718601 ms`, and `0.840586 ms`. This keeps TP8 alive, but
+still only as a separate TP branch: the synthetic compute body must be replaced
+with a real TP-only DS4 layer slice before any serving integration.
 
 Current long-context production throughput mode is the Sprint 121 16-slot/256K
 appliance with the Sprint 122 rendezvous fix. Sprint 137 adds an explicit

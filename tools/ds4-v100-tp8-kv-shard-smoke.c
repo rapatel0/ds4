@@ -53,6 +53,7 @@ static uint64_t values_bytes(uint64_t values, kv_dtype dtype) {
     case KV_Q8_0: return bytes_blocks(values, 32, 34);
     default: die("unknown KV dtype");
     }
+    return 0;
 }
 
 static const char *dtype_name(kv_dtype dtype) {

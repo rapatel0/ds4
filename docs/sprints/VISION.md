@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: sprint-execute
-revision: 204
+revision: 209
 ---
 
 # Vision: DS4 V100 Appliance
@@ -62,6 +62,16 @@ fails at `50.63 GiB`, and 43-layer TP8 doubling boundary overhead is
 sprint should build a bounded one-layer TP8 prototype in new TP-only files; it
 must not introduce a generic scheduler or add TP modes to the PP/layer
 scheduler.
+Sprint 209 clears that bounded one-layer gate. The TP8 prototype is still
+synthetic, but it proves the separate-codepath contract: sharded KV allocation
+inside the boundary, two resident compute phases, two TP8 reductions, and
+identical hidden output across all eight V100s. At 32 slots / 256K / ratio-4
+F8 KV, the per-GPU layer KV shard is `169347072` bytes rather than a replicated
+`1.262 GiB` logical layer allocation. The 32/64/128 token one-layer timings are
+`0.739408 ms`, `0.876011 ms`, and `1.098461 ms`, all correct. The next sprint
+should continue TP8 only by adding a real DS4 layer body in new TP files:
+sharded attention/KV descriptors plus routed/shared FFN shard execution. The
+PP/layer scheduler remains out of scope.
 
 ## Current State
 
@@ -3024,6 +3034,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-23 | Completed Sprint 205 async root TP4 reduction gate. | Added `DS4_TP4_RESIDENT_ALGO=root_async`, a concurrent root gather/reduce/broadcast variant for the resident TP4 layer-slice benchmark. The first cross-device event implementation failed with an invalid resource handle, so the final implementation uses async peer copies plus stream synchronization. V100 correctness passed, but performance was worse than one GPU: `0.970x` at 96 routes x 4 layers, `0.866x` at 768 routes x 4 layers, and `0.860x` at 96 routes x 43 layers. Reject root_async and pause TP4 production decode work. Next sprint should pivot to persistent fused routed-FFN. | Sprint 206+ |
 | 2026-05-23 | Completed Sprint 206 six-route FFN persistent-boundary gate. | Extended the focused TurboMind gate/up benchmark so it measures the exact compact six-route production routed-FFN sequence, `MXFP4 gated gate/up -> MXFP4 down-reduce`, and optionally captures that sequence into a CUDA graph. V100 correctness passed. The 100-iteration smoke measured `0.1597 ms` normal versus `0.1573 ms` graph (`1.016x`), and the 500-iteration repeat measured `0.1459 ms` normal versus `0.1389 ms` graph (`1.050x`). This makes a pure loading/dispatch explanation unlikely for the current six-route bottleneck. The next real lever is a monolithic/software-pipelined routed-FFN kernel or TurboMind/CUTLASS variant that keeps the gated activation tile local across gate/up and down, rather than another graph or wrapper-level optimization. | Sprint 207+ |
 | 2026-05-23 | Completed Sprint 208 separate TP8 investigation path. | Added separate TP8 planner/probe files and ran the first all-8-GPU V100 gates. `PP1/TP8` at 32 slots/256K fits with F8 KV sharding (`26.84 GiB` worst GPU) and fails with replicated KV (`50.63 GiB`), so sharded KV is mandatory. TP8 FP16 recursive-doubling collectives passed at 32/64/128 tokens and measured `0.322599/0.372364/0.436299 ms`. The 43-layer, 2-reduction/layer resident proxy measured `29.381000 ms` at 32 tokens, `32.605223 ms` at 64, and `37.994584 ms` at 128, with all correctness checks passing. Per-link NVLink byte counters were unavailable (`N/A`) in the pod, but link status and effective-wire timing were recorded. Continue to a bounded one-layer TP8 prototype in new TP-only files; do not build a generic scheduler. | Sprint 209 |
+| 2026-05-23 | Completed Sprint 209 TP8 one-layer prototype. | Added `tools/ds4-v100-tp8-layer-smoke.cu` as a completely separate TP-only executable. It allocates TP8-sharded DS4 KV inside the boundary, runs two resident compute phases and two recursive-doubling hidden reductions, and verifies identical reduced hidden state across all eight V100s. At 32 slots/256K/ratio-4 F8 KV, each GPU owns a `169347072` byte layer KV shard instead of replicated logical KV. The 32/64/128 token runs passed correctness with total one-layer latencies `0.739408/0.876011/1.098461 ms`. Continue TP8 in new TP-only files by replacing synthetic compute with a real DS4 attention/FFN layer slice; do not wire TP into the PP scheduler. | Sprint 210 |
 
 ## Open Questions
 
