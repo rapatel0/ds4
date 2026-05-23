@@ -22,6 +22,10 @@ but the naive resident boundary is not fast enough: `96 routes x 43 layers`
 measured `0.825x` versus one GPU, and `768 routes x 43 layers` measured
 `0.589x`. Production TP4 scheduler work should wait for a real concurrent
 collective or fused reduction boundary.
+Sprint 204 added that first concurrent boundary using per-device async
+doubling. It helps larger shapes (`1.071x` at `768 routes x 43 layers`) but
+does not reliably clear the production decode shape (`0.896x` on the longer
+`96 routes x 43 layers` repeat).
 
 The appliance is correct and served on the 8x V100 node, but it is not yet in
 the practical throughput range from the vision. The current 8-slot default is
@@ -214,6 +218,7 @@ to slightly worse.
 
 | Sprint | Change | Result | Decision |
 |---|---|---|---|
+| 204 | Concurrent resident TP4 reduction | Correct on V100 with `doubling_async`; 43-layer 768-route speedup was `1.071x`, while the longer 43-layer 96-route repeat was `0.896x` | TP4 remains plausible for larger batched/prefill shapes, but not ready for production decode scheduler integration |
 | 203 | Resident TP4 layer-slice gate | Correct on V100 at 6/96/768 routes; 43-layer root speedups were `0.825x` at 96 routes and `0.589x` at 768 routes; hand-rolled doubling was slower than root in 4-layer tests | Do not wire this TP4 boundary into production; next TP work needs a real concurrent collective/fused reduction, otherwise pivot back to persistent fused routed-FFN |
 | 202 | TP4 routed-FFN compute envelope | Correct on V100 after fixing a benchmark stream/workspace overlap; corrected 6/96/768-route compute-only speedups were `2.686x`, `2.350x`, `3.636x`; copy-inclusive speedups were `0.986x`, `0.783x`, `0.682x` | TP4 expert compute is worth pursuing only inside a full-layer resident TP/EP topology; reject routed-only TP overlay expansion |
 | 201 | TP4 full-layer boundary proxy | Correct on V100; 16-token default verified at `22.113369 ms` root and `24.414061 ms` doubling for the full 43-layer boundary; larger doubling cases reached `1837` overhead-only tok/s at 64 tokens and `2509` at 128 tokens | Use only for a full-layer TP4/EP prototype that keeps dense+routed compute inside the boundary; do not expand routed-only TP overlays |
@@ -494,3 +499,8 @@ reduction is still slower than the one-GPU reference at both the production
 96-route shape and the larger 768-route shape. The simple doubling variant is
 also slower because it is sequential, not a true concurrent collective. Do not
 move TP4 into the scheduler until the collective boundary is materially better.
+After Sprint 204, `doubling_async` proves concurrency matters: the same
+resident slice becomes positive for 768-route high-batch shapes. The 96-route
+production decode shape remains negative on repeat, so the project should not
+spend the next sprint wiring TP4 into serving. Either build a stronger
+collective gate or pivot back to persistent fused routed-FFN work.

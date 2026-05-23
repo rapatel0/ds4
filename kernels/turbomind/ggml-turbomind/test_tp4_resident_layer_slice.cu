@@ -34,6 +34,7 @@ __global__ void add_half_inplace_kernel(__half * dst, const __half * src, size_t
 enum class ResidentReduceAlgo {
     Root,
     Doubling,
+    DoublingAsync,
 };
 
 static int resident_env_int(const char *name, int fallback, int lo, int hi) {
@@ -52,11 +53,13 @@ static ResidentReduceAlgo resident_reduce_algo_from_env() {
     const char *v = std::getenv("DS4_TP4_RESIDENT_ALGO");
     if (!v || !v[0] || std::strcmp(v, "root") == 0) return ResidentReduceAlgo::Root;
     if (std::strcmp(v, "doubling") == 0) return ResidentReduceAlgo::Doubling;
+    if (std::strcmp(v, "doubling_async") == 0) return ResidentReduceAlgo::DoublingAsync;
     fprintf(stderr, "[tp4_resident] ignoring invalid DS4_TP4_RESIDENT_ALGO=%s\n", v);
     return ResidentReduceAlgo::Root;
 }
 
 static const char * resident_reduce_algo_name(ResidentReduceAlgo algo) {
+    if (algo == ResidentReduceAlgo::DoublingAsync) return "doubling_async";
     return algo == ResidentReduceAlgo::Doubling ? "doubling" : "root";
 }
 
@@ -125,7 +128,7 @@ static int run_tp4_resident_layers(std::array<DeviceSide, kParts> & sides,
                                           sides[0].d_A, devices[0],
                                           bytes));
             }
-        } else {
+        } else if (algo == ResidentReduceAlgo::Doubling) {
             const int round1_peer[kParts] = {1, 0, 3, 2};
             const int round2_peer[kParts] = {2, 3, 0, 1};
 
@@ -154,6 +157,40 @@ static int run_tp4_resident_layers(std::array<DeviceSide, kParts> & sides,
             }
             for (int p = 0; p < kParts; ++p) {
                 CHECK_CUDA(cudaSetDevice(devices[p]));
+                add_half_inplace_kernel<<<blocks, threads, 0, sides[p].stream>>>(
+                    sides[p].d_down, reduce_recv[p], elems);
+                CHECK_CUDA(cudaGetLastError());
+            }
+            for (int p = 0; p < kParts; ++p) {
+                CHECK_CUDA(cudaSetDevice(devices[p]));
+                CHECK_CUDA(cudaStreamSynchronize(sides[p].stream));
+                std::swap(sides[p].d_A, sides[p].d_down);
+            }
+        } else {
+            const int round1_peer[kParts] = {1, 0, 3, 2};
+            const int round2_peer[kParts] = {2, 3, 0, 1};
+
+            for (int p = 0; p < kParts; ++p) {
+                const int peer = round1_peer[p];
+                CHECK_CUDA(cudaSetDevice(devices[p]));
+                CHECK_CUDA(cudaMemcpyPeerAsync(reduce_recv[p], devices[p],
+                                               sides[peer].d_down, devices[peer],
+                                               bytes, sides[p].stream));
+                add_half_inplace_kernel<<<blocks, threads, 0, sides[p].stream>>>(
+                    sides[p].d_down, reduce_recv[p], elems);
+                CHECK_CUDA(cudaGetLastError());
+            }
+            for (int p = 0; p < kParts; ++p) {
+                CHECK_CUDA(cudaSetDevice(devices[p]));
+                CHECK_CUDA(cudaStreamSynchronize(sides[p].stream));
+            }
+
+            for (int p = 0; p < kParts; ++p) {
+                const int peer = round2_peer[p];
+                CHECK_CUDA(cudaSetDevice(devices[p]));
+                CHECK_CUDA(cudaMemcpyPeerAsync(reduce_recv[p], devices[p],
+                                               sides[peer].d_down, devices[peer],
+                                               bytes, sides[p].stream));
                 add_half_inplace_kernel<<<blocks, threads, 0, sides[p].stream>>>(
                     sides[p].d_down, reduce_recv[p], elems);
                 CHECK_CUDA(cudaGetLastError());

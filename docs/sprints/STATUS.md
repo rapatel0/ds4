@@ -24,6 +24,12 @@ resident root boundary is still slower than a one-GPU full-width routed-FFN
 reference: `0.825x` at `96 routes x 43 layers` and `0.589x` at
 `768 routes x 43 layers`. This blocks production TP4 scheduler integration
 until a real concurrent collective or fused reduction boundary exists.
+Sprint 204 added a concurrent `doubling_async` resident reduction. It improves
+the resident slice and is positive at larger 768-route shapes (`1.071x` over
+43 layers), but it does not reliably clear the production 96-route decode gate:
+the first 43-layer run was `1.006x`, while the longer repeat was `0.896x`.
+TP4 should remain a larger-batch/prefill candidate unless the collective gets a
+fused/NCCL-grade implementation.
 
 Current long-context production throughput mode is the Sprint 121 16-slot/256K
 appliance with the Sprint 122 rendezvous fix. Sprint 137 adds an explicit
@@ -311,6 +317,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 
 | Sprint | Experiment | Result | Decision |
 |---|---|---|---|
+| 204 | Concurrent resident TP4 reduction | V100 build passed; `doubling_async` correctness passed at 96/768 routes; 43-layer 768-route speedup was `1.071x`, but 43-layer 96-route repeat was `0.896x` | Keep TP4 for larger batched/prefill investigation only; do not integrate production decode scheduler without a fused/NCCL-grade collective |
 | 203 | Resident TP4 layer-slice gate | V100 build passed; resident TP4 correctness passed at 6/96/768 routes; 43-layer root speedup was `0.825x` at 96 routes and `0.589x` at 768 routes; hand-rolled doubling was slower than root in 4-layer tests | Do not wire this TP4 boundary into production; next TP work needs a real concurrent collective/fused reduction, otherwise pivot back to persistent fused routed-FFN |
 | 202 | TP4 routed-FFN compute envelope | V100 build passed; fixed a GPU0 stream/workspace overlap in the benchmark warmup; real TurboMind MXFP4 TP4 split correctness passed at 6/96/768 routes; corrected compute-only speedup was `2.686x`, `2.350x`, `3.636x`; copy-inclusive speedup was `0.986x`, `0.783x`, `0.682x` | TP4 compute is strong enough for full-layer TP/EP, but routed-only full-hidden copy overlays are rejected |
 | 201 | TP4 full-layer boundary proxy | V100 build passed; 16-token/43-layer/4-collective boundary measured `22.113369 ms` root and `24.414061 ms` doubling, both verified; 64-token doubling measured `34.830881 ms`, 128-token doubling measured `51.026125 ms` | Full-layer TP4/EP remains plausible only as a broad topology that keeps dense+routed compute inside the boundary; do not expand routed-only TP overlays |
@@ -609,6 +616,10 @@ routes), and the simple doubling variant is worse in this implementation. TP4
 production work should not continue into the scheduler until the collective is
 made concurrent/fused; otherwise the next practical serving sprint should
 return to a persistent fused routed-FFN executor.
+Sprint 204 made that boundary concurrent with per-device async doubling. The
+larger 768-route 43-layer shape improved to `1.071x`, but the production
+96-route 43-layer repeat was `0.896x`. This keeps TP4 alive for larger
+batched/prefill work, not for immediate production decode integration.
 
 The concise current status is also tracked in
 `docs/sprints/EXPERIMENT-STATUS.md`.
