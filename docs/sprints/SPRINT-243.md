@@ -1,7 +1,7 @@
 # Sprint 243 - TP/EP Dense HMMA Compose Gate
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete
 
 ## Overview
 
@@ -74,18 +74,18 @@ while preserving the same row-sharded TP output layout.
 
 ## Definition Of Done
 
-- [ ] Sprint plan is committed before implementation evidence.
-- [ ] Implementation stays in the separate TP/EP codepath.
-- [ ] No PP scheduler files are modified.
-- [ ] HMMA dense option builds on the V100 pod.
-- [ ] Scalar dense + fused compose/sum control still passes.
-- [ ] HMMA dense + fused compose/sum candidate passes finite/repeat checks.
-- [ ] A/B evidence records `ms_per_step`, `slot_step_tok_s`, dense stage time,
+- [x] Sprint plan is committed before implementation evidence.
+- [x] Implementation stays in the separate TP/EP codepath.
+- [x] No PP scheduler files are modified.
+- [x] HMMA dense option builds on the V100 pod.
+- [x] Scalar dense + fused compose/sum control still passes.
+- [x] HMMA dense + fused compose/sum candidate passes finite/repeat checks.
+- [x] A/B evidence records `ms_per_step`, `slot_step_tok_s`, dense stage time,
       compose stage time, and checksum.
-- [ ] Evidence is copied to
+- [x] Evidence is copied to
       `logs/from-cluster/sprint243-tp-ep-dense-hmma/`.
-- [ ] Status and vision docs are updated with the decision.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Status and vision docs are updated with the decision.
+- [x] Changes are committed with explicit `git add` paths.
 
 ## Risks
 
@@ -97,6 +97,52 @@ while preserving the same row-sharded TP output layout.
 - The kernel is a bounded layer-2 composition path, not the final all-layer
   dense implementation.
 
+## Evidence
+
+V100 pod: `llm/llamacpp-build-8gpu`
+
+Command shape:
+
+```text
+slots=32
+ctx=262144
+top_k=6
+layer=2
+decode_steps=50
+MTP=off
+fuse_compose_sum=on
+dense_compute_all=on
+compose_next_hidden=on
+```
+
+Logs:
+
+- `logs/from-cluster/sprint243-tp-ep-dense-hmma/layer2-decode-loop-scalar-dense-fused-compose-32slot-256k-50steps.log`
+- `logs/from-cluster/sprint243-tp-ep-dense-hmma/layer2-decode-loop-hmma-dense-fused-compose-32slot-256k-50steps.log`
+
+| Mode | Dense HMMA | ms/step | Slot-step tok/s | EP ms/step | Dense ms/step | Compose ms/step | Checksum | Result |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| Scalar dense + fused compose | 0 | 1.620386 | 19748.386791 | 0.309798 | 0.753941 | 0.556571 | 2382924023 | PASS |
+| HMMA dense + fused compose | 1 | 3.533215 | 9056.907248 | 0.306812 | 2.667910 | 0.558428 | 442383 | PASS |
+
+The one-shot compose gate also shows the HMMA dense candidate is slower:
+
+| Mode | Dense HMMA | Attn dense ms | Shared dense ms | Compose ms | Result |
+|---|---:|---:|---:|---:|---|
+| Scalar dense + fused compose | 0 | 0.555418 | 0.153702 | 2.274831 | PASS |
+| HMMA dense + fused compose | 1 | 1.762714 | 0.487322 | 2.111211 | PASS |
+
 ## Decision
 
-Pending.
+Reject this naive HMMA dense candidate as a default and keep it as an explicit
+diagnostic only. It is finite and repeat-stable, but it is much slower than
+the scalar F8 dense reference at the target `32`-slot shape. The likely issue
+is not HMMA itself; it is this first implementation's per-tile F8 decode and
+shared-memory staging pattern, which reloads and converts packed weights too
+often for the current row-sharded composition tensors.
+
+The next dense optimization should not tune this kernel blindly. It should use
+the older production HMMA evidence more directly: either adapt the existing
+`ds4_cuda.cu` F8 HMMA paths that already encode shape-specific lessons, or use
+a prepacked/streaming low-bit dense kernel where F8 decode is amortized and
+software-pipelined across K tiles.

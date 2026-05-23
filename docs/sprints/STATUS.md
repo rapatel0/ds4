@@ -434,6 +434,18 @@ standalone add kernels per destination rank. Same-binary 50-step A/B at
 pass finite validation. Decision: keep FP32 return, move fusion forward, and
 continue collapsing TP/EP synchronization boundaries before serving
 integration.
+Sprint 243 tested a bounded HMMA dense replacement for the two F8 composition
+tensors in the separate TP/EP resident loop. The new opt-in
+`--dense-hmma-compose` keeps packed F8 bytes resident and decodes tiles into
+FP16 WMMA fragments on GPU, but this first implementation is slower. Same
+32-slot/256K/50-step A/B with fused compose enabled: scalar dense measures
+`ms_per_step=1.620386`, `slot_step_tok_s=19748.386791`, and
+`dense_ms_per_step=0.753941`; HMMA dense measures `ms_per_step=3.533215`,
+`slot_step_tok_s=9056.907248`, and `dense_ms_per_step=2.667910`. Both pass
+finite/repeat checks. Decision: reject this naive HMMA candidate as default;
+do not tune it blindly. The next dense optimization should adapt the older
+shape-specific F8 HMMA paths or introduce a prepacked/software-pipelined
+low-bit dense kernel that amortizes F8 decode.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit

@@ -178,3 +178,31 @@ standalone return quantization. The production direction should preserve
 low-bit weight loads, do FP16/FP32 math inside GPU kernels, and collapse
 peer-return reduction plus residual/dense composition into as few resident
 kernels as practical.
+
+## Sprint 243 Dense HMMA Measurement
+
+Sprint 243 tested a first bounded HMMA dense candidate for the two F8
+composition tensors:
+
+- `blk.2.attn_output_b.weight`
+- `blk.2.ffn_down_shexp.weight`
+
+The candidate keeps packed F8 bytes resident, decodes each tile on GPU into
+FP16 WMMA fragments, and accumulates through HMMA into FP32 output shards. It
+supports the target `32` slots by tiling tokens in `16`-token blocks.
+
+Same-binary V100 A/B at `32` slots / `256K`, MTP off, fused compose enabled,
+`50` resident decode-loop steps:
+
+| Mode | Dense HMMA | ms/step | Slot-step tok/s | Dense ms/step | Compose ms/step | Result |
+|---|---:|---:|---:|---:|---:|---|
+| Scalar dense | 0 | 1.620386 | 19748.386791 | 0.753941 | 0.556571 | PASS |
+| HMMA dense candidate | 1 | 3.533215 | 9056.907248 | 2.667910 | 0.558428 | PASS |
+
+Conclusion: this naive HMMA candidate is rejected. The result does not reject
+HMMA as the right compute target; it rejects this implementation shape. The
+kernel decodes F8 and stages fragments per tile without enough reuse, so it
+spends more time feeding HMMA than the scalar reference spends doing the dot
+products. Future dense work should adapt the older shape-specific F8 HMMA
+kernels or use a prepacked/software-pipelined layout where low-bit decode is
+amortized across more useful tensor-core work.

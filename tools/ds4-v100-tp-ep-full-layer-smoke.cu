@@ -6,6 +6,7 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <dlfcn.h>
+#include <mma.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -225,6 +226,7 @@ struct ComposeStats {
     uint64_t checksum = 0;
     bool ep_return_fp16 = false;
     bool fused_compose_sum = false;
+    bool dense_hmma_compose = false;
 };
 
 struct DecodeLoopStats {
@@ -246,6 +248,7 @@ struct DecodeLoopStats {
     uint64_t checksum = 0;
     bool ep_return_fp16 = false;
     bool fused_compose_sum = false;
+    bool dense_hmma_compose = false;
 };
 
 struct Options {
@@ -268,6 +271,7 @@ struct Options {
     int decode_steps = 0;
     bool ep_return_fp16 = false;
     bool fuse_compose_sum = false;
+    bool dense_hmma_compose = false;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -338,6 +342,104 @@ __global__ void f8_b128_dense_kernel(float *out,
     }
     acc = block_sum_256_f32(acc);
     if (threadIdx.x == 0u) out[(uint64_t)slot * rows + row] = acc;
+}
+
+__global__ void f8_b128_dense_hmma_m16_kernel(float *out,
+                                              const uint8_t *weights,
+                                              const float *x,
+                                              uint32_t rows,
+                                              uint32_t cols,
+                                              uint32_t row_stride_bytes,
+                                              uint32_t slots) {
+#if __CUDA_ARCH__ >= 700
+    namespace wmma = nvcuda::wmma;
+    enum {
+        WARPS_PER_BLOCK = 4,
+        TILE_M = 16,
+        TILE_N = 16,
+        TILE_K = 16,
+        ROWS_PER_BLOCK = WARPS_PER_BLOCK * TILE_N,
+    };
+
+    const uint32_t tid = threadIdx.x;
+    const uint32_t warp = tid >> 5u;
+    if (warp >= WARPS_PER_BLOCK) return;
+
+    const uint32_t row_block = blockIdx.x * ROWS_PER_BLOCK;
+    const uint32_t token_block = blockIdx.y * TILE_M;
+
+    __shared__ __half a_sh[TILE_M * TILE_K];
+    __shared__ __half b_sh[WARPS_PER_BLOCK * TILE_K * TILE_N];
+    __shared__ float c_sh[WARPS_PER_BLOCK * TILE_M * TILE_N];
+
+    wmma::fragment<wmma::matrix_a, TILE_M, TILE_N, TILE_K, __half, wmma::row_major> a_frag;
+    wmma::fragment<wmma::matrix_b, TILE_M, TILE_N, TILE_K, __half, wmma::col_major> b_frag;
+    wmma::fragment<wmma::accumulator, TILE_M, TILE_N, TILE_K, float> c_frag;
+    wmma::fill_fragment(c_frag, 0.0f);
+
+    for (uint32_t k0 = 0; k0 < cols; k0 += TILE_K) {
+        for (uint32_t i = tid; i < TILE_M * TILE_K; i += blockDim.x) {
+            const uint32_t token = i >> 4u;
+            const uint32_t k = i & 15u;
+            const uint32_t global_token = token_block + token;
+            float v = 0.0f;
+            if (global_token < slots) {
+                v = x[(uint64_t)global_token * cols + k0 + k];
+            }
+            a_sh[i] = __float2half_rn(v);
+        }
+
+        for (uint32_t i = tid; i < WARPS_PER_BLOCK * TILE_K * TILE_N; i += blockDim.x) {
+            const uint32_t wtile = i >> 8u;
+            const uint32_t local = i & 255u;
+            const uint32_t out_col = local >> 4u;
+            const uint32_t k = local & 15u;
+            const uint32_t row = row_block + wtile * TILE_N + out_col;
+            float w = 0.0f;
+            if (row < rows) {
+                const uint32_t col = k0 + k;
+                const uint8_t *row_base = weights + (uint64_t)row * row_stride_bytes;
+                const uint8_t *block = row_base + (uint64_t)(col >> 7u) * 129ull;
+                w = f8_e4m3fn_to_f32_dev(block[1u + (col & 127u)]) *
+                    f8_e8m0_to_f32_dev(block[0]);
+            }
+            b_sh[i] = __float2half_rn(w);
+        }
+        __syncthreads();
+
+        wmma::load_matrix_sync(a_frag, a_sh, TILE_K);
+        wmma::load_matrix_sync(b_frag, b_sh + warp * TILE_K * TILE_N, TILE_K);
+        wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+        __syncthreads();
+    }
+
+    wmma::store_matrix_sync(c_sh + warp * TILE_M * TILE_N,
+                            c_frag,
+                            TILE_N,
+                            wmma::mem_row_major);
+    __syncthreads();
+
+    for (uint32_t i = tid; i < WARPS_PER_BLOCK * TILE_M * TILE_N; i += blockDim.x) {
+        const uint32_t wtile = i >> 8u;
+        const uint32_t local = i & 255u;
+        const uint32_t token = local >> 4u;
+        const uint32_t out_col = local & 15u;
+        const uint32_t global_token = token_block + token;
+        const uint32_t row = row_block + wtile * TILE_N + out_col;
+        if (global_token < slots && row < rows) {
+            out[(uint64_t)global_token * rows + row] =
+                c_sh[wtile * TILE_M * TILE_N + local];
+        }
+    }
+#else
+    (void)out;
+    (void)weights;
+    (void)x;
+    (void)rows;
+    (void)cols;
+    (void)row_stride_bytes;
+    (void)slots;
+#endif
 }
 
 __device__ float bf16_to_f32_dev(uint16_t v) {
@@ -563,7 +665,8 @@ void usage(const char *argv0) {
                  "       [--dense-compute-tensor NAME] [--dense-compute-all-f8]\n"
                  "       [--dense-compute-all-bf16] [--dense-compute-all]\n"
                  "       [--compose-next-hidden] [--decode-steps N]\n"
-                 "       [--ep-return-fp16] [--fuse-compose-sum]\n",
+                 "       [--ep-return-fp16] [--fuse-compose-sum]\n"
+                 "       [--dense-hmma-compose]\n",
                  argv0);
 }
 
@@ -633,6 +736,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->ep_return_fp16 = true;
         } else if (std::strcmp(arg, "--fuse-compose-sum") == 0) {
             opt->fuse_compose_sum = true;
+        } else if (std::strcmp(arg, "--dense-hmma-compose") == 0) {
+            opt->dense_hmma_compose = true;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -1288,13 +1393,22 @@ int prepare_resident_f8_dense(const Options &opt,
 int launch_resident_f8_dense(const Options &opt,
                              const ResidentF8Dense &op,
                              RankState ranks[kGpus]) {
-    const dim3 grid((unsigned int)op.rows_per_gpu, (unsigned int)op.slots, 1);
     for (int gpu = 0; gpu < kGpus; ++gpu) {
         CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
         (void)cudaGetLastError();
-        f8_b128_dense_kernel<<<grid, 256, 0, ranks[gpu].stream>>>(
-            op.d_out[(size_t)gpu], op.d_w[(size_t)gpu], op.d_x[(size_t)gpu],
-            op.rows_per_gpu, op.cols, (uint32_t)op.row_bytes, op.slots);
+        if (opt.dense_hmma_compose) {
+            const dim3 grid((unsigned int)((op.rows_per_gpu + 63) / 64),
+                            (unsigned int)((op.slots + 15) / 16),
+                            1);
+            f8_b128_dense_hmma_m16_kernel<<<grid, 128, 0, ranks[gpu].stream>>>(
+                op.d_out[(size_t)gpu], op.d_w[(size_t)gpu], op.d_x[(size_t)gpu],
+                op.rows_per_gpu, op.cols, (uint32_t)op.row_bytes, op.slots);
+        } else {
+            const dim3 grid((unsigned int)op.rows_per_gpu, (unsigned int)op.slots, 1);
+            f8_b128_dense_kernel<<<grid, 256, 0, ranks[gpu].stream>>>(
+                op.d_out[(size_t)gpu], op.d_w[(size_t)gpu], op.d_x[(size_t)gpu],
+                op.rows_per_gpu, op.cols, (uint32_t)op.row_bytes, op.slots);
+        }
         CHECK_CUDA(cudaGetLastError());
     }
     return 0;
@@ -1360,19 +1474,34 @@ int run_f8_dense_to_device(const Options &opt,
                               cudaMemcpyHostToDevice));
         CHECK_CUDA(cudaEventCreate(&start));
         CHECK_CUDA(cudaEventCreate(&stop));
-        const dim3 grid((unsigned int)rows_per_gpu, (unsigned int)opt.slots, 1);
+        const dim3 scalar_grid((unsigned int)rows_per_gpu, (unsigned int)opt.slots, 1);
+        const dim3 hmma_grid((unsigned int)((rows_per_gpu + 63) / 64),
+                             (unsigned int)((opt.slots + 15) / 16),
+                             1);
         for (int i = 0; i < opt.warmup; ++i) {
-            f8_b128_dense_kernel<<<grid, 256>>>(out->d_out[(size_t)gpu], d_w, d_x,
-                                                rows_per_gpu, cols,
-                                                (uint32_t)row_bytes, opt.slots);
+            if (opt.dense_hmma_compose) {
+                f8_b128_dense_hmma_m16_kernel<<<hmma_grid, 128>>>(
+                    out->d_out[(size_t)gpu], d_w, d_x, rows_per_gpu, cols,
+                    (uint32_t)row_bytes, opt.slots);
+            } else {
+                f8_b128_dense_kernel<<<scalar_grid, 256>>>(
+                    out->d_out[(size_t)gpu], d_w, d_x, rows_per_gpu, cols,
+                    (uint32_t)row_bytes, opt.slots);
+            }
         }
         CHECK_CUDA(cudaGetLastError());
         CHECK_CUDA(cudaDeviceSynchronize());
         CHECK_CUDA(cudaEventRecord(start));
         for (int i = 0; i < opt.iters; ++i) {
-            f8_b128_dense_kernel<<<grid, 256>>>(out->d_out[(size_t)gpu], d_w, d_x,
-                                                rows_per_gpu, cols,
-                                                (uint32_t)row_bytes, opt.slots);
+            if (opt.dense_hmma_compose) {
+                f8_b128_dense_hmma_m16_kernel<<<hmma_grid, 128>>>(
+                    out->d_out[(size_t)gpu], d_w, d_x, rows_per_gpu, cols,
+                    (uint32_t)row_bytes, opt.slots);
+            } else {
+                f8_b128_dense_kernel<<<scalar_grid, 256>>>(
+                    out->d_out[(size_t)gpu], d_w, d_x, rows_per_gpu, cols,
+                    (uint32_t)row_bytes, opt.slots);
+            }
         }
         CHECK_CUDA(cudaEventRecord(stop));
         CHECK_CUDA(cudaEventSynchronize(stop));
@@ -1673,6 +1802,7 @@ int run_next_hidden_compose(const Options &opt,
     stats->enabled = true;
     stats->ep_return_fp16 = opt.ep_return_fp16;
     stats->fused_compose_sum = opt.fuse_compose_sum && !opt.ep_return_fp16;
+    stats->dense_hmma_compose = opt.dense_hmma_compose;
 
     DeviceDenseOutputs attn;
     DeviceDenseOutputs shared;
@@ -1843,6 +1973,7 @@ int run_decode_loop(const Options &opt,
     stats->enabled = true;
     stats->ep_return_fp16 = opt.ep_return_fp16;
     stats->fused_compose_sum = opt.fuse_compose_sum && !opt.ep_return_fp16;
+    stats->dense_hmma_compose = opt.dense_hmma_compose;
     stats->steps = opt.decode_steps;
     stats->slots = opt.slots;
     stats->slot_steps = (uint64_t)opt.decode_steps * (uint64_t)opt.slots;
@@ -2327,7 +2458,8 @@ int main(int argc, char **argv) {
     if (compose.enabled) {
         std::printf("tp_ep_next_hidden_compose\tslots\t%d\tctx\t%llu\t"
                     "hidden_shard\t%d\tep_contribution_bytes\t%llu\t"
-                    "ep_return_dtype\t%s\tep_return_bytes\t%llu\tattn_dense_ms\t%.6f\t"
+                    "ep_return_dtype\t%s\tep_return_bytes\t%llu\tdense_hmma\t%d\t"
+                    "attn_dense_ms\t%.6f\t"
                     "shared_dense_ms\t%.6f\tfused_compose_sum\t%d\tcompose_ms\t%.6f\t"
                     "checksum\t%llu\tfinite_bad\t%d\trepeat_max_abs\t%.9f\t"
                     "repeat_bad\t%d\t%s\n",
@@ -2335,6 +2467,7 @@ int main(int argc, char **argv) {
                     (unsigned long long)compose.ep_contribution_bytes,
                     compose.ep_return_fp16 ? "fp16" : "fp32",
                     (unsigned long long)compose.ep_return_bytes,
+                    compose.dense_hmma_compose ? 1 : 0,
                     compose.attn_dense_ms, compose.shared_dense_ms,
                     compose.fused_compose_sum ? 1 : 0,
                     compose.compose_ms, (unsigned long long)compose.checksum,
@@ -2351,6 +2484,7 @@ int main(int argc, char **argv) {
     if (decode_loop.enabled) {
         std::printf("tp_ep_decode_loop\tsteps\t%d\tslots\t%d\tslot_steps\t%llu\t"
                     "total_ms\t%.6f\tms_per_step\t%.6f\tslot_step_tok_s\t%.6f\t"
+                    "dense_hmma\t%d\t"
                     "ep_ms_per_step\t%.6f\tdense_ms_per_step\t%.6f\t"
                     "fused_compose_sum\t%d\tcompose_ms_per_step\t%.6f\t"
                     "dense_loaded_bytes\t%llu\t"
@@ -2360,7 +2494,9 @@ int main(int argc, char **argv) {
                     decode_loop.steps, decode_loop.slots,
                     (unsigned long long)decode_loop.slot_steps,
                     decode_loop.total_ms, decode_loop.ms_per_step,
-                    decode_loop.tok_s, decode_loop.ep_ms_per_step,
+                    decode_loop.tok_s,
+                    decode_loop.dense_hmma_compose ? 1 : 0,
+                    decode_loop.ep_ms_per_step,
                     decode_loop.dense_ms_per_step,
                     decode_loop.fused_compose_sum ? 1 : 0,
                     decode_loop.compose_ms_per_step,
@@ -2431,7 +2567,7 @@ int main(int argc, char **argv) {
                 "bf16_compute_oracle_bad\t%d\tbf16_compute_pass\t%d\t"
                 "compose_next_hidden\t%d\tcompose_ep_contribution_bytes\t%llu\t"
                 "compose_ep_return_dtype\t%s\tcompose_ep_return_bytes\t%llu\t"
-                "compose_attn_dense_ms\t%.6f\t"
+                "compose_dense_hmma\t%d\tcompose_attn_dense_ms\t%.6f\t"
                 "compose_shared_dense_ms\t%.6f\tcompose_fused_sum\t%d\t"
                 "compose_ms\t%.6f\t"
                 "compose_checksum\t%llu\tcompose_finite_bad\t%d\t"
@@ -2439,6 +2575,7 @@ int main(int argc, char **argv) {
                 "compose_pass\t%d\t"
                 "decode_steps\t%d\tdecode_slot_steps\t%llu\tdecode_total_ms\t%.6f\t"
                 "decode_ms_per_step\t%.6f\tdecode_slot_step_tok_s\t%.6f\t"
+                "decode_dense_hmma\t%d\t"
                 "decode_ep_ms_per_step\t%.6f\tdecode_dense_ms_per_step\t%.6f\t"
                 "decode_fused_compose_sum\t%d\tdecode_compose_ms_per_step\t%.6f\t"
                 "decode_ep_return_dtype\t%s\t"
@@ -2488,6 +2625,7 @@ int main(int argc, char **argv) {
                 (unsigned long long)compose.ep_contribution_bytes,
                 compose.ep_return_fp16 ? "fp16" : "fp32",
                 (unsigned long long)compose.ep_return_bytes,
+                compose.dense_hmma_compose ? 1 : 0,
                 compose.attn_dense_ms,
                 compose.shared_dense_ms,
                 compose.fused_compose_sum ? 1 : 0,
@@ -2502,6 +2640,7 @@ int main(int argc, char **argv) {
                 decode_loop.total_ms,
                 decode_loop.ms_per_step,
                 decode_loop.tok_s,
+                decode_loop.dense_hmma_compose ? 1 : 0,
                 decode_loop.ep_ms_per_step,
                 decode_loop.dense_ms_per_step,
                 decode_loop.fused_compose_sum ? 1 : 0,

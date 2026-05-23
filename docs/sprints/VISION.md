@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 242
+revision: 243
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -91,6 +91,10 @@ not a serial layer-chain.
   the FP32 EP remote-sum into next-hidden compose, improving the 50-step
   layer-loop metric from `1.784008 ms/step` to `1.641832 ms/step` and from
   `17937.138290` to `19490.418145` slot-step tok/s while preserving checksum.
+- Sprint 243 tested a first HMMA dense replacement in the same TP/EP path. It
+  is correct/finite but slower (`3.533215 ms/step`) than the scalar dense
+  control (`1.620386 ms/step`), so naive per-tile F8 decode into WMMA
+  fragments is rejected.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -433,6 +437,25 @@ at `1.784008 ms/step`, `17937.138290` slot-step tok/s, and
 compose. Keep FP32 return and continue fusing TP/EP synchronization boundaries
 before server integration.
 
+### Sprint 243 - TP/EP Dense HMMA Compose Gate [complete]
+
+Goal: Test a bounded HMMA dense replacement for the two F8 composition tensors
+used by the representative TP/EP resident loop.
+
+Rationale: After Sprint 242, scalar F8 dense compute is the largest measured
+stage. V100 should compute low-bit dense paths by expanding/dequantizing on GPU
+into FP16 HMMA fragments, not by scalar FP32 dot products.
+
+Outcome: Complete and rejected as a default. `--dense-hmma-compose` adds a
+32-slot-capable WMMA/HMMA kernel that keeps F8 bytes resident and decodes each
+tile into FP16 fragments before FP32 accumulation. It passes finite/repeat
+checks, but it slows the fused-compose resident loop from `1.620386 ms/step`
+and `19748.386791` slot-step tok/s to `3.533215 ms/step` and
+`9056.907248` slot-step tok/s. Dense time rises from `0.753941 ms/step` to
+`2.667910 ms/step`. Keep this as a diagnostic only; the next dense path should
+reuse/adapt the older shape-specific F8 HMMA kernels or use a prepacked,
+software-pipelined low-bit dense design.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -476,6 +499,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 240 proved a resident repeated TP/EP layer-loop benchmark at `32` slots / `256K`. | The path now reports stage costs without per-step pack reloads: dense and compose/sync dominate over EP. | Decide whether Sprint 241 optimizes dense/compose kernels first or starts server-loop integration with known bottlenecks. |
 | 2026-05-23 | Sprint 241 proved FP16 EP return is correct but slower as a standalone pass. | Payload bytes are not the limiter; extra cast/expand kernels increase compose time. | Keep FP32 return default and target fused dense/compose kernel boundaries next. |
 | 2026-05-23 | Sprint 242 proved fused FP32 remote-sum compose improves the resident layer loop. | Removing zero/add kernels is more valuable than standalone EP return quantization at this shape. | Continue collapsing TP/EP dense, EP return, and compose boundaries, then move to all-layer/server integration. |
+| 2026-05-23 | Sprint 243 rejected the first naive TP/EP dense HMMA candidate. | HMMA is not enough by itself; per-tile F8 decode/staging made dense time worse than scalar. | Adapt the older shape-specific HMMA kernels or design a prepacked/software-pipelined dense path. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 
