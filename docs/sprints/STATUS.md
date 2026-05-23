@@ -505,12 +505,17 @@ The next target still needs to change a larger execution boundary. Sprints
 bypass, tile probes, fixed-shape 768/1536-route probes, stage-count tuning,
 epilogue-only down-reduce fusion, bounded TP probes, and simple slot widening
 are correct but too small to close the practical serving gap. Aggregate
-throughput is still about `61` tok/s at 256-slot/16K and about `46` tok/s at
-16-slot/256K, far below the practical serving target. The next sprint should
-either attack the full TurboMind routed expert boundary with route-aware
-activation staging and persistent/grouped execution, or build the narrow
-one-layer 2-way TP routed-FFN runtime path for the 128-slot/32K tier as a
-bounded scheduling experiment.
+throughput is still about `61` tok/s at 256-slot/16K and about `46-71` tok/s at
+16-slot/256K depending on async-pipeline era and test harness, far below the
+practical serving target. Sprint 194 adds a topology estimator and changes the
+TP decision rule: the existing routed-only TP2 overlay should not be expanded,
+because at 16-slot/256K it moves about `21.531 MiB` per token without changing
+the dense execution shape, versus `7.000 MiB` for the current layer split. Full
+TP/EP moves more wire bytes (`112.875 MiB` for TP4/PP1 at the same tier), so it
+is only worth implementing if attention, shared FFN, routed experts, and output
+ownership all become native to the topology. The next sprint should either build
+a bounded full-layer TP4/PP1 prototype or implement a true monolithic routed-FFN
+kernel that removes the remaining global `mid_half` boundary.
 
 The concise current status is also tracked in
 `docs/sprints/EXPERIMENT-STATUS.md`.
