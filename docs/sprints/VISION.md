@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 292
+revision: 293
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -53,8 +53,12 @@ not a serial layer-chain.
   `32` slots / `256K`, `64/64` token match, `50.434232` generated tok/s,
   `47.282093` continuation tok/s, average GPU utilization `47.076%`, max
   GPU utilization `96%`.
-- Existing TP work is prototype-only. TP is not operational in production
-  serving.
+- The TP/EP path is now operational as a resident diagnostic serving harness:
+  coalesced `/v1/completions` requests can drive a 32-slot, 256K TP8/EP8
+  token-major loop and return vocab-sharded selected-token metadata. It is not
+  real DeepSeek text serving yet because prompt prefill, tokenizer text,
+  selected-token feedback, and the complete DS4 HC attention/FFN pre/post
+  sequence are still in progress.
 - Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
   longer exposes PP/layer-split topology modes. Against the real production
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about
@@ -1676,6 +1680,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 290 added a resident TP/EP output-head gate and GPU-side shard top-1. | Full-logit host readback roughly doubled output-head latency; device-side top-1 raises the 32-slot resident gate to `3752.194257` output-head tok/s. | Add the TP/EP final-HC carry contract, then feed the resident output head from `/v1/completions`. |
 | 2026-05-23 | Sprint 291 added a TP/EP final-HC carry scaffold. | The sharded `[slots][4][512]` per-GPU carry buffer passes 1-token and 4-token all-layer gates with about `0.047 ms/layer` overhead, but currently uses proxy HC rows. | Replace proxy HC with true DS4 HC semantics or wire it only through an explicitly diagnostic output-head path. |
 | 2026-05-23 | Sprint 292 wired proxy-HC carry into resident TP/EP output-head serving. | `/v1/completions` can now return diagnostic selected token IDs/logits from the vocab-sharded output head, and a 32-concurrent launcher run passes. | Replace proxy HC rows with true DS4 HC row semantics and feed selected tokens back into decode. |
+| 2026-05-23 | Sprint 293 added TP/EP HC final-expand using real layer HC FFN controls. | The output-head bridge no longer depends on arbitrary row-scaled proxy HC; 32-concurrent completions pass with `proxy_hc=0`, `160.904882` wall tok/s, and `271.342877` decode tok/s for the 1-token diagnostic case. | Implement the full DS4 HC attention/FFN pre/post sequence, then token feedback and text output. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

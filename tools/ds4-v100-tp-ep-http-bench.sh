@@ -20,6 +20,7 @@ diagnostic_output_head="0"
 concurrent_requests="1"
 request_token_pattern=""
 endpoint="selected-token"
+hc_final_expand="0"
 
 usage() {
     cat <<'USAGE'
@@ -46,6 +47,7 @@ Options:
   --ep-return-fp16
   --compact-route-compose
   --no-compact-route-compose
+  --hc-final-expand
   --diagnostic-output-head
   --concurrent-requests
   --sequential-requests
@@ -79,6 +81,7 @@ while [ "$#" -gt 0 ]; do
         --ep-return-fp16) ep_return_fp16="1"; shift ;;
         --compact-route-compose) compact_route_compose="1"; shift ;;
         --no-compact-route-compose) compact_route_compose="0"; shift ;;
+        --hc-final-expand) hc_final_expand="1"; shift ;;
         --diagnostic-output-head) diagnostic_output_head="1"; shift ;;
         --concurrent-requests) concurrent_requests="1"; shift ;;
         --sequential-requests) concurrent_requests="0"; shift ;;
@@ -160,6 +163,7 @@ for tokens in "${token_values[@]}"; do
     DS4_V100_TP_EP_COPY_EVENT_COMPOSE="$copy_event_compose" \
     DS4_V100_TP_EP_RETURN_FP16="$ep_return_fp16" \
     DS4_V100_TP_EP_COMPACT_ROUTE_COMPOSE="$compact_route_compose" \
+    DS4_V100_TP_EP_HC_FINAL_EXPAND="$hc_final_expand" \
     DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD="$diagnostic_output_head" \
     DS4_V100_LOG_DIR="$case_dir/runtime" \
     "$run_appliance" >"$server_log" 2>"$server_err" &

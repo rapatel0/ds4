@@ -132,6 +132,20 @@ HTTP 200 responses with diagnostic output-head metadata, and reports
 `0.341194 ms` top-1 time, `158.576748` wall generated tok/s, and
 `294.331849` decode generated tok/s for the 1-token diagnostic case. This is
 still proxy-HC diagnostic serving, not real DeepSeek text serving.
+Sprint 293 replaced the arbitrary final proxy HC expansion with an opt-in
+TP/EP DS4-style HC final-expand diagnostic path. The new
+`--tp-hc-final-expand-gate` / `DS4_V100_TP_EP_HC_FINAL_EXPAND=1` path loads
+real `blk.N.hc_ffn_fn`, `blk.N.hc_ffn_base`, and `blk.N.hc_ffn_scale` controls
+for all 43 layers, computes HC split from gathered sharded HC on GPU0, and
+expands the next sharded `[slots][4][512]` HC state per rank. Direct 32-slot
+V100 validation passes with `sum_final_hc_ms=25.407638` and
+`8.750574 ms` output-head time. A full launcher-level 32-concurrent
+completions run forms one 32-request batch, returns `32/32` HTTP 200 responses
+with `proxy_hc=0`, and reports `160.904882` wall generated tok/s /
+`271.342877` decode generated tok/s for the 1-token diagnostic case. This is a
+better HC semantic bridge than Sprint 292, but it still lacks the full DS4 HC
+attention/FFN pre/post sequence, prompt prefill, token feedback, and tokenizer
+text output.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s
