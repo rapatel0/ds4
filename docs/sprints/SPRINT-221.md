@@ -1,7 +1,7 @@
 # Sprint 221 - MTP Target Block Verification Primitive
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete
 
 ## Overview
 
@@ -87,19 +87,19 @@ replace with a fused, batched, or graph-captured implementation.
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists and is committed before implementation evidence.
-- [ ] Replay snapshot create/restore/free/bytes API exists.
-- [ ] Target block verification API exists and reports accounting.
-- [ ] `tools/ds4-v100-replay --target-block-smoke N` exists and is guarded to
+- [x] Sprint plan exists and is committed before implementation evidence.
+- [x] Replay snapshot create/restore/free/bytes API exists.
+- [x] Target block verification API exists and reports accounting.
+- [x] `tools/ds4-v100-replay --target-block-smoke N` exists and is guarded to
       one-slot diagnostics.
-- [ ] Local validation passes.
-- [ ] V100 build passes.
-- [ ] V100 target-block smoke passes on the production appliance pack.
-- [ ] Evidence logs are copied to
+- [x] Local validation passes.
+- [x] V100 build passes.
+- [x] V100 target-block smoke passes on the production appliance pack.
+- [x] Evidence logs are copied to
       `logs/from-cluster/sprint221-mtp-target-block-smoke/`.
-- [ ] Docs are updated with whether this primitive is ready for the next MTP
+- [x] Docs are updated with whether this primitive is ready for the next MTP
       integration sprint.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Changes are committed with explicit `git add` paths.
 
 ## Verification Strategy
 
@@ -131,7 +131,7 @@ Expected:
 - first block pass matches baseline outputs for the forced block;
 - restore + second block pass matches the first block pass;
 - report has `target_forwards=4`, `accepted_prefix_len=4`,
-  `effective_output_tokens=5`, and `speculative_saves=0` for the serial first
+  `effective_output_tokens=4`, and `speculative_saves=0` for the serial first
   implementation;
 - snapshot bytes are non-zero.
 
@@ -156,3 +156,84 @@ weights.
 - Sprint 216 MTP accounting evidence.
 - Sprint 220 production appliance deployment path.
 - Production pack `/workspace/packs/ds4-appliance-full-tm-gated-s181`.
+
+## Execution
+
+Local validation:
+
+```text
+git diff --check
+make -j8 tools/ds4-v100-replay.o ds4_v100_replay.o
+```
+
+The full `tools/ds4-v100-replay` target is CUDA-only on the local Mac and
+correctly fails there with `tools/ds4-v100-replay requires a CUDA build`; the
+actual binary build was run on the V100 pod.
+
+V100 build:
+
+```text
+pod: llm/llamacpp-build-8gpu
+workspace: /workspace/ds4-sprint181
+command: make -j80 CUDA_ARCH=sm_70 tools/ds4-v100-replay
+result: pass
+```
+
+V100 target-block smoke:
+
+```text
+./tools/ds4-v100-replay \
+  --model /models/DSv4-Flash-256e-fixed.gguf \
+  --appliance-dir /workspace/packs/ds4-appliance-full-tm-gated-s181 \
+  --prompt-file tests/test-vectors/prompts/short_reasoning_plain.txt \
+  --ctx 262144 \
+  --slots 1 \
+  --active-microbatch 1 \
+  --tokens 8 \
+  --target-block-smoke 4 \
+  --expected-token-hex 3136
+```
+
+Production TurboMind environment flags matched the Sprint 220 launcher defaults
+for the interleaved gated-SiLU appliance pack.
+
+Result:
+
+```text
+ds4-v100-replay: target_block_smoke block_tokens=4 baseline_tokens=8 first_token=926 first_hex=3136 snapshot_bytes=30107648 target_forwards=4 accepted_prefix_len=4 target_tokens_verified=4 effective_output_tokens=4 speculative_saves=0 first_verify_ms=232.302 second_verify_ms=231.457 ok
+```
+
+Negative guard:
+
+```text
+ds4-v100-replay: --target-block-smoke currently requires --slots 1 --active-microbatch 1
+negative_rc=2
+```
+
+## Evidence
+
+Logs:
+
+```text
+logs/from-cluster/sprint221-mtp-target-block-smoke/target-block-smoke.log
+logs/from-cluster/sprint221-mtp-target-block-smoke/target-block-negative.log
+```
+
+The smoke proves:
+
+- the normal greedy baseline still produces fixture bytes `3136`;
+- the first forced target block matches baseline tokens 2-5;
+- snapshot restore plus second forced target block matches the first block;
+- snapshot capture spans `30107648` bytes of target state;
+- the new API reports `target_forwards=4`, `accepted_prefix_len=4`,
+  `target_tokens_verified=4`, `effective_output_tokens=4`, and
+  `speculative_saves=0`.
+
+## Decision
+
+Ship the replay-level target block verification primitive as the next MTP
+foundation. This sprint does not promote MTP as a throughput feature because
+the initial implementation still performs serial target forwards inside the
+block. It does, however, make the missing boundary concrete and tested:
+future work can now replace the serial body with a graph-captured, batched, or
+state-advance implementation while preserving the same API and rollback smoke.

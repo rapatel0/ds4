@@ -151,7 +151,16 @@ the env example now defaults to the production appliance dir, `ctx=262144`,
 `slots=32`, `active_microbatch=32`, and `DS4_V100_STARTUP_WARMUP=auto`; the
 production deployment smoke now accepts `--appliance-dir`, checks warmed
 readiness in status and metrics, and passed on the V100 pod with two bounded
-generation requests returning `3136`.
+generation requests returning `3136`. Sprint 221 added the first explicit
+MTP target-block verification primitive. Replay now has all-stage target
+snapshot wrappers and a one-slot forced-block verification API, with
+`tools/ds4-v100-replay --target-block-smoke N` as the diagnostic gate. The
+V100 production-pack smoke passed for a 4-token block: first token bytes
+`3136`, snapshot bytes `30107648`, `target_forwards=4`,
+`accepted_prefix_len=4`, `target_tokens_verified=4`,
+`effective_output_tokens=4`, and `speculative_saves=0`; a negative guard fails
+closed for multi-slot use. This is the right MTP boundary, but not yet an MTP
+speedup because the block body is still serial target execution.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit

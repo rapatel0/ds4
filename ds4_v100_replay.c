@@ -4,6 +4,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,6 +31,11 @@ struct ds4_v100_replay {
     double open_ms[DS4_V100_EXPECTED_GPUS];
     double open_total_ms;
     bool used;
+};
+
+struct ds4_v100_replay_snapshot {
+    ds4_v100_stage_scheduler_snapshot *stages[DS4_V100_EXPECTED_GPUS];
+    uint64_t bytes;
 };
 
 static void replay_pipeline_runtime_close(replay_pipeline_runtime *p);
@@ -2470,6 +2476,147 @@ int ds4_v100_replay_select_current_token(ds4_v100_replay *rt,
                                           size_t errlen) {
     if (!rt || !out) return replay_error(err, errlen, "missing V100 replay select input");
     return replay_select_token(rt, out, counters, err, errlen);
+}
+
+void ds4_v100_replay_snapshot_free(ds4_v100_replay_snapshot *snapshot) {
+    if (!snapshot) return;
+    for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
+        ds4_v100_stage_scheduler_snapshot_free(snapshot->stages[stage]);
+    }
+    free(snapshot);
+}
+
+uint64_t ds4_v100_replay_snapshot_bytes(
+    const ds4_v100_replay_snapshot *snapshot) {
+    return snapshot ? snapshot->bytes : 0;
+}
+
+int ds4_v100_replay_snapshot_create(ds4_v100_replay *rt,
+                                    ds4_v100_replay_snapshot **out,
+                                    char *err,
+                                    size_t errlen) {
+    if (!out) return replay_error(err, errlen, "missing V100 replay snapshot output");
+    *out = NULL;
+    if (!rt) return replay_error(err, errlen, "missing V100 replay snapshot input");
+    if (rt->opts.kv_active_slots != 1) {
+        if (err && errlen) {
+            snprintf(err,
+                     errlen,
+                     "V100 replay snapshot currently requires kv_active_slots=1, got %" PRIu64,
+                     rt->opts.kv_active_slots);
+        }
+        return 1;
+    }
+
+    ds4_v100_replay_snapshot *snap =
+        (ds4_v100_replay_snapshot *)calloc(1, sizeof(*snap));
+    if (!snap) return replay_error(err, errlen, "failed to allocate V100 replay snapshot");
+
+    for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
+        if (!rt->scheds[stage]) {
+            ds4_v100_replay_snapshot_free(snap);
+            return replay_error(err, errlen, "missing V100 replay scheduler for snapshot");
+        }
+        if (ds4_v100_stage_scheduler_snapshot_create(rt->scheds[stage],
+                                                     &snap->stages[stage],
+                                                     err,
+                                                     errlen)) {
+            ds4_v100_replay_snapshot_free(snap);
+            return 1;
+        }
+        snap->bytes += ds4_v100_stage_scheduler_snapshot_bytes(snap->stages[stage]);
+    }
+    *out = snap;
+    return 0;
+}
+
+int ds4_v100_replay_snapshot_restore(ds4_v100_replay *rt,
+                                     const ds4_v100_replay_snapshot *snapshot,
+                                     char *err,
+                                     size_t errlen) {
+    if (!rt || !snapshot) {
+        return replay_error(err, errlen, "missing V100 replay snapshot restore input");
+    }
+    if (rt->opts.kv_active_slots != 1) {
+        if (err && errlen) {
+            snprintf(err,
+                     errlen,
+                     "V100 replay snapshot restore currently requires kv_active_slots=1, got %" PRIu64,
+                     rt->opts.kv_active_slots);
+        }
+        return 1;
+    }
+    for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
+        if (!rt->scheds[stage] || !snapshot->stages[stage]) {
+            return replay_error(err, errlen, "missing V100 replay scheduler snapshot");
+        }
+        if (ds4_v100_stage_scheduler_snapshot_restore(rt->scheds[stage],
+                                                      snapshot->stages[stage],
+                                                      err,
+                                                      errlen)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int ds4_v100_replay_verify_token_block(
+    ds4_v100_replay *rt,
+    const uint32_t *tokens,
+    const uint32_t *positions,
+    uint32_t n_tokens,
+    uint32_t accepted_prefix_len,
+    ds4_v100_replay_output *outputs,
+    uint32_t output_cap,
+    ds4_v100_replay_target_block_report *report,
+    ds4_v100_replay_counters *counters,
+    char *err,
+    size_t errlen) {
+    if (report) memset(report, 0, sizeof(*report));
+    if (!rt || !tokens || !positions || n_tokens == 0 || !outputs ||
+        output_cap < n_tokens) {
+        return replay_error(err, errlen, "missing V100 replay target block input");
+    }
+    if (rt->opts.kv_active_slots != 1) {
+        if (err && errlen) {
+            snprintf(err,
+                     errlen,
+                     "V100 replay target block currently requires kv_active_slots=1, got %" PRIu64,
+                     rt->opts.kv_active_slots);
+        }
+        return 1;
+    }
+    if (accepted_prefix_len > n_tokens) accepted_prefix_len = n_tokens;
+
+    const double t0 = replay_now_ms();
+    for (uint32_t i = 0; i < n_tokens; i++) {
+        if (replay_feed_token(rt,
+                              tokens[i],
+                              positions[i],
+                              counters,
+                              counters ? &counters->continuation_decode_ms : NULL,
+                              err,
+                              errlen)) {
+            return 1;
+        }
+        if (counters) counters->total_input_tokens++;
+        if (replay_select_token(rt, &outputs[i], counters, err, errlen)) {
+            return 1;
+        }
+    }
+
+    if (report) {
+        report->target_forwards = n_tokens;
+        report->accepted_prefix_len = accepted_prefix_len;
+        report->target_tokens_verified = n_tokens;
+        report->effective_output_tokens = accepted_prefix_len;
+        report->speculative_saves =
+            report->effective_output_tokens > report->target_forwards
+                ? report->effective_output_tokens - report->target_forwards
+                : 0u;
+        report->verify_ms = replay_now_ms() - t0;
+    }
+    return 0;
 }
 
 void ds4_v100_replay_finish_generation(ds4_v100_replay *rt,

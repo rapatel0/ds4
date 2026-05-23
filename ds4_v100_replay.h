@@ -13,6 +13,7 @@ extern "C" {
 #endif
 
 typedef struct ds4_v100_replay ds4_v100_replay;
+typedef struct ds4_v100_replay_snapshot ds4_v100_replay_snapshot;
 
 typedef enum {
     DS4_V100_REPLAY_ASYNC_PIPELINE_OFF = 0,
@@ -84,6 +85,16 @@ typedef struct {
     double token_text_ms;
     double total_ms;
 } ds4_v100_replay_counters;
+
+typedef struct {
+    uint32_t target_forwards;
+    uint32_t accepted_prefix_len;
+    uint32_t target_tokens_verified;
+    uint32_t effective_output_tokens;
+    uint32_t speculative_saves;
+    uint64_t snapshot_bytes;
+    double verify_ms;
+} ds4_v100_replay_target_block_report;
 
 void ds4_v100_replay_options_init(ds4_v100_replay_options *opts);
 
@@ -158,6 +169,34 @@ int ds4_v100_replay_select_current_token(ds4_v100_replay *rt,
                                           ds4_v100_replay_counters *counters,
                                           char *err,
                                           size_t errlen);
+
+int ds4_v100_replay_snapshot_create(ds4_v100_replay *rt,
+                                    ds4_v100_replay_snapshot **out,
+                                    char *err,
+                                    size_t errlen);
+
+int ds4_v100_replay_snapshot_restore(ds4_v100_replay *rt,
+                                     const ds4_v100_replay_snapshot *snapshot,
+                                     char *err,
+                                     size_t errlen);
+
+uint64_t ds4_v100_replay_snapshot_bytes(
+    const ds4_v100_replay_snapshot *snapshot);
+
+void ds4_v100_replay_snapshot_free(ds4_v100_replay_snapshot *snapshot);
+
+int ds4_v100_replay_verify_token_block(
+    ds4_v100_replay *rt,
+    const uint32_t *tokens,
+    const uint32_t *positions,
+    uint32_t n_tokens,
+    uint32_t accepted_prefix_len,
+    ds4_v100_replay_output *outputs,
+    uint32_t output_cap,
+    ds4_v100_replay_target_block_report *report,
+    ds4_v100_replay_counters *counters,
+    char *err,
+    size_t errlen);
 
 void ds4_v100_replay_finish_generation(ds4_v100_replay *rt,
                                         uint32_t generated_tokens,

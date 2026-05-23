@@ -293,7 +293,10 @@ Focused MTP speculative gate:
 | MTP commit | 262,144 | 1 | `4.561292` | `4.276211` | 1/1 | `8/15` | `16` | `16` | `0` |
 
 The MTP gate fails as a throughput feature because accepted drafts do not reduce
-target-model forwards. Keep MTP off for production throughput serving.
+target-model forwards. Sprint 221 added the first replay-level target block
+verification and rollback primitive, but it still executes the block serially
+and reports `speculative_saves=0`. Keep MTP off for production throughput
+serving.
 
 Latest short-context served curve with split prefill/decode metrics:
 
@@ -592,9 +595,14 @@ Sprint 216 added explicit speculative accounting and confirmed the current
 commit path saves no target work: `target_forwards=16`,
 `effective_output_tokens=16`, and `speculative_saves=0` for a 16-token one-slot
 gate. The missing runtime primitive is one-slot multi-position target
-verification with KV/state commit or rollback for the accepted prefix.
-Do not treat MTP as a throughput feature until a true speculative verifier can
-batch target verification over drafted tokens.
+verification with KV/state commit or rollback for the accepted prefix. Sprint
+221 now provides that primitive as a guarded one-slot diagnostic boundary
+(`--target-block-smoke N`), with V100 proof that snapshot/restore and forced
+target-block replay match the greedy baseline. It is not a throughput path yet:
+the diagnostic still reports `target_forwards=effective_output_tokens` and
+`speculative_saves=0`. Do not treat MTP as a throughput feature until a true
+speculative verifier can batch or otherwise reduce target forwards over drafted
+tokens.
 
 ## Generate
 

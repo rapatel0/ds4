@@ -1,0 +1,1 @@
+ds4-v100-replay: --target-block-smoke currently requires --slots 1 --active-microbatch 1
