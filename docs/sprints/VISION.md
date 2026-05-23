@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 286
+revision: 287
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -306,6 +306,12 @@ not a serial layer-chain.
   The practical-serving semantic baseline is now `721.446441` wall generated
   tok/s for 32 tokens/request and `787.316214` for 64 tokens/request, both
   with aggregate `32/32` token match.
+- Sprint 287 added bucketed admission on top of coalescing. Mixed concurrent
+  selected-token requests with pattern `32,64` now run as two same-length
+  batches instead of being rejected: `32/32` token match, `bucketed_requests=16`,
+  zero rejections, and `387.877251` wall generated tok/s over admitted client
+  tokens. Uniform full-batch behavior remains intact at `759.490446` wall
+  generated tok/s for 32 concurrent 32-token requests.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -1409,6 +1415,32 @@ This is now the practical-serving semantic baseline for the selected-token
 harness. The next gap is a real prompt/token API and bucketed admission queues
 on top of this coalescing path.
 
+### Sprint 287 - TP/EP Bucketed Admission [complete]
+
+Goal: Make the TP/EP HTTP serving path handle mixed concurrent generation
+lengths by queueing requests into token-count buckets instead of rejecting
+mismatches during coalescing.
+
+Outcome: Complete. The TP/EP HTTP server now keeps a pending generation queue,
+drains same-length queued requests before accepting new sockets for a batch,
+and continues serving while pending generation requests exist. Mixed
+`max_tokens` requests are no longer rejected with `409`; they are held for a
+later same-length decode batch. `/v100/status` and `/metrics` expose
+`bucketed_requests` and `pending_generation_requests`.
+
+The V100 pod mixed run at `32` slots / `256K` with 32 concurrent requests using
+pattern `32,64` forms two batches of 16 clients each, reports
+`bucketed_requests=16`, returns aggregate `32/32` token match, and has zero
+rejected requests. Admitted-client throughput is `387.877251` wall generated
+tok/s and `510.747848` decode generated tok/s over 1536 generated client
+tokens. A uniform 32-request sanity run still forms one full batch and reports
+`759.490446` wall generated tok/s / `991.405750` decode generated tok/s.
+
+Partial buckets intentionally run the configured 32-slot decode shape and count
+only admitted client tokens in serving metrics. This keeps compact
+route-compose on the validated kernel shape until a future sprint adds true
+dynamic-slot compact compose or per-slot refill.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1495,6 +1527,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 284 promoted compact route-compose. | Route-major EP contribution packing reduces staged FP32 traffic and improves same-binary serving throughput by about `11%`. | Re-establish promoted 32/64 topline and add true request coalescing/admission. |
 | 2026-05-23 | Sprint 285 established the promoted HTTP serving topline. | The normal TP/EP launcher path now reports about `771-795` wall generated tok/s at `32` slots / `256K`. | Add true request coalescing/admission, then revisit MTP. |
 | 2026-05-23 | Sprint 286 added TP/EP HTTP request coalescing. | `32` independent concurrent selected-token requests now form one 32-slot resident decode batch, with `721-787` wall generated tok/s depending on tokens/request. | Replace the selected-token harness with the real prompt/token API and bucketed admission queues. |
+| 2026-05-23 | Sprint 287 added bucketed TP/EP admission. | Mixed `32,64` token requests are served as same-length batches instead of rejected, with `32/32` match and zero rejected requests. | Add a real prompt/token-compatible TP/EP endpoint on top of coalesced bucketed admission. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

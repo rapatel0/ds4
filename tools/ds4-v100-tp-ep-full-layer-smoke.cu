@@ -17,9 +17,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <limits>
 #include <random>
 #include <string>
+#include <utility>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -4343,11 +4345,33 @@ struct HttpParsedRequest {
     int requested_tokens = 0;
 };
 
+static int http_content_length(const char *req) {
+    const char *p = std::strstr(req, "Content-Length:");
+    if (!p) return 0;
+    p += std::strlen("Content-Length:");
+    while (*p == ' ' || *p == '\t') ++p;
+    char *end = nullptr;
+    long v = std::strtol(p, &end, 10);
+    if (end == p || v < 0 || v > 4096) return 0;
+    return (int)v;
+}
+
 static bool http_read_request(int fd, HttpParsedRequest *out) {
     char req[8192];
-    const ssize_t nr = read(fd, req, sizeof(req) - 1);
-    if (nr <= 0) return false;
-    req[nr] = '\0';
+    size_t used = 0;
+    for (;;) {
+        if (used + 1 >= sizeof(req)) return false;
+        const ssize_t nr = read(fd, req + used, sizeof(req) - 1 - used);
+        if (nr <= 0) return false;
+        used += (size_t)nr;
+        req[used] = '\0';
+        const char *body = std::strstr(req, "\r\n\r\n");
+        if (body) {
+            const int content_length = http_content_length(req);
+            const size_t header_bytes = (size_t)(body + 4 - req);
+            if (used >= header_bytes + (size_t)content_length) break;
+        }
+    }
     char method[16] = {};
     char path[256] = {};
     if (std::sscanf(req, "%15s %255s", method, path) != 2) return false;
@@ -4375,6 +4399,28 @@ static bool http_wait_for_connection(int listen_fd, int wait_us) {
     tv.tv_usec = wait_us % 1000000;
     const int rc = select(listen_fd + 1, &rfds, nullptr, nullptr, &tv);
     return rc > 0 && FD_ISSET(listen_fd, &rfds);
+}
+
+static int http_requested_tokens(const HttpParsedRequest &req, int fallback) {
+    int out = json_find_int(req.body.c_str(), "max_tokens", fallback);
+    if (out <= 0) out = fallback;
+    if (out <= 0) out = 1;
+    return out;
+}
+
+static void http_drain_matching_pending(std::deque<HttpParsedRequest> *pending,
+                                        int requested_tokens,
+                                        int max_batch,
+                                        std::vector<HttpParsedRequest> *batch) {
+    for (auto it = pending->begin();
+         it != pending->end() && (int)batch->size() < max_batch;) {
+        if (it->requested_tokens == requested_tokens) {
+            batch->push_back(std::move(*it));
+            it = pending->erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 int run_tp_ep_http_server(const Options &base_opt,
@@ -4413,7 +4459,9 @@ int run_tp_ep_http_server(const Options &base_opt,
     uint64_t generation_requests = 0;
     uint64_t generation_batches = 0;
     uint64_t coalesced_requests = 0;
+    uint64_t bucketed_requests = 0;
     uint64_t rejected = 0;
+    std::deque<HttpParsedRequest> pending_generation;
     uint64_t next_position = base_opt.position;
     uint64_t total_prompt_tokens = 0;
     uint64_t total_generated_tokens = 0;
@@ -4433,18 +4481,26 @@ int run_tp_ep_http_server(const Options &base_opt,
                 base_opt.host, base_opt.port);
     std::fflush(stdout);
 
-    while (base_opt.max_requests == 0 || (int)served < base_opt.max_requests) {
-        int fd = accept(listen_fd, nullptr, nullptr);
-        if (fd < 0) {
-            if (errno == EINTR) continue;
-            std::perror("tp_ep_http_accept");
-            break;
-        }
-        served++;
+    while (base_opt.max_requests == 0 || (int)served < base_opt.max_requests ||
+           !pending_generation.empty()) {
         HttpParsedRequest first_req;
-        if (!http_read_request(fd, &first_req)) {
-            close(fd);
-            continue;
+        int fd = -1;
+        if (!pending_generation.empty()) {
+            first_req = std::move(pending_generation.front());
+            pending_generation.pop_front();
+            fd = first_req.fd;
+        } else {
+            fd = accept(listen_fd, nullptr, nullptr);
+            if (fd < 0) {
+                if (errno == EINTR) continue;
+                std::perror("tp_ep_http_accept");
+                break;
+            }
+            served++;
+            if (!http_read_request(fd, &first_req)) {
+                close(fd);
+                continue;
+            }
         }
 
         if (first_req.method == "GET" && first_req.path == "/health") {
@@ -4469,7 +4525,9 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "\"tp\":8,\"ep\":8,\"pp\":1,\"ctx\":262144,"
                           "\"slots\":%d,\"served_requests\":%llu,"
                           "\"generation_requests\":%llu,\"generation_batches\":%llu,"
-                          "\"coalesced_requests\":%llu,\"microbatch_wait_us\":%d,"
+                          "\"coalesced_requests\":%llu,\"bucketed_requests\":%llu,"
+                          "\"pending_generation_requests\":%zu,"
+                          "\"microbatch_wait_us\":%d,"
                           "\"rejected_requests\":%llu,"
                           "\"total_prompt_tokens\":%llu,"
                           "\"total_generated_tokens\":%llu,"
@@ -4494,6 +4552,8 @@ int run_tp_ep_http_server(const Options &base_opt,
                           (unsigned long long)generation_requests,
                           (unsigned long long)generation_batches,
                           (unsigned long long)coalesced_requests,
+                          (unsigned long long)bucketed_requests,
+                          pending_generation.size(),
                           base_opt.microbatch_wait_us,
                           (unsigned long long)rejected,
                           (unsigned long long)total_prompt_tokens,
@@ -4535,6 +4595,8 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "ds4_v100_tp_ep_generation_requests %llu\n"
                           "ds4_v100_tp_ep_generation_batches %llu\n"
                           "ds4_v100_tp_ep_coalesced_requests %llu\n"
+                          "ds4_v100_tp_ep_bucketed_requests %llu\n"
+                          "ds4_v100_tp_ep_pending_generation_requests %zu\n"
                           "ds4_v100_tp_ep_microbatch_wait_us %d\n"
                           "ds4_v100_tp_ep_rejected_requests %llu\n"
                           "ds4_v100_tp_ep_total_prompt_tokens %llu\n"
@@ -4559,6 +4621,8 @@ int run_tp_ep_http_server(const Options &base_opt,
                           (unsigned long long)generation_requests,
                           (unsigned long long)generation_batches,
                           (unsigned long long)coalesced_requests,
+                          (unsigned long long)bucketed_requests,
+                          pending_generation.size(),
                           base_opt.microbatch_wait_us,
                           (unsigned long long)rejected,
                           (unsigned long long)total_prompt_tokens,
@@ -4580,13 +4644,14 @@ int run_tp_ep_http_server(const Options &base_opt,
                           total_compose_final_ms);
             http_write_text(fd, out);
         } else if (http_is_generation_post(first_req)) {
-            first_req.requested_tokens =
-                json_find_int(first_req.body.c_str(), "max_tokens", base_opt.decode_steps);
-            if (first_req.requested_tokens <= 0) first_req.requested_tokens = base_opt.decode_steps;
-            if (first_req.requested_tokens <= 0) first_req.requested_tokens = 1;
+            first_req.requested_tokens = http_requested_tokens(first_req, base_opt.decode_steps);
 
             std::vector<HttpParsedRequest> batch;
             batch.push_back(first_req);
+            http_drain_matching_pending(&pending_generation,
+                                        first_req.requested_tokens,
+                                        base_opt.slots,
+                                        &batch);
             while ((int)batch.size() < base_opt.slots &&
                    http_wait_for_connection(listen_fd, base_opt.microbatch_wait_us)) {
                 int extra_fd = accept(listen_fd, nullptr, nullptr);
@@ -4606,13 +4671,10 @@ int run_tp_ep_http_server(const Options &base_opt,
                     close(extra_fd);
                     continue;
                 }
-                extra_req.requested_tokens =
-                    json_find_int(extra_req.body.c_str(), "max_tokens", first_req.requested_tokens);
-                if (extra_req.requested_tokens <= 0) extra_req.requested_tokens = first_req.requested_tokens;
+                extra_req.requested_tokens = http_requested_tokens(extra_req, first_req.requested_tokens);
                 if (extra_req.requested_tokens != first_req.requested_tokens) {
-                    rejected++;
-                    http_write_json(extra_fd, 409, "{\"error\":\"mixed_token_batch_rejected\"}\n");
-                    close(extra_fd);
+                    bucketed_requests++;
+                    pending_generation.push_back(std::move(extra_req));
                     continue;
                 }
                 batch.push_back(extra_req);
@@ -4620,7 +4682,7 @@ int run_tp_ep_http_server(const Options &base_opt,
 
             Options req_opt = base_opt;
             req_opt.decode_steps = first_req.requested_tokens;
-            req_opt.slots = (int)batch.size();
+            req_opt.slots = base_opt.slots;
             req_opt.position = next_position;
             req_opt.serving_bench = false;
             ServingBenchResult result;
@@ -4643,13 +4705,19 @@ int run_tp_ep_http_server(const Options &base_opt,
                 }
             } else {
                 const uint64_t batch_id = generation_batches + 1;
+                const uint64_t client_prompt_tokens = (uint64_t)batch.size();
+                const uint64_t client_generated_tokens =
+                    (uint64_t)batch.size() * (uint64_t)req_opt.decode_steps;
+                const uint64_t client_continuation_tokens = req_opt.decode_steps > 1
+                    ? (uint64_t)batch.size() * (uint64_t)(req_opt.decode_steps - 1)
+                    : 0ull;
                 generation_batches++;
                 generation_requests += (uint64_t)batch.size();
                 if (batch.size() > 1) coalesced_requests += (uint64_t)batch.size();
                 next_position += (uint64_t)req_opt.decode_steps;
-                total_prompt_tokens += result.prompt_tokens;
-                total_generated_tokens += result.generated_tokens;
-                total_continuation_tokens += result.continuation_tokens;
+                total_prompt_tokens += client_prompt_tokens;
+                total_generated_tokens += client_generated_tokens;
+                total_continuation_tokens += client_continuation_tokens;
                 total_decode_ms += result.total_decode_ms;
                 total_wall_ms += result.total_wall_ms;
                 total_continuation_decode_ms += result.continuation_decode_ms;
@@ -4673,12 +4741,15 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   "\"coalesced_batch_size\":%zu,"
                                   "\"coalesced_slot_index\":%zu,"
                                   "\"microbatch_wait_us\":%d,"
+                                  "\"decode_slots\":%d,"
                                   "\"prompt_tokens\":1,"
                                   "\"generated_tokens\":%llu,"
                                   "\"continuation_tokens\":%llu,"
                                   "\"batch_prompt_tokens\":%llu,"
                                   "\"batch_generated_tokens\":%llu,"
                                   "\"batch_continuation_tokens\":%llu,"
+                                  "\"decode_generated_tokens\":%llu,"
+                                  "\"decode_continuation_tokens\":%llu,"
                                   "\"tokens_per_request\":%d,\"slots\":%d,\"ctx\":262144,"
                                   "\"token_match\":1,\"token_mismatch\":0,"
                                   "\"timing_ms\":{\"first_token_decode\":%.6f,"
@@ -4698,9 +4769,12 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   batch.size(),
                                   i,
                                   base_opt.microbatch_wait_us,
+                                  req_opt.slots,
                                   (unsigned long long)request_generated,
                                   (unsigned long long)request_continuation,
-                                  (unsigned long long)result.prompt_tokens,
+                                  (unsigned long long)client_prompt_tokens,
+                                  (unsigned long long)client_generated_tokens,
+                                  (unsigned long long)client_continuation_tokens,
                                   (unsigned long long)result.generated_tokens,
                                   (unsigned long long)result.continuation_tokens,
                                   req_opt.decode_steps, req_opt.slots,

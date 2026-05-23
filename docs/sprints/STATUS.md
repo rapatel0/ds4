@@ -64,7 +64,15 @@ and `64` tokens/request reports `787.316214` wall generated tok/s and
 `1030.972573` decode generated tok/s. Both cases return aggregate `32/32`
 token match. This is the current practical-serving semantic baseline; the
 next gap is replacing the selected-token harness with the real prompt/token
-API and bucketed admission queues.
+API and bucketed admission queues. Sprint 287 then added bucketed admission:
+mixed concurrent requests with different `max_tokens` are queued into
+same-length decode batches instead of rejected. A V100 run with 32 concurrent
+requests alternating `32,64` tokens forms two batches, reports
+`bucketed_requests=16`, returns `32/32` token match with zero rejected
+requests, and reaches `387.877251` wall generated tok/s /
+`510.747848` decode generated tok/s over `1536` admitted client tokens. A
+uniform 32-request sanity run still forms one full 32-slot batch and reports
+`759.490446` wall generated tok/s / `991.405750` decode generated tok/s.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

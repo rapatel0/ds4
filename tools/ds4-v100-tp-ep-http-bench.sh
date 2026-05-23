@@ -17,6 +17,7 @@ copy_event_compose="1"
 ep_return_fp16="0"
 compact_route_compose="1"
 concurrent_requests="1"
+request_token_pattern=""
 
 usage() {
     cat <<'USAGE'
@@ -45,6 +46,7 @@ Options:
   --no-compact-route-compose
   --concurrent-requests
   --sequential-requests
+  --request-token-pattern CSV
   --help
 USAGE
 }
@@ -75,6 +77,7 @@ while [ "$#" -gt 0 ]; do
         --no-compact-route-compose) compact_route_compose="0"; shift ;;
         --concurrent-requests) concurrent_requests="1"; shift ;;
         --sequential-requests) concurrent_requests="0"; shift ;;
+        --request-token-pattern) request_token_pattern="$2"; shift 2 ;;
         --help|-h) usage; exit 0 ;;
         *) fail "unknown option: $1" ;;
     esac
@@ -100,13 +103,18 @@ case "$generation_requests" in
     *[!0-9]* | "") fail "--requests must be numeric" ;;
 esac
 [ "$generation_requests" -ge 1 ] && [ "$generation_requests" -le 128 ] || fail "--requests must be in [1,128]"
+if [ -n "$request_token_pattern" ]; then
+    case "$request_token_pattern" in
+        *[!0-9,]* | *::* | :* | *:) fail "--request-token-pattern must be numeric CSV" ;;
+    esac
+fi
 
 mkdir -p "$log_dir/cases"
 summary_tsv="$log_dir/sustained_http.tsv"
 summary_json="$log_dir/sustained_http.json"
 printf 'schema\tds4_v100_tp_ep_sustained_http.v3\n' >"$summary_tsv"
 printf 'backend\ttp_ep_launcher_http\n\n' >>"$summary_tsv"
-printf 'tokens\tctx\tslots\tgeneration_requests\tcoalesced_batches\tcoalesced_batch_max\tstatus_200\tgenerated_tokens\tcontinuation_tokens\telapsed_s\tgenerated_tok_s\tcontinuation_tok_s\tgenerated_tok_s_decode\tcontinuation_tok_s_decode\tep_ms\tdense_ms\tcompose_ms\tcompose_reduce_ms\tcompose_copy_ms\tcompose_final_ms\tgpu_util_avg\tgpu_util_max\tgpu_mem_used_max_mib\n' >>"$summary_tsv"
+printf 'tokens\trequest_token_pattern\tctx\tslots\tgeneration_requests\tcoalesced_batches\tcoalesced_batch_max\tstatus_200\tgenerated_tokens\tcontinuation_tokens\telapsed_s\tgenerated_tok_s\tcontinuation_tok_s\tgenerated_tok_s_decode\tcontinuation_tok_s_decode\tep_ms\tdense_ms\tcompose_ms\tcompose_reduce_ms\tcompose_copy_ms\tcompose_final_ms\tgpu_util_avg\tgpu_util_max\tgpu_mem_used_max_mib\n' >>"$summary_tsv"
 
 case_jsons=()
 case_index=0
@@ -115,8 +123,12 @@ for tokens in "${token_values[@]}"; do
     [ -n "$tokens" ] || continue
     case "$tokens" in *[!0-9]*) fail "bad token case: $tokens" ;; esac
     [ "$tokens" -ge 1 ] && [ "$tokens" -le 64 ] || fail "token case must be in [1,64]: $tokens"
+    case_suffix="tok${tokens}"
+    if [ -n "$request_token_pattern" ]; then
+        case_suffix="${case_suffix}_pat${request_token_pattern//,/x}"
+    fi
     port=$((port_base + case_index))
-    case_dir="$log_dir/cases/case_${case_index}_ctx${ctx}_s${slots}_tok${tokens}"
+    case_dir="$log_dir/cases/case_${case_index}_ctx${ctx}_s${slots}_${case_suffix}"
     mkdir -p "$case_dir/runtime"
     server_log="$case_dir/server.log"
     server_err="$case_dir/server.err"
@@ -151,7 +163,7 @@ for tokens in "${token_values[@]}"; do
     done
     grep -q "tp_ep_http_serving" "$server_log" || fail "server did not listen for token case $tokens"
 
-    python3 - "$case_dir" "$port" "$tokens" "$generation_requests" "$concurrent_requests" <<'PY'
+    python3 - "$case_dir" "$port" "$tokens" "$generation_requests" "$concurrent_requests" "$request_token_pattern" <<'PY'
 import json
 import shutil
 import subprocess
@@ -160,10 +172,15 @@ import threading
 import time
 import urllib.request
 
-case_dir, port, tokens, generation_requests, concurrent_requests = sys.argv[1:]
+case_dir, port, tokens, generation_requests, concurrent_requests, token_pattern = sys.argv[1:]
 tokens = int(tokens)
 generation_requests = int(generation_requests)
 concurrent_requests = int(concurrent_requests)
+if token_pattern:
+    pattern = [int(x) for x in token_pattern.split(",") if x]
+else:
+    pattern = [tokens]
+request_tokens = [pattern[i % len(pattern)] for i in range(generation_requests)]
 base = f"http://127.0.0.1:{port}"
 
 def fetch(name, path, data=None, suffix="json"):
@@ -216,7 +233,7 @@ try:
                 body = fetch(
                     f"response_{i:03d}",
                     "/v100/selected-token",
-                    json.dumps({"max_tokens": tokens, "request_index": i}).encode(),
+                    json.dumps({"max_tokens": request_tokens[i], "request_index": i}).encode(),
                 )
                 responses[i] = json.loads(body.decode("utf-8"))
             except Exception as exc:
@@ -232,7 +249,7 @@ try:
             body = fetch(
                 f"response_{i:03d}",
                 "/v100/selected-token",
-                json.dumps({"max_tokens": tokens, "request_index": i}).encode(),
+                json.dumps({"max_tokens": request_tokens[i], "request_index": i}).encode(),
             )
             responses.append(json.loads(body.decode("utf-8")))
     if errors:
@@ -253,11 +270,11 @@ fetch("metrics", "/metrics", None, "txt")
 PY
     wait "$server_pid"
 
-    python3 - "$case_dir" "$tokens" "$ctx" "$slots" "$generation_requests" "$summary_tsv" <<'PY'
+    python3 - "$case_dir" "$tokens" "$request_token_pattern" "$ctx" "$slots" "$generation_requests" "$summary_tsv" <<'PY'
 import json
 import sys
 
-case_dir, tokens, ctx, slots, generation_requests, summary_tsv = sys.argv[1:]
+case_dir, tokens, request_token_pattern, ctx, slots, generation_requests, summary_tsv = sys.argv[1:]
 with open(f"{case_dir}/responses.json", "r", encoding="utf-8") as f:
     responses = json.load(f)
 if len(responses) != int(generation_requests):
@@ -309,6 +326,7 @@ row = {
     "schema": "ds4_v100_tp_ep_sustained_http_case.v3",
     "backend": "tp_ep_launcher_http",
     "tokens_per_request": int(tokens),
+    "request_token_pattern": request_token_pattern or str(tokens),
     "ctx": int(ctx),
     "slots": int(slots),
     "generation_requests": int(generation_requests),
@@ -339,7 +357,8 @@ with open(f"{case_dir}/result.json", "w", encoding="utf-8") as f:
     f.write("\n")
 with open(summary_tsv, "a", encoding="utf-8") as f:
     f.write(
-        f"{row['tokens_per_request']}\t{row['ctx']}\t{row['slots']}\t"
+        f"{row['tokens_per_request']}\t{row['request_token_pattern']}\t"
+        f"{row['ctx']}\t{row['slots']}\t"
         f"{row['generation_requests']}\t{row['coalesced_batches']}\t"
         f"{row['coalesced_batch_max']}\t{row['status_200']}\t"
         f"{row['generated_tokens']}\t{row['continuation_tokens']}\t"
