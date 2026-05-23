@@ -1,0 +1,2 @@
+ds4-v100-replay: --mtp-block2-commit-smoke currently requires --slots 1 --active-microbatch 1
+negative_rc=2

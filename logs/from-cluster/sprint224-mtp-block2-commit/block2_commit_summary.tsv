@@ -1,0 +1,6 @@
+case	status	token_match	generated	blocks	full_accepts	partial_accepts	rejects	drafts_accepted	target_forwards	speculative_saves	block2_tps	baseline_tps	error
+long_code_audit	ok	True	8	3	3	0	0	6	7	1	0.033014	0.032855	
+long_memory_archive	fail												ds4-v100-replay: MTP block2 token mismatch at 1: baseline=16 got=8773
+short_code_completion	ok	True	8	4	3	0	1	6	7	1	4.105815	2.430585	
+short_italian_fact	ok	True	8	3	3	0	0	6	7	1	4.969561	2.624934	
+short_reasoning_plain	ok	True	8	4	0	2	2	2	7	1	5.543783	3.043298	

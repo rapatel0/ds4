@@ -181,6 +181,17 @@ that longer blocks did not improve acceptance: block-4 and block-8 never
 accepted more than two tokens. The next MTP work should therefore target an
 exact block-2 speculative commit/verify path and measure real continuation
 throughput; do not spend another sprint optimizing longer MTP draft blocks yet.
+Sprint 224 implemented the block-2 exact commit gate and found the next
+correctness blocker. The block-2 path is token-correct on four of five matrix
+prompts and is faster than same-process baseline on those successful cases
+(`3.663043` versus `2.032918` average generated tok/s over the small direct
+gate, `1.801865x`). It also reports the intended accounting shape:
+`effective_output_tokens=8`, `target_forwards=7`, and `speculative_saves=1`.
+However, `long_memory_archive` failed token parity, and the same prompt also
+fails the existing target-block reset smoke. The high-throughput vision cannot
+promote MTP serving until long-prompt replay reset/snapshot determinism is
+fixed. The next sprint should repair that determinism gap, then rerun the
+block-2 gate before any serving integration.
 
 ## Current State
 
@@ -3152,6 +3163,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-23 | Completed Sprint 221 MTP target block verification primitive. | Added replay-level all-stage target snapshot wrappers and `ds4_v100_replay_verify_token_block()`, plus `tools/ds4-v100-replay --target-block-smoke N`. V100 validation on the production appliance pack passed for a 4-token forced block: greedy fixture bytes remained `3136`, snapshot size was `30107648` bytes, first and restored block passes matched the baseline, and accounting reported `target_forwards=4`, `accepted_prefix_len=4`, `target_tokens_verified=4`, `effective_output_tokens=4`, and `speculative_saves=0`. The negative guard fails closed for multi-slot use. This establishes the MTP verification/state boundary but does not yet improve throughput; Sprint 222 should replace the serial block body with graph-captured/batched target verification or connect real MTP draft blocks to this API under exact rollback semantics. | Sprint 222 |
 | 2026-05-23 | Completed Sprint 222 MTP draft block chaining diagnostic. | Added an MTP forward sibling API that can return `next_hc`, plus `tools/ds4-v100-replay --mtp-draft-block-smoke N` to chain real MTP drafts and verify them through the Sprint 221 target-block boundary. V100 production-pack validation passed mechanically: first token bytes remained `3136`, the 4-token draft block was `1,0,1,0`, target verification returned `1,380,5,380`, `accepted_prefix_len=1`, `target_forwards=4`, `effective_output_tokens=2`, and `speculative_saves=0`; the multi-slot guard fails closed. This ships the diagnostic but keeps MTP default-off for throughput. The next MTP step should be an acceptance matrix before any verifier-speed sprint; low acceptance should pivot practical serving back to attention/KV or persistent low-bit execution. | Sprint 223 |
 | 2026-05-23 | Completed Sprint 223 MTP acceptance matrix pivot gate. | Added `tools/ds4-v100-mtp-acceptance-matrix.sh` and fixed real-prompt replay compressed-cache cap sizing so long prompt diagnostics no longer fail at layer 2. The V100 production-pack matrix passed `15/15` cases across five prompt fixtures and block sizes `2,4,8`: average accepted prefix `1.533`, max accepted prefix `2`, `10/15` cases with accepted prefix `>=2`, and total speculative saves `4`. The decision is to continue MTP only for a block-2 exact speculative commit/verify path: block-2 accepted both drafted tokens in `4/5` prompts, while block-4 and block-8 never accepted more than two tokens and mostly add verifier work. | Sprint 224 |
+| 2026-05-23 | Completed Sprint 224 MTP block-2 exact commit gate. | Added `tools/ds4-v100-replay --mtp-block2-commit-smoke N`, an exact one-slot block-2 diagnostic that drafts two MTP tokens, verifies the first target step, commits accepted prefixes, and reports target forwards, effective output tokens, speculative saves, MTP time, verify time, and token parity. V100 production-pack evidence is positive but not promotable: `4/5` prompts matched baseline and averaged `1.801865x` same-process speedup (`3.663043` versus `2.032918` generated tok/s), but `long_memory_archive` failed token parity and also fails the existing target-block reset smoke. Keep MTP out of serving integration until long-prompt replay reset/snapshot determinism is fixed and this gate reruns cleanly. | Sprint 225 |
 
 ## Open Questions
 

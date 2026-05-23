@@ -618,7 +618,13 @@ accepted prefix `>=2`. The only currently plausible MTP throughput shape is
 block-2: `4/5` block-2 cases accepted both drafted tokens and reported
 `speculative_saves=1`; block-4 and block-8 never accepted more than two tokens.
 Keep MTP off by default until a block-2 exact speculative commit/verify serving
-path demonstrates real continuation tok/s improvement.
+path demonstrates real continuation tok/s improvement. Sprint 224 added the
+direct diagnostic as `--mtp-block2-commit-smoke N`. It is promising but not a
+serving feature: on the V100 production pack it matched baseline on `4/5`
+prompts and averaged `1.801865x` same-process speedup on those successful
+cases, but `long_memory_archive` failed token parity and also fails the older
+target-block reset smoke. Treat block-2 MTP as blocked on long-prompt replay
+reset/snapshot determinism, not ready for HTTP serving integration.
 
 ## Generate
 

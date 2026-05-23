@@ -1,7 +1,7 @@
 # Sprint 224 - MTP Block-2 Exact Commit Throughput Gate
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete - Gate Failed For Serving Integration
 
 ## Overview
 
@@ -86,22 +86,93 @@ persistent low-bit execution.
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists and is committed before implementation evidence.
-- [ ] Block-2 exact commit diagnostic exists and fails closed outside one-slot
+- [x] Sprint plan exists and is committed before implementation evidence.
+- [x] Block-2 exact commit diagnostic exists and fails closed outside one-slot
       MTP mode.
-- [ ] Accepted-prefix commit restores/replays safely when prefix is less than
+- [x] Accepted-prefix commit restores/replays safely when prefix is less than
       two.
 - [ ] Output token sequence matches baseline for the measured prompts.
-- [ ] Accounting reports accepted prefix, target forwards, effective output
+- [x] Accounting reports accepted prefix, target forwards, effective output
       tokens, speculative saves, draft time, verify time, and total timing.
-- [ ] Local validation passes.
-- [ ] V100 build passes.
-- [ ] V100 A/B runs on the production appliance pack.
-- [ ] Logs are copied to
+- [x] Local validation passes.
+- [x] V100 build passes.
+- [x] V100 A/B runs on the production appliance pack.
+- [x] Logs are copied to
       `logs/from-cluster/sprint224-mtp-block2-commit/`.
-- [ ] Docs state whether block-2 exact commit justifies a serving integration
+- [x] Docs state whether block-2 exact commit justifies a serving integration
       sprint.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Changes are committed with explicit `git add` paths.
+
+## Execution Evidence
+
+Local validation:
+
+```text
+git diff --check
+make -B -j8 tools/ds4-v100-replay.o
+```
+
+V100 build:
+
+```text
+cd /workspace/ds4-sprint181
+make -j80 CUDA_ARCH=sm_70 tools/ds4-v100-replay
+```
+
+Negative guard:
+
+```text
+ds4-v100-replay: --mtp-block2-commit-smoke currently requires --slots 1 --active-microbatch 1
+negative_rc=2
+```
+
+V100 production-pack block-2 matrix:
+
+```text
+cases: 5
+ok_cases: 4
+failed_cases: 1
+average_block2_tps_ok_cases: 3.663043
+average_baseline_tps_ok_cases: 2.032918
+ok_case_speedup_ratio: 1.801865
+```
+
+| Case | Status | Match | Blocks | Full | Partial | Reject | Drafts Accepted | Target Forwards | Spec Saves | Block2 tok/s | Baseline tok/s |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `short_reasoning_plain` | ok | true | 4 | 0 | 2 | 2 | 2 | 7 | 1 | 5.543783 | 3.043298 |
+| `short_code_completion` | ok | true | 4 | 3 | 0 | 1 | 6 | 7 | 1 | 4.105815 | 2.430585 |
+| `short_italian_fact` | ok | true | 3 | 3 | 0 | 0 | 6 | 7 | 1 | 4.969561 | 2.624934 |
+| `long_code_audit` | ok | true | 3 | 3 | 0 | 0 | 6 | 7 | 1 | 0.033014 | 0.032855 |
+| `long_memory_archive` | fail | false | - | - | - | - | - | - | - | - | - |
+
+The failed case is not isolated to block-2 MTP. `long_memory_archive` failed
+token parity at token 1 (`baseline=16`, `got=8773`), and a follow-up
+`--target-block-smoke 2` on the same prompt also failed reset determinism:
+
+```text
+ds4-v100-replay: target-block prompt[0] token mismatch got=32085 want=10220
+ds4-v100-replay: target block prompt first token mismatch
+```
+
+Evidence is stored in
+`logs/from-cluster/sprint224-mtp-block2-commit/`.
+
+## Decision
+
+Do not move block-2 MTP into serving integration yet.
+
+The positive signal is real: the exact block-2 path is token-correct on four
+of five prompts and faster than the same-process baseline on those successful
+cases. It also performs the useful state transition: accepted prefix `2` emits
+three output tokens with two target forwards, while partial/reject blocks keep
+state aligned with the verified target token.
+
+The blocker is correctness scope. The `long_memory_archive` fixture shows
+target replay reset nondeterminism even without the block-2 path, so MTP cannot
+be promoted safely until long-prompt replay reset/snapshot determinism is
+fixed or the serving contract explicitly excludes that class of prompt. The
+next sprint should address replay reset determinism for long prompts, then
+rerun this block-2 gate.
 
 ## Verification Strategy
 

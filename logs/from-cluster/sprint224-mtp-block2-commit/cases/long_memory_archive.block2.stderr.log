@@ -1,0 +1,4 @@
+ds4: CUDA loading model tensors into device cache
+ds4: TurboMind down-reduce epilogue selected total_routes=6
+ds4: CUDA loading model tensors 1.13 GiB cached
+ds4-v100-replay: MTP block2 token mismatch at 1: baseline=16 got=8773

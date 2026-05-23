@@ -55,6 +55,7 @@ typedef struct {
     uint32_t synthetic_prompt_len;
     uint32_t target_block_smoke;
     uint32_t mtp_draft_block_smoke;
+    uint32_t mtp_block2_commit_smoke;
     uint32_t mtp_top_k;
     int mtp_gpu;
     int mtp_reserve_mib;
@@ -217,6 +218,10 @@ static int replay_mtp_service_run_slot(replay_mtp_service *svc,
                                        replay_mtp_result *result,
                                        char *err,
                                        size_t errlen);
+static int replay_output_copy(ds4_v100_replay_output *dst,
+                              const ds4_v100_replay_output *src,
+                              char *err,
+                              size_t errlen);
 
 static const char *queue_policy_name(replay_queue_policy p) {
     switch (p) {
@@ -614,6 +619,8 @@ static void usage(FILE *fp) {
             "  --tokens N                greedy tokens to generate, default 1\n"
             "  --target-block-smoke N    verify/restore a forced one-slot target block\n"
             "  --mtp-draft-block-smoke N chain MTP drafts and verify the block\n"
+            "  --mtp-block2-commit-smoke N\n"
+            "                            exact block-2 MTP commit diagnostic for N tokens\n"
             "  --ctx N                   KV context tokens, default 1048576\n"
             "  --slots N                 configured admission slots, default 1\n"
             "  --active-microbatch N     active decode request slots, default 1\n"
@@ -771,6 +778,15 @@ static replay_cli_options parse_options(int argc, char **argv) {
                 exit(2);
             }
             opt.mtp_draft_block_smoke = (uint32_t)v;
+        } else if (!strcmp(arg, "--mtp-block2-commit-smoke")) {
+            uint64_t v = parse_u64_arg(need_arg(&i, argc, argv, arg), arg);
+            if (v > DS4_V100_REPLAY_MAX_TOKENS) {
+                fprintf(stderr,
+                        "ds4-v100-replay: --mtp-block2-commit-smoke must be in [1,%d]\n",
+                        DS4_V100_REPLAY_MAX_TOKENS);
+                exit(2);
+            }
+            opt.mtp_block2_commit_smoke = (uint32_t)v;
         } else if (!strcmp(arg, "--ctx")) {
             opt.ctx = parse_u64_arg(need_arg(&i, argc, argv, arg), arg);
         } else if (!strcmp(arg, "--slots")) {
@@ -915,6 +931,9 @@ static replay_cli_options parse_options(int argc, char **argv) {
         }
     }
     bool synthetic_prompt = opt.synthetic_prompt_len != 0;
+    if (opt.mtp_block2_commit_smoke && opt.tokens < opt.mtp_block2_commit_smoke) {
+        opt.tokens = opt.mtp_block2_commit_smoke;
+    }
     if (!opt.model_path || !opt.index_path ||
         (!opt.serve && !opt.open_only && !opt.prompt && !opt.prompt_file &&
          !synthetic_prompt)) {
@@ -978,6 +997,28 @@ static replay_cli_options parse_options(int argc, char **argv) {
         }
         if (opt.tokens <= opt.mtp_draft_block_smoke) {
             fprintf(stderr, "ds4-v100-replay: --tokens must be greater than --mtp-draft-block-smoke\n");
+            exit(2);
+        }
+    }
+    if (opt.mtp_block2_commit_smoke) {
+        if (!opt.mtp_model_path || !opt.mtp_model_path[0]) {
+            fprintf(stderr, "ds4-v100-replay: --mtp-block2-commit-smoke requires --mtp-model\n");
+            exit(2);
+        }
+        if (opt.slots != 1 || opt.active_microbatch != 1) {
+            fprintf(stderr, "ds4-v100-replay: --mtp-block2-commit-smoke currently requires --slots 1 --active-microbatch 1\n");
+            exit(2);
+        }
+        if (opt.serve || opt.open_only) {
+            fprintf(stderr, "ds4-v100-replay: use --mtp-block2-commit-smoke without --serve or --open-only\n");
+            exit(2);
+        }
+        if (opt.mtp_serving != REPLAY_MTP_SERVING_OFF) {
+            fprintf(stderr, "ds4-v100-replay: --mtp-block2-commit-smoke is a diagnostic; do not combine it with --mtp-serving\n");
+            exit(2);
+        }
+        if (opt.mtp_block2_commit_smoke < 2) {
+            fprintf(stderr, "ds4-v100-replay: --mtp-block2-commit-smoke must be >= 2\n");
             exit(2);
         }
     }
@@ -1122,6 +1163,30 @@ static void mtp_result_set_service(replay_mtp_service *svc, replay_mtp_result *r
     result->output_weight_bytes = svc->output_weight_bytes;
 }
 
+static int replay_output_copy(ds4_v100_replay_output *dst,
+                              const ds4_v100_replay_output *src,
+                              char *err,
+                              size_t errlen) {
+    if (!dst || !src) {
+        snprintf(err, errlen, "missing replay output copy input");
+        return 1;
+    }
+    memset(dst, 0, sizeof(*dst));
+    dst->token = src->token;
+    dst->logit = src->logit;
+    dst->text_len = src->text_len;
+    if (src->text && src->text_len) {
+        dst->text = (char *)malloc(src->text_len + 1u);
+        if (!dst->text) {
+            snprintf(err, errlen, "failed to copy replay output text");
+            return 1;
+        }
+        memcpy(dst->text, src->text, src->text_len);
+        dst->text[src->text_len] = '\0';
+    }
+    return 0;
+}
+
 static void replay_mtp_service_close(replay_mtp_service *svc) {
     if (!svc) return;
     ds4_v100_mtp_forward_close(svc->forward);
@@ -1138,7 +1203,8 @@ static int replay_mtp_service_open(replay_mtp_service **out,
     if (out) *out = NULL;
     if (!out || !opt || !rt) return 1;
     if (opt->mtp_serving == REPLAY_MTP_SERVING_OFF &&
-        opt->mtp_draft_block_smoke == 0) {
+        opt->mtp_draft_block_smoke == 0 &&
+        opt->mtp_block2_commit_smoke == 0) {
         return 0;
     }
 
@@ -2305,6 +2371,453 @@ done:
     return rc;
 }
 
+static int run_mtp_block2_commit_smoke(replay_mtp_service *svc,
+                                       ds4_v100_replay *rt,
+                                       const ds4_tokens *prompt,
+                                       uint32_t max_tokens,
+                                       const unsigned char *expected,
+                                       size_t expected_len,
+                                       bool json,
+                                       char *err,
+                                       size_t errlen) {
+    if (!svc || !svc->enabled || !rt || !prompt || prompt->len <= 0 ||
+        max_tokens < 2 || max_tokens > DS4_V100_REPLAY_MAX_TOKENS) {
+        snprintf(err, errlen, "invalid MTP block2 commit smoke input");
+        return 1;
+    }
+
+    ds4_v100_replay_output baseline[DS4_V100_REPLAY_MAX_TOKENS];
+    ds4_v100_replay_output outputs[DS4_V100_REPLAY_MAX_TOKENS];
+    ds4_v100_replay_output current;
+    memset(baseline, 0, sizeof(baseline));
+    memset(outputs, 0, sizeof(outputs));
+    memset(&current, 0, sizeof(current));
+    ds4_v100_replay_counters baseline_counters;
+    ds4_v100_replay_counters counters;
+    memset(&baseline_counters, 0, sizeof(baseline_counters));
+    memset(&counters, 0, sizeof(counters));
+    uint32_t baseline_count = 0;
+    uint32_t n_out = 0;
+    int rc = 1;
+
+    if (ds4_v100_replay_generate(rt,
+                                 prompt,
+                                 max_tokens,
+                                 baseline,
+                                 DS4_V100_REPLAY_MAX_TOKENS,
+                                 &baseline_count,
+                                 &baseline_counters,
+                                 err,
+                                 errlen) ||
+        baseline_count != max_tokens) {
+        if (err[0] == '\0') snprintf(err, errlen, "block2 baseline generation failed");
+        goto done;
+    }
+    if (expected) {
+        if (!baseline[0].text ||
+            baseline[0].text_len != expected_len ||
+            memcmp(baseline[0].text, expected, expected_len) != 0) {
+            fprintf(stderr, "ds4-v100-replay: mtp-block2 selected token mismatch expected=");
+            print_hex(stderr, expected, expected_len);
+            fprintf(stderr, " got=");
+            if (baseline[0].text) {
+                print_hex(stderr,
+                          (const unsigned char *)baseline[0].text,
+                          baseline[0].text_len);
+            } else {
+                fprintf(stderr, "none");
+            }
+            fprintf(stderr, " token=%" PRIu32 " logit=%.8g\n",
+                    baseline[0].token,
+                    baseline[0].logit);
+            snprintf(err, errlen, "MTP block2 expected first token mismatch");
+            goto done;
+        }
+    }
+
+    if (ds4_v100_replay_reset(rt, err, errlen) ||
+        ds4_v100_replay_begin_generation(rt,
+                                         (uint32_t)prompt->len,
+                                         &counters,
+                                         err,
+                                         errlen)) {
+        goto done;
+    }
+
+    const double total0 = now_ms();
+    for (int pos = 0; pos < prompt->len; pos++) {
+        if (prompt->v[pos] < 0) {
+            snprintf(err, errlen, "negative prompt token at position %d", pos);
+            goto done;
+        }
+        if (ds4_v100_replay_feed_token_at_position(rt,
+                                                   (uint32_t)prompt->v[pos],
+                                                   (uint32_t)pos,
+                                                   &counters,
+                                                   &counters.prompt_replay_ms,
+                                                   err,
+                                                   errlen)) {
+            goto done;
+        }
+        counters.total_input_tokens++;
+    }
+
+    if (ds4_v100_replay_select_current_token(rt,
+                                             &current,
+                                             &counters,
+                                             err,
+                                             errlen)) {
+        goto done;
+    }
+
+    uint32_t target_forwards = 0;
+    uint32_t target_tokens_verified = 0;
+    uint32_t accepted_prefix_total = 0;
+    uint32_t draft_tokens_proposed = 0;
+    uint32_t draft_tokens_accepted = 0;
+    uint32_t blocks = 0;
+    uint32_t block2_full_accepts = 0;
+    uint32_t block2_partial_accepts = 0;
+    uint32_t block2_rejects = 0;
+    double mtp_ms = 0.0;
+    double verify_ms = 0.0;
+    uint32_t last_raw_row = 0;
+    uint32_t last_n_raw = 0;
+
+    if (replay_output_copy(&outputs[n_out], &current, err, errlen)) goto done;
+    n_out++;
+
+    while (n_out < max_tokens) {
+        const uint32_t remaining = max_tokens - n_out;
+        if (remaining < 2) {
+            const uint32_t pos = (uint32_t)prompt->len + n_out - 1u;
+            const double t0 = now_ms();
+            if (ds4_v100_replay_feed_token_at_position(rt,
+                                                       current.token,
+                                                       pos,
+                                                       &counters,
+                                                       &counters.continuation_decode_ms,
+                                                       err,
+                                                       errlen)) {
+                goto done;
+            }
+            counters.total_input_tokens++;
+            ds4_v100_replay_output next;
+            memset(&next, 0, sizeof(next));
+            if (ds4_v100_replay_select_current_token(rt,
+                                                     &next,
+                                                     &counters,
+                                                     err,
+                                                     errlen)) {
+                ds4_v100_replay_output_free(&next);
+                goto done;
+            }
+            verify_ms += now_ms() - t0;
+            target_forwards++;
+            ds4_v100_replay_output_free(&current);
+            current = next;
+            if (replay_output_copy(&outputs[n_out], &current, err, errlen)) goto done;
+            n_out++;
+            continue;
+        }
+
+        blocks++;
+        const uint32_t pos = (uint32_t)prompt->len + n_out - 1u;
+
+        ds4_v100_replay_output target0;
+        ds4_v100_replay_output target1;
+        memset(&target0, 0, sizeof(target0));
+        memset(&target1, 0, sizeof(target1));
+        uint32_t draft_tokens[2] = { UINT32_MAX, UINT32_MAX };
+        float draft_logits[2] = { 0.0f, 0.0f };
+        uint32_t top_tokens[DS4_V100_MTP_FORWARD_MAX_TOPK];
+        float top_logits[DS4_V100_MTP_FORWARD_MAX_TOPK];
+        float embed[DS4_V100_MTP_FORWARD_N_EMBD];
+        float hc_a[DS4_V100_MTP_FORWARD_HC_VALUES];
+        float hc_b[DS4_V100_MTP_FORWARD_HC_VALUES];
+        memset(embed, 0, sizeof(embed));
+        memset(hc_a, 0, sizeof(hc_a));
+        memset(hc_b, 0, sizeof(hc_b));
+
+        const double verify0 = now_ms();
+        if (ds4_v100_replay_feed_token_at_position(rt,
+                                                   current.token,
+                                                   pos,
+                                                   &counters,
+                                                   &counters.continuation_decode_ms,
+                                                   err,
+                                                   errlen)) {
+            ds4_v100_replay_output_free(&target0);
+            ds4_v100_replay_output_free(&target1);
+            goto done;
+        }
+        counters.total_input_tokens++;
+        if (ds4_v100_replay_read_output_hc_slot(rt,
+                                                0,
+                                                hc_a,
+                                                sizeof(hc_a),
+                                                err,
+                                                errlen) ||
+            ds4_v100_replay_select_current_token(rt,
+                                                 &target0,
+                                                 &counters,
+                                                 err,
+                                                 errlen)) {
+            ds4_v100_replay_output_free(&target0);
+            ds4_v100_replay_output_free(&target1);
+            goto done;
+        }
+        verify_ms += now_ms() - verify0;
+        target_forwards++;
+        target_tokens_verified++;
+
+        uint32_t current_token = current.token;
+        float *current_hc = hc_a;
+        float *next_hc = hc_b;
+        for (uint32_t i = 0; i < 2; i++) {
+            if (ds4_v100_replay_read_token_embedding_f32(rt,
+                                                         current_token,
+                                                         embed,
+                                                         DS4_V100_MTP_FORWARD_N_EMBD,
+                                                         err,
+                                                         errlen)) {
+                ds4_v100_replay_output_free(&target0);
+                ds4_v100_replay_output_free(&target1);
+                goto done;
+            }
+            memset(top_tokens, 0xff, sizeof(top_tokens));
+            memset(top_logits, 0, sizeof(top_logits));
+            ds4_v100_mtp_forward_report report;
+            memset(&report, 0, sizeof(report));
+            const double mtp0 = now_ms();
+            pthread_mutex_lock(&svc->mu);
+            int mtp_rc = ds4_v100_mtp_forward_run_host_next_hc(
+                svc->forward,
+                embed,
+                current_hc,
+                pos + i,
+                svc->top_k,
+                top_tokens,
+                top_logits,
+                next_hc,
+                DS4_V100_MTP_FORWARD_HC_VALUES,
+                &report,
+                err,
+                errlen);
+            pthread_mutex_unlock(&svc->mu);
+            if (mtp_rc) {
+                ds4_v100_replay_output_free(&target0);
+                ds4_v100_replay_output_free(&target1);
+                goto done;
+            }
+            mtp_ms += now_ms() - mtp0;
+            draft_tokens[i] = top_tokens[0];
+            draft_logits[i] = top_logits[0];
+            current_token = draft_tokens[i];
+            float *tmp = current_hc;
+            current_hc = next_hc;
+            next_hc = tmp;
+            last_raw_row = report.raw_row;
+            last_n_raw = report.n_raw;
+            draft_tokens_proposed++;
+        }
+
+        uint32_t accepted_prefix = 0;
+        if (target0.token == draft_tokens[0]) {
+            accepted_prefix = 1;
+            const double verify1 = now_ms();
+            if (ds4_v100_replay_feed_token_at_position(rt,
+                                                       draft_tokens[0],
+                                                       pos + 1u,
+                                                       &counters,
+                                                       &counters.continuation_decode_ms,
+                                                       err,
+                                                       errlen)) {
+                ds4_v100_replay_output_free(&target0);
+                ds4_v100_replay_output_free(&target1);
+                goto done;
+            }
+            counters.total_input_tokens++;
+            if (ds4_v100_replay_select_current_token(rt,
+                                                     &target1,
+                                                     &counters,
+                                                     err,
+                                                     errlen)) {
+                ds4_v100_replay_output_free(&target0);
+                ds4_v100_replay_output_free(&target1);
+                goto done;
+            }
+            verify_ms += now_ms() - verify1;
+            target_forwards++;
+            target_tokens_verified++;
+            if (target1.token == draft_tokens[1]) accepted_prefix = 2;
+        }
+
+        accepted_prefix_total += accepted_prefix;
+        draft_tokens_accepted += accepted_prefix;
+        if (accepted_prefix == 2) block2_full_accepts++;
+        else if (accepted_prefix == 1) block2_partial_accepts++;
+        else block2_rejects++;
+
+        if (replay_output_copy(&outputs[n_out], &target0, err, errlen)) {
+            ds4_v100_replay_output_free(&target0);
+            ds4_v100_replay_output_free(&target1);
+            goto done;
+        }
+        n_out++;
+        ds4_v100_replay_output_free(&current);
+
+        if (accepted_prefix >= 1 && n_out < max_tokens) {
+            if (replay_output_copy(&outputs[n_out], &target1, err, errlen)) {
+                ds4_v100_replay_output_free(&target0);
+                ds4_v100_replay_output_free(&target1);
+                goto done;
+            }
+            n_out++;
+            if (replay_output_copy(&current, &target1, err, errlen)) {
+                ds4_v100_replay_output_free(&target0);
+                ds4_v100_replay_output_free(&target1);
+                goto done;
+            }
+        } else {
+            if (replay_output_copy(&current, &target0, err, errlen)) {
+                ds4_v100_replay_output_free(&target0);
+                ds4_v100_replay_output_free(&target1);
+                goto done;
+            }
+        }
+        ds4_v100_replay_output_free(&target0);
+        ds4_v100_replay_output_free(&target1);
+        (void)draft_logits;
+    }
+
+    counters.generated_tokens = n_out;
+    counters.total_ms = now_ms() - total0;
+    ds4_v100_replay_finish_generation(rt, counters.generated_tokens, counters.total_ms, &counters);
+
+    if (n_out != baseline_count) {
+        snprintf(err, errlen, "MTP block2 output count mismatch baseline=%" PRIu32 " got=%" PRIu32,
+                 baseline_count, n_out);
+        goto done;
+    }
+    for (uint32_t i = 0; i < n_out; i++) {
+        if (outputs[i].token != baseline[i].token) {
+            snprintf(err,
+                     errlen,
+                     "MTP block2 token mismatch at %" PRIu32 ": baseline=%" PRIu32 " got=%" PRIu32,
+                     i,
+                     baseline[i].token,
+                     outputs[i].token);
+            goto done;
+        }
+    }
+
+    const uint32_t speculative_saves =
+        n_out > target_forwards ? n_out - target_forwards : 0u;
+    const double block2_tps =
+        counters.total_ms > 0.0 ? (double)counters.generated_tokens * 1000.0 / counters.total_ms : 0.0;
+    const double baseline_tps =
+        baseline_counters.total_ms > 0.0
+            ? (double)baseline_counters.generated_tokens * 1000.0 / baseline_counters.total_ms
+            : 0.0;
+
+    if (json) {
+        printf("{\"mtp_block2_commit_smoke\":true,"
+               "\"prompt_tokens\":%d,"
+               "\"generated_tokens\":%" PRIu32 ","
+               "\"baseline_tokens\":%" PRIu32 ","
+               "\"token_match\":true,"
+               "\"blocks\":%" PRIu32 ","
+               "\"block2_full_accepts\":%" PRIu32 ","
+               "\"block2_partial_accepts\":%" PRIu32 ","
+               "\"block2_rejects\":%" PRIu32 ","
+               "\"accepted_prefix_total\":%" PRIu32 ","
+               "\"draft_tokens_proposed\":%" PRIu32 ","
+               "\"draft_tokens_accepted\":%" PRIu32 ","
+               "\"target_forwards\":%" PRIu32 ","
+               "\"target_tokens_verified\":%" PRIu32 ","
+               "\"effective_output_tokens\":%" PRIu32 ","
+               "\"speculative_saves\":%" PRIu32 ","
+               "\"mtp_ms\":%.3f,"
+               "\"verify_ms\":%.3f,"
+               "\"block2_total_ms\":%.3f,"
+               "\"baseline_total_ms\":%.3f,"
+               "\"block2_generated_tps\":%.6f,"
+               "\"baseline_generated_tps\":%.6f,"
+               "\"last_mtp_raw_row\":%" PRIu32 ","
+               "\"last_mtp_n_raw\":%" PRIu32 "}\n",
+               prompt->len,
+               n_out,
+               baseline_count,
+               blocks,
+               block2_full_accepts,
+               block2_partial_accepts,
+               block2_rejects,
+               accepted_prefix_total,
+               draft_tokens_proposed,
+               draft_tokens_accepted,
+               target_forwards,
+               target_tokens_verified,
+               n_out,
+               speculative_saves,
+               mtp_ms,
+               verify_ms,
+               counters.total_ms,
+               baseline_counters.total_ms,
+               block2_tps,
+               baseline_tps,
+               last_raw_row,
+               last_n_raw);
+    } else {
+        printf("ds4-v100-replay: mtp_block2_commit_smoke generated_tokens=%" PRIu32
+               " baseline_tokens=%" PRIu32
+               " token_match=true blocks=%" PRIu32
+               " full_accepts=%" PRIu32
+               " partial_accepts=%" PRIu32
+               " rejects=%" PRIu32
+               " accepted_prefix_total=%" PRIu32
+               " draft_tokens_proposed=%" PRIu32
+               " draft_tokens_accepted=%" PRIu32
+               " target_forwards=%" PRIu32
+               " target_tokens_verified=%" PRIu32
+               " effective_output_tokens=%" PRIu32
+               " speculative_saves=%" PRIu32
+               " mtp_ms=%.3f verify_ms=%.3f"
+               " block2_total_ms=%.3f baseline_total_ms=%.3f"
+               " block2_generated_tps=%.6f baseline_generated_tps=%.6f ok\n",
+               n_out,
+               baseline_count,
+               blocks,
+               block2_full_accepts,
+               block2_partial_accepts,
+               block2_rejects,
+               accepted_prefix_total,
+               draft_tokens_proposed,
+               draft_tokens_accepted,
+               target_forwards,
+               target_tokens_verified,
+               n_out,
+               speculative_saves,
+               mtp_ms,
+               verify_ms,
+               counters.total_ms,
+               baseline_counters.total_ms,
+               block2_tps,
+               baseline_tps);
+    }
+    rc = 0;
+
+done:
+    for (uint32_t i = 0; i < baseline_count && i < DS4_V100_REPLAY_MAX_TOKENS; i++) {
+        ds4_v100_replay_output_free(&baseline[i]);
+    }
+    for (uint32_t i = 0; i < n_out && i < DS4_V100_REPLAY_MAX_TOKENS; i++) {
+        ds4_v100_replay_output_free(&outputs[i]);
+    }
+    ds4_v100_replay_output_free(&current);
+    return rc;
+}
+
 static int hex4(const char *s, uint32_t *out) {
     uint32_t v = 0;
     for (int i = 0; i < 4; i++) {
@@ -3216,6 +3729,28 @@ int main(int argc, char **argv) {
             fprintf(stderr,
                     "ds4-v100-replay: %s\n",
                     err[0] ? err : "MTP draft block smoke failed");
+        }
+        replay_mtp_service_close(mtp);
+        ds4_v100_replay_close(rt);
+        ds4_tokens_free(&prompt);
+        free(expected);
+        free(prompt_owned);
+        return smoke_rc;
+    }
+    if (opt.mtp_block2_commit_smoke) {
+        int smoke_rc = run_mtp_block2_commit_smoke(mtp,
+                                                   rt,
+                                                   &prompt,
+                                                   opt.mtp_block2_commit_smoke,
+                                                   expected,
+                                                   expected_len,
+                                                   opt.json,
+                                                   err,
+                                                   sizeof(err));
+        if (smoke_rc) {
+            fprintf(stderr,
+                    "ds4-v100-replay: %s\n",
+                    err[0] ? err : "MTP block2 commit smoke failed");
         }
         replay_mtp_service_close(mtp);
         ds4_v100_replay_close(rt);

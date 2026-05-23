@@ -180,7 +180,16 @@ block-2 shape: block-2 accepted both drafted tokens in `4/5` cases and reported
 `speculative_saves=1`, while block-4 and block-8 never accepted more than two
 tokens and mostly add verifier work. The next MTP sprint should build and
 measure a block-2 exact speculative commit/verify path, not longer draft
-blocks.
+blocks. Sprint 224 built that exact block-2 path and measured it on the V100
+production pack. The path is token-correct and faster than same-process
+baseline on `4/5` prompts: ok-case average `3.663043` block2 tok/s versus
+`2.032918` baseline tok/s (`1.801865x`). It reports `target_forwards=7`,
+`effective_output_tokens=8`, and `speculative_saves=1` for 8-token runs. It is
+not ready for serving integration because `long_memory_archive` failed token
+parity at token 1 (`baseline=16`, `got=8773`), and a follow-up
+`--target-block-smoke 2` on that same prompt also failed target replay reset
+determinism (`got=32085 want=10220`). The next sprint should fix long-prompt
+replay reset/snapshot determinism, then rerun the block-2 gate.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit
