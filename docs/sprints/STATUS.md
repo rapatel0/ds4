@@ -33,7 +33,10 @@ runtime in token-major order and promoted it for token-major all-layer runs:
 the 4-step scaffold improves from `51.289549` to `47.902324 ms/token` proxy,
 projected slot-step throughput improves from `623.908781` to `668.026047`,
 and wall time drops from `34880.753622` to `11661.323548 ms` with checksum
-preserved.
+preserved. Sprint 268 then made token-major runs advance logical position per
+token step. The 4-step gate over positions `1024-1027` passes `172/172`
+invocations and improves the proxy again to `45.770462 ms/token` /
+`699.140856` projected slot-step tok/s, with checksum `296236348`.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

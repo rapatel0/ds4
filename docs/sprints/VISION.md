@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 267
+revision: 268
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -217,6 +217,9 @@ not a serial layer-chain.
   for token-major all-layer runs. The 4-step scaffold improves from
   `51.289549` to `47.902324 ms/token` proxy and cuts wall time from
   `34880.753622` to `11661.323548 ms`, with checksum preserved.
+- Sprint 268 made token-major runs advance logical position per token step.
+  The 4-step scaffold over positions `1024-1027` passes `172/172` invocations
+  at `45.770462 ms/token` proxy and `699.140856` projected slot-step tok/s.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -1025,6 +1028,26 @@ Wall time drops from `34880.753622` to `11661.323548 ms`, with checksum
 `296236348` preserved. A default one-step check confirms token-major runs now
 select `shared_tp_runtime=1`.
 
+### Sprint 268 - TP/EP Token-Major Position Advance [complete]
+
+Goal: Make the token-major scaffold advance context position across token
+steps.
+
+Rationale: The first token-major scaffold validated execution order, but every
+token step reused the same logical position. Serving decode advances position
+each token while keeping the sequence slot fixed, so the scaffold should do
+the same before longer continuous gates or generated-token integration.
+
+Outcome: Complete. In `--token-major-all-layers` mode, each layer invocation
+now uses `position = start_position + token_step`, and token-major item logs
+include the effective position. On the V100 pod at `32` slots / `256K`, `4`
+token steps, positions `1024-1027`, shared TP runtime, resident expert
+bindings, EP+dense overlap, and source-scheduled staged copies, the scaffold
+passes `172/172` layer invocations. It reports `45.770462 ms/token` proxy,
+`699.140856` projected slot-step tok/s, `93.872406 ms` summed EP,
+`89.157724 ms` summed compose, `11799.119372 ms` wall, and checksum
+`296236348`.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1093,6 +1116,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 265 added a token-major serving-order scaffold. | It exposes the real decode order and shows the next gap is resident token-loop state, not only layer-major kernel speed. | Reduce token-major setup/wall cost and then integrate generated/continuation serving measurement. |
 | 2026-05-23 | Sprint 266 tested shared dense-op residency in token-major order. | Correctness holds, but decode proxy regresses despite slightly lower wall time. | Keep dense ops local per layer and target TP runtime/KV orchestration or serving integration next. |
 | 2026-05-23 | Sprint 267 promoted shared TP runtime for token-major all-layer runs. | In serving order, TP/KV runtime residency improves both wall/setup and summed decode proxy. | Reduce token-major compose/all-to-all and bridge the scaffold into generated/continuation serving measurement. |
+| 2026-05-23 | Sprint 268 added token-major position advance. | The scaffold now progresses logical context position across token steps and remains correct. | Run a longer continuous token-major gate, then bridge to generated/continuation serving measurement. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

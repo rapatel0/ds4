@@ -3727,6 +3727,7 @@ int main(int argc, char **argv) {
             for (int layer = 0; layer < 43; ++layer) {
                 Options layer_opt = opt;
                 layer_opt.layer = layer;
+                layer_opt.position = opt.position + (uint64_t)step;
                 layer_opt.decode_steps = 1;
                 layer_opt.warmup = 0;
                 LayerRunSummary s;
@@ -3740,10 +3741,12 @@ int main(int argc, char **argv) {
                                          &shared_rank_buffers, tp_runtime_arg, expert_arg,
                                          dense_ops_arg);
                 std::printf("tp_ep_token_major_item\tstep\t%d\tlayer\t%d\tratio\t%d\t"
+                            "position\t%llu\t"
                             "decode_ms_per_step\t%.6f\tdecode_slot_step_tok_s\t%.6f\t"
                             "decode_ep_ms_per_step\t%.6f\tdecode_dense_ms_per_step\t%.6f\t"
                             "decode_compose_ms_per_step\t%.6f\tdecode_checksum\t%llu\t%s\n",
                             step, s.layer, s.ratio,
+                            (unsigned long long)layer_opt.position,
                             s.decode_ms_per_step,
                             s.decode_slot_step_tok_s,
                             s.decode_ep_ms_per_step,
