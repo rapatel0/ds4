@@ -135,7 +135,9 @@ struct RankState {
     __half *d_gated = nullptr;
     __half *d_down = nullptr;
     float *d_ep_contrib_all = nullptr;
+    __half *d_ep_contrib_half_all = nullptr;
     float *d_ep_remote[kGpus] = {};
+    __half *d_ep_remote_half[kGpus] = {};
     float *d_ep_sum = nullptr;
     float *d_next_hidden = nullptr;
     PackedExperts gated;
@@ -221,6 +223,7 @@ struct ComposeStats {
     int finite_bad = 0;
     int repeat_bad = 0;
     uint64_t checksum = 0;
+    bool ep_return_fp16 = false;
 };
 
 struct DecodeLoopStats {
@@ -240,6 +243,7 @@ struct DecodeLoopStats {
     double compose_ms_per_step = 0.0;
     int finite_bad = 0;
     uint64_t checksum = 0;
+    bool ep_return_fp16 = false;
 };
 
 struct Options {
@@ -260,6 +264,7 @@ struct Options {
     bool dense_compute_all_bf16 = false;
     bool compose_next_hidden = false;
     int decode_steps = 0;
+    bool ep_return_fp16 = false;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -383,6 +388,16 @@ __global__ void ep_reduce_all_dest_shards_kernel(float *contrib,
 __global__ void add_f32_kernel(float *dst, const float *src, uint64_t n) {
     const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) dst[i] += src[i];
+}
+
+__global__ void cast_f32_to_half_kernel(__half *dst, const float *src, uint64_t n) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) dst[i] = __float2half(src[i]);
+}
+
+__global__ void add_half_to_f32_kernel(float *dst, const __half *src, uint64_t n) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) dst[i] += __half2float(src[i]);
 }
 
 __global__ void compose_next_hidden_kernel(float *next,
@@ -518,7 +533,8 @@ void usage(const char *argv0) {
                  "       [--position N] [--warmup N] [--iters N]\n"
                  "       [--dense-compute-tensor NAME] [--dense-compute-all-f8]\n"
                  "       [--dense-compute-all-bf16] [--dense-compute-all]\n"
-                 "       [--compose-next-hidden] [--decode-steps N]\n",
+                 "       [--compose-next-hidden] [--decode-steps N]\n"
+                 "       [--ep-return-fp16]\n",
                  argv0);
 }
 
@@ -584,6 +600,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
         } else if (std::strcmp(arg, "--decode-steps") == 0) {
             if (!val || !parse_int(val, &opt->decode_steps) || opt->decode_steps < 0) return false;
             ++i;
+        } else if (std::strcmp(arg, "--ep-return-fp16") == 0) {
+            opt->ep_return_fp16 = true;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -1598,11 +1616,19 @@ int ensure_compose_buffers(const Options &opt, RankState ranks[kGpus]) {
         CHECK_CUDA(cudaSetDevice(r.device));
         if (!r.d_ep_contrib_all) CHECK_CUDA(cudaMalloc(&r.d_ep_contrib_all,
                                                         (size_t)all_contrib_bytes));
+        if (opt.ep_return_fp16 && !r.d_ep_contrib_half_all) {
+            CHECK_CUDA(cudaMalloc(&r.d_ep_contrib_half_all,
+                                  (size_t)(all_contrib_elems * sizeof(__half))));
+        }
         if (!r.d_ep_sum) CHECK_CUDA(cudaMalloc(&r.d_ep_sum, (size_t)shard_bytes));
         if (!r.d_next_hidden) CHECK_CUDA(cudaMalloc(&r.d_next_hidden, (size_t)shard_bytes));
         for (int src = 0; src < kGpus; ++src) {
             if (!r.d_ep_remote[src]) CHECK_CUDA(cudaMalloc(&r.d_ep_remote[src],
                                                            (size_t)shard_bytes));
+            if (opt.ep_return_fp16 && !r.d_ep_remote_half[src]) {
+                CHECK_CUDA(cudaMalloc(&r.d_ep_remote_half[src],
+                                      (size_t)(shard_elems * sizeof(__half))));
+            }
         }
     }
     return 0;
@@ -1614,6 +1640,7 @@ int run_next_hidden_compose(const Options &opt,
                             ComposeStats *stats) {
     if (!opt.compose_next_hidden) return 0;
     stats->enabled = true;
+    stats->ep_return_fp16 = opt.ep_return_fp16;
 
     DeviceDenseOutputs attn;
     DeviceDenseOutputs shared;
@@ -1628,10 +1655,12 @@ int run_next_hidden_compose(const Options &opt,
 
     const uint64_t shard_elems = (uint64_t)opt.slots * (kHidden / kGpus);
     const uint64_t shard_bytes = shard_elems * sizeof(float);
+    const uint64_t return_shard_bytes =
+        shard_elems * (opt.ep_return_fp16 ? sizeof(__half) : sizeof(float));
     const uint64_t all_contrib_elems = (uint64_t)kGpus * shard_elems;
     const uint64_t all_contrib_bytes = all_contrib_elems * sizeof(float);
     stats->ep_contribution_bytes = all_contrib_bytes * kGpus;
-    stats->ep_return_bytes = shard_bytes * kGpus * kGpus;
+    stats->ep_return_bytes = return_shard_bytes * kGpus * kGpus;
     if (ensure_compose_buffers(opt, ranks) != 0) {
         free_device_dense_outputs(attn, opt);
         free_device_dense_outputs(shared, opt);
@@ -1653,6 +1682,12 @@ int run_next_hidden_compose(const Options &opt,
         ep_reduce_all_dest_shards_kernel<<<grid, block, 0, r.stream>>>(
             r.d_ep_contrib_all, r.d_down, r.d_route_slots, r.routes, opt.slots);
         CHECK_CUDA(cudaGetLastError());
+        if (opt.ep_return_fp16) {
+            grid = (int)((all_contrib_elems + block - 1) / block);
+            cast_f32_to_half_kernel<<<grid, block, 0, r.stream>>>(
+                r.d_ep_contrib_half_all, r.d_ep_contrib_all, all_contrib_elems);
+            CHECK_CUDA(cudaGetLastError());
+        }
     }
     for (int p = 0; p < kGpus; ++p) {
         CHECK_CUDA(cudaSetDevice(ranks[p].device));
@@ -1662,13 +1697,25 @@ int run_next_hidden_compose(const Options &opt,
     for (int dst = 0; dst < kGpus; ++dst) {
         CHECK_CUDA(cudaSetDevice(ranks[dst].device));
         for (int src = 0; src < kGpus; ++src) {
-            const float *src_ptr = ranks[src].d_ep_contrib_all + (uint64_t)dst * shard_elems;
-            CHECK_CUDA(cudaMemcpyPeerAsync(ranks[dst].d_ep_remote[src],
-                                           ranks[dst].device,
-                                           src_ptr,
-                                           ranks[src].device,
-                                           (size_t)shard_bytes,
-                                           ranks[dst].stream));
+            if (opt.ep_return_fp16) {
+                const __half *src_ptr =
+                    ranks[src].d_ep_contrib_half_all + (uint64_t)dst * shard_elems;
+                CHECK_CUDA(cudaMemcpyPeerAsync(ranks[dst].d_ep_remote_half[src],
+                                               ranks[dst].device,
+                                               src_ptr,
+                                               ranks[src].device,
+                                               (size_t)return_shard_bytes,
+                                               ranks[dst].stream));
+            } else {
+                const float *src_ptr = ranks[src].d_ep_contrib_all +
+                                       (uint64_t)dst * shard_elems;
+                CHECK_CUDA(cudaMemcpyPeerAsync(ranks[dst].d_ep_remote[src],
+                                               ranks[dst].device,
+                                               src_ptr,
+                                               ranks[src].device,
+                                               (size_t)return_shard_bytes,
+                                               ranks[dst].stream));
+            }
         }
     }
     for (int dst = 0; dst < kGpus; ++dst) {
@@ -1686,9 +1733,14 @@ int run_next_hidden_compose(const Options &opt,
             zero_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_sum, shard_elems);
             CHECK_CUDA(cudaGetLastError());
             for (int src = 0; src < kGpus; ++src) {
-                add_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_sum,
-                                                             r.d_ep_remote[src],
-                                                             shard_elems);
+                if (opt.ep_return_fp16) {
+                    add_half_to_f32_kernel<<<grid, block, 0, r.stream>>>(
+                        r.d_ep_sum, r.d_ep_remote_half[src], shard_elems);
+                } else {
+                    add_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_sum,
+                                                                 r.d_ep_remote[src],
+                                                                 shard_elems);
+                }
             }
             CHECK_CUDA(cudaGetLastError());
             compose_next_hidden_kernel<<<grid, block, 0, r.stream>>>(
@@ -1749,6 +1801,7 @@ int run_decode_loop(const Options &opt,
                     DecodeLoopStats *stats) {
     if (opt.decode_steps <= 0) return 0;
     stats->enabled = true;
+    stats->ep_return_fp16 = opt.ep_return_fp16;
     stats->steps = opt.decode_steps;
     stats->slots = opt.slots;
     stats->slot_steps = (uint64_t)opt.decode_steps * (uint64_t)opt.slots;
@@ -1765,10 +1818,12 @@ int run_decode_loop(const Options &opt,
 
     const uint64_t shard_elems = (uint64_t)opt.slots * (kHidden / kGpus);
     const uint64_t shard_bytes = shard_elems * sizeof(float);
+    const uint64_t return_shard_bytes =
+        shard_elems * (opt.ep_return_fp16 ? sizeof(__half) : sizeof(float));
     const uint64_t all_contrib_elems = (uint64_t)kGpus * shard_elems;
     const uint64_t all_contrib_bytes = all_contrib_elems * sizeof(float);
     stats->ep_contribution_bytes = all_contrib_bytes * kGpus;
-    stats->ep_return_bytes = shard_bytes * kGpus * kGpus;
+    stats->ep_return_bytes = return_shard_bytes * kGpus * kGpus;
     if (ensure_compose_buffers(opt, ranks) != 0) {
         free_resident_f8_dense(attn, opt);
         free_resident_f8_dense(shared, opt);
@@ -1809,20 +1864,37 @@ int run_decode_loop(const Options &opt,
             ep_reduce_all_dest_shards_kernel<<<grid, block, 0, r.stream>>>(
                 r.d_ep_contrib_all, r.d_down, r.d_route_slots, r.routes, opt.slots);
             CHECK_CUDA(cudaGetLastError());
+            if (opt.ep_return_fp16) {
+                grid = (int)((all_contrib_elems + block - 1) / block);
+                cast_f32_to_half_kernel<<<grid, block, 0, r.stream>>>(
+                    r.d_ep_contrib_half_all, r.d_ep_contrib_all, all_contrib_elems);
+                CHECK_CUDA(cudaGetLastError());
+            }
         }
         sync_all();
 
         for (int dst = 0; dst < kGpus; ++dst) {
             CHECK_CUDA(cudaSetDevice(ranks[dst].device));
             for (int src = 0; src < kGpus; ++src) {
-                const float *src_ptr = ranks[src].d_ep_contrib_all +
-                                       (uint64_t)dst * shard_elems;
-                CHECK_CUDA(cudaMemcpyPeerAsync(ranks[dst].d_ep_remote[src],
-                                               ranks[dst].device,
-                                               src_ptr,
-                                               ranks[src].device,
-                                               (size_t)shard_bytes,
-                                               ranks[dst].stream));
+                if (opt.ep_return_fp16) {
+                    const __half *src_ptr =
+                        ranks[src].d_ep_contrib_half_all + (uint64_t)dst * shard_elems;
+                    CHECK_CUDA(cudaMemcpyPeerAsync(ranks[dst].d_ep_remote_half[src],
+                                                   ranks[dst].device,
+                                                   src_ptr,
+                                                   ranks[src].device,
+                                                   (size_t)return_shard_bytes,
+                                                   ranks[dst].stream));
+                } else {
+                    const float *src_ptr = ranks[src].d_ep_contrib_all +
+                                           (uint64_t)dst * shard_elems;
+                    CHECK_CUDA(cudaMemcpyPeerAsync(ranks[dst].d_ep_remote[src],
+                                                   ranks[dst].device,
+                                                   src_ptr,
+                                                   ranks[src].device,
+                                                   (size_t)return_shard_bytes,
+                                                   ranks[dst].stream));
+                }
             }
         }
         sync_all();
@@ -1834,9 +1906,14 @@ int run_decode_loop(const Options &opt,
             zero_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_sum, shard_elems);
             CHECK_CUDA(cudaGetLastError());
             for (int src = 0; src < kGpus; ++src) {
-                add_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_sum,
-                                                             r.d_ep_remote[src],
-                                                             shard_elems);
+                if (opt.ep_return_fp16) {
+                    add_half_to_f32_kernel<<<grid, block, 0, r.stream>>>(
+                        r.d_ep_sum, r.d_ep_remote_half[src], shard_elems);
+                } else {
+                    add_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_sum,
+                                                                 r.d_ep_remote[src],
+                                                                 shard_elems);
+                }
             }
             CHECK_CUDA(cudaGetLastError());
             compose_next_hidden_kernel<<<grid, block, 0, r.stream>>>(
@@ -2201,12 +2278,13 @@ int main(int argc, char **argv) {
     if (compose.enabled) {
         std::printf("tp_ep_next_hidden_compose\tslots\t%d\tctx\t%llu\t"
                     "hidden_shard\t%d\tep_contribution_bytes\t%llu\t"
-                    "ep_return_bytes\t%llu\tattn_dense_ms\t%.6f\t"
+                    "ep_return_dtype\t%s\tep_return_bytes\t%llu\tattn_dense_ms\t%.6f\t"
                     "shared_dense_ms\t%.6f\tcompose_ms\t%.6f\t"
                     "checksum\t%llu\tfinite_bad\t%d\trepeat_max_abs\t%.9f\t"
                     "repeat_bad\t%d\t%s\n",
                     opt.slots, (unsigned long long)cfg.ctx, kHidden / kGpus,
                     (unsigned long long)compose.ep_contribution_bytes,
+                    compose.ep_return_fp16 ? "fp16" : "fp32",
                     (unsigned long long)compose.ep_return_bytes,
                     compose.attn_dense_ms, compose.shared_dense_ms,
                     compose.compose_ms, (unsigned long long)compose.checksum,
@@ -2225,7 +2303,8 @@ int main(int argc, char **argv) {
                     "total_ms\t%.6f\tms_per_step\t%.6f\tslot_step_tok_s\t%.6f\t"
                     "ep_ms_per_step\t%.6f\tdense_ms_per_step\t%.6f\t"
                     "compose_ms_per_step\t%.6f\tdense_loaded_bytes\t%llu\t"
-                    "ep_contribution_bytes\t%llu\tep_return_bytes\t%llu\t"
+                    "ep_contribution_bytes\t%llu\tep_return_dtype\t%s\t"
+                    "ep_return_bytes\t%llu\t"
                     "checksum\t%llu\tfinite_bad\t%d\t%s\n",
                     decode_loop.steps, decode_loop.slots,
                     (unsigned long long)decode_loop.slot_steps,
@@ -2234,6 +2313,7 @@ int main(int argc, char **argv) {
                     decode_loop.dense_ms_per_step, decode_loop.compose_ms_per_step,
                     (unsigned long long)decode_loop.dense_loaded_bytes,
                     (unsigned long long)decode_loop.ep_contribution_bytes,
+                    decode_loop.ep_return_fp16 ? "fp16" : "fp32",
                     (unsigned long long)decode_loop.ep_return_bytes,
                     (unsigned long long)decode_loop.checksum,
                     decode_loop.finite_bad,
@@ -2297,7 +2377,8 @@ int main(int argc, char **argv) {
                 "bf16_compute_repeat_nan\t%d\tbf16_compute_oracle_max_abs\t%.9f\t"
                 "bf16_compute_oracle_bad\t%d\tbf16_compute_pass\t%d\t"
                 "compose_next_hidden\t%d\tcompose_ep_contribution_bytes\t%llu\t"
-                "compose_ep_return_bytes\t%llu\tcompose_attn_dense_ms\t%.6f\t"
+                "compose_ep_return_dtype\t%s\tcompose_ep_return_bytes\t%llu\t"
+                "compose_attn_dense_ms\t%.6f\t"
                 "compose_shared_dense_ms\t%.6f\tcompose_ms\t%.6f\t"
                 "compose_checksum\t%llu\tcompose_finite_bad\t%d\t"
                 "compose_repeat_max_abs\t%.9f\tcompose_repeat_bad\t%d\t"
@@ -2305,7 +2386,8 @@ int main(int argc, char **argv) {
                 "decode_steps\t%d\tdecode_slot_steps\t%llu\tdecode_total_ms\t%.6f\t"
                 "decode_ms_per_step\t%.6f\tdecode_slot_step_tok_s\t%.6f\t"
                 "decode_ep_ms_per_step\t%.6f\tdecode_dense_ms_per_step\t%.6f\t"
-                "decode_compose_ms_per_step\t%.6f\tdecode_checksum\t%llu\t"
+                "decode_compose_ms_per_step\t%.6f\tdecode_ep_return_dtype\t%s\t"
+                "decode_ep_return_bytes\t%llu\tdecode_checksum\t%llu\t"
                 "decode_finite_bad\t%d\tdecode_pass\t%d\t"
                 "aggregate_routes\t%d\tdispatch_bytes\t%llu\treturn_bytes\t%llu\t"
                 "route_imbalance\t%.6f\tdescriptor_ms\t%.6f\tdense_kv_ms\t%.6f\t"
@@ -2349,6 +2431,7 @@ int main(int argc, char **argv) {
                 bf16_compute.enabled && bf16_compute.pass ? 1 : 0,
                 compose.enabled ? 1 : 0,
                 (unsigned long long)compose.ep_contribution_bytes,
+                compose.ep_return_fp16 ? "fp16" : "fp32",
                 (unsigned long long)compose.ep_return_bytes,
                 compose.attn_dense_ms,
                 compose.shared_dense_ms,
@@ -2366,6 +2449,8 @@ int main(int argc, char **argv) {
                 decode_loop.ep_ms_per_step,
                 decode_loop.dense_ms_per_step,
                 decode_loop.compose_ms_per_step,
+                decode_loop.ep_return_fp16 ? "fp16" : "fp32",
+                (unsigned long long)decode_loop.ep_return_bytes,
                 (unsigned long long)decode_loop.checksum,
                 decode_loop.finite_bad,
                 decode_loop.enabled && decode_loop.pass ? 1 : 0,
@@ -2387,8 +2472,10 @@ int main(int argc, char **argv) {
         CHECK_CUDA(cudaFree(r.d_gated));
         CHECK_CUDA(cudaFree(r.d_down));
         if (r.d_ep_contrib_all) CHECK_CUDA(cudaFree(r.d_ep_contrib_all));
+        if (r.d_ep_contrib_half_all) CHECK_CUDA(cudaFree(r.d_ep_contrib_half_all));
         for (int src = 0; src < kGpus; ++src) {
             if (r.d_ep_remote[src]) CHECK_CUDA(cudaFree(r.d_ep_remote[src]));
+            if (r.d_ep_remote_half[src]) CHECK_CUDA(cudaFree(r.d_ep_remote_half[src]));
         }
         if (r.d_ep_sum) CHECK_CUDA(cudaFree(r.d_ep_sum));
         if (r.d_next_hidden) CHECK_CUDA(cudaFree(r.d_next_hidden));

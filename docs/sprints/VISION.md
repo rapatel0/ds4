@@ -393,15 +393,22 @@ passes with `ms_per_step=1.845548`, `slot_step_tok_s=17339.021356`,
 composition still pass. This is not generated tok/s; it is the first resident
 TP/EP layer-loop metric.
 
-### Sprint 241 - TP/EP Throughput Optimization [tentative]
+### Sprint 241 - TP/EP FP16 EP Return A/B [complete]
 
-Goal: Optimize the measured TP/EP bottleneck after Sprint 234 identifies it.
+Goal: Add an opt-in FP16 EP return path and measure whether halving peer
+payload improves the Sprint 240 resident loop.
 
-Rationale: The bottleneck may be collectives, expert dispatch, KV bandwidth,
-dense projection layout, output head, or host scheduling. The optimization
-sprint should follow measured evidence, not guesswork.
+Rationale: Sprint 240 showed compose/peer synchronization is a major stage
+cost. FP16 return is the smallest isolated communication optimization.
 
-Outcome: Pending.
+Outcome: Complete and rejected as a default. `--ep-return-fp16` halves the
+reported EP return payload from `4194304` bytes to `2097152` bytes and passes
+finite/checksum validation, but it slows the 50-step resident loop from
+`1.788149 ms/step` to `1.937399 ms/step`. Compose time rises from
+`0.713836 ms/step` to `0.859697 ms/step`, so the added cast and expand kernels
+cost more than the reduced peer payload saves. Keep FP32 return as default;
+keep FP16 return as an opt-in diagnostic and revisit only if fused into the
+EP reduction or next-hidden compose.
 
 ### Sprint 242 - Multi-Slot MTP On TP/EP [tentative]
 
@@ -454,6 +461,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 238 proved BF16 compressor/indexer dense coverage and combined F8+BF16 coverage for layer `2`. | Layer-2 dense families now execute from production bytes in the separate TP/EP path. | Compose dense, KV, control/router, and EP expert outputs into representative full-layer decode. |
 | 2026-05-23 | Sprint 239 proved representative TP/EP next-hidden shard composition for layer `2`. | Dense outputs, EP returned contributions, KV update/check, and residual composition now run in one separate TP/EP execution. | Move from smoke composition to a TP/EP serving gate at `32` slots / `256K`, MTP off. |
 | 2026-05-23 | Sprint 240 proved a resident repeated TP/EP layer-loop benchmark at `32` slots / `256K`. | The path now reports stage costs without per-step pack reloads: dense and compose/sync dominate over EP. | Decide whether Sprint 241 optimizes dense/compose kernels first or starts server-loop integration with known bottlenecks. |
+| 2026-05-23 | Sprint 241 proved FP16 EP return is correct but slower as a standalone pass. | Payload bytes are not the limiter; extra cast/expand kernels increase compose time. | Keep FP32 return default and target fused dense/compose kernel boundaries next. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit in Sprint 236 or equivalent after TP/EP serving exists. |
 

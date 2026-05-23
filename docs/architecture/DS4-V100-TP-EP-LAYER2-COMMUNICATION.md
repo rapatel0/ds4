@@ -137,5 +137,20 @@ we force extra synchronization between many small kernels.
 | Input-sharded matmul reduction | Maybe fp16 output, keep fp32 accum inside kernel | V100 HMMA accumulates fp32 internally. Wire/storage can be fp16 if validation passes. |
 | Router hidden/logits | Be conservative | Routing quality can dominate model quality. Use fp16 hidden and f32 logits/top-k first. |
 | EP dispatch | fp16 | Expert inputs are already half in the TurboMind path. |
-| EP return | Strong candidate for fp16 | Sprint 239 uses f32 for observability. fp16 return would halve `4 MiB -> 2 MiB` aggregate at 32 slots and likely preserve enough accuracy, but must be validated. |
+| EP return | Correct but not useful as a standalone pass yet | Sprint 241 validated fp16 return and halved `4 MiB -> 2 MiB` aggregate at 32 slots, but the extra cast/expand kernels slowed the resident loop. Revisit only when fused into EP reduction or next-hidden compose. |
 | Next-hidden compose | fp16 storage with fp32 local accumulation is plausible | Compose can accumulate locally in fp32 and store fp16 for the next layer if quality holds. |
+
+## Sprint 241 FP16 Return Measurement
+
+Sprint 241 tested the EP return quantization hypothesis directly at
+`32` slots / `256K`, MTP off, `50` resident decode-loop steps.
+
+| Mode | Return bytes | ms/step | Slot-step tok/s | Compose ms/step | Result |
+|---|---:|---:|---:|---:|---|
+| FP32 return | 4194304 | 1.788149 | 17895.603225 | 0.713836 | PASS |
+| FP16 return | 2097152 | 1.937399 | 16516.992775 | 0.859697 | PASS |
+
+Conclusion: raw EP return bandwidth is not the limiter at this shape. FP16
+return is correct, but standalone conversion adds more synchronization/kernel
+cost than the peer-copy payload reduction saves. Keep FP32 return as the
+default until conversion is fused into the reduction or compose kernel.

@@ -410,6 +410,18 @@ steps pass with `1600` slot-steps, `total_ms=92.277411`,
 generated tok/s; it is a representative layer-loop metric showing the current
 TP/EP resident path is dominated by scalar dense kernels plus compose/peer
 synchronization rather than EP alone.
+Sprint 241 adds and measures an opt-in FP16 EP return path. The implementation
+keeps local EP contribution accumulation in FP32, casts each source/destination
+return shard to FP16 before peer copy, then expands FP16 back to FP32 while
+summing on the destination rank. The FP16 path passes at `32` slots / `256K`
+and halves the reported EP return payload from `4194304` bytes to `2097152`
+bytes, but it is slower as a standalone optimization. Same-binary 50-step A/B:
+FP32 return measures `ms_per_step=1.788149`, `slot_step_tok_s=17895.603225`,
+`compose_ms_per_step=0.713836`; FP16 return measures
+`ms_per_step=1.937399`, `slot_step_tok_s=16516.992775`,
+`compose_ms_per_step=0.859697`. Both pass finite/checksum checks. Decision:
+keep FP32 return as default, keep `--ep-return-fp16` as a diagnostic, and only
+revisit FP16 return if cast/copy/sum is fused into a larger compose kernel.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit

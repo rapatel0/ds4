@@ -1,7 +1,7 @@
 # Sprint 241 - TP/EP FP16 EP Return A/B
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete
 
 ## Overview
 
@@ -88,18 +88,18 @@ neutral or better.
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists and is committed before implementation evidence.
-- [ ] Implementation stays in the separate TP/EP codepath.
-- [ ] No PP scheduler files are modified.
-- [ ] `--ep-return-fp16` builds on the V100 pod.
-- [ ] FP32 return baseline still passes.
-- [ ] FP16 return candidate passes finite/checksum checks.
-- [ ] FP16 run reports half EP return bytes.
-- [ ] A/B evidence records `ms_per_step`, `slot_step_tok_s`, and stage timings.
-- [ ] Evidence is copied to
+- [x] Sprint plan exists and is committed before implementation evidence.
+- [x] Implementation stays in the separate TP/EP codepath.
+- [x] No PP scheduler files are modified.
+- [x] `--ep-return-fp16` builds on the V100 pod.
+- [x] FP32 return baseline still passes.
+- [x] FP16 return candidate passes finite/checksum checks.
+- [x] FP16 run reports half EP return bytes.
+- [x] A/B evidence records `ms_per_step`, `slot_step_tok_s`, and stage timings.
+- [x] Evidence is copied to
       `logs/from-cluster/sprint241-tp-ep-fp16-return/`.
-- [ ] Status and vision docs are updated with the decision.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Status and vision docs are updated with the decision.
+- [x] Changes are committed with explicit `git add` paths.
 
 ## Risks
 
@@ -110,4 +110,28 @@ neutral or better.
 
 ## Decision
 
-Pending.
+Complete. `--ep-return-fp16` is implemented and validated in the separate
+TP/EP path, but it should stay opt-in rather than becoming the default.
+
+Same-binary A/B on the V100 pod at `32` slots / `256K`, MTP off, `50`
+resident decode-loop steps:
+
+| Mode | Return bytes | ms/step | Slot-step tok/s | EP ms/step | Dense ms/step | Compose ms/step | Result |
+|---|---:|---:|---:|---:|---:|---:|---|
+| FP32 return | 4194304 | 1.788149 | 17895.603225 | 0.321324 | 0.752902 | 0.713836 | PASS |
+| FP16 return | 2097152 | 1.937399 | 16516.992775 | 0.317810 | 0.759782 | 0.859697 | PASS |
+
+FP16 return halves the peer payload and preserves finite/checksum validation,
+but the standalone cast-to-half and half-to-float expansion kernels make the
+resident loop slower by about `8.3%` in this implementation. The result
+confirms the Sprint 240 diagnosis: at this message size, synchronization and
+extra kernel boundaries matter more than raw NVLink payload bytes.
+
+Decision: keep FP32 return as the default for this smoke. Keep
+`--ep-return-fp16` as a diagnostic and revisit only if the conversion is fused
+into the EP reduction or next-hidden compose kernel.
+
+Evidence:
+
+- `logs/from-cluster/sprint241-tp-ep-fp16-return/layer2-decode-loop-fp32-return-32slot-256k-50steps.log`
+- `logs/from-cluster/sprint241-tp-ep-fp16-return/layer2-decode-loop-fp16-return-32slot-256k-50steps.log`
