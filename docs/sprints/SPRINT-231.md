@@ -1,7 +1,7 @@
 # Sprint 231 - TP/EP Routed Expert Slice
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete
 
 ## Overview
 
@@ -80,19 +80,69 @@ and kernel behavior concrete at the production slot target.
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists and is committed before implementation evidence.
-- [ ] New smoke tool is TP/EP-only and does not modify PP scheduler files.
-- [ ] Smoke uses the real TurboMind MXFP4 grouped gated-SiLU ABI.
-- [ ] Smoke uses the real TurboMind MXFP4 grouped down ABI.
-- [ ] Smoke reports route distribution and imbalance across all eight GPUs.
-- [ ] Smoke reports dispatch bytes and return bytes for `32` slots / `top_k=6`.
-- [ ] V100 build passes with `CUDA_ARCH=sm_70`.
-- [ ] V100 smoke passes finite and deterministic repeat checks.
-- [ ] Smoke reports per-rank and worst-rank latency.
-- [ ] Evidence is copied to
+- [x] Sprint plan exists and is committed before implementation evidence.
+- [x] New smoke tool is TP/EP-only and does not modify PP scheduler files.
+- [x] Smoke uses the real TurboMind MXFP4 grouped gated-SiLU ABI.
+- [x] Smoke uses the real TurboMind MXFP4 grouped down ABI.
+- [x] Smoke reports route distribution and imbalance across all eight GPUs.
+- [x] Smoke reports dispatch bytes and return bytes for `32` slots / `top_k=6`.
+- [x] V100 build passes with `CUDA_ARCH=sm_70`.
+- [x] V100 smoke passes finite and deterministic repeat checks.
+- [x] Smoke reports per-rank and worst-rank latency.
+- [x] Evidence is copied to
       `logs/from-cluster/sprint231-tp-ep-expert-slice/`.
-- [ ] Status and vision docs are updated with the decision.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Status and vision docs are updated with the decision.
+- [x] Changes are committed with explicit `git add` paths.
+
+## Evidence
+
+Build on V100:
+
+```text
+cd /workspace/ds4-sprint181
+make -B -j80 CUDA_ARCH=sm_70 tools/ds4-v100-tp-ep-expert-smoke
+```
+
+Target 32-slot/top-6 run:
+
+```text
+./tools/ds4-v100-tp-ep-expert-smoke \
+  --lib ./build/turbomind-v100/libggml-turbomind.so \
+  --slots 32 --top-k 6 --warmup 5 --iters 30
+```
+
+Result:
+
+```text
+rank 0 routes 24 active_local_experts 6 max_routes_per_expert 6 total_ms 0.059529
+rank 1 routes 24 active_local_experts 6 max_routes_per_expert 6 total_ms 0.059255
+rank 2 routes 24 active_local_experts 6 max_routes_per_expert 6 total_ms 0.058982
+rank 3 routes 24 active_local_experts 6 max_routes_per_expert 6 total_ms 0.058880
+rank 4 routes 24 active_local_experts 6 max_routes_per_expert 6 total_ms 0.058709
+rank 5 routes 24 active_local_experts 6 max_routes_per_expert 6 total_ms 0.058607
+rank 6 routes 24 active_local_experts 6 max_routes_per_expert 6 total_ms 0.058948
+rank 7 routes 24 active_local_experts 6 max_routes_per_expert 6 total_ms 0.249378
+tp_ep_expert_smoke slots 32 top_k 6 aggregate_routes 192 dispatch_bytes 1572864 return_bytes 1572864 route_imbalance 1.000000 worst_total_ms 0.249378 repeat_max_abs 0 repeat_bad 0 repeat_nan 0 PASS
+```
+
+Denser diagnostic:
+
+```text
+./tools/ds4-v100-tp-ep-expert-smoke \
+  --lib ./build/turbomind-v100/libggml-turbomind.so \
+  --slots 64 --top-k 6 --warmup 5 --iters 30
+```
+
+Result:
+
+```text
+tp_ep_expert_smoke slots 64 top_k 6 aggregate_routes 384 dispatch_bytes 3145728 return_bytes 3145728 route_imbalance 1.000000 worst_total_ms 0.268049 repeat_max_abs 0 repeat_bad 0 repeat_nan 0 PASS
+```
+
+Logs:
+
+- `logs/from-cluster/sprint231-tp-ep-expert-slice/ep32-top6.log`
+- `logs/from-cluster/sprint231-tp-ep-expert-slice/ep64-top6-diagnostic.log`
 
 ## Risks
 
@@ -107,4 +157,15 @@ and kernel behavior concrete at the production slot target.
 
 ## Decision
 
-Pending.
+Sprint 231 passes as a bounded EP kernel/lifecycle gate. The separate TP/EP
+path can run the real TurboMind MXFP4 grouped gated-SiLU and grouped down
+kernels on all eight V100s with an EP8 route distribution at the target
+`32` slot / `top_k=6` shape. The modeled wire volume is small:
+`1.5 MiB` dispatch and `1.5 MiB` return for `192` aggregate routes. The
+deterministic repeat check is exact and finite on all ranks.
+
+The main observation is rank skew: ranks `0-6` finish the local EP slice in
+about `0.059 ms`, while rank `7` reports `0.249 ms` at the target shape and
+`0.268 ms` in the denser diagnostic. The next sprint should carry this
+per-rank timing forward into the one-layer TP/EP correctness gate rather than
+averaging it away.

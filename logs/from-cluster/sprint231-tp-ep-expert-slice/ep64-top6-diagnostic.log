@@ -1,0 +1,9 @@
+rank	0	device	0	routes	48	active_local_experts	6	max_routes_per_expert	12	gate_ms	0.028843	down_ms	0.026897	total_ms	0.055740
+rank	1	device	1	routes	48	active_local_experts	6	max_routes_per_expert	12	gate_ms	0.028570	down_ms	0.026897	total_ms	0.055467
+rank	2	device	2	routes	48	active_local_experts	6	max_routes_per_expert	11	gate_ms	0.028297	down_ms	0.026897	total_ms	0.055194
+rank	3	device	3	routes	48	active_local_experts	6	max_routes_per_expert	11	gate_ms	0.028058	down_ms	0.026897	total_ms	0.054955
+rank	4	device	4	routes	48	active_local_experts	6	max_routes_per_expert	11	gate_ms	0.027785	down_ms	0.026897	total_ms	0.054682
+rank	5	device	5	routes	48	active_local_experts	6	max_routes_per_expert	11	gate_ms	0.027511	down_ms	0.026897	total_ms	0.054409
+rank	6	device	6	routes	48	active_local_experts	6	max_routes_per_expert	12	gate_ms	0.027238	down_ms	0.026897	total_ms	0.054135
+rank	7	device	7	routes	48	active_local_experts	6	max_routes_per_expert	12	gate_ms	0.175923	down_ms	0.092126	total_ms	0.268049
+tp_ep_expert_smoke	slots	64	top_k	6	aggregate_routes	384	global_experts	256	local_experts	32	active_local_experts	6	dispatch_bytes	3145728	return_bytes	3145728	route_imbalance	1.000000	worst_gate_ms	0.175923	worst_down_ms	0.092126	worst_total_ms	0.268049	repeat_max_abs	0.000000000	repeat_bad	0	repeat_nan	0	PASS

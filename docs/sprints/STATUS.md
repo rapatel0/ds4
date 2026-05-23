@@ -266,6 +266,19 @@ indexer KV passes at slot `7`, position `8192`, attn row `192`, attn row
 bytes `65`, and `max_abs=0.000000000`. TP/EP is still not a serving runtime;
 the next step is a bounded EP routed-expert slice using the real low-bit
 expert kernels inside the separate TP runtime model.
+Sprint 231 adds that bounded EP routed-expert slice as a new TP/EP-only smoke
+tool, `tools/ds4-v100-tp-ep-expert-smoke.cu`. It uses the real TurboMind
+MXFP4 grouped gated-SiLU and grouped down ABIs on all eight V100s, with EP8
+ownership modeled as `256` global experts and `32` local experts per rank. At
+the target `32` slots / `top_k=6`, the smoke reports `192` aggregate routes,
+`24` routes per GPU, `6` active local experts per GPU, route imbalance
+`1.000000`, `1572864` dispatch bytes, `1572864` return bytes,
+`repeat_max_abs=0`, `repeat_bad=0`, `repeat_nan=0`, and `PASS`. Per-rank
+latency is skewed: ranks `0-6` are about `0.059 ms`, while rank `7` is
+`0.249378 ms`; the 64-slot diagnostic also passes with `384` aggregate routes
+and rank `7` at `0.268049 ms`. TP/EP is still not serving, but the EP
+low-bit kernel gate is now live; the next step is a one-layer TP/EP
+correctness gate that combines dense/KV, routing, EP experts, and reduction.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit

@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 230
+revision: 231
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -75,6 +75,10 @@ not a serial layer-chain.
 - Sprint 230 added explicit per-layer sharded KV row ownership to the separate
   TP runtime. Ratio-4/indexer and ratio-128 dense/KV slices pass on the V100
   pod at `32` slots / `256K` / F8 KV with `max_abs=0`.
+- Sprint 231 added the bounded EP routed-expert slice. A new TP/EP-only smoke
+  runs the real TurboMind MXFP4 grouped gated-SiLU and grouped down kernels on
+  all eight V100s at the `32` slot / `top_k=6` target, with finite exact repeat
+  output and explicit route/latency reporting.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -176,7 +180,7 @@ ratio-128 without indexer KV passes at `attn_row=192`, `attn_row_bytes=65`,
 and `max_abs=0`. This keeps the TP runtime path viable and moves the next
 implementation gate to EP routed experts.
 
-### Sprint 231 - EP Routed Expert Slice [planned]
+### Sprint 231 - EP Routed Expert Slice [complete]
 
 Goal: Implement a bounded EP routed-expert slice using real low-bit expert
 kernels and measure expert dispatch, route imbalance, and grouped GEMM density
@@ -186,7 +190,14 @@ Rationale: Expert execution dominates the useful work. EP is only valuable if
 active slots create dense enough expert batches and dispatch/reduction does not
 erase the kernel gains.
 
-Outcome: Pending.
+Outcome: Complete. `tools/ds4-v100-tp-ep-expert-smoke.cu` models EP8
+ownership as `256` global experts and `32` local experts per GPU, then runs
+the real TurboMind MXFP4 grouped gated-SiLU and grouped down kernels on all
+eight V100s. At `32` slots / `top_k=6`, it reports `192` aggregate routes,
+`1.5 MiB` dispatch, `1.5 MiB` return, balanced route imbalance `1.0`,
+`repeat_max_abs=0`, `repeat_bad=0`, `repeat_nan=0`, and `PASS`. Rank `7` is
+the slow rank at `0.249378 ms` versus roughly `0.059 ms` on ranks `0-6`, so
+per-rank timing must remain visible in Sprint 232.
 
 ### Sprint 232 - One-Layer TP/EP Correctness Gate [planned]
 
@@ -270,6 +281,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 |---|---|---|---|
 | 2026-05-23 | Archived the prior PP-era vision to `docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md`. | The accumulated roadmap still documents history, but it no longer reflects the strategy. | Use this file as the active alignment document. |
 | 2026-05-23 | Sprint 230 proved TP sharded KV row ownership at `32` slots / `256K`. | TP/EP needs resident hidden/KV state before EP expert work is meaningful. | Build the bounded EP routed-expert slice in separate TP/EP files. |
+| 2026-05-23 | Sprint 231 proved bounded EP8 routed expert execution with real TurboMind MXFP4 kernels. | The EP low-bit kernel path is live outside the PP scheduler, but rank skew is visible. | Build the one-layer TP/EP correctness gate and preserve per-rank timing. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit in Sprint 236 or equivalent after TP/EP serving exists. |
 
