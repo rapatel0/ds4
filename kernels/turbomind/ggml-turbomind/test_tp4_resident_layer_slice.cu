@@ -33,6 +33,7 @@ __global__ void add_half_inplace_kernel(__half * dst, const __half * src, size_t
 
 enum class ResidentReduceAlgo {
     Root,
+    RootAsync,
     Doubling,
     DoublingAsync,
 };
@@ -52,6 +53,7 @@ static int resident_env_int(const char *name, int fallback, int lo, int hi) {
 static ResidentReduceAlgo resident_reduce_algo_from_env() {
     const char *v = std::getenv("DS4_TP4_RESIDENT_ALGO");
     if (!v || !v[0] || std::strcmp(v, "root") == 0) return ResidentReduceAlgo::Root;
+    if (std::strcmp(v, "root_async") == 0) return ResidentReduceAlgo::RootAsync;
     if (std::strcmp(v, "doubling") == 0) return ResidentReduceAlgo::Doubling;
     if (std::strcmp(v, "doubling_async") == 0) return ResidentReduceAlgo::DoublingAsync;
     fprintf(stderr, "[tp4_resident] ignoring invalid DS4_TP4_RESIDENT_ALGO=%s\n", v);
@@ -59,6 +61,7 @@ static ResidentReduceAlgo resident_reduce_algo_from_env() {
 }
 
 static const char * resident_reduce_algo_name(ResidentReduceAlgo algo) {
+    if (algo == ResidentReduceAlgo::RootAsync) return "root_async";
     if (algo == ResidentReduceAlgo::DoublingAsync) return "doubling_async";
     return algo == ResidentReduceAlgo::Doubling ? "doubling" : "root";
 }
@@ -127,6 +130,38 @@ static int run_tp4_resident_layers(std::array<DeviceSide, kParts> & sides,
                 CHECK_CUDA(cudaMemcpyPeer(sides[p].d_A, devices[p],
                                           sides[0].d_A, devices[0],
                                           bytes));
+            }
+        } else if (algo == ResidentReduceAlgo::RootAsync) {
+            for (int p = 1; p < kParts; ++p) {
+                CHECK_CUDA(cudaSetDevice(devices[p]));
+                CHECK_CUDA(cudaMemcpyPeerAsync(reduce_recv[p], devices[0],
+                                               sides[p].d_down, devices[p],
+                                               bytes, sides[p].stream));
+            }
+            for (int p = 1; p < kParts; ++p) {
+                CHECK_CUDA(cudaSetDevice(devices[p]));
+                CHECK_CUDA(cudaStreamSynchronize(sides[p].stream));
+            }
+            CHECK_CUDA(cudaSetDevice(devices[0]));
+            sum4_half_kernel<<<blocks, threads, 0, sides[0].stream>>>(
+                sides[0].d_down,
+                reduce_recv[1],
+                reduce_recv[2],
+                reduce_recv[3],
+                sides[0].d_A,
+                elems);
+            CHECK_CUDA(cudaGetLastError());
+            CHECK_CUDA(cudaStreamSynchronize(sides[0].stream));
+
+            for (int p = 1; p < kParts; ++p) {
+                CHECK_CUDA(cudaSetDevice(devices[p]));
+                CHECK_CUDA(cudaMemcpyPeerAsync(sides[p].d_A, devices[p],
+                                               sides[0].d_A, devices[0],
+                                               bytes, sides[p].stream));
+            }
+            for (int p = 1; p < kParts; ++p) {
+                CHECK_CUDA(cudaSetDevice(devices[p]));
+                CHECK_CUDA(cudaStreamSynchronize(sides[p].stream));
             }
         } else if (algo == ResidentReduceAlgo::Doubling) {
             const int round1_peer[kParts] = {1, 0, 3, 2};
@@ -373,8 +408,8 @@ static int run_resident_case(void * lib, const Case & c) {
 
     std::array<__half *, kParts> reduce_recv{};
     for (int p = 0; p < kParts; ++p) {
-        if (algo == ResidentReduceAlgo::Root && p == 0) continue;
-        CHECK_CUDA(cudaSetDevice(algo == ResidentReduceAlgo::Root ? devices[0] : devices[p]));
+        if ((algo == ResidentReduceAlgo::Root || algo == ResidentReduceAlgo::RootAsync) && p == 0) continue;
+        CHECK_CUDA(cudaSetDevice((algo == ResidentReduceAlgo::Root || algo == ResidentReduceAlgo::RootAsync) ? devices[0] : devices[p]));
         CHECK_CUDA(cudaMalloc(&reduce_recv[p], h_A.size() * sizeof(__half)));
     }
 
@@ -501,7 +536,7 @@ static int run_resident_case(void * lib, const Case & c) {
     }
     for (int p = 0; p < kParts; ++p) {
         if (!reduce_recv[p]) continue;
-        CHECK_CUDA(cudaSetDevice(algo == ResidentReduceAlgo::Root ? devices[0] : devices[p]));
+        CHECK_CUDA(cudaSetDevice((algo == ResidentReduceAlgo::Root || algo == ResidentReduceAlgo::RootAsync) ? devices[0] : devices[p]));
         CHECK_CUDA(cudaFree(reduce_recv[p]));
     }
 

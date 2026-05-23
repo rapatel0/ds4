@@ -26,6 +26,8 @@ Sprint 204 added that first concurrent boundary using per-device async
 doubling. It helps larger shapes (`1.071x` at `768 routes x 43 layers`) but
 does not reliably clear the production decode shape (`0.896x` on the longer
 `96 routes x 43 layers` repeat).
+Sprint 205 tested async root gather/reduce/broadcast and rejected it: the
+96-route 43-layer gate was `0.860x`.
 
 The appliance is correct and served on the 8x V100 node, but it is not yet in
 the practical throughput range from the vision. The current 8-slot default is
@@ -218,6 +220,7 @@ to slightly worse.
 
 | Sprint | Change | Result | Decision |
 |---|---|---|---|
+| 205 | Async root resident TP4 reduction | Correct on V100; root_async speedups were `0.970x` at 96 routes x 4 layers, `0.866x` at 768 routes x 4 layers, and `0.860x` at 96 routes x 43 layers | Reject root_async and pause the TP4 production decode branch; pivot to persistent fused routed-FFN |
 | 204 | Concurrent resident TP4 reduction | Correct on V100 with `doubling_async`; 43-layer 768-route speedup was `1.071x`, while the longer 43-layer 96-route repeat was `0.896x` | TP4 remains plausible for larger batched/prefill shapes, but not ready for production decode scheduler integration |
 | 203 | Resident TP4 layer-slice gate | Correct on V100 at 6/96/768 routes; 43-layer root speedups were `0.825x` at 96 routes and `0.589x` at 768 routes; hand-rolled doubling was slower than root in 4-layer tests | Do not wire this TP4 boundary into production; next TP work needs a real concurrent collective/fused reduction, otherwise pivot back to persistent fused routed-FFN |
 | 202 | TP4 routed-FFN compute envelope | Correct on V100 after fixing a benchmark stream/workspace overlap; corrected 6/96/768-route compute-only speedups were `2.686x`, `2.350x`, `3.636x`; copy-inclusive speedups were `0.986x`, `0.783x`, `0.682x` | TP4 expert compute is worth pursuing only inside a full-layer resident TP/EP topology; reject routed-only TP overlay expansion |
@@ -504,3 +507,7 @@ resident slice becomes positive for 768-route high-batch shapes. The 96-route
 production decode shape remains negative on repeat, so the project should not
 spend the next sprint wiring TP4 into serving. Either build a stronger
 collective gate or pivot back to persistent fused routed-FFN work.
+After Sprint 205, the stronger small-payload root alternative is rejected.
+The next sprint should not continue TP4 decode integration; it should start the
+persistent fused routed-FFN path unless the explicit goal changes to
+larger-batch/prefill TP4.

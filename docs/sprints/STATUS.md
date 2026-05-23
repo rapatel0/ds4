@@ -30,6 +30,11 @@ the resident slice and is positive at larger 768-route shapes (`1.071x` over
 the first 43-layer run was `1.006x`, while the longer repeat was `0.896x`.
 TP4 should remain a larger-batch/prefill candidate unless the collective gets a
 fused/NCCL-grade implementation.
+Sprint 205 tested the missing async root variant. It is correct, but slower:
+`0.970x` at `96 routes x 4 layers`, `0.866x` at `768 routes x 4 layers`, and
+`0.860x` at `96 routes x 43 layers`. This closes the current TP4 production
+decode branch; next implementation should pivot to persistent fused routed-FFN
+work.
 
 Current long-context production throughput mode is the Sprint 121 16-slot/256K
 appliance with the Sprint 122 rendezvous fix. Sprint 137 adds an explicit
@@ -317,6 +322,7 @@ generated tok/s for 8-slot/256K and `20.026385` for 4-slot/1M.
 
 | Sprint | Experiment | Result | Decision |
 |---|---|---|---|
+| 205 | Async root resident TP4 reduction | V100 build passed; `root_async` correctness passed; speedups were `0.970x` at 96 routes x 4 layers, `0.866x` at 768 routes x 4 layers, and `0.860x` at 96 routes x 43 layers | Reject root_async; pause TP4 production decode branch and pivot to persistent fused routed-FFN |
 | 204 | Concurrent resident TP4 reduction | V100 build passed; `doubling_async` correctness passed at 96/768 routes; 43-layer 768-route speedup was `1.071x`, but 43-layer 96-route repeat was `0.896x` | Keep TP4 for larger batched/prefill investigation only; do not integrate production decode scheduler without a fused/NCCL-grade collective |
 | 203 | Resident TP4 layer-slice gate | V100 build passed; resident TP4 correctness passed at 6/96/768 routes; 43-layer root speedup was `0.825x` at 96 routes and `0.589x` at 768 routes; hand-rolled doubling was slower than root in 4-layer tests | Do not wire this TP4 boundary into production; next TP work needs a real concurrent collective/fused reduction, otherwise pivot back to persistent fused routed-FFN |
 | 202 | TP4 routed-FFN compute envelope | V100 build passed; fixed a GPU0 stream/workspace overlap in the benchmark warmup; real TurboMind MXFP4 TP4 split correctness passed at 6/96/768 routes; corrected compute-only speedup was `2.686x`, `2.350x`, `3.636x`; copy-inclusive speedup was `0.986x`, `0.783x`, `0.682x` | TP4 compute is strong enough for full-layer TP/EP, but routed-only full-hidden copy overlays are rejected |
@@ -620,6 +626,11 @@ Sprint 204 made that boundary concurrent with per-device async doubling. The
 larger 768-route 43-layer shape improved to `1.071x`, but the production
 96-route 43-layer repeat was `0.896x`. This keeps TP4 alive for larger
 batched/prefill work, not for immediate production decode integration.
+Sprint 205 tested async root gather/reduce/broadcast for small-payload decode.
+It was correct but slower than the one-GPU reference and slower than
+`doubling_async`, with `0.860x` at the 96-route 43-layer gate. The current TP4
+decode branch is now blocked; the next sprint should return to persistent fused
+routed-FFN work.
 
 The concise current status is also tracked in
 `docs/sprints/EXPERIMENT-STATUS.md`.
