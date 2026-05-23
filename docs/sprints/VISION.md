@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 289
+revision: 290
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -1495,6 +1495,36 @@ carry or reconstruct final HC `[slots,4,4096]` at the end of layer 42 and feed
 that into this output-head primitive. Only after that should `/v1/completions`
 emit real selected tokens/text.
 
+### Sprint 290 - TP/EP Resident Output Head Gate [complete]
+
+Goal: Convert the cold TP/EP output-head diagnostic into a resident repeated
+gate and remove full-logit host readback from the reduction path.
+
+Outcome: Complete. `tools/ds4-v100-tp-ep-full-layer-smoke.cu` now has
+`--output-head-resident-gate`. It preloads the real BF16 `output.weight` vocab
+shards across all 8 V100s, keeps output-head scratch resident, repeats the
+synthetic-HC output path, and reports separate timing for HC prep, embedding
+broadcast, vocab projection, worst per-GPU projection kernel, and token
+selection.
+
+The sprint also added GPU-side per-shard top-1 reduction. That changes the
+host transfer from full logits to only `8 * slots` token/logit candidates. At
+32 slots, full-logit readback measured `15.980438 ms` total and
+`2002.448256` output-head tok/s. With device-side shard top-1, the same gate
+measures `8.528343 ms` total, `7.474198 ms` projection wall time,
+`7.427597 ms` worst per-GPU projection-kernel time, `0.211761 ms`
+top-1/readback time, and `3752.194257` output-head tok/s. The 16-slot and
+64-slot gates also pass at `3563.755123` and `3877.433386` output-head tok/s.
+
+Decision: reject full-logit host readback for serving. Promote resident
+vocab-sharded output projection plus GPU-side shard top-1 as the first TP/EP
+output-head serving shape. The projection kernel is still scalar BF16 and
+should be optimized later, after real final HC is wired into the serving loop.
+
+Remaining gap: the TP/EP token-major loop still carries per-rank hidden shards,
+not final DS4 HC `[slots,4,4096]`. The next sprint should add the HC carry
+contract and call the resident output-head primitive from `/v1/completions`.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1584,6 +1614,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 287 added bucketed TP/EP admission. | Mixed `32,64` token requests are served as same-length batches instead of rejected, with `32/32` match and zero rejected requests. | Add a prompt/token-compatible diagnostic TP/EP endpoint on top of coalesced bucketed admission. |
 | 2026-05-23 | Sprint 288 added diagnostic `/v1/completions` for TP/EP. | Completion-shaped requests now exercise the real coalesced/bucketed resident decode path and return OpenAI-style envelopes, but prompt prefill/output-head text are still explicit gaps. | Wire real TP/EP output-head/top-token selection, then tokenizer text and prompt prefill. |
 | 2026-05-23 | Sprint 289 added the TP/EP vocab-sharded output-head gate. | Real `output.weight` shards and output controls now produce a global top-1 token across 8 GPUs; the missing piece is final HC from the serving loop. | Carry final HC through the TP/EP token-major loop and call output-head from `/v1/completions`. |
+| 2026-05-23 | Sprint 290 added a resident TP/EP output-head gate and GPU-side shard top-1. | Full-logit host readback roughly doubled output-head latency; device-side top-1 raises the 32-slot resident gate to `3752.194257` output-head tok/s. | Add the TP/EP final-HC carry contract, then feed the resident output head from `/v1/completions`. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

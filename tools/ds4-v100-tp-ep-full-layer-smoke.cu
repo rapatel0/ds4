@@ -431,6 +431,7 @@ struct Options {
     int max_requests = 0;
     int microbatch_wait_us = 5000;
     bool output_head_gate = false;
+    bool output_head_resident_gate = false;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -645,6 +646,46 @@ __global__ void bf16_dense_kernel(float *out,
     }
     acc = block_sum_256_f32(acc);
     if (threadIdx.x == 0u) out[(uint64_t)slot * rows + row] = acc;
+}
+
+__global__ void shard_top1_kernel(uint32_t *out_token,
+                                  float *out_logit,
+                                  const float *logits,
+                                  uint32_t rows,
+                                  uint32_t shard_base,
+                                  uint32_t slots) {
+    const uint32_t slot = blockIdx.x;
+    if (slot >= slots) return;
+    const float *row = logits + (uint64_t)slot * rows;
+    float best = -3.4028234663852886e+38F;
+    uint32_t best_idx = 0;
+    for (uint32_t i = threadIdx.x; i < rows; i += blockDim.x) {
+        const float v = row[i];
+        if (v > best) {
+            best = v;
+            best_idx = i;
+        }
+    }
+    __shared__ float s_val[256];
+    __shared__ uint32_t s_idx[256];
+    s_val[threadIdx.x] = best;
+    s_idx[threadIdx.x] = best_idx;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            const float other = s_val[threadIdx.x + stride];
+            const uint32_t other_idx = s_idx[threadIdx.x + stride];
+            if (other > s_val[threadIdx.x]) {
+                s_val[threadIdx.x] = other;
+                s_idx[threadIdx.x] = other_idx;
+            }
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0u) {
+        out_token[slot] = shard_base + s_idx[0];
+        out_logit[slot] = s_val[0];
+    }
 }
 
 __global__ void synthetic_hc_kernel(float *hc, uint32_t slots) {
@@ -1034,7 +1075,7 @@ void usage(const char *argv0) {
                  "       [--skip-decode-checksum]\n"
                  "       [--serve-http] [--host ADDR] [--port N] [--max-requests N]\n"
                  "       [--microbatch-wait-us N]\n"
-                 "       [--output-head-gate]\n",
+                 "       [--output-head-gate] [--output-head-resident-gate]\n",
                  argv0);
 }
 
@@ -1178,6 +1219,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             ++i;
         } else if (std::strcmp(arg, "--output-head-gate") == 0) {
             opt->output_head_gate = true;
+        } else if (std::strcmp(arg, "--output-head-resident-gate") == 0) {
+            opt->output_head_resident_gate = true;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -1819,6 +1862,29 @@ struct OutputHeadGateStats {
     int finite_bad = 0;
 };
 
+struct OutputHeadResidentGateStats {
+    bool pass = true;
+    int slots = 0;
+    int vocab = 0;
+    int rows_per_gpu = 0;
+    int warmup = 0;
+    int iters = 0;
+    uint64_t output_weight_bytes = 0;
+    uint64_t logits_bytes = 0;
+    double load_ms = 0.0;
+    double avg_total_ms = 0.0;
+    double avg_hc_prep_ms = 0.0;
+    double avg_broadcast_ms = 0.0;
+    double avg_projection_wall_ms = 0.0;
+    double avg_projection_kernel_worst_ms = 0.0;
+    double avg_readback_reduce_ms = 0.0;
+    double output_head_tok_s = 0.0;
+    uint32_t first_token = UINT32_MAX;
+    float first_logit = 0.0f;
+    uint64_t checksum = 0;
+    int finite_bad = 0;
+};
+
 int run_output_head_gate(const Options &opt,
                          const std::vector<ContractRow> &rows,
                          OutputHeadGateStats *stats) {
@@ -2091,6 +2157,335 @@ int run_output_head_gate(const Options &opt,
                 (unsigned long long)stats->logits_bytes,
                 stats->projection_ms, stats->projection_kernel_worst_ms,
                 stats->host_reduce_ms, stats->total_ms,
+                stats->first_token, stats->first_logit, stats->finite_bad,
+                (unsigned long long)stats->checksum,
+                stats->pass ? "PASS" : "FAIL");
+    return stats->pass ? 0 : 5;
+}
+
+int run_output_head_resident_gate(const Options &opt,
+                                  const std::vector<ContractRow> &rows,
+                                  OutputHeadResidentGateStats *stats) {
+    if (opt.dense_f16_cublas_compose) {
+        std::fprintf(stderr, "resident output-head gate currently supports bf16_scalar only\n");
+        return 2;
+    }
+    stats->slots = opt.slots;
+    stats->warmup = opt.warmup;
+    stats->iters = opt.iters;
+
+    std::vector<ContractRow> output_rows;
+    int output_cols = 0;
+    int vocab = 0;
+    if (!select_bf16_dense_rows(rows, "output.weight", &output_rows, &output_cols, &vocab)) {
+        std::fprintf(stderr, "resident output-head gate failed to select output.weight shards\n");
+        return 1;
+    }
+    if (output_cols != kHidden || vocab <= 0 || vocab % kGpus != 0) {
+        std::fprintf(stderr, "resident output-head gate invalid output.weight shape cols=%d vocab=%d\n",
+                     output_cols, vocab);
+        return 2;
+    }
+    const int rows_per_gpu = vocab / kGpus;
+    stats->vocab = vocab;
+    stats->rows_per_gpu = rows_per_gpu;
+
+    std::vector<float> hc_head_fn;
+    std::vector<float> hc_head_base;
+    std::vector<float> hc_head_scale;
+    std::vector<float> output_norm;
+    if (load_control_f32(opt, rows, "hc_head_fn", (size_t)4 * 4 * kHidden, &hc_head_fn) ||
+        load_control_f32(opt, rows, "hc_head_base", 4, &hc_head_base) ||
+        load_control_f32(opt, rows, "hc_head_scale", 1, &hc_head_scale) ||
+        load_control_f32(opt, rows, "output_norm.weight", kHidden, &output_norm)) {
+        return 3;
+    }
+
+    const uint64_t hc_elems = (uint64_t)opt.slots * 4ull * (uint64_t)kHidden;
+    const uint64_t embd_elems = (uint64_t)opt.slots * (uint64_t)kHidden;
+    const uint64_t logits_elems = (uint64_t)opt.slots * (uint64_t)rows_per_gpu;
+    const uint64_t output_shard_bytes = (uint64_t)rows_per_gpu * (uint64_t)kHidden *
+                                        sizeof(uint16_t);
+
+    float *d_hc = nullptr;
+    float *d_hc_norm = nullptr;
+    float *d_head_pre = nullptr;
+    float *d_head_weights = nullptr;
+    float *d_embd = nullptr;
+    float *d_embd_norm = nullptr;
+    float *d_head_fn = nullptr;
+    float *d_head_base = nullptr;
+    float *d_head_scale = nullptr;
+    float *d_output_norm = nullptr;
+    uint16_t *d_w[kGpus] = {};
+    float *d_x[kGpus] = {};
+    float *d_logits[kGpus] = {};
+    uint32_t *d_best_token[kGpus] = {};
+    float *d_best_logit[kGpus] = {};
+    cudaEvent_t projection_start[kGpus] = {};
+    cudaEvent_t projection_stop[kGpus] = {};
+
+    const auto load_start = std::chrono::steady_clock::now();
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    CHECK_CUDA(cudaMalloc(&d_hc, (size_t)hc_elems * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_hc_norm, (size_t)hc_elems * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_head_pre, (size_t)opt.slots * 4 * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_head_weights, (size_t)opt.slots * 4 * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_embd, (size_t)embd_elems * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_embd_norm, (size_t)embd_elems * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_head_fn, hc_head_fn.size() * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_head_base, hc_head_base.size() * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_head_scale, hc_head_scale.size() * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_output_norm, output_norm.size() * sizeof(float)));
+    CHECK_CUDA(cudaMemcpy(d_head_fn, hc_head_fn.data(), hc_head_fn.size() * sizeof(float),
+                          cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_head_base, hc_head_base.data(), hc_head_base.size() * sizeof(float),
+                          cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_head_scale, hc_head_scale.data(), hc_head_scale.size() * sizeof(float),
+                          cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_output_norm, output_norm.data(), output_norm.size() * sizeof(float),
+                          cudaMemcpyHostToDevice));
+
+    std::vector<uint16_t> host_w((size_t)rows_per_gpu * (size_t)kHidden);
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        const ContractRow &r = output_rows[(size_t)gpu];
+        const std::string path = path_join(opt.pack_dir, r.source_pack_file);
+        if (read_exact_at(path, physical_row_offset(r), host_w.data(),
+                          (size_t)output_shard_bytes) != 0) {
+            return 4;
+        }
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        CHECK_CUDA(cudaMalloc(&d_w[gpu], (size_t)output_shard_bytes));
+        CHECK_CUDA(cudaMalloc(&d_x[gpu], (size_t)embd_elems * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&d_logits[gpu], (size_t)logits_elems * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&d_best_token[gpu], (size_t)opt.slots * sizeof(uint32_t)));
+        CHECK_CUDA(cudaMalloc(&d_best_logit[gpu], (size_t)opt.slots * sizeof(float)));
+        CHECK_CUDA(cudaEventCreate(&projection_start[gpu]));
+        CHECK_CUDA(cudaEventCreate(&projection_stop[gpu]));
+        CHECK_CUDA(cudaMemcpy(d_w[gpu], host_w.data(), (size_t)output_shard_bytes,
+                              cudaMemcpyHostToDevice));
+        stats->output_weight_bytes += output_shard_bytes;
+    }
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        CHECK_CUDA(cudaDeviceSynchronize());
+    }
+    const auto load_stop = std::chrono::steady_clock::now();
+    stats->load_ms =
+        std::chrono::duration<double, std::milli>(load_stop - load_start).count();
+    stats->logits_bytes = logits_elems * sizeof(float) * kGpus;
+
+    const int total_iters = opt.warmup + opt.iters;
+    std::vector<std::vector<uint32_t>> host_best_token((size_t)kGpus);
+    std::vector<std::vector<float>> host_best_logit((size_t)kGpus);
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        host_best_token[(size_t)gpu].resize((size_t)opt.slots);
+        host_best_logit[(size_t)gpu].resize((size_t)opt.slots);
+    }
+    std::vector<uint32_t> best_token((size_t)opt.slots, UINT32_MAX);
+    std::vector<float> best_logit((size_t)opt.slots, -std::numeric_limits<float>::max());
+
+    for (int iter = 0; iter < total_iters; ++iter) {
+        const bool measure = iter >= opt.warmup;
+        const auto iter_start = std::chrono::steady_clock::now();
+
+        const auto prep_start = std::chrono::steady_clock::now();
+        CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+        synthetic_hc_kernel<<<(unsigned int)((hc_elems + 255) / 256), 256>>>(d_hc, opt.slots);
+        rms_norm_plain_rows_kernel<<<(unsigned int)opt.slots, 256>>>(
+            d_hc_norm, d_hc, 4u * (uint32_t)kHidden, (uint32_t)opt.slots, 1.0e-6f);
+        const dim3 head_grid(4u, (unsigned int)opt.slots, 1u);
+        f32_dense_kernel<<<head_grid, 256>>>(d_head_pre, d_head_fn, d_hc_norm,
+                                             4u, 4u * (uint32_t)kHidden,
+                                             (uint32_t)opt.slots);
+        output_hc_weights_rows_kernel<<<(unsigned int)(((uint64_t)opt.slots * 4ull + 255) / 256), 256>>>(
+            d_head_weights, d_head_pre, d_head_scale, d_head_base, (uint32_t)opt.slots);
+        hc_weighted_sum_rows_kernel<<<(unsigned int)((embd_elems + 255) / 256), 256>>>(
+            d_embd, d_hc, d_head_weights, (uint32_t)opt.slots);
+        rms_norm_weight_rows_kernel<<<(unsigned int)opt.slots, 256>>>(
+            d_embd_norm, d_embd, d_output_norm, (uint32_t)kHidden,
+            (uint32_t)opt.slots, 1.0e-6f);
+        CHECK_CUDA(cudaGetLastError());
+        CHECK_CUDA(cudaDeviceSynchronize());
+        const auto prep_stop = std::chrono::steady_clock::now();
+
+        const auto broadcast_start = std::chrono::steady_clock::now();
+        for (int gpu = 0; gpu < kGpus; ++gpu) {
+            CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+            if (gpu == 0) {
+                CHECK_CUDA(cudaMemcpyAsync(d_x[gpu], d_embd_norm,
+                                           (size_t)embd_elems * sizeof(float),
+                                           cudaMemcpyDeviceToDevice));
+            } else {
+                CHECK_CUDA(cudaMemcpyPeerAsync(d_x[gpu],
+                                               opt.devices[gpu],
+                                               d_embd_norm,
+                                               opt.devices[0],
+                                               (size_t)embd_elems * sizeof(float)));
+            }
+        }
+        for (int gpu = 0; gpu < kGpus; ++gpu) {
+            CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+            CHECK_CUDA(cudaDeviceSynchronize());
+        }
+        const auto broadcast_stop = std::chrono::steady_clock::now();
+
+        const auto projection_start_wall = std::chrono::steady_clock::now();
+        for (int gpu = 0; gpu < kGpus; ++gpu) {
+            CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+            const dim3 grid((unsigned int)rows_per_gpu, (unsigned int)opt.slots, 1u);
+            CHECK_CUDA(cudaEventRecord(projection_start[gpu]));
+            bf16_dense_kernel<<<grid, 256>>>(d_logits[gpu], d_w[gpu], d_x[gpu],
+                                             (uint32_t)rows_per_gpu,
+                                             (uint32_t)kHidden,
+                                             (uint32_t)kHidden,
+                                             (uint32_t)opt.slots);
+            CHECK_CUDA(cudaEventRecord(projection_stop[gpu]));
+            CHECK_CUDA(cudaGetLastError());
+        }
+        double iter_kernel_worst_ms = 0.0;
+        for (int gpu = 0; gpu < kGpus; ++gpu) {
+            CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+            CHECK_CUDA(cudaDeviceSynchronize());
+            float kernel_ms = 0.0f;
+            CHECK_CUDA(cudaEventElapsedTime(&kernel_ms,
+                                            projection_start[gpu],
+                                            projection_stop[gpu]));
+            iter_kernel_worst_ms = std::max(iter_kernel_worst_ms, (double)kernel_ms);
+        }
+        const auto projection_stop_wall = std::chrono::steady_clock::now();
+
+        const auto reduce_start = std::chrono::steady_clock::now();
+        std::fill(best_token.begin(), best_token.end(), UINT32_MAX);
+        std::fill(best_logit.begin(), best_logit.end(),
+                  -std::numeric_limits<float>::max());
+        for (int gpu = 0; gpu < kGpus; ++gpu) {
+            CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+            const int shard_index = output_rows[(size_t)gpu].shard_index >= 0
+                ? output_rows[(size_t)gpu].shard_index
+                : gpu;
+            shard_top1_kernel<<<(unsigned int)opt.slots, 256>>>(
+                d_best_token[gpu],
+                d_best_logit[gpu],
+                d_logits[gpu],
+                (uint32_t)rows_per_gpu,
+                (uint32_t)(shard_index * rows_per_gpu),
+                (uint32_t)opt.slots);
+            CHECK_CUDA(cudaGetLastError());
+        }
+        for (int gpu = 0; gpu < kGpus; ++gpu) {
+            CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+            CHECK_CUDA(cudaDeviceSynchronize());
+            CHECK_CUDA(cudaMemcpy(host_best_token[(size_t)gpu].data(), d_best_token[gpu],
+                                  (size_t)opt.slots * sizeof(uint32_t),
+                                  cudaMemcpyDeviceToHost));
+            CHECK_CUDA(cudaMemcpy(host_best_logit[(size_t)gpu].data(), d_best_logit[gpu],
+                                  (size_t)opt.slots * sizeof(float),
+                                  cudaMemcpyDeviceToHost));
+            for (int slot = 0; slot < opt.slots; ++slot) {
+                const float logit = host_best_logit[(size_t)gpu][(size_t)slot];
+                if (!std::isfinite(logit)) {
+                    if (measure) stats->finite_bad++;
+                    stats->pass = false;
+                    continue;
+                }
+                if (logit > best_logit[(size_t)slot]) {
+                    best_logit[(size_t)slot] = logit;
+                    best_token[(size_t)slot] =
+                        host_best_token[(size_t)gpu][(size_t)slot];
+                }
+            }
+        }
+        const auto reduce_stop = std::chrono::steady_clock::now();
+        const auto iter_stop = std::chrono::steady_clock::now();
+
+        if (measure) {
+            stats->avg_hc_prep_ms +=
+                std::chrono::duration<double, std::milli>(prep_stop - prep_start).count();
+            stats->avg_broadcast_ms +=
+                std::chrono::duration<double, std::milli>(broadcast_stop - broadcast_start).count();
+            stats->avg_projection_wall_ms +=
+                std::chrono::duration<double, std::milli>(projection_stop_wall - projection_start_wall).count();
+            stats->avg_projection_kernel_worst_ms += iter_kernel_worst_ms;
+            stats->avg_readback_reduce_ms +=
+                std::chrono::duration<double, std::milli>(reduce_stop - reduce_start).count();
+            stats->avg_total_ms +=
+                std::chrono::duration<double, std::milli>(iter_stop - iter_start).count();
+            for (int slot = 0; slot < opt.slots; ++slot) {
+                if (best_token[(size_t)slot] >= (uint32_t)vocab ||
+                    !std::isfinite(best_logit[(size_t)slot])) {
+                    stats->pass = false;
+                }
+                uint32_t bits = 0;
+                std::memcpy(&bits, &best_logit[(size_t)slot], sizeof(bits));
+                stats->checksum ^=
+                    (uint64_t)best_token[(size_t)slot] * 1000003ull +
+                    (uint64_t)bits +
+                    (uint64_t)(slot + 1) * 7907ull +
+                    (uint64_t)(iter + 1) * 104729ull;
+            }
+            stats->first_token = best_token.empty() ? UINT32_MAX : best_token[0];
+            stats->first_logit = best_logit.empty() ? 0.0f : best_logit[0];
+        }
+    }
+
+    if (opt.iters > 0) {
+        stats->avg_hc_prep_ms /= (double)opt.iters;
+        stats->avg_broadcast_ms /= (double)opt.iters;
+        stats->avg_projection_wall_ms /= (double)opt.iters;
+        stats->avg_projection_kernel_worst_ms /= (double)opt.iters;
+        stats->avg_readback_reduce_ms /= (double)opt.iters;
+        stats->avg_total_ms /= (double)opt.iters;
+        stats->output_head_tok_s = stats->avg_total_ms > 0.0
+            ? (double)opt.slots * 1000.0 / stats->avg_total_ms
+            : 0.0;
+    }
+    if (stats->checksum == 0 || stats->finite_bad != 0) stats->pass = false;
+
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        if (projection_stop[gpu]) CHECK_CUDA(cudaEventDestroy(projection_stop[gpu]));
+        if (projection_start[gpu]) CHECK_CUDA(cudaEventDestroy(projection_start[gpu]));
+        if (d_best_logit[gpu]) CHECK_CUDA(cudaFree(d_best_logit[gpu]));
+        if (d_best_token[gpu]) CHECK_CUDA(cudaFree(d_best_token[gpu]));
+        if (d_logits[gpu]) CHECK_CUDA(cudaFree(d_logits[gpu]));
+        if (d_x[gpu]) CHECK_CUDA(cudaFree(d_x[gpu]));
+        if (d_w[gpu]) CHECK_CUDA(cudaFree(d_w[gpu]));
+    }
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    CHECK_CUDA(cudaFree(d_output_norm));
+    CHECK_CUDA(cudaFree(d_head_scale));
+    CHECK_CUDA(cudaFree(d_head_base));
+    CHECK_CUDA(cudaFree(d_head_fn));
+    CHECK_CUDA(cudaFree(d_embd_norm));
+    CHECK_CUDA(cudaFree(d_embd));
+    CHECK_CUDA(cudaFree(d_head_weights));
+    CHECK_CUDA(cudaFree(d_head_pre));
+    CHECK_CUDA(cudaFree(d_hc_norm));
+    CHECK_CUDA(cudaFree(d_hc));
+
+    std::printf("tp_ep_output_head_resident_gate\tslots\t%d\tvocab\t%d\t"
+                "rows_per_gpu\t%d\twarmup\t%d\titers\t%d\t"
+                "projection_kernel\tbf16_scalar\t"
+                "output_weight_bytes\t%llu\tlogits_bytes\t%llu\t"
+                "load_ms\t%.6f\tavg_total_ms\t%.6f\t"
+                "avg_hc_prep_ms\t%.6f\tavg_broadcast_ms\t%.6f\t"
+                "avg_projection_wall_ms\t%.6f\t"
+                "avg_projection_kernel_worst_ms\t%.6f\t"
+                "avg_device_top1_readback_ms\t%.6f\t"
+                "output_head_tok_s\t%.6f\t"
+                "first_token\t%u\tfirst_logit\t%.9f\tfinite_bad\t%d\t"
+                "checksum\t%llu\t%s\n",
+                stats->slots, stats->vocab, stats->rows_per_gpu,
+                stats->warmup, stats->iters,
+                (unsigned long long)stats->output_weight_bytes,
+                (unsigned long long)stats->logits_bytes,
+                stats->load_ms, stats->avg_total_ms,
+                stats->avg_hc_prep_ms, stats->avg_broadcast_ms,
+                stats->avg_projection_wall_ms,
+                stats->avg_projection_kernel_worst_ms,
+                stats->avg_readback_reduce_ms,
+                stats->output_head_tok_s,
                 stats->first_token, stats->first_logit, stats->finite_bad,
                 (unsigned long long)stats->checksum,
                 stats->pass ? "PASS" : "FAIL");
@@ -5314,6 +5709,19 @@ int main(int argc, char **argv) {
         }
         OutputHeadGateStats output_head_stats;
         return run_output_head_gate(opt, all_rows, &output_head_stats);
+    }
+
+    if (opt.output_head_resident_gate) {
+        std::vector<ContractRow> all_rows;
+        LayerStats all_stats;
+        if (parse_contract(opt.contract_path, -1, &all_rows, &all_stats) != 0 ||
+            all_stats.bad_rows != 0) {
+            std::fprintf(stderr, "resident output-head gate contract parse failed bad_rows=%llu\n",
+                         (unsigned long long)all_stats.bad_rows);
+            return 2;
+        }
+        OutputHeadResidentGateStats output_head_stats;
+        return run_output_head_resident_gate(opt, all_rows, &output_head_stats);
     }
 
     if (!opt.all_layers) {

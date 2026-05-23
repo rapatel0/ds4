@@ -93,6 +93,17 @@ passes with the same token, but is slower in this cold gate:
 `2217.599099 ms` projection time and `22.116352 ms` worst per-GPU kernel time.
 This makes the output-head layout operational, but `/v1/completions` still
 needs final HC carried into the output head before it can emit real model text.
+Sprint 290 then converted that cold output-head gate into a resident TP/EP
+gate and added GPU-side per-shard top-1 reduction. With full-logit host
+readback, 32 slots measured `15.980438 ms` total and `2002.448256`
+output-head tok/s. After device-side shard top-1, 32 slots measured
+`8.528343 ms` total, `7.474198 ms` projection wall time,
+`7.427597 ms` worst per-GPU projection-kernel time, `0.211761 ms`
+device-top1/readback time, and `3752.194257` output-head tok/s. The 16-slot
+and 64-slot resident gates also pass, at `3563.755123` and `3877.433386`
+output-head tok/s respectively. Full-logit readback is rejected for serving;
+the next gap remains carrying final HC `[slots,4,4096]` through the TP/EP
+token-major loop and feeding this resident output-head primitive.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s
