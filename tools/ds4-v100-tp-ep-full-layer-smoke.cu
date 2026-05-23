@@ -282,6 +282,12 @@ struct SharedApi {
     bool initialized = false;
 };
 
+struct SharedRankBuffers {
+    RankState ranks[kGpus];
+    bool initialized = false;
+    uint64_t core_bytes = 0;
+};
+
 struct DecodeLoopStats {
     bool enabled = false;
     bool pass = true;
@@ -2164,6 +2170,80 @@ void build_offsets_for_rank(int rank, int slots, int top_k,
     *max_routes_per_expert = max_routes;
 }
 
+int open_shared_rank_buffers(const Options &opt, SharedRankBuffers *shared) {
+    shared->core_bytes = 0;
+    for (int p = 0; p < kGpus; ++p) {
+        RankState &r = shared->ranks[p];
+        r.rank = p;
+        r.device = opt.devices[p];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        CHECK_CUDA(cudaStreamCreate(&r.stream));
+        CHECK_CUDA(cudaEventCreate(&r.start));
+        CHECK_CUDA(cudaEventCreate(&r.mid));
+        CHECK_CUDA(cudaEventCreate(&r.stop));
+
+        std::vector<int> offsets;
+        std::vector<int> route_slots;
+        build_offsets_for_rank(p, opt.slots, opt.top_k, &offsets, &route_slots, &r.routes,
+                               &r.active_experts, &r.max_routes_per_expert);
+
+        const size_t a_elems = (size_t)r.routes * kHidden;
+        CHECK_CUDA(cudaMalloc(&r.d_offsets, offsets.size() * sizeof(int)));
+        CHECK_CUDA(cudaMemcpy(r.d_offsets, offsets.data(), offsets.size() * sizeof(int),
+                              cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMalloc(&r.d_route_slots, route_slots.size() * sizeof(int)));
+        CHECK_CUDA(cudaMemcpy(r.d_route_slots, route_slots.data(),
+                              route_slots.size() * sizeof(int), cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMalloc(&r.d_a, a_elems * sizeof(__half)));
+        CHECK_CUDA(cudaMalloc(&r.d_gated, (size_t)r.routes * kMid * sizeof(__half)));
+        CHECK_CUDA(cudaMalloc(&r.d_down, a_elems * sizeof(__half)));
+
+        std::mt19937 rng(0xE2350000u + (uint32_t)p * 97u);
+        std::uniform_real_distribution<float> dist(-0.003f, 0.003f);
+        std::vector<__half> h_a(a_elems);
+        for (__half &v : h_a) v = __float2half(dist(rng));
+        CHECK_CUDA(cudaMemcpy(r.d_a, h_a.data(), a_elems * sizeof(__half),
+                              cudaMemcpyHostToDevice));
+
+        shared->core_bytes += offsets.size() * sizeof(int);
+        shared->core_bytes += route_slots.size() * sizeof(int);
+        shared->core_bytes += a_elems * sizeof(__half);
+        shared->core_bytes += (size_t)r.routes * kMid * sizeof(__half);
+        shared->core_bytes += a_elems * sizeof(__half);
+    }
+    shared->initialized = true;
+    return 0;
+}
+
+void close_shared_rank_buffers(SharedRankBuffers *shared) {
+    if (!shared || !shared->initialized) return;
+    for (int p = 0; p < kGpus; ++p) {
+        RankState &r = shared->ranks[p];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        free_packed(r.gated);
+        free_packed(r.down);
+        if (r.d_offsets) CHECK_CUDA(cudaFree(r.d_offsets));
+        if (r.d_route_slots) CHECK_CUDA(cudaFree(r.d_route_slots));
+        if (r.d_a) CHECK_CUDA(cudaFree(r.d_a));
+        if (r.d_gated) CHECK_CUDA(cudaFree(r.d_gated));
+        if (r.d_down) CHECK_CUDA(cudaFree(r.d_down));
+        if (r.d_ep_contrib_all) CHECK_CUDA(cudaFree(r.d_ep_contrib_all));
+        if (r.d_ep_contrib_half_all) CHECK_CUDA(cudaFree(r.d_ep_contrib_half_all));
+        for (int src = 0; src < kGpus; ++src) {
+            if (r.d_ep_remote[src]) CHECK_CUDA(cudaFree(r.d_ep_remote[src]));
+            if (r.d_ep_remote_half[src]) CHECK_CUDA(cudaFree(r.d_ep_remote_half[src]));
+        }
+        if (r.d_ep_sum) CHECK_CUDA(cudaFree(r.d_ep_sum));
+        if (r.d_next_hidden) CHECK_CUDA(cudaFree(r.d_next_hidden));
+        if (r.start) CHECK_CUDA(cudaEventDestroy(r.start));
+        if (r.mid) CHECK_CUDA(cudaEventDestroy(r.mid));
+        if (r.stop) CHECK_CUDA(cudaEventDestroy(r.stop));
+        if (r.stream) CHECK_CUDA(cudaStreamDestroy(r.stream));
+        r = RankState{};
+    }
+    *shared = SharedRankBuffers{};
+}
+
 int ensure_compose_buffers(const Options &opt, RankState ranks[kGpus]) {
     const uint64_t shard_elems = (uint64_t)opt.slots * (kHidden / kGpus);
     const uint64_t shard_bytes = shard_elems * sizeof(float);
@@ -2577,7 +2657,8 @@ int run_decode_loop(const Options &opt,
 int run_layer(const Options &opt,
               LayerRunSummary *summary,
               const DenseF16Cache *shared_dense_f16_cache,
-              const SharedApi *shared_api) {
+              const SharedApi *shared_api,
+              SharedRankBuffers *shared_rank_buffers) {
     std::vector<ContractRow> rows;
     LayerStats layer_stats;
     if (parse_contract(opt.contract_path, opt.layer, &rows, &layer_stats) != 0 ||
@@ -2756,7 +2837,8 @@ int run_layer(const Options &opt,
         api = &local_api;
     }
 
-    RankState ranks[kGpus];
+    RankState local_ranks[kGpus];
+    RankState *ranks = shared_rank_buffers ? shared_rank_buffers->ranks : local_ranks;
     int aggregate_routes = 0;
     int min_routes = std::numeric_limits<int>::max();
     int max_routes = 0;
@@ -2776,36 +2858,38 @@ int run_layer(const Options &opt,
             ds4_v100_tp_runtime_close(rt);
             return 7;
         }
-        CHECK_CUDA(cudaStreamCreate(&r.stream));
-        CHECK_CUDA(cudaEventCreate(&r.start));
-        CHECK_CUDA(cudaEventCreate(&r.mid));
-        CHECK_CUDA(cudaEventCreate(&r.stop));
+        if (!shared_rank_buffers) {
+            CHECK_CUDA(cudaStreamCreate(&r.stream));
+            CHECK_CUDA(cudaEventCreate(&r.start));
+            CHECK_CUDA(cudaEventCreate(&r.mid));
+            CHECK_CUDA(cudaEventCreate(&r.stop));
 
-        std::vector<int> offsets;
-        std::vector<int> route_slots;
-        build_offsets_for_rank(p, opt.slots, opt.top_k, &offsets, &route_slots, &r.routes,
-                               &r.active_experts, &r.max_routes_per_expert);
+            std::vector<int> offsets;
+            std::vector<int> route_slots;
+            build_offsets_for_rank(p, opt.slots, opt.top_k, &offsets, &route_slots, &r.routes,
+                                   &r.active_experts, &r.max_routes_per_expert);
+
+            const size_t a_elems = (size_t)r.routes * kHidden;
+            CHECK_CUDA(cudaMalloc(&r.d_offsets, offsets.size() * sizeof(int)));
+            CHECK_CUDA(cudaMemcpy(r.d_offsets, offsets.data(), offsets.size() * sizeof(int),
+                                  cudaMemcpyHostToDevice));
+            CHECK_CUDA(cudaMalloc(&r.d_route_slots, route_slots.size() * sizeof(int)));
+            CHECK_CUDA(cudaMemcpy(r.d_route_slots, route_slots.data(),
+                                  route_slots.size() * sizeof(int), cudaMemcpyHostToDevice));
+            CHECK_CUDA(cudaMalloc(&r.d_a, a_elems * sizeof(__half)));
+            CHECK_CUDA(cudaMalloc(&r.d_gated, (size_t)r.routes * kMid * sizeof(__half)));
+            CHECK_CUDA(cudaMalloc(&r.d_down, a_elems * sizeof(__half)));
+
+            std::mt19937 rng(0xE2350000u + (uint32_t)p * 97u);
+            std::uniform_real_distribution<float> dist(-0.003f, 0.003f);
+            std::vector<__half> h_a(a_elems);
+            for (__half &v : h_a) v = __float2half(dist(rng));
+            CHECK_CUDA(cudaMemcpy(r.d_a, h_a.data(), a_elems * sizeof(__half),
+                                  cudaMemcpyHostToDevice));
+        }
         aggregate_routes += r.routes;
         min_routes = std::min(min_routes, r.routes);
         max_routes = std::max(max_routes, r.routes);
-
-        const size_t a_elems = (size_t)r.routes * kHidden;
-        CHECK_CUDA(cudaMalloc(&r.d_offsets, offsets.size() * sizeof(int)));
-        CHECK_CUDA(cudaMemcpy(r.d_offsets, offsets.data(), offsets.size() * sizeof(int),
-                              cudaMemcpyHostToDevice));
-        CHECK_CUDA(cudaMalloc(&r.d_route_slots, route_slots.size() * sizeof(int)));
-        CHECK_CUDA(cudaMemcpy(r.d_route_slots, route_slots.data(),
-                              route_slots.size() * sizeof(int), cudaMemcpyHostToDevice));
-        CHECK_CUDA(cudaMalloc(&r.d_a, a_elems * sizeof(__half)));
-        CHECK_CUDA(cudaMalloc(&r.d_gated, (size_t)r.routes * kMid * sizeof(__half)));
-        CHECK_CUDA(cudaMalloc(&r.d_down, a_elems * sizeof(__half)));
-
-        std::mt19937 rng(0xE2350000u + (uint32_t)p * 97u);
-        std::uniform_real_distribution<float> dist(-0.003f, 0.003f);
-        std::vector<__half> h_a(a_elems);
-        for (__half &v : h_a) v = __float2half(dist(rng));
-        CHECK_CUDA(cudaMemcpy(r.d_a, h_a.data(), a_elems * sizeof(__half),
-                              cudaMemcpyHostToDevice));
 
         std::vector<int> active;
         for (int e = 0; e < kActiveLocalExperts; ++e) active.push_back(e);
@@ -3136,24 +3220,28 @@ int run_layer(const Options &opt,
         RankState &r = ranks[p];
         CHECK_CUDA(cudaSetDevice(r.device));
         free_packed(r.gated);
+        r.gated = PackedExperts{};
         free_packed(r.down);
-        CHECK_CUDA(cudaFree(r.d_offsets));
-        CHECK_CUDA(cudaFree(r.d_route_slots));
-        CHECK_CUDA(cudaFree(r.d_a));
-        CHECK_CUDA(cudaFree(r.d_gated));
-        CHECK_CUDA(cudaFree(r.d_down));
-        if (r.d_ep_contrib_all) CHECK_CUDA(cudaFree(r.d_ep_contrib_all));
-        if (r.d_ep_contrib_half_all) CHECK_CUDA(cudaFree(r.d_ep_contrib_half_all));
-        for (int src = 0; src < kGpus; ++src) {
-            if (r.d_ep_remote[src]) CHECK_CUDA(cudaFree(r.d_ep_remote[src]));
-            if (r.d_ep_remote_half[src]) CHECK_CUDA(cudaFree(r.d_ep_remote_half[src]));
+        r.down = PackedExperts{};
+        if (!shared_rank_buffers) {
+            CHECK_CUDA(cudaFree(r.d_offsets));
+            CHECK_CUDA(cudaFree(r.d_route_slots));
+            CHECK_CUDA(cudaFree(r.d_a));
+            CHECK_CUDA(cudaFree(r.d_gated));
+            CHECK_CUDA(cudaFree(r.d_down));
+            if (r.d_ep_contrib_all) CHECK_CUDA(cudaFree(r.d_ep_contrib_all));
+            if (r.d_ep_contrib_half_all) CHECK_CUDA(cudaFree(r.d_ep_contrib_half_all));
+            for (int src = 0; src < kGpus; ++src) {
+                if (r.d_ep_remote[src]) CHECK_CUDA(cudaFree(r.d_ep_remote[src]));
+                if (r.d_ep_remote_half[src]) CHECK_CUDA(cudaFree(r.d_ep_remote_half[src]));
+            }
+            if (r.d_ep_sum) CHECK_CUDA(cudaFree(r.d_ep_sum));
+            if (r.d_next_hidden) CHECK_CUDA(cudaFree(r.d_next_hidden));
+            CHECK_CUDA(cudaEventDestroy(r.start));
+            CHECK_CUDA(cudaEventDestroy(r.mid));
+            CHECK_CUDA(cudaEventDestroy(r.stop));
+            CHECK_CUDA(cudaStreamDestroy(r.stream));
         }
-        if (r.d_ep_sum) CHECK_CUDA(cudaFree(r.d_ep_sum));
-        if (r.d_next_hidden) CHECK_CUDA(cudaFree(r.d_next_hidden));
-        CHECK_CUDA(cudaEventDestroy(r.start));
-        CHECK_CUDA(cudaEventDestroy(r.mid));
-        CHECK_CUDA(cudaEventDestroy(r.stop));
-        CHECK_CUDA(cudaStreamDestroy(r.stream));
     }
     if (!shared_api) {
         api->shutdown();
@@ -3172,7 +3260,7 @@ int main(int argc, char **argv) {
     }
 
     if (!opt.all_layers) {
-        return run_layer(opt, nullptr, nullptr, nullptr);
+        return run_layer(opt, nullptr, nullptr, nullptr, nullptr);
     }
 
     DenseF16Cache all_layer_dense_f16_cache;
@@ -3216,6 +3304,17 @@ int main(int argc, char **argv) {
     }
     std::printf("tp_ep_all_layer_turbomind_api_shared\tdevices\t%d\tPASS\n", kGpus);
 
+    SharedRankBuffers shared_rank_buffers;
+    if (open_shared_rank_buffers(opt, &shared_rank_buffers) != 0) {
+        close_shared_api(&shared_api);
+        if (shared_dense_f16_cache) {
+            free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+        }
+        return 7;
+    }
+    std::printf("tp_ep_all_layer_rank_buffers_shared\tdevices\t%d\tcore_bytes\t%llu\tPASS\n",
+                kGpus, (unsigned long long)shared_rank_buffers.core_bytes);
+
     int pass_layers = 0;
     double sum_decode_ms = 0.0;
     double sum_ep_ms = 0.0;
@@ -3227,7 +3326,8 @@ int main(int argc, char **argv) {
         Options layer_opt = opt;
         layer_opt.layer = layer;
         LayerRunSummary s;
-        const int rc = run_layer(layer_opt, &s, shared_dense_f16_cache, &shared_api);
+        const int rc = run_layer(layer_opt, &s, shared_dense_f16_cache, &shared_api,
+                                 &shared_rank_buffers);
         std::printf("tp_ep_all_layer_item\tlayer\t%d\tratio\t%d\t"
                     "total_rows\t%llu\tdense_rows\t%llu\tcontrol_rows\t%llu\t"
                     "expert_rows\t%llu\tkv_rows\t%llu\tcomp_rows\t%llu\t"
@@ -3261,10 +3361,11 @@ int main(int argc, char **argv) {
                 std::chrono::duration<double, std::milli>(stop - start).count();
             std::printf("tp_ep_all_layer_scaffold\tlayers\t43\tpass_layers\t%d\t"
                         "failed_layer\t%d\tdescriptor_checks\t%d\tpredecode_probes\t%d\t"
-                        "shared_api\t%d\twall_ms\t%.6f\tFAIL\n",
+                        "shared_api\t%d\tshared_rank_buffers\t%d\twall_ms\t%.6f\tFAIL\n",
                         pass_layers, layer, opt.skip_descriptor_checks ? 0 : 1,
                         opt.skip_predecode_probes ? 0 : 1, shared_api.initialized ? 1 : 0,
-                        wall_ms);
+                        shared_rank_buffers.initialized ? 1 : 0, wall_ms);
+            close_shared_rank_buffers(&shared_rank_buffers);
             close_shared_api(&shared_api);
             if (shared_dense_f16_cache) {
                 free_dense_f16_cache(all_layer_dense_f16_cache, opt);
@@ -3281,6 +3382,7 @@ int main(int argc, char **argv) {
     std::printf("tp_ep_all_layer_scaffold\tlayers\t43\tpass_layers\t%d\t"
                 "slots\t%d\tctx\t262144\tdecode_steps_per_layer\t%d\t"
                 "descriptor_checks\t%d\tpredecode_probes\t%d\tshared_api\t%d\t"
+                "shared_rank_buffers\t%d\t"
                 "sum_decode_ms_per_token\t%.6f\tprojected_slot_step_tok_s\t%.6f\t"
                 "sum_ep_ms\t%.6f\tsum_dense_ms\t%.6f\tsum_compose_ms\t%.6f\t"
                 "wall_ms\t%.6f\tchecksum\t%llu\tPASS\n",
@@ -3288,8 +3390,10 @@ int main(int argc, char **argv) {
                 opt.skip_descriptor_checks ? 0 : 1,
                 opt.skip_predecode_probes ? 0 : 1,
                 shared_api.initialized ? 1 : 0,
+                shared_rank_buffers.initialized ? 1 : 0,
                 sum_decode_ms, slot_step_tok_s, sum_ep_ms, sum_dense_ms,
                 sum_compose_ms, wall_ms, (unsigned long long)checksum);
+    close_shared_rank_buffers(&shared_rank_buffers);
     close_shared_api(&shared_api);
     if (shared_dense_f16_cache) {
         free_dense_f16_cache(all_layer_dense_f16_cache, opt);

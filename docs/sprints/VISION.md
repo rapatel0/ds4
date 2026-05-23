@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 255
+revision: 256
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -165,6 +165,11 @@ not a serial layer-chain.
   The gate now records `shared_api=1`, passes `43/43` layers at `32` slots /
   `256K`, and reduces wall time to `35565.756621 ms`. The summed decode proxy
   is `43.957040 ms/token` / `727.983506` projected slot-step tok/s.
+- Sprint 256 hoisted fixed rank buffers, route maps, streams/events, and lazy
+  compose buffers across the all-layer TP/EP loop. The gate now records
+  `shared_rank_buffers=1`, passes `43/43` layers, and reduces wall time to
+  `33978.379725 ms`. The summed decode proxy is `43.895297 ms/token` /
+  `729.007483` projected slot-step tok/s.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -765,6 +770,25 @@ layers at `32` slots / `256K`. It reports `shared_api=1`,
 tok/s, and `35565.756621 ms` wall time. Next hoist route buffers,
 streams/events, expert bindings, and TP runtime/KV state.
 
+### Sprint 256 - TP/EP Shared Rank Buffers [complete]
+
+Goal: Hoist fixed rank buffers and stream/event lifecycle across the all-layer
+TP/EP scaffold.
+
+Rationale: Route offsets, route-to-slot maps, input/gated/down buffers,
+streams, events, and compose buffers are invariant for a fixed `slots/top_k`
+run. Serving should not allocate and destroy them once per layer.
+
+Outcome: Complete. `--all-layers` now initializes shared rank buffers once and
+reuses them across all 43 layers. Per-layer packed expert bindings remain
+layer-specific and are still loaded/freed per layer. With shared dense cache,
+shared TurboMind API, descriptor checks disabled, predecode probes disabled,
+and decode-only all-layer mode, the V100 gate passes `43/43` layers at `32`
+slots / `256K`. It reports `shared_rank_buffers=1`, `43.895297 ms/token`
+summed decode proxy, `729.007483` projected slot-step tok/s, and
+`33978.379725 ms` wall time. Next hoist TP runtime/KV state or expert
+descriptor bindings.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -821,6 +845,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 253 repaired the decode-only all-layer scaffold harness. | The standard TP/EP scaffold benchmark no longer requires an extra one-shot compose validation path. | Hoist TurboMind/API handles, route buffers, expert bindings, and stream/event lifecycle. |
 | 2026-05-23 | Sprint 254 added opt-in pre-decode probe bypass for benchmark runs. | Extra isolated TurboMind probes are validation work, not serving work. | Hoist TurboMind/API handles, route buffers, expert bindings, and stream/event lifecycle. |
 | 2026-05-23 | Sprint 255 hoisted TurboMind API lifecycle across the all-layer TP/EP loop. | Removing per-layer library/API setup cuts scaffold wall time while preserving decode checksums. | Hoist route buffers, streams/events, expert bindings, and TP runtime/KV state. |
+| 2026-05-23 | Sprint 256 hoisted fixed rank buffers and stream/event lifecycle across the all-layer TP/EP loop. | Removing per-layer route/core buffer allocation cuts wall time and keeps checksum stable. | Hoist TP runtime/KV state or expert descriptor bindings. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 
