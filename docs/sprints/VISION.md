@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 226
+revision: 227
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -60,6 +60,11 @@ not a serial layer-chain.
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about
   `27.00 GiB` per GPU including a `2.00 GiB` reserve, with `5.00 GiB`
   headroom.
+- Sprint 227 built the TP8 collective workbench. The doubling all-reduce
+  boundary is correct and density-sensitive: `1189` overhead-only tok/s at
+  32 tokens, `2119` at 64, and `3332` at 128 for the 43-layer,
+  two-collective proxy. Root/direct RS+AG is correct but slower and is not the
+  first runtime boundary candidate.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -99,7 +104,7 @@ collective/EP traffic reporting. The real-pack V100 run reports `145.42 GiB`
 total resident weight bytes, `27.00 GiB` per-GPU total at `32` slots / `256K`
 / F8 KV, and admission of `63` slots at `256K` under current assumptions.
 
-### Sprint 227 - TP8 Collective Workbench [planned]
+### Sprint 227 - TP8 Collective Workbench [complete]
 
 Goal: Build TP-only collective smokes for hidden all-reduce, reduce-scatter,
 all-gather, and expert-output reduction across all eight V100s.
@@ -108,7 +113,11 @@ Rationale: The suspected TP risk is not raw NVLink bandwidth alone; it is
 latency, synchronization, and whether collectives can stay resident and
 overlapped inside the layer boundary.
 
-Outcome: Pending.
+Outcome: Complete. `tools/ds4-v100-tp8-collective-workbench` now measures
+`allreduce`, `reduce-scatter`, `allgather`, `rs-ag`, and `ep-reduce` modes.
+At 32 tokens, the hidden all-reduce proxy is `26.904544 ms` and the EP reduce
+proxy is `27.436756 ms`; both pass correctness. At 128 tokens they improve to
+`3332.257` and `3253.920` overhead-only tok/s respectively.
 
 ### Sprint 228 - TP/EP Pack Contract [planned]
 

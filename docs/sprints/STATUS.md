@@ -220,6 +220,18 @@ decode traffic shape: `37.625 MiB` hidden collective wire per decode step and
 `3.000 MiB` aggregate EP dispatch+return at 32 slots. TP/EP is still not a
 serving runtime, but the memory/topology contract is now explicit and PP modes
 cannot be selected from the TP planner.
+Sprint 227 adds the TP8 collective workbench and characterizes the next
+boundary. The new `tools/ds4-v100-tp8-collective-workbench` builds on the V100
+pod and supports `allreduce`, `reduce-scatter`, `allgather`, `rs-ag`, and
+`ep-reduce` modes. At 32 tokens / hidden 4096 / 43 layers, the two-collective
+doubling all-reduce proxy measures `26.904544 ms` (`1189.390` overhead-only
+tok/s), while the EP output-reduce proxy measures `27.436756 ms`
+(`1166.319` tok/s). Density helps: all-reduce reaches `2119.907` tok/s at 64
+tokens and `3332.257` tok/s at 128 tokens; EP reduce reaches `1745.157` and
+`3253.920` respectively. The root/direct RS+AG proxy is correct but slower
+(`32.361613 ms`, `988.826` tok/s at 32 tokens), so it is not the first runtime
+boundary candidate. NVLink status snapshots show all links at `25.781 GB/s`,
+but byte counters remain `N/A` in the pod.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit

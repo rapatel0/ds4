@@ -1,0 +1,5 @@
+### mode=ep-reduce tokens=128 cpl=2 algo=doubling
+ds4-v100-tp8-collective-workbench mode=ep-reduce algo=doubling devices=0,1,2,3,4,5,6,7 root=0 tokens=128 hidden=4096 dtype=f16 full_bytes=1048576 chunk_bytes=131072 layers=43 collectives_per_layer=2 ops_per_iter=86 warmup=3 iters=10
+latency_ms avg=39.337174 min=34.481702 max=50.151663 per_layer=0.914818 per_collective=0.457409 effective_wire_gbps=36.679 overhead_only_tok_s=3253.920
+ep_shape top_k=6 active_routes=768 routes_per_gpu=96.000
+verify max_abs=0.000000000 ok

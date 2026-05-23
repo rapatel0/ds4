@@ -1,0 +1,25 @@
+### mode=allreduce tokens=32 cpl=2 algo=doubling
+ds4-v100-tp8-collective-workbench mode=allreduce algo=doubling devices=0,1,2,3,4,5,6,7 root=0 tokens=32 hidden=4096 dtype=f16 full_bytes=262144 chunk_bytes=32768 layers=43 collectives_per_layer=2 ops_per_iter=86 warmup=3 iters=10
+latency_ms avg=26.904544 min=26.543430 max=27.315668 per_layer=0.625687 per_collective=0.312844 effective_wire_gbps=13.407 overhead_only_tok_s=1189.390
+ep_shape top_k=6 active_routes=192 routes_per_gpu=24.000
+verify max_abs=0.000000000 ok
+### mode=reduce-scatter tokens=32 cpl=1 algo=root
+ds4-v100-tp8-collective-workbench mode=reduce-scatter algo=root devices=0,1,2,3,4,5,6,7 root=0 tokens=32 hidden=4096 dtype=f16 full_bytes=262144 chunk_bytes=32768 layers=43 collectives_per_layer=1 ops_per_iter=43 warmup=3 iters=10
+latency_ms avg=11.945595 min=11.877631 max=12.019074 per_layer=0.277805 per_collective=0.277805 effective_wire_gbps=7.431 overhead_only_tok_s=2678.812
+ep_shape top_k=6 active_routes=192 routes_per_gpu=24.000
+verify max_abs=0.000000000 ok
+### mode=allgather tokens=32 cpl=1 algo=root
+ds4-v100-tp8-collective-workbench mode=allgather algo=root devices=0,1,2,3,4,5,6,7 root=0 tokens=32 hidden=4096 dtype=f16 full_bytes=262144 chunk_bytes=32768 layers=43 collectives_per_layer=1 ops_per_iter=43 warmup=3 iters=10
+latency_ms avg=18.319043 min=18.116494 max=18.458523 per_layer=0.426024 per_collective=0.426024 effective_wire_gbps=4.307 overhead_only_tok_s=1746.816
+ep_shape top_k=6 active_routes=192 routes_per_gpu=24.000
+verify max_abs=0.000000000 ok
+### mode=rs-ag tokens=32 cpl=1 algo=root
+ds4-v100-tp8-collective-workbench mode=rs-ag algo=root devices=0,1,2,3,4,5,6,7 root=0 tokens=32 hidden=4096 dtype=f16 full_bytes=262144 chunk_bytes=32768 layers=43 collectives_per_layer=1 ops_per_iter=43 warmup=3 iters=10
+latency_ms avg=32.361613 min=31.047182 max=36.430998 per_layer=0.752596 per_collective=0.752596 effective_wire_gbps=5.181 overhead_only_tok_s=988.826
+ep_shape top_k=6 active_routes=192 routes_per_gpu=24.000
+verify max_abs=0.000000000 ok
+### mode=ep-reduce tokens=32 cpl=2 algo=doubling
+ds4-v100-tp8-collective-workbench mode=ep-reduce algo=doubling devices=0,1,2,3,4,5,6,7 root=0 tokens=32 hidden=4096 dtype=f16 full_bytes=262144 chunk_bytes=32768 layers=43 collectives_per_layer=2 ops_per_iter=86 warmup=3 iters=10
+latency_ms avg=27.436756 min=26.892694 max=27.807796 per_layer=0.638064 per_collective=0.319032 effective_wire_gbps=13.147 overhead_only_tok_s=1166.319
+ep_shape top_k=6 active_routes=192 routes_per_gpu=24.000
+verify max_abs=0.000000000 ok
