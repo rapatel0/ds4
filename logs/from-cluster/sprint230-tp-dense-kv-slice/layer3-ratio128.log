@@ -1,0 +1,9 @@
+tp_dense_kv_slice	ctx=262144	slots=32	hidden=4096	layer=3	ratio=128	slot=7	position=8192	attn_row=192	indexer_row=18446744073709551615	max_abs=0.000000000
+gpu	0	attn_offset	816523456	attn_row_bytes	65	indexer_offset	18446744073709551615	indexer_row_bytes	0
+gpu	1	attn_offset	816523456	attn_row_bytes	65	indexer_offset	18446744073709551615	indexer_row_bytes	0
+gpu	2	attn_offset	816523456	attn_row_bytes	65	indexer_offset	18446744073709551615	indexer_row_bytes	0
+gpu	3	attn_offset	816523456	attn_row_bytes	65	indexer_offset	18446744073709551615	indexer_row_bytes	0
+gpu	4	attn_offset	816523456	attn_row_bytes	65	indexer_offset	18446744073709551615	indexer_row_bytes	0
+gpu	5	attn_offset	816523456	attn_row_bytes	65	indexer_offset	18446744073709551615	indexer_row_bytes	0
+gpu	6	attn_offset	816523456	attn_row_bytes	65	indexer_offset	18446744073709551615	indexer_row_bytes	0
+gpu	7	attn_offset	816523456	attn_row_bytes	65	indexer_offset	18446744073709551615	indexer_row_bytes	0

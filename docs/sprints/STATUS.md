@@ -253,6 +253,19 @@ enables peer access, allocates the target runtime arenas at `32` slots /
 bytes, and `1610612736` scratch bytes, for `7061329920` runtime bytes before
 weights. The fixture reports `fixture_max_abs=0.000000000`, and `nvidia-smi`
 shows `0 MiB` used on all eight GPUs after teardown.
+Sprint 230 adds the first bounded dense/KV slice to the separate TP runtime.
+The runtime now builds explicit per-layer, per-slot sharded KV offsets and the
+smoke tool can write/read deterministic resident rows without touching the PP
+scheduler. On the V100 pod at `32` slots / `256K` / F8 KV, the allocation
+smoke passes with `3707940864` KV bytes, `1803550720` compression-state bytes,
+and `7122628608` total runtime bytes per GPU before weights. The ratio-4
+layer-2 slice with indexer KV passes at slot `7`, position `1024`, attn row
+`384`, indexer row `256`, attn row bytes `65`, indexer row bytes `17`, and
+`max_abs=0.000000000` on all eight GPUs. The ratio-128 layer-3 slice without
+indexer KV passes at slot `7`, position `8192`, attn row `192`, attn row
+bytes `65`, and `max_abs=0.000000000`. TP/EP is still not a serving runtime;
+the next step is a bounded EP routed-expert slice using the real low-bit
+expert kernels inside the separate TP runtime model.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit

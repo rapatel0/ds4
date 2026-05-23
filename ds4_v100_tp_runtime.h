@@ -39,6 +39,20 @@ typedef struct {
 
 typedef struct ds4_v100_tp_runtime ds4_v100_tp_runtime;
 
+typedef struct {
+    int layer;
+    int ratio;
+    uint32_t slot;
+    uint64_t position;
+    uint64_t attn_row;
+    uint64_t attn_offset[DS4_V100_TP_MAX_GPUS];
+    uint64_t attn_row_bytes[DS4_V100_TP_MAX_GPUS];
+    uint64_t indexer_row;
+    uint64_t indexer_offset[DS4_V100_TP_MAX_GPUS];
+    uint64_t indexer_row_bytes[DS4_V100_TP_MAX_GPUS];
+    double max_abs;
+} ds4_v100_tp_dense_kv_result;
+
 void ds4_v100_tp_runtime_default_config(ds4_v100_tp_runtime_config *cfg);
 
 int ds4_v100_tp_runtime_open(ds4_v100_tp_runtime **out,
@@ -50,6 +64,15 @@ int ds4_v100_tp_runtime_fixture(ds4_v100_tp_runtime *rt,
                                 double *max_abs,
                                 char *err,
                                 size_t err_len);
+
+int ds4_v100_tp_runtime_dense_kv_slice(ds4_v100_tp_runtime *rt,
+                                       int layer,
+                                       uint32_t slot,
+                                       uint64_t position,
+                                       int write_indexer,
+                                       ds4_v100_tp_dense_kv_result *result,
+                                       char *err,
+                                       size_t err_len);
 
 void ds4_v100_tp_runtime_get_report(const ds4_v100_tp_runtime *rt,
                                     ds4_v100_tp_runtime_report *report);

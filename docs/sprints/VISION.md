@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 229
+revision: 230
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -72,6 +72,9 @@ not a serial layer-chain.
 - Sprint 229 added the first separate TP runtime skeleton. It opens all eight
   GPUs, enables peer access, allocates target hidden/KV/compression/scratch
   arenas for `32` slots / `256K`, runs a fixture pass, and tears down cleanly.
+- Sprint 230 added explicit per-layer sharded KV row ownership to the separate
+  TP runtime. Ratio-4/indexer and ratio-128 dense/KV slices pass on the V100
+  pod at `32` slots / `256K` / F8 KV with `max_abs=0`.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -154,7 +157,7 @@ skeleton. The V100 smoke allocates `7061329920` runtime bytes per GPU before
 weights at the target shape and verifies fixture output with
 `fixture_max_abs=0`.
 
-### Sprint 230 - TP Dense And KV Slice [planned]
+### Sprint 230 - TP Dense And KV Slice [complete]
 
 Goal: Implement a bounded dense-attention/KV slice in the TP runtime, including
 sharded DS4 compressed KV at the `32` slot / `256K` target.
@@ -163,7 +166,15 @@ Rationale: TP must keep hidden state and KV in native sharded layout across
 layers. This sprint answers whether dense paths and KV are viable before MoE
 complexity is added.
 
-Outcome: Pending.
+Outcome: Complete. `ds4_v100_tp_runtime_dense_kv_slice` now computes
+per-layer, per-slot sharded KV offsets and writes/reads deterministic resident
+KV rows on all eight GPUs. At the target `32` slots / `256K` / F8 KV shape,
+the runtime allocates `7122628608` bytes per GPU before weights. Layer 2
+ratio-4 with indexer KV passes at `attn_row=384`, `indexer_row=256`,
+`attn_row_bytes=65`, `indexer_row_bytes=17`, and `max_abs=0`. Layer 3
+ratio-128 without indexer KV passes at `attn_row=192`, `attn_row_bytes=65`,
+and `max_abs=0`. This keeps the TP runtime path viable and moves the next
+implementation gate to EP routed experts.
 
 ### Sprint 231 - EP Routed Expert Slice [planned]
 
@@ -258,6 +269,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | Date | Change | Rationale | Next |
 |---|---|---|---|
 | 2026-05-23 | Archived the prior PP-era vision to `docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md`. | The accumulated roadmap still documents history, but it no longer reflects the strategy. | Use this file as the active alignment document. |
+| 2026-05-23 | Sprint 230 proved TP sharded KV row ownership at `32` slots / `256K`. | TP/EP needs resident hidden/KV state before EP expert work is meaningful. | Build the bounded EP routed-expert slice in separate TP/EP files. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit in Sprint 236 or equivalent after TP/EP serving exists. |
 

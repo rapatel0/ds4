@@ -11,7 +11,8 @@ static unsigned long long parse_u64(const char *s) {
 static void usage(const char *argv0) {
     std::fprintf(stderr,
                  "usage: %s [--ctx N] [--slots N] [--scratch-mib N] "
-                 "[--kv-dtype f16|f8|q8_0]\n",
+                 "[--kv-dtype f16|f8|q8_0] [--dense-kv-slice] "
+                 "[--layer N] [--slot N] [--position N] [--indexer on|off]\n",
                  argv0);
 }
 
@@ -28,6 +29,11 @@ static bool parse_kv(const char *s, ds4_v100_tp_kv_dtype *out) {
 int main(int argc, char **argv) {
     ds4_v100_tp_runtime_config cfg;
     ds4_v100_tp_runtime_default_config(&cfg);
+    bool dense_kv_slice = false;
+    int layer = 2;
+    uint32_t slot = 0;
+    unsigned long long position = 0;
+    int indexer = 0;
 
     for (int i = 1; i < argc; ++i) {
         const char *arg = argv[i];
@@ -47,6 +53,29 @@ int main(int argc, char **argv) {
                 return 2;
             }
             ++i;
+        } else if (std::strcmp(arg, "--dense-kv-slice") == 0) {
+            dense_kv_slice = true;
+        } else if (std::strcmp(arg, "--layer") == 0 && val) {
+            layer = (int)parse_u64(val);
+            ++i;
+        } else if (std::strcmp(arg, "--slot") == 0 && val) {
+            slot = (uint32_t)parse_u64(val);
+            ++i;
+        } else if (std::strcmp(arg, "--position") == 0 && val) {
+            position = parse_u64(val);
+            ++i;
+        } else if (std::strcmp(arg, "--indexer") == 0 && val) {
+            if (std::strcmp(val, "on") == 0 || std::strcmp(val, "true") == 0 ||
+                std::strcmp(val, "1") == 0) {
+                indexer = 1;
+            } else if (std::strcmp(val, "off") == 0 || std::strcmp(val, "false") == 0 ||
+                       std::strcmp(val, "0") == 0) {
+                indexer = 0;
+            } else {
+                usage(argv[0]);
+                return 2;
+            }
+            ++i;
         } else if (std::strcmp(arg, "-h") == 0 || std::strcmp(arg, "--help") == 0) {
             usage(argv[0]);
             return 0;
@@ -61,6 +90,36 @@ int main(int argc, char **argv) {
     if (ds4_v100_tp_runtime_open(&rt, &cfg, err, sizeof(err)) != 0) {
         std::fprintf(stderr, "tp_runtime_open_failed\t%s\n", err);
         return 1;
+    }
+
+    if (dense_kv_slice) {
+        ds4_v100_tp_dense_kv_result result;
+        if (ds4_v100_tp_runtime_dense_kv_slice(rt, layer, slot, position, indexer,
+                                               &result, err, sizeof(err)) != 0) {
+            std::fprintf(stderr, "tp_runtime_dense_kv_slice_failed\t%s\n", err);
+            ds4_v100_tp_runtime_close(rt);
+            return 1;
+        }
+        std::printf("tp_dense_kv_slice\tctx=%llu\tslots=%u\thidden=%u\t"
+                    "layer=%d\tratio=%d\tslot=%u\tposition=%llu\t"
+                    "attn_row=%llu\tindexer_row=%llu\tmax_abs=%.9f\n",
+                    (unsigned long long)cfg.ctx, cfg.slots, cfg.hidden,
+                    result.layer, result.ratio, result.slot,
+                    (unsigned long long)result.position,
+                    (unsigned long long)result.attn_row,
+                    (unsigned long long)result.indexer_row,
+                    result.max_abs);
+        for (int gpu = 0; gpu < DS4_V100_TP_MAX_GPUS; ++gpu) {
+            std::printf("gpu\t%d\tattn_offset\t%llu\tattn_row_bytes\t%llu\t"
+                        "indexer_offset\t%llu\tindexer_row_bytes\t%llu\n",
+                        gpu,
+                        (unsigned long long)result.attn_offset[gpu],
+                        (unsigned long long)result.attn_row_bytes[gpu],
+                        (unsigned long long)result.indexer_offset[gpu],
+                        (unsigned long long)result.indexer_row_bytes[gpu]);
+        }
+        ds4_v100_tp_runtime_close(rt);
+        return result.max_abs <= 0.0 ? 0 : 1;
     }
 
     double max_abs = 0.0;
