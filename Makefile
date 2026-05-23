@@ -187,6 +187,9 @@ tools/ds4-v100-turbomind-pack:
 tools/ds4-v100-appliance-pack:
 	@echo "tools/ds4-v100-appliance-pack requires a CUDA build"
 	@exit 2
+tools/ds4-v100-tp4-collective-smoke:
+	@echo "tools/ds4-v100-tp4-collective-smoke requires a CUDA build"
+	@exit 2
 else
 tools/ds4-v100-turbomind-pack.o: tools/ds4-v100-turbomind-pack.cu ds4_pack.h ds4_source_formats.h kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h
 	$(NVCC) $(NVCCFLAGS) $(TURBOMIND_ADAPTER_CUDAFLAGS) -I. -c -o $@ tools/ds4-v100-turbomind-pack.cu
@@ -199,6 +202,9 @@ tools/ds4-v100-appliance-pack.o: tools/ds4-v100-appliance-pack.cu ds4_pack.h ds4
 
 tools/ds4-v100-appliance-pack: tools/ds4-v100-appliance-pack.o ds4_pack.o ds4_source_formats.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
+
+tools/ds4-v100-tp4-collective-smoke: tools/ds4-v100-tp4-collective-smoke.cu
+	$(NVCC) $(NVCCFLAGS) -I. -o $@ $< $(CUDA_LDLIBS)
 endif
 
 tools/ds4-v100-turbomind-admit.o: tools/ds4-v100-turbomind-admit.c ds4_pack.h ds4_turbomind_pack.h
@@ -633,4 +639,4 @@ test: ds4_test
 	./ds4_test
 
 clean:
-	rm -f ds4 ds4-server ds4-bench ds4-eval ds4_cpu ds4_native ds4_server_test ds4_test *.o tests/*.o tests/cuda_long_context_smoke tests/cuda_bf16_probe tests/cuda_v100_context_smoke tests/cuda_source_dtypes_smoke tests/cuda_f8_hmma_shared_down_smoke tests/cuda_f8_hmma_pair_swiglu_smoke tests/cuda_f8_hmma_attn_batch_smoke tests/cuda_v100_prefill_kv_smoke tests/cuda_v100_compressor_bridge_smoke tests/cuda_v100_projection_attention_smoke tests/cuda_v100_bounded_logits_smoke tests/cuda_v100_mxfp4_moe_smoke tests/cuda_v100_tc_grid_int8_smoke tests/cuda_v100_turbomind_adapter_smoke tests/cuda_v100_turbomind_sidecar_smoke tests/cuda_v100_descriptor_bound_ffn_smoke tests/cuda_v100_tp_routed_ffn_smoke tests/cuda_v100_descriptor_bound_attention_smoke tests/cuda_v100_integrated_layer_smoke tests/cuda_v100_stage_scheduler_smoke tests/cuda_v100_two_stage_scheduler_smoke tests/cuda_v100_full_scheduler_smoke tests/cuda_v100_selected_token_smoke tests/cuda_v100_output_head_parity_smoke tests/cuda_v100_scheduler_checkpoint_parity_smoke tests/cuda_v100_scheduler_snapshot_smoke tests/cuda_v100_stage_wavefront_smoke tests/cuda_v100_stage_layer_span_smoke tests/cuda_hc_relay_smoke tests/pack_index_smoke tests/gpu_arena_smoke tests/bf16_probe_smoke tests/v100_context_smoke tests/v100_layer_binding_smoke tests/v100_layer_state_smoke tests/source_dtypes_smoke tools/*.o tools/ds4-v100-plan tools/ds4-v100-tp-estimate tools/ds4-v100-pack tools/ds4-v100-turbomind-pack tools/ds4-v100-appliance-pack tools/ds4-v100-turbomind-admit tools/ds4-v100-residency-smoke tools/ds4-v100-context-smoke tools/ds4-v100-layer-descriptor-gate tools/ds4-source-oracle-vector tools/ds4-v100-mtp-sidecar-gate tools/ds4-v100-mtp-residency-smoke tools/ds4-v100-mtp-prefix-smoke tools/ds4-v100-mtp-q4k-smoke tools/ds4-v100-mtp-ffn-smoke tools/ds4-v100-mtp-attn-smoke tools/ds4-v100-mtp-logits-smoke tools/ds4-v100-mtp-forward-smoke tools/ds4-v100-mtp-verify-smoke tools/ds4-v100-replay
+	rm -f ds4 ds4-server ds4-bench ds4-eval ds4_cpu ds4_native ds4_server_test ds4_test *.o tests/*.o tests/cuda_long_context_smoke tests/cuda_bf16_probe tests/cuda_v100_context_smoke tests/cuda_source_dtypes_smoke tests/cuda_f8_hmma_shared_down_smoke tests/cuda_f8_hmma_pair_swiglu_smoke tests/cuda_f8_hmma_attn_batch_smoke tests/cuda_v100_prefill_kv_smoke tests/cuda_v100_compressor_bridge_smoke tests/cuda_v100_projection_attention_smoke tests/cuda_v100_bounded_logits_smoke tests/cuda_v100_mxfp4_moe_smoke tests/cuda_v100_tc_grid_int8_smoke tests/cuda_v100_turbomind_adapter_smoke tests/cuda_v100_turbomind_sidecar_smoke tests/cuda_v100_descriptor_bound_ffn_smoke tests/cuda_v100_tp_routed_ffn_smoke tests/cuda_v100_descriptor_bound_attention_smoke tests/cuda_v100_integrated_layer_smoke tests/cuda_v100_stage_scheduler_smoke tests/cuda_v100_two_stage_scheduler_smoke tests/cuda_v100_full_scheduler_smoke tests/cuda_v100_selected_token_smoke tests/cuda_v100_output_head_parity_smoke tests/cuda_v100_scheduler_checkpoint_parity_smoke tests/cuda_v100_scheduler_snapshot_smoke tests/cuda_v100_stage_wavefront_smoke tests/cuda_v100_stage_layer_span_smoke tests/cuda_hc_relay_smoke tests/pack_index_smoke tests/gpu_arena_smoke tests/bf16_probe_smoke tests/v100_context_smoke tests/v100_layer_binding_smoke tests/v100_layer_state_smoke tests/source_dtypes_smoke tools/*.o tools/ds4-v100-plan tools/ds4-v100-tp-estimate tools/ds4-v100-tp4-collective-smoke tools/ds4-v100-pack tools/ds4-v100-turbomind-pack tools/ds4-v100-appliance-pack tools/ds4-v100-turbomind-admit tools/ds4-v100-residency-smoke tools/ds4-v100-context-smoke tools/ds4-v100-layer-descriptor-gate tools/ds4-source-oracle-vector tools/ds4-v100-mtp-sidecar-gate tools/ds4-v100-mtp-residency-smoke tools/ds4-v100-mtp-prefix-smoke tools/ds4-v100-mtp-q4k-smoke tools/ds4-v100-mtp-ffn-smoke tools/ds4-v100-mtp-attn-smoke tools/ds4-v100-mtp-logits-smoke tools/ds4-v100-mtp-forward-smoke tools/ds4-v100-mtp-verify-smoke tools/ds4-v100-replay

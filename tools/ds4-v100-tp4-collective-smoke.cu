@@ -1,0 +1,345 @@
+#include <cuda_runtime.h>
+
+#include <algorithm>
+#include <cerrno>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <limits>
+#include <string>
+#include <vector>
+
+namespace {
+
+constexpr int kParticipants = 4;
+
+#define CUDA_CHECK(expr)                                                                          \
+    do {                                                                                          \
+        cudaError_t err__ = (expr);                                                               \
+        if (err__ != cudaSuccess) {                                                               \
+            std::fprintf(stderr, "cuda error %s:%d: %s\n", __FILE__, __LINE__,                   \
+                         cudaGetErrorString(err__));                                              \
+            std::exit(2);                                                                         \
+        }                                                                                         \
+    } while (0)
+
+__global__ void reduce_sum_kernel(float * dst, const float * staging, int participants,
+                                  size_t elems) {
+    size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= elems) {
+        return;
+    }
+
+    float sum = 0.0f;
+    for (int p = 0; p < participants; ++p) {
+        sum += staging[(size_t) p * elems + i];
+    }
+    dst[i] = sum;
+}
+
+struct Options {
+    int devices[kParticipants] = {0, 1, 2, 3};
+    int tokens = 16;
+    int hidden = 4096;
+    int warmup = 10;
+    int iters = 100;
+    int root_index = 0;
+};
+
+bool parse_int(const char * text, int * out) {
+    if (text == nullptr || *text == '\0') {
+        return false;
+    }
+
+    errno = 0;
+    char * end = nullptr;
+    long v = std::strtol(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' || v < 0 ||
+        v > std::numeric_limits<int>::max()) {
+        return false;
+    }
+    *out = (int) v;
+    return true;
+}
+
+bool parse_devices(const char * text, int devices[kParticipants]) {
+    std::vector<int> parsed;
+    const char * cur = text;
+    while (cur != nullptr && *cur != '\0') {
+        const char * comma = std::strchr(cur, ',');
+        std::string piece;
+        if (comma != nullptr) {
+            piece.assign(cur, comma - cur);
+            cur = comma + 1;
+        } else {
+            piece.assign(cur);
+            cur = nullptr;
+        }
+
+        int dev = 0;
+        if (!parse_int(piece.c_str(), &dev)) {
+            return false;
+        }
+        parsed.push_back(dev);
+    }
+
+    if ((int) parsed.size() != kParticipants) {
+        return false;
+    }
+
+    for (int i = 0; i < kParticipants; ++i) {
+        for (int j = i + 1; j < kParticipants; ++j) {
+            if (parsed[i] == parsed[j]) {
+                return false;
+            }
+        }
+        devices[i] = parsed[i];
+    }
+    return true;
+}
+
+void usage(const char * argv0) {
+    std::fprintf(stderr,
+                 "usage: %s [--devices 0,1,2,3] [--tokens N] [--hidden N] "
+                 "[--warmup N] [--iters N] [--root-index 0..3]\n",
+                 argv0);
+}
+
+bool parse_args(int argc, char ** argv, Options * opt) {
+    for (int i = 1; i < argc; ++i) {
+        const char * arg = argv[i];
+        const char * val = (i + 1 < argc) ? argv[i + 1] : nullptr;
+        if (std::strcmp(arg, "--devices") == 0) {
+            if (val == nullptr || !parse_devices(val, opt->devices)) {
+                std::fprintf(stderr, "invalid --devices value; expected four unique ids\n");
+                return false;
+            }
+            ++i;
+        } else if (std::strcmp(arg, "--tokens") == 0) {
+            if (val == nullptr || !parse_int(val, &opt->tokens) || opt->tokens <= 0) {
+                std::fprintf(stderr, "invalid --tokens value\n");
+                return false;
+            }
+            ++i;
+        } else if (std::strcmp(arg, "--hidden") == 0) {
+            if (val == nullptr || !parse_int(val, &opt->hidden) || opt->hidden <= 0) {
+                std::fprintf(stderr, "invalid --hidden value\n");
+                return false;
+            }
+            ++i;
+        } else if (std::strcmp(arg, "--warmup") == 0) {
+            if (val == nullptr || !parse_int(val, &opt->warmup)) {
+                std::fprintf(stderr, "invalid --warmup value\n");
+                return false;
+            }
+            ++i;
+        } else if (std::strcmp(arg, "--iters") == 0) {
+            if (val == nullptr || !parse_int(val, &opt->iters) || opt->iters <= 0) {
+                std::fprintf(stderr, "invalid --iters value\n");
+                return false;
+            }
+            ++i;
+        } else if (std::strcmp(arg, "--root-index") == 0) {
+            if (val == nullptr || !parse_int(val, &opt->root_index) || opt->root_index < 0 ||
+                opt->root_index >= kParticipants) {
+                std::fprintf(stderr, "invalid --root-index value\n");
+                return false;
+            }
+            ++i;
+        } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
+            usage(argv[0]);
+            std::exit(0);
+        } else {
+            std::fprintf(stderr, "unknown argument: %s\n", arg);
+            return false;
+        }
+    }
+    return true;
+}
+
+void enable_peer_access_or_die(const Options & opt) {
+    int device_count = 0;
+    CUDA_CHECK(cudaGetDeviceCount(&device_count));
+    for (int i = 0; i < kParticipants; ++i) {
+        if (opt.devices[i] < 0 || opt.devices[i] >= device_count) {
+            std::fprintf(stderr, "device %d is outside visible device count %d\n",
+                         opt.devices[i], device_count);
+            std::exit(2);
+        }
+    }
+
+    for (int i = 0; i < kParticipants; ++i) {
+        CUDA_CHECK(cudaSetDevice(opt.devices[i]));
+        for (int j = 0; j < kParticipants; ++j) {
+            if (i == j) {
+                continue;
+            }
+            int can_access = 0;
+            CUDA_CHECK(cudaDeviceCanAccessPeer(&can_access, opt.devices[i], opt.devices[j]));
+            if (!can_access) {
+                std::fprintf(stderr, "device %d cannot peer-access device %d\n",
+                             opt.devices[i], opt.devices[j]);
+                std::exit(2);
+            }
+            cudaError_t err = cudaDeviceEnablePeerAccess(opt.devices[j], 0);
+            if (err == cudaErrorPeerAccessAlreadyEnabled) {
+                (void) cudaGetLastError();
+            } else if (err != cudaSuccess) {
+                std::fprintf(stderr, "failed to enable peer access %d -> %d: %s\n",
+                             opt.devices[i], opt.devices[j], cudaGetErrorString(err));
+                std::exit(2);
+            }
+        }
+    }
+}
+
+void fill_host_input(std::vector<float> * h, int participant) {
+    for (size_t i = 0; i < h->size(); ++i) {
+        (*h)[i] = (float) (participant + 1) + (float) (i % 97) * 0.001f;
+    }
+}
+
+float expected_value(size_t i) {
+    float sum = 0.0f;
+    for (int p = 0; p < kParticipants; ++p) {
+        sum += (float) (p + 1) + (float) (i % 97) * 0.001f;
+    }
+    return sum;
+}
+
+void run_collective(const Options & opt, float ** inputs, float ** outputs, float * staging,
+                    cudaStream_t root_stream, size_t elems, size_t bytes) {
+    const int root_dev = opt.devices[opt.root_index];
+
+    CUDA_CHECK(cudaSetDevice(root_dev));
+    for (int p = 0; p < kParticipants; ++p) {
+        float * dst = staging + (size_t) p * elems;
+        if (p == opt.root_index) {
+            CUDA_CHECK(cudaMemcpyAsync(dst, inputs[p], bytes, cudaMemcpyDeviceToDevice,
+                                       root_stream));
+        } else {
+            CUDA_CHECK(cudaMemcpyPeerAsync(dst, root_dev, inputs[p], opt.devices[p], bytes,
+                                           root_stream));
+        }
+    }
+
+    const int block = 256;
+    const int grid = (int) ((elems + block - 1) / block);
+    reduce_sum_kernel<<<grid, block, 0, root_stream>>>(outputs[opt.root_index], staging,
+                                                       kParticipants, elems);
+    CUDA_CHECK(cudaGetLastError());
+
+    for (int p = 0; p < kParticipants; ++p) {
+        if (p == opt.root_index) {
+            continue;
+        }
+        CUDA_CHECK(cudaMemcpyPeerAsync(outputs[p], opt.devices[p], outputs[opt.root_index],
+                                       root_dev, bytes, root_stream));
+    }
+}
+
+float verify_outputs(const Options & opt, float ** outputs, size_t elems, size_t bytes) {
+    std::vector<float> h(elems);
+    float max_abs = 0.0f;
+
+    for (int p = 0; p < kParticipants; ++p) {
+        CUDA_CHECK(cudaSetDevice(opt.devices[p]));
+        CUDA_CHECK(cudaMemcpy(h.data(), outputs[p], bytes, cudaMemcpyDeviceToHost));
+        for (size_t i = 0; i < elems; ++i) {
+            float diff = std::fabs(h[i] - expected_value(i));
+            max_abs = std::max(max_abs, diff);
+        }
+    }
+
+    return max_abs;
+}
+
+} // namespace
+
+int main(int argc, char ** argv) {
+    Options opt;
+    if (!parse_args(argc, argv, &opt)) {
+        usage(argv[0]);
+        return 2;
+    }
+
+    enable_peer_access_or_die(opt);
+
+    const size_t elems = (size_t) opt.tokens * (size_t) opt.hidden;
+    const size_t bytes = elems * sizeof(float);
+    const int root_dev = opt.devices[opt.root_index];
+
+    float * inputs[kParticipants] = {};
+    float * outputs[kParticipants] = {};
+    float * staging = nullptr;
+
+    for (int p = 0; p < kParticipants; ++p) {
+        CUDA_CHECK(cudaSetDevice(opt.devices[p]));
+        CUDA_CHECK(cudaMalloc(&inputs[p], bytes));
+        CUDA_CHECK(cudaMalloc(&outputs[p], bytes));
+
+        std::vector<float> h(elems);
+        fill_host_input(&h, p);
+        CUDA_CHECK(cudaMemcpy(inputs[p], h.data(), bytes, cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemset(outputs[p], 0, bytes));
+    }
+
+    CUDA_CHECK(cudaSetDevice(root_dev));
+    CUDA_CHECK(cudaMalloc(&staging, bytes * kParticipants));
+    cudaStream_t root_stream = nullptr;
+    CUDA_CHECK(cudaStreamCreate(&root_stream));
+
+    for (int i = 0; i < opt.warmup; ++i) {
+        run_collective(opt, inputs, outputs, staging, root_stream, elems, bytes);
+        CUDA_CHECK(cudaStreamSynchronize(root_stream));
+    }
+
+    cudaEvent_t start = nullptr;
+    cudaEvent_t stop = nullptr;
+    CUDA_CHECK(cudaEventCreate(&start));
+    CUDA_CHECK(cudaEventCreate(&stop));
+
+    double total_ms = 0.0;
+    float min_ms = std::numeric_limits<float>::max();
+    float max_ms = 0.0f;
+
+    for (int i = 0; i < opt.iters; ++i) {
+        CUDA_CHECK(cudaEventRecord(start, root_stream));
+        run_collective(opt, inputs, outputs, staging, root_stream, elems, bytes);
+        CUDA_CHECK(cudaEventRecord(stop, root_stream));
+        CUDA_CHECK(cudaEventSynchronize(stop));
+
+        float ms = 0.0f;
+        CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
+        total_ms += ms;
+        min_ms = std::min(min_ms, ms);
+        max_ms = std::max(max_ms, ms);
+    }
+
+    CUDA_CHECK(cudaStreamSynchronize(root_stream));
+    const float max_abs = verify_outputs(opt, outputs, elems, bytes);
+    const double avg_ms = total_ms / (double) opt.iters;
+    const double wire_bytes = (double) bytes * (double) (kParticipants - 1) * 2.0;
+    const double effective_gbps = wire_bytes / (avg_ms / 1000.0) / 1.0e9;
+
+    std::printf("ds4-v100-tp4-collective-smoke devices=%d,%d,%d,%d root=%d tokens=%d "
+                "hidden=%d bytes_per_tensor=%zu warmup=%d iters=%d\n",
+                opt.devices[0], opt.devices[1], opt.devices[2], opt.devices[3], root_dev,
+                opt.tokens, opt.hidden, bytes, opt.warmup, opt.iters);
+    std::printf("latency_ms avg=%.6f min=%.6f max=%.6f effective_wire_gbps=%.3f\n",
+                avg_ms, min_ms, max_ms, effective_gbps);
+    std::printf("verify max_abs=%.9f %s\n", max_abs, max_abs <= 1.0e-5f ? "ok" : "FAIL");
+
+    CUDA_CHECK(cudaEventDestroy(start));
+    CUDA_CHECK(cudaEventDestroy(stop));
+    CUDA_CHECK(cudaStreamDestroy(root_stream));
+    CUDA_CHECK(cudaFree(staging));
+    for (int p = 0; p < kParticipants; ++p) {
+        CUDA_CHECK(cudaSetDevice(opt.devices[p]));
+        CUDA_CHECK(cudaFree(inputs[p]));
+        CUDA_CHECK(cudaFree(outputs[p]));
+    }
+
+    return max_abs <= 1.0e-5f ? 0 : 1;
+}

@@ -513,9 +513,14 @@ because at 16-slot/256K it moves about `21.531 MiB` per token without changing
 the dense execution shape, versus `7.000 MiB` for the current layer split. Full
 TP/EP moves more wire bytes (`112.875 MiB` for TP4/PP1 at the same tier), so it
 is only worth implementing if attention, shared FFN, routed experts, and output
-ownership all become native to the topology. The next sprint should either build
-a bounded full-layer TP4/PP1 prototype or implement a true monolithic routed-FFN
-kernel that removes the remaining global `mid_half` boundary.
+ownership all become native to the topology. Sprint 195 then measured the first
+TP4 primitive directly: a root gather/reduce/broadcast hidden collective is
+correct on the V100 NVLink islands, but costs about `0.11 ms` for the
+16-token/4096-hidden decode payload and only reaches about `27 GB/s` effective
+wire bandwidth at larger payloads. The next sprint should not build production
+TP4 on that root collective. It should either implement a real ring/tree/NCCL
+TP4 collective inside one four-GPU NVLink island, or return to the monolithic
+routed-FFN kernel that removes the global `mid_half` boundary.
 
 The concise current status is also tracked in
 `docs/sprints/EXPERIMENT-STATUS.md`.

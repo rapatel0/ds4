@@ -409,3 +409,12 @@ The TP split pack path is available after Sprint 153 through
 `tools/ds4-v100-appliance-pack --emit-tp-split`. It is a bounded prototype
 format only; no launcher or production scheduler path selects TP expert rows by
 default.
+
+The TP4 hidden collective smoke is available after Sprint 195 through
+`tools/ds4-v100-tp4-collective-smoke`. It is a measurement and correctness
+primitive only. On the V100 node, the root gather/reduce/broadcast version
+verifies on both four-GPU NVLink islands, but measures about `0.11 ms` for the
+16-token/4096-hidden payload and tops out near `27 GB/s` effective wire
+bandwidth at larger payloads. Do not use it as the production TP4 collective;
+the next TP step needs NCCL, ring/tree peer-copy all-reduce, or a fused resident
+boundary that avoids repeated full-hidden materialization.
