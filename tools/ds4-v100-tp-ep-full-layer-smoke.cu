@@ -4386,7 +4386,15 @@ static bool http_read_request(int fd, HttpParsedRequest *out) {
 static bool http_is_generation_post(const HttpParsedRequest &req) {
     return req.method == "POST" &&
            (req.path == "/v100/selected-token" ||
-            req.path == "/v1/v100/selected-token");
+            req.path == "/v1/v100/selected-token" ||
+            req.path == "/v1/completions" ||
+            req.path == "/v100/diagnostic-completions");
+}
+
+static bool http_is_completion_post(const HttpParsedRequest &req) {
+    return req.method == "POST" &&
+           (req.path == "/v1/completions" ||
+            req.path == "/v100/diagnostic-completions");
 }
 
 static bool http_wait_for_connection(int listen_fd, int wait_us) {
@@ -4406,6 +4414,12 @@ static int http_requested_tokens(const HttpParsedRequest &req, int fallback) {
     if (out <= 0) out = fallback;
     if (out <= 0) out = 1;
     return out;
+}
+
+static unsigned long long http_epoch_seconds() {
+    using namespace std::chrono;
+    return (unsigned long long)duration_cast<seconds>(
+        system_clock::now().time_since_epoch()).count();
 }
 
 static void http_drain_matching_pending(std::deque<HttpParsedRequest> *pending,
@@ -4478,6 +4492,8 @@ int run_tp_ep_http_server(const Options &base_opt,
     double total_compose_final_ms = 0.0;
     ServingBenchResult last = {};
     std::printf("tp_ep_http_serving\thttp://%s:%d/v100/selected-token\tPASS\n",
+                base_opt.host, base_opt.port);
+    std::printf("tp_ep_http_completions\thttp://%s:%d/v1/completions\tDIAGNOSTIC\n",
                 base_opt.host, base_opt.port);
     std::fflush(stdout);
 
@@ -4734,9 +4750,11 @@ int run_tp_ep_http_server(const Options &base_opt,
                     const uint64_t request_continuation = req_opt.decode_steps > 1
                         ? (uint64_t)(req_opt.decode_steps - 1)
                         : 0ull;
-                    char out[4096];
-                    std::snprintf(out, sizeof(out),
-                                  "{\"backend\":\"tp_ep_resident\","
+                    char meta[4096];
+                    std::snprintf(meta, sizeof(meta),
+                                  "\"backend\":\"tp_ep_resident\","
+                                  "\"diagnostic\":true,"
+                                  "\"diagnostic_note\":\"prompt prefill and output head are not wired in this TP/EP endpoint yet\","
                                   "\"coalesced_batch_id\":%llu,"
                                   "\"coalesced_batch_size\":%zu,"
                                   "\"coalesced_slot_index\":%zu,"
@@ -4764,7 +4782,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   "\"continuation_tokens_per_second\":%.6f,"
                                   "\"generated_tokens_per_second_decode\":%.6f,"
                                   "\"continuation_tokens_per_second_decode\":%.6f},"
-                                  "\"checksum\":%llu}\n",
+                                  "\"checksum\":%llu",
                                   (unsigned long long)batch_id,
                                   batch.size(),
                                   i,
@@ -4795,6 +4813,29 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   result.aggregate_generated_tok_s_decode,
                                   result.aggregate_continuation_tok_s_decode,
                                   (unsigned long long)result.checksum);
+                    char out[8192];
+                    if (http_is_completion_post(batch[i])) {
+                        std::snprintf(out, sizeof(out),
+                                      "{\"id\":\"cmpl-ds4-v100-diagnostic-%llu-%zu\","
+                                      "\"object\":\"text_completion\","
+                                      "\"created\":%llu,"
+                                      "\"model\":\"ds4-v100-tp-ep-diagnostic\","
+                                      "\"choices\":[{\"text\":\"\","
+                                      "\"index\":0,\"logprobs\":null,"
+                                      "\"finish_reason\":\"length\"}],"
+                                      "\"usage\":{\"prompt_tokens\":1,"
+                                      "\"completion_tokens\":%llu,"
+                                      "\"total_tokens\":%llu},"
+                                      "\"ds4_v100\":{%s}}\n",
+                                      (unsigned long long)batch_id,
+                                      i,
+                                      http_epoch_seconds(),
+                                      (unsigned long long)request_generated,
+                                      (unsigned long long)(request_generated + 1),
+                                      meta);
+                    } else {
+                        std::snprintf(out, sizeof(out), "{%s}\n", meta);
+                    }
                     http_write_json(batch[i].fd, 200, out);
                     close(batch[i].fd);
                 }

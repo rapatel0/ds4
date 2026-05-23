@@ -18,6 +18,7 @@ ep_return_fp16="0"
 compact_route_compose="1"
 concurrent_requests="1"
 request_token_pattern=""
+endpoint="selected-token"
 
 usage() {
     cat <<'USAGE'
@@ -47,6 +48,7 @@ Options:
   --concurrent-requests
   --sequential-requests
   --request-token-pattern CSV
+  --endpoint selected-token|completions
   --help
 USAGE
 }
@@ -78,6 +80,7 @@ while [ "$#" -gt 0 ]; do
         --concurrent-requests) concurrent_requests="1"; shift ;;
         --sequential-requests) concurrent_requests="0"; shift ;;
         --request-token-pattern) request_token_pattern="$2"; shift 2 ;;
+        --endpoint) endpoint="$2"; shift 2 ;;
         --help|-h) usage; exit 0 ;;
         *) fail "unknown option: $1" ;;
     esac
@@ -108,13 +111,17 @@ if [ -n "$request_token_pattern" ]; then
         *[!0-9,]* | *::* | :* | *:) fail "--request-token-pattern must be numeric CSV" ;;
     esac
 fi
+case "$endpoint" in
+    selected-token|completions) ;;
+    *) fail "--endpoint must be selected-token or completions" ;;
+esac
 
 mkdir -p "$log_dir/cases"
 summary_tsv="$log_dir/sustained_http.tsv"
 summary_json="$log_dir/sustained_http.json"
-printf 'schema\tds4_v100_tp_ep_sustained_http.v3\n' >"$summary_tsv"
+printf 'schema\tds4_v100_tp_ep_sustained_http.v4\n' >"$summary_tsv"
 printf 'backend\ttp_ep_launcher_http\n\n' >>"$summary_tsv"
-printf 'tokens\trequest_token_pattern\tctx\tslots\tgeneration_requests\tcoalesced_batches\tcoalesced_batch_max\tstatus_200\tgenerated_tokens\tcontinuation_tokens\telapsed_s\tgenerated_tok_s\tcontinuation_tok_s\tgenerated_tok_s_decode\tcontinuation_tok_s_decode\tep_ms\tdense_ms\tcompose_ms\tcompose_reduce_ms\tcompose_copy_ms\tcompose_final_ms\tgpu_util_avg\tgpu_util_max\tgpu_mem_used_max_mib\n' >>"$summary_tsv"
+printf 'endpoint\ttokens\trequest_token_pattern\tctx\tslots\tgeneration_requests\tcoalesced_batches\tcoalesced_batch_max\tstatus_200\tgenerated_tokens\tcontinuation_tokens\telapsed_s\tgenerated_tok_s\tcontinuation_tok_s\tgenerated_tok_s_decode\tcontinuation_tok_s_decode\tep_ms\tdense_ms\tcompose_ms\tcompose_reduce_ms\tcompose_copy_ms\tcompose_final_ms\tgpu_util_avg\tgpu_util_max\tgpu_mem_used_max_mib\n' >>"$summary_tsv"
 
 case_jsons=()
 case_index=0
@@ -127,6 +134,7 @@ for tokens in "${token_values[@]}"; do
     if [ -n "$request_token_pattern" ]; then
         case_suffix="${case_suffix}_pat${request_token_pattern//,/x}"
     fi
+    case_suffix="${case_suffix}_${endpoint}"
     port=$((port_base + case_index))
     case_dir="$log_dir/cases/case_${case_index}_ctx${ctx}_s${slots}_${case_suffix}"
     mkdir -p "$case_dir/runtime"
@@ -163,7 +171,7 @@ for tokens in "${token_values[@]}"; do
     done
     grep -q "tp_ep_http_serving" "$server_log" || fail "server did not listen for token case $tokens"
 
-    python3 - "$case_dir" "$port" "$tokens" "$generation_requests" "$concurrent_requests" "$request_token_pattern" <<'PY'
+    python3 - "$case_dir" "$port" "$tokens" "$generation_requests" "$concurrent_requests" "$request_token_pattern" "$endpoint" <<'PY'
 import json
 import shutil
 import subprocess
@@ -172,7 +180,7 @@ import threading
 import time
 import urllib.request
 
-case_dir, port, tokens, generation_requests, concurrent_requests, token_pattern = sys.argv[1:]
+case_dir, port, tokens, generation_requests, concurrent_requests, token_pattern, endpoint = sys.argv[1:]
 tokens = int(tokens)
 generation_requests = int(generation_requests)
 concurrent_requests = int(concurrent_requests)
@@ -182,6 +190,7 @@ else:
     pattern = [tokens]
 request_tokens = [pattern[i % len(pattern)] for i in range(generation_requests)]
 base = f"http://127.0.0.1:{port}"
+post_path = "/v1/completions" if endpoint == "completions" else "/v100/selected-token"
 
 def fetch(name, path, data=None, suffix="json"):
     req = urllib.request.Request(
@@ -230,10 +239,19 @@ try:
         responses = [None] * generation_requests
         def post_one(i):
             try:
+                if endpoint == "completions":
+                    payload = {
+                        "model": "ds4-v100-tp-ep-diagnostic",
+                        "prompt": f"diagnostic request {i}",
+                        "max_tokens": request_tokens[i],
+                        "request_index": i,
+                    }
+                else:
+                    payload = {"max_tokens": request_tokens[i], "request_index": i}
                 body = fetch(
                     f"response_{i:03d}",
-                    "/v100/selected-token",
-                    json.dumps({"max_tokens": request_tokens[i], "request_index": i}).encode(),
+                    post_path,
+                    json.dumps(payload).encode(),
                 )
                 responses[i] = json.loads(body.decode("utf-8"))
             except Exception as exc:
@@ -246,10 +264,19 @@ try:
         responses = [r for r in responses if r is not None]
     else:
         for i in range(generation_requests):
+            if endpoint == "completions":
+                payload = {
+                    "model": "ds4-v100-tp-ep-diagnostic",
+                    "prompt": f"diagnostic request {i}",
+                    "max_tokens": request_tokens[i],
+                    "request_index": i,
+                }
+            else:
+                payload = {"max_tokens": request_tokens[i], "request_index": i}
             body = fetch(
                 f"response_{i:03d}",
-                "/v100/selected-token",
-                json.dumps({"max_tokens": request_tokens[i], "request_index": i}).encode(),
+                post_path,
+                json.dumps(payload).encode(),
             )
             responses.append(json.loads(body.decode("utf-8")))
     if errors:
@@ -270,19 +297,20 @@ fetch("metrics", "/metrics", None, "txt")
 PY
     wait "$server_pid"
 
-    python3 - "$case_dir" "$tokens" "$request_token_pattern" "$ctx" "$slots" "$generation_requests" "$summary_tsv" <<'PY'
+    python3 - "$case_dir" "$tokens" "$request_token_pattern" "$ctx" "$slots" "$generation_requests" "$summary_tsv" "$endpoint" <<'PY'
 import json
 import sys
 
-case_dir, tokens, request_token_pattern, ctx, slots, generation_requests, summary_tsv = sys.argv[1:]
+case_dir, tokens, request_token_pattern, ctx, slots, generation_requests, summary_tsv, endpoint = sys.argv[1:]
 with open(f"{case_dir}/responses.json", "r", encoding="utf-8") as f:
     responses = json.load(f)
 if len(responses) != int(generation_requests):
     raise SystemExit(f"expected {generation_requests} responses, found {len(responses)}")
-total_generated = sum(r["generated_tokens"] for r in responses)
-total_continuation = sum(r["continuation_tokens"] for r in responses)
+metas = [r.get("ds4_v100", r) for r in responses]
+total_generated = sum(r["generated_tokens"] for r in metas)
+total_continuation = sum(r["continuation_tokens"] for r in metas)
 batch_rows = {}
-for i, r in enumerate(responses):
+for i, r in enumerate(metas):
     batch_rows.setdefault(r.get("coalesced_batch_id", i + 1), r)
 unique_batches = list(batch_rows.values())
 total_wall_ms = sum(r["timing_ms"]["total_wall"] for r in unique_batches)
@@ -296,9 +324,9 @@ total_compose_reduce_ms = sum(r["timing_ms"].get("compose_reduce", 0.0) for r in
 total_compose_copy_ms = sum(r["timing_ms"].get("compose_copy", 0.0) for r in unique_batches)
 total_compose_final_ms = sum(r["timing_ms"].get("compose_final", 0.0) for r in unique_batches)
 coalesced_batches = len(unique_batches)
-coalesced_batch_max = max((int(r.get("coalesced_batch_size", 1)) for r in responses), default=0)
-token_match = sum(r["token_match"] for r in responses)
-token_mismatch = sum(r["token_mismatch"] for r in responses)
+coalesced_batch_max = max((int(r.get("coalesced_batch_size", 1)) for r in metas), default=0)
+token_match = sum(r["token_match"] for r in metas)
+token_mismatch = sum(r["token_mismatch"] for r in metas)
 gpu_utils = []
 gpu_mem_used = []
 try:
@@ -323,8 +351,9 @@ gpu_util_avg = sum(gpu_utils) / len(gpu_utils) if gpu_utils else 0.0
 gpu_util_max = max(gpu_utils) if gpu_utils else 0.0
 gpu_mem_used_max = max(gpu_mem_used) if gpu_mem_used else 0.0
 row = {
-    "schema": "ds4_v100_tp_ep_sustained_http_case.v3",
+    "schema": "ds4_v100_tp_ep_sustained_http_case.v4",
     "backend": "tp_ep_launcher_http",
+    "endpoint": endpoint,
     "tokens_per_request": int(tokens),
     "request_token_pattern": request_token_pattern or str(tokens),
     "ctx": int(ctx),
@@ -357,6 +386,7 @@ with open(f"{case_dir}/result.json", "w", encoding="utf-8") as f:
     f.write("\n")
 with open(summary_tsv, "a", encoding="utf-8") as f:
     f.write(
+        f"{row['endpoint']}\t"
         f"{row['tokens_per_request']}\t{row['request_token_pattern']}\t"
         f"{row['ctx']}\t{row['slots']}\t"
         f"{row['generation_requests']}\t{row['coalesced_batches']}\t"
@@ -386,7 +416,7 @@ for path in sys.argv[2:]:
     with open(path, "r", encoding="utf-8") as f:
         cases.append(json.load(f))
 with open(summary_path, "w", encoding="utf-8") as f:
-    json.dump({"schema": "ds4_v100_tp_ep_sustained_http.v3", "cases": cases}, f, sort_keys=True)
+    json.dump({"schema": "ds4_v100_tp_ep_sustained_http.v4", "cases": cases}, f, sort_keys=True)
     f.write("\n")
 PY
 

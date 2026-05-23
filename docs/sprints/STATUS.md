@@ -73,6 +73,17 @@ requests, and reaches `387.877251` wall generated tok/s /
 `510.747848` decode generated tok/s over `1536` admitted client tokens. A
 uniform 32-request sanity run still forms one full 32-slot batch and reports
 `759.490446` wall generated tok/s / `991.405750` decode generated tok/s.
+Sprint 288 added a TP/EP diagnostic `POST /v1/completions` endpoint on top of
+the same coalesced and bucketed resident decode path. The response is
+OpenAI-shaped and carries usage/choices fields, but explicitly marks
+`ds4_v100.diagnostic=true` because prompt prefill, tokenizer text output, and
+output-head token selection are not yet wired in this TP/EP endpoint. The V100
+completion-shaped mixed run at `32` slots / `256K` with 32 concurrent requests
+and pattern `32,64` forms two 16-client buckets, returns `32/32` token match,
+and reports `384.581100` wall generated tok/s / `505.797315` decode generated
+tok/s. The selected-token regression sanity still forms one 32-client batch
+and reports `726.823991` wall generated tok/s / `944.195924` decode generated
+tok/s.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

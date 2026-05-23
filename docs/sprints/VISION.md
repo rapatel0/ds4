@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 287
+revision: 288
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -1441,6 +1441,34 @@ only admitted client tokens in serving metrics. This keeps compact
 route-compose on the validated kernel shape until a future sprint adds true
 dynamic-slot compact compose or per-slot refill.
 
+### Sprint 288 - TP/EP Diagnostic Completions Endpoint [complete]
+
+Goal: Add a serving-shaped, OpenAI-compatible diagnostic completions endpoint
+to the TP/EP HTTP harness while preserving the coalesced and bucketed admission
+policy from Sprints 286-287.
+
+Outcome: Complete. The TP/EP server now accepts `POST /v1/completions` and
+`POST /v100/diagnostic-completions` in the same generation path as
+`POST /v100/selected-token`. Completion responses use an OpenAI-style
+`text_completion` envelope with `choices` and `usage`, while TP/EP admission,
+timing, checksum, and token-match metadata are nested under `ds4_v100`.
+
+This endpoint is deliberately diagnostic. It marks `ds4_v100.diagnostic=true`
+and records that prompt prefill and output-head text/token selection are not
+yet wired in this TP/EP surface.
+
+The V100 pod mixed completion run at `32` slots / `256K` with 32 concurrent
+requests using pattern `32,64` forms two 16-client buckets, returns aggregate
+`32/32` token match, and reports `384.581100` wall generated tok/s /
+`505.797315` decode generated tok/s over 1536 admitted client tokens. The
+selected-token regression sanity still forms one full 32-client batch and
+reports `726.823991` wall generated tok/s / `944.195924` decode generated
+tok/s.
+
+Next work should move from diagnostic completions to real model output in the
+TP/EP path: output-head/top-token selection, tokenizer text emission, prompt
+prefill, and then stop/finish handling.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1527,7 +1555,8 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 284 promoted compact route-compose. | Route-major EP contribution packing reduces staged FP32 traffic and improves same-binary serving throughput by about `11%`. | Re-establish promoted 32/64 topline and add true request coalescing/admission. |
 | 2026-05-23 | Sprint 285 established the promoted HTTP serving topline. | The normal TP/EP launcher path now reports about `771-795` wall generated tok/s at `32` slots / `256K`. | Add true request coalescing/admission, then revisit MTP. |
 | 2026-05-23 | Sprint 286 added TP/EP HTTP request coalescing. | `32` independent concurrent selected-token requests now form one 32-slot resident decode batch, with `721-787` wall generated tok/s depending on tokens/request. | Replace the selected-token harness with the real prompt/token API and bucketed admission queues. |
-| 2026-05-23 | Sprint 287 added bucketed TP/EP admission. | Mixed `32,64` token requests are served as same-length batches instead of rejected, with `32/32` match and zero rejected requests. | Add a real prompt/token-compatible TP/EP endpoint on top of coalesced bucketed admission. |
+| 2026-05-23 | Sprint 287 added bucketed TP/EP admission. | Mixed `32,64` token requests are served as same-length batches instead of rejected, with `32/32` match and zero rejected requests. | Add a prompt/token-compatible diagnostic TP/EP endpoint on top of coalesced bucketed admission. |
+| 2026-05-23 | Sprint 288 added diagnostic `/v1/completions` for TP/EP. | Completion-shaped requests now exercise the real coalesced/bucketed resident decode path and return OpenAI-style envelopes, but prompt prefill/output-head text are still explicit gaps. | Wire real TP/EP output-head/top-token selection, then tokenizer text and prompt prefill. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 
