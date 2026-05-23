@@ -423,3 +423,9 @@ pairwise all-reduce. It verifies on V100 and reaches `81.065 GB/s` effective
 wire bandwidth at 1024 tokens, but it is slower than root at the current
 16-token decode payload (`0.133761 ms` versus `0.110762 ms`). Treat this as a
 prefill/batched-TP primitive, not a direct decode-serving win.
+After Sprint 197, `DS4_V100_TURBOMIND_PROFILE=1` reports routed-FFN liveness
+counters. The current `fused6_reduce` path has `compact_a_calls == calls`,
+`down_reduce_epilogue_calls == calls`, `down_routes_calls == 0`, and
+`mid_half_calls == calls`. The six-route `mid_half` allocation is `24576` bytes
+per call, which means the next routed-FFN optimization needs to reduce the
+gate/up and down execution boundary rather than only shrinking scratch memory.

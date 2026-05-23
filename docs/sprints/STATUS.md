@@ -529,6 +529,15 @@ direct TP4 collectives are not the decode lever unless fused into a larger
 persistent boundary. The next sprint should prioritize the monolithic
 routed-FFN or persistent layer boundary, while keeping the doubling collective
 as the baseline for later TP4/prefill work.
+Sprint 197 added the missing liveness contract to the TurboMind profile. The
+current `fused6_reduce` production-shaped path now proves compact activation
+staging is selected, `down_routes` is elided, and `mid_half` remains
+materialized on every routed FFN call. The remaining `mid_half` buffer is only
+`24576` bytes per six-route call, so a pure buffer-elision sprint is unlikely to
+move serving throughput. The next implementation should target a persistent or
+tile-level gate/up+down executor that reduces launch/GEMM boundary cost, or
+use the TP4 doubling collective for larger batched/prefill shapes where it
+actually wins.
 
 The concise current status is also tracked in
 `docs/sprints/EXPERIMENT-STATUS.md`.

@@ -748,9 +748,18 @@ struct cuda_tm_profile_stats {
     uint64_t fused_calls;
     uint64_t group_pipeline_calls;
     uint64_t group_pipeline_groups;
+    uint64_t route_expanded_a_calls;
+    uint64_t compact_a_calls;
+    uint64_t mid_half_materialized_calls;
+    uint64_t down_routes_materialized_calls;
+    uint64_t down_reduce_epilogue_calls;
     uint64_t tokens;
     uint64_t routes;
     uint64_t active_expert_sum;
+    uint64_t scratch_bytes;
+    uint64_t a_half_bytes;
+    uint64_t mid_half_bytes;
+    uint64_t down_routes_bytes;
     uint32_t max_routes_per_call;
     uint32_t max_routes_per_expert;
     double route_ms;
@@ -786,12 +795,17 @@ static void cuda_tm_profile_dump(void) {
         const double calls = (double)s.calls;
         const double total = s.total_ms > 0.0 ? s.total_ms : 1.0;
         fprintf(stderr,
-                "ds4: turbomind_profile gpu=%d calls=%llu fused_calls=%llu group_pipeline_calls=%llu group_pipeline_groups=%llu tokens=%llu routes=%llu avg_tokens=%.3f avg_routes=%.3f avg_active_experts=%.3f max_routes_call=%u max_routes_expert=%u total_ms=%.3f route_ms=%.3f gather_ms=%.3f gate_up_ms=%.3f swiglu_ms=%.3f down_ms=%.3f scatter_ms=%.3f gate_up_pct=%.2f down_pct=%.2f\n",
+                "ds4: turbomind_profile gpu=%d calls=%llu fused_calls=%llu group_pipeline_calls=%llu group_pipeline_groups=%llu route_expanded_a_calls=%llu compact_a_calls=%llu mid_half_calls=%llu down_routes_calls=%llu down_reduce_epilogue_calls=%llu tokens=%llu routes=%llu avg_tokens=%.3f avg_routes=%.3f avg_active_experts=%.3f max_routes_call=%u max_routes_expert=%u scratch_bytes=%llu a_half_bytes=%llu mid_half_bytes=%llu down_routes_bytes=%llu avg_scratch_bytes=%.1f avg_mid_half_bytes=%.1f total_ms=%.3f route_ms=%.3f gather_ms=%.3f gate_up_ms=%.3f swiglu_ms=%.3f down_ms=%.3f scatter_ms=%.3f gate_up_pct=%.2f down_pct=%.2f\n",
                 gpu,
                 (unsigned long long)s.calls,
                 (unsigned long long)s.fused_calls,
                 (unsigned long long)s.group_pipeline_calls,
                 (unsigned long long)s.group_pipeline_groups,
+                (unsigned long long)s.route_expanded_a_calls,
+                (unsigned long long)s.compact_a_calls,
+                (unsigned long long)s.mid_half_materialized_calls,
+                (unsigned long long)s.down_routes_materialized_calls,
+                (unsigned long long)s.down_reduce_epilogue_calls,
                 (unsigned long long)s.tokens,
                 (unsigned long long)s.routes,
                 (double)s.tokens / calls,
@@ -799,6 +813,12 @@ static void cuda_tm_profile_dump(void) {
                 (double)s.active_expert_sum / calls,
                 s.max_routes_per_call,
                 s.max_routes_per_expert,
+                (unsigned long long)s.scratch_bytes,
+                (unsigned long long)s.a_half_bytes,
+                (unsigned long long)s.mid_half_bytes,
+                (unsigned long long)s.down_routes_bytes,
+                (double)s.scratch_bytes / calls,
+                (double)s.mid_half_bytes / calls,
                 s.total_ms,
                 s.route_ms,
                 s.gather_ms,
@@ -838,7 +858,16 @@ static void cuda_tm_profile_record(int gpu,
                                    float scatter_ms,
                                    float total_ms,
                                    int group_pipeline,
-                                   uint32_t group_pipeline_groups) {
+                                   uint32_t group_pipeline_groups,
+                                   int route_expanded_a,
+                                   int compact_a,
+                                   int mid_half_materialized,
+                                   int down_routes_materialized,
+                                   int down_reduce_epilogue,
+                                   uint64_t scratch_bytes,
+                                   uint64_t a_half_bytes,
+                                   uint64_t mid_half_bytes,
+                                   uint64_t down_routes_bytes) {
     if (gpu < 0 || gpu >= DS4_CUDA_MAX_TMP_DEVICES) return;
     std::lock_guard<std::mutex> lk(g_tm_profile_mutex);
     cuda_tm_profile_stats &s = g_tm_profile_stats[gpu];
@@ -848,9 +877,18 @@ static void cuda_tm_profile_record(int gpu,
         s.group_pipeline_calls++;
         s.group_pipeline_groups += group_pipeline_groups;
     }
+    if (route_expanded_a) s.route_expanded_a_calls++;
+    if (compact_a) s.compact_a_calls++;
+    if (mid_half_materialized) s.mid_half_materialized_calls++;
+    if (down_routes_materialized) s.down_routes_materialized_calls++;
+    if (down_reduce_epilogue) s.down_reduce_epilogue_calls++;
     s.tokens += n_tokens;
     s.routes += total_routes;
     s.active_expert_sum += active_experts;
+    s.scratch_bytes += scratch_bytes;
+    s.a_half_bytes += a_half_bytes;
+    s.mid_half_bytes += mid_half_bytes;
+    s.down_routes_bytes += down_routes_bytes;
     if (total_routes > s.max_routes_per_call) s.max_routes_per_call = total_routes;
     if (max_routes_per_expert > s.max_routes_per_expert) {
         s.max_routes_per_expert = max_routes_per_expert;
@@ -876,6 +914,15 @@ struct cuda_tm_profile_call {
     float swiglu_ms = 0.0f;
     float down_ms = 0.0f;
     float scatter_ms = 0.0f;
+    uint64_t scratch_bytes = 0;
+    uint64_t a_half_bytes = 0;
+    uint64_t mid_half_bytes = 0;
+    uint64_t down_routes_bytes = 0;
+    int route_expanded_a = 0;
+    int compact_a = 0;
+    int mid_half_materialized = 0;
+    int down_routes_materialized = 0;
+    int down_reduce_epilogue = 0;
 
     void begin(int gpu_in) {
         if (!cuda_tm_profile_enabled()) return;
@@ -933,7 +980,16 @@ struct cuda_tm_profile_call {
                                scatter_ms,
                                total_ms,
                                group_pipeline,
-                               group_pipeline_groups);
+                               group_pipeline_groups,
+                               route_expanded_a,
+                               compact_a,
+                               mid_half_materialized,
+                               down_routes_materialized,
+                               down_reduce_epilogue,
+                               scratch_bytes,
+                               a_half_bytes,
+                               mid_half_bytes,
+                               down_routes_bytes);
     }
 
     void cleanup() {
@@ -7533,7 +7589,9 @@ static int cuda_tm_routed_mxfp4_packed_impl(
         scratch_bytes += (uint64_t)tm_group_capacity * sizeof(cuda_tm_strided_ptr);
     }
     const uint64_t a_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
-    scratch_bytes += (uint64_t)(use_unexpanded_a ? n_tokens : total_routes) * hidden * sizeof(__half);
+    const uint64_t a_half_bytes =
+        (uint64_t)(use_unexpanded_a ? n_tokens : total_routes) * hidden * sizeof(__half);
+    scratch_bytes += a_half_bytes;
     const uint64_t gate_out_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
     if (!use_gated_silu) {
         scratch_bytes += (uint64_t)total_routes * mid * (fused_gate_up ? 2u : 1u) * sizeof(__half);
@@ -7543,12 +7601,25 @@ static int cuda_tm_routed_mxfp4_packed_impl(
         scratch_bytes += (uint64_t)total_routes * mid * sizeof(__half);
     }
     const uint64_t mid_half_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
-    scratch_bytes += (uint64_t)total_routes * mid * sizeof(__half);
+    const uint64_t mid_half_bytes = (uint64_t)total_routes * mid * sizeof(__half);
+    scratch_bytes += mid_half_bytes;
     const uint64_t down_routes_off = scratch_bytes = cuda_tm_align16(scratch_bytes);
+    uint64_t down_routes_bytes = 0;
     if (!use_fused6_reduce) {
-        scratch_bytes += (uint64_t)total_routes * hidden * sizeof(__half);
+        down_routes_bytes = (uint64_t)total_routes * hidden * sizeof(__half);
+        scratch_bytes += down_routes_bytes;
     }
     scratch_bytes = cuda_tm_align16(scratch_bytes);
+    if (tm_prof.enabled) {
+        tm_prof.scratch_bytes = scratch_bytes;
+        tm_prof.a_half_bytes = a_half_bytes;
+        tm_prof.mid_half_bytes = mid_half_bytes;
+        tm_prof.down_routes_bytes = down_routes_bytes;
+        tm_prof.route_expanded_a = use_unexpanded_a ? 0 : 1;
+        tm_prof.compact_a = use_unexpanded_a ? 1 : 0;
+        tm_prof.mid_half_materialized = 1;
+        tm_prof.down_routes_materialized = use_fused6_reduce ? 0 : 1;
+    }
 
     uint8_t *scratch = (uint8_t *)cuda_tmp_alloc(scratch_bytes, "turbomind packed routed FFN scratch");
     if (!scratch) return 1;
@@ -7966,6 +8037,9 @@ static int cuda_tm_routed_mxfp4_packed_impl(
                                       (int)hidden,
                                       (int)mid,
                                       use_fused6_reduce);
+    if (tm_prof.enabled) {
+        tm_prof.down_reduce_epilogue = use_down_reduce_epilogue ? 1 : 0;
+    }
     if (ok && fused6_reduce_requested && !use_down_reduce_epilogue) {
         fprintf(stderr,
                 "ds4: fused6_reduce requested but down-reduce epilogue is unavailable\n");
