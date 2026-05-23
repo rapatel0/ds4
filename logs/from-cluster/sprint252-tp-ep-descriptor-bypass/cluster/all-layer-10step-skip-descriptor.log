@@ -1,0 +1,9 @@
+tp_ep_all_layer_dense_f16_cache	rows	4096	source_bytes	8640413696	cache_bytes	14451998720	cache_aligned_bytes	14451998720	max_temp_bytes	132382720	cache_ms	7589.592198	PASS
+rank	0	device	0	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.041984	down_ms	0.034406	ep_ms	0.076390	dense_rows	8	control_rows	13	expert_rows	2	kv_rows	1	comp_rows	0	checksum	0
+rank	1	device	1	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.039936	down_ms	0.034202	ep_ms	0.074138	dense_rows	8	control_rows	13	expert_rows	2	kv_rows	1	comp_rows	0	checksum	0
+rank	2	device	2	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.038298	down_ms	0.034406	ep_ms	0.072704	dense_rows	8	control_rows	13	expert_rows	2	kv_rows	1	comp_rows	0	checksum	0
+rank	3	device	3	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.036250	down_ms	0.034406	ep_ms	0.070656	dense_rows	8	control_rows	13	expert_rows	2	kv_rows	1	comp_rows	0	checksum	0
+rank	4	device	4	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.034611	down_ms	0.034611	ep_ms	0.069222	dense_rows	8	control_rows	13	expert_rows	2	kv_rows	1	comp_rows	0	checksum	0
+rank	5	device	5	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.033792	down_ms	0.034406	ep_ms	0.068198	dense_rows	8	control_rows	13	expert_rows	2	kv_rows	1	comp_rows	0	checksum	0
+rank	6	device	6	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.032973	down_ms	0.034202	ep_ms	0.067174	dense_rows	8	control_rows	13	expert_rows	2	kv_rows	1	comp_rows	0	checksum	0
+rank	7	device	7	routes	24	active_local_experts	6	max_routes_per_expert	6	gate_ms	0.167526	down_ms	0.092160	ep_ms	0.259686	dense_rows	8	control_rows	13	expert_rows	2	kv_rows	1	comp_rows	0	checksum	0

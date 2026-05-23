@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 251
+revision: 252
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -144,6 +144,12 @@ not a serial layer-chain.
   `91879.358460 ms` to `74382.064295 ms`, and projected slot-step tok/s moves
   from `705.516343` to `731.369579`. The next residency targets are
   TurboMind/API handles, route buffers, expert bindings, and TP runtime state.
+- Sprint 252 added an opt-in descriptor-check bypass for serving-shaped TP/EP
+  scaffold runs. With shared dense cache and `--skip-descriptor-checks`, the
+  10-step all-layer gate passes `43/43` layers with `descriptor_checks=0`,
+  wall time drops to `46990.435640 ms`, and the projected decode proxy remains
+  in the same range at `720.987187` slot-step tok/s. Strict descriptor checks
+  remain the default validation gate.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -671,6 +677,25 @@ the summed decode proxy from `45.356852 ms/token` to `43.753529 ms/token`
 (`731.369579` projected slot-step tok/s). Next hoist TurboMind/API handles,
 route buffers, expert bindings, and TP runtime state.
 
+### Sprint 252 - TP/EP Descriptor Check Bypass [complete]
+
+Goal: Add an opt-in way to skip dense/control descriptor byte checks for
+serving-shaped all-layer scaffold measurements.
+
+Rationale: Descriptor byte checks are validation work, not serving work. After
+the pack has passed strict descriptor validation, the all-layer loop should not
+reread and checksum dense/control rows every layer.
+
+Outcome: Complete. `tools/ds4-v100-tp-ep-full-layer-smoke` now supports
+`--skip-descriptor-checks`. The default remains strict. With shared dense
+cache, `--compose-next-hidden`, and descriptor checks disabled, the 10-step
+V100 gate passes `43/43` layers at `32` slots / `256K`, reports
+`descriptor_checks=0`, cuts wall time from `74382.064295 ms` to
+`46990.435640 ms`, and reports `44.383590 ms/token` summed decode proxy
+(`720.987187` projected slot-step tok/s). A decode-only run exposed a smoke
+harness `invalid resource handle` path; keep compose validation enabled until
+that is fixed.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -723,6 +748,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 249 made the representative TP/EP full-layer smoke layer-parametric across SWA-only, ratio-4, ratio-128, and late layers. | The all-layer loop no longer has layer-2 tensor-name and ratio-4 KV assumptions as blockers. | Build a resident all-layer TP/EP loop that carries hidden shards through all 43 layers in one process. |
 | 2026-05-23 | Sprint 250 added a single-process all-layer TP/EP scaffold gate. | The TP/EP path now has a 43-layer correctness/timing gate, but it still recreates per-layer state. | Move runtime/cache/TurboMind state outside the per-layer runner for a truly resident all-layer loop. |
 | 2026-05-23 | Sprint 251 hoisted the dense FP16 cache across all layers. | Reusing dense cache cuts all-layer scaffold wall time by about 19% and removes one class of per-layer state churn. | Hoist TurboMind/API, route buffers, expert bindings, and TP runtime state. |
+| 2026-05-23 | Sprint 252 added opt-in descriptor-check bypass for serving-shaped scaffold runs. | Descriptor checks are validation work; skipping them cuts all-layer wall time by about 37% after validation has passed. | Fix decode-only harness and hoist TurboMind/API plus rank buffers. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

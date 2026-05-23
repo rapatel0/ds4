@@ -4,17 +4,17 @@ Last updated: 2026-05-23
 
 ## Topline
 
-Current TP/EP implementation status: Sprint 251 hoisted dense FP16 cache
-materialization out of the per-layer all-layer runner. The separate TP/EP smoke
-supports `--all-layers`, builds one shared `4096`-row dense cache
-(`14451998720` bytes) in `7772.591153 ms`, and passes all `43` transformer
-layers at `32` slots / `256K`, MTP off. The 10-step gate reports
-`43.753529 ms/token` summed decode proxy and `731.369579` projected slot-step
-tok/s, with stage sums of `11.837140 ms` EP, `7.613544 ms` dense, and
-`24.296721 ms` compose. Wall time improved from Sprint 250's `91879.358460 ms`
-to `74382.064295 ms`. This is not generated-token serving throughput; the next
-gap is hoisting TurboMind/API handles, route buffers, expert bindings, and TP
-runtime state.
+Current TP/EP implementation status: Sprint 252 added an opt-in
+`--skip-descriptor-checks` mode for serving-shaped scaffold runs after strict
+descriptor validation has passed. With shared dense cache and descriptor checks
+off, the separate TP/EP all-layer smoke passes all `43` transformer layers at
+`32` slots / `256K`, MTP off, reports `descriptor_checks=0`, and cuts wall time
+from Sprint 251's `74382.064295 ms` to `46990.435640 ms`. The 10-step gate
+reports `44.383590 ms/token` summed decode proxy and `720.987187` projected
+slot-step tok/s, with stage sums of `11.784128 ms` EP, `7.933067 ms` dense,
+and `24.659710 ms` compose. This is not generated-token serving throughput; the
+next gap is fixing the decode-only harness path and hoisting TurboMind/API
+handles, route buffers, expert bindings, and TP runtime state.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

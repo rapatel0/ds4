@@ -324,6 +324,7 @@ struct Options {
     bool dense_f16_cublas_compose = false;
     bool dense_f16_cache_compose = false;
     bool all_layers = false;
+    bool skip_descriptor_checks = false;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -741,7 +742,8 @@ void usage(const char *argv0) {
                  "       [--compose-next-hidden] [--decode-steps N]\n"
                  "       [--ep-return-fp16] [--fuse-compose-sum]\n"
                  "       [--dense-hmma-compose] [--dense-f16-cublas-compose]\n"
-                 "       [--dense-f16-cache-compose] [--all-layers]\n",
+                 "       [--dense-f16-cache-compose] [--all-layers]\n"
+                 "       [--skip-descriptor-checks]\n",
                  argv0);
 }
 
@@ -819,6 +821,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->dense_f16_cache_compose = true;
         } else if (std::strcmp(arg, "--all-layers") == 0) {
             opt->all_layers = true;
+        } else if (std::strcmp(arg, "--skip-descriptor-checks") == 0) {
+            opt->skip_descriptor_checks = true;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -2553,12 +2557,15 @@ int run_layer(const Options &opt,
     const auto descriptor_start = std::chrono::steady_clock::now();
     for (const ContractRow &r : rows) {
         if (r.record_type != "dense_tp" && r.record_type != "replicated_control") continue;
-        uint64_t checksum = 0;
-        if (device_checksum_row(opt.devices[r.owning_gpu], opt.pack_dir, r, &checksum) != 0) {
-            return 3;
+        if (!opt.skip_descriptor_checks) {
+            uint64_t checksum = 0;
+            if (device_checksum_row(opt.devices[r.owning_gpu], opt.pack_dir, r, &checksum) != 0) {
+                return 3;
+            }
+            layer_stats.gpu[r.owning_gpu].checksum ^=
+                checksum + (uint64_t)(r.owning_gpu + 1) * 131u;
+            layer_stats.checksum ^= checksum + (uint64_t)(r.owning_gpu + 1) * 257u;
         }
-        layer_stats.gpu[r.owning_gpu].checksum ^= checksum + (uint64_t)(r.owning_gpu + 1) * 131u;
-        layer_stats.checksum ^= checksum + (uint64_t)(r.owning_gpu + 1) * 257u;
         if (r.record_type == "dense_tp") layer_stats.dense_loaded_bytes += r.bytes_estimate;
         else layer_stats.control_loaded_bytes += r.bytes_estimate;
     }
@@ -2910,7 +2917,7 @@ int run_layer(const Options &opt,
                       layer_stats.expert_rows > 0 &&
                       layer_stats.kv_rows > 0 &&
                       (!comp_rows_expected || layer_stats.comp_rows > 0) &&
-                      layer_stats.checksum != 0 &&
+                      (opt.skip_descriptor_checks || layer_stats.checksum != 0) &&
                       kv_result.max_abs == 0.0 &&
                       repeat_bad == 0 &&
                       repeat_nan == 0 &&
@@ -3185,8 +3192,8 @@ int main(int argc, char **argv) {
             const double wall_ms =
                 std::chrono::duration<double, std::milli>(stop - start).count();
             std::printf("tp_ep_all_layer_scaffold\tlayers\t43\tpass_layers\t%d\t"
-                        "failed_layer\t%d\twall_ms\t%.6f\tFAIL\n",
-                        pass_layers, layer, wall_ms);
+                        "failed_layer\t%d\tdescriptor_checks\t%d\twall_ms\t%.6f\tFAIL\n",
+                        pass_layers, layer, opt.skip_descriptor_checks ? 0 : 1, wall_ms);
             if (shared_dense_f16_cache) {
                 free_dense_f16_cache(all_layer_dense_f16_cache, opt);
             }
@@ -3201,10 +3208,12 @@ int main(int argc, char **argv) {
         : 0.0;
     std::printf("tp_ep_all_layer_scaffold\tlayers\t43\tpass_layers\t%d\t"
                 "slots\t%d\tctx\t262144\tdecode_steps_per_layer\t%d\t"
+                "descriptor_checks\t%d\t"
                 "sum_decode_ms_per_token\t%.6f\tprojected_slot_step_tok_s\t%.6f\t"
                 "sum_ep_ms\t%.6f\tsum_dense_ms\t%.6f\tsum_compose_ms\t%.6f\t"
                 "wall_ms\t%.6f\tchecksum\t%llu\tPASS\n",
                 pass_layers, opt.slots, opt.decode_steps,
+                opt.skip_descriptor_checks ? 0 : 1,
                 sum_decode_ms, slot_step_tok_s, sum_ep_ms, sum_dense_ms,
                 sum_compose_ms, wall_ms, (unsigned long long)checksum);
     if (shared_dense_f16_cache) {
