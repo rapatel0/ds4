@@ -287,7 +287,7 @@ finite deterministic repeat output. This remains a scaffold, not a
 logits-equivalent layer; the descriptor load/check time is startup evidence,
 not serving throughput.
 
-### Sprint 236 - Descriptor-Backed TP Dense Compute Gate [planned]
+### Sprint 236 - Descriptor-Backed TP Dense Compute Gate [complete]
 
 Goal: Replace one Sprint 235 dense checksum stage with real low-bit dense
 computation for `blk.2.attn_q_a.weight`, using packed F8 source bytes from the
@@ -298,7 +298,15 @@ gate must prove that descriptor-backed packed dense bytes can feed GPU compute
 inside the TP/EP path before expanding that pattern to the rest of attention
 and shared dense math.
 
-Outcome: Pending.
+Outcome: Complete for one representative dense tensor. The TP/EP full-layer
+smoke now resolves `blk.2.attn_q_a.weight`, loads real packed F8 E4M3 block-128
+TP shards from the production pack, expands F8 values inside a CUDA kernel, and
+computes `32` slots x `128` local rows x `4096` columns on all eight V100s.
+The V100 run passes with `dense_compute_ms=0.081783`, exact repeat,
+`dense_compute_oracle_max_abs=0.000000007`, KV `max_abs=0`, and the existing
+descriptor-backed EP path still passing. This is not yet optimized HMMA/CUTLASS
+dense math and not full-layer logits equivalence, but it proves the packed
+dense compute path inside TP/EP.
 
 ### Sprint 237 - TP/EP Serving Gate [planned]
 
@@ -367,6 +375,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 233 proved descriptor ownership for layer `2` from the real production-pack contract. | The contract has the rows and TP/EP ownership needed, but execution still uses fixture weights. | Bind descriptor rows to actual pack bytes and feed real expert pointers into the one-layer smoke. |
 | 2026-05-23 | Sprint 234 proved descriptor-backed routed expert byte binding for layer `2`. | Real packed expert bytes now flow into the separate TP/EP path; the remaining gap is full-layer math and all-layer decode. | Build descriptor-backed full-layer TP/EP decode with MTP off. |
 | 2026-05-23 | Sprint 235 proved a descriptor-backed full-layer scaffold for layer `2`. | All descriptor families now have a concrete TP/EP binding outside the PP path, but dense/control rows are checksum scaffolds, not math. | Replace dense/control checksum stages with real low-bit dense execution for representative full-layer decode. |
+| 2026-05-23 | Sprint 236 proved real packed-F8 dense compute for `blk.2.attn_q_a.weight` in the TP/EP path. | The runtime can now compute from packed dense bytes, but only for one representative tensor and with a straightforward FP32 dot kernel. | Extend dense compute coverage or replace this gate with fused HMMA/CUTLASS dense blocks. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit in Sprint 236 or equivalent after TP/EP serving exists. |
 

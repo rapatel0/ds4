@@ -334,6 +334,20 @@ fixture time is `0.744619 ms`, and the one-shot descriptor load/check phase is
 startup/scaffold byte-binding cost. TP/EP is still not serving and not
 logits-equivalent, but all layer-2 families now have a concrete TP/EP runtime
 binding outside the PP path.
+Sprint 236 replaces the first dense checksum stage with real descriptor-backed
+low-bit dense computation. The TP/EP-only full-layer smoke now accepts
+`--dense-compute-tensor blk.2.attn_q_a.weight`, resolves the real layer-2 F8
+contract rows, loads packed F8 E4M3 block-128 shards directly from the
+production pack, and expands F8 values inside a CUDA kernel. On the V100 pod at
+`32` slots / `256K`, each GPU computes `128` local rows x `4096` columns for
+`32` slots. The dense gate loads `4227072` packed bytes, measures
+`dense_compute_ms=0.081783`, passes exact repeat (`repeat_bad=0`,
+`repeat_nan=0`), and matches the bounded CPU oracle with
+`dense_compute_oracle_max_abs=0.000000007`. The Sprint 235 scaffold still
+passes in the same run: `288` layer rows, KV `max_abs=0`, EP
+`worst_ep_ms=0.242517`, and final `PASS`. TP/EP is still not serving and not
+full-layer logits-equivalent, but packed dense bytes now feed real GPU compute
+inside the separate TP/EP path.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit

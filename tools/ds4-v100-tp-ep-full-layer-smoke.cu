@@ -70,6 +70,7 @@ struct ContractRow {
     std::string tensor_id;
     std::string family;
     std::string source_dtype;
+    std::string source_shape;
     std::string runtime_layout;
     int layer = -1;
     int owning_gpu = -1;
@@ -167,6 +168,22 @@ struct LayerStats {
     GpuFamilyStats gpu[kGpus];
 };
 
+struct DenseComputeStats {
+    bool enabled = false;
+    bool pass = true;
+    std::string tensor_id;
+    int rows_per_gpu = 0;
+    int cols = 0;
+    int slots = 0;
+    uint64_t loaded_bytes = 0;
+    double compute_ms = 0.0;
+    double repeat_max_abs = 0.0;
+    double oracle_max_abs = 0.0;
+    int repeat_bad = 0;
+    int repeat_nan = 0;
+    int oracle_bad = 0;
+};
+
 struct Options {
     const char *lib_path = "./build/turbomind-v100/libggml-turbomind.so";
     const char *pack_dir = nullptr;
@@ -180,6 +197,7 @@ struct Options {
     uint64_t position = 1024;
     int warmup = 5;
     int iters = 30;
+    const char *dense_compute_tensor = nullptr;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -191,6 +209,65 @@ __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
         local += (unsigned long long)data[i] * (unsigned long long)((i % 251u) + 1u);
     }
     atomicAdd(out, local);
+}
+
+__device__ float f8_e8m0_to_f32_dev(uint8_t e) {
+    return __uint_as_float(e == 0 ? 0x00400000u : ((uint32_t)e << 23));
+}
+
+__device__ float f8_e4m3fn_to_f32_dev(uint8_t x) {
+    const uint32_t sign = ((uint32_t)x & 0x80u) << 24;
+    const uint32_t ax = (uint32_t)x & 0x7fu;
+    if (ax == 0) return __uint_as_float(sign ? 0x80000000u : 0u);
+    if (ax == 0x7f) return __uint_as_float(0x7fc00000u);
+    const uint32_t exp = ax >> 3;
+    const uint32_t man = ax & 0x07u;
+    if (exp != 0) {
+        return __uint_as_float(sign | ((exp + 120u) << 23) | (man << 20));
+    }
+    const uint32_t hi = man >= 4u ? 2u : (man >= 2u ? 1u : 0u);
+    const uint32_t mant = (man << (23u - hi)) & 0x007fffffu;
+    return __uint_as_float(sign | ((118u + hi) << 23) | mant);
+}
+
+__device__ float warp_sum_f32(float v) {
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        v += __shfl_down_sync(0xffffffffu, v, offset);
+    }
+    return v;
+}
+
+__device__ float block_sum_256_f32(float v) {
+    __shared__ float warp_sums[8];
+    v = warp_sum_f32(v);
+    if ((threadIdx.x & 31u) == 0u) warp_sums[threadIdx.x >> 5] = v;
+    __syncthreads();
+    v = threadIdx.x < 8u ? warp_sums[threadIdx.x] : 0.0f;
+    if (threadIdx.x < 32u) v = warp_sum_f32(v);
+    return v;
+}
+
+__global__ void f8_b128_dense_kernel(float *out,
+                                     const uint8_t *weights,
+                                     const float *x,
+                                     uint32_t rows,
+                                     uint32_t cols,
+                                     uint32_t row_stride_bytes,
+                                     uint32_t slots) {
+    const uint32_t row = blockIdx.x;
+    const uint32_t slot = blockIdx.y;
+    if (row >= rows || slot >= slots) return;
+    const uint8_t *wrow = weights + (uint64_t)row * row_stride_bytes;
+    const float *xrow = x + (uint64_t)slot * cols;
+    float acc = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        const uint8_t *block = wrow + (uint64_t)(c / 128u) * 129ull;
+        const float scale = f8_e8m0_to_f32_dev(block[0]);
+        const float w = f8_e4m3fn_to_f32_dev(block[1u + (c % 128u)]) * scale;
+        acc += w * xrow[c];
+    }
+    acc = block_sum_256_f32(acc);
+    if (threadIdx.x == 0u) out[(uint64_t)slot * rows + row] = acc;
 }
 
 bool parse_int(const char *text, int *out) {
@@ -306,7 +383,8 @@ void usage(const char *argv0) {
                  "usage: %s --pack-dir DIR --contract FILE --tm-index FILE [options]\n"
                  "       [--lib PATH] [--devices 0,1,2,3,4,5,6,7]\n"
                  "       [--slots N] [--top-k N] [--layer N] [--kv-slot N]\n"
-                 "       [--position N] [--warmup N] [--iters N]\n",
+                 "       [--position N] [--warmup N] [--iters N]\n"
+                 "       [--dense-compute-tensor NAME]\n",
                  argv0);
 }
 
@@ -356,6 +434,10 @@ bool parse_args(int argc, char **argv, Options *opt) {
         } else if (std::strcmp(arg, "--iters") == 0) {
             if (!val || !parse_int(val, &opt->iters) || opt->iters <= 0) return false;
             ++i;
+        } else if (std::strcmp(arg, "--dense-compute-tensor") == 0) {
+            if (!val) return false;
+            opt->dense_compute_tensor = val;
+            ++i;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -375,6 +457,7 @@ bool parse_contract_row(const std::vector<std::string> &f, ContractRow *out) {
     if (!parse_int(f[3].c_str(), &r.layer)) return false;
     r.family = f[4];
     r.source_dtype = f[5];
+    r.source_shape = f[6];
     r.runtime_layout = f[7];
     if (!parse_int(f[8].c_str(), &r.owning_gpu)) return false;
     if (!parse_int(f[9].c_str(), &r.tp_rank)) return false;
@@ -458,6 +541,53 @@ uint64_t physical_row_offset(const ContractRow &r) {
     return r.source_shard_offset;
 }
 
+bool parse_shape2(const std::string &shape, int *cols, int *rows) {
+    if (shape.size() < 5 || shape.front() != '[' || shape.back() != ']') return false;
+    const size_t x = shape.find('x');
+    if (x == std::string::npos) return false;
+    std::string a = shape.substr(1, x - 1);
+    std::string b = shape.substr(x + 1, shape.size() - x - 2);
+    return parse_int(a.c_str(), cols) && parse_int(b.c_str(), rows) &&
+           *cols > 0 && *rows > 0;
+}
+
+uint64_t f8_row_bytes(int cols) {
+    return (uint64_t)(cols / 128) * 129ull;
+}
+
+float e8m0_to_f32_host(uint8_t e) {
+    uint32_t bits = e == 0 ? 0x00400000u : ((uint32_t)e << 23);
+    float v = 0.0f;
+    std::memcpy(&v, &bits, sizeof(v));
+    return v;
+}
+
+float e4m3fn_to_f32_host(uint8_t x) {
+    const uint8_t ax = x & 0x7fu;
+    const bool sign = (x & 0x80u) != 0;
+    if (ax == 0) return sign ? -0.0f : 0.0f;
+    if (ax == 0x7f) return std::numeric_limits<float>::quiet_NaN();
+    const int exp = (x >> 3) & 0x0f;
+    const int man = x & 0x07;
+    const float value = exp == 0 ? std::ldexp((float)man, -9)
+                                 : std::ldexp(1.0f + (float)man / 8.0f, exp - 7);
+    return sign ? -value : value;
+}
+
+float cpu_f8_dot(const uint8_t *row, const float *x, int cols) {
+    double acc = 0.0;
+    const int blocks = cols / 128;
+    for (int b = 0; b < blocks; ++b) {
+        const uint8_t *block = row + (uint64_t)b * 129ull;
+        const float scale = e8m0_to_f32_host(block[0]);
+        for (int c = 0; c < 128; ++c) {
+            acc += (double)(e4m3fn_to_f32_host(block[1 + c]) * scale) *
+                   (double)x[b * 128 + c];
+        }
+    }
+    return (float)acc;
+}
+
 int device_checksum_row(int device, const char *pack_dir, const ContractRow &r,
                         uint64_t *checksum) {
     if (r.bytes_estimate == 0 || r.source_pack_file == "-") return 0;
@@ -489,6 +619,181 @@ int device_checksum_row(int device, const char *pack_dir, const ContractRow &r,
     CHECK_CUDA(cudaFree(d_sum));
     *checksum = (uint64_t)h_sum;
     return 0;
+}
+
+bool select_dense_rows(const std::vector<ContractRow> &rows,
+                       const char *tensor,
+                       std::vector<ContractRow> *selected,
+                       int *cols,
+                       int *total_rows) {
+    selected->clear();
+    for (const ContractRow &r : rows) {
+        if (r.record_type == "dense_tp" && r.tensor_id == tensor) selected->push_back(r);
+    }
+    if ((int)selected->size() != kGpus) return false;
+    std::sort(selected->begin(), selected->end(),
+              [](const ContractRow &a, const ContractRow &b) {
+                  return a.owning_gpu < b.owning_gpu;
+              });
+    int parsed_cols = 0;
+    int parsed_rows = 0;
+    if (!parse_shape2((*selected)[0].source_shape, &parsed_cols, &parsed_rows)) return false;
+    for (int i = 0; i < kGpus; ++i) {
+        const ContractRow &r = (*selected)[i];
+        if (r.owning_gpu != i ||
+            r.tp_rank != i ||
+            r.shard_index != i ||
+            r.shard_count != kGpus ||
+            r.source_dtype != "f8_e4m3_b128" ||
+            r.source_shape != (*selected)[0].source_shape) {
+            return false;
+        }
+    }
+    if (parsed_cols % 128 != 0 || parsed_rows % kGpus != 0) return false;
+    const uint64_t row_bytes = f8_row_bytes(parsed_cols);
+    const uint64_t rows_per_gpu = (uint64_t)parsed_rows / kGpus;
+    for (const ContractRow &r : *selected) {
+        if (r.bytes_estimate != row_bytes * rows_per_gpu) return false;
+    }
+    *cols = parsed_cols;
+    *total_rows = parsed_rows;
+    return true;
+}
+
+int run_dense_compute_gate(const Options &opt,
+                           const std::vector<ContractRow> &rows,
+                           DenseComputeStats *stats) {
+    if (!opt.dense_compute_tensor) return 0;
+    stats->enabled = true;
+    stats->tensor_id = opt.dense_compute_tensor;
+    stats->slots = opt.slots;
+
+    std::vector<ContractRow> selected;
+    int cols = 0;
+    int total_rows = 0;
+    if (!select_dense_rows(rows, opt.dense_compute_tensor, &selected, &cols, &total_rows)) {
+        std::fprintf(stderr, "dense compute tensor validation failed for %s\n",
+                     opt.dense_compute_tensor);
+        return 1;
+    }
+    const int rows_per_gpu = total_rows / kGpus;
+    const uint64_t row_bytes = f8_row_bytes(cols);
+    const uint64_t shard_bytes = row_bytes * (uint64_t)rows_per_gpu;
+    stats->rows_per_gpu = rows_per_gpu;
+    stats->cols = cols;
+
+    std::vector<float> h_x((size_t)opt.slots * cols);
+    for (int slot = 0; slot < opt.slots; ++slot) {
+        for (int c = 0; c < cols; ++c) {
+            const int m = (slot * 17 + c * 13) % 257;
+            h_x[(size_t)slot * cols + c] = ((float)m - 128.0f) * 0.00025f;
+        }
+    }
+
+    double worst_ms = 0.0;
+    std::vector<std::vector<uint8_t>> host_weights((size_t)kGpus);
+    std::vector<std::vector<float>> host_outputs((size_t)kGpus);
+
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        const ContractRow &r = selected[(size_t)gpu];
+        host_weights[(size_t)gpu].resize((size_t)shard_bytes);
+        host_outputs[(size_t)gpu].resize((size_t)opt.slots * rows_per_gpu);
+        const std::string path = path_join(opt.pack_dir, r.source_pack_file);
+        if (read_exact_at(path, physical_row_offset(r),
+                          host_weights[(size_t)gpu].data(), (size_t)shard_bytes) != 0) {
+            return 2;
+        }
+        stats->loaded_bytes += shard_bytes;
+
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        uint8_t *d_w = nullptr;
+        float *d_x = nullptr;
+        float *d_out1 = nullptr;
+        float *d_out2 = nullptr;
+        cudaEvent_t start = nullptr;
+        cudaEvent_t stop = nullptr;
+        CHECK_CUDA(cudaMalloc(&d_w, (size_t)shard_bytes));
+        CHECK_CUDA(cudaMalloc(&d_x, h_x.size() * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&d_out1, host_outputs[(size_t)gpu].size() * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&d_out2, host_outputs[(size_t)gpu].size() * sizeof(float)));
+        CHECK_CUDA(cudaMemcpy(d_w, host_weights[(size_t)gpu].data(), (size_t)shard_bytes,
+                              cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(d_x, h_x.data(), h_x.size() * sizeof(float),
+                              cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaEventCreate(&start));
+        CHECK_CUDA(cudaEventCreate(&stop));
+        const dim3 grid((unsigned int)rows_per_gpu, (unsigned int)opt.slots, 1);
+        for (int i = 0; i < opt.warmup; ++i) {
+            f8_b128_dense_kernel<<<grid, 256>>>(d_out1, d_w, d_x, rows_per_gpu,
+                                                cols, (uint32_t)row_bytes, opt.slots);
+        }
+        CHECK_CUDA(cudaGetLastError());
+        CHECK_CUDA(cudaDeviceSynchronize());
+        CHECK_CUDA(cudaEventRecord(start));
+        for (int i = 0; i < opt.iters; ++i) {
+            f8_b128_dense_kernel<<<grid, 256>>>(d_out1, d_w, d_x, rows_per_gpu,
+                                                cols, (uint32_t)row_bytes, opt.slots);
+        }
+        CHECK_CUDA(cudaEventRecord(stop));
+        CHECK_CUDA(cudaEventSynchronize(stop));
+        float ms = 0.0f;
+        CHECK_CUDA(cudaEventElapsedTime(&ms, start, stop));
+        worst_ms = std::max(worst_ms, (double)ms / opt.iters);
+
+        f8_b128_dense_kernel<<<grid, 256>>>(d_out2, d_w, d_x, rows_per_gpu,
+                                            cols, (uint32_t)row_bytes, opt.slots);
+        CHECK_CUDA(cudaGetLastError());
+        CHECK_CUDA(cudaDeviceSynchronize());
+        std::vector<float> second(host_outputs[(size_t)gpu].size());
+        CHECK_CUDA(cudaMemcpy(host_outputs[(size_t)gpu].data(), d_out1,
+                              host_outputs[(size_t)gpu].size() * sizeof(float),
+                              cudaMemcpyDeviceToHost));
+        CHECK_CUDA(cudaMemcpy(second.data(), d_out2,
+                              second.size() * sizeof(float), cudaMemcpyDeviceToHost));
+        for (size_t i = 0; i < second.size(); ++i) {
+            const float a = host_outputs[(size_t)gpu][i];
+            const float b = second[i];
+            if (!std::isfinite(a) || !std::isfinite(b)) {
+                stats->repeat_nan++;
+                stats->pass = false;
+                continue;
+            }
+            const double diff = std::fabs((double)a - (double)b);
+            stats->repeat_max_abs = std::max(stats->repeat_max_abs, diff);
+            if (diff > 0.0) {
+                stats->repeat_bad++;
+                stats->pass = false;
+            }
+        }
+
+        const int sample_slots = std::min(opt.slots, 2);
+        const int sample_rows = std::min(rows_per_gpu, 4);
+        for (int slot = 0; slot < sample_slots; ++slot) {
+            for (int row = 0; row < sample_rows; ++row) {
+                const float expected =
+                    cpu_f8_dot(host_weights[(size_t)gpu].data() + (uint64_t)row * row_bytes,
+                               h_x.data() + (size_t)slot * cols, cols);
+                const float got = host_outputs[(size_t)gpu][(size_t)slot * rows_per_gpu + row];
+                const double diff = std::fabs((double)expected - (double)got);
+                stats->oracle_max_abs = std::max(stats->oracle_max_abs, diff);
+                const double tol = 1.0e-4 + std::fabs((double)expected) * 1.0e-4;
+                if (!std::isfinite(got) || diff > tol) {
+                    stats->oracle_bad++;
+                    stats->pass = false;
+                }
+            }
+        }
+
+        CHECK_CUDA(cudaEventDestroy(start));
+        CHECK_CUDA(cudaEventDestroy(stop));
+        CHECK_CUDA(cudaFree(d_w));
+        CHECK_CUDA(cudaFree(d_x));
+        CHECK_CUDA(cudaFree(d_out1));
+        CHECK_CUDA(cudaFree(d_out2));
+    }
+
+    stats->compute_ms = worst_ms;
+    return stats->pass ? 0 : 3;
 }
 
 bool parse_tm_entry(const std::vector<std::string> &f, TmIndexEntry *out) {
@@ -765,6 +1070,13 @@ int main(int argc, char **argv) {
     const double descriptor_ms =
         std::chrono::duration<double, std::milli>(descriptor_stop - descriptor_start).count();
 
+    DenseComputeStats dense_compute;
+    if (run_dense_compute_gate(opt, rows, &dense_compute) != 0) {
+        std::fprintf(stderr, "dense compute gate failed for %s\n",
+                     opt.dense_compute_tensor ? opt.dense_compute_tensor : "(disabled)");
+        return 3;
+    }
+
     ds4_v100_tp_runtime_config cfg;
     ds4_v100_tp_runtime_default_config(&cfg);
     cfg.slots = (uint32_t)opt.slots;
@@ -944,7 +1256,8 @@ int main(int argc, char **argv) {
                       layer_stats.checksum != 0 &&
                       kv_result.max_abs == 0.0 &&
                       repeat_bad == 0 &&
-                      repeat_nan == 0;
+                      repeat_nan == 0 &&
+                      (!dense_compute.enabled || dense_compute.pass);
 
     std::printf("runtime_bytes_per_gpu\thidden\t%llu\tkv\t%llu\tcomp_state\t%llu\t"
                 "scratch\t%llu\ttotal\t%llu\n",
@@ -968,6 +1281,12 @@ int main(int argc, char **argv) {
                 "expert_rows\t%llu\tkv_rows\t%llu\tcomp_rows\t%llu\t"
                 "dense_loaded_bytes\t%llu\tcontrol_loaded_bytes\t%llu\t"
                 "ep_loaded_bytes\t%llu\tdescriptor_checksum\t%llu\t"
+                "dense_compute_tensor\t%s\tdense_compute_rows_per_gpu\t%d\t"
+                "dense_compute_cols\t%d\tdense_compute_slots\t%d\t"
+                "dense_compute_loaded_bytes\t%llu\tdense_compute_ms\t%.6f\t"
+                "dense_compute_repeat_max_abs\t%.9f\tdense_compute_repeat_bad\t%d\t"
+                "dense_compute_repeat_nan\t%d\tdense_compute_oracle_max_abs\t%.9f\t"
+                "dense_compute_oracle_bad\t%d\tdense_compute_pass\t%d\t"
                 "aggregate_routes\t%d\tdispatch_bytes\t%llu\treturn_bytes\t%llu\t"
                 "route_imbalance\t%.6f\tdescriptor_ms\t%.6f\tdense_kv_ms\t%.6f\t"
                 "worst_gate_ms\t%.6f\tworst_down_ms\t%.6f\tworst_ep_ms\t%.6f\t"
@@ -984,6 +1303,18 @@ int main(int argc, char **argv) {
                 (unsigned long long)layer_stats.control_loaded_bytes,
                 (unsigned long long)layer_stats.ep_loaded_bytes,
                 (unsigned long long)layer_stats.checksum,
+                dense_compute.enabled ? dense_compute.tensor_id.c_str() : "disabled",
+                dense_compute.rows_per_gpu,
+                dense_compute.cols,
+                dense_compute.slots,
+                (unsigned long long)dense_compute.loaded_bytes,
+                dense_compute.compute_ms,
+                dense_compute.repeat_max_abs,
+                dense_compute.repeat_bad,
+                dense_compute.repeat_nan,
+                dense_compute.oracle_max_abs,
+                dense_compute.oracle_bad,
+                dense_compute.enabled && dense_compute.pass ? 1 : 0,
                 aggregate_routes,
                 (unsigned long long)dispatch_bytes,
                 (unsigned long long)return_bytes,

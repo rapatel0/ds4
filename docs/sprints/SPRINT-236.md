@@ -1,7 +1,7 @@
 # Sprint 236 - Descriptor Backed TP Dense Compute Gate
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete
 
 ## Overview
 
@@ -127,19 +127,71 @@ kernel, not pre-expanded into a persistent FP16/FP32 weight arena.
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists and is committed before implementation evidence.
-- [ ] Dense compute gate is implemented only in the separate TP/EP tool.
-- [ ] No PP scheduler files are modified.
-- [ ] Tool resolves `blk.2.attn_q_a.weight` from the real TP/EP contract.
-- [ ] Tool loads packed F8 shards directly from the production pack.
-- [ ] Kernel expands F8 values inside the GPU computation path.
-- [ ] V100 run passes finite repeat checks for the dense output.
-- [ ] V100 run passes bounded CPU oracle comparison with declared tolerance.
-- [ ] Existing full-layer scaffold, KV, and EP checks still pass.
-- [ ] Evidence is copied to
+- [x] Sprint plan exists and is committed before implementation evidence.
+- [x] Dense compute gate is implemented only in the separate TP/EP tool.
+- [x] No PP scheduler files are modified.
+- [x] Tool resolves `blk.2.attn_q_a.weight` from the real TP/EP contract.
+- [x] Tool loads packed F8 shards directly from the production pack.
+- [x] Kernel expands F8 values inside the GPU computation path.
+- [x] V100 run passes finite repeat checks for the dense output.
+- [x] V100 run passes bounded CPU oracle comparison with declared tolerance.
+- [x] Existing full-layer scaffold, KV, and EP checks still pass.
+- [x] Evidence is copied to
       `logs/from-cluster/sprint236-tp-dense-compute-gate/`.
-- [ ] Status and vision docs are updated with the decision.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Status and vision docs are updated with the decision.
+- [x] Changes are committed with explicit `git add` paths.
+
+## Evidence
+
+V100 pod: `llm/llamacpp-build-8gpu`
+
+Pack: `/workspace/packs/ds4-appliance-full-tm-gated-s181`
+
+Contract:
+`/workspace/logs/sprint228-tp-ep-pack-contract/contract/tp-ep-pack-contract.tsv`
+
+Command shape:
+
+- `32` slots;
+- `256K` context;
+- `top_k=6`;
+- layer `2`;
+- dense compute tensor `blk.2.attn_q_a.weight`;
+- MTP off.
+
+Dense compute result:
+
+| Metric | Value |
+|---|---:|
+| tensor | `blk.2.attn_q_a.weight` |
+| rows/GPU | `128` |
+| columns | `4096` |
+| slots | `32` |
+| packed F8 bytes loaded | `4227072` |
+| dense compute ms | `0.081783` |
+| repeat max_abs | `0.000000000` |
+| repeat bad/nan | `0 / 0` |
+| CPU oracle max_abs | `0.000000007` |
+| CPU oracle bad | `0` |
+| dense compute pass | `1` |
+
+Full scaffold result remained passing:
+
+| Metric | Value |
+|---|---:|
+| total layer rows | `288` |
+| dense rows | `112` |
+| control rows | `136` |
+| expert rows | `16` |
+| KV rows | `16` |
+| comp rows | `8` |
+| dense loaded bytes checked | `163102720` |
+| control loaded bytes checked | `84041408` |
+| EP loaded bytes | `641728512` |
+| KV max_abs | `0.000000000` |
+| worst EP ms | `0.242517` |
+| repeat bad/nan | `0 / 0` |
+| result | `PASS` |
 
 ## Risks
 
@@ -153,4 +205,14 @@ kernel, not pre-expanded into a persistent FP16/FP32 weight arena.
 
 ## Decision
 
-Pending.
+Complete. The TP/EP-only full-layer smoke now has an opt-in real dense compute
+gate for `blk.2.attn_q_a.weight`. It resolves the real contract rows, loads
+packed F8 shards directly from the production pack, expands F8 values inside a
+CUDA kernel, computes row-sharded dense output for `32` slots on all eight
+V100s, and verifies repeat plus bounded CPU oracle correctness.
+
+This is still not full-layer logits equivalence and not serving. The dense
+gate uses a straightforward FP32 dot kernel, not the final HMMA/CUTLASS
+implementation. The next sprint should extend the same descriptor-backed dense
+compute pattern to the remaining attention/shared dense tensor families or
+replace the representative gate with the first fused low-bit dense block.
