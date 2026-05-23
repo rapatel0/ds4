@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 252
+revision: 253
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -150,6 +150,12 @@ not a serial layer-chain.
   wall time drops to `46990.435640 ms`, and the projected decode proxy remains
   in the same range at `720.987187` slot-step tok/s. Strict descriptor checks
   remain the default validation gate.
+- Sprint 253 repaired the decode-only all-layer harness path. With shared
+  dense cache, descriptor checks off, and no one-shot compose validation, the
+  10-step all-layer gate passes `43/43` layers at `44.035733 ms/token`
+  summed decode proxy and `726.682578` projected slot-step tok/s. Wall time
+  drops to `39951.007721 ms`. This is now the lightweight TP/EP scaffold
+  benchmark to use after strict validation.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -696,6 +702,25 @@ V100 gate passes `43/43` layers at `32` slots / `256K`, reports
 harness `invalid resource handle` path; keep compose validation enabled until
 that is fixed.
 
+### Sprint 253 - TP/EP Decode-Only Harness Repair [complete]
+
+Goal: Restore the decode-only all-layer scaffold benchmark.
+
+Rationale: Sprint 252's descriptor-bypass path still needed
+`--compose-next-hidden` enabled to avoid a harness failure. That extra one-shot
+compose validation is not serving-shaped and should not be required for the
+standard scaffold benchmark.
+
+Outcome: Complete. `prepare_resident_f8_dense()` now drains stale per-device
+CUDA error state before launching local dense setup conversion kernels. The
+decode-only all-layer V100 gate passes `43/43` layers at `32` slots / `256K`,
+shared dense cache, descriptor checks off, and MTP off. It reports
+`44.035733 ms/token` summed decode proxy, `726.682578` projected slot-step
+tok/s, `11.804094 ms` summed EP, `7.744769 ms` summed dense,
+`24.482197 ms` summed compose, and `39951.007721 ms` wall time. Next hoist
+TurboMind/API handles, route buffers, expert bindings, and stream/event
+lifecycle across the 43-layer loop.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -749,6 +774,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 250 added a single-process all-layer TP/EP scaffold gate. | The TP/EP path now has a 43-layer correctness/timing gate, but it still recreates per-layer state. | Move runtime/cache/TurboMind state outside the per-layer runner for a truly resident all-layer loop. |
 | 2026-05-23 | Sprint 251 hoisted the dense FP16 cache across all layers. | Reusing dense cache cuts all-layer scaffold wall time by about 19% and removes one class of per-layer state churn. | Hoist TurboMind/API, route buffers, expert bindings, and TP runtime state. |
 | 2026-05-23 | Sprint 252 added opt-in descriptor-check bypass for serving-shaped scaffold runs. | Descriptor checks are validation work; skipping them cuts all-layer wall time by about 37% after validation has passed. | Fix decode-only harness and hoist TurboMind/API plus rank buffers. |
+| 2026-05-23 | Sprint 253 repaired the decode-only all-layer scaffold harness. | The standard TP/EP scaffold benchmark no longer requires an extra one-shot compose validation path. | Hoist TurboMind/API handles, route buffers, expert bindings, and stream/event lifecycle. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

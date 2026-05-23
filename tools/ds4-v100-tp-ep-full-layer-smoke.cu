@@ -1634,6 +1634,7 @@ int prepare_resident_f8_dense(const Options &opt,
         CHECK_CUDA(cudaMemcpy(op->d_x[(size_t)gpu], h_x.data(),
                               h_x.size() * sizeof(float), cudaMemcpyHostToDevice));
         if (opt.dense_f16_cublas_compose) {
+            (void)cudaGetLastError();
             if (cache_entry) {
                 if (cache_entry->cols != cols || cache_entry->rows_per_gpu != rows_per_gpu) {
                     free_resident_f8_dense(*op, opt);

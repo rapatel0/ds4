@@ -4,17 +4,15 @@ Last updated: 2026-05-23
 
 ## Topline
 
-Current TP/EP implementation status: Sprint 252 added an opt-in
-`--skip-descriptor-checks` mode for serving-shaped scaffold runs after strict
-descriptor validation has passed. With shared dense cache and descriptor checks
-off, the separate TP/EP all-layer smoke passes all `43` transformer layers at
-`32` slots / `256K`, MTP off, reports `descriptor_checks=0`, and cuts wall time
-from Sprint 251's `74382.064295 ms` to `46990.435640 ms`. The 10-step gate
-reports `44.383590 ms/token` summed decode proxy and `720.987187` projected
-slot-step tok/s, with stage sums of `11.784128 ms` EP, `7.933067 ms` dense,
-and `24.659710 ms` compose. This is not generated-token serving throughput; the
-next gap is fixing the decode-only harness path and hoisting TurboMind/API
-handles, route buffers, expert bindings, and TP runtime state.
+Current TP/EP implementation status: Sprint 253 repaired the decode-only
+all-layer scaffold benchmark. With shared dense cache, descriptor checks off,
+and no one-shot compose validation, the separate TP/EP all-layer smoke passes
+all `43` transformer layers at `32` slots / `256K`, MTP off. The 10-step gate
+reports `44.035733 ms/token` summed decode proxy and `726.682578` projected
+slot-step tok/s, with stage sums of `11.804094 ms` EP, `7.744769 ms` dense,
+and `24.482197 ms` compose. Wall time is now `39951.007721 ms`. This is not
+generated-token serving throughput; the next gap is hoisting TurboMind/API
+handles, route buffers, expert bindings, streams/events, and TP runtime state.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s
