@@ -287,15 +287,16 @@ finite deterministic repeat output. This remains a scaffold, not a
 logits-equivalent layer; the descriptor load/check time is startup evidence,
 not serving throughput.
 
-### Sprint 236 - Full-Layer TP/EP Decode [planned]
+### Sprint 236 - Descriptor-Backed TP Dense Compute Gate [planned]
 
-Goal: Replace Sprint 235 dense/control checksum stages with real low-bit dense
-execution for a representative layer and prove selected-token/decode
-correctness with MTP off.
+Goal: Replace one Sprint 235 dense checksum stage with real low-bit dense
+computation for `blk.2.attn_q_a.weight`, using packed F8 source bytes from the
+production pack and executing a TP8 row-sharded dense kernel on all V100s.
 
 Rationale: The full-layer scaffold is not a logits-equivalent layer. The next
-gate must turn descriptor-backed residency into real layer math while
-preserving TP/EP hidden and KV layout.
+gate must prove that descriptor-backed packed dense bytes can feed GPU compute
+inside the TP/EP path before expanding that pattern to the rest of attention
+and shared dense math.
 
 Outcome: Pending.
 
