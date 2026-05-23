@@ -200,6 +200,16 @@ from `100000 -> 100001 -> 100002`, followed by `alpha/goodbye` as
 `cache_hit=0`, `cache_prompt_match=0`, `100000 -> 100001`. Status reports
 `cache_hits=1`, `cache_misses=2`, `cache_evictions=0`. This is still
 string-fingerprint protection, not tokenizer-prefix reuse.
+Sprint 298 ran a longer diagnostic `/v1/completions` benchmark after those API
+guardrails. With `32` concurrent requests, `32` slots, `256K` context,
+diagnostic output head, HC-current input, HC final expand, and persistent HC
+state enabled, the `16/32/64` token cases each formed one coalesced 32-request
+batch and returned `32/32` HTTP 200 responses. Wall generated throughput was
+`194.530928`, `199.286944`, and `200.272837` tok/s respectively; decode
+generated throughput was `329.048680`, `340.196025`, and `338.142261` tok/s.
+The KV all-slot readback verifier was intentionally off for this throughput
+run. GPU utilization remained low at roughly `7.4-8.4%` average and `36-37%`
+max.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s
