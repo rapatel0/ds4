@@ -4,15 +4,16 @@ Last updated: 2026-05-23
 
 ## Topline
 
-Current TP/EP implementation status: Sprint 249 completed the
-layer-parametric resident full-layer scaffold. The separate TP/EP smoke now
-passes representative DS4 layers `0`, `1`, `2`, `3`, and `42` at `32` slots /
-`256K`, MTP off, with cache-backed FP16 dense compose, real TurboMind MXFP4
-EP experts, sharded KV, and fused next-hidden composition. Representative
-decode-loop proxy timing is `0.999333-1.181511 ms/step`
-(`27083.969701-32021.345429` slot-step tok/s). This is not generated-token
-serving throughput; the next gap is a resident all-layer TP/EP loop carrying
-hidden shards through all 43 layers in one process.
+Current TP/EP implementation status: Sprint 250 completed a one-process
+all-layer scaffold gate. The separate TP/EP smoke now supports `--all-layers`
+and passes all `43` transformer layers at `32` slots / `256K`, MTP off, with
+cache-backed FP16 dense compose, real TurboMind MXFP4 EP experts, sharded KV,
+and fused next-hidden composition. The 10-step gate reports
+`45.356852 ms/token` summed decode proxy and `705.516343` projected
+slot-step tok/s, with stage sums of `12.009343 ms` EP, `8.064360 ms` dense,
+and `25.277469 ms` compose. This is not generated-token serving throughput;
+the next gap is making the 43-layer loop truly resident instead of recreating
+per-layer runtime/cache state.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

@@ -258,6 +258,24 @@ struct ComposeStats {
     bool dense_f16_cache_compose = false;
 };
 
+struct LayerRunSummary {
+    int layer = -1;
+    int ratio = 0;
+    bool pass = false;
+    uint64_t total_rows = 0;
+    uint64_t dense_rows = 0;
+    uint64_t control_rows = 0;
+    uint64_t expert_rows = 0;
+    uint64_t kv_rows = 0;
+    uint64_t comp_rows = 0;
+    double decode_ms_per_step = 0.0;
+    double decode_slot_step_tok_s = 0.0;
+    double decode_ep_ms_per_step = 0.0;
+    double decode_dense_ms_per_step = 0.0;
+    double decode_compose_ms_per_step = 0.0;
+    uint64_t decode_checksum = 0;
+};
+
 struct DecodeLoopStats {
     bool enabled = false;
     bool pass = true;
@@ -305,6 +323,7 @@ struct Options {
     bool dense_hmma_compose = false;
     bool dense_f16_cublas_compose = false;
     bool dense_f16_cache_compose = false;
+    bool all_layers = false;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -721,7 +740,8 @@ void usage(const char *argv0) {
                  "       [--dense-compute-all-bf16] [--dense-compute-all]\n"
                  "       [--compose-next-hidden] [--decode-steps N]\n"
                  "       [--ep-return-fp16] [--fuse-compose-sum]\n"
-                 "       [--dense-hmma-compose] [--dense-f16-cublas-compose]\n",
+                 "       [--dense-hmma-compose] [--dense-f16-cublas-compose]\n"
+                 "       [--dense-f16-cache-compose] [--all-layers]\n",
                  argv0);
 }
 
@@ -797,6 +817,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->dense_f16_cublas_compose = true;
         } else if (std::strcmp(arg, "--dense-f16-cache-compose") == 0) {
             opt->dense_f16_cache_compose = true;
+        } else if (std::strcmp(arg, "--all-layers") == 0) {
+            opt->all_layers = true;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -2511,13 +2533,7 @@ int run_decode_loop(const Options &opt,
 
 } // namespace
 
-int main(int argc, char **argv) {
-    Options opt;
-    if (!parse_args(argc, argv, &opt)) {
-        usage(argv[0]);
-        return 2;
-    }
-
+int run_layer(const Options &opt, LayerRunSummary *summary) {
     std::vector<ContractRow> rows;
     LayerStats layer_stats;
     if (parse_contract(opt.contract_path, opt.layer, &rows, &layer_stats) != 0 ||
@@ -3028,6 +3044,24 @@ int main(int argc, char **argv) {
                 worst_ep_ms, scaffold_ms, repeat_max_abs, repeat_bad, repeat_nan,
                 pass ? "PASS" : "FAIL");
 
+    if (summary) {
+        summary->layer = opt.layer;
+        summary->ratio = ds4_layer_ratio(opt.layer);
+        summary->pass = pass;
+        summary->total_rows = layer_stats.total_rows;
+        summary->dense_rows = layer_stats.dense_rows;
+        summary->control_rows = layer_stats.control_rows;
+        summary->expert_rows = layer_stats.expert_rows;
+        summary->kv_rows = layer_stats.kv_rows;
+        summary->comp_rows = layer_stats.comp_rows;
+        summary->decode_ms_per_step = decode_loop.ms_per_step;
+        summary->decode_slot_step_tok_s = decode_loop.tok_s;
+        summary->decode_ep_ms_per_step = decode_loop.ep_ms_per_step;
+        summary->decode_dense_ms_per_step = decode_loop.dense_ms_per_step;
+        summary->decode_compose_ms_per_step = decode_loop.compose_ms_per_step;
+        summary->decode_checksum = decode_loop.checksum;
+    }
+
     for (int p = 0; p < kGpus; ++p) {
         RankState &r = ranks[p];
         CHECK_CUDA(cudaSetDevice(r.device));
@@ -3056,4 +3090,81 @@ int main(int argc, char **argv) {
     ds4_v100_tp_runtime_close(rt);
     free_dense_f16_cache(dense_f16_cache, opt);
     return pass ? 0 : 1;
+}
+
+int main(int argc, char **argv) {
+    Options opt;
+    if (!parse_args(argc, argv, &opt)) {
+        usage(argv[0]);
+        return 2;
+    }
+
+    if (!opt.all_layers) {
+        return run_layer(opt, nullptr);
+    }
+
+    int pass_layers = 0;
+    double sum_decode_ms = 0.0;
+    double sum_ep_ms = 0.0;
+    double sum_dense_ms = 0.0;
+    double sum_compose_ms = 0.0;
+    uint64_t checksum = 0;
+    const auto start = std::chrono::steady_clock::now();
+    for (int layer = 0; layer < 43; ++layer) {
+        Options layer_opt = opt;
+        layer_opt.layer = layer;
+        LayerRunSummary s;
+        const int rc = run_layer(layer_opt, &s);
+        std::printf("tp_ep_all_layer_item\tlayer\t%d\tratio\t%d\t"
+                    "total_rows\t%llu\tdense_rows\t%llu\tcontrol_rows\t%llu\t"
+                    "expert_rows\t%llu\tkv_rows\t%llu\tcomp_rows\t%llu\t"
+                    "decode_ms_per_step\t%.6f\tdecode_slot_step_tok_s\t%.6f\t"
+                    "decode_ep_ms_per_step\t%.6f\tdecode_dense_ms_per_step\t%.6f\t"
+                    "decode_compose_ms_per_step\t%.6f\tdecode_checksum\t%llu\t%s\n",
+                    s.layer, s.ratio,
+                    (unsigned long long)s.total_rows,
+                    (unsigned long long)s.dense_rows,
+                    (unsigned long long)s.control_rows,
+                    (unsigned long long)s.expert_rows,
+                    (unsigned long long)s.kv_rows,
+                    (unsigned long long)s.comp_rows,
+                    s.decode_ms_per_step,
+                    s.decode_slot_step_tok_s,
+                    s.decode_ep_ms_per_step,
+                    s.decode_dense_ms_per_step,
+                    s.decode_compose_ms_per_step,
+                    (unsigned long long)s.decode_checksum,
+                    (rc == 0 && s.pass) ? "PASS" : "FAIL");
+        if (rc == 0 && s.pass) {
+            pass_layers++;
+            sum_decode_ms += s.decode_ms_per_step;
+            sum_ep_ms += s.decode_ep_ms_per_step;
+            sum_dense_ms += s.decode_dense_ms_per_step;
+            sum_compose_ms += s.decode_compose_ms_per_step;
+            checksum ^= s.decode_checksum + (uint64_t)(layer + 1) * 104729ull;
+        } else {
+            const auto stop = std::chrono::steady_clock::now();
+            const double wall_ms =
+                std::chrono::duration<double, std::milli>(stop - start).count();
+            std::printf("tp_ep_all_layer_scaffold\tlayers\t43\tpass_layers\t%d\t"
+                        "failed_layer\t%d\twall_ms\t%.6f\tFAIL\n",
+                        pass_layers, layer, wall_ms);
+            return rc == 0 ? 1 : rc;
+        }
+    }
+    const auto stop = std::chrono::steady_clock::now();
+    const double wall_ms =
+        std::chrono::duration<double, std::milli>(stop - start).count();
+    const double slot_step_tok_s = sum_decode_ms > 0.0
+        ? (double)opt.slots * 1000.0 / sum_decode_ms
+        : 0.0;
+    std::printf("tp_ep_all_layer_scaffold\tlayers\t43\tpass_layers\t%d\t"
+                "slots\t%d\tctx\t262144\tdecode_steps_per_layer\t%d\t"
+                "sum_decode_ms_per_token\t%.6f\tprojected_slot_step_tok_s\t%.6f\t"
+                "sum_ep_ms\t%.6f\tsum_dense_ms\t%.6f\tsum_compose_ms\t%.6f\t"
+                "wall_ms\t%.6f\tchecksum\t%llu\tPASS\n",
+                pass_layers, opt.slots, opt.decode_steps,
+                sum_decode_ms, slot_step_tok_s, sum_ep_ms, sum_dense_ms,
+                sum_compose_ms, wall_ms, (unsigned long long)checksum);
+    return 0;
 }
