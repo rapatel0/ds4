@@ -325,6 +325,7 @@ struct Options {
     bool dense_f16_cache_compose = false;
     bool all_layers = false;
     bool skip_descriptor_checks = false;
+    bool skip_predecode_probes = false;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -743,7 +744,7 @@ void usage(const char *argv0) {
                  "       [--ep-return-fp16] [--fuse-compose-sum]\n"
                  "       [--dense-hmma-compose] [--dense-f16-cublas-compose]\n"
                  "       [--dense-f16-cache-compose] [--all-layers]\n"
-                 "       [--skip-descriptor-checks]\n",
+                 "       [--skip-descriptor-checks] [--skip-predecode-probes]\n",
                  argv0);
 }
 
@@ -823,6 +824,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->all_layers = true;
         } else if (std::strcmp(arg, "--skip-descriptor-checks") == 0) {
             opt->skip_descriptor_checks = true;
+        } else if (std::strcmp(arg, "--skip-predecode-probes") == 0) {
+            opt->skip_predecode_probes = true;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -2772,40 +2775,42 @@ int run_layer(const Options &opt,
     }
     layer_stats.ep_loaded_bytes = ep_loaded_bytes;
 
-    for (int i = 0; i < opt.warmup; ++i) {
+    if (!opt.skip_predecode_probes) {
+        for (int i = 0; i < opt.warmup; ++i) {
+            for (int p = 0; p < kGpus; ++p) {
+                if (run_gate(ranks[p], api) != 0 || run_down(ranks[p], api) != 0) {
+                    ds4_v100_tp_runtime_close(rt);
+                    return 9;
+                }
+            }
+            for (int p = 0; p < kGpus; ++p) {
+                CHECK_CUDA(cudaSetDevice(ranks[p].device));
+                CHECK_CUDA(cudaStreamSynchronize(ranks[p].stream));
+            }
+        }
+
         for (int p = 0; p < kGpus; ++p) {
-            if (run_gate(ranks[p], api) != 0 || run_down(ranks[p], api) != 0) {
-                ds4_v100_tp_runtime_close(rt);
-                return 9;
+            CHECK_CUDA(cudaSetDevice(ranks[p].device));
+            CHECK_CUDA(cudaEventRecord(ranks[p].start, ranks[p].stream));
+        }
+        for (int i = 0; i < opt.iters; ++i) {
+            for (int p = 0; p < kGpus; ++p) {
+                if (run_gate(ranks[p], api) != 0) return 10;
             }
         }
         for (int p = 0; p < kGpus; ++p) {
             CHECK_CUDA(cudaSetDevice(ranks[p].device));
-            CHECK_CUDA(cudaStreamSynchronize(ranks[p].stream));
+            CHECK_CUDA(cudaEventRecord(ranks[p].mid, ranks[p].stream));
         }
-    }
-
-    for (int p = 0; p < kGpus; ++p) {
-        CHECK_CUDA(cudaSetDevice(ranks[p].device));
-        CHECK_CUDA(cudaEventRecord(ranks[p].start, ranks[p].stream));
-    }
-    for (int i = 0; i < opt.iters; ++i) {
+        for (int i = 0; i < opt.iters; ++i) {
+            for (int p = 0; p < kGpus; ++p) {
+                if (run_down(ranks[p], api) != 0) return 11;
+            }
+        }
         for (int p = 0; p < kGpus; ++p) {
-            if (run_gate(ranks[p], api) != 0) return 10;
+            CHECK_CUDA(cudaSetDevice(ranks[p].device));
+            CHECK_CUDA(cudaEventRecord(ranks[p].stop, ranks[p].stream));
         }
-    }
-    for (int p = 0; p < kGpus; ++p) {
-        CHECK_CUDA(cudaSetDevice(ranks[p].device));
-        CHECK_CUDA(cudaEventRecord(ranks[p].mid, ranks[p].stream));
-    }
-    for (int i = 0; i < opt.iters; ++i) {
-        for (int p = 0; p < kGpus; ++p) {
-            if (run_down(ranks[p], api) != 0) return 11;
-        }
-    }
-    for (int p = 0; p < kGpus; ++p) {
-        CHECK_CUDA(cudaSetDevice(ranks[p].device));
-        CHECK_CUDA(cudaEventRecord(ranks[p].stop, ranks[p].stream));
     }
 
     double worst_gate_ms = 0.0;
@@ -2813,9 +2818,13 @@ int run_layer(const Options &opt,
     double worst_ep_ms = 0.0;
     for (int p = 0; p < kGpus; ++p) {
         CHECK_CUDA(cudaSetDevice(ranks[p].device));
-        CHECK_CUDA(cudaEventSynchronize(ranks[p].stop));
-        const double gate_ms = (double)elapsed_ms(ranks[p].start, ranks[p].mid) / opt.iters;
-        const double down_ms = (double)elapsed_ms(ranks[p].mid, ranks[p].stop) / opt.iters;
+        double gate_ms = 0.0;
+        double down_ms = 0.0;
+        if (!opt.skip_predecode_probes) {
+            CHECK_CUDA(cudaEventSynchronize(ranks[p].stop));
+            gate_ms = (double)elapsed_ms(ranks[p].start, ranks[p].mid) / opt.iters;
+            down_ms = (double)elapsed_ms(ranks[p].mid, ranks[p].stop) / opt.iters;
+        }
         worst_gate_ms = std::max(worst_gate_ms, gate_ms);
         worst_down_ms = std::max(worst_down_ms, down_ms);
         worst_ep_ms = std::max(worst_ep_ms, gate_ms + down_ms);
@@ -2837,10 +2846,12 @@ int run_layer(const Options &opt,
     double repeat_max_abs = 0.0;
     int repeat_bad = 0;
     int repeat_nan = 0;
-    for (int p = 0; p < kGpus; ++p) {
-        if (check_repeat(ranks[p], api, &repeat_max_abs, &repeat_bad, &repeat_nan) != 0) {
-            ds4_v100_tp_runtime_close(rt);
-            return 12;
+    if (!opt.skip_predecode_probes) {
+        for (int p = 0; p < kGpus; ++p) {
+            if (check_repeat(ranks[p], api, &repeat_max_abs, &repeat_bad, &repeat_nan) != 0) {
+                ds4_v100_tp_runtime_close(rt);
+                return 12;
+            }
         }
     }
 
@@ -3209,12 +3220,13 @@ int main(int argc, char **argv) {
         : 0.0;
     std::printf("tp_ep_all_layer_scaffold\tlayers\t43\tpass_layers\t%d\t"
                 "slots\t%d\tctx\t262144\tdecode_steps_per_layer\t%d\t"
-                "descriptor_checks\t%d\t"
+                "descriptor_checks\t%d\tpredecode_probes\t%d\t"
                 "sum_decode_ms_per_token\t%.6f\tprojected_slot_step_tok_s\t%.6f\t"
                 "sum_ep_ms\t%.6f\tsum_dense_ms\t%.6f\tsum_compose_ms\t%.6f\t"
                 "wall_ms\t%.6f\tchecksum\t%llu\tPASS\n",
                 pass_layers, opt.slots, opt.decode_steps,
                 opt.skip_descriptor_checks ? 0 : 1,
+                opt.skip_predecode_probes ? 0 : 1,
                 sum_decode_ms, slot_step_tok_s, sum_ep_ms, sum_dense_ms,
                 sum_compose_ms, wall_ms, (unsigned long long)checksum);
     if (shared_dense_f16_cache) {

@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 253
+revision: 254
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -156,6 +156,11 @@ not a serial layer-chain.
   summed decode proxy and `726.682578` projected slot-step tok/s. Wall time
   drops to `39951.007721 ms`. This is now the lightweight TP/EP scaffold
   benchmark to use after strict validation.
+- Sprint 254 added `--skip-predecode-probes` for benchmark-only runs after
+  strict validation. The all-layer decode-only gate passes `43/43` layers with
+  `descriptor_checks=0` and `predecode_probes=0`, reducing wall time to
+  `37819.503379 ms`. The summed decode proxy remains in the scaffold band at
+  `44.848746 ms/token` / `713.509362` projected slot-step tok/s.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -721,6 +726,22 @@ tok/s, `11.804094 ms` summed EP, `7.744769 ms` summed dense,
 TurboMind/API handles, route buffers, expert bindings, and stream/event
 lifecycle across the 43-layer loop.
 
+### Sprint 254 - TP/EP Pre-Decode Probe Bypass [complete]
+
+Goal: Add an opt-in benchmark mode that skips pre-decode validation probes.
+
+Rationale: After strict gates pass, the serving-shaped scaffold should not run
+extra isolated TurboMind warmup/timing/repeat probes before each layer's decode
+loop.
+
+Outcome: Complete. `tools/ds4-v100-tp-ep-full-layer-smoke` now supports
+`--skip-predecode-probes`. The default strict behavior remains unchanged. With
+shared dense cache, descriptor checks disabled, predecode probes disabled, and
+decode-only all-layer mode, the V100 gate passes `43/43` layers at `32` slots /
+`256K`. It reports `predecode_probes=0`, `44.848746 ms/token` summed decode
+proxy, `713.509362` projected slot-step tok/s, and `37819.503379 ms` wall
+time. Use this only as a lightweight benchmark mode after strict validation.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -775,6 +796,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 251 hoisted the dense FP16 cache across all layers. | Reusing dense cache cuts all-layer scaffold wall time by about 19% and removes one class of per-layer state churn. | Hoist TurboMind/API, route buffers, expert bindings, and TP runtime state. |
 | 2026-05-23 | Sprint 252 added opt-in descriptor-check bypass for serving-shaped scaffold runs. | Descriptor checks are validation work; skipping them cuts all-layer wall time by about 37% after validation has passed. | Fix decode-only harness and hoist TurboMind/API plus rank buffers. |
 | 2026-05-23 | Sprint 253 repaired the decode-only all-layer scaffold harness. | The standard TP/EP scaffold benchmark no longer requires an extra one-shot compose validation path. | Hoist TurboMind/API handles, route buffers, expert bindings, and stream/event lifecycle. |
+| 2026-05-23 | Sprint 254 added opt-in pre-decode probe bypass for benchmark runs. | Extra isolated TurboMind probes are validation work, not serving work. | Hoist TurboMind/API handles, route buffers, expert bindings, and stream/event lifecycle. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 
