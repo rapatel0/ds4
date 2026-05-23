@@ -1,0 +1,4 @@
+=== tokens=32 mid_shard=2048 ===
+ds4-v100-tp8-real-layer-smoke devices=0,1,2,3,4,5,6,7 tokens=32 hidden=4096 mid_shard=2048 full_mid=16384 ctx=262144 slots=32 ratio=4 kv_dtype=f8_e4m3_b128 kv_per_slot_bytes=42336768 kv_logical_bytes=1354776576 kv_shard_bytes=169347072 warmup=3 iters=20
+latency_ms total_avg=0.658825 min=0.645062 max=0.683047 gate_up=0.201642 activation=0.033144 down=0.102262 reduce=0.321687 effective_wire_gbps=19.558 fixture_tflops=19.557 tok_s=48571.357
+verify cross_device_max_abs=0.000000000 ok

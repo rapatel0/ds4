@@ -1,7 +1,7 @@
 # Sprint 210 - TP8 Real Layer Body Prototype
 
 Date: 2026-05-23
-Status: Planned
+Status: Completed
 
 ## Overview
 
@@ -127,19 +127,100 @@ low-bit packed expert weights:
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists.
-- [ ] New TP-only real layer-body executable exists.
-- [ ] No PP scheduler files are modified.
-- [ ] CUDA target is added to `Makefile`, including macOS CUDA-required branch.
-- [ ] Local hygiene passes.
-- [ ] V100 build passes with `CUDA_ARCH=sm_70`.
-- [ ] 32, 64, and 128 token runs pass correctness on all eight V100s.
-- [ ] Timing output separates gate/up GEMM, activation, down GEMM, reduction,
+- [x] Sprint plan exists.
+- [x] New TP-only real layer-body executable exists.
+- [x] No PP scheduler files are modified.
+- [x] CUDA target is added to `Makefile`, including macOS CUDA-required branch.
+- [x] Local hygiene passes.
+- [x] V100 build passes with `CUDA_ARCH=sm_70`.
+- [x] 32, 64, and 128 token runs pass correctness on all eight V100s.
+- [x] Timing output separates gate/up GEMM, activation, down GEMM, reduction,
   and total layer time.
-- [ ] Results are copied to `logs/from-cluster/sprint210-tp8-real-layer/`.
-- [ ] Sprint 210 document records validation and decision.
-- [ ] Status/Vision documents are updated.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Results are copied to `logs/from-cluster/sprint210-tp8-real-layer/`.
+- [x] Sprint 210 document records validation and decision.
+- [x] Status/Vision documents are updated.
+- [x] Changes are committed with explicit `git add` paths.
+
+## Execution
+
+Implemented `tools/ds4-v100-tp8-real-layer-smoke.cu` as a standalone TP-only
+executable. It does not call or modify the PP scheduler. The executable:
+
+- allocates DS4 ratio/dtype/context/slot KV shards per GPU using Sprint 209
+  descriptor math;
+- allocates resident FP16 fixture tensors per GPU;
+- runs column-parallel gate and up GEMMs with cuBLAS Tensor Core GEMM;
+- applies gated SiLU activation;
+- runs a row-parallel down GEMM;
+- reduces the hidden partials across all eight V100s with recursive doubling;
+- reports gate/up, activation, down, reduction, total, effective wire,
+  fixture TFLOP/s, and prototype token rate;
+- verifies identical reduced hidden output across all eight participants.
+
+The fixture uses FP16 weights to test the topology and Tensor Core execution
+shape. It is not a final DS4 precision choice; production still needs low-bit
+MXFP4/FP8 expert weights with unpack/dequant inside GPU kernels.
+
+## Validation
+
+Build:
+
+```text
+make -j80 tools/ds4-v100-tp8-real-layer-smoke CUDA_ARCH=sm_70
+```
+
+Cluster evidence is in `logs/from-cluster/sprint210-tp8-real-layer/`.
+
+Configuration for the required gate:
+
+```text
+devices=0,1,2,3,4,5,6,7
+hidden=4096
+mid_shard=1024
+full_mid=8192
+ctx=262144
+slots=32
+ratio=4
+kv_dtype=f8_e4m3_b128
+kv_shard_bytes=169347072
+warmup=3
+iters=20
+```
+
+| Tokens | Total avg | Gate/up | Activation | Down | Reduce | Fixture TFLOP/s | Prototype tok/s | Correctness |
+|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 32 | `0.614750 ms` | `0.181991 ms` | `0.033233 ms` | `0.075261 ms` | `0.324181 ms` | `10.480` | `52053.642` | ok |
+| 64 | `0.709350 ms` | `0.200673 ms` | `0.035416 ms` | `0.103582 ms` | `0.369582 ms` | `18.164` | `90223.463` | ok |
+| 128 | `0.796927 ms` | `0.214567 ms` | `0.034067 ms` | `0.103161 ms` | `0.445042 ms` | `32.336` | `160616.909` | ok |
+
+Extra denser fixture sweep:
+
+| Tokens | Mid shard | Full mid | Total avg | Gate/up | Down | Reduce | Fixture TFLOP/s | Correctness |
+|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 32 | 2048 | 16384 | `0.658825 ms` | `0.201642 ms` | `0.102262 ms` | `0.321687 ms` | `19.557` | ok |
+| 64 | 2048 | 16384 | `0.706391 ms` | `0.210752 ms` | `0.107817 ms` | `0.354505 ms` | `36.481` | ok |
+| 128 | 2048 | 16384 | `0.818660 ms` | `0.235765 ms` | `0.127715 ms` | `0.422892 ms` | `62.956` | ok |
+
+The prototype token-rate values are not serving throughput claims. They are
+single-layer fixture rates used to compare topology overhead against useful
+resident GEMM work.
+
+## Decision
+
+Continue TP8 implementation in separate TP-only files.
+
+The real-layer body gate passes:
+
+- all required token shapes are correct on eight V100s;
+- sharded KV allocation remains compatible with the 32-slot / 256K target;
+- adding useful Tensor Core work does not make the TP8 boundary collapse;
+- larger token and mid-shard shapes improve fixture TFLOP/s, which supports the
+  user's hunch that TP can put the executor into denser kernel regimes.
+
+The next sprint should not integrate a scheduler yet. It should replace the
+FP16 fixture FFN body with a low-bit TP8 expert body using the TurboMind MXFP4
+path and TP-aware descriptors. That is the point where we learn whether the
+real DS4 precision/layout path preserves this topology result.
 
 ## Decision Gate
 

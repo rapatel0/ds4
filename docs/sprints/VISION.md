@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: sprint-execute
-revision: 209
+revision: 210
 ---
 
 # Vision: DS4 V100 Appliance
@@ -72,6 +72,15 @@ F8 KV, the per-GPU layer KV shard is `169347072` bytes rather than a replicated
 should continue TP8 only by adding a real DS4 layer body in new TP files:
 sharded attention/KV descriptors plus routed/shared FFN shard execution. The
 PP/layer scheduler remains out of scope.
+Sprint 210 replaces the synthetic TP8 body with real resident Tensor Core
+work: FP16 fixture gate/up GEMMs, gated SiLU, down GEMM, and TP8 hidden
+reduction. This is not the final low-bit DS4 precision path, but it confirms
+that useful layer-shaped compute can live inside the TP8 boundary at the
+32-slot / 256K target. The `mid_shard=1024` gate passed at 32/64/128 tokens
+with `0.614750/0.709350/0.796927 ms` total latency, and a denser
+`mid_shard=2048` sweep reached `62.956` fixture TFLOP/s at 128 tokens. The
+next TP sprint should adapt the TurboMind MXFP4/FP8 expert body into this
+separate TP8 codepath; scheduler integration remains premature.
 
 ## Current State
 
@@ -3035,6 +3044,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-23 | Completed Sprint 206 six-route FFN persistent-boundary gate. | Extended the focused TurboMind gate/up benchmark so it measures the exact compact six-route production routed-FFN sequence, `MXFP4 gated gate/up -> MXFP4 down-reduce`, and optionally captures that sequence into a CUDA graph. V100 correctness passed. The 100-iteration smoke measured `0.1597 ms` normal versus `0.1573 ms` graph (`1.016x`), and the 500-iteration repeat measured `0.1459 ms` normal versus `0.1389 ms` graph (`1.050x`). This makes a pure loading/dispatch explanation unlikely for the current six-route bottleneck. The next real lever is a monolithic/software-pipelined routed-FFN kernel or TurboMind/CUTLASS variant that keeps the gated activation tile local across gate/up and down, rather than another graph or wrapper-level optimization. | Sprint 207+ |
 | 2026-05-23 | Completed Sprint 208 separate TP8 investigation path. | Added separate TP8 planner/probe files and ran the first all-8-GPU V100 gates. `PP1/TP8` at 32 slots/256K fits with F8 KV sharding (`26.84 GiB` worst GPU) and fails with replicated KV (`50.63 GiB`), so sharded KV is mandatory. TP8 FP16 recursive-doubling collectives passed at 32/64/128 tokens and measured `0.322599/0.372364/0.436299 ms`. The 43-layer, 2-reduction/layer resident proxy measured `29.381000 ms` at 32 tokens, `32.605223 ms` at 64, and `37.994584 ms` at 128, with all correctness checks passing. Per-link NVLink byte counters were unavailable (`N/A`) in the pod, but link status and effective-wire timing were recorded. Continue to a bounded one-layer TP8 prototype in new TP-only files; do not build a generic scheduler. | Sprint 209 |
 | 2026-05-23 | Completed Sprint 209 TP8 one-layer prototype. | Added `tools/ds4-v100-tp8-layer-smoke.cu` as a completely separate TP-only executable. It allocates TP8-sharded DS4 KV inside the boundary, runs two resident compute phases and two recursive-doubling hidden reductions, and verifies identical reduced hidden state across all eight V100s. At 32 slots/256K/ratio-4 F8 KV, each GPU owns a `169347072` byte layer KV shard instead of replicated logical KV. The 32/64/128 token runs passed correctness with total one-layer latencies `0.739408/0.876011/1.098461 ms`. Continue TP8 in new TP-only files by replacing synthetic compute with a real DS4 attention/FFN layer slice; do not wire TP into the PP scheduler. | Sprint 210 |
+| 2026-05-23 | Completed Sprint 210 TP8 real layer-body fixture. | Added `tools/ds4-v100-tp8-real-layer-smoke.cu` as a separate TP-only Tensor Core layer-body prototype. It allocates sharded KV, runs FP16 fixture gate/up GEMMs, gated SiLU, down GEMM, and recursive-doubling TP8 reduction, with phase timing and correctness. The required `mid_shard=1024` 32/64/128 token gates passed with total latencies `0.614750/0.709350/0.796927 ms`; the denser `mid_shard=2048` sweep also passed and reached `62.956` fixture TFLOP/s at 128 tokens. This supports continuing TP8, but only by replacing the FP16 fixture with the real low-bit TurboMind MXFP4/FP8 expert path in TP-only files. | Sprint 211 |
 
 ## Open Questions
 

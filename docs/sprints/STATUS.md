@@ -55,6 +55,16 @@ latencies of `0.739408 ms`, `0.876011 ms`, and `1.098461 ms`; reduction time
 was `0.634680 ms`, `0.718601 ms`, and `0.840586 ms`. This keeps TP8 alive, but
 still only as a separate TP branch: the synthetic compute body must be replaced
 with a real TP-only DS4 layer slice before any serving integration.
+Sprint 210 replaced the synthetic body with a TP-only resident FFN fixture that
+uses cuBLAS FP16 Tensor Core GEMMs for column-parallel gate/up, gated SiLU,
+row-parallel down, and TP8 hidden reduction. At 32 slots / 256K / ratio-4 F8
+KV, the `mid_shard=1024` gate passed correctness at 32/64/128 tokens with
+total latencies `0.614750 ms`, `0.709350 ms`, and `0.796927 ms`. The denser
+`mid_shard=2048` sweep also passed and reached `62.956` fixture TFLOP/s at 128
+tokens. This confirms TP8 can put useful resident GEMM work inside the boundary,
+but it is still an FP16 fixture; the next TP sprint should adapt the low-bit
+TurboMind MXFP4 expert path to the separate TP8 codepath before any serving
+integration.
 
 Current long-context production throughput mode is the Sprint 121 16-slot/256K
 appliance with the Sprint 122 rendezvous fix. Sprint 137 adds an explicit
