@@ -9460,6 +9460,10 @@ static int cuda_f8_hmma_grouped_attn_o_batch_enabled(void) {
     return cuda_env_flag_enabled("DS4_CUDA_F8_HMMA_GROUPED_ATTN_O_BATCH");
 }
 
+static int cuda_f8_hmma_grouped_attn_o_single_enabled(void) {
+    return cuda_env_flag_enabled("DS4_CUDA_F8_HMMA_GROUPED_ATTN_O_SINGLE");
+}
+
 static int cuda_f8_hmma_single_enabled(void) {
     return cuda_env_flag_enabled("DS4_CUDA_F8_HMMA_SINGLE");
 }
@@ -9481,10 +9485,14 @@ static int cuda_f8_hmma_grouped_attn_o_batch_shape_ok(
         uint32_t rows_per_group,
         uint32_t cols_per_group,
         uint32_t n_tokens) {
-    return groups == 8u &&
-           rows_per_group == 1024u &&
-           cols_per_group == 4096u &&
-           n_tokens == 16u;
+    if (groups != 8u ||
+        rows_per_group != 1024u ||
+        cols_per_group != 4096u) {
+        return 0;
+    }
+    if (n_tokens == 16u) return cuda_f8_hmma_grouped_attn_o_batch_enabled();
+    if (n_tokens == 1u) return cuda_f8_hmma_grouped_attn_o_single_enabled();
+    return 0;
 }
 
 static uint64_t cuda_f8_f16_arena_cache_reserve_bytes(void) {
@@ -10023,8 +10031,7 @@ extern "C" int ds4_gpu_arena_f8_e4m3_b128_matmul_grouped_batch_f32(
     }
     if (!cuda_ok(cudaSetDevice(arena->gpu), "f8 source grouped batch matmul set device")) return 1;
     const uint8_t *base = (const uint8_t *)((const char *)arena->ptr + view->arena_offset);
-    if (cuda_f8_hmma_grouped_attn_o_batch_enabled() &&
-        cuda_f8_hmma_grouped_attn_o_batch_shape_ok(groups,
+    if (cuda_f8_hmma_grouped_attn_o_batch_shape_ok(groups,
                                                    rows_per_group,
                                                    cols_per_group,
                                                    n_tokens)) {

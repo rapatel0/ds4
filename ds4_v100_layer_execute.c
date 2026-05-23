@@ -894,7 +894,22 @@ static int grouped_attention_output(const ds4_v100_layer_state *state,
         return exec_error(err, errlen, "attention grouped output tensor is too small");
     }
 
-    if (!env_flag_enabled("DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A")) {
+    if (env_flag_enabled("DS4_V100_SINGLE_SLOT_ATTN_OUTPUT_A_HMMA") &&
+        env_flag_enabled("DS4_CUDA_F8_HMMA_GROUPED_ATTN_O_SINGLE")) {
+        ds4_gpu_source_row_view a_view;
+        if (source_view(&state->attn_output_a, &a_view, err, errlen)) return 1;
+        if (ds4_gpu_arena_f8_e4m3_b128_matmul_grouped_batch_f32(
+                    cfg->arena,
+                    &a_view,
+                    heads,
+                    1,
+                    DS4_V100_OUT_GROUPS,
+                    DS4_V100_OUT_GROUP_RANK,
+                    DS4_V100_OUT_GROUP_DIM,
+                    low) != 0) {
+            return exec_error(err, errlen, "attention output_a single HMMA matmul failed");
+        }
+    } else if (!env_flag_enabled("DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A")) {
         ds4_gpu_source_row_view a_view;
         if (source_view(&state->attn_output_a, &a_view, err, errlen)) return 1;
         if (ds4_gpu_arena_f8_e4m3_b128_matmul_grouped_f32(
@@ -987,6 +1002,24 @@ static int grouped_attention_output_a(const ds4_v100_layer_state *state,
         ds4_gpu_tensor_bytes(heads) < (uint64_t)DS4_V100_N_HEAD * DS4_V100_HEAD_DIM * sizeof(float) ||
         ds4_gpu_tensor_bytes(low) < (uint64_t)DS4_V100_OUT_GROUPS * DS4_V100_OUT_GROUP_RANK * sizeof(float)) {
         return exec_error(err, errlen, "attention grouped output_a tensor is too small");
+    }
+
+    if (env_flag_enabled("DS4_V100_SINGLE_SLOT_ATTN_OUTPUT_A_HMMA") &&
+        env_flag_enabled("DS4_CUDA_F8_HMMA_GROUPED_ATTN_O_SINGLE")) {
+        ds4_gpu_source_row_view a_view;
+        if (source_view(&state->attn_output_a, &a_view, err, errlen)) return 1;
+        if (ds4_gpu_arena_f8_e4m3_b128_matmul_grouped_batch_f32(
+                    cfg->arena,
+                    &a_view,
+                    heads,
+                    1,
+                    DS4_V100_OUT_GROUPS,
+                    DS4_V100_OUT_GROUP_RANK,
+                    DS4_V100_OUT_GROUP_DIM,
+                    low) != 0) {
+            return exec_error(err, errlen, "attention output_a single HMMA matmul failed");
+        }
+        return 0;
     }
 
     if (!env_flag_enabled("DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A")) {
