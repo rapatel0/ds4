@@ -471,6 +471,18 @@ shape if cacheable dense source tensors are not kept twice in VRAM. The next
 implementation should add the TP/EP dense-cache loader/runtime path for all
 dense tensors and then benchmark the resident all-layer path before returning
 to custom packed low-bit dense kernels.
+Sprint 246 added that loader as a new TP/EP-only CUDA tool,
+`tools/ds4-v100-tp-ep-dense-cache-smoke`. It allocates one FP16 dense cache
+arena per GPU, stages source shards through a temporary GPU buffer, converts
+`f8_e4m3_b128` and `bf16` dense tensors on device, and validates FP16 cache
+checksums/nonfinite counts. The layer-2 subset passes with `112` dense rows,
+`0.151901 GiB` source bytes, and `0.281738 GiB` aggregate cache. The full
+contract passes with `4096` dense rows, `8.047012 GiB` aggregate source bytes,
+and `13.459473 GiB` aggregate FP16 cache. Per GPU, this is `512` rows,
+`1.005877 GiB` source, `1.682434 GiB` FP16 cache, `126.250 MiB` max temporary
+source staging, and zero nonfinite FP16 values. Decision: the dense cache is
+now a real V100 allocation/conversion path. Next wire the cache arena into the
+TP/EP resident layer execution path, then benchmark a resident all-layer loop.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit

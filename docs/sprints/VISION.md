@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 245
+revision: 246
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -106,6 +106,11 @@ not a serial layer-chain.
   cacheable dense source tensors are replaced by FP16 runtime weights, leaving
   `4.299 GiB` physical headroom. Dense FP16 cache is therefore admissible as a
   runtime fallback/ceiling path, not a source-format change.
+- Sprint 246 turned that admission into a real V100 allocation/conversion
+  smoke. The separate TP/EP dense-cache tool materializes all `4096` dense TP
+  rows into FP16 arenas: `13.459473 GiB` aggregate cache, `1.682434 GiB` per
+  GPU, zero nonfinite values, PASS. This is now an executable runtime cache
+  path, though not yet wired into the all-layer decode loop.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -510,6 +515,26 @@ That leaves `4.299 GiB` physical headroom. Dense FP16 cache is memory
 admissible as a runtime option; next implement the dense-cache loader/runtime
 path for all dense tensors, then benchmark the resident all-layer path.
 
+### Sprint 246 - TP/EP Dense FP16 Cache Runtime Smoke [complete]
+
+Goal: Materialize the dense FP16 runtime cache on the V100 pod from the real
+TP/EP contract.
+
+Rationale: Sprint 245 proved the memory budget on paper. The next risk was
+whether the runtime can allocate the arenas, stage packed source shards,
+convert all dense F8/BF16 tensors on GPU, and keep the cache resident without
+bad values.
+
+Outcome: Complete. `tools/ds4-v100-tp-ep-dense-cache-smoke` is a new
+TP/EP-only CUDA tool. It allocates one dense FP16 cache arena per GPU and
+converts `f8_e4m3_b128` and `bf16` dense shards from the production pack into
+that arena. Layer-2 passes with `112` dense rows and `0.281738 GiB` aggregate
+cache. The full contract passes with `4096` dense rows, `8.047012 GiB`
+aggregate source bytes, and `13.459473 GiB` aggregate FP16 cache. Per GPU:
+`512` rows, `1.005877 GiB` source, `1.682434 GiB` FP16 cache, `126.250 MiB`
+max temp staging, and zero nonfinite values. Next wire this arena into the
+resident TP/EP layer execution path and benchmark all-layer decode.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -556,6 +581,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 243 rejected the first naive TP/EP dense HMMA candidate. | HMMA is not enough by itself; per-tile F8 decode/staging made dense time worse than scalar. | Adapt the older shape-specific HMMA kernels or design a prepacked/software-pipelined dense path. |
 | 2026-05-23 | Sprint 244 proved a resident FP16 tensor-core dense ceiling is materially faster. | Dense is removable if low-bit feeding is efficient, but expanded FP16 is not the final memory format. | Implement a packed low-bit dense production kernel that approaches the FP16/cuBLAS ceiling. |
 | 2026-05-23 | Sprint 245 proved dense FP16 runtime cache fits the `32` slot / `256K` TP/EP budget when replacing dense source tensors in VRAM. | This gives us a working tensor-core dense fallback while preserving the quantized source pack offline. | Build the TP/EP dense-cache loader/runtime path for all dense tensors and benchmark resident all-layer decode. |
+| 2026-05-23 | Sprint 246 materialized all dense TP rows into FP16 cache arenas on the V100 pod. | The dense-cache path is now an executable runtime primitive, not just an estimate. | Wire dense cache lookup into resident layer execution and benchmark all-layer decode. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 
