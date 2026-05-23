@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 250
+revision: 251
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -137,6 +137,13 @@ not a serial layer-chain.
   `12.009343 ms` EP, `8.064360 ms` dense, and `25.277469 ms` compose. This is
   still a scaffold because per-layer runtime/cache state is rebuilt; the next
   gap is making the all-layer loop truly resident.
+- Sprint 251 hoisted dense FP16 cache materialization out of the per-layer
+  runner in `--all-layers` mode. The shared all-layer cache has `4096` dense
+  rows and `14451998720` cache bytes, builds once in `7772.591153 ms`, and the
+  10-step all-layer gate still passes `43/43` layers. Wall time improves from
+  `91879.358460 ms` to `74382.064295 ms`, and projected slot-step tok/s moves
+  from `705.516343` to `731.369579`. The next residency targets are
+  TurboMind/API handles, route buffers, expert bindings, and TP runtime state.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -645,6 +652,25 @@ experts, and fused compose, both all-layer gates pass `43/43` layers. The
 state is still recreated per layer inside the process. Next make the 43-layer
 loop truly resident.
 
+### Sprint 251 - TP/EP Shared Dense Cache Residency [complete]
+
+Goal: Hoist dense FP16 cache materialization out of the per-layer all-layer
+runner.
+
+Rationale: Sprint 250's all-layer gate was one process, but not resident: each
+layer rebuilt dense cache state. Dense cache is both large enough to matter and
+already memory-admitted for `32` slots / `256K`, so it is the right first
+state-hoist.
+
+Outcome: Complete. In `--all-layers` mode, the full dense contract is parsed
+once and materialized into a shared FP16 cache with `4096` rows and
+`14451998720` cache bytes. The cache builds in `7772.591153 ms` and is reused
+across all 43 layer scaffolds. The 10-step V100 gate passes `43/43` layers,
+improves wall time from `91879.358460 ms` to `74382.064295 ms`, and improves
+the summed decode proxy from `45.356852 ms/token` to `43.753529 ms/token`
+(`731.369579` projected slot-step tok/s). Next hoist TurboMind/API handles,
+route buffers, expert bindings, and TP runtime state.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -696,6 +722,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 248 built the descriptor-selected all-layer dense execution table. | Dense no longer depends on hardcoded layer-2 tensor selection. | Compose dense, EP, KV, and hidden-state flow in a resident all-layer TP/EP loop. |
 | 2026-05-23 | Sprint 249 made the representative TP/EP full-layer smoke layer-parametric across SWA-only, ratio-4, ratio-128, and late layers. | The all-layer loop no longer has layer-2 tensor-name and ratio-4 KV assumptions as blockers. | Build a resident all-layer TP/EP loop that carries hidden shards through all 43 layers in one process. |
 | 2026-05-23 | Sprint 250 added a single-process all-layer TP/EP scaffold gate. | The TP/EP path now has a 43-layer correctness/timing gate, but it still recreates per-layer state. | Move runtime/cache/TurboMind state outside the per-layer runner for a truly resident all-layer loop. |
+| 2026-05-23 | Sprint 251 hoisted the dense FP16 cache across all layers. | Reusing dense cache cuts all-layer scaffold wall time by about 19% and removes one class of per-layer state churn. | Hoist TurboMind/API, route buffers, expert bindings, and TP runtime state. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

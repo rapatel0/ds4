@@ -886,7 +886,7 @@ int parse_contract(const char *path, int layer, std::vector<ContractRow> *rows,
             stats->bad_rows++;
             continue;
         }
-        if (r.layer != layer) continue;
+        if (layer >= 0 && r.layer != layer) continue;
         if (r.owning_gpu < 0 || r.owning_gpu >= kGpus) {
             stats->bad_rows++;
             continue;
@@ -2533,7 +2533,9 @@ int run_decode_loop(const Options &opt,
 
 } // namespace
 
-int run_layer(const Options &opt, LayerRunSummary *summary) {
+int run_layer(const Options &opt,
+              LayerRunSummary *summary,
+              const DenseF16Cache *shared_dense_f16_cache) {
     std::vector<ContractRow> rows;
     LayerStats layer_stats;
     if (parse_contract(opt.contract_path, opt.layer, &rows, &layer_stats) != 0 ||
@@ -2641,21 +2643,25 @@ int run_layer(const Options &opt, LayerRunSummary *summary) {
         bf16_compute.pass = bf16_compute.pass && one.pass;
     }
 
-    DenseF16Cache dense_f16_cache;
-    if (prepare_dense_f16_cache(opt, rows, &dense_f16_cache) != 0) {
-        std::fprintf(stderr, "dense f16 cache prepare failed\n");
-        return 4;
+    DenseF16Cache local_dense_f16_cache;
+    const DenseF16Cache *dense_f16_cache = shared_dense_f16_cache;
+    if (!dense_f16_cache) {
+        if (prepare_dense_f16_cache(opt, rows, &local_dense_f16_cache) != 0) {
+            std::fprintf(stderr, "dense f16 cache prepare failed\n");
+            return 4;
+        }
+        dense_f16_cache = &local_dense_f16_cache;
     }
-    if (dense_f16_cache.enabled) {
+    if (!shared_dense_f16_cache && dense_f16_cache->enabled) {
         std::printf("tp_ep_dense_f16_cache\tlayer\t%d\trows\t%llu\t"
                     "source_bytes\t%llu\tcache_bytes\t%llu\t"
                     "cache_aligned_bytes\t%llu\tmax_temp_bytes\t%llu\tPASS\n",
                     opt.layer,
-                    (unsigned long long)dense_f16_cache.rows,
-                    (unsigned long long)dense_f16_cache.source_bytes,
-                    (unsigned long long)dense_f16_cache.cache_bytes,
-                    (unsigned long long)dense_f16_cache.cache_aligned_bytes,
-                    (unsigned long long)dense_f16_cache.max_temp_bytes);
+                    (unsigned long long)dense_f16_cache->rows,
+                    (unsigned long long)dense_f16_cache->source_bytes,
+                    (unsigned long long)dense_f16_cache->cache_bytes,
+                    (unsigned long long)dense_f16_cache->cache_aligned_bytes,
+                    (unsigned long long)dense_f16_cache->max_temp_bytes);
     }
 
     ds4_v100_tp_runtime_config cfg;
@@ -2859,7 +2865,7 @@ int run_layer(const Options &opt, LayerRunSummary *summary) {
     }
 
     DecodeLoopStats decode_loop;
-    const int decode_rc = run_decode_loop(opt, rows, ranks, api, &dense_f16_cache, &decode_loop);
+    const int decode_rc = run_decode_loop(opt, rows, ranks, api, dense_f16_cache, &decode_loop);
     if (decode_loop.enabled) {
         std::printf("tp_ep_decode_loop\tsteps\t%d\tslots\t%d\tslot_steps\t%llu\t"
                     "total_ms\t%.6f\tms_per_step\t%.6f\tslot_step_tok_s\t%.6f\t"
@@ -3088,7 +3094,7 @@ int run_layer(const Options &opt, LayerRunSummary *summary) {
     api.shutdown();
     dlclose(lib);
     ds4_v100_tp_runtime_close(rt);
-    free_dense_f16_cache(dense_f16_cache, opt);
+    if (!shared_dense_f16_cache) free_dense_f16_cache(local_dense_f16_cache, opt);
     return pass ? 0 : 1;
 }
 
@@ -3100,7 +3106,39 @@ int main(int argc, char **argv) {
     }
 
     if (!opt.all_layers) {
-        return run_layer(opt, nullptr);
+        return run_layer(opt, nullptr, nullptr);
+    }
+
+    DenseF16Cache all_layer_dense_f16_cache;
+    DenseF16Cache *shared_dense_f16_cache = nullptr;
+    if (opt.dense_f16_cache_compose) {
+        std::vector<ContractRow> all_rows;
+        LayerStats all_stats;
+        if (parse_contract(opt.contract_path, -1, &all_rows, &all_stats) != 0 ||
+            all_stats.bad_rows != 0) {
+            std::fprintf(stderr, "all-layer contract parse failed bad_rows=%llu\n",
+                         (unsigned long long)all_stats.bad_rows);
+            return 2;
+        }
+        const auto cache_start = std::chrono::steady_clock::now();
+        if (prepare_dense_f16_cache(opt, all_rows, &all_layer_dense_f16_cache) != 0) {
+            std::fprintf(stderr, "all-layer dense f16 cache prepare failed\n");
+            return 4;
+        }
+        const auto cache_stop = std::chrono::steady_clock::now();
+        const double cache_ms =
+            std::chrono::duration<double, std::milli>(cache_stop - cache_start).count();
+        shared_dense_f16_cache = &all_layer_dense_f16_cache;
+        std::printf("tp_ep_all_layer_dense_f16_cache\trows\t%llu\t"
+                    "source_bytes\t%llu\tcache_bytes\t%llu\t"
+                    "cache_aligned_bytes\t%llu\tmax_temp_bytes\t%llu\t"
+                    "cache_ms\t%.6f\tPASS\n",
+                    (unsigned long long)all_layer_dense_f16_cache.rows,
+                    (unsigned long long)all_layer_dense_f16_cache.source_bytes,
+                    (unsigned long long)all_layer_dense_f16_cache.cache_bytes,
+                    (unsigned long long)all_layer_dense_f16_cache.cache_aligned_bytes,
+                    (unsigned long long)all_layer_dense_f16_cache.max_temp_bytes,
+                    cache_ms);
     }
 
     int pass_layers = 0;
@@ -3114,7 +3152,7 @@ int main(int argc, char **argv) {
         Options layer_opt = opt;
         layer_opt.layer = layer;
         LayerRunSummary s;
-        const int rc = run_layer(layer_opt, &s);
+        const int rc = run_layer(layer_opt, &s, shared_dense_f16_cache);
         std::printf("tp_ep_all_layer_item\tlayer\t%d\tratio\t%d\t"
                     "total_rows\t%llu\tdense_rows\t%llu\tcontrol_rows\t%llu\t"
                     "expert_rows\t%llu\tkv_rows\t%llu\tcomp_rows\t%llu\t"
@@ -3149,6 +3187,9 @@ int main(int argc, char **argv) {
             std::printf("tp_ep_all_layer_scaffold\tlayers\t43\tpass_layers\t%d\t"
                         "failed_layer\t%d\twall_ms\t%.6f\tFAIL\n",
                         pass_layers, layer, wall_ms);
+            if (shared_dense_f16_cache) {
+                free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+            }
             return rc == 0 ? 1 : rc;
         }
     }
@@ -3166,5 +3207,8 @@ int main(int argc, char **argv) {
                 pass_layers, opt.slots, opt.decode_steps,
                 sum_decode_ms, slot_step_tok_s, sum_ep_ms, sum_dense_ms,
                 sum_compose_ms, wall_ms, (unsigned long long)checksum);
+    if (shared_dense_f16_cache) {
+        free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+    }
     return 0;
 }

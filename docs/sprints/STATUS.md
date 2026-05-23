@@ -4,16 +4,17 @@ Last updated: 2026-05-23
 
 ## Topline
 
-Current TP/EP implementation status: Sprint 250 completed a one-process
-all-layer scaffold gate. The separate TP/EP smoke now supports `--all-layers`
-and passes all `43` transformer layers at `32` slots / `256K`, MTP off, with
-cache-backed FP16 dense compose, real TurboMind MXFP4 EP experts, sharded KV,
-and fused next-hidden composition. The 10-step gate reports
-`45.356852 ms/token` summed decode proxy and `705.516343` projected
-slot-step tok/s, with stage sums of `12.009343 ms` EP, `8.064360 ms` dense,
-and `25.277469 ms` compose. This is not generated-token serving throughput;
-the next gap is making the 43-layer loop truly resident instead of recreating
-per-layer runtime/cache state.
+Current TP/EP implementation status: Sprint 251 hoisted dense FP16 cache
+materialization out of the per-layer all-layer runner. The separate TP/EP smoke
+supports `--all-layers`, builds one shared `4096`-row dense cache
+(`14451998720` bytes) in `7772.591153 ms`, and passes all `43` transformer
+layers at `32` slots / `256K`, MTP off. The 10-step gate reports
+`43.753529 ms/token` summed decode proxy and `731.369579` projected slot-step
+tok/s, with stage sums of `11.837140 ms` EP, `7.613544 ms` dense, and
+`24.296721 ms` compose. Wall time improved from Sprint 250's `91879.358460 ms`
+to `74382.064295 ms`. This is not generated-token serving throughput; the next
+gap is hoisting TurboMind/API handles, route buffers, expert bindings, and TP
+runtime state.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s
