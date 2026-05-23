@@ -1,7 +1,7 @@
 # Sprint 235 - Descriptor Backed Full-Layer TP/EP Scaffold
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete
 
 ## Overview
 
@@ -128,21 +128,71 @@ checksum stages with real low-bit dense kernels and compare layer outputs.
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists and is committed before implementation evidence.
-- [ ] New tool is TP/EP-only and does not modify PP scheduler files.
-- [ ] New tool parses layer-2 dense/control/expert/KV/comp descriptors from
+- [x] Sprint plan exists and is committed before implementation evidence.
+- [x] New tool is TP/EP-only and does not modify PP scheduler files.
+- [x] New tool parses layer-2 dense/control/expert/KV/comp descriptors from
       the real TP/EP contract.
-- [ ] New tool copies and device-checks real dense/control descriptor bytes on
+- [x] New tool copies and device-checks real dense/control descriptor bytes on
       the owning V100s.
-- [ ] New tool runs the existing descriptor-backed TurboMind EP expert path.
-- [ ] New tool runs the sharded KV gate at `32` slots / `256K`.
-- [ ] V100 run reports per-family rows and bytes for all eight GPUs.
-- [ ] V100 run passes deterministic finite checks:
+- [x] New tool runs the existing descriptor-backed TurboMind EP expert path.
+- [x] New tool runs the sharded KV gate at `32` slots / `256K`.
+- [x] V100 run reports per-family rows and bytes for all eight GPUs.
+- [x] V100 run passes deterministic finite checks:
       `kv_max_abs=0`, `repeat_bad=0`, `repeat_nan=0`.
-- [ ] Evidence is copied to
+- [x] Evidence is copied to
       `logs/from-cluster/sprint235-tp-ep-full-layer-scaffold/`.
-- [ ] Status and vision docs are updated with the decision.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Status and vision docs are updated with the decision.
+- [x] Changes are committed with explicit `git add` paths.
+
+## Evidence
+
+V100 pod: `llm/llamacpp-build-8gpu`
+
+Pack: `/workspace/packs/ds4-appliance-full-tm-gated-s181`
+
+Contract:
+`/workspace/logs/sprint228-tp-ep-pack-contract/contract/tp-ep-pack-contract.tsv`
+
+Command shape:
+
+- `32` slots;
+- `256K` context;
+- `top_k=6`;
+- layer `2`;
+- MTP off.
+
+Full-layer scaffold result:
+
+| Metric | Value |
+|---|---:|
+| total layer rows | `288` |
+| dense rows | `112` |
+| control rows | `136` |
+| expert rows | `16` |
+| KV rows | `16` |
+| comp rows | `8` |
+| dense loaded bytes | `163102720` |
+| control loaded bytes | `84041408` |
+| EP loaded bytes | `641728512` |
+| descriptor checksum | `3434523335` |
+| aggregate routes | `192` |
+| dispatch bytes | `1572864` |
+| return bytes | `1572864` |
+| route imbalance | `1.000000` |
+| runtime bytes/GPU | `7122628608` |
+| KV max_abs | `0.000000000` |
+| descriptor load/check ms | `2414.124867` |
+| dense/KV ms | `0.744619` |
+| worst gate ms | `0.164284` |
+| worst down ms | `0.085094` |
+| worst EP ms | `0.249378` |
+| scaffold ms | `2415.118864` |
+| repeat max_abs | `0.000000000` |
+| repeat bad/nan | `0 / 0` |
+| result | `PASS` |
+
+Per GPU, the tool reports `14` dense rows, `17` control rows, `2` expert
+rows, `2` KV rows, and `1` comp row for layer `2`.
 
 ## Risks
 
@@ -159,4 +209,13 @@ checksum stages with real low-bit dense kernels and compare layer outputs.
 
 ## Decision
 
-Pending.
+Complete. The new TP/EP-only full-layer scaffold parses the real TP/EP
+contract, binds all layer-2 descriptor families, device-checks real
+dense/control bytes, runs the sharded KV gate, and preserves the
+descriptor-backed TurboMind EP execution path on all eight V100s.
+
+This is still not serving and not a logits-equivalent DS4 layer. The
+`descriptor_ms` is dominated by host-side one-shot loading/checking and is not
+a runtime throughput metric. The next sprint should replace the dense/control
+checksum scaffold with real descriptor-backed low-bit dense execution for a
+representative full layer, while keeping MTP off.

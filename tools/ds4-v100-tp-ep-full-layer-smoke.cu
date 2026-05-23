@@ -1,0 +1,1012 @@
+#define _FILE_OFFSET_BITS 64
+
+#include "ds4_v100_tp_runtime.h"
+#include "kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h"
+
+#include <cuda_fp16.h>
+#include <cuda_runtime.h>
+#include <dlfcn.h>
+
+#include <algorithm>
+#include <cerrno>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <limits>
+#include <random>
+#include <string>
+#include <sys/types.h>
+#include <vector>
+
+namespace {
+
+constexpr int kGpus = 8;
+constexpr int kHidden = 4096;
+constexpr int kMid = 2048;
+constexpr int kFusedN = 2 * kMid;
+constexpr int kGlobalExperts = 256;
+constexpr int kLocalExperts = kGlobalExperts / kGpus;
+constexpr int kActiveLocalExperts = 6;
+constexpr int kGroupSize = 32;
+constexpr int kDType = GGML_TM_DTYPE_MXFP4;
+
+#define CHECK_CUDA(expr)                                                              \
+    do {                                                                              \
+        cudaError_t err__ = (expr);                                                   \
+        if (err__ != cudaSuccess) {                                                   \
+            std::fprintf(stderr, "cuda error %s:%d: %s\n", __FILE__, __LINE__,      \
+                         cudaGetErrorString(err__));                                  \
+            std::exit(2);                                                             \
+        }                                                                             \
+    } while (0)
+
+typedef int (*pfn_init)(int);
+typedef void (*pfn_shutdown)(void);
+typedef int (*pfn_mmgt)(const void *, const int *, const int *, int, int,
+                        const void * const *, const void * const *, int, int, int, int, int,
+                        void *, void *);
+typedef int (*pfn_mmgs)(const void *, const int *, const int *, int, int,
+                        const void * const *, const void * const *, int, int, int, int, int,
+                        void *, void *);
+
+struct alignas(16) StridedPtrH {
+    void *p;
+    int stride;
+};
+static_assert(sizeof(StridedPtrH) == 16, "StridedPtrH must match TurboMind ABI");
+
+struct Api {
+    pfn_init init = nullptr;
+    pfn_shutdown shutdown = nullptr;
+    pfn_mmgt mmgt = nullptr;
+    pfn_mmgs mmgs = nullptr;
+};
+
+struct ContractRow {
+    std::string record_type;
+    std::string tensor_id;
+    std::string family;
+    std::string source_dtype;
+    std::string runtime_layout;
+    int layer = -1;
+    int owning_gpu = -1;
+    int tp_rank = -1;
+    int ep_rank = -1;
+    int shard_index = -1;
+    int shard_count = -1;
+    int expert_first = -1;
+    int expert_count = 0;
+    int kv_ratio = -1;
+    uint64_t kv_rows_per_slot = 0;
+    uint64_t bytes_estimate = 0;
+    std::string source_pack_file;
+    uint64_t source_shard_offset = 0;
+    uint64_t source_byte_length = 0;
+    std::string kernel_family;
+};
+
+struct TmIndexEntry {
+    std::string semantic_tensor_id;
+    std::string runtime_layout;
+    std::string sidecar_file;
+    int layer_id = -1;
+    int n = 0;
+    int k = 0;
+    int experts_packed = 0;
+    int experts_total = 0;
+    size_t weight_bytes_per_expert = 0;
+    size_t scale_bytes_per_expert = 0;
+    int k_pack = 0;
+    int weight_stride = 0;
+    int scale_stride = 0;
+    uint64_t weight_offset = 0;
+    uint64_t scale_offset = 0;
+};
+
+struct DescriptorBindings {
+    TmIndexEntry gated;
+    TmIndexEntry down;
+    bool have_gated = false;
+    bool have_down = false;
+};
+
+struct PackedExperts {
+    std::vector<void *> d_w_active;
+    std::vector<void *> d_s_active;
+    void *d_w_table = nullptr;
+    void *d_s_table = nullptr;
+    int k_pack = 0;
+};
+
+struct RankState {
+    int rank = 0;
+    int device = 0;
+    int routes = 0;
+    int active_experts = 0;
+    int max_routes_per_expert = 0;
+    cudaStream_t stream = nullptr;
+    int *d_offsets = nullptr;
+    __half *d_a = nullptr;
+    __half *d_gated = nullptr;
+    __half *d_down = nullptr;
+    PackedExperts gated;
+    PackedExperts down;
+    cudaEvent_t start = nullptr;
+    cudaEvent_t mid = nullptr;
+    cudaEvent_t stop = nullptr;
+};
+
+struct GpuFamilyStats {
+    uint64_t dense_rows = 0;
+    uint64_t control_rows = 0;
+    uint64_t expert_rows = 0;
+    uint64_t kv_rows = 0;
+    uint64_t comp_rows = 0;
+    uint64_t dense_bytes = 0;
+    uint64_t control_bytes = 0;
+    uint64_t expert_descriptor_bytes = 0;
+    uint64_t ep_loaded_bytes = 0;
+    uint64_t checksum = 0;
+};
+
+struct LayerStats {
+    uint64_t total_rows = 0;
+    uint64_t dense_rows = 0;
+    uint64_t control_rows = 0;
+    uint64_t expert_rows = 0;
+    uint64_t kv_rows = 0;
+    uint64_t comp_rows = 0;
+    uint64_t bad_rows = 0;
+    uint64_t dense_loaded_bytes = 0;
+    uint64_t control_loaded_bytes = 0;
+    uint64_t ep_loaded_bytes = 0;
+    uint64_t checksum = 0;
+    GpuFamilyStats gpu[kGpus];
+};
+
+struct Options {
+    const char *lib_path = "./build/turbomind-v100/libggml-turbomind.so";
+    const char *pack_dir = nullptr;
+    const char *contract_path = nullptr;
+    const char *tm_index_path = nullptr;
+    int devices[kGpus] = {0, 1, 2, 3, 4, 5, 6, 7};
+    int slots = 32;
+    int top_k = 6;
+    int layer = 2;
+    uint32_t kv_slot = 7;
+    uint64_t position = 1024;
+    int warmup = 5;
+    int iters = 30;
+};
+
+__global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
+                                      unsigned long long *out) {
+    unsigned long long local = 0;
+    for (uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+         i < n;
+         i += (uint64_t)blockDim.x * gridDim.x) {
+        local += (unsigned long long)data[i] * (unsigned long long)((i % 251u) + 1u);
+    }
+    atomicAdd(out, local);
+}
+
+bool parse_int(const char *text, int *out) {
+    if (!text || !*text) return false;
+    char *end = nullptr;
+    const long v = std::strtol(text, &end, 10);
+    if (end == text || *end != '\0' || v < std::numeric_limits<int>::min() ||
+        v > std::numeric_limits<int>::max()) {
+        return false;
+    }
+    *out = (int)v;
+    return true;
+}
+
+bool parse_u64(const char *text, uint64_t *out) {
+    if (!text || !*text) return false;
+    char *end = nullptr;
+    const unsigned long long v = std::strtoull(text, &end, 10);
+    if (end == text || *end != '\0') return false;
+    *out = (uint64_t)v;
+    return true;
+}
+
+bool parse_size(const char *text, size_t *out) {
+    uint64_t v = 0;
+    if (!parse_u64(text, &v)) return false;
+    if (v > (uint64_t)std::numeric_limits<size_t>::max()) return false;
+    *out = (size_t)v;
+    return true;
+}
+
+std::vector<std::string> split_tabs(const std::string &line) {
+    std::vector<std::string> fields;
+    size_t start = 0;
+    while (start <= line.size()) {
+        const size_t tab = line.find('\t', start);
+        if (tab == std::string::npos) {
+            fields.emplace_back(line.substr(start));
+            break;
+        }
+        fields.emplace_back(line.substr(start, tab - start));
+        start = tab + 1;
+    }
+    return fields;
+}
+
+bool safe_sidecar_name(const std::string &name) {
+    return !name.empty() &&
+           name.find('/') == std::string::npos &&
+           name.find('\\') == std::string::npos &&
+           name.find("..") == std::string::npos;
+}
+
+std::string path_join(const char *dir, const std::string &base) {
+    std::string out(dir ? dir : "");
+    if (!out.empty() && out.back() != '/') out.push_back('/');
+    out += base;
+    return out;
+}
+
+int read_exact_at(const std::string &path, uint64_t offset, void *dst, size_t bytes) {
+    FILE *fp = std::fopen(path.c_str(), "rb");
+    if (!fp) {
+        std::fprintf(stderr, "cannot open sidecar %s: %s\n", path.c_str(), std::strerror(errno));
+        return 1;
+    }
+    if (fseeko(fp, (off_t)offset, SEEK_SET) != 0) {
+        std::fprintf(stderr, "cannot seek sidecar %s offset %llu: %s\n",
+                     path.c_str(), (unsigned long long)offset, std::strerror(errno));
+        std::fclose(fp);
+        return 2;
+    }
+    const size_t got = std::fread(dst, 1, bytes, fp);
+    if (got != bytes) {
+        std::fprintf(stderr, "short read sidecar %s offset %llu bytes %zu got %zu\n",
+                     path.c_str(), (unsigned long long)offset, bytes, got);
+        std::fclose(fp);
+        return 3;
+    }
+    std::fclose(fp);
+    return 0;
+}
+
+bool parse_devices(const char *text, int devices[kGpus]) {
+    std::vector<int> parsed;
+    const char *cur = text;
+    while (cur && *cur) {
+        const char *comma = std::strchr(cur, ',');
+        std::string piece;
+        if (comma) {
+            piece.assign(cur, comma - cur);
+            cur = comma + 1;
+        } else {
+            piece.assign(cur);
+            cur = nullptr;
+        }
+        int dev = 0;
+        if (!parse_int(piece.c_str(), &dev) || dev < 0) return false;
+        parsed.push_back(dev);
+    }
+    if ((int)parsed.size() != kGpus) return false;
+    for (int i = 0; i < kGpus; ++i) {
+        for (int j = i + 1; j < kGpus; ++j) {
+            if (parsed[i] == parsed[j]) return false;
+        }
+        devices[i] = parsed[i];
+    }
+    return true;
+}
+
+void usage(const char *argv0) {
+    std::fprintf(stderr,
+                 "usage: %s --pack-dir DIR --contract FILE --tm-index FILE [options]\n"
+                 "       [--lib PATH] [--devices 0,1,2,3,4,5,6,7]\n"
+                 "       [--slots N] [--top-k N] [--layer N] [--kv-slot N]\n"
+                 "       [--position N] [--warmup N] [--iters N]\n",
+                 argv0);
+}
+
+bool parse_args(int argc, char **argv, Options *opt) {
+    for (int i = 1; i < argc; ++i) {
+        const char *arg = argv[i];
+        const char *val = (i + 1 < argc) ? argv[i + 1] : nullptr;
+        if (std::strcmp(arg, "--lib") == 0) {
+            if (!val) return false;
+            opt->lib_path = val;
+            ++i;
+        } else if (std::strcmp(arg, "--pack-dir") == 0) {
+            if (!val) return false;
+            opt->pack_dir = val;
+            ++i;
+        } else if (std::strcmp(arg, "--contract") == 0) {
+            if (!val) return false;
+            opt->contract_path = val;
+            ++i;
+        } else if (std::strcmp(arg, "--tm-index") == 0) {
+            if (!val) return false;
+            opt->tm_index_path = val;
+            ++i;
+        } else if (std::strcmp(arg, "--devices") == 0) {
+            if (!val || !parse_devices(val, opt->devices)) return false;
+            ++i;
+        } else if (std::strcmp(arg, "--slots") == 0) {
+            if (!val || !parse_int(val, &opt->slots) || opt->slots <= 0) return false;
+            ++i;
+        } else if (std::strcmp(arg, "--top-k") == 0) {
+            if (!val || !parse_int(val, &opt->top_k) || opt->top_k <= 0) return false;
+            ++i;
+        } else if (std::strcmp(arg, "--layer") == 0) {
+            if (!val || !parse_int(val, &opt->layer)) return false;
+            ++i;
+        } else if (std::strcmp(arg, "--kv-slot") == 0) {
+            int slot = 0;
+            if (!val || !parse_int(val, &slot) || slot < 0) return false;
+            opt->kv_slot = (uint32_t)slot;
+            ++i;
+        } else if (std::strcmp(arg, "--position") == 0) {
+            if (!val || !parse_u64(val, &opt->position)) return false;
+            ++i;
+        } else if (std::strcmp(arg, "--warmup") == 0) {
+            if (!val || !parse_int(val, &opt->warmup) || opt->warmup < 0) return false;
+            ++i;
+        } else if (std::strcmp(arg, "--iters") == 0) {
+            if (!val || !parse_int(val, &opt->iters) || opt->iters <= 0) return false;
+            ++i;
+        } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
+            usage(argv[0]);
+            std::exit(0);
+        } else {
+            return false;
+        }
+    }
+    return opt->pack_dir && opt->contract_path && opt->tm_index_path &&
+           opt->top_k <= kActiveLocalExperts && opt->layer >= 0;
+}
+
+bool parse_contract_row(const std::vector<std::string> &f, ContractRow *out) {
+    if (f.size() < 23) return false;
+    ContractRow r;
+    r.record_type = f[0];
+    r.tensor_id = f[1];
+    if (!parse_int(f[3].c_str(), &r.layer)) return false;
+    r.family = f[4];
+    r.source_dtype = f[5];
+    r.runtime_layout = f[7];
+    if (!parse_int(f[8].c_str(), &r.owning_gpu)) return false;
+    if (!parse_int(f[9].c_str(), &r.tp_rank)) return false;
+    if (!parse_int(f[10].c_str(), &r.ep_rank)) return false;
+    if (!parse_int(f[12].c_str(), &r.shard_index)) return false;
+    if (!parse_int(f[13].c_str(), &r.shard_count)) return false;
+    if (!parse_int(f[14].c_str(), &r.expert_first)) return false;
+    if (!parse_int(f[15].c_str(), &r.expert_count)) return false;
+    if (!parse_int(f[16].c_str(), &r.kv_ratio)) return false;
+    if (!parse_u64(f[17].c_str(), &r.kv_rows_per_slot)) return false;
+    if (!parse_u64(f[18].c_str(), &r.bytes_estimate)) return false;
+    r.source_pack_file = f[19];
+    if (!parse_u64(f[20].c_str(), &r.source_shard_offset)) return false;
+    if (!parse_u64(f[21].c_str(), &r.source_byte_length)) return false;
+    r.kernel_family = f[22];
+    if (!safe_sidecar_name(r.source_pack_file) && r.source_pack_file != "-") return false;
+    *out = r;
+    return true;
+}
+
+int parse_contract(const char *path, int layer, std::vector<ContractRow> *rows,
+                   LayerStats *stats) {
+    FILE *fp = std::fopen(path, "rb");
+    if (!fp) {
+        std::fprintf(stderr, "cannot open contract %s: %s\n", path, std::strerror(errno));
+        return 1;
+    }
+    char buf[8192];
+    bool first = true;
+    while (std::fgets(buf, sizeof(buf), fp)) {
+        std::string line(buf);
+        while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
+        if (first) {
+            first = false;
+            continue;
+        }
+        if (line.empty()) continue;
+        std::vector<std::string> f = split_tabs(line);
+        ContractRow r;
+        if (!parse_contract_row(f, &r)) {
+            stats->bad_rows++;
+            continue;
+        }
+        if (r.layer != layer) continue;
+        if (r.owning_gpu < 0 || r.owning_gpu >= kGpus) {
+            stats->bad_rows++;
+            continue;
+        }
+        rows->push_back(r);
+        stats->total_rows++;
+        GpuFamilyStats &g = stats->gpu[r.owning_gpu];
+        if (r.record_type == "dense_tp") {
+            stats->dense_rows++;
+            g.dense_rows++;
+            g.dense_bytes += r.bytes_estimate;
+        } else if (r.record_type == "replicated_control") {
+            stats->control_rows++;
+            g.control_rows++;
+            g.control_bytes += r.bytes_estimate;
+        } else if (r.record_type == "ep_expert") {
+            stats->expert_rows++;
+            g.expert_rows++;
+            g.expert_descriptor_bytes += r.bytes_estimate;
+        } else if (r.record_type == "kv_shard") {
+            stats->kv_rows++;
+            g.kv_rows++;
+        } else if (r.record_type == "kv_comp_state") {
+            stats->comp_rows++;
+            g.comp_rows++;
+        }
+    }
+    std::fclose(fp);
+    return rows->empty() ? 2 : 0;
+}
+
+uint64_t physical_row_offset(const ContractRow &r) {
+    if (r.record_type == "dense_tp" && r.shard_index >= 0 && r.shard_count > 1 &&
+        r.source_byte_length >= r.bytes_estimate * (uint64_t)r.shard_count) {
+        return r.source_shard_offset + (uint64_t)r.shard_index * r.bytes_estimate;
+    }
+    return r.source_shard_offset;
+}
+
+int device_checksum_row(int device, const char *pack_dir, const ContractRow &r,
+                        uint64_t *checksum) {
+    if (r.bytes_estimate == 0 || r.source_pack_file == "-") return 0;
+    CHECK_CUDA(cudaSetDevice(device));
+    const uint64_t offset = physical_row_offset(r);
+    if (offset + r.bytes_estimate > r.source_shard_offset + r.source_byte_length &&
+        r.record_type == "dense_tp") {
+        std::fprintf(stderr, "dense shard exceeds source span for %s\n", r.tensor_id.c_str());
+        return 1;
+    }
+    std::vector<unsigned char> host((size_t)r.bytes_estimate);
+    const std::string path = path_join(pack_dir, r.source_pack_file);
+    if (read_exact_at(path, offset, host.data(), host.size()) != 0) return 2;
+
+    unsigned char *d = nullptr;
+    unsigned long long *d_sum = nullptr;
+    CHECK_CUDA(cudaMalloc(&d, host.size()));
+    CHECK_CUDA(cudaMalloc(&d_sum, sizeof(unsigned long long)));
+    CHECK_CUDA(cudaMemcpy(d, host.data(), host.size(), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemset(d_sum, 0, sizeof(unsigned long long)));
+    const int block = 256;
+    const int grid = (int)std::min<uint64_t>(4096, (r.bytes_estimate + block - 1) / block);
+    checksum_bytes_kernel<<<std::max(grid, 1), block>>>(d, r.bytes_estimate, d_sum);
+    CHECK_CUDA(cudaGetLastError());
+    CHECK_CUDA(cudaDeviceSynchronize());
+    unsigned long long h_sum = 0;
+    CHECK_CUDA(cudaMemcpy(&h_sum, d_sum, sizeof(h_sum), cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaFree(d));
+    CHECK_CUDA(cudaFree(d_sum));
+    *checksum = (uint64_t)h_sum;
+    return 0;
+}
+
+bool parse_tm_entry(const std::vector<std::string> &f, TmIndexEntry *out) {
+    if (f.size() < 25) return false;
+    TmIndexEntry e;
+    e.semantic_tensor_id = f[0];
+    e.runtime_layout = f[4];
+    if (!parse_int(f[6].c_str(), &e.layer_id)) return false;
+    if (!parse_int(f[8].c_str(), &e.n)) return false;
+    if (!parse_int(f[9].c_str(), &e.k)) return false;
+    if (!parse_int(f[10].c_str(), &e.experts_packed)) return false;
+    if (!parse_int(f[11].c_str(), &e.experts_total)) return false;
+    if (!parse_size(f[12].c_str(), &e.weight_bytes_per_expert)) return false;
+    if (!parse_size(f[13].c_str(), &e.scale_bytes_per_expert)) return false;
+    if (!parse_int(f[14].c_str(), &e.k_pack)) return false;
+    if (!parse_int(f[15].c_str(), &e.weight_stride)) return false;
+    if (!parse_int(f[16].c_str(), &e.scale_stride)) return false;
+    e.sidecar_file = f[17];
+    if (!parse_u64(f[18].c_str(), &e.weight_offset)) return false;
+    if (!parse_u64(f[19].c_str(), &e.scale_offset)) return false;
+    if (!safe_sidecar_name(e.sidecar_file)) return false;
+    *out = e;
+    return true;
+}
+
+bool valid_tm_entry(const TmIndexEntry &e, int n, int k, const char *layout) {
+    return e.n == n &&
+           e.k == k &&
+           e.experts_total == kGlobalExperts &&
+           e.experts_packed >= kGlobalExperts &&
+           e.weight_bytes_per_expert > 0 &&
+           e.scale_bytes_per_expert > 0 &&
+           e.k_pack > 0 &&
+           e.weight_stride > 0 &&
+           e.scale_stride > 0 &&
+           e.runtime_layout == layout;
+}
+
+int parse_tm_index(const char *path, int layer, DescriptorBindings *out) {
+    FILE *fp = std::fopen(path, "rb");
+    if (!fp) {
+        std::fprintf(stderr, "cannot open tm index %s: %s\n", path, std::strerror(errno));
+        return 1;
+    }
+    char gated_name[128];
+    char down_name[128];
+    std::snprintf(gated_name, sizeof(gated_name), "blk.%d.ffn_gate_up_exps.weight", layer);
+    std::snprintf(down_name, sizeof(down_name), "blk.%d.ffn_down_exps.weight", layer);
+    char buf[8192];
+    bool first = true;
+    while (std::fgets(buf, sizeof(buf), fp)) {
+        std::string line(buf);
+        while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
+        if (first) {
+            first = false;
+            continue;
+        }
+        if (line.empty()) continue;
+        std::vector<std::string> f = split_tabs(line);
+        TmIndexEntry e;
+        if (!parse_tm_entry(f, &e)) {
+            std::fclose(fp);
+            return 2;
+        }
+        if (e.layer_id != layer) continue;
+        if (e.semantic_tensor_id == gated_name) {
+            if (!valid_tm_entry(e, kFusedN, kHidden,
+                                "turbomind_mxfp4_grouped_gate_up_interleaved")) {
+                std::fclose(fp);
+                return 3;
+            }
+            out->gated = e;
+            out->have_gated = true;
+        } else if (e.semantic_tensor_id == down_name) {
+            if (!valid_tm_entry(e, kHidden, kMid, "turbomind_mxfp4_grouped")) {
+                std::fclose(fp);
+                return 4;
+            }
+            out->down = e;
+            out->have_down = true;
+        }
+    }
+    std::fclose(fp);
+    return out->have_gated && out->have_down ? 0 : 5;
+}
+
+void load_api(void *lib, Api *api) {
+    api->init = (pfn_init)dlsym(lib, "ggml_turbomind_init");
+    api->shutdown = (pfn_shutdown)dlsym(lib, "ggml_turbomind_shutdown");
+    api->mmgt = (pfn_mmgt)dlsym(lib, "ggml_turbomind_mul_mat_grouped_total_tokens");
+    api->mmgs = (pfn_mmgs)dlsym(lib, "ggml_turbomind_mul_mat_grouped_gated_silu_total_tokens");
+    if (!api->init || !api->shutdown || !api->mmgt || !api->mmgs) {
+        std::fprintf(stderr, "dlsym failed for required TurboMind ABI\n");
+        std::exit(2);
+    }
+}
+
+void free_packed(PackedExperts &p) {
+    for (void *v : p.d_w_active) {
+        if (v) CHECK_CUDA(cudaFree(v));
+    }
+    for (void *v : p.d_s_active) {
+        if (v) CHECK_CUDA(cudaFree(v));
+    }
+    if (p.d_w_table) CHECK_CUDA(cudaFree(p.d_w_table));
+    if (p.d_s_table) CHECK_CUDA(cudaFree(p.d_s_table));
+    p = PackedExperts{};
+}
+
+int pack_descriptor_set(int device, const TmIndexEntry &entry, int rank,
+                        const std::vector<int> &active, const char *pack_dir,
+                        PackedExperts *out, uint64_t *host_bytes_read) {
+    CHECK_CUDA(cudaSetDevice(device));
+    const std::string sidecar_path = path_join(pack_dir, entry.sidecar_file);
+    out->d_w_active.assign(active.size(), nullptr);
+    out->d_s_active.assign(active.size(), nullptr);
+    out->k_pack = entry.k_pack;
+
+    std::vector<uint8_t> h_weight(entry.weight_bytes_per_expert);
+    std::vector<uint8_t> h_scale(entry.scale_bytes_per_expert);
+    for (size_t i = 0; i < active.size(); ++i) {
+        const int global_expert = rank * kLocalExperts + active[i];
+        const uint64_t w_off = entry.weight_offset +
+                               (uint64_t)global_expert * entry.weight_bytes_per_expert;
+        const uint64_t s_off = entry.scale_offset +
+                               (uint64_t)global_expert * entry.scale_bytes_per_expert;
+        if (read_exact_at(sidecar_path, w_off, h_weight.data(), h_weight.size()) != 0 ||
+            read_exact_at(sidecar_path, s_off, h_scale.data(), h_scale.size()) != 0) {
+            return 1;
+        }
+        CHECK_CUDA(cudaMalloc(&out->d_w_active[i], h_weight.size()));
+        CHECK_CUDA(cudaMalloc(&out->d_s_active[i], h_scale.size()));
+        CHECK_CUDA(cudaMemcpy(out->d_w_active[i], h_weight.data(), h_weight.size(),
+                              cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(out->d_s_active[i], h_scale.data(), h_scale.size(),
+                              cudaMemcpyHostToDevice));
+        *host_bytes_read += (uint64_t)h_weight.size() + (uint64_t)h_scale.size();
+    }
+
+    std::vector<StridedPtrH> w_table((size_t)kLocalExperts);
+    std::vector<StridedPtrH> s_table((size_t)kLocalExperts);
+    for (int e = 0; e < kLocalExperts; ++e) {
+        w_table[(size_t)e] = StridedPtrH{out->d_w_active[0], entry.weight_stride};
+        s_table[(size_t)e] = StridedPtrH{out->d_s_active[0], entry.scale_stride};
+    }
+    for (size_t i = 0; i < active.size(); ++i) {
+        w_table[(size_t)active[i]] = StridedPtrH{out->d_w_active[i], entry.weight_stride};
+        s_table[(size_t)active[i]] = StridedPtrH{out->d_s_active[i], entry.scale_stride};
+    }
+    CHECK_CUDA(cudaMalloc(&out->d_w_table, w_table.size() * sizeof(StridedPtrH)));
+    CHECK_CUDA(cudaMemcpy(out->d_w_table, w_table.data(),
+                          w_table.size() * sizeof(StridedPtrH), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMalloc(&out->d_s_table, s_table.size() * sizeof(StridedPtrH)));
+    CHECK_CUDA(cudaMemcpy(out->d_s_table, s_table.data(),
+                          s_table.size() * sizeof(StridedPtrH), cudaMemcpyHostToDevice));
+    return 0;
+}
+
+int run_gate(RankState &rank, const Api &api) {
+    return api.mmgs(rank.d_a, nullptr, rank.d_offsets, kLocalExperts, rank.routes,
+                    (const void * const *)rank.gated.d_w_table,
+                    (const void * const *)rank.gated.d_s_table,
+                    kDType, kFusedN, kHidden, kGroupSize, rank.gated.k_pack,
+                    rank.d_gated, rank.stream);
+}
+
+int run_down(RankState &rank, const Api &api) {
+    return api.mmgt(rank.d_gated, nullptr, rank.d_offsets, kLocalExperts, rank.routes,
+                    (const void * const *)rank.down.d_w_table,
+                    (const void * const *)rank.down.d_s_table,
+                    kDType, kHidden, kMid, kGroupSize, rank.down.k_pack,
+                    rank.d_down, rank.stream);
+}
+
+float elapsed_ms(cudaEvent_t start, cudaEvent_t stop) {
+    float ms = 0.0f;
+    CHECK_CUDA(cudaEventElapsedTime(&ms, start, stop));
+    return ms;
+}
+
+int check_repeat(RankState &rank, const Api &api, double *max_abs, int *bad, int *nan) {
+    const size_t elems = (size_t)rank.routes * kHidden;
+    std::vector<__half> first(elems);
+    std::vector<__half> second(elems);
+    CHECK_CUDA(cudaSetDevice(rank.device));
+    if (run_gate(rank, api) != 0 || run_down(rank, api) != 0) return 1;
+    CHECK_CUDA(cudaStreamSynchronize(rank.stream));
+    CHECK_CUDA(cudaMemcpy(first.data(), rank.d_down, elems * sizeof(__half),
+                          cudaMemcpyDeviceToHost));
+    if (run_gate(rank, api) != 0 || run_down(rank, api) != 0) return 1;
+    CHECK_CUDA(cudaStreamSynchronize(rank.stream));
+    CHECK_CUDA(cudaMemcpy(second.data(), rank.d_down, elems * sizeof(__half),
+                          cudaMemcpyDeviceToHost));
+    for (size_t i = 0; i < elems; ++i) {
+        const float a = __half2float(first[i]);
+        const float b = __half2float(second[i]);
+        if (!std::isfinite(a) || !std::isfinite(b)) {
+            ++*nan;
+            continue;
+        }
+        const double diff = std::fabs((double)a - (double)b);
+        *max_abs = std::max(*max_abs, diff);
+        if (diff > 0.0) ++*bad;
+    }
+    return 0;
+}
+
+void build_offsets_for_rank(int rank, int slots, int top_k,
+                            std::vector<int> *offsets,
+                            int *routes,
+                            int *active_experts,
+                            int *max_routes_per_expert) {
+    std::vector<int> counts((size_t)kLocalExperts, 0);
+    for (int slot = 0; slot < slots; ++slot) {
+        for (int k = 0; k < top_k; ++k) {
+            const int dst_rank = (slot * top_k + k) % kGpus;
+            if (dst_rank != rank) continue;
+            const int local = (slot + k * 7 + rank) % kActiveLocalExperts;
+            counts[(size_t)local]++;
+        }
+    }
+    offsets->assign((size_t)kLocalExperts + 1, 0);
+    int running = 0;
+    int active = 0;
+    int max_routes = 0;
+    for (int e = 0; e < kLocalExperts; ++e) {
+        (*offsets)[(size_t)e] = running;
+        running += counts[(size_t)e];
+        if (counts[(size_t)e] > 0) ++active;
+        max_routes = std::max(max_routes, counts[(size_t)e]);
+    }
+    (*offsets)[(size_t)kLocalExperts] = running;
+    *routes = running;
+    *active_experts = active;
+    *max_routes_per_expert = max_routes;
+}
+
+} // namespace
+
+int main(int argc, char **argv) {
+    Options opt;
+    if (!parse_args(argc, argv, &opt)) {
+        usage(argv[0]);
+        return 2;
+    }
+
+    std::vector<ContractRow> rows;
+    LayerStats layer_stats;
+    if (parse_contract(opt.contract_path, opt.layer, &rows, &layer_stats) != 0 ||
+        layer_stats.bad_rows != 0) {
+        std::fprintf(stderr, "contract parse failed bad_rows=%llu\n",
+                     (unsigned long long)layer_stats.bad_rows);
+        return 2;
+    }
+    DescriptorBindings bindings;
+    if (parse_tm_index(opt.tm_index_path, opt.layer, &bindings) != 0) {
+        std::fprintf(stderr, "tm index parse failed for layer %d\n", opt.layer);
+        return 2;
+    }
+
+    const auto descriptor_start = std::chrono::steady_clock::now();
+    for (const ContractRow &r : rows) {
+        if (r.record_type != "dense_tp" && r.record_type != "replicated_control") continue;
+        uint64_t checksum = 0;
+        if (device_checksum_row(opt.devices[r.owning_gpu], opt.pack_dir, r, &checksum) != 0) {
+            return 3;
+        }
+        layer_stats.gpu[r.owning_gpu].checksum ^= checksum + (uint64_t)(r.owning_gpu + 1) * 131u;
+        layer_stats.checksum ^= checksum + (uint64_t)(r.owning_gpu + 1) * 257u;
+        if (r.record_type == "dense_tp") layer_stats.dense_loaded_bytes += r.bytes_estimate;
+        else layer_stats.control_loaded_bytes += r.bytes_estimate;
+    }
+    const auto descriptor_stop = std::chrono::steady_clock::now();
+    const double descriptor_ms =
+        std::chrono::duration<double, std::milli>(descriptor_stop - descriptor_start).count();
+
+    ds4_v100_tp_runtime_config cfg;
+    ds4_v100_tp_runtime_default_config(&cfg);
+    cfg.slots = (uint32_t)opt.slots;
+    cfg.ctx = 262144;
+    cfg.kv_dtype = DS4_V100_TP_KV_F8_E4M3_B128;
+    cfg.scratch_bytes = 1536ull * 1024ull * 1024ull;
+    for (int i = 0; i < kGpus; ++i) cfg.devices[i] = opt.devices[i];
+
+    char err[512] = {0};
+    ds4_v100_tp_runtime *rt = nullptr;
+    if (ds4_v100_tp_runtime_open(&rt, &cfg, err, sizeof(err)) != 0) {
+        std::fprintf(stderr, "tp_runtime_open_failed\t%s\n", err);
+        return 4;
+    }
+
+    ds4_v100_tp_runtime_report runtime_report;
+    ds4_v100_tp_runtime_get_report(rt, &runtime_report);
+
+    ds4_v100_tp_dense_kv_result kv_result;
+    const auto kv_start = std::chrono::steady_clock::now();
+    if (ds4_v100_tp_runtime_dense_kv_slice(rt, opt.layer, opt.kv_slot, opt.position,
+                                           1, &kv_result, err, sizeof(err)) != 0) {
+        std::fprintf(stderr, "tp_runtime_dense_kv_slice_failed\t%s\n", err);
+        ds4_v100_tp_runtime_close(rt);
+        return 5;
+    }
+    const auto kv_stop = std::chrono::steady_clock::now();
+    const double dense_kv_ms =
+        std::chrono::duration<double, std::milli>(kv_stop - kv_start).count();
+
+    void *lib = dlopen(opt.lib_path, RTLD_LAZY | RTLD_LOCAL);
+    if (!lib) {
+        std::fprintf(stderr, "dlopen failed for %s: %s\n", opt.lib_path, dlerror());
+        ds4_v100_tp_runtime_close(rt);
+        return 6;
+    }
+    Api api;
+    load_api(lib, &api);
+
+    RankState ranks[kGpus];
+    int aggregate_routes = 0;
+    int min_routes = std::numeric_limits<int>::max();
+    int max_routes = 0;
+    uint64_t ep_loaded_bytes = 0;
+
+    for (int p = 0; p < kGpus; ++p) {
+        RankState &r = ranks[p];
+        r.rank = p;
+        r.device = opt.devices[p];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        if (api.init(r.device) != 0) {
+            std::fprintf(stderr, "ggml_turbomind_init failed on device %d\n", r.device);
+            ds4_v100_tp_runtime_close(rt);
+            return 7;
+        }
+        CHECK_CUDA(cudaStreamCreate(&r.stream));
+        CHECK_CUDA(cudaEventCreate(&r.start));
+        CHECK_CUDA(cudaEventCreate(&r.mid));
+        CHECK_CUDA(cudaEventCreate(&r.stop));
+
+        std::vector<int> offsets;
+        build_offsets_for_rank(p, opt.slots, opt.top_k, &offsets, &r.routes,
+                               &r.active_experts, &r.max_routes_per_expert);
+        aggregate_routes += r.routes;
+        min_routes = std::min(min_routes, r.routes);
+        max_routes = std::max(max_routes, r.routes);
+
+        const size_t a_elems = (size_t)r.routes * kHidden;
+        CHECK_CUDA(cudaMalloc(&r.d_offsets, offsets.size() * sizeof(int)));
+        CHECK_CUDA(cudaMemcpy(r.d_offsets, offsets.data(), offsets.size() * sizeof(int),
+                              cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMalloc(&r.d_a, a_elems * sizeof(__half)));
+        CHECK_CUDA(cudaMalloc(&r.d_gated, (size_t)r.routes * kMid * sizeof(__half)));
+        CHECK_CUDA(cudaMalloc(&r.d_down, a_elems * sizeof(__half)));
+
+        std::mt19937 rng(0xE2350000u + (uint32_t)p * 97u);
+        std::uniform_real_distribution<float> dist(-0.003f, 0.003f);
+        std::vector<__half> h_a(a_elems);
+        for (__half &v : h_a) v = __float2half(dist(rng));
+        CHECK_CUDA(cudaMemcpy(r.d_a, h_a.data(), a_elems * sizeof(__half),
+                              cudaMemcpyHostToDevice));
+
+        std::vector<int> active;
+        for (int e = 0; e < kActiveLocalExperts; ++e) active.push_back(e);
+        if (pack_descriptor_set(r.device, bindings.gated, p, active, opt.pack_dir,
+                                &r.gated, &ep_loaded_bytes) != 0 ||
+            pack_descriptor_set(r.device, bindings.down, p, active, opt.pack_dir,
+                                &r.down, &ep_loaded_bytes) != 0) {
+            ds4_v100_tp_runtime_close(rt);
+            return 8;
+        }
+        layer_stats.gpu[p].ep_loaded_bytes = ep_loaded_bytes;
+    }
+    layer_stats.ep_loaded_bytes = ep_loaded_bytes;
+
+    for (int i = 0; i < opt.warmup; ++i) {
+        for (int p = 0; p < kGpus; ++p) {
+            if (run_gate(ranks[p], api) != 0 || run_down(ranks[p], api) != 0) {
+                ds4_v100_tp_runtime_close(rt);
+                return 9;
+            }
+        }
+        for (int p = 0; p < kGpus; ++p) {
+            CHECK_CUDA(cudaSetDevice(ranks[p].device));
+            CHECK_CUDA(cudaStreamSynchronize(ranks[p].stream));
+        }
+    }
+
+    for (int p = 0; p < kGpus; ++p) {
+        CHECK_CUDA(cudaSetDevice(ranks[p].device));
+        CHECK_CUDA(cudaEventRecord(ranks[p].start, ranks[p].stream));
+    }
+    for (int i = 0; i < opt.iters; ++i) {
+        for (int p = 0; p < kGpus; ++p) {
+            if (run_gate(ranks[p], api) != 0) return 10;
+        }
+    }
+    for (int p = 0; p < kGpus; ++p) {
+        CHECK_CUDA(cudaSetDevice(ranks[p].device));
+        CHECK_CUDA(cudaEventRecord(ranks[p].mid, ranks[p].stream));
+    }
+    for (int i = 0; i < opt.iters; ++i) {
+        for (int p = 0; p < kGpus; ++p) {
+            if (run_down(ranks[p], api) != 0) return 11;
+        }
+    }
+    for (int p = 0; p < kGpus; ++p) {
+        CHECK_CUDA(cudaSetDevice(ranks[p].device));
+        CHECK_CUDA(cudaEventRecord(ranks[p].stop, ranks[p].stream));
+    }
+
+    double worst_gate_ms = 0.0;
+    double worst_down_ms = 0.0;
+    double worst_ep_ms = 0.0;
+    for (int p = 0; p < kGpus; ++p) {
+        CHECK_CUDA(cudaSetDevice(ranks[p].device));
+        CHECK_CUDA(cudaEventSynchronize(ranks[p].stop));
+        const double gate_ms = (double)elapsed_ms(ranks[p].start, ranks[p].mid) / opt.iters;
+        const double down_ms = (double)elapsed_ms(ranks[p].mid, ranks[p].stop) / opt.iters;
+        worst_gate_ms = std::max(worst_gate_ms, gate_ms);
+        worst_down_ms = std::max(worst_down_ms, down_ms);
+        worst_ep_ms = std::max(worst_ep_ms, gate_ms + down_ms);
+        std::printf("rank\t%d\tdevice\t%d\troutes\t%d\tactive_local_experts\t%d\t"
+                    "max_routes_per_expert\t%d\tgate_ms\t%.6f\tdown_ms\t%.6f\t"
+                    "ep_ms\t%.6f\tdense_rows\t%llu\tcontrol_rows\t%llu\t"
+                    "expert_rows\t%llu\tkv_rows\t%llu\tcomp_rows\t%llu\t"
+                    "checksum\t%llu\n",
+                    p, ranks[p].device, ranks[p].routes, ranks[p].active_experts,
+                    ranks[p].max_routes_per_expert, gate_ms, down_ms, gate_ms + down_ms,
+                    (unsigned long long)layer_stats.gpu[p].dense_rows,
+                    (unsigned long long)layer_stats.gpu[p].control_rows,
+                    (unsigned long long)layer_stats.gpu[p].expert_rows,
+                    (unsigned long long)layer_stats.gpu[p].kv_rows,
+                    (unsigned long long)layer_stats.gpu[p].comp_rows,
+                    (unsigned long long)layer_stats.gpu[p].checksum);
+    }
+
+    double repeat_max_abs = 0.0;
+    int repeat_bad = 0;
+    int repeat_nan = 0;
+    for (int p = 0; p < kGpus; ++p) {
+        if (check_repeat(ranks[p], api, &repeat_max_abs, &repeat_bad, &repeat_nan) != 0) {
+            ds4_v100_tp_runtime_close(rt);
+            return 12;
+        }
+    }
+
+    const uint64_t dispatch_bytes = (uint64_t)aggregate_routes * kHidden * sizeof(__half);
+    const uint64_t return_bytes = dispatch_bytes;
+    const double imbalance = min_routes > 0 ? (double)max_routes / (double)min_routes : 0.0;
+    const double scaffold_ms = descriptor_ms + dense_kv_ms + worst_ep_ms;
+    const bool pass = layer_stats.dense_rows > 0 &&
+                      layer_stats.control_rows > 0 &&
+                      layer_stats.expert_rows > 0 &&
+                      layer_stats.kv_rows > 0 &&
+                      layer_stats.comp_rows > 0 &&
+                      layer_stats.checksum != 0 &&
+                      kv_result.max_abs == 0.0 &&
+                      repeat_bad == 0 &&
+                      repeat_nan == 0;
+
+    std::printf("runtime_bytes_per_gpu\thidden\t%llu\tkv\t%llu\tcomp_state\t%llu\t"
+                "scratch\t%llu\ttotal\t%llu\n",
+                (unsigned long long)runtime_report.gpu[0].hidden_bytes,
+                (unsigned long long)runtime_report.gpu[0].kv_bytes,
+                (unsigned long long)runtime_report.gpu[0].comp_state_bytes,
+                (unsigned long long)runtime_report.gpu[0].scratch_bytes,
+                (unsigned long long)runtime_report.gpu[0].total_bytes);
+    std::printf("dense_kv_slice\tlayer\t%d\tratio\t%d\tslot\t%u\tposition\t%llu\t"
+                "attn_row\t%llu\tindexer_row\t%llu\tattn_row_bytes\t%llu\t"
+                "indexer_row_bytes\t%llu\tmax_abs\t%.9f\tdense_kv_ms\t%.6f\n",
+                kv_result.layer, kv_result.ratio, kv_result.slot,
+                (unsigned long long)kv_result.position,
+                (unsigned long long)kv_result.attn_row,
+                (unsigned long long)kv_result.indexer_row,
+                (unsigned long long)kv_result.attn_row_bytes[0],
+                (unsigned long long)kv_result.indexer_row_bytes[0],
+                kv_result.max_abs, dense_kv_ms);
+    std::printf("tp_ep_full_layer_scaffold\tslots\t%d\tctx\t%llu\ttop_k\t%d\t"
+                "layer\t%d\ttotal_rows\t%llu\tdense_rows\t%llu\tcontrol_rows\t%llu\t"
+                "expert_rows\t%llu\tkv_rows\t%llu\tcomp_rows\t%llu\t"
+                "dense_loaded_bytes\t%llu\tcontrol_loaded_bytes\t%llu\t"
+                "ep_loaded_bytes\t%llu\tdescriptor_checksum\t%llu\t"
+                "aggregate_routes\t%d\tdispatch_bytes\t%llu\treturn_bytes\t%llu\t"
+                "route_imbalance\t%.6f\tdescriptor_ms\t%.6f\tdense_kv_ms\t%.6f\t"
+                "worst_gate_ms\t%.6f\tworst_down_ms\t%.6f\tworst_ep_ms\t%.6f\t"
+                "scaffold_ms\t%.6f\trepeat_max_abs\t%.9f\trepeat_bad\t%d\t"
+                "repeat_nan\t%d\t%s\n",
+                opt.slots, (unsigned long long)cfg.ctx, opt.top_k, opt.layer,
+                (unsigned long long)layer_stats.total_rows,
+                (unsigned long long)layer_stats.dense_rows,
+                (unsigned long long)layer_stats.control_rows,
+                (unsigned long long)layer_stats.expert_rows,
+                (unsigned long long)layer_stats.kv_rows,
+                (unsigned long long)layer_stats.comp_rows,
+                (unsigned long long)layer_stats.dense_loaded_bytes,
+                (unsigned long long)layer_stats.control_loaded_bytes,
+                (unsigned long long)layer_stats.ep_loaded_bytes,
+                (unsigned long long)layer_stats.checksum,
+                aggregate_routes,
+                (unsigned long long)dispatch_bytes,
+                (unsigned long long)return_bytes,
+                imbalance, descriptor_ms, dense_kv_ms, worst_gate_ms, worst_down_ms,
+                worst_ep_ms, scaffold_ms, repeat_max_abs, repeat_bad, repeat_nan,
+                pass ? "PASS" : "FAIL");
+
+    for (int p = 0; p < kGpus; ++p) {
+        RankState &r = ranks[p];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        free_packed(r.gated);
+        free_packed(r.down);
+        CHECK_CUDA(cudaFree(r.d_offsets));
+        CHECK_CUDA(cudaFree(r.d_a));
+        CHECK_CUDA(cudaFree(r.d_gated));
+        CHECK_CUDA(cudaFree(r.d_down));
+        CHECK_CUDA(cudaEventDestroy(r.start));
+        CHECK_CUDA(cudaEventDestroy(r.mid));
+        CHECK_CUDA(cudaEventDestroy(r.stop));
+        CHECK_CUDA(cudaStreamDestroy(r.stream));
+    }
+    api.shutdown();
+    dlclose(lib);
+    ds4_v100_tp_runtime_close(rt);
+    return pass ? 0 : 1;
+}

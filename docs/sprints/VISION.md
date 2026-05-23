@@ -263,7 +263,7 @@ KV `max_abs=0`, and deterministic finite repeat output. This is still not
 serving and not logits-equivalent; dense/control/router/attention descriptor
 execution is the next gate.
 
-### Sprint 235 - Descriptor-Backed Full-Layer TP/EP Scaffold [planned]
+### Sprint 235 - Descriptor-Backed Full-Layer TP/EP Scaffold [complete]
 
 Goal: Expand from descriptor-backed routed experts to a full layer-2 TP/EP
 scaffold that parses, loads, and device-checks dense/control descriptors,
@@ -276,7 +276,16 @@ must prove that the full-layer ownership model can bind real dense/control,
 KV/state, and expert rows in the separate TP/EP codepath before replacing
 checksum stages with true DS4 math and scaling to all 43 layers.
 
-Outcome: Pending.
+Outcome: Complete as a scaffold gate. `tools/ds4-v100-tp-ep-full-layer-smoke.cu`
+now parses the real TP/EP contract, binds all layer-2 descriptor families,
+device-checks real dense/control bytes on the owning V100s, preserves sharded
+KV correctness, and runs descriptor-backed TurboMind EP experts. At `32`
+slots / `256K` / `top_k=6`, the run passes with `288` total layer rows,
+`163102720` dense bytes checked, `84041408` control bytes checked,
+`641728512` EP bytes loaded, KV `max_abs=0`, `worst_ep_ms=0.249378`, and
+finite deterministic repeat output. This remains a scaffold, not a
+logits-equivalent layer; the descriptor load/check time is startup evidence,
+not serving throughput.
 
 ### Sprint 236 - Full-Layer TP/EP Decode [planned]
 
@@ -356,6 +365,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 232 proved the combined TP runtime plus EP expert fixture in one process. | The TP/EP lifecycle works at the target shape, but it is still fixture data. | Move to descriptor-driven one-real-layer TP/EP correctness. |
 | 2026-05-23 | Sprint 233 proved descriptor ownership for layer `2` from the real production-pack contract. | The contract has the rows and TP/EP ownership needed, but execution still uses fixture weights. | Bind descriptor rows to actual pack bytes and feed real expert pointers into the one-layer smoke. |
 | 2026-05-23 | Sprint 234 proved descriptor-backed routed expert byte binding for layer `2`. | Real packed expert bytes now flow into the separate TP/EP path; the remaining gap is full-layer math and all-layer decode. | Build descriptor-backed full-layer TP/EP decode with MTP off. |
+| 2026-05-23 | Sprint 235 proved a descriptor-backed full-layer scaffold for layer `2`. | All descriptor families now have a concrete TP/EP binding outside the PP path, but dense/control rows are checksum scaffolds, not math. | Replace dense/control checksum stages with real low-bit dense execution for representative full-layer decode. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit in Sprint 236 or equivalent after TP/EP serving exists. |
 

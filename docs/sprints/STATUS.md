@@ -319,6 +319,21 @@ synthetic regression also passes with `worst_ep_ms=0.247603`. TP/EP is still
 not serving; this proves real packed expert byte binding for one layer, while
 dense/control/router/attention descriptor execution and full 43-layer decode
 remain the next gates.
+Sprint 235 adds the first TP/EP-only full-layer scaffold as
+`tools/ds4-v100-tp-ep-full-layer-smoke.cu`. It does not touch the PP
+scheduler. Against the real Sprint 228 TP/EP contract and the Sprint 181
+production pack, layer `2` parses and binds all descriptor families:
+`288` rows total, `112` dense rows, `136` control rows, `16` expert rows,
+`16` KV rows, and `8` compression-state rows. The V100 run at `32` slots /
+`256K` / `top_k=6` device-checks `163102720` dense bytes and `84041408`
+control bytes, loads `641728512` routed-expert bytes, reports descriptor
+checksum `3434523335`, keeps KV `max_abs=0.000000000`, and passes EP repeat
+with `repeat_bad=0`, `repeat_nan=0`. Worst EP time is `0.249378 ms`, dense/KV
+fixture time is `0.744619 ms`, and the one-shot descriptor load/check phase is
+`2414.124867 ms`. That descriptor time is not a serving metric; it is a
+startup/scaffold byte-binding cost. TP/EP is still not serving and not
+logits-equivalent, but all layer-2 families now have a concrete TP/EP runtime
+binding outside the PP path.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit
