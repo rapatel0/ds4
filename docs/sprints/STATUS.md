@@ -16,15 +16,17 @@ using the PP replay server. Sprint 277 wired that server into
 `tools/ds4-v100-run-appliance.sh` as `DS4_V100_SERVE_MODE=tp-ep`. Sprint 278
 added the sustained HTTP matrix driver. Sprint 279 made the Kubernetes example
 point at the TP/EP serving path and added GPU-utilization capture around the
-HTTP matrix. The current V100 matrix at `32` slots / `256K` reports
-`745.699174` wall generated tok/s and `771.902910` wall continuation tok/s for
-`32` tokens/request, and `753.708353` wall generated tok/s and `766.803086`
-wall continuation tok/s for `64` tokens/request. Decode-only rates remain
-near `961-977` generated tok/s and `996-1000` continuation tok/s. Both cases
-return `32/32` token match. GPU utilization peaks at `38-40%` and averages
-`15-19%` across the short POST windows, so the remaining gap is now practical
-continuous request batching/coalescing and reduction of the dominant
-compose-copy overhead, not proof that the TP/EP server path exists.
+HTTP matrix. Sprint 280 extended that harness to resident multi-request
+metrology and added cumulative `/v100/status` plus `/metrics` counters. The
+current V100 matrix at `32` slots / `256K` with three generation requests per
+case reports `751.114404` wall generated tok/s and `760.078310` wall
+continuation tok/s for `32` tokens/request, and `762.277426` wall generated
+tok/s and `766.925593` wall continuation tok/s for `64` tokens/request.
+Decode-only rates are `972.107940` and `988.565789` generated tok/s. Both
+cases return aggregate `96/96` token match. GPU utilization peaks at `40-41%`
+and averages `19-20%` across the generation windows, so the remaining gap is
+now practical continuous request batching/coalescing and reduction of the
+dominant compose-copy overhead, not proof that the TP/EP server path exists.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 279
+revision: 280
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -272,6 +272,12 @@ not a serial layer-chain.
   32 tokens/request and `753.708353` for 64 tokens/request, both at
   `32` slots / `256K` with `32/32` token match. GPU utilization during the
   short POST windows remains low: `15-19%` average and `38-40%` max.
+- Sprint 280 extended the TP/EP HTTP harness from one generation POST per
+  server to resident multi-request metrology. The current three-request V100
+  matrix reports `751.114404` wall generated tok/s for 32 tokens/request and
+  `762.277426` for 64 tokens/request, both at `32` slots / `256K`, with
+  aggregate `96/96` token match per case. GPU utilization still peaks only at
+  `40-41%`, so the next gap is request coalescing and compose/copy reduction.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -1266,6 +1272,21 @@ tok/s and `766.803086` wall continuation tok/s for `64` tokens/request, with
 `32/32` token match. GPU utilization peaks at `38-40%` and averages
 `15-19%` across the sampled POST windows.
 
+### Sprint 280 - TP/EP Multi-Request HTTP Metrology [complete]
+
+Goal: Measure resident sustained serving across multiple generation requests
+without restarting the TP/EP server.
+
+Outcome: Complete. The TP/EP HTTP server now exposes cumulative prompt,
+generated, continuation, timing, throughput, and logical-position counters via
+`/v100/status` and `/metrics`. The sustained HTTP bench now supports
+`--requests N`, writes per-request responses, and aggregates throughput across
+the resident request sequence. The V100 run at `32` slots / `256K` with three
+generation requests per case reports `751.114404` wall generated tok/s and
+`760.078310` wall continuation tok/s for `32` tokens/request, and
+`762.277426` wall generated tok/s and `766.925593` wall continuation tok/s for
+`64` tokens/request. Both cases return aggregate `96/96` token match.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1345,6 +1366,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 277 wired the TP/EP HTTP server into the appliance launcher. | Operators can now start the TP/EP path with `DS4_V100_SERVE_MODE=tp-ep`. | Build and run sustained HTTP matrix tooling against the launcher path. |
 | 2026-05-23 | Sprint 278 added sustained HTTP matrix tooling for the launcher path. | The TP/EP server now has repeatable operational metrology. | Wire Kubernetes defaults and capture GPU utilization around the matrix. |
 | 2026-05-23 | Sprint 279 wired Kubernetes defaults to the TP/EP path and added GPU-util sampling. | The deployment example no longer points at the frozen PP path, and the HTTP matrix now exposes utilization as well as tok/s. | Build continuous request batching/coalescing for practical serving and keep optimizing compose/copy once metrology is stable. |
+| 2026-05-23 | Sprint 280 added resident multi-request HTTP metrology. | One loaded TP/EP server now serves repeated generation requests and exposes cumulative counters. | Add request coalescing/admission so independent HTTP requests can fill the 32 active slots. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

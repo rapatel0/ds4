@@ -4141,6 +4141,13 @@ int run_tp_ep_http_server(const Options &base_opt,
     uint64_t generation_requests = 0;
     uint64_t rejected = 0;
     uint64_t next_position = base_opt.position;
+    uint64_t total_prompt_tokens = 0;
+    uint64_t total_generated_tokens = 0;
+    uint64_t total_continuation_tokens = 0;
+    double total_decode_ms = 0.0;
+    double total_wall_ms = 0.0;
+    double total_continuation_decode_ms = 0.0;
+    double total_continuation_wall_ms = 0.0;
     ServingBenchResult last = {};
     std::printf("tp_ep_http_serving\thttp://%s:%d/v100/selected-token\tPASS\n",
                 base_opt.host, base_opt.port);
@@ -4171,38 +4178,94 @@ int run_tp_ep_http_server(const Options &base_opt,
             http_write_json(fd, 200, "{\"status\":\"ok\",\"backend\":\"tp_ep_resident\"}\n");
         } else if (std::strcmp(method, "GET") == 0 &&
                    (std::strcmp(path, "/status") == 0 || std::strcmp(path, "/v100/status") == 0)) {
-            char out[2048];
+            const double cumulative_generated_tok_s_wall = total_wall_ms > 0.0
+                ? (double)total_generated_tokens * 1000.0 / total_wall_ms
+                : 0.0;
+            const double cumulative_generated_tok_s_decode = total_decode_ms > 0.0
+                ? (double)total_generated_tokens * 1000.0 / total_decode_ms
+                : 0.0;
+            const double cumulative_continuation_tok_s_wall = total_continuation_wall_ms > 0.0
+                ? (double)total_continuation_tokens * 1000.0 / total_continuation_wall_ms
+                : 0.0;
+            const double cumulative_continuation_tok_s_decode = total_continuation_decode_ms > 0.0
+                ? (double)total_continuation_tokens * 1000.0 / total_continuation_decode_ms
+                : 0.0;
+            char out[4096];
             std::snprintf(out, sizeof(out),
                           "{\"status\":\"ok\",\"backend\":\"tp_ep_resident\","
                           "\"tp\":8,\"ep\":8,\"pp\":1,\"ctx\":262144,"
                           "\"slots\":%d,\"served_requests\":%llu,"
                           "\"generation_requests\":%llu,\"rejected_requests\":%llu,"
+                          "\"total_prompt_tokens\":%llu,"
+                          "\"total_generated_tokens\":%llu,"
+                          "\"total_continuation_tokens\":%llu,"
+                          "\"next_position\":%llu,"
                           "\"warmed_ready\":true,\"resident_ready\":true,"
                           "\"last_generated_tok_s_wall\":%.6f,"
-                          "\"last_continuation_tok_s_wall\":%.6f}\n",
+                          "\"last_continuation_tok_s_wall\":%.6f,"
+                          "\"cumulative_generated_tok_s_wall\":%.6f,"
+                          "\"cumulative_continuation_tok_s_wall\":%.6f,"
+                          "\"cumulative_generated_tok_s_decode\":%.6f,"
+                          "\"cumulative_continuation_tok_s_decode\":%.6f}\n",
                           base_opt.slots,
                           (unsigned long long)served,
                           (unsigned long long)generation_requests,
                           (unsigned long long)rejected,
+                          (unsigned long long)total_prompt_tokens,
+                          (unsigned long long)total_generated_tokens,
+                          (unsigned long long)total_continuation_tokens,
+                          (unsigned long long)next_position,
                           last.aggregate_generated_tok_s_wall,
-                          last.aggregate_continuation_tok_s_wall);
+                          last.aggregate_continuation_tok_s_wall,
+                          cumulative_generated_tok_s_wall,
+                          cumulative_continuation_tok_s_wall,
+                          cumulative_generated_tok_s_decode,
+                          cumulative_continuation_tok_s_decode);
             http_write_json(fd, 200, out);
         } else if (std::strcmp(method, "GET") == 0 && std::strcmp(path, "/metrics") == 0) {
-            char out[2048];
+            const double cumulative_generated_tok_s_wall = total_wall_ms > 0.0
+                ? (double)total_generated_tokens * 1000.0 / total_wall_ms
+                : 0.0;
+            const double cumulative_generated_tok_s_decode = total_decode_ms > 0.0
+                ? (double)total_generated_tokens * 1000.0 / total_decode_ms
+                : 0.0;
+            const double cumulative_continuation_tok_s_wall = total_continuation_wall_ms > 0.0
+                ? (double)total_continuation_tokens * 1000.0 / total_continuation_wall_ms
+                : 0.0;
+            const double cumulative_continuation_tok_s_decode = total_continuation_decode_ms > 0.0
+                ? (double)total_continuation_tokens * 1000.0 / total_continuation_decode_ms
+                : 0.0;
+            char out[4096];
             std::snprintf(out, sizeof(out),
                           "ds4_v100_tp_ep_resident_ready 1\n"
                           "ds4_v100_tp_ep_slots %d\n"
                           "ds4_v100_tp_ep_served_requests %llu\n"
                           "ds4_v100_tp_ep_generation_requests %llu\n"
                           "ds4_v100_tp_ep_rejected_requests %llu\n"
+                          "ds4_v100_tp_ep_total_prompt_tokens %llu\n"
+                          "ds4_v100_tp_ep_total_generated_tokens %llu\n"
+                          "ds4_v100_tp_ep_total_continuation_tokens %llu\n"
+                          "ds4_v100_tp_ep_next_position %llu\n"
                           "ds4_v100_tp_ep_generated_tok_s_wall %.6f\n"
-                          "ds4_v100_tp_ep_continuation_tok_s_wall %.6f\n",
+                          "ds4_v100_tp_ep_continuation_tok_s_wall %.6f\n"
+                          "ds4_v100_tp_ep_cumulative_generated_tok_s_wall %.6f\n"
+                          "ds4_v100_tp_ep_cumulative_continuation_tok_s_wall %.6f\n"
+                          "ds4_v100_tp_ep_cumulative_generated_tok_s_decode %.6f\n"
+                          "ds4_v100_tp_ep_cumulative_continuation_tok_s_decode %.6f\n",
                           base_opt.slots,
                           (unsigned long long)served,
                           (unsigned long long)generation_requests,
                           (unsigned long long)rejected,
+                          (unsigned long long)total_prompt_tokens,
+                          (unsigned long long)total_generated_tokens,
+                          (unsigned long long)total_continuation_tokens,
+                          (unsigned long long)next_position,
                           last.aggregate_generated_tok_s_wall,
-                          last.aggregate_continuation_tok_s_wall);
+                          last.aggregate_continuation_tok_s_wall,
+                          cumulative_generated_tok_s_wall,
+                          cumulative_continuation_tok_s_wall,
+                          cumulative_generated_tok_s_decode,
+                          cumulative_continuation_tok_s_decode);
             http_write_text(fd, out);
         } else if (std::strcmp(method, "POST") == 0 &&
                    (std::strcmp(path, "/v100/selected-token") == 0 ||
@@ -4231,6 +4294,13 @@ int run_tp_ep_http_server(const Options &base_opt,
             } else {
                 generation_requests++;
                 next_position += (uint64_t)req_opt.decode_steps;
+                total_prompt_tokens += result.prompt_tokens;
+                total_generated_tokens += result.generated_tokens;
+                total_continuation_tokens += result.continuation_tokens;
+                total_decode_ms += result.total_decode_ms;
+                total_wall_ms += result.total_wall_ms;
+                total_continuation_decode_ms += result.continuation_decode_ms;
+                total_continuation_wall_ms += result.continuation_wall_ms;
                 last = result;
                 char out[4096];
                 std::snprintf(out, sizeof(out),

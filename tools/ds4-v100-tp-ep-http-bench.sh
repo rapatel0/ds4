@@ -3,6 +3,7 @@ set -euo pipefail
 
 log_dir=""
 tokens_cases="32,64"
+generation_requests="1"
 port_base="18100"
 slots="32"
 ctx="262144"
@@ -23,6 +24,7 @@ surface with Python stdlib, and writes a sustained HTTP matrix.
 Options:
   --log-dir DIR       output directory; required
   --tokens-cases CSV  generated tokens per request, default 32,64
+  --requests N        generation requests per resident server, default 1
   --port-base N       first port to use, default 18100
   --slots N           active slots, default 32
   --ctx N             context, default 262144
@@ -45,6 +47,7 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --log-dir) log_dir="$2"; shift 2 ;;
         --tokens-cases) tokens_cases="$2"; shift 2 ;;
+        --requests) generation_requests="$2"; shift 2 ;;
         --port-base) port_base="$2"; shift 2 ;;
         --slots) slots="$2"; shift 2 ;;
         --ctx) ctx="$2"; shift 2 ;;
@@ -75,13 +78,17 @@ fi
 case "$tokens_cases:$port_base" in
     *[!0-9,:]* | *::* | :* | *:) fail "tokens cases and port base must be numeric" ;;
 esac
+case "$generation_requests" in
+    *[!0-9]* | "") fail "--requests must be numeric" ;;
+esac
+[ "$generation_requests" -ge 1 ] && [ "$generation_requests" -le 128 ] || fail "--requests must be in [1,128]"
 
 mkdir -p "$log_dir/cases"
 summary_tsv="$log_dir/sustained_http.tsv"
 summary_json="$log_dir/sustained_http.json"
-printf 'schema\tds4_v100_tp_ep_sustained_http.v1\n' >"$summary_tsv"
+printf 'schema\tds4_v100_tp_ep_sustained_http.v2\n' >"$summary_tsv"
 printf 'backend\ttp_ep_launcher_http\n\n' >>"$summary_tsv"
-printf 'tokens\tctx\tslots\tstatus_200\tgenerated_tokens\tcontinuation_tokens\telapsed_s\tgenerated_tok_s\tcontinuation_tok_s\tgenerated_tok_s_decode\tcontinuation_tok_s_decode\tgpu_util_avg\tgpu_util_max\tgpu_mem_used_max_mib\n' >>"$summary_tsv"
+printf 'tokens\tctx\tslots\tgeneration_requests\tstatus_200\tgenerated_tokens\tcontinuation_tokens\telapsed_s\tgenerated_tok_s\tcontinuation_tok_s\tgenerated_tok_s_decode\tcontinuation_tok_s_decode\tgpu_util_avg\tgpu_util_max\tgpu_mem_used_max_mib\n' >>"$summary_tsv"
 
 case_jsons=()
 case_index=0
@@ -108,7 +115,7 @@ for tokens in "${token_values[@]}"; do
     DS4_V100_TOKENS="$tokens" \
     DS4_V100_HOST=127.0.0.1 \
     DS4_V100_PORT="$port" \
-    DS4_V100_MAX_REQUESTS=4 \
+    DS4_V100_MAX_REQUESTS=$((generation_requests + 4)) \
     DS4_V100_LOG_DIR="$case_dir/runtime" \
     "$run_appliance" >"$server_log" 2>"$server_err" &
     server_pid=$!
@@ -123,7 +130,7 @@ for tokens in "${token_values[@]}"; do
     done
     grep -q "tp_ep_http_serving" "$server_log" || fail "server did not listen for token case $tokens"
 
-    python3 - "$case_dir" "$port" "$tokens" <<'PY'
+    python3 - "$case_dir" "$port" "$tokens" "$generation_requests" <<'PY'
 import json
 import shutil
 import subprocess
@@ -132,7 +139,9 @@ import threading
 import time
 import urllib.request
 
-case_dir, port, tokens = sys.argv[1:]
+case_dir, port, tokens, generation_requests = sys.argv[1:]
+tokens = int(tokens)
+generation_requests = int(generation_requests)
 base = f"http://127.0.0.1:{port}"
 
 def fetch(name, path, data=None, suffix="json"):
@@ -145,6 +154,7 @@ def fetch(name, path, data=None, suffix="json"):
         body = r.read()
     with open(f"{case_dir}/{name}.{suffix}", "wb") as f:
         f.write(body)
+    return body
 
 fetch("health", "/health")
 fetch("status_before", "/v100/status")
@@ -174,24 +184,48 @@ def sample_gpu():
 
 thread = threading.Thread(target=sample_gpu, daemon=True)
 thread.start()
+responses = []
 try:
-    fetch("response", "/v100/selected-token", json.dumps({"max_tokens": int(tokens)}).encode())
+    for i in range(generation_requests):
+        body = fetch(
+            f"response_{i:03d}",
+            "/v100/selected-token",
+            json.dumps({"max_tokens": tokens, "request_index": i}).encode(),
+        )
+        responses.append(json.loads(body.decode("utf-8")))
 finally:
     stop.set()
     thread.join(timeout=2.0)
 
+if responses:
+    with open(f"{case_dir}/response.json", "w", encoding="utf-8") as f:
+        json.dump(responses[-1], f, sort_keys=True)
+        f.write("\n")
+with open(f"{case_dir}/responses.json", "w", encoding="utf-8") as f:
+    json.dump(responses, f, sort_keys=True)
+    f.write("\n")
+fetch("status_after", "/v100/status")
 fetch("metrics", "/metrics", None, "txt")
 PY
     wait "$server_pid"
 
-    python3 - "$case_dir" "$tokens" "$ctx" "$slots" "$summary_tsv" <<'PY'
+    python3 - "$case_dir" "$tokens" "$ctx" "$slots" "$generation_requests" "$summary_tsv" <<'PY'
 import json
 import sys
 
-case_dir, tokens, ctx, slots, summary_tsv = sys.argv[1:]
-with open(f"{case_dir}/response.json", "r", encoding="utf-8") as f:
-    result = json.load(f)
-timing = result["timing_ms"]
+case_dir, tokens, ctx, slots, generation_requests, summary_tsv = sys.argv[1:]
+with open(f"{case_dir}/responses.json", "r", encoding="utf-8") as f:
+    responses = json.load(f)
+if len(responses) != int(generation_requests):
+    raise SystemExit(f"expected {generation_requests} responses, found {len(responses)}")
+total_generated = sum(r["generated_tokens"] for r in responses)
+total_continuation = sum(r["continuation_tokens"] for r in responses)
+total_wall_ms = sum(r["timing_ms"]["total_wall"] for r in responses)
+total_decode_ms = sum(r["timing_ms"]["total_decode"] for r in responses)
+total_cont_wall_ms = sum(r["timing_ms"]["continuation_wall"] for r in responses)
+total_cont_decode_ms = sum(r["timing_ms"]["continuation_decode"] for r in responses)
+token_match = sum(r["token_match"] for r in responses)
+token_mismatch = sum(r["token_mismatch"] for r in responses)
 gpu_utils = []
 gpu_mem_used = []
 try:
@@ -216,21 +250,22 @@ gpu_util_avg = sum(gpu_utils) / len(gpu_utils) if gpu_utils else 0.0
 gpu_util_max = max(gpu_utils) if gpu_utils else 0.0
 gpu_mem_used_max = max(gpu_mem_used) if gpu_mem_used else 0.0
 row = {
-    "schema": "ds4_v100_tp_ep_sustained_http_case.v1",
+    "schema": "ds4_v100_tp_ep_sustained_http_case.v2",
     "backend": "tp_ep_launcher_http",
     "tokens_per_request": int(tokens),
     "ctx": int(ctx),
     "slots": int(slots),
-    "status_200": int(slots),
-    "generated_tokens": result["generated_tokens"],
-    "continuation_tokens": result["continuation_tokens"],
-    "elapsed_s": timing["total_wall"] / 1000.0,
-    "generated_tok_s": timing["generated_tokens_per_second"],
-    "continuation_tok_s": timing["continuation_tokens_per_second"],
-    "generated_tok_s_decode": timing["generated_tokens_per_second_decode"],
-    "continuation_tok_s_decode": timing["continuation_tokens_per_second_decode"],
-    "token_match": result["token_match"],
-    "token_mismatch": result["token_mismatch"],
+    "generation_requests": int(generation_requests),
+    "status_200": token_match,
+    "generated_tokens": total_generated,
+    "continuation_tokens": total_continuation,
+    "elapsed_s": total_wall_ms / 1000.0,
+    "generated_tok_s": (total_generated * 1000.0 / total_wall_ms) if total_wall_ms > 0 else 0.0,
+    "continuation_tok_s": (total_continuation * 1000.0 / total_cont_wall_ms) if total_cont_wall_ms > 0 else 0.0,
+    "generated_tok_s_decode": (total_generated * 1000.0 / total_decode_ms) if total_decode_ms > 0 else 0.0,
+    "continuation_tok_s_decode": (total_continuation * 1000.0 / total_cont_decode_ms) if total_cont_decode_ms > 0 else 0.0,
+    "token_match": token_match,
+    "token_mismatch": token_mismatch,
     "gpu_util_avg": gpu_util_avg,
     "gpu_util_max": gpu_util_max,
     "gpu_mem_used_max_mib": gpu_mem_used_max,
@@ -241,7 +276,8 @@ with open(f"{case_dir}/result.json", "w", encoding="utf-8") as f:
 with open(summary_tsv, "a", encoding="utf-8") as f:
     f.write(
         f"{row['tokens_per_request']}\t{row['ctx']}\t{row['slots']}\t"
-        f"{row['status_200']}\t{row['generated_tokens']}\t{row['continuation_tokens']}\t"
+        f"{row['generation_requests']}\t{row['status_200']}\t"
+        f"{row['generated_tokens']}\t{row['continuation_tokens']}\t"
         f"{row['elapsed_s']:.6f}\t{row['generated_tok_s']:.6f}\t"
         f"{row['continuation_tok_s']:.6f}\t{row['generated_tok_s_decode']:.6f}\t"
         f"{row['continuation_tok_s_decode']:.6f}\t"
@@ -263,7 +299,7 @@ for path in sys.argv[2:]:
     with open(path, "r", encoding="utf-8") as f:
         cases.append(json.load(f))
 with open(summary_path, "w", encoding="utf-8") as f:
-    json.dump({"schema": "ds4_v100_tp_ep_sustained_http.v1", "cases": cases}, f, sort_keys=True)
+    json.dump({"schema": "ds4_v100_tp_ep_sustained_http.v2", "cases": cases}, f, sort_keys=True)
     f.write("\n")
 PY
 
