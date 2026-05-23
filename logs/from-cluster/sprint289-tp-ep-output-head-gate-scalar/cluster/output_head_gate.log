@@ -1,0 +1,1 @@
+tp_ep_output_head_gate	slots	32	vocab	129280	rows_per_gpu	16160	projection_kernel	bf16_scalar	output_weight_bytes	1059061760	logits_bytes	16547840	projection_ms	2192.810195	projection_kernel_worst_ms	7.593408	host_reduce_ms	6.070330	total_ms	2833.320711	first_token	26803	first_logit	3608.255126953	finite_bad	0	checksum	55955151146	PASS

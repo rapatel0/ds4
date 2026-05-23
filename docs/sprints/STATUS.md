@@ -83,7 +83,16 @@ and pattern `32,64` forms two 16-client buckets, returns `32/32` token match,
 and reports `384.581100` wall generated tok/s / `505.797315` decode generated
 tok/s. The selected-token regression sanity still forms one 32-client batch
 and reports `726.823991` wall generated tok/s / `944.195924` decode generated
-tok/s.
+tok/s. Sprint 289 then added a TP/EP-only vocab-sharded output-head gate. It
+loads real `hc_head_fn`, `hc_head_base`, `hc_head_scale`, `output_norm.weight`,
+and real BF16 `output.weight` vocab shards across all 8 GPUs. At `32` slots,
+the scalar BF16 output projection passes with token `26803`, `2192.810195 ms`
+cold projection time, `7.593408 ms` worst per-GPU projection-kernel time, and
+`6.070330 ms` host top-1 reduction. The BF16-to-FP16 cuBLAS diagnostic also
+passes with the same token, but is slower in this cold gate:
+`2217.599099 ms` projection time and `22.116352 ms` worst per-GPU kernel time.
+This makes the output-head layout operational, but `/v1/completions` still
+needs final HC carried into the output head before it can emit real model text.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

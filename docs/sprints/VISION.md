@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 288
+revision: 289
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -1469,6 +1469,32 @@ Next work should move from diagnostic completions to real model output in the
 TP/EP path: output-head/top-token selection, tokenizer text emission, prompt
 prefill, and then stop/finish handling.
 
+### Sprint 289 - TP/EP Vocab-Sharded Output Head Gate [complete]
+
+Goal: Add a TP/EP-only output-head primitive that exercises the real DS4
+output-head tensor layout across all 8 V100s.
+
+Outcome: Complete. `tools/ds4-v100-tp-ep-full-layer-smoke.cu` now has
+`--output-head-gate`. The gate loads real replicated `hc_head_fn`,
+`hc_head_base`, `hc_head_scale`, and `output_norm.weight` controls, plus real
+BF16 `output.weight` vocab shards. It runs synthetic HC through the DS4
+output-head collapse, projects across vocab shards on all 8 GPUs, and reduces
+the shard-local logits to a global top-1 token.
+
+At `32` slots / vocab `129280`, the scalar BF16 projection passes with token
+`26803`, cold projection time `2192.810195 ms`, worst per-GPU projection-kernel
+time `7.593408 ms`, host top-1 reduction `6.070330 ms`, and finite logits.
+The BF16-to-FP16 cuBLAS diagnostic path also passes and selects the same token,
+but is slower in this cold gate: `2217.599099 ms` projection time and
+`22.116352 ms` worst per-GPU kernel time. That cuBLAS result includes cold
+upload, BF16-to-FP16 expansion, handle creation, and serial per-GPU
+orchestration; it is not yet a serving-path rejection.
+
+The remaining serving gap is now sharper: the TP/EP token-major loop must
+carry or reconstruct final HC `[slots,4,4096]` at the end of layer 42 and feed
+that into this output-head primitive. Only after that should `/v1/completions`
+emit real selected tokens/text.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1557,6 +1583,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 286 added TP/EP HTTP request coalescing. | `32` independent concurrent selected-token requests now form one 32-slot resident decode batch, with `721-787` wall generated tok/s depending on tokens/request. | Replace the selected-token harness with the real prompt/token API and bucketed admission queues. |
 | 2026-05-23 | Sprint 287 added bucketed TP/EP admission. | Mixed `32,64` token requests are served as same-length batches instead of rejected, with `32/32` match and zero rejected requests. | Add a prompt/token-compatible diagnostic TP/EP endpoint on top of coalesced bucketed admission. |
 | 2026-05-23 | Sprint 288 added diagnostic `/v1/completions` for TP/EP. | Completion-shaped requests now exercise the real coalesced/bucketed resident decode path and return OpenAI-style envelopes, but prompt prefill/output-head text are still explicit gaps. | Wire real TP/EP output-head/top-token selection, then tokenizer text and prompt prefill. |
+| 2026-05-23 | Sprint 289 added the TP/EP vocab-sharded output-head gate. | Real `output.weight` shards and output controls now produce a global top-1 token across 8 GPUs; the missing piece is final HC from the serving loop. | Carry final HC through the TP/EP token-major loop and call output-head from `/v1/completions`. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

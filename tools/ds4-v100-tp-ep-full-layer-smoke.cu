@@ -430,6 +430,7 @@ struct Options {
     int port = 18082;
     int max_requests = 0;
     int microbatch_wait_us = 5000;
+    bool output_head_gate = false;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -644,6 +645,112 @@ __global__ void bf16_dense_kernel(float *out,
     }
     acc = block_sum_256_f32(acc);
     if (threadIdx.x == 0u) out[(uint64_t)slot * rows + row] = acc;
+}
+
+__global__ void synthetic_hc_kernel(float *hc, uint32_t slots) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t n = (uint64_t)slots * 4ull * (uint64_t)kHidden;
+    if (i >= n) return;
+    const uint32_t col = (uint32_t)(i % kHidden);
+    const uint32_t row = (uint32_t)((i / kHidden) & 3ull);
+    const uint32_t slot = (uint32_t)(i / (4ull * (uint64_t)kHidden));
+    const int m = (int)((slot * 97u + row * 31u + col * 17u) % 257u);
+    hc[i] = ((float)m - 128.0f) * 0.0025f;
+}
+
+__global__ void rms_norm_plain_rows_kernel(float *out,
+                                           const float *in,
+                                           uint32_t cols,
+                                           uint32_t rows,
+                                           float eps) {
+    const uint32_t row = blockIdx.x;
+    if (row >= rows) return;
+    const float *src = in + (uint64_t)row * cols;
+    float *dst = out + (uint64_t)row * cols;
+    float sum = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        const float v = src[c];
+        sum += v * v;
+    }
+    sum = block_sum_256_f32(sum);
+    const float scale = rsqrtf(sum / (float)cols + eps);
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        dst[c] = src[c] * scale;
+    }
+}
+
+__global__ void f32_dense_kernel(float *out,
+                                 const float *weights,
+                                 const float *x,
+                                 uint32_t rows,
+                                 uint32_t cols,
+                                 uint32_t slots) {
+    const uint32_t row = blockIdx.x;
+    const uint32_t slot = blockIdx.y;
+    if (row >= rows || slot >= slots) return;
+    const float *wrow = weights + (uint64_t)row * cols;
+    const float *xrow = x + (uint64_t)slot * cols;
+    float acc = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        acc += wrow[c] * xrow[c];
+    }
+    acc = block_sum_256_f32(acc);
+    if (threadIdx.x == 0u) out[(uint64_t)slot * rows + row] = acc;
+}
+
+__global__ void output_hc_weights_rows_kernel(float *out,
+                                              const float *pre,
+                                              const float *scale,
+                                              const float *base,
+                                              uint32_t rows) {
+    const uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    const uint32_t n = rows * 4u;
+    if (i >= n) return;
+    const uint32_t h = i & 3u;
+    const float z = pre[i] * scale[0] + base[h];
+    out[i] = 1.0f / (1.0f + expf(-z)) + 1.0e-6f;
+}
+
+__global__ void hc_weighted_sum_rows_kernel(float *out,
+                                            const float *hc,
+                                            const float *weights,
+                                            uint32_t slots) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t n = (uint64_t)slots * (uint64_t)kHidden;
+    if (i >= n) return;
+    const uint32_t slot = (uint32_t)(i / kHidden);
+    const uint32_t col = (uint32_t)(i % kHidden);
+    const uint64_t base = (uint64_t)slot * 4ull * (uint64_t)kHidden;
+    const float w0 = weights[(uint64_t)slot * 4ull + 0ull];
+    const float w1 = weights[(uint64_t)slot * 4ull + 1ull];
+    const float w2 = weights[(uint64_t)slot * 4ull + 2ull];
+    const float w3 = weights[(uint64_t)slot * 4ull + 3ull];
+    out[i] = hc[base + col] * w0 +
+             hc[base + (uint64_t)kHidden + col] * w1 +
+             hc[base + 2ull * (uint64_t)kHidden + col] * w2 +
+             hc[base + 3ull * (uint64_t)kHidden + col] * w3;
+}
+
+__global__ void rms_norm_weight_rows_kernel(float *out,
+                                            const float *in,
+                                            const float *weight,
+                                            uint32_t cols,
+                                            uint32_t rows,
+                                            float eps) {
+    const uint32_t row = blockIdx.x;
+    if (row >= rows) return;
+    const float *src = in + (uint64_t)row * cols;
+    float *dst = out + (uint64_t)row * cols;
+    float sum = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        const float v = src[c];
+        sum += v * v;
+    }
+    sum = block_sum_256_f32(sum);
+    const float scale = rsqrtf(sum / (float)cols + eps);
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        dst[c] = src[c] * scale * weight[c];
+    }
 }
 
 __global__ void zero_f32_kernel(float *dst, uint64_t n) {
@@ -926,7 +1033,8 @@ void usage(const char *argv0) {
                  "       [--multi-copy-streams] [--serving-bench]\n"
                  "       [--skip-decode-checksum]\n"
                  "       [--serve-http] [--host ADDR] [--port N] [--max-requests N]\n"
-                 "       [--microbatch-wait-us N]\n",
+                 "       [--microbatch-wait-us N]\n"
+                 "       [--output-head-gate]\n",
                  argv0);
 }
 
@@ -1068,6 +1176,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             if (!val || !parse_int(val, &opt->microbatch_wait_us) ||
                 opt->microbatch_wait_us < 0 || opt->microbatch_wait_us > 1000000) return false;
             ++i;
+        } else if (std::strcmp(arg, "--output-head-gate") == 0) {
+            opt->output_head_gate = true;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -1654,6 +1764,337 @@ int run_bf16_dense_compute_gate(const Options &opt,
 
     stats->compute_ms = worst_ms;
     return stats->pass ? 0 : 3;
+}
+
+bool find_replicated_control_row(const std::vector<ContractRow> &rows,
+                                 const char *tensor,
+                                 ContractRow *out) {
+    for (const ContractRow &r : rows) {
+        if (r.record_type == "replicated_control" && r.tensor_id == tensor) {
+            *out = r;
+            return true;
+        }
+    }
+    return false;
+}
+
+int load_control_f32(const Options &opt,
+                     const std::vector<ContractRow> &rows,
+                     const char *tensor,
+                     size_t elems,
+                     std::vector<float> *out) {
+    ContractRow r;
+    if (!find_replicated_control_row(rows, tensor, &r)) {
+        std::fprintf(stderr, "missing replicated control tensor %s\n", tensor);
+        return 1;
+    }
+    if (r.source_dtype != "f32" || r.bytes_estimate != elems * sizeof(float)) {
+        std::fprintf(stderr, "bad replicated control tensor %s dtype=%s bytes=%llu expected=%zu\n",
+                     tensor, r.source_dtype.c_str(),
+                     (unsigned long long)r.bytes_estimate, elems * sizeof(float));
+        return 2;
+    }
+    out->resize(elems);
+    const std::string path = path_join(opt.pack_dir, r.source_pack_file);
+    if (read_exact_at(path, physical_row_offset(r), out->data(), elems * sizeof(float)) != 0) {
+        return 3;
+    }
+    return 0;
+}
+
+struct OutputHeadGateStats {
+    bool pass = true;
+    int slots = 0;
+    int vocab = 0;
+    int rows_per_gpu = 0;
+    uint64_t output_weight_bytes = 0;
+    uint64_t logits_bytes = 0;
+    double total_ms = 0.0;
+    double projection_ms = 0.0;
+    double projection_kernel_worst_ms = 0.0;
+    double host_reduce_ms = 0.0;
+    uint32_t first_token = UINT32_MAX;
+    float first_logit = 0.0f;
+    uint64_t checksum = 0;
+    int finite_bad = 0;
+};
+
+int run_output_head_gate(const Options &opt,
+                         const std::vector<ContractRow> &rows,
+                         OutputHeadGateStats *stats) {
+    stats->slots = opt.slots;
+
+    std::vector<ContractRow> output_rows;
+    int output_cols = 0;
+    int vocab = 0;
+    if (!select_bf16_dense_rows(rows, "output.weight", &output_rows, &output_cols, &vocab)) {
+        std::fprintf(stderr, "output-head gate failed to select output.weight shards\n");
+        return 1;
+    }
+    if (output_cols != kHidden || vocab <= 0 || vocab % kGpus != 0) {
+        std::fprintf(stderr, "output-head gate invalid output.weight shape cols=%d vocab=%d\n",
+                     output_cols, vocab);
+        return 2;
+    }
+    const int rows_per_gpu = vocab / kGpus;
+    stats->vocab = vocab;
+    stats->rows_per_gpu = rows_per_gpu;
+
+    std::vector<float> hc_head_fn;
+    std::vector<float> hc_head_base;
+    std::vector<float> hc_head_scale;
+    std::vector<float> output_norm;
+    if (load_control_f32(opt, rows, "hc_head_fn", (size_t)4 * 4 * kHidden, &hc_head_fn) ||
+        load_control_f32(opt, rows, "hc_head_base", 4, &hc_head_base) ||
+        load_control_f32(opt, rows, "hc_head_scale", 1, &hc_head_scale) ||
+        load_control_f32(opt, rows, "output_norm.weight", kHidden, &output_norm)) {
+        return 3;
+    }
+
+    const uint64_t hc_elems = (uint64_t)opt.slots * 4ull * (uint64_t)kHidden;
+    const uint64_t embd_elems = (uint64_t)opt.slots * (uint64_t)kHidden;
+    const uint64_t logits_elems = (uint64_t)opt.slots * (uint64_t)rows_per_gpu;
+    const uint64_t output_shard_bytes = (uint64_t)rows_per_gpu * (uint64_t)kHidden *
+                                        sizeof(uint16_t);
+    const auto total_start = std::chrono::steady_clock::now();
+
+    float *d_hc = nullptr;
+    float *d_hc_norm = nullptr;
+    float *d_head_pre = nullptr;
+    float *d_head_weights = nullptr;
+    float *d_embd = nullptr;
+    float *d_embd_norm = nullptr;
+    float *d_head_fn = nullptr;
+    float *d_head_base = nullptr;
+    float *d_head_scale = nullptr;
+    float *d_output_norm = nullptr;
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    CHECK_CUDA(cudaMalloc(&d_hc, (size_t)hc_elems * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_hc_norm, (size_t)hc_elems * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_head_pre, (size_t)opt.slots * 4 * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_head_weights, (size_t)opt.slots * 4 * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_embd, (size_t)embd_elems * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_embd_norm, (size_t)embd_elems * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_head_fn, hc_head_fn.size() * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_head_base, hc_head_base.size() * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_head_scale, hc_head_scale.size() * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_output_norm, output_norm.size() * sizeof(float)));
+    CHECK_CUDA(cudaMemcpy(d_head_fn, hc_head_fn.data(), hc_head_fn.size() * sizeof(float),
+                          cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_head_base, hc_head_base.data(), hc_head_base.size() * sizeof(float),
+                          cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_head_scale, hc_head_scale.data(), hc_head_scale.size() * sizeof(float),
+                          cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_output_norm, output_norm.data(), output_norm.size() * sizeof(float),
+                          cudaMemcpyHostToDevice));
+    synthetic_hc_kernel<<<(unsigned int)((hc_elems + 255) / 256), 256>>>(d_hc, opt.slots);
+    rms_norm_plain_rows_kernel<<<(unsigned int)opt.slots, 256>>>(
+        d_hc_norm, d_hc, 4u * (uint32_t)kHidden, (uint32_t)opt.slots, 1.0e-6f);
+    const dim3 head_grid(4u, (unsigned int)opt.slots, 1u);
+    f32_dense_kernel<<<head_grid, 256>>>(d_head_pre, d_head_fn, d_hc_norm,
+                                         4u, 4u * (uint32_t)kHidden,
+                                         (uint32_t)opt.slots);
+    output_hc_weights_rows_kernel<<<(unsigned int)(((uint64_t)opt.slots * 4ull + 255) / 256), 256>>>(
+        d_head_weights, d_head_pre, d_head_scale, d_head_base, (uint32_t)opt.slots);
+    hc_weighted_sum_rows_kernel<<<(unsigned int)((embd_elems + 255) / 256), 256>>>(
+        d_embd, d_hc, d_head_weights, (uint32_t)opt.slots);
+    rms_norm_weight_rows_kernel<<<(unsigned int)opt.slots, 256>>>(
+        d_embd_norm, d_embd, d_output_norm, (uint32_t)kHidden, (uint32_t)opt.slots, 1.0e-6f);
+    CHECK_CUDA(cudaGetLastError());
+    CHECK_CUDA(cudaDeviceSynchronize());
+
+    std::vector<float> h_embd_norm((size_t)embd_elems);
+    CHECK_CUDA(cudaMemcpy(h_embd_norm.data(), d_embd_norm,
+                          h_embd_norm.size() * sizeof(float), cudaMemcpyDeviceToHost));
+
+    std::vector<std::vector<float>> host_logits((size_t)kGpus);
+    std::vector<uint16_t> host_w;
+    std::vector<uint32_t> best_token((size_t)opt.slots, UINT32_MAX);
+    std::vector<float> best_logit((size_t)opt.slots, -std::numeric_limits<float>::max());
+
+    const auto projection_start = std::chrono::steady_clock::now();
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        const ContractRow &r = output_rows[(size_t)gpu];
+        host_w.resize((size_t)rows_per_gpu * (size_t)kHidden);
+        host_logits[(size_t)gpu].resize((size_t)logits_elems);
+        const std::string path = path_join(opt.pack_dir, r.source_pack_file);
+        if (read_exact_at(path, physical_row_offset(r), host_w.data(),
+                          (size_t)output_shard_bytes) != 0) {
+            stats->pass = false;
+            return 4;
+        }
+        stats->output_weight_bytes += output_shard_bytes;
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        uint16_t *d_w = nullptr;
+        __half *d_w_half = nullptr;
+        float *d_x = nullptr;
+        __half *d_x_half = nullptr;
+        float *d_logits = nullptr;
+        cublasHandle_t blas = nullptr;
+        cudaEvent_t kernel_start = nullptr;
+        cudaEvent_t kernel_stop = nullptr;
+        CHECK_CUDA(cudaMalloc(&d_w, (size_t)output_shard_bytes));
+        CHECK_CUDA(cudaMalloc(&d_x, h_embd_norm.size() * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&d_logits, (size_t)logits_elems * sizeof(float)));
+        CHECK_CUDA(cudaMemcpy(d_w, host_w.data(), (size_t)output_shard_bytes,
+                              cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(d_x, h_embd_norm.data(), h_embd_norm.size() * sizeof(float),
+                              cudaMemcpyHostToDevice));
+        if (opt.dense_f16_cublas_compose) {
+            const uint64_t w_elems = (uint64_t)rows_per_gpu * (uint64_t)kHidden;
+            const uint64_t x_elems = (uint64_t)opt.slots * (uint64_t)kHidden;
+            CHECK_CUDA(cudaMalloc(&d_w_half, (size_t)w_elems * sizeof(__half)));
+            CHECK_CUDA(cudaMalloc(&d_x_half, (size_t)x_elems * sizeof(__half)));
+            bf16_to_half_kernel<<<(unsigned int)((w_elems + 255) / 256), 256>>>(
+                d_w_half, d_w, w_elems);
+            cast_f32_to_half_kernel<<<(unsigned int)((x_elems + 255) / 256), 256>>>(
+                d_x_half, d_x, x_elems);
+            CHECK_CUDA(cudaGetLastError());
+            cublasStatus_t st = cublasCreate(&blas);
+            if (st != CUBLAS_STATUS_SUCCESS) {
+                std::fprintf(stderr, "output-head cublasCreate failed gpu=%d status=%d\n",
+                             gpu, (int)st);
+                return 5;
+            }
+            (void)cublasSetMathMode(blas, CUBLAS_TENSOR_OP_MATH);
+            const float alpha = 1.0f;
+            const float beta = 0.0f;
+            CHECK_CUDA(cudaEventCreate(&kernel_start));
+            CHECK_CUDA(cudaEventCreate(&kernel_stop));
+            CHECK_CUDA(cudaEventRecord(kernel_start));
+            st = cublasGemmEx(blas,
+                              CUBLAS_OP_T,
+                              CUBLAS_OP_N,
+                              rows_per_gpu,
+                              opt.slots,
+                              kHidden,
+                              &alpha,
+                              d_w_half,
+                              CUDA_R_16F,
+                              kHidden,
+                              d_x_half,
+                              CUDA_R_16F,
+                              kHidden,
+                              &beta,
+                              d_logits,
+                              CUDA_R_32F,
+                              rows_per_gpu,
+                              CUDA_R_32F,
+                              CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+            if (st != CUBLAS_STATUS_SUCCESS) {
+                std::fprintf(stderr, "output-head cublasGemmEx failed gpu=%d status=%d\n",
+                             gpu, (int)st);
+                return 6;
+            }
+            CHECK_CUDA(cudaEventRecord(kernel_stop));
+        } else {
+            const dim3 grid((unsigned int)rows_per_gpu, (unsigned int)opt.slots, 1u);
+            CHECK_CUDA(cudaEventCreate(&kernel_start));
+            CHECK_CUDA(cudaEventCreate(&kernel_stop));
+            CHECK_CUDA(cudaEventRecord(kernel_start));
+            bf16_dense_kernel<<<grid, 256>>>(d_logits, d_w, d_x,
+                                             (uint32_t)rows_per_gpu,
+                                             (uint32_t)kHidden,
+                                             (uint32_t)kHidden,
+                                             (uint32_t)opt.slots);
+            CHECK_CUDA(cudaEventRecord(kernel_stop));
+        }
+        CHECK_CUDA(cudaGetLastError());
+        CHECK_CUDA(cudaDeviceSynchronize());
+        float kernel_ms = 0.0f;
+        CHECK_CUDA(cudaEventElapsedTime(&kernel_ms, kernel_start, kernel_stop));
+        stats->projection_kernel_worst_ms =
+            std::max(stats->projection_kernel_worst_ms, (double)kernel_ms);
+        CHECK_CUDA(cudaMemcpy(host_logits[(size_t)gpu].data(), d_logits,
+                              (size_t)logits_elems * sizeof(float),
+                              cudaMemcpyDeviceToHost));
+        CHECK_CUDA(cudaEventDestroy(kernel_stop));
+        CHECK_CUDA(cudaEventDestroy(kernel_start));
+        if (blas) (void)cublasDestroy(blas);
+        CHECK_CUDA(cudaFree(d_logits));
+        if (d_x_half) CHECK_CUDA(cudaFree(d_x_half));
+        CHECK_CUDA(cudaFree(d_x));
+        if (d_w_half) CHECK_CUDA(cudaFree(d_w_half));
+        CHECK_CUDA(cudaFree(d_w));
+    }
+    const auto projection_stop = std::chrono::steady_clock::now();
+    stats->projection_ms =
+        std::chrono::duration<double, std::milli>(projection_stop - projection_start).count();
+    stats->logits_bytes = logits_elems * sizeof(float) * kGpus;
+
+    const auto reduce_start = std::chrono::steady_clock::now();
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        const int shard_index = output_rows[(size_t)gpu].shard_index >= 0
+            ? output_rows[(size_t)gpu].shard_index
+            : gpu;
+        for (int slot = 0; slot < opt.slots; ++slot) {
+            const float *row = host_logits[(size_t)gpu].data() +
+                               (uint64_t)slot * (uint64_t)rows_per_gpu;
+            for (int v = 0; v < rows_per_gpu; ++v) {
+                const float logit = row[v];
+                if (!std::isfinite(logit)) {
+                    stats->finite_bad++;
+                    stats->pass = false;
+                    continue;
+                }
+                if (logit > best_logit[(size_t)slot]) {
+                    best_logit[(size_t)slot] = logit;
+                    best_token[(size_t)slot] =
+                        (uint32_t)(shard_index * rows_per_gpu + v);
+                }
+            }
+        }
+    }
+    const auto reduce_stop = std::chrono::steady_clock::now();
+    stats->host_reduce_ms =
+        std::chrono::duration<double, std::milli>(reduce_stop - reduce_start).count();
+
+    for (int slot = 0; slot < opt.slots; ++slot) {
+        if (best_token[(size_t)slot] >= (uint32_t)vocab ||
+            !std::isfinite(best_logit[(size_t)slot])) {
+            stats->pass = false;
+        }
+        uint32_t bits = 0;
+        std::memcpy(&bits, &best_logit[(size_t)slot], sizeof(bits));
+        stats->checksum ^= (uint64_t)best_token[(size_t)slot] * 1000003ull +
+                           (uint64_t)bits + (uint64_t)(slot + 1) * 7907ull;
+    }
+    stats->first_token = best_token.empty() ? UINT32_MAX : best_token[0];
+    stats->first_logit = best_logit.empty() ? 0.0f : best_logit[0];
+    const auto total_stop = std::chrono::steady_clock::now();
+    stats->total_ms =
+        std::chrono::duration<double, std::milli>(total_stop - total_start).count();
+    if (stats->checksum == 0 || stats->finite_bad != 0) stats->pass = false;
+
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    CHECK_CUDA(cudaFree(d_output_norm));
+    CHECK_CUDA(cudaFree(d_head_scale));
+    CHECK_CUDA(cudaFree(d_head_base));
+    CHECK_CUDA(cudaFree(d_head_fn));
+    CHECK_CUDA(cudaFree(d_embd_norm));
+    CHECK_CUDA(cudaFree(d_embd));
+    CHECK_CUDA(cudaFree(d_head_weights));
+    CHECK_CUDA(cudaFree(d_head_pre));
+    CHECK_CUDA(cudaFree(d_hc_norm));
+    CHECK_CUDA(cudaFree(d_hc));
+
+    std::printf("tp_ep_output_head_gate\tslots\t%d\tvocab\t%d\trows_per_gpu\t%d\t"
+                "projection_kernel\t%s\t"
+                "output_weight_bytes\t%llu\tlogits_bytes\t%llu\t"
+                "projection_ms\t%.6f\tprojection_kernel_worst_ms\t%.6f\t"
+                "host_reduce_ms\t%.6f\ttotal_ms\t%.6f\t"
+                "first_token\t%u\tfirst_logit\t%.9f\tfinite_bad\t%d\t"
+                "checksum\t%llu\t%s\n",
+                stats->slots, stats->vocab, stats->rows_per_gpu,
+                opt.dense_f16_cublas_compose ? "bf16_to_fp16_cublas" : "bf16_scalar",
+                (unsigned long long)stats->output_weight_bytes,
+                (unsigned long long)stats->logits_bytes,
+                stats->projection_ms, stats->projection_kernel_worst_ms,
+                stats->host_reduce_ms, stats->total_ms,
+                stats->first_token, stats->first_logit, stats->finite_bad,
+                (unsigned long long)stats->checksum,
+                stats->pass ? "PASS" : "FAIL");
+    return stats->pass ? 0 : 5;
 }
 
 void free_device_dense_outputs(DeviceDenseOutputs &out, const Options &opt) {
@@ -4860,6 +5301,19 @@ int main(int argc, char **argv) {
     }
     if (opt.token_major_all_layers && opt.all_layers && !opt.tp_runtime_explicit) {
         opt.share_tp_runtime = true;
+    }
+
+    if (opt.output_head_gate) {
+        std::vector<ContractRow> all_rows;
+        LayerStats all_stats;
+        if (parse_contract(opt.contract_path, -1, &all_rows, &all_stats) != 0 ||
+            all_stats.bad_rows != 0) {
+            std::fprintf(stderr, "output-head gate contract parse failed bad_rows=%llu\n",
+                         (unsigned long long)all_stats.bad_rows);
+            return 2;
+        }
+        OutputHeadGateStats output_head_stats;
+        return run_output_head_gate(opt, all_rows, &output_head_stats);
     }
 
     if (!opt.all_layers) {
