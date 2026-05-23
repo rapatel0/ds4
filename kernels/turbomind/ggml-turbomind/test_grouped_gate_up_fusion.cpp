@@ -616,6 +616,7 @@ static int run_case(void * lib, const Case & c) {
     __half * d_down = nullptr;
     __half * d_down_probe = nullptr;
     float * d_down_reduce = nullptr;
+    float * d_ffn_reduce = nullptr;
     int * d_sorted_pairs = nullptr;
     float * d_route_weights = nullptr;
     __half * d_tp_gated0 = nullptr;
@@ -637,6 +638,7 @@ static int run_case(void * lib, const Case & c) {
     }
     if (run_down_reduce) {
         CHECK_CUDA(cudaMalloc(&d_down_reduce, (size_t) logical_tokens * K * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&d_ffn_reduce, (size_t) logical_tokens * K * sizeof(float)));
         CHECK_CUDA(cudaMalloc(&d_sorted_pairs, (size_t) total_tokens * sizeof(int)));
         CHECK_CUDA(cudaMalloc(&d_route_weights, (size_t) total_tokens * sizeof(float)));
         std::vector<int> h_sorted_pairs((size_t) total_tokens);
@@ -677,6 +679,7 @@ static int run_case(void * lib, const Case & c) {
     }
     if (run_down_reduce) {
         CHECK_CUDA(cudaMemset(d_down_reduce, 0, (size_t) logical_tokens * K * sizeof(float)));
+        CHECK_CUDA(cudaMemset(d_ffn_reduce, 0, (size_t) logical_tokens * K * sizeof(float)));
     }
     if (run_tp_split) {
         CHECK_CUDA(cudaMemset(d_tp_gated0, 0, (size_t) total_tokens * tp_N * sizeof(__half)));
@@ -770,6 +773,20 @@ static int run_case(void * lib, const Case & c) {
                 fprintf(stderr, "[gate_up_fusion] down reduce warmup rc=%d\n", rc);
                 return 7;
             }
+            CHECK_CUDA(cudaMemsetAsync(d_ffn_reduce, 0, (size_t) logical_tokens * K * sizeof(float), nullptr));
+            rc = down_reduce6(d_gated, d_offsets, num_experts, total_tokens,
+                              (const void * const *) down_packed.d_w_table,
+                              (const void * const *) down_packed.d_s_table,
+                              down_packed.k_pack,
+                              d_ffn_reduce,
+                              d_sorted_pairs,
+                              d_route_weights,
+                              routes_per_token,
+                              nullptr);
+            if (rc != 0) {
+                fprintf(stderr, "[gate_up_fusion] ffn down reduce warmup rc=%d\n", rc);
+                return 7;
+            }
         }
         if (run_tp_split) {
             rc = mmgs(d_A, nullptr, d_offsets, num_experts, total_tokens,
@@ -826,6 +843,10 @@ static int run_case(void * lib, const Case & c) {
     cudaEvent_t down_probe_stop = nullptr;
     cudaEvent_t down_reduce_start = nullptr;
     cudaEvent_t down_reduce_stop = nullptr;
+    cudaEvent_t ffn_reduce_start = nullptr;
+    cudaEvent_t ffn_reduce_stop = nullptr;
+    cudaEvent_t ffn_graph_start = nullptr;
+    cudaEvent_t ffn_graph_stop = nullptr;
     cudaEvent_t route_clear_start = nullptr;
     cudaEvent_t route_clear_stop = nullptr;
     cudaEvent_t tp_half0_start = nullptr;
@@ -853,6 +874,10 @@ static int run_case(void * lib, const Case & c) {
     if (run_down_reduce) {
         CHECK_CUDA(cudaEventCreate(&down_reduce_start));
         CHECK_CUDA(cudaEventCreate(&down_reduce_stop));
+        CHECK_CUDA(cudaEventCreate(&ffn_reduce_start));
+        CHECK_CUDA(cudaEventCreate(&ffn_reduce_stop));
+        CHECK_CUDA(cudaEventCreate(&ffn_graph_start));
+        CHECK_CUDA(cudaEventCreate(&ffn_graph_stop));
         CHECK_CUDA(cudaEventCreate(&route_clear_start));
         CHECK_CUDA(cudaEventCreate(&route_clear_stop));
     }
@@ -988,6 +1013,93 @@ static int run_case(void * lib, const Case & c) {
         }
         CHECK_CUDA(cudaEventRecord(down_reduce_stop, nullptr));
         CHECK_CUDA(cudaEventSynchronize(down_reduce_stop));
+
+        CHECK_CUDA(cudaEventRecord(ffn_reduce_start, nullptr));
+        for (int iter = 0; iter < bench_iters; ++iter) {
+            rc = mmgs(d_A, nullptr, d_offsets, num_experts, total_tokens,
+                      (const void * const *) gated_packed.d_w_table,
+                      (const void * const *) gated_packed.d_s_table,
+                      ggml_type, fused_N, K, group_size, gated_packed.k_pack, d_gated, nullptr);
+            if (rc != 0) {
+                fprintf(stderr, "[gate_up_fusion] ffn gated rc=%d\n", rc);
+                return 10;
+            }
+            CHECK_CUDA(cudaMemsetAsync(d_ffn_reduce, 0, (size_t) logical_tokens * K * sizeof(float), nullptr));
+            rc = down_reduce6(d_gated, d_offsets, num_experts, total_tokens,
+                              (const void * const *) down_packed.d_w_table,
+                              (const void * const *) down_packed.d_s_table,
+                              down_packed.k_pack,
+                              d_ffn_reduce,
+                              d_sorted_pairs,
+                              d_route_weights,
+                              routes_per_token,
+                              nullptr);
+            if (rc != 0) {
+                fprintf(stderr, "[gate_up_fusion] ffn down reduce rc=%d\n", rc);
+                return 10;
+            }
+        }
+        CHECK_CUDA(cudaEventRecord(ffn_reduce_stop, nullptr));
+        CHECK_CUDA(cudaEventSynchronize(ffn_reduce_stop));
+    }
+
+    float ffn_graph_ms = 0.0f;
+    int ffn_graph_status = 0;
+    if (run_down_reduce && env_flag("DS4_TURBOMIND_GATE_UP_GRAPH_FFN", true)) {
+        cudaStream_t graph_stream = nullptr;
+        cudaGraph_t graph = nullptr;
+        cudaGraphExec_t graph_exec = nullptr;
+        cudaError_t stream_rc = cudaStreamCreateWithFlags(&graph_stream, cudaStreamNonBlocking);
+        cudaError_t cap_begin = stream_rc == cudaSuccess
+            ? cudaStreamBeginCapture(graph_stream, cudaStreamCaptureModeGlobal)
+            : stream_rc;
+        if (cap_begin != cudaSuccess) {
+            ffn_graph_status = (int)cap_begin;
+            (void)cudaGetLastError();
+        } else {
+            rc = mmgs(d_A, nullptr, d_offsets, num_experts, total_tokens,
+                      (const void * const *) gated_packed.d_w_table,
+                      (const void * const *) gated_packed.d_s_table,
+                      ggml_type, fused_N, K, group_size, gated_packed.k_pack, d_gated, graph_stream);
+            if (rc == 0) {
+                CHECK_CUDA(cudaMemsetAsync(d_ffn_reduce, 0, (size_t) logical_tokens * K * sizeof(float), graph_stream));
+                rc = down_reduce6(d_gated, d_offsets, num_experts, total_tokens,
+                                  (const void * const *) down_packed.d_w_table,
+                                  (const void * const *) down_packed.d_s_table,
+                                  down_packed.k_pack,
+                                  d_ffn_reduce,
+                                  d_sorted_pairs,
+                                  d_route_weights,
+                                  routes_per_token,
+                                  graph_stream);
+            }
+            cudaError_t cap_end = cudaStreamEndCapture(graph_stream, &graph);
+            if (rc != 0 || cap_end != cudaSuccess || !graph) {
+                ffn_graph_status = rc != 0 ? rc : (int)cap_end;
+                (void)cudaGetLastError();
+            } else {
+                cudaError_t inst = cudaGraphInstantiate(&graph_exec, graph, nullptr, nullptr, 0);
+                if (inst != cudaSuccess || !graph_exec) {
+                    ffn_graph_status = (int)inst;
+                    (void)cudaGetLastError();
+                } else {
+                    for (int iter = 0; iter < warmup_iters; ++iter) {
+                        CHECK_CUDA(cudaGraphLaunch(graph_exec, graph_stream));
+                    }
+                    CHECK_CUDA(cudaStreamSynchronize(graph_stream));
+                    CHECK_CUDA(cudaEventRecord(ffn_graph_start, graph_stream));
+                    for (int iter = 0; iter < bench_iters; ++iter) {
+                        CHECK_CUDA(cudaGraphLaunch(graph_exec, graph_stream));
+                    }
+                    CHECK_CUDA(cudaEventRecord(ffn_graph_stop, graph_stream));
+                    CHECK_CUDA(cudaEventSynchronize(ffn_graph_stop));
+                    ffn_graph_ms = elapsed_ms(ffn_graph_start, ffn_graph_stop) / (float) bench_iters;
+                }
+            }
+        }
+        if (graph_exec) CHECK_CUDA(cudaGraphExecDestroy(graph_exec));
+        if (graph) CHECK_CUDA(cudaGraphDestroy(graph));
+        if (graph_stream) CHECK_CUDA(cudaStreamDestroy(graph_stream));
     }
 
     if (run_tp_split) {
@@ -1081,6 +1193,8 @@ static int run_case(void * lib, const Case & c) {
         run_down_reduce ? elapsed_ms(route_clear_start, route_clear_stop) / (float) bench_iters : 0.0f;
     const float down_reduce_ms =
         run_down_reduce ? elapsed_ms(down_reduce_start, down_reduce_stop) / (float) bench_iters : 0.0f;
+    const float ffn_reduce_ms =
+        run_down_reduce ? elapsed_ms(ffn_reduce_start, ffn_reduce_stop) / (float) bench_iters : 0.0f;
     const float tp_half0_ms =
         run_tp_split ? elapsed_ms(tp_half0_start, tp_half0_stop) / (float) bench_iters : 0.0f;
     const float tp_half1_ms =
@@ -1106,6 +1220,10 @@ static int run_case(void * lib, const Case & c) {
     if (run_down_reduce) {
         CHECK_CUDA(cudaEventDestroy(down_reduce_start));
         CHECK_CUDA(cudaEventDestroy(down_reduce_stop));
+        CHECK_CUDA(cudaEventDestroy(ffn_reduce_start));
+        CHECK_CUDA(cudaEventDestroy(ffn_reduce_stop));
+        CHECK_CUDA(cudaEventDestroy(ffn_graph_start));
+        CHECK_CUDA(cudaEventDestroy(ffn_graph_stop));
         CHECK_CUDA(cudaEventDestroy(route_clear_start));
         CHECK_CUDA(cudaEventDestroy(route_clear_stop));
     }
@@ -1262,6 +1380,21 @@ static int run_case(void * lib, const Case & c) {
             down_probe_max_abs, down_probe_rel, down_probe_bad, h_down.size(),
             down_reduce_max_abs, down_reduce_rel, down_reduce_bad, h_down_reduce.size(),
             gate_packed.k_pack, fused_packed.k_pack, gated_packed.k_pack, down_packed.k_pack);
+    if (run_down_reduce) {
+        const float ffn_ungraphed_sum_ms = gated_ms + down_reduce_ms;
+        const float ffn_graph_speedup =
+            ffn_graph_ms > 0.0f ? ffn_reduce_ms / ffn_graph_ms : 0.0f;
+        fprintf(stderr,
+                "[gate_up_fusion tpa=%d] ffn_reduce_sequence gated_plus_down_reduce_sum_ms=%.4f ffn_reduce_ms=%.4f ffn_graph_ms=%.4f ffn_graph_speedup=%.3fx ffn_graph_status=%d logical_tokens=%d routes_per_token=%d\n",
+                c.tokens_per_active,
+                ffn_ungraphed_sum_ms,
+                ffn_reduce_ms,
+                ffn_graph_ms,
+                ffn_graph_speedup,
+                ffn_graph_status,
+                logical_tokens,
+                routes_per_token);
+    }
     if (run_tp_split) {
         const float full_routed_ms = gated_ms + down_ms;
         const float tp2_ideal_compute_ms = std::max(tp_half0_ms, tp_half1_ms);
@@ -1307,6 +1440,7 @@ static int run_case(void * lib, const Case & c) {
     CHECK_CUDA(cudaFree(d_down));
     if (d_down_probe) CHECK_CUDA(cudaFree(d_down_probe));
     if (d_down_reduce) CHECK_CUDA(cudaFree(d_down_reduce));
+    if (d_ffn_reduce) CHECK_CUDA(cudaFree(d_ffn_reduce));
     if (d_sorted_pairs) CHECK_CUDA(cudaFree(d_sorted_pairs));
     if (d_route_weights) CHECK_CUDA(cudaFree(d_route_weights));
     if (d_tp_gated0) CHECK_CUDA(cudaFree(d_tp_gated0));
