@@ -276,6 +276,12 @@ struct LayerRunSummary {
     uint64_t decode_checksum = 0;
 };
 
+struct SharedApi {
+    void *lib = nullptr;
+    Api api = {};
+    bool initialized = false;
+};
+
 struct DecodeLoopStats {
     bool enabled = false;
     bool pass = true;
@@ -1977,6 +1983,33 @@ void load_api(void *lib, Api *api) {
     }
 }
 
+int open_shared_api(const Options &opt, SharedApi *shared) {
+    shared->lib = dlopen(opt.lib_path, RTLD_LAZY | RTLD_LOCAL);
+    if (!shared->lib) {
+        std::fprintf(stderr, "dlopen failed for %s: %s\n", opt.lib_path, dlerror());
+        return 1;
+    }
+    load_api(shared->lib, &shared->api);
+    for (int p = 0; p < kGpus; ++p) {
+        if (shared->api.init(opt.devices[p]) != 0) {
+            std::fprintf(stderr, "ggml_turbomind_init failed on device %d\n", opt.devices[p]);
+            if (shared->api.shutdown) shared->api.shutdown();
+            dlclose(shared->lib);
+            *shared = SharedApi{};
+            return 2;
+        }
+    }
+    shared->initialized = true;
+    return 0;
+}
+
+void close_shared_api(SharedApi *shared) {
+    if (!shared || !shared->lib) return;
+    if (shared->initialized && shared->api.shutdown) shared->api.shutdown();
+    dlclose(shared->lib);
+    *shared = SharedApi{};
+}
+
 void free_packed(PackedExperts &p) {
     for (void *v : p.d_w_active) {
         if (v) CHECK_CUDA(cudaFree(v));
@@ -2543,7 +2576,8 @@ int run_decode_loop(const Options &opt,
 
 int run_layer(const Options &opt,
               LayerRunSummary *summary,
-              const DenseF16Cache *shared_dense_f16_cache) {
+              const DenseF16Cache *shared_dense_f16_cache,
+              const SharedApi *shared_api) {
     std::vector<ContractRow> rows;
     LayerStats layer_stats;
     if (parse_contract(opt.contract_path, opt.layer, &rows, &layer_stats) != 0 ||
@@ -2706,14 +2740,21 @@ int run_layer(const Options &opt,
     const double dense_kv_ms =
         std::chrono::duration<double, std::milli>(kv_stop - kv_start).count();
 
-    void *lib = dlopen(opt.lib_path, RTLD_LAZY | RTLD_LOCAL);
-    if (!lib) {
-        std::fprintf(stderr, "dlopen failed for %s: %s\n", opt.lib_path, dlerror());
-        ds4_v100_tp_runtime_close(rt);
-        return 6;
+    void *lib = nullptr;
+    Api local_api;
+    const Api *api = nullptr;
+    if (shared_api) {
+        api = &shared_api->api;
+    } else {
+        lib = dlopen(opt.lib_path, RTLD_LAZY | RTLD_LOCAL);
+        if (!lib) {
+            std::fprintf(stderr, "dlopen failed for %s: %s\n", opt.lib_path, dlerror());
+            ds4_v100_tp_runtime_close(rt);
+            return 6;
+        }
+        load_api(lib, &local_api);
+        api = &local_api;
     }
-    Api api;
-    load_api(lib, &api);
 
     RankState ranks[kGpus];
     int aggregate_routes = 0;
@@ -2726,8 +2767,12 @@ int run_layer(const Options &opt,
         r.rank = p;
         r.device = opt.devices[p];
         CHECK_CUDA(cudaSetDevice(r.device));
-        if (api.init(r.device) != 0) {
+        if (!shared_api && api->init(r.device) != 0) {
             std::fprintf(stderr, "ggml_turbomind_init failed on device %d\n", r.device);
+            if (!shared_api) {
+                api->shutdown();
+                dlclose(lib);
+            }
             ds4_v100_tp_runtime_close(rt);
             return 7;
         }
@@ -2778,7 +2823,7 @@ int run_layer(const Options &opt,
     if (!opt.skip_predecode_probes) {
         for (int i = 0; i < opt.warmup; ++i) {
             for (int p = 0; p < kGpus; ++p) {
-                if (run_gate(ranks[p], api) != 0 || run_down(ranks[p], api) != 0) {
+                if (run_gate(ranks[p], *api) != 0 || run_down(ranks[p], *api) != 0) {
                     ds4_v100_tp_runtime_close(rt);
                     return 9;
                 }
@@ -2795,7 +2840,7 @@ int run_layer(const Options &opt,
         }
         for (int i = 0; i < opt.iters; ++i) {
             for (int p = 0; p < kGpus; ++p) {
-                if (run_gate(ranks[p], api) != 0) return 10;
+                if (run_gate(ranks[p], *api) != 0) return 10;
             }
         }
         for (int p = 0; p < kGpus; ++p) {
@@ -2804,7 +2849,7 @@ int run_layer(const Options &opt,
         }
         for (int i = 0; i < opt.iters; ++i) {
             for (int p = 0; p < kGpus; ++p) {
-                if (run_down(ranks[p], api) != 0) return 11;
+                if (run_down(ranks[p], *api) != 0) return 11;
             }
         }
         for (int p = 0; p < kGpus; ++p) {
@@ -2848,7 +2893,7 @@ int run_layer(const Options &opt,
     int repeat_nan = 0;
     if (!opt.skip_predecode_probes) {
         for (int p = 0; p < kGpus; ++p) {
-            if (check_repeat(ranks[p], api, &repeat_max_abs, &repeat_bad, &repeat_nan) != 0) {
+            if (check_repeat(ranks[p], *api, &repeat_max_abs, &repeat_bad, &repeat_nan) != 0) {
                 ds4_v100_tp_runtime_close(rt);
                 return 12;
             }
@@ -2884,7 +2929,7 @@ int run_layer(const Options &opt,
     }
 
     DecodeLoopStats decode_loop;
-    const int decode_rc = run_decode_loop(opt, rows, ranks, api, dense_f16_cache, &decode_loop);
+    const int decode_rc = run_decode_loop(opt, rows, ranks, *api, dense_f16_cache, &decode_loop);
     if (decode_loop.enabled) {
         std::printf("tp_ep_decode_loop\tsteps\t%d\tslots\t%d\tslot_steps\t%llu\t"
                     "total_ms\t%.6f\tms_per_step\t%.6f\tslot_step_tok_s\t%.6f\t"
@@ -3110,8 +3155,10 @@ int run_layer(const Options &opt,
         CHECK_CUDA(cudaEventDestroy(r.stop));
         CHECK_CUDA(cudaStreamDestroy(r.stream));
     }
-    api.shutdown();
-    dlclose(lib);
+    if (!shared_api) {
+        api->shutdown();
+        dlclose(lib);
+    }
     ds4_v100_tp_runtime_close(rt);
     if (!shared_dense_f16_cache) free_dense_f16_cache(local_dense_f16_cache, opt);
     return pass ? 0 : 1;
@@ -3125,7 +3172,7 @@ int main(int argc, char **argv) {
     }
 
     if (!opt.all_layers) {
-        return run_layer(opt, nullptr, nullptr);
+        return run_layer(opt, nullptr, nullptr, nullptr);
     }
 
     DenseF16Cache all_layer_dense_f16_cache;
@@ -3160,6 +3207,15 @@ int main(int argc, char **argv) {
                     cache_ms);
     }
 
+    SharedApi shared_api;
+    if (open_shared_api(opt, &shared_api) != 0) {
+        if (shared_dense_f16_cache) {
+            free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+        }
+        return 6;
+    }
+    std::printf("tp_ep_all_layer_turbomind_api_shared\tdevices\t%d\tPASS\n", kGpus);
+
     int pass_layers = 0;
     double sum_decode_ms = 0.0;
     double sum_ep_ms = 0.0;
@@ -3171,7 +3227,7 @@ int main(int argc, char **argv) {
         Options layer_opt = opt;
         layer_opt.layer = layer;
         LayerRunSummary s;
-        const int rc = run_layer(layer_opt, &s, shared_dense_f16_cache);
+        const int rc = run_layer(layer_opt, &s, shared_dense_f16_cache, &shared_api);
         std::printf("tp_ep_all_layer_item\tlayer\t%d\tratio\t%d\t"
                     "total_rows\t%llu\tdense_rows\t%llu\tcontrol_rows\t%llu\t"
                     "expert_rows\t%llu\tkv_rows\t%llu\tcomp_rows\t%llu\t"
@@ -3204,8 +3260,12 @@ int main(int argc, char **argv) {
             const double wall_ms =
                 std::chrono::duration<double, std::milli>(stop - start).count();
             std::printf("tp_ep_all_layer_scaffold\tlayers\t43\tpass_layers\t%d\t"
-                        "failed_layer\t%d\tdescriptor_checks\t%d\twall_ms\t%.6f\tFAIL\n",
-                        pass_layers, layer, opt.skip_descriptor_checks ? 0 : 1, wall_ms);
+                        "failed_layer\t%d\tdescriptor_checks\t%d\tpredecode_probes\t%d\t"
+                        "shared_api\t%d\twall_ms\t%.6f\tFAIL\n",
+                        pass_layers, layer, opt.skip_descriptor_checks ? 0 : 1,
+                        opt.skip_predecode_probes ? 0 : 1, shared_api.initialized ? 1 : 0,
+                        wall_ms);
+            close_shared_api(&shared_api);
             if (shared_dense_f16_cache) {
                 free_dense_f16_cache(all_layer_dense_f16_cache, opt);
             }
@@ -3220,15 +3280,17 @@ int main(int argc, char **argv) {
         : 0.0;
     std::printf("tp_ep_all_layer_scaffold\tlayers\t43\tpass_layers\t%d\t"
                 "slots\t%d\tctx\t262144\tdecode_steps_per_layer\t%d\t"
-                "descriptor_checks\t%d\tpredecode_probes\t%d\t"
+                "descriptor_checks\t%d\tpredecode_probes\t%d\tshared_api\t%d\t"
                 "sum_decode_ms_per_token\t%.6f\tprojected_slot_step_tok_s\t%.6f\t"
                 "sum_ep_ms\t%.6f\tsum_dense_ms\t%.6f\tsum_compose_ms\t%.6f\t"
                 "wall_ms\t%.6f\tchecksum\t%llu\tPASS\n",
                 pass_layers, opt.slots, opt.decode_steps,
                 opt.skip_descriptor_checks ? 0 : 1,
                 opt.skip_predecode_probes ? 0 : 1,
+                shared_api.initialized ? 1 : 0,
                 sum_decode_ms, slot_step_tok_s, sum_ep_ms, sum_dense_ms,
                 sum_compose_ms, wall_ms, (unsigned long long)checksum);
+    close_shared_api(&shared_api);
     if (shared_dense_f16_cache) {
         free_dense_f16_cache(all_layer_dense_f16_cache, opt);
     }

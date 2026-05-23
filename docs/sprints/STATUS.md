@@ -4,16 +4,16 @@ Last updated: 2026-05-23
 
 ## Topline
 
-Current TP/EP implementation status: Sprint 254 added an opt-in
-`--skip-predecode-probes` benchmark mode after strict validation. With shared
-dense cache, descriptor checks off, predecode probes off, and no one-shot
-compose validation, the separate TP/EP all-layer smoke passes all `43`
-transformer layers at `32` slots / `256K`, MTP off. The 10-step gate reports
-`44.848746 ms/token` summed decode proxy and `713.509362` projected slot-step
-tok/s, with stage sums of `11.806264 ms` EP, `8.126768 ms` dense, and
-`24.910200 ms` compose. Wall time is now `37819.503379 ms`. This is not
-generated-token serving throughput; the next gap is hoisting TurboMind/API
-handles, route buffers, expert bindings, streams/events, and TP runtime state.
+Current TP/EP implementation status: Sprint 255 hoisted the TurboMind dynamic
+library/API lifecycle across the `--all-layers` TP/EP scaffold. With shared
+dense cache, descriptor checks off, predecode probes off, shared TurboMind API,
+and no one-shot compose validation, the separate TP/EP all-layer smoke passes
+all `43` transformer layers at `32` slots / `256K`, MTP off. The 10-step gate
+reports `43.957040 ms/token` summed decode proxy and `727.983506` projected
+slot-step tok/s, with stage sums of `11.808814 ms` EP, `7.613046 ms` dense,
+and `24.529236 ms` compose. Wall time is now `35565.756621 ms`. This is not
+generated-token serving throughput; the next gap is hoisting route buffers,
+expert bindings, streams/events, and TP runtime/KV state.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s
