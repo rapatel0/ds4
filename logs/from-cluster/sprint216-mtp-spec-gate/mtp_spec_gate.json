@@ -1,0 +1,28 @@
+{
+  "baseline": {
+    "continuation_tokens_per_second": 4.644949284410631,
+    "generated_tokens_per_second": 4.954612570038006,
+    "token_match": 1,
+    "token_mismatch": 0
+  },
+  "decision": "fail_serial_target_replay",
+  "mtp_commit": {
+    "accepted": 8,
+    "accepted_prefix_len_max": 1,
+    "attempted": 15,
+    "committed": 8,
+    "continuation_tokens_per_second": 4.276210876227846,
+    "draft_ms_total": 62.552,
+    "draft_tokens_accepted": 8,
+    "draft_tokens_proposed": 15,
+    "effective_output_tokens": 16,
+    "generated_tokens_per_second": 4.561291601309702,
+    "rejected": 7,
+    "speculative_saves": 0,
+    "target_forwards": 16,
+    "target_tokens_verified": 15,
+    "token_match": 1,
+    "token_mismatch": 0
+  },
+  "schema": "ds4_v100_mtp_spec_gate.v1"
+}

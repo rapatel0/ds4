@@ -90,6 +90,13 @@ typedef struct {
     uint32_t accepted_count;
     uint32_t rejected_count;
     uint32_t commit_count;
+    uint32_t draft_tokens_proposed;
+    uint32_t draft_tokens_accepted;
+    uint32_t accepted_prefix_len;
+    uint32_t target_tokens_verified;
+    uint32_t target_forwards;
+    uint32_t effective_output_tokens;
+    uint32_t speculative_saves;
     uint32_t raw_row;
     uint32_t n_raw;
     uint32_t output_vocab;
@@ -1179,6 +1186,8 @@ static int replay_mtp_service_draft(replay_mtp_service *svc,
     memset(&report, 0, sizeof(report));
     result->attempted = true;
     result->attempts++;
+    result->draft_tokens_proposed++;
+    result->target_tokens_verified++;
     const double t0 = now_ms();
     pthread_mutex_lock(&svc->mu);
     if (ds4_v100_mtp_forward_run_host(svc->forward,
@@ -1219,8 +1228,13 @@ static int replay_mtp_service_draft(replay_mtp_service *svc,
         }
     }
     result->accepted = result->draft_token == result->target_token;
-    if (result->accepted) result->accepted_count++;
-    else result->rejected_count++;
+    if (result->accepted) {
+        result->accepted_count++;
+        result->draft_tokens_accepted++;
+        if (result->accepted_prefix_len < 1u) result->accepted_prefix_len = 1u;
+    } else {
+        result->rejected_count++;
+    }
     svc->drafts++;
     if (result->accepted) svc->accepted++;
     else svc->rejected++;
@@ -1267,16 +1281,27 @@ static int replay_mtp_service_run_slot(replay_mtp_service *svc,
     }
     const uint32_t committed_idx = n_outputs - 2u;
     const uint32_t target_idx = n_outputs - 1u;
-    return replay_mtp_service_draft(svc,
-                                    rt,
-                                    hc_slot,
-                                    outputs[committed_idx].token,
-                                    counters->prompt_tokens + committed_idx,
-                                    outputs[target_idx].token,
-                                    outputs[target_idx].logit,
-                                    result,
-                                    err,
-                                    errlen);
+    int rc = replay_mtp_service_draft(svc,
+                                      rt,
+                                      hc_slot,
+                                      outputs[committed_idx].token,
+                                      counters->prompt_tokens + committed_idx,
+                                      outputs[target_idx].token,
+                                      outputs[target_idx].logit,
+                                      result,
+                                      err,
+                                      errlen);
+    if (rc == 0) {
+        result->target_forwards = n_outputs;
+        result->effective_output_tokens = n_outputs;
+        result->speculative_saves = 0;
+        if (result->reason[0] == '\0') {
+            snprintf(result->reason,
+                     sizeof(result->reason),
+                     "posthoc_verify_no_target_forward_savings");
+        }
+    }
+    return rc;
 }
 
 static int replay_generate_mtp_commit_one_slot(replay_mtp_service *svc,
@@ -1338,6 +1363,8 @@ static int replay_generate_mtp_commit_one_slot(replay_mtp_service *svc,
         return 1;
     }
     n_out++;
+    mtp_result->target_forwards = n_out;
+    mtp_result->effective_output_tokens = n_out;
 
     if (max_tokens < 2) {
         mtp_result->skipped = true;
@@ -1386,8 +1413,16 @@ static int replay_generate_mtp_commit_one_slot(replay_mtp_service *svc,
             svc->committed++;
         }
         outputs[n_out++] = target;
+        mtp_result->target_forwards = n_out;
+        mtp_result->effective_output_tokens = n_out;
+        mtp_result->speculative_saves = 0;
     }
 
+    if (mtp_result->reason[0] == '\0') {
+        snprintf(mtp_result->reason,
+                 sizeof(mtp_result->reason),
+                 "serial_commit_no_target_forward_savings");
+    }
     ds4_v100_replay_finish_generation(rt, n_out, now_ms() - total0, c);
     if (out_count) *out_count = n_out;
     return 0;
@@ -1410,6 +1445,13 @@ static void print_mtp_json(FILE *fp, const replay_mtp_result *mtp) {
     fprintf(fp, "\"accepted_count\":%" PRIu32 ",", mtp->accepted_count);
     fprintf(fp, "\"rejected_count\":%" PRIu32 ",", mtp->rejected_count);
     fprintf(fp, "\"commit_count\":%" PRIu32 ",", mtp->commit_count);
+    fprintf(fp, "\"draft_tokens_proposed\":%" PRIu32 ",", mtp->draft_tokens_proposed);
+    fprintf(fp, "\"draft_tokens_accepted\":%" PRIu32 ",", mtp->draft_tokens_accepted);
+    fprintf(fp, "\"accepted_prefix_len\":%" PRIu32 ",", mtp->accepted_prefix_len);
+    fprintf(fp, "\"target_tokens_verified\":%" PRIu32 ",", mtp->target_tokens_verified);
+    fprintf(fp, "\"target_forwards\":%" PRIu32 ",", mtp->target_forwards);
+    fprintf(fp, "\"effective_output_tokens\":%" PRIu32 ",", mtp->effective_output_tokens);
+    fprintf(fp, "\"speculative_saves\":%" PRIu32 ",", mtp->speculative_saves);
     fprintf(fp, "\"target_logit\":%.9g,", mtp->target_logit);
     fprintf(fp, "\"draft_logit\":%.9g,", mtp->draft_logit);
     fprintf(fp, "\"top_k\":%" PRIu32 ",", mtp->top_k);

@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: sprint-execute
-revision: 215
+revision: 216
 ---
 
 # Vision: DS4 V100 Appliance
@@ -130,6 +130,17 @@ one-slot commit accepted and counted `8/15` drafts but only reached
 realized; the next implementation lever should be true speculative MTP target
 verification over drafted tokens or a 256K attention/KV execution-boundary
 change, not more routed-FFN reducer wrappers.
+Sprint 216 tests the first of those two levers and rejects the current MTP
+commit implementation as a real speculative speedup. The new gate records the
+necessary accounting directly: the one-slot `256K` commit run accepted `8/15`
+drafts, but still performed `16` target forwards for `16` effective output
+tokens, so `speculative_saves=0`. This means MTP is not blocked by terminology
+or reporting; it is blocked by a missing runtime primitive. The replay stack
+can batch slots at one decode step, but it cannot yet verify a drafted block for
+one slot, advance target KV/state over the accepted prefix, and avoid replaying
+the same target work serially. The practical-serving branch should now either
+build that MTP verification/state-advance primitive explicitly or pivot to the
+256K attention/KV execution boundary.
 
 ## Current State
 

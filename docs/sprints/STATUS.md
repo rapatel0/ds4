@@ -122,6 +122,17 @@ admission cap 16`. MTP verify is compatible but not a speedup
 commit accepted `8/15` drafts but only reached `8.369430` generated tok/s /
 `7.846341` continuation tok/s. MTP is therefore not shipped as a speedup; the
 next MTP step must be true speculative target verification over drafted tokens.
+Sprint 216 built that focused MTP speculative gate and rejected the current
+commit path as a throughput feature. The new replay and sustained-bench
+accounting reports draft proposals, accepted drafts, target tokens verified,
+target forwards, effective output tokens, and speculative saves. On the V100
+pod, one-slot `256K` MTP commit again accepted `8/15` drafts, but the decisive
+fields were `target_forwards=16`, `effective_output_tokens=16`, and
+`speculative_saves=0`; continuation throughput was `4.276211` tok/s versus
+`4.644949` for the same one-slot baseline. The API gap is now explicit:
+current replay batching is across slots at the same decode step, while MTP
+needs a one-slot multi-position target verification/state-advance primitive to
+save target forwards. MTP remains default-off for production throughput.
 
 Current maximum-context production mode remains the Sprint 215 16-slot/256K
 appliance result, while the best practical long-context throughput mode is now

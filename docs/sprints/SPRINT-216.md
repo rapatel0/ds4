@@ -1,7 +1,7 @@
 # Sprint 216 - True MTP Speculative Verification Gate
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete
 
 ## Overview
 
@@ -101,24 +101,24 @@ TP work in separate TP-only files; this sprint is MTP-only.
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists and is committed before execution evidence is staged.
-- [ ] Current MTP commit path reports target forwards and speculative saves.
-- [ ] A focused MTP speculative-verification harness or mode exists.
-- [ ] The harness reports draft proposals, accepted prefix, target tokens
+- [x] Sprint plan exists and is committed before execution evidence is staged.
+- [x] Current MTP commit path reports target forwards and speculative saves.
+- [x] A focused MTP speculative-verification harness or mode exists.
+- [x] The harness reports draft proposals, accepted prefix, target tokens
       verified, target forwards, effective output tokens, and effective tok/s.
-- [ ] If block target verification is impossible with current APIs, the exact
+- [x] If block target verification is impossible with current APIs, the exact
       missing primitive is documented with code references.
-- [ ] If block target verification is possible, emitted tokens match normal
+- [x] If block target verification is possible, emitted tokens match normal
       one-slot replay for the same prompt and token count.
-- [ ] V100 build passes for any C/CUDA changes.
-- [ ] V100 focused run is captured under
+- [x] V100 build passes for any C/CUDA changes.
+- [x] V100 focused run is captured under
       `logs/from-cluster/sprint216-mtp-spec-gate/`.
-- [ ] Prompt/prefill and continuation/decode tok/s are recorded separately.
-- [ ] MTP remains default-off unless the focused gate proves real target-forward
+- [x] Prompt/prefill and continuation/decode tok/s are recorded separately.
+- [x] MTP remains default-off unless the focused gate proves real target-forward
       savings and correctness.
-- [ ] `docs/sprints/STATUS.md`, `docs/sprints/VISION.md`, and the appliance
+- [x] `docs/sprints/STATUS.md`, `docs/sprints/VISION.md`, and the appliance
       runbook are updated with the decision.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Changes are committed with explicit `git add` paths.
 
 ## Verification Strategy
 
@@ -175,3 +175,105 @@ local model mounts, and persistent appliance pack.
 - Production pack from Sprint 181:
   `/workspace/packs/ds4-appliance-full-tm-gated-s181`.
 - V100 build pod `llm/llamacpp-build-8gpu`.
+
+## Execution
+
+Implemented honest speculative-accounting fields in
+`tools/ds4-v100-replay.c`:
+
+| Field | Purpose |
+|---|---|
+| `draft_tokens_proposed` | number of sidecar draft attempts |
+| `draft_tokens_accepted` | number of draft tokens matching target |
+| `accepted_prefix_len` | maximum accepted prefix length visible to current path |
+| `target_tokens_verified` | target tokens compared against drafts |
+| `target_forwards` | target-model output steps actually performed |
+| `effective_output_tokens` | user-visible output tokens |
+| `speculative_saves` | avoided target forwards |
+
+Extended `tools/ds4-v100-sustained-decode-bench.sh` so MTP summaries aggregate
+those fields, and added `tools/ds4-v100-mtp-spec-gate.sh` as the focused gate
+harness. The harness runs:
+
+1. one-slot `256K` target generation with MTP off;
+2. one-slot `256K` MTP commit mode;
+3. a small JSON/Markdown report comparing target forwards, effective output
+   tokens, and speculative saves.
+
+## V100 Evidence
+
+Cluster target: `llm/llamacpp-build-8gpu` on `gpu-01`.
+
+Build:
+
+```text
+cd /workspace/ds4-sprint181
+make -j80 CUDA_ARCH=sm_70 tools/ds4-v100-replay
+```
+
+Focused gate command:
+
+```text
+cd /workspace/ds4-sprint181
+./tools/ds4-v100-mtp-spec-gate.sh \
+  --log-dir /workspace/logs/sprint216-mtp-spec-gate \
+  --port-base 19040 \
+  --requests 1 \
+  --warmup-requests 0 \
+  --tokens 16 \
+  --ctx 262144
+```
+
+Topline:
+
+| Mode | Generated tok/s | Continuation tok/s | Match | Drafts accepted | Target forwards | Effective output tokens | Spec saves |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| baseline off | `4.954613` | `4.644949` | 1/1 | n/a | n/a | n/a | n/a |
+| MTP commit | `4.561292` | `4.276211` | 1/1 | `8/15` | `16` | `16` | `0` |
+
+Evidence:
+
+```text
+logs/from-cluster/sprint216-mtp-spec-gate/
+```
+
+## API Gap
+
+The current replay API batches across slots, not speculative positions for one
+slot. `ds4_v100_replay_generate_batch()` builds `batch_tokens[]` and
+`batch_positions[]` with one entry per active slot, then advances all slots one
+decode step at a time. There is no public primitive that accepts a drafted
+token block for a single slot and returns target logits for all drafted
+positions in one verification pass.
+
+Relevant code:
+
+- `ds4_v100_replay.h:122` exposes `ds4_v100_replay_generate_batch()` with
+  `n_prompts`, not a one-slot multi-position verification block.
+- `ds4_v100_replay.h:148` exposes `ds4_v100_replay_feed_token_at_position()`,
+  a single-token/single-position feed primitive.
+- `ds4_v100_replay.c:2498` through `2627` implements batch generation by
+  iterating `step` and feeding one token per slot at each step.
+- `tools/ds4-v100-replay.c:1307` through `1428` implements MTP commit by
+  feeding the committed token, selecting the target token, and then running the
+  MTP sidecar draft comparison serially for each generated step.
+
+The smallest missing primitive is a target-model speculative verification API
+that can:
+
+1. take one slot's current KV/state plus a drafted token block;
+2. advance target KV/state over the block in one scheduled verification unit;
+3. return target logits for each drafted position;
+4. commit only the accepted prefix or roll back rejected suffix state without
+   serially replaying the same target forwards.
+
+## Decision
+
+Sprint 216 fails the true speculative MTP gate for the current implementation.
+MTP commit accepts drafts, but accepted drafts do not save target-model work:
+`target_forwards=16`, `effective_output_tokens=16`, and `speculative_saves=0`.
+
+Keep `DS4_V100_MTP_SERVING=off` for production throughput serving. MTP verify
+and commit remain diagnostics until a new target-verification/state-advance
+primitive exists. The next practical-serving sprint should either build that
+primitive explicitly or pivot to the 256K attention/KV execution boundary.

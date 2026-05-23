@@ -566,6 +566,13 @@ stats = {
     "mtp_rejected": 0,
     "mtp_committed": 0,
     "mtp_skipped": 0,
+    "mtp_draft_tokens_proposed": 0,
+    "mtp_draft_tokens_accepted": 0,
+    "mtp_target_tokens_verified": 0,
+    "mtp_target_forwards": 0,
+    "mtp_effective_output_tokens": 0,
+    "mtp_speculative_saves": 0,
+    "mtp_accepted_prefix_len_max": 0,
 }
 latencies_ms = []
 timing_acc = {}
@@ -611,6 +618,16 @@ def worker():
                     stats["mtp_accepted"] += int(mtp.get("accepted_count", 1 if mtp.get("accepted") else 0) or 0)
                     stats["mtp_rejected"] += int(mtp.get("rejected_count", 0) or 0)
                     stats["mtp_committed"] += int(mtp.get("commit_count", 0) or 0)
+                    stats["mtp_draft_tokens_proposed"] += int(mtp.get("draft_tokens_proposed", 0) or 0)
+                    stats["mtp_draft_tokens_accepted"] += int(mtp.get("draft_tokens_accepted", 0) or 0)
+                    stats["mtp_target_tokens_verified"] += int(mtp.get("target_tokens_verified", 0) or 0)
+                    stats["mtp_target_forwards"] += int(mtp.get("target_forwards", 0) or 0)
+                    stats["mtp_effective_output_tokens"] += int(mtp.get("effective_output_tokens", 0) or 0)
+                    stats["mtp_speculative_saves"] += int(mtp.get("speculative_saves", 0) or 0)
+                    stats["mtp_accepted_prefix_len_max"] = max(
+                        stats["mtp_accepted_prefix_len_max"],
+                        int(mtp.get("accepted_prefix_len", 0) or 0),
+                    )
                     if mtp.get("skipped"):
                         stats["mtp_skipped"] += 1
                     try:
@@ -684,6 +701,13 @@ summary = {
         "rejected": stats["mtp_rejected"],
         "committed": stats["mtp_committed"],
         "skipped": stats["mtp_skipped"],
+        "draft_tokens_proposed": stats["mtp_draft_tokens_proposed"],
+        "draft_tokens_accepted": stats["mtp_draft_tokens_accepted"],
+        "accepted_prefix_len_max": stats["mtp_accepted_prefix_len_max"],
+        "target_tokens_verified": stats["mtp_target_tokens_verified"],
+        "target_forwards": stats["mtp_target_forwards"],
+        "effective_output_tokens": stats["mtp_effective_output_tokens"],
+        "speculative_saves": stats["mtp_speculative_saves"],
         "draft_ms_avg": avg(mtp_draft_ms),
         "draft_ms_total": sum(mtp_draft_ms),
     },
@@ -1024,7 +1048,7 @@ printf 'async_handoff\t%s\n' "$async_handoff" >>"$summary_tsv"
 printf 'microbatch_wait_us\t%s\n' "${microbatch_wait_us:-default}" >>"$summary_tsv"
 printf 'mtp_serving\t%s\n' "$mtp_serving" >>"$summary_tsv"
 printf 'mtp_top_k\t%s\n' "$mtp_top_k" >>"$summary_tsv"
-printf '\nctx\tslots\tpolicy\tmtp_serving\tstatus_200\tstatus_other\terrors\ttoken_match\ttoken_mismatch\tlatency_avg_ms\tlatency_p50_ms\tlatency_p95_ms\tlatency_p99_ms\telapsed_s\taggregate_prompt_tokens_per_second\taggregate_generated_tokens_per_second\taggregate_continuation_tokens_per_second\tavg_prompt_response_tokens_per_second\tavg_continuation_response_tokens_per_second\tavg_gpu_util_percent\tmax_gpu_util_percent\tmtp_attempted\tmtp_accepted\tmtp_rejected\tmtp_committed\tmtp_draft_ms_avg\tmtp_draft_ms_total\tavg_async_total_ms\tavg_async_setup_ms\tavg_async_host_wait_ms\tavg_async_complete_ms\tavg_async_wait_prev_sum_ms\tavg_async_handoff_sum_ms\tavg_async_device_sync_sum_ms\n' >>"$summary_tsv"
+printf '\nctx\tslots\tpolicy\tmtp_serving\tstatus_200\tstatus_other\terrors\ttoken_match\ttoken_mismatch\tlatency_avg_ms\tlatency_p50_ms\tlatency_p95_ms\tlatency_p99_ms\telapsed_s\taggregate_prompt_tokens_per_second\taggregate_generated_tokens_per_second\taggregate_continuation_tokens_per_second\tavg_prompt_response_tokens_per_second\tavg_continuation_response_tokens_per_second\tavg_gpu_util_percent\tmax_gpu_util_percent\tmtp_attempted\tmtp_accepted\tmtp_rejected\tmtp_committed\tmtp_draft_tokens_proposed\tmtp_draft_tokens_accepted\tmtp_accepted_prefix_len_max\tmtp_target_tokens_verified\tmtp_target_forwards\tmtp_effective_output_tokens\tmtp_speculative_saves\tmtp_draft_ms_avg\tmtp_draft_ms_total\tavg_async_total_ms\tavg_async_setup_ms\tavg_async_host_wait_ms\tavg_async_complete_ms\tavg_async_wait_prev_sum_ms\tavg_async_handoff_sum_ms\tavg_async_device_sync_sum_ms\n' >>"$summary_tsv"
 
 case_index=0
 case_paths=()
@@ -1104,6 +1128,13 @@ print("\t".join([
     str(mtp.get("accepted", 0)),
     str(mtp.get("rejected", 0)),
     str(mtp.get("committed", 0)),
+    str(mtp.get("draft_tokens_proposed", 0)),
+    str(mtp.get("draft_tokens_accepted", 0)),
+    str(mtp.get("accepted_prefix_len_max", 0)),
+    str(mtp.get("target_tokens_verified", 0)),
+    str(mtp.get("target_forwards", 0)),
+    str(mtp.get("effective_output_tokens", 0)),
+    str(mtp.get("speculative_saves", 0)),
     f"{float(mtp.get('draft_ms_avg', 0.0)):.3f}",
     f"{float(mtp.get('draft_ms_total', 0.0)):.3f}",
     f"{float(async_timing.get('total', 0.0)):.3f}",

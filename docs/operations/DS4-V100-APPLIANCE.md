@@ -277,6 +277,16 @@ Latest practical long-context matrix:
 The `32`-slot/`256K` rejection is intentional:
 `DS4_V100_SLOTS=32 exceeds ctx=262144 admission cap 16`.
 
+Focused MTP speculative gate:
+
+| Mode | Context | Slots | Generated tok/s | Continuation tok/s | Correctness | Drafts accepted | Target forwards | Effective output tokens | Spec saves |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| baseline off | 262,144 | 1 | `4.954613` | `4.644949` | 1/1 | n/a | n/a | n/a | n/a |
+| MTP commit | 262,144 | 1 | `4.561292` | `4.276211` | 1/1 | `8/15` | `16` | `16` | `0` |
+
+The MTP gate fails as a throughput feature because accepted drafts do not reduce
+target-model forwards. Keep MTP off for production throughput serving.
+
 Latest short-context served curve with split prefill/decode metrics:
 
 | Context | Slots | Generated tok/s | Prompt tok/s | Continuation tok/s | Correctness |
@@ -570,6 +580,11 @@ to `active_microbatch=1` because the current exact-commit path still recomputes
 the base target token serially. Sprint 215 measured production-pack MTP:
 verify attempted `16` drafts and accepted `0`, while one-slot commit accepted
 and counted `8/15` drafts but only reached `7.846341` continuation tok/s.
+Sprint 216 added explicit speculative accounting and confirmed the current
+commit path saves no target work: `target_forwards=16`,
+`effective_output_tokens=16`, and `speculative_saves=0` for a 16-token one-slot
+gate. The missing runtime primitive is one-slot multi-position target
+verification with KV/state commit or rollback for the accepted prefix.
 Do not treat MTP as a throughput feature until a true speculative verifier can
 batch target verification over drafted tokens.
 
@@ -586,7 +601,10 @@ The response includes prompt token count, generated token count, selected token
 bytes, stage timings, and memory/upload counters from the resident replay path.
 When MTP verify mode is enabled, the response also includes an `mtp` object with
 committed token, target token, draft token, top-k candidates, accept/reject
-status, and draft timing.
+status, draft timing, and speculative-accounting fields:
+`draft_tokens_proposed`, `draft_tokens_accepted`, `accepted_prefix_len`,
+`target_tokens_verified`, `target_forwards`, `effective_output_tokens`, and
+`speculative_saves`. Production MTP speedup requires `speculative_saves > 0`.
 
 ## MTP Verify Serving Smoke
 
