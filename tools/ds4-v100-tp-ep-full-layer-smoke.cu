@@ -365,6 +365,7 @@ struct Options {
     bool overlap_ep_dense = true;
     bool direct_remote_compose = false;
     bool source_copy_schedule = true;
+    bool token_major_all_layers = false;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -788,7 +789,8 @@ void usage(const char *argv0) {
                  "       [--shared-expert-bindings] [--local-expert-bindings]\n"
                  "       [--overlap-ep-dense] [--serial-ep-dense]\n"
                  "       [--direct-remote-compose]\n"
-                 "       [--source-copy-schedule] [--dest-copy-schedule]\n",
+                 "       [--source-copy-schedule] [--dest-copy-schedule]\n"
+                 "       [--token-major-all-layers]\n",
                  argv0);
 }
 
@@ -888,6 +890,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->source_copy_schedule = true;
         } else if (std::strcmp(arg, "--dest-copy-schedule") == 0) {
             opt->source_copy_schedule = false;
+        } else if (std::strcmp(arg, "--token-major-all-layers") == 0) {
+            opt->token_major_all_layers = true;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -3600,6 +3604,107 @@ int main(int argc, char **argv) {
     } else {
         std::printf("tp_ep_all_layer_expert_bindings_shared\tlayers\t43\tdevices\t%d\t"
                     "mode\tlocal_per_layer\tPASS\n", kGpus);
+    }
+
+    if (opt.token_major_all_layers) {
+        int pass_invocations = 0;
+        double sum_decode_ms = 0.0;
+        double sum_ep_ms = 0.0;
+        double sum_dense_ms = 0.0;
+        double sum_compose_ms = 0.0;
+        uint64_t checksum = 0;
+        const auto start = std::chrono::steady_clock::now();
+        for (int step = 0; step < opt.decode_steps; ++step) {
+            for (int layer = 0; layer < 43; ++layer) {
+                Options layer_opt = opt;
+                layer_opt.layer = layer;
+                layer_opt.decode_steps = 1;
+                layer_opt.warmup = 0;
+                LayerRunSummary s;
+                SharedTpRuntime *tp_runtime_arg =
+                    shared_tp_runtime.initialized ? &shared_tp_runtime : nullptr;
+                const SharedExpertBindings *expert_arg =
+                    shared_expert_bindings.initialized ? &shared_expert_bindings : nullptr;
+                const int rc = run_layer(layer_opt, &s, shared_dense_f16_cache, &shared_api,
+                                         &shared_rank_buffers, tp_runtime_arg, expert_arg);
+                std::printf("tp_ep_token_major_item\tstep\t%d\tlayer\t%d\tratio\t%d\t"
+                            "decode_ms_per_step\t%.6f\tdecode_slot_step_tok_s\t%.6f\t"
+                            "decode_ep_ms_per_step\t%.6f\tdecode_dense_ms_per_step\t%.6f\t"
+                            "decode_compose_ms_per_step\t%.6f\tdecode_checksum\t%llu\t%s\n",
+                            step, s.layer, s.ratio,
+                            s.decode_ms_per_step,
+                            s.decode_slot_step_tok_s,
+                            s.decode_ep_ms_per_step,
+                            s.decode_dense_ms_per_step,
+                            s.decode_compose_ms_per_step,
+                            (unsigned long long)s.decode_checksum,
+                            (rc == 0 && s.pass) ? "PASS" : "FAIL");
+                if (rc == 0 && s.pass) {
+                    pass_invocations++;
+                    sum_decode_ms += s.decode_ms_per_step;
+                    sum_ep_ms += s.decode_ep_ms_per_step;
+                    sum_dense_ms += s.decode_dense_ms_per_step;
+                    sum_compose_ms += s.decode_compose_ms_per_step;
+                    checksum ^= s.decode_checksum +
+                                (uint64_t)(step + 1) * 1000003ull +
+                                (uint64_t)(layer + 1) * 104729ull;
+                } else {
+                    const auto stop = std::chrono::steady_clock::now();
+                    const double wall_ms =
+                        std::chrono::duration<double, std::milli>(stop - start).count();
+                    std::printf("tp_ep_token_major_scaffold\tsteps\t%d\tlayers\t43\t"
+                                "pass_invocations\t%d\tfailed_step\t%d\tfailed_layer\t%d\t"
+                                "slots\t%d\tctx\t262144\twall_ms\t%.6f\tFAIL\n",
+                                opt.decode_steps, pass_invocations, step, layer,
+                                opt.slots, wall_ms);
+                    close_shared_expert_bindings(&shared_expert_bindings);
+                    close_shared_tp_runtime(&shared_tp_runtime);
+                    close_shared_rank_buffers(&shared_rank_buffers);
+                    close_shared_api(&shared_api);
+                    if (shared_dense_f16_cache) {
+                        free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+                    }
+                    return rc == 0 ? 1 : rc;
+                }
+            }
+        }
+        const auto stop = std::chrono::steady_clock::now();
+        const double wall_ms =
+            std::chrono::duration<double, std::milli>(stop - start).count();
+        const double ms_per_token = opt.decode_steps > 0
+            ? sum_decode_ms / (double)opt.decode_steps
+            : 0.0;
+        const double slot_step_tok_s = sum_decode_ms > 0.0
+            ? (double)opt.slots * (double)opt.decode_steps * 1000.0 / sum_decode_ms
+            : 0.0;
+        std::printf("tp_ep_token_major_scaffold\tsteps\t%d\tlayers\t43\t"
+                    "pass_invocations\t%d\tslots\t%d\tctx\t262144\t"
+                    "shared_api\t%d\tshared_rank_buffers\t%d\tshared_tp_runtime\t%d\t"
+                    "shared_expert_bindings\t%d\toverlap_ep_dense\t%d\t"
+                    "direct_remote_compose\t%d\tsource_copy_schedule\t%d\t"
+                    "sum_decode_ms\t%.6f\tms_per_token\t%.6f\t"
+                    "projected_slot_step_tok_s\t%.6f\t"
+                    "sum_ep_ms\t%.6f\tsum_dense_ms\t%.6f\tsum_compose_ms\t%.6f\t"
+                    "wall_ms\t%.6f\tchecksum\t%llu\tPASS\n",
+                    opt.decode_steps, pass_invocations, opt.slots,
+                    shared_api.initialized ? 1 : 0,
+                    shared_rank_buffers.initialized ? 1 : 0,
+                    shared_tp_runtime.initialized ? 1 : 0,
+                    shared_expert_bindings.initialized ? 1 : 0,
+                    opt.overlap_ep_dense ? 1 : 0,
+                    opt.direct_remote_compose ? 1 : 0,
+                    opt.source_copy_schedule ? 1 : 0,
+                    sum_decode_ms, ms_per_token, slot_step_tok_s,
+                    sum_ep_ms, sum_dense_ms, sum_compose_ms,
+                    wall_ms, (unsigned long long)checksum);
+        close_shared_expert_bindings(&shared_expert_bindings);
+        close_shared_tp_runtime(&shared_tp_runtime);
+        close_shared_rank_buffers(&shared_rank_buffers);
+        close_shared_api(&shared_api);
+        if (shared_dense_f16_cache) {
+            free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+        }
+        return 0;
     }
 
     int pass_layers = 0;

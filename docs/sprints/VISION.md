@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 264
+revision: 265
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -204,6 +204,11 @@ not a serial layer-chain.
 - Sprint 264 changed staged peer-copy scheduling from destination streams to
   source copy streams. It is promoted: projected throughput improves from
   `840.494594` to `999.490407` slot-step tok/s with checksum preserved.
+- Sprint 265 added the first token-major serving-order scaffold. It passes
+  `172/172` layer invocations for `4` token steps at `32` slots / `256K`,
+  reporting `48.840011 ms/token` proxy and `655.200508` projected slot-step
+  tok/s. This is closer to serving order, but still not generated-token
+  serving throughput.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -955,6 +960,22 @@ compose passes `43/43` layers with checksum `204721433`. Projected scaffold
 throughput improves from `840.494594` to `999.490407` slot-step tok/s, and
 compose time drops from `25.452322 ms` to `19.513090 ms`.
 
+### Sprint 265 - TP/EP Token-Major Scaffold [complete]
+
+Goal: Add a serving-order TP/EP scaffold that executes layers in token-major
+order.
+
+Rationale: Layer-major repeated loops are useful for kernel timing, but serving
+decodes as `for token -> for layer`. We need a gate that exposes that schedule
+before claiming practical serving.
+
+Outcome: Complete. `tools/ds4-v100-tp-ep-full-layer-smoke` now supports
+`--token-major-all-layers`. The V100 gate runs `4` token steps x `43` layers
+at `32` slots / `256K`, using resident expert bindings, EP+dense overlap, and
+source-scheduled staged copies. It passes `172/172` layer invocations and
+reports `48.840011 ms/token` proxy / `655.200508` projected slot-step tok/s.
+This is a serving-order scaffold, not generated-token serving throughput.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1020,6 +1041,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 262 rechecked FP16 EP return under the resident overlapped schedule. | FP16 return still regresses total decode because compose gets slower. | Keep FP32 return and target fused/direct compose-all-to-all instead of standalone cast staging. |
 | 2026-05-23 | Sprint 263 tested direct peer-memory compose. | Direct remote reads preserve correctness but regress compose time and total throughput. | Keep staged peer copies; optimize staged-copy scheduling or destination-side reduction. |
 | 2026-05-23 | Sprint 264 changed staged peer-copy scheduling to source copy streams. | Source-scheduled copies materially reduce compose time and raise projected scaffold throughput. | Convert scaffold into serving loop or continue destination-side compose kernel optimization. |
+| 2026-05-23 | Sprint 265 added a token-major serving-order scaffold. | It exposes the real decode order and shows the next gap is resident token-loop state, not only layer-major kernel speed. | Reduce token-major setup/wall cost and then integrate generated/continuation serving measurement. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

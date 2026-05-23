@@ -20,7 +20,11 @@ direct remote reads regress projected throughput from `840.751688` to
 dominant stage is staged compose/all-to-all with FP32 EP return. Sprint 264
 changed staged peer-copy scheduling from destination streams to source copy
 streams and promoted it: projected throughput improves from `840.494594` to
-`999.490407` slot-step tok/s with checksum preserved.
+`999.490407` slot-step tok/s with checksum preserved. Sprint 265 added the
+first token-major serving-order scaffold. It passes `172/172` layer
+invocations for `4` token steps at `32` slots / `256K`, reporting
+`48.840011 ms/token` proxy and `655.200508` projected slot-step tok/s. This is
+closer to serving order, but still not generated-token serving throughput.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s
