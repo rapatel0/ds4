@@ -483,6 +483,19 @@ and `13.459473 GiB` aggregate FP16 cache. Per GPU, this is `512` rows,
 source staging, and zero nonfinite FP16 values. Decision: the dense cache is
 now a real V100 allocation/conversion path. Next wire the cache arena into the
 TP/EP resident layer execution path, then benchmark a resident all-layer loop.
+Sprint 247 wires that cache into execution for the representative layer-2
+TP/EP resident decode loop. The new `--dense-f16-cache-compose` option builds
+a layer-local dense FP16 cache from the contract and makes the resident
+FP16/cuBLAS dense ops use cache pointers instead of private weight copies.
+Same-binary 50-step A/B/C at `32` slots / `256K`, MTP off, fused compose:
+scalar dense passes at `1.642514 ms/step` and `19482.326340` slot-step tok/s;
+private FP16/cuBLAS passes at `1.056807 ms/step` and `30279.894858`
+slot-step tok/s; cache-backed FP16/cuBLAS passes at `1.015128 ms/step` and
+`31523.122614` slot-step tok/s. The cache-backed path preserves checksum
+`2515001`, emits `dense_f16_cache=1`, and materializes `112` layer-2 dense
+rows into `302514176` cache bytes. Decision: dense cache lookup is now wired
+into decode execution. Next lift it from the two composition tensors to a
+descriptor-selected dense execution table for every layer.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit

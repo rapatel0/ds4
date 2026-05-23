@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 246
+revision: 247
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -111,6 +111,12 @@ not a serial layer-chain.
   rows into FP16 arenas: `13.459473 GiB` aggregate cache, `1.682434 GiB` per
   GPU, zero nonfinite values, PASS. This is now an executable runtime cache
   path, though not yet wired into the all-layer decode loop.
+- Sprint 247 wired dense cache lookup into the representative layer-2 TP/EP
+  resident decode loop. Cache-backed FP16/cuBLAS dense passes at `1.015128`
+  ms/step and `31523.122614` slot-step tok/s, preserving the private-FP16
+  checksum while using cache pointers. The remaining gap is lifting this from
+  two composition tensors to a descriptor-selected dense table for every
+  layer.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -535,6 +541,27 @@ aggregate source bytes, and `13.459473 GiB` aggregate FP16 cache. Per GPU:
 max temp staging, and zero nonfinite values. Next wire this arena into the
 resident TP/EP layer execution path and benchmark all-layer decode.
 
+### Sprint 247 - TP/EP Dense Cache Compose Integration [complete]
+
+Goal: Wire the dense FP16 cache arena into the representative TP/EP resident
+decode loop.
+
+Rationale: Sprint 246 proved all dense rows can be cached, but execution still
+used private FP16 copies for the two composition tensors. The runtime must
+look up cache-resident weights by tensor and GPU if this is going to become a
+serving path.
+
+Outcome: Complete. `--dense-f16-cache-compose` builds a layer-local dense
+cache from contract rows and makes the resident FP16/cuBLAS dense path use
+cache pointers. Same-binary A/B/C at `32` slots / `256K`, MTP off, fused
+compose, and `50` resident steps: scalar dense passes at `1.642514 ms/step`
+and `19482.326340` slot-step tok/s; private FP16/cuBLAS passes at
+`1.056807 ms/step` and `30279.894858`; cache-backed FP16/cuBLAS passes at
+`1.015128 ms/step` and `31523.122614`. The cache-backed path emits
+`dense_f16_cache=1`, preserves checksum `2515001`, and materializes `112`
+layer-2 dense rows into `302514176` cache bytes. Next lift this into a
+descriptor-selected dense execution table for every layer.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -582,6 +609,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 244 proved a resident FP16 tensor-core dense ceiling is materially faster. | Dense is removable if low-bit feeding is efficient, but expanded FP16 is not the final memory format. | Implement a packed low-bit dense production kernel that approaches the FP16/cuBLAS ceiling. |
 | 2026-05-23 | Sprint 245 proved dense FP16 runtime cache fits the `32` slot / `256K` TP/EP budget when replacing dense source tensors in VRAM. | This gives us a working tensor-core dense fallback while preserving the quantized source pack offline. | Build the TP/EP dense-cache loader/runtime path for all dense tensors and benchmark resident all-layer decode. |
 | 2026-05-23 | Sprint 246 materialized all dense TP rows into FP16 cache arenas on the V100 pod. | The dense-cache path is now an executable runtime primitive, not just an estimate. | Wire dense cache lookup into resident layer execution and benchmark all-layer decode. |
+| 2026-05-23 | Sprint 247 wired dense cache lookup into the representative TP/EP decode loop. | Execution can now consume cache-resident FP16 dense weights instead of private per-op copies. | Build a descriptor-selected dense execution table across all layers. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

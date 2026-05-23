@@ -206,6 +206,7 @@ struct ResidentF8Dense {
     std::vector<uint8_t *> d_w;
     std::vector<float *> d_x;
     std::vector<__half *> d_w_half;
+    std::vector<bool> owns_w_half;
     std::vector<__half *> d_x_half;
     std::vector<float *> d_out;
     std::vector<cublasHandle_t> cublas;
@@ -214,6 +215,28 @@ struct ResidentF8Dense {
     int slots = 0;
     uint64_t row_bytes = 0;
     uint64_t loaded_bytes = 0;
+};
+
+struct DenseF16CacheEntry {
+    std::string tensor_id;
+    int gpu = -1;
+    int cols = 0;
+    int rows_per_gpu = 0;
+    uint64_t offset = 0;
+    uint64_t source_bytes = 0;
+    uint64_t cache_bytes = 0;
+};
+
+struct DenseF16Cache {
+    bool enabled = false;
+    std::vector<uint8_t *> arena;
+    std::vector<uint8_t *> temp;
+    std::vector<DenseF16CacheEntry> entries;
+    uint64_t rows = 0;
+    uint64_t source_bytes = 0;
+    uint64_t cache_bytes = 0;
+    uint64_t cache_aligned_bytes = 0;
+    uint64_t max_temp_bytes = 0;
 };
 
 struct ComposeStats {
@@ -232,6 +255,7 @@ struct ComposeStats {
     bool fused_compose_sum = false;
     bool dense_hmma_compose = false;
     bool dense_f16_cublas_compose = false;
+    bool dense_f16_cache_compose = false;
 };
 
 struct DecodeLoopStats {
@@ -255,6 +279,7 @@ struct DecodeLoopStats {
     bool fused_compose_sum = false;
     bool dense_hmma_compose = false;
     bool dense_f16_cublas_compose = false;
+    bool dense_f16_cache_compose = false;
 };
 
 struct Options {
@@ -279,6 +304,7 @@ struct Options {
     bool fuse_compose_sum = false;
     bool dense_hmma_compose = false;
     bool dense_f16_cublas_compose = false;
+    bool dense_f16_cache_compose = false;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -468,6 +494,11 @@ __global__ void f8_b128_to_half_kernel(__half *out,
 
 __device__ float bf16_to_f32_dev(uint16_t v) {
     return __uint_as_float((uint32_t)v << 16);
+}
+
+__global__ void bf16_to_half_kernel(__half *out, const uint16_t *in, uint64_t n) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[i] = __float2half_rn(bf16_to_f32_dev(in[i]));
 }
 
 __global__ void bf16_dense_kernel(float *out,
@@ -764,6 +795,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->dense_hmma_compose = true;
         } else if (std::strcmp(arg, "--dense-f16-cublas-compose") == 0) {
             opt->dense_f16_cublas_compose = true;
+        } else if (std::strcmp(arg, "--dense-f16-cache-compose") == 0) {
+            opt->dense_f16_cache_compose = true;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -774,6 +807,7 @@ bool parse_args(int argc, char **argv, Options *opt) {
     return opt->pack_dir && opt->contract_path && opt->tm_index_path &&
            opt->top_k <= kActiveLocalExperts && opt->layer >= 0 &&
            !(opt->dense_hmma_compose && opt->dense_f16_cublas_compose) &&
+           (!opt->dense_f16_cache_compose || opt->dense_f16_cublas_compose) &&
            !(opt->dense_compute_tensor &&
              (opt->dense_compute_all_f8 || opt->dense_compute_all_bf16));
 }
@@ -1355,7 +1389,8 @@ void free_resident_f8_dense(ResidentF8Dense &op, const Options &opt) {
         if (op.d_w[(size_t)gpu]) CHECK_CUDA(cudaFree(op.d_w[(size_t)gpu]));
         if (op.d_x[(size_t)gpu]) CHECK_CUDA(cudaFree(op.d_x[(size_t)gpu]));
         if (gpu < (int)op.d_w_half.size() && op.d_w_half[(size_t)gpu]) {
-            CHECK_CUDA(cudaFree(op.d_w_half[(size_t)gpu]));
+            const bool owns = gpu >= (int)op.owns_w_half.size() || op.owns_w_half[(size_t)gpu];
+            if (owns) CHECK_CUDA(cudaFree(op.d_w_half[(size_t)gpu]));
         }
         if (gpu < (int)op.d_x_half.size() && op.d_x_half[(size_t)gpu]) {
             CHECK_CUDA(cudaFree(op.d_x_half[(size_t)gpu]));
@@ -1368,10 +1403,137 @@ void free_resident_f8_dense(ResidentF8Dense &op, const Options &opt) {
     op = ResidentF8Dense{};
 }
 
+uint64_t align_up_u64(uint64_t v, uint64_t a) {
+    return (v + a - 1) / a * a;
+}
+
+void free_dense_f16_cache(DenseF16Cache &cache, const Options &opt) {
+    for (int gpu = 0; gpu < (int)cache.arena.size(); ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        if (cache.arena[(size_t)gpu]) CHECK_CUDA(cudaFree(cache.arena[(size_t)gpu]));
+        if (gpu < (int)cache.temp.size() && cache.temp[(size_t)gpu]) {
+            CHECK_CUDA(cudaFree(cache.temp[(size_t)gpu]));
+        }
+    }
+    cache = DenseF16Cache{};
+}
+
+const DenseF16CacheEntry *find_dense_f16_cache_entry(const DenseF16Cache &cache,
+                                                     const char *tensor,
+                                                     int gpu) {
+    if (!cache.enabled) return nullptr;
+    for (const DenseF16CacheEntry &e : cache.entries) {
+        if (e.gpu == gpu && e.tensor_id == tensor) return &e;
+    }
+    return nullptr;
+}
+
+int prepare_dense_f16_cache(const Options &opt,
+                            const std::vector<ContractRow> &rows,
+                            DenseF16Cache *cache) {
+    if (!opt.dense_f16_cache_compose) return 0;
+    cache->enabled = true;
+    cache->arena.assign((size_t)kGpus, nullptr);
+    cache->temp.assign((size_t)kGpus, nullptr);
+    uint64_t gpu_offsets[kGpus] = {};
+    uint64_t gpu_temp[kGpus] = {};
+
+    for (const ContractRow &r : rows) {
+        if (r.record_type != "dense_tp" ||
+            (r.source_dtype != "f8_e4m3_b128" && r.source_dtype != "bf16")) {
+            continue;
+        }
+        int cols = 0;
+        int total_rows = 0;
+        if (!parse_shape2(r.source_shape, &cols, &total_rows)) continue;
+        uint64_t rows_per_gpu = 0;
+        if (r.source_dtype == "f8_e4m3_b128") {
+            if (cols % 128 != 0) continue;
+            const uint64_t rb = f8_row_bytes(cols);
+            if (rb == 0 || r.bytes_estimate % rb != 0) continue;
+            rows_per_gpu = r.bytes_estimate / rb;
+        } else {
+            const uint64_t rb = (uint64_t)cols * sizeof(uint16_t);
+            if (rb == 0 || r.bytes_estimate % rb != 0) continue;
+            rows_per_gpu = r.bytes_estimate / rb;
+        }
+        DenseF16CacheEntry e;
+        e.tensor_id = r.tensor_id;
+        e.gpu = r.owning_gpu;
+        e.cols = cols;
+        e.rows_per_gpu = (int)rows_per_gpu;
+        e.offset = gpu_offsets[r.owning_gpu];
+        e.source_bytes = r.bytes_estimate;
+        e.cache_bytes = rows_per_gpu * (uint64_t)cols * sizeof(__half);
+        cache->entries.push_back(e);
+        cache->rows++;
+        cache->source_bytes += e.source_bytes;
+        cache->cache_bytes += e.cache_bytes;
+        const uint64_t aligned = align_up_u64(e.cache_bytes, 256);
+        gpu_offsets[r.owning_gpu] += aligned;
+        cache->cache_aligned_bytes += aligned;
+        gpu_temp[r.owning_gpu] = std::max(gpu_temp[r.owning_gpu], e.source_bytes);
+        cache->max_temp_bytes = std::max(cache->max_temp_bytes, e.source_bytes);
+    }
+
+    if (cache->entries.empty()) return 1;
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        if (gpu_offsets[gpu]) CHECK_CUDA(cudaMalloc(&cache->arena[(size_t)gpu],
+                                                    (size_t)gpu_offsets[gpu]));
+        if (gpu_temp[gpu]) CHECK_CUDA(cudaMalloc(&cache->temp[(size_t)gpu],
+                                                 (size_t)gpu_temp[gpu]));
+    }
+
+    std::vector<uint8_t> host;
+    for (const ContractRow &r : rows) {
+        if (r.record_type != "dense_tp" ||
+            (r.source_dtype != "f8_e4m3_b128" && r.source_dtype != "bf16")) {
+            continue;
+        }
+        const DenseF16CacheEntry *e =
+            find_dense_f16_cache_entry(*cache, r.tensor_id.c_str(), r.owning_gpu);
+        if (!e || e->source_bytes != r.bytes_estimate) continue;
+        host.resize((size_t)r.bytes_estimate);
+        const std::string path = path_join(opt.pack_dir, r.source_pack_file);
+        if (read_exact_at(path, physical_row_offset(r), host.data(), host.size()) != 0) {
+            free_dense_f16_cache(*cache, opt);
+            return 2;
+        }
+        CHECK_CUDA(cudaSetDevice(opt.devices[r.owning_gpu]));
+        CHECK_CUDA(cudaMemcpy(cache->temp[(size_t)r.owning_gpu], host.data(), host.size(),
+                              cudaMemcpyHostToDevice));
+        __half *dst =
+            reinterpret_cast<__half *>(cache->arena[(size_t)r.owning_gpu] + e->offset);
+        const uint64_t elems = e->cache_bytes / sizeof(__half);
+        const unsigned int grid = (unsigned int)((elems + 255) / 256);
+        if (r.source_dtype == "f8_e4m3_b128") {
+            f8_b128_to_half_kernel<<<grid, 256>>>(
+                dst, cache->temp[(size_t)r.owning_gpu], e->rows_per_gpu,
+                e->cols, (uint32_t)f8_row_bytes(e->cols));
+        } else {
+            bf16_to_half_kernel<<<grid, 256>>>(
+                dst, reinterpret_cast<const uint16_t *>(cache->temp[(size_t)r.owning_gpu]),
+                elems);
+        }
+        CHECK_CUDA(cudaGetLastError());
+        CHECK_CUDA(cudaDeviceSynchronize());
+    }
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        if (cache->temp[(size_t)gpu]) {
+            CHECK_CUDA(cudaFree(cache->temp[(size_t)gpu]));
+            cache->temp[(size_t)gpu] = nullptr;
+        }
+    }
+    return 0;
+}
+
 int prepare_resident_f8_dense(const Options &opt,
                               const std::vector<ContractRow> &rows,
                               const char *tensor,
                               int seed,
+                              const DenseF16Cache *cache,
                               ResidentF8Dense *op) {
     std::vector<ContractRow> selected;
     int cols = 0;
@@ -1391,6 +1553,7 @@ int prepare_resident_f8_dense(const Options &opt,
     op->d_w.assign((size_t)kGpus, nullptr);
     op->d_x.assign((size_t)kGpus, nullptr);
     op->d_w_half.assign((size_t)kGpus, nullptr);
+    op->owns_w_half.assign((size_t)kGpus, true);
     op->d_x_half.assign((size_t)kGpus, nullptr);
     op->d_out.assign((size_t)kGpus, nullptr);
     op->cublas.assign((size_t)kGpus, nullptr);
@@ -1409,32 +1572,51 @@ int prepare_resident_f8_dense(const Options &opt,
 
     for (int gpu = 0; gpu < kGpus; ++gpu) {
         const ContractRow &r = selected[(size_t)gpu];
-        std::vector<uint8_t> h_w((size_t)shard_bytes);
-        const std::string path = path_join(opt.pack_dir, r.source_pack_file);
-        if (read_exact_at(path, physical_row_offset(r), h_w.data(), h_w.size()) != 0) {
-            free_resident_f8_dense(*op, opt);
-            return 3;
-        }
-        op->loaded_bytes += shard_bytes;
+        const DenseF16CacheEntry *cache_entry =
+            opt.dense_f16_cache_compose && opt.dense_f16_cublas_compose && cache
+                ? find_dense_f16_cache_entry(*cache, tensor, gpu)
+                : nullptr;
         CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
-        CHECK_CUDA(cudaMalloc(&op->d_w[(size_t)gpu], (size_t)shard_bytes));
+        if (!cache_entry) {
+            std::vector<uint8_t> h_w((size_t)shard_bytes);
+            const std::string path = path_join(opt.pack_dir, r.source_pack_file);
+            if (read_exact_at(path, physical_row_offset(r), h_w.data(), h_w.size()) != 0) {
+                free_resident_f8_dense(*op, opt);
+                return 3;
+            }
+            op->loaded_bytes += shard_bytes;
+            CHECK_CUDA(cudaMalloc(&op->d_w[(size_t)gpu], (size_t)shard_bytes));
+            CHECK_CUDA(cudaMemcpy(op->d_w[(size_t)gpu], h_w.data(), (size_t)shard_bytes,
+                                  cudaMemcpyHostToDevice));
+        } else {
+            op->loaded_bytes += cache_entry->source_bytes;
+        }
         CHECK_CUDA(cudaMalloc(&op->d_x[(size_t)gpu], h_x.size() * sizeof(float)));
         CHECK_CUDA(cudaMalloc(&op->d_out[(size_t)gpu],
                               (size_t)opt.slots * rows_per_gpu * sizeof(float)));
-        CHECK_CUDA(cudaMemcpy(op->d_w[(size_t)gpu], h_w.data(), (size_t)shard_bytes,
-                              cudaMemcpyHostToDevice));
         CHECK_CUDA(cudaMemcpy(op->d_x[(size_t)gpu], h_x.data(),
                               h_x.size() * sizeof(float), cudaMemcpyHostToDevice));
         if (opt.dense_f16_cublas_compose) {
-            CHECK_CUDA(cudaMalloc(&op->d_w_half[(size_t)gpu],
-                                  (size_t)rows_per_gpu * cols * sizeof(__half)));
+            if (cache_entry) {
+                if (cache_entry->cols != cols || cache_entry->rows_per_gpu != rows_per_gpu) {
+                    free_resident_f8_dense(*op, opt);
+                    return 4;
+                }
+                op->d_w_half[(size_t)gpu] =
+                    reinterpret_cast<__half *>(cache->arena[(size_t)gpu] + cache_entry->offset);
+                op->owns_w_half[(size_t)gpu] = false;
+            } else {
+                CHECK_CUDA(cudaMalloc(&op->d_w_half[(size_t)gpu],
+                                      (size_t)rows_per_gpu * cols * sizeof(__half)));
+                op->owns_w_half[(size_t)gpu] = true;
+                const uint64_t w_elems = (uint64_t)rows_per_gpu * cols;
+                f8_b128_to_half_kernel<<<(unsigned int)((w_elems + 255) / 256), 256>>>(
+                    op->d_w_half[(size_t)gpu], op->d_w[(size_t)gpu],
+                    rows_per_gpu, cols, (uint32_t)row_bytes);
+                CHECK_CUDA(cudaGetLastError());
+            }
             CHECK_CUDA(cudaMalloc(&op->d_x_half[(size_t)gpu],
                                   h_x.size() * sizeof(__half)));
-            const uint64_t w_elems = (uint64_t)rows_per_gpu * cols;
-            f8_b128_to_half_kernel<<<(unsigned int)((w_elems + 255) / 256), 256>>>(
-                op->d_w_half[(size_t)gpu], op->d_w[(size_t)gpu],
-                rows_per_gpu, cols, (uint32_t)row_bytes);
-            CHECK_CUDA(cudaGetLastError());
             const uint64_t x_elems = (uint64_t)opt.slots * cols;
             cast_f32_to_half_kernel<<<(unsigned int)((x_elems + 255) / 256), 256>>>(
                 op->d_x_half[(size_t)gpu], op->d_x[(size_t)gpu], x_elems);
@@ -2111,6 +2293,7 @@ int run_decode_loop(const Options &opt,
                     const std::vector<ContractRow> &rows,
                     RankState ranks[kGpus],
                     const Api &api,
+                    const DenseF16Cache *cache,
                     DecodeLoopStats *stats) {
     if (opt.decode_steps <= 0) return 0;
     stats->enabled = true;
@@ -2118,14 +2301,15 @@ int run_decode_loop(const Options &opt,
     stats->fused_compose_sum = opt.fuse_compose_sum && !opt.ep_return_fp16;
     stats->dense_hmma_compose = opt.dense_hmma_compose;
     stats->dense_f16_cublas_compose = opt.dense_f16_cublas_compose;
+    stats->dense_f16_cache_compose = opt.dense_f16_cache_compose;
     stats->steps = opt.decode_steps;
     stats->slots = opt.slots;
     stats->slot_steps = (uint64_t)opt.decode_steps * (uint64_t)opt.slots;
 
     ResidentF8Dense attn;
     ResidentF8Dense shared;
-    if (prepare_resident_f8_dense(opt, rows, "blk.2.attn_output_b.weight", 1, &attn) != 0 ||
-        prepare_resident_f8_dense(opt, rows, "blk.2.ffn_down_shexp.weight", 2, &shared) != 0) {
+    if (prepare_resident_f8_dense(opt, rows, "blk.2.attn_output_b.weight", 1, cache, &attn) != 0 ||
+        prepare_resident_f8_dense(opt, rows, "blk.2.ffn_down_shexp.weight", 2, cache, &shared) != 0) {
         free_resident_f8_dense(attn, opt);
         free_resident_f8_dense(shared, opt);
         return 1;
@@ -2426,6 +2610,23 @@ int main(int argc, char **argv) {
         bf16_compute.pass = bf16_compute.pass && one.pass;
     }
 
+    DenseF16Cache dense_f16_cache;
+    if (prepare_dense_f16_cache(opt, rows, &dense_f16_cache) != 0) {
+        std::fprintf(stderr, "dense f16 cache prepare failed\n");
+        return 4;
+    }
+    if (dense_f16_cache.enabled) {
+        std::printf("tp_ep_dense_f16_cache\tlayer\t%d\trows\t%llu\t"
+                    "source_bytes\t%llu\tcache_bytes\t%llu\t"
+                    "cache_aligned_bytes\t%llu\tmax_temp_bytes\t%llu\tPASS\n",
+                    opt.layer,
+                    (unsigned long long)dense_f16_cache.rows,
+                    (unsigned long long)dense_f16_cache.source_bytes,
+                    (unsigned long long)dense_f16_cache.cache_bytes,
+                    (unsigned long long)dense_f16_cache.cache_aligned_bytes,
+                    (unsigned long long)dense_f16_cache.max_temp_bytes);
+    }
+
     ds4_v100_tp_runtime_config cfg;
     ds4_v100_tp_runtime_default_config(&cfg);
     cfg.slots = (uint32_t)opt.slots;
@@ -2626,11 +2827,11 @@ int main(int argc, char **argv) {
     }
 
     DecodeLoopStats decode_loop;
-    const int decode_rc = run_decode_loop(opt, rows, ranks, api, &decode_loop);
+    const int decode_rc = run_decode_loop(opt, rows, ranks, api, &dense_f16_cache, &decode_loop);
     if (decode_loop.enabled) {
         std::printf("tp_ep_decode_loop\tsteps\t%d\tslots\t%d\tslot_steps\t%llu\t"
                     "total_ms\t%.6f\tms_per_step\t%.6f\tslot_step_tok_s\t%.6f\t"
-                    "dense_hmma\t%d\tdense_f16_cublas\t%d\t"
+                    "dense_hmma\t%d\tdense_f16_cublas\t%d\tdense_f16_cache\t%d\t"
                     "ep_ms_per_step\t%.6f\tdense_ms_per_step\t%.6f\t"
                     "fused_compose_sum\t%d\tcompose_ms_per_step\t%.6f\t"
                     "dense_loaded_bytes\t%llu\t"
@@ -2643,6 +2844,7 @@ int main(int argc, char **argv) {
                     decode_loop.tok_s,
                     decode_loop.dense_hmma_compose ? 1 : 0,
                     decode_loop.dense_f16_cublas_compose ? 1 : 0,
+                    decode_loop.dense_f16_cache_compose ? 1 : 0,
                     decode_loop.ep_ms_per_step,
                     decode_loop.dense_ms_per_step,
                     decode_loop.fused_compose_sum ? 1 : 0,
@@ -2724,6 +2926,7 @@ int main(int argc, char **argv) {
                 "decode_steps\t%d\tdecode_slot_steps\t%llu\tdecode_total_ms\t%.6f\t"
                 "decode_ms_per_step\t%.6f\tdecode_slot_step_tok_s\t%.6f\t"
                 "decode_dense_hmma\t%d\tdecode_dense_f16_cublas\t%d\t"
+                "decode_dense_f16_cache\t%d\t"
                 "decode_ep_ms_per_step\t%.6f\tdecode_dense_ms_per_step\t%.6f\t"
                 "decode_fused_compose_sum\t%d\tdecode_compose_ms_per_step\t%.6f\t"
                 "decode_ep_return_dtype\t%s\t"
@@ -2791,6 +2994,7 @@ int main(int argc, char **argv) {
                 decode_loop.tok_s,
                 decode_loop.dense_hmma_compose ? 1 : 0,
                 decode_loop.dense_f16_cublas_compose ? 1 : 0,
+                decode_loop.dense_f16_cache_compose ? 1 : 0,
                 decode_loop.ep_ms_per_step,
                 decode_loop.dense_ms_per_step,
                 decode_loop.fused_compose_sum ? 1 : 0,
@@ -2833,5 +3037,6 @@ int main(int argc, char **argv) {
     api.shutdown();
     dlclose(lib);
     ds4_v100_tp_runtime_close(rt);
+    free_dense_f16_cache(dense_f16_cache, opt);
     return pass ? 0 : 1;
 }
