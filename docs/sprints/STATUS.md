@@ -25,6 +25,10 @@ first token-major serving-order scaffold. It passes `172/172` layer
 invocations for `4` token steps at `32` slots / `256K`, reporting
 `48.840011 ms/token` proxy and `655.200508` projected slot-step tok/s. This is
 closer to serving order, but still not generated-token serving throughput.
+Sprint 266 tested shared dense-op residency in that token-major scaffold.
+Correctness holds, but the shared dense-op cache regresses the proxy from
+`51.991980` to `56.085843 ms/token`; it remains an opt-in diagnostic and the
+default stays local dense ops per layer.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

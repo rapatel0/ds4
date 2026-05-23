@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 265
+revision: 266
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -209,6 +209,10 @@ not a serial layer-chain.
   reporting `48.840011 ms/token` proxy and `655.200508` projected slot-step
   tok/s. This is closer to serving order, but still not generated-token
   serving throughput.
+- Sprint 266 tested all-layer shared dense op residency in token-major mode.
+  It remains correct but is not promoted: the shared-op cache regressed the
+  token-major proxy from `51.991980` to `56.085843 ms/token`. Keep it as an
+  opt-in diagnostic and keep the default dense op lifecycle local per layer.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -976,6 +980,26 @@ source-scheduled staged copies. It passes `172/172` layer invocations and
 reports `48.840011 ms/token` proxy / `655.200508` projected slot-step tok/s.
 This is a serving-order scaffold, not generated-token serving throughput.
 
+### Sprint 266 - TP/EP Shared Dense Ops Probe [complete]
+
+Goal: Test whether token-major setup cost can be reduced by hoisting dense
+operation objects across all layers.
+
+Rationale: The token-major scaffold still constructs dense cuBLAS handles,
+input buffers, and output buffers per layer invocation. If that setup is a
+material part of the token-major gap, a shared dense-op cache should improve
+the serving-order scaffold.
+
+Outcome: Complete and rejected as a default. `tools/ds4-v100-tp-ep-full-layer-smoke`
+now supports `--shared-dense-ops` as an opt-in diagnostic. On the V100 pod at
+`32` slots / `256K`, `4` token steps, resident expert bindings, EP+dense
+overlap, and source-scheduled staged copies, both local and shared dense-op
+modes pass `172/172` layer invocations with checksum `296236348`. Local dense
+ops report `51.991980 ms/token` proxy and `615.479538` projected slot-step
+tok/s. Shared dense ops report `56.085843 ms/token` proxy and `570.553966`
+projected slot-step tok/s. Shared dense ops slightly reduce wall time but
+regress decode timing by `7.3%`, so the default remains local dense ops.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1042,6 +1066,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 263 tested direct peer-memory compose. | Direct remote reads preserve correctness but regress compose time and total throughput. | Keep staged peer copies; optimize staged-copy scheduling or destination-side reduction. |
 | 2026-05-23 | Sprint 264 changed staged peer-copy scheduling to source copy streams. | Source-scheduled copies materially reduce compose time and raise projected scaffold throughput. | Convert scaffold into serving loop or continue destination-side compose kernel optimization. |
 | 2026-05-23 | Sprint 265 added a token-major serving-order scaffold. | It exposes the real decode order and shows the next gap is resident token-loop state, not only layer-major kernel speed. | Reduce token-major setup/wall cost and then integrate generated/continuation serving measurement. |
+| 2026-05-23 | Sprint 266 tested shared dense-op residency in token-major order. | Correctness holds, but decode proxy regresses despite slightly lower wall time. | Keep dense ops local per layer and target TP runtime/KV orchestration or serving integration next. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

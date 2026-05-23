@@ -219,6 +219,18 @@ struct ResidentF8Dense {
     uint64_t loaded_bytes = 0;
 };
 
+struct LayerDenseOps {
+    ResidentF8Dense attn;
+    ResidentF8Dense shared;
+    bool initialized = false;
+};
+
+struct SharedDenseOps {
+    LayerDenseOps layers[43];
+    uint64_t loaded_bytes = 0;
+    bool initialized = false;
+};
+
 struct DenseF16CacheEntry {
     std::string tensor_id;
     int gpu = -1;
@@ -366,6 +378,7 @@ struct Options {
     bool direct_remote_compose = false;
     bool source_copy_schedule = true;
     bool token_major_all_layers = false;
+    bool share_dense_ops = false;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -790,7 +803,7 @@ void usage(const char *argv0) {
                  "       [--overlap-ep-dense] [--serial-ep-dense]\n"
                  "       [--direct-remote-compose]\n"
                  "       [--source-copy-schedule] [--dest-copy-schedule]\n"
-                 "       [--token-major-all-layers]\n",
+                 "       [--token-major-all-layers] [--shared-dense-ops]\n",
                  argv0);
 }
 
@@ -892,6 +905,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->source_copy_schedule = false;
         } else if (std::strcmp(arg, "--token-major-all-layers") == 0) {
             opt->token_major_all_layers = true;
+        } else if (std::strcmp(arg, "--shared-dense-ops") == 0) {
+            opt->share_dense_ops = true;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -1741,6 +1756,49 @@ int prepare_resident_f8_dense(const Options &opt,
     return 0;
 }
 
+void free_shared_dense_ops(SharedDenseOps *ops, const Options &opt) {
+    if (!ops) return;
+    for (int layer = 0; layer < 43; ++layer) {
+        free_resident_f8_dense(ops->layers[layer].attn, opt);
+        free_resident_f8_dense(ops->layers[layer].shared, opt);
+        ops->layers[layer] = LayerDenseOps{};
+    }
+    *ops = SharedDenseOps{};
+}
+
+int open_shared_dense_ops(const Options &opt,
+                          const DenseF16Cache *cache,
+                          SharedDenseOps *ops) {
+    if (!opt.dense_f16_cublas_compose || !opt.dense_f16_cache_compose || !cache) {
+        return 1;
+    }
+    for (int layer = 0; layer < 43; ++layer) {
+        std::vector<ContractRow> rows;
+        LayerStats stats;
+        if (parse_contract(opt.contract_path, layer, &rows, &stats) != 0 ||
+            stats.bad_rows != 0) {
+            free_shared_dense_ops(ops, opt);
+            return 2;
+        }
+        Options layer_opt = opt;
+        layer_opt.layer = layer;
+        LayerDenseOps &d = ops->layers[layer];
+        const std::string attn_tensor = layer_tensor_name(layer, "attn_output_b.weight");
+        const std::string shared_tensor = layer_tensor_name(layer, "ffn_down_shexp.weight");
+        if (prepare_resident_f8_dense(layer_opt, rows, attn_tensor.c_str(), 1, cache,
+                                      &d.attn) != 0 ||
+            prepare_resident_f8_dense(layer_opt, rows, shared_tensor.c_str(), 2, cache,
+                                      &d.shared) != 0) {
+            free_shared_dense_ops(ops, opt);
+            return 3;
+        }
+        d.initialized = true;
+        ops->loaded_bytes += d.attn.loaded_bytes + d.shared.loaded_bytes;
+    }
+    ops->initialized = true;
+    return 0;
+}
+
 int launch_resident_f8_dense(const Options &opt,
                              const ResidentF8Dense &op,
                              RankState ranks[kGpus]) {
@@ -2587,6 +2645,7 @@ int run_decode_loop(const Options &opt,
                     RankState ranks[kGpus],
                     const Api &api,
                     const DenseF16Cache *cache,
+                    const LayerDenseOps *shared_dense_ops,
                     DecodeLoopStats *stats) {
     if (opt.decode_steps <= 0) return 0;
     stats->enabled = true;
@@ -2601,15 +2660,24 @@ int run_decode_loop(const Options &opt,
 
     ResidentF8Dense attn;
     ResidentF8Dense shared;
+    const ResidentF8Dense *attn_op = nullptr;
+    const ResidentF8Dense *shared_op = nullptr;
     const std::string attn_tensor = layer_tensor_name(opt.layer, "attn_output_b.weight");
     const std::string shared_tensor = layer_tensor_name(opt.layer, "ffn_down_shexp.weight");
-    if (prepare_resident_f8_dense(opt, rows, attn_tensor.c_str(), 1, cache, &attn) != 0 ||
-        prepare_resident_f8_dense(opt, rows, shared_tensor.c_str(), 2, cache, &shared) != 0) {
-        free_resident_f8_dense(attn, opt);
-        free_resident_f8_dense(shared, opt);
-        return 1;
+    if (shared_dense_ops) {
+        attn_op = &shared_dense_ops->attn;
+        shared_op = &shared_dense_ops->shared;
+    } else {
+        if (prepare_resident_f8_dense(opt, rows, attn_tensor.c_str(), 1, cache, &attn) != 0 ||
+            prepare_resident_f8_dense(opt, rows, shared_tensor.c_str(), 2, cache, &shared) != 0) {
+            free_resident_f8_dense(attn, opt);
+            free_resident_f8_dense(shared, opt);
+            return 1;
+        }
+        attn_op = &attn;
+        shared_op = &shared;
     }
-    stats->dense_loaded_bytes = attn.loaded_bytes + shared.loaded_bytes;
+    stats->dense_loaded_bytes = attn_op->loaded_bytes + shared_op->loaded_bytes;
 
     const uint64_t shard_elems = (uint64_t)opt.slots * (kHidden / kGpus);
     const uint64_t shard_bytes = shard_elems * sizeof(float);
@@ -2620,8 +2688,10 @@ int run_decode_loop(const Options &opt,
     stats->ep_contribution_bytes = all_contrib_bytes * kGpus;
     stats->ep_return_bytes = return_shard_bytes * kGpus * kGpus;
     if (ensure_compose_buffers(opt, ranks) != 0) {
-        free_resident_f8_dense(attn, opt);
-        free_resident_f8_dense(shared, opt);
+        if (!shared_dense_ops) {
+            free_resident_f8_dense(attn, opt);
+            free_resident_f8_dense(shared, opt);
+        }
         return 2;
     }
 
@@ -2643,8 +2713,8 @@ int run_decode_loop(const Options &opt,
         double ep_stage_ms = 0.0;
         double dense_stage_ms = 0.0;
         if (opt.overlap_ep_dense) {
-            if (launch_resident_f8_dense(opt, attn, ranks) != 0 ||
-                launch_resident_f8_dense(opt, shared, ranks) != 0) {
+            if (launch_resident_f8_dense(opt, *attn_op, ranks) != 0 ||
+                launch_resident_f8_dense(opt, *shared_op, ranks) != 0) {
                 return 2;
             }
             sync_all();
@@ -2653,8 +2723,8 @@ int run_decode_loop(const Options &opt,
         } else {
             sync_all();
             auto t1 = std::chrono::steady_clock::now();
-            if (launch_resident_f8_dense(opt, attn, ranks) != 0 ||
-                launch_resident_f8_dense(opt, shared, ranks) != 0) {
+            if (launch_resident_f8_dense(opt, *attn_op, ranks) != 0 ||
+                launch_resident_f8_dense(opt, *shared_op, ranks) != 0) {
                 return 2;
             }
             sync_all();
@@ -2779,7 +2849,7 @@ int run_decode_loop(const Options &opt,
                     ? ranks[7].d_ep_contrib_all + (uint64_t)dst * shard_elems
                     : r.d_ep_remote[7];
                 compose_next_hidden_sum8_kernel<<<grid, block, 0, r.stream>>>(
-                    r.d_next_hidden, attn.d_out[(size_t)dst], shared.d_out[(size_t)dst],
+                    r.d_next_hidden, attn_op->d_out[(size_t)dst], shared_op->d_out[(size_t)dst],
                     r0, r1, r2, r3, r4, r5, r6, r7, dst, opt.slots);
             } else {
                 zero_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_sum, shard_elems);
@@ -2796,7 +2866,7 @@ int run_decode_loop(const Options &opt,
                 }
                 CHECK_CUDA(cudaGetLastError());
                 compose_next_hidden_kernel<<<grid, block, 0, r.stream>>>(
-                    r.d_next_hidden, attn.d_out[(size_t)dst], shared.d_out[(size_t)dst],
+                    r.d_next_hidden, attn_op->d_out[(size_t)dst], shared_op->d_out[(size_t)dst],
                     r.d_ep_sum, dst, opt.slots);
             }
             CHECK_CUDA(cudaGetLastError());
@@ -2814,8 +2884,10 @@ int run_decode_loop(const Options &opt,
     double warm_compose = 0.0;
     for (int i = 0; i < opt.warmup; ++i) {
         if (run_one_step(&warm_ep, &warm_dense, &warm_compose) != 0) {
-            free_resident_f8_dense(attn, opt);
-            free_resident_f8_dense(shared, opt);
+            if (!shared_dense_ops) {
+                free_resident_f8_dense(attn, opt);
+                free_resident_f8_dense(shared, opt);
+            }
             return 3;
         }
     }
@@ -2826,8 +2898,10 @@ int run_decode_loop(const Options &opt,
     const auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < opt.decode_steps; ++i) {
         if (run_one_step(&ep_ms, &dense_ms, &compose_ms) != 0) {
-            free_resident_f8_dense(attn, opt);
-            free_resident_f8_dense(shared, opt);
+            if (!shared_dense_ops) {
+                free_resident_f8_dense(attn, opt);
+                free_resident_f8_dense(shared, opt);
+            }
             return 4;
         }
     }
@@ -2861,8 +2935,10 @@ int run_decode_loop(const Options &opt,
     }
     if (stats->checksum == 0 || stats->finite_bad != 0) stats->pass = false;
 
-    free_resident_f8_dense(attn, opt);
-    free_resident_f8_dense(shared, opt);
+    if (!shared_dense_ops) {
+        free_resident_f8_dense(attn, opt);
+        free_resident_f8_dense(shared, opt);
+    }
     return stats->pass ? 0 : 5;
 }
 
@@ -2874,7 +2950,8 @@ int run_layer(const Options &opt,
               const SharedApi *shared_api,
               SharedRankBuffers *shared_rank_buffers,
               SharedTpRuntime *shared_tp_runtime,
-              const SharedExpertBindings *shared_expert_bindings) {
+              const SharedExpertBindings *shared_expert_bindings,
+              const SharedDenseOps *shared_dense_ops) {
     std::vector<ContractRow> rows;
     LayerStats layer_stats;
     if (parse_contract(opt.contract_path, opt.layer, &rows, &layer_stats) != 0 ||
@@ -3247,7 +3324,12 @@ int run_layer(const Options &opt,
     }
 
     DecodeLoopStats decode_loop;
-    const int decode_rc = run_decode_loop(opt, rows, ranks, *api, dense_f16_cache, &decode_loop);
+    const LayerDenseOps *layer_dense_ops =
+        shared_dense_ops && shared_dense_ops->initialized
+            ? &shared_dense_ops->layers[opt.layer]
+            : nullptr;
+    const int decode_rc = run_decode_loop(opt, rows, ranks, *api, dense_f16_cache,
+                                          layer_dense_ops, &decode_loop);
     if (decode_loop.enabled) {
         std::printf("tp_ep_decode_loop\tsteps\t%d\tslots\t%d\tslot_steps\t%llu\t"
                     "total_ms\t%.6f\tms_per_step\t%.6f\tslot_step_tok_s\t%.6f\t"
@@ -3506,7 +3588,7 @@ int main(int argc, char **argv) {
     }
 
     if (!opt.all_layers) {
-        return run_layer(opt, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+        return run_layer(opt, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 
     DenseF16Cache all_layer_dense_f16_cache;
@@ -3606,6 +3688,27 @@ int main(int argc, char **argv) {
                     "mode\tlocal_per_layer\tPASS\n", kGpus);
     }
 
+    SharedDenseOps shared_dense_ops;
+    if (opt.share_dense_ops && open_shared_dense_ops(opt, shared_dense_f16_cache,
+                                                     &shared_dense_ops) != 0) {
+        close_shared_expert_bindings(&shared_expert_bindings);
+        close_shared_tp_runtime(&shared_tp_runtime);
+        close_shared_rank_buffers(&shared_rank_buffers);
+        close_shared_api(&shared_api);
+        if (shared_dense_f16_cache) {
+            free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+        }
+        return 10;
+    }
+    if (shared_dense_ops.initialized) {
+        std::printf("tp_ep_all_layer_dense_ops_shared\tlayers\t43\tdevices\t%d\t"
+                    "loaded_bytes\t%llu\tPASS\n",
+                    kGpus, (unsigned long long)shared_dense_ops.loaded_bytes);
+    } else {
+        std::printf("tp_ep_all_layer_dense_ops_shared\tlayers\t43\tdevices\t%d\t"
+                    "mode\tlocal_per_layer\tPASS\n", kGpus);
+    }
+
     if (opt.token_major_all_layers) {
         int pass_invocations = 0;
         double sum_decode_ms = 0.0;
@@ -3625,8 +3728,11 @@ int main(int argc, char **argv) {
                     shared_tp_runtime.initialized ? &shared_tp_runtime : nullptr;
                 const SharedExpertBindings *expert_arg =
                     shared_expert_bindings.initialized ? &shared_expert_bindings : nullptr;
+                const SharedDenseOps *dense_ops_arg =
+                    shared_dense_ops.initialized ? &shared_dense_ops : nullptr;
                 const int rc = run_layer(layer_opt, &s, shared_dense_f16_cache, &shared_api,
-                                         &shared_rank_buffers, tp_runtime_arg, expert_arg);
+                                         &shared_rank_buffers, tp_runtime_arg, expert_arg,
+                                         dense_ops_arg);
                 std::printf("tp_ep_token_major_item\tstep\t%d\tlayer\t%d\tratio\t%d\t"
                             "decode_ms_per_step\t%.6f\tdecode_slot_step_tok_s\t%.6f\t"
                             "decode_ep_ms_per_step\t%.6f\tdecode_dense_ms_per_step\t%.6f\t"
@@ -3657,6 +3763,7 @@ int main(int argc, char **argv) {
                                 "slots\t%d\tctx\t262144\twall_ms\t%.6f\tFAIL\n",
                                 opt.decode_steps, pass_invocations, step, layer,
                                 opt.slots, wall_ms);
+                    free_shared_dense_ops(&shared_dense_ops, opt);
                     close_shared_expert_bindings(&shared_expert_bindings);
                     close_shared_tp_runtime(&shared_tp_runtime);
                     close_shared_rank_buffers(&shared_rank_buffers);
@@ -3681,6 +3788,7 @@ int main(int argc, char **argv) {
                     "pass_invocations\t%d\tslots\t%d\tctx\t262144\t"
                     "shared_api\t%d\tshared_rank_buffers\t%d\tshared_tp_runtime\t%d\t"
                     "shared_expert_bindings\t%d\toverlap_ep_dense\t%d\t"
+                    "shared_dense_ops\t%d\t"
                     "direct_remote_compose\t%d\tsource_copy_schedule\t%d\t"
                     "sum_decode_ms\t%.6f\tms_per_token\t%.6f\t"
                     "projected_slot_step_tok_s\t%.6f\t"
@@ -3692,11 +3800,13 @@ int main(int argc, char **argv) {
                     shared_tp_runtime.initialized ? 1 : 0,
                     shared_expert_bindings.initialized ? 1 : 0,
                     opt.overlap_ep_dense ? 1 : 0,
+                    shared_dense_ops.initialized ? 1 : 0,
                     opt.direct_remote_compose ? 1 : 0,
                     opt.source_copy_schedule ? 1 : 0,
                     sum_decode_ms, ms_per_token, slot_step_tok_s,
                     sum_ep_ms, sum_dense_ms, sum_compose_ms,
                     wall_ms, (unsigned long long)checksum);
+        free_shared_dense_ops(&shared_dense_ops, opt);
         close_shared_expert_bindings(&shared_expert_bindings);
         close_shared_tp_runtime(&shared_tp_runtime);
         close_shared_rank_buffers(&shared_rank_buffers);
@@ -3722,8 +3832,11 @@ int main(int argc, char **argv) {
             shared_tp_runtime.initialized ? &shared_tp_runtime : nullptr;
         const SharedExpertBindings *expert_arg =
             shared_expert_bindings.initialized ? &shared_expert_bindings : nullptr;
+        const SharedDenseOps *dense_ops_arg =
+            shared_dense_ops.initialized ? &shared_dense_ops : nullptr;
         const int rc = run_layer(layer_opt, &s, shared_dense_f16_cache, &shared_api,
-                                 &shared_rank_buffers, tp_runtime_arg, expert_arg);
+                                 &shared_rank_buffers, tp_runtime_arg, expert_arg,
+                                 dense_ops_arg);
         std::printf("tp_ep_all_layer_item\tlayer\t%d\tratio\t%d\t"
                     "total_rows\t%llu\tdense_rows\t%llu\tcontrol_rows\t%llu\t"
                     "expert_rows\t%llu\tkv_rows\t%llu\tcomp_rows\t%llu\t"
@@ -3759,6 +3872,7 @@ int main(int argc, char **argv) {
                         "failed_layer\t%d\tdescriptor_checks\t%d\tpredecode_probes\t%d\t"
                         "shared_api\t%d\tshared_rank_buffers\t%d\tshared_tp_runtime\t%d\t"
                         "shared_expert_bindings\t%d\t"
+                        "shared_dense_ops\t%d\t"
                         "overlap_ep_dense\t%d\tdirect_remote_compose\t%d\t"
                         "source_copy_schedule\t%d\t"
                         "wall_ms\t%.6f\tFAIL\n",
@@ -3767,10 +3881,12 @@ int main(int argc, char **argv) {
                         shared_rank_buffers.initialized ? 1 : 0,
                         shared_tp_runtime.initialized ? 1 : 0,
                         shared_expert_bindings.initialized ? 1 : 0,
+                        shared_dense_ops.initialized ? 1 : 0,
                         opt.overlap_ep_dense ? 1 : 0,
                         opt.direct_remote_compose ? 1 : 0,
                         opt.source_copy_schedule ? 1 : 0,
                         wall_ms);
+            free_shared_dense_ops(&shared_dense_ops, opt);
             close_shared_expert_bindings(&shared_expert_bindings);
             close_shared_tp_runtime(&shared_tp_runtime);
             close_shared_rank_buffers(&shared_rank_buffers);
@@ -3792,6 +3908,7 @@ int main(int argc, char **argv) {
                 "descriptor_checks\t%d\tpredecode_probes\t%d\tshared_api\t%d\t"
                 "shared_rank_buffers\t%d\tshared_tp_runtime\t%d\t"
                 "shared_expert_bindings\t%d\t"
+                "shared_dense_ops\t%d\t"
                 "overlap_ep_dense\t%d\tdirect_remote_compose\t%d\t"
                 "source_copy_schedule\t%d\t"
                 "sum_decode_ms_per_token\t%.6f\tprojected_slot_step_tok_s\t%.6f\t"
@@ -3804,11 +3921,13 @@ int main(int argc, char **argv) {
                 shared_rank_buffers.initialized ? 1 : 0,
                 shared_tp_runtime.initialized ? 1 : 0,
                 shared_expert_bindings.initialized ? 1 : 0,
+                shared_dense_ops.initialized ? 1 : 0,
                 opt.overlap_ep_dense ? 1 : 0,
                 opt.direct_remote_compose ? 1 : 0,
                 opt.source_copy_schedule ? 1 : 0,
                 sum_decode_ms, slot_step_tok_s, sum_ep_ms, sum_dense_ms,
                 sum_compose_ms, wall_ms, (unsigned long long)checksum);
+    free_shared_dense_ops(&shared_dense_ops, opt);
     close_shared_expert_bindings(&shared_expert_bindings);
     close_shared_tp_runtime(&shared_tp_runtime);
     close_shared_rank_buffers(&shared_rank_buffers);
