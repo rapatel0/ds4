@@ -179,6 +179,19 @@ batch, `32/32` HTTP 200 responses, `58.791255` wall generated tok/s, and
 `206.196887` decode generated tok/s. This is a correctness mode, not an
 optimized KV path. Real per-client session keys, stable slot ownership,
 prefill population, eviction/reset semantics, and token feedback remain.
+Sprint 296 added the first TP/EP HTTP session-slot primitive after reviewing
+the existing `ds4.c` session timeline model and llama.cpp server slot/cache
+semantics. The diagnostic HTTP endpoint now derives a cache key from
+`session_id`, `cache_key`, `conversation_id`, or a prompt hash fallback,
+assigns stable resident slots with LRU eviction, buckets only requests with the
+same `max_tokens` and resident position, rejects duplicate session keys inside
+one decode batch, and exposes `/v100/slots` plus cache hit/miss/eviction
+metadata in `/v100/status`, `/metrics`, and responses. V100 validation with
+`session_id=alpha` shows the first request missing slot `0` at position
+`100000 -> 100001`, the second request hitting the same slot at
+`100001 -> 100002`, and status reporting `cache_hits=1`, `cache_misses=1`,
+`cache_evictions=0`, `next_position=100002`. This is still diagnostic serving,
+but the serving cursor is no longer only global scratch state.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

@@ -6282,6 +6282,13 @@ struct HttpParsedRequest {
     std::string path;
     std::string body;
     int requested_tokens = 0;
+    std::string cache_key;
+    bool cache_key_explicit = false;
+    uint64_t cache_position = 0;
+    int cache_slot = -1;
+    bool cache_hit = false;
+    bool cache_evicted = false;
+    std::string evicted_key;
 };
 
 static int http_content_length(const char *req) {
@@ -6293,6 +6300,60 @@ static int http_content_length(const char *req) {
     long v = std::strtol(p, &end, 10);
     if (end == p || v < 0 || v > 4096) return 0;
     return (int)v;
+}
+
+static std::string json_find_string(const char *body, const char *key) {
+    if (!body || !key) return "";
+    const char *p = std::strstr(body, key);
+    if (!p) return "";
+    p += std::strlen(key);
+    while (*p && (*p == ' ' || *p == '\t' || *p == ':')) ++p;
+    if (*p != '"' && *p != '\'') {
+        while (*p && *p != '"' && *p != '\'') ++p;
+    }
+    if (!*p) return "";
+    const char quote = *p++;
+    std::string out;
+    while (*p && *p != quote && out.size() < 256) {
+        if (*p == '\\' && p[1]) {
+            ++p;
+        }
+        out.push_back(*p++);
+    }
+    return out;
+}
+
+static uint64_t fnv1a64(const std::string &s) {
+    uint64_t h = 1469598103934665603ull;
+    for (unsigned char c : s) {
+        h ^= (uint64_t)c;
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+
+static std::string http_json_escape(const std::string &s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (char c : s) {
+        switch (c) {
+            case '\\': out += "\\\\"; break;
+            case '"': out += "\\\""; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if ((unsigned char)c < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x", (unsigned char)c);
+                    out += buf;
+                } else {
+                    out.push_back(c);
+                }
+                break;
+        }
+    }
+    return out;
 }
 
 static bool http_read_request(int fd, HttpParsedRequest *out) {
@@ -6355,6 +6416,211 @@ static int http_requested_tokens(const HttpParsedRequest &req, int fallback) {
     return out;
 }
 
+static std::string http_request_cache_key(const HttpParsedRequest &req,
+                                          uint64_t request_serial,
+                                          bool *explicit_key) {
+    std::string key = json_find_string(req.body.c_str(), "\"session_id\"");
+    if (key.empty()) key = json_find_string(req.body.c_str(), "\"cache_key\"");
+    if (key.empty()) key = json_find_string(req.body.c_str(), "\"conversation_id\"");
+    if (!key.empty()) {
+        if (explicit_key) *explicit_key = true;
+        return key;
+    }
+
+    const std::string prompt = json_find_string(req.body.c_str(), "\"prompt\"");
+    if (!prompt.empty()) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "prompt:%016llx",
+                      (unsigned long long)fnv1a64(prompt));
+        if (explicit_key) *explicit_key = false;
+        return buf;
+    }
+
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "ephemeral:%llu",
+                  (unsigned long long)request_serial);
+    if (explicit_key) *explicit_key = false;
+    return buf;
+}
+
+struct TpEpHttpSessionSlot {
+    int id = -1;
+    bool occupied = false;
+    bool kv_valid = false;
+    bool hc_valid = false;
+    std::string key;
+    uint64_t pos = 0;
+    uint64_t prompt_tokens = 0;
+    uint64_t generated_tokens = 0;
+    uint64_t hits = 0;
+    uint64_t misses = 0;
+    uint64_t last_used = 0;
+};
+
+struct TpEpHttpSessionAssignment {
+    int slot = -1;
+    bool hit = false;
+    bool evicted = false;
+    std::string evicted_key;
+    uint64_t pos_in = 0;
+    uint64_t pos_out = 0;
+};
+
+struct TpEpHttpSessionTable {
+    std::vector<TpEpHttpSessionSlot> slots;
+    uint64_t clock = 0;
+    uint64_t hits = 0;
+    uint64_t misses = 0;
+    uint64_t evictions = 0;
+
+    void init(int n_slots) {
+        slots.resize((size_t)n_slots);
+        for (int i = 0; i < n_slots; ++i) {
+            slots[(size_t)i].id = i;
+        }
+    }
+
+    int find(const std::string &key) const {
+        for (const auto &slot : slots) {
+            if (slot.occupied && slot.key == key) return slot.id;
+        }
+        return -1;
+    }
+
+    uint64_t preview_position(const std::string &key, uint64_t base_pos) const {
+        const int idx = find(key);
+        if (idx >= 0 && slots[(size_t)idx].kv_valid && slots[(size_t)idx].hc_valid) {
+            return slots[(size_t)idx].pos;
+        }
+        return base_pos;
+    }
+
+    TpEpHttpSessionAssignment assign(const std::string &key,
+                                     uint64_t base_pos,
+                                     const std::vector<bool> &protected_slots) {
+        TpEpHttpSessionAssignment a;
+        ++clock;
+
+        int idx = find(key);
+        if (idx >= 0) {
+            auto &slot = slots[(size_t)idx];
+            a.slot = idx;
+            a.hit = slot.kv_valid && slot.hc_valid;
+            a.pos_in = a.hit ? slot.pos : base_pos;
+            slot.last_used = clock;
+            if (a.hit) {
+                hits++;
+                slot.hits++;
+            } else {
+                misses++;
+                slot.misses++;
+                slot.pos = base_pos;
+            }
+            return a;
+        }
+
+        for (auto &slot : slots) {
+            if (!slot.occupied) {
+                idx = slot.id;
+                break;
+            }
+        }
+        if (idx < 0) {
+            uint64_t best_last = UINT64_MAX;
+            for (const auto &slot : slots) {
+                if (slot.id >= 0 && slot.id < (int)protected_slots.size() &&
+                    protected_slots[(size_t)slot.id]) {
+                    continue;
+                }
+                if (slot.last_used < best_last) {
+                    best_last = slot.last_used;
+                    idx = slot.id;
+                }
+            }
+        }
+        if (idx < 0) return a;
+
+        auto &slot = slots[(size_t)idx];
+        if (slot.occupied) {
+            a.evicted = true;
+            a.evicted_key = slot.key;
+            evictions++;
+        }
+        slot.occupied = true;
+        slot.kv_valid = false;
+        slot.hc_valid = false;
+        slot.key = key;
+        slot.pos = base_pos;
+        slot.prompt_tokens = 0;
+        slot.generated_tokens = 0;
+        slot.hits = 0;
+        slot.misses = 1;
+        slot.last_used = clock;
+        misses++;
+
+        a.slot = idx;
+        a.hit = false;
+        a.pos_in = base_pos;
+        return a;
+    }
+
+    void commit(const TpEpHttpSessionAssignment &a,
+                uint64_t prompt_tokens,
+                uint64_t generated_tokens) {
+        if (a.slot < 0 || a.slot >= (int)slots.size()) return;
+        auto &slot = slots[(size_t)a.slot];
+        slot.kv_valid = true;
+        slot.hc_valid = true;
+        slot.pos = a.pos_in + generated_tokens;
+        slot.prompt_tokens += prompt_tokens;
+        slot.generated_tokens += generated_tokens;
+        slot.last_used = ++clock;
+    }
+
+    int used() const {
+        int n = 0;
+        for (const auto &slot : slots) n += slot.occupied ? 1 : 0;
+        return n;
+    }
+
+    void slots_json(char *out, size_t out_size) const {
+        size_t used_bytes = 0;
+        int n = std::snprintf(out, out_size,
+                              "{\"slots_total\":%zu,\"slots_used\":%d,"
+                              "\"cache_hits\":%llu,\"cache_misses\":%llu,"
+                              "\"cache_evictions\":%llu,\"slots\":[",
+                              slots.size(), used(),
+                              (unsigned long long)hits,
+                              (unsigned long long)misses,
+                              (unsigned long long)evictions);
+        if (n < 0) return;
+        used_bytes = (size_t)std::min(n, (int)out_size);
+        for (size_t i = 0; i < slots.size() && used_bytes + 256 < out_size; ++i) {
+            const auto &slot = slots[i];
+            const std::string key = http_json_escape(slot.key);
+            n = std::snprintf(out + used_bytes, out_size - used_bytes,
+                              "%s{\"id\":%d,\"occupied\":%d,\"key\":\"%s\","
+                              "\"pos\":%llu,\"kv_valid\":%d,\"hc_valid\":%d,"
+                              "\"prompt_tokens\":%llu,\"generated_tokens\":%llu,"
+                              "\"hits\":%llu,\"misses\":%llu}",
+                              i == 0 ? "" : ",",
+                              slot.id, slot.occupied ? 1 : 0, key.c_str(),
+                              (unsigned long long)slot.pos,
+                              slot.kv_valid ? 1 : 0,
+                              slot.hc_valid ? 1 : 0,
+                              (unsigned long long)slot.prompt_tokens,
+                              (unsigned long long)slot.generated_tokens,
+                              (unsigned long long)slot.hits,
+                              (unsigned long long)slot.misses);
+            if (n < 0) break;
+            used_bytes += (size_t)n;
+        }
+        if (used_bytes + 4 < out_size) {
+            std::snprintf(out + used_bytes, out_size - used_bytes, "]}\n");
+        }
+    }
+};
+
 static unsigned long long http_epoch_seconds() {
     using namespace std::chrono;
     return (unsigned long long)duration_cast<seconds>(
@@ -6363,11 +6629,21 @@ static unsigned long long http_epoch_seconds() {
 
 static void http_drain_matching_pending(std::deque<HttpParsedRequest> *pending,
                                         int requested_tokens,
+                                        uint64_t cache_position,
                                         int max_batch,
                                         std::vector<HttpParsedRequest> *batch) {
     for (auto it = pending->begin();
          it != pending->end() && (int)batch->size() < max_batch;) {
-        if (it->requested_tokens == requested_tokens) {
+        bool duplicate_key = false;
+        for (const auto &req : *batch) {
+            if (req.cache_key == it->cache_key) {
+                duplicate_key = true;
+                break;
+            }
+        }
+        if (it->requested_tokens == requested_tokens &&
+            it->cache_position == cache_position &&
+            !duplicate_key) {
             batch->push_back(std::move(*it));
             it = pending->erase(it);
         } else {
@@ -6416,6 +6692,8 @@ int run_tp_ep_http_server(const Options &base_opt,
     uint64_t coalesced_requests = 0;
     uint64_t bucketed_requests = 0;
     uint64_t rejected = 0;
+    TpEpHttpSessionTable sessions;
+    sessions.init(base_opt.slots);
     std::deque<HttpParsedRequest> pending_generation;
     uint64_t next_position = base_opt.position;
     uint64_t total_prompt_tokens = 0;
@@ -6476,7 +6754,7 @@ int run_tp_ep_http_server(const Options &base_opt,
             const double cumulative_continuation_tok_s_decode = total_continuation_decode_ms > 0.0
                 ? (double)total_continuation_tokens * 1000.0 / total_continuation_decode_ms
                 : 0.0;
-            char out[4096];
+            char out[6144];
             std::snprintf(out, sizeof(out),
                           "{\"status\":\"ok\",\"backend\":\"tp_ep_resident\","
                           "\"tp\":8,\"ep\":8,\"pp\":1,\"ctx\":262144,"
@@ -6488,6 +6766,11 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "\"kv_runtime_resident\":%d,"
                           "\"kv_all_slots_gate\":%d,"
                           "\"hc_persist_state_gate\":%d,"
+                          "\"cache_slots_total\":%zu,"
+                          "\"cache_slots_used\":%d,"
+                          "\"cache_hits\":%llu,"
+                          "\"cache_misses\":%llu,"
+                          "\"cache_evictions\":%llu,"
                           "\"rejected_requests\":%llu,"
                           "\"total_prompt_tokens\":%llu,"
                           "\"total_generated_tokens\":%llu,"
@@ -6518,6 +6801,11 @@ int run_tp_ep_http_server(const Options &base_opt,
                           shared_tp_runtime && shared_tp_runtime->initialized ? 1 : 0,
                           base_opt.tp_kv_all_slots_gate ? 1 : 0,
                           base_opt.tp_hc_persist_state_gate ? 1 : 0,
+                          sessions.slots.size(),
+                          sessions.used(),
+                          (unsigned long long)sessions.hits,
+                          (unsigned long long)sessions.misses,
+                          (unsigned long long)sessions.evictions,
                           (unsigned long long)rejected,
                           (unsigned long long)total_prompt_tokens,
                           (unsigned long long)total_generated_tokens,
@@ -6536,6 +6824,10 @@ int run_tp_ep_http_server(const Options &base_opt,
                           total_compose_reduce_ms,
                           total_compose_copy_ms,
                           total_compose_final_ms);
+            http_write_json(fd, 200, out);
+        } else if (first_req.method == "GET" && first_req.path == "/v100/slots") {
+            char out[16384];
+            sessions.slots_json(out, sizeof(out));
             http_write_json(fd, 200, out);
         } else if (first_req.method == "GET" && first_req.path == "/metrics") {
             const double cumulative_generated_tok_s_wall = total_wall_ms > 0.0
@@ -6564,6 +6856,11 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "ds4_v100_tp_ep_kv_runtime_resident %d\n"
                           "ds4_v100_tp_ep_kv_all_slots_gate %d\n"
                           "ds4_v100_tp_ep_hc_persist_state_gate %d\n"
+                          "ds4_v100_tp_ep_cache_slots_total %zu\n"
+                          "ds4_v100_tp_ep_cache_slots_used %d\n"
+                          "ds4_v100_tp_ep_cache_hits %llu\n"
+                          "ds4_v100_tp_ep_cache_misses %llu\n"
+                          "ds4_v100_tp_ep_cache_evictions %llu\n"
                           "ds4_v100_tp_ep_rejected_requests %llu\n"
                           "ds4_v100_tp_ep_total_prompt_tokens %llu\n"
                           "ds4_v100_tp_ep_total_generated_tokens %llu\n"
@@ -6593,6 +6890,11 @@ int run_tp_ep_http_server(const Options &base_opt,
                           shared_tp_runtime && shared_tp_runtime->initialized ? 1 : 0,
                           base_opt.tp_kv_all_slots_gate ? 1 : 0,
                           base_opt.tp_hc_persist_state_gate ? 1 : 0,
+                          sessions.slots.size(),
+                          sessions.used(),
+                          (unsigned long long)sessions.hits,
+                          (unsigned long long)sessions.misses,
+                          (unsigned long long)sessions.evictions,
                           (unsigned long long)rejected,
                           (unsigned long long)total_prompt_tokens,
                           (unsigned long long)total_generated_tokens,
@@ -6614,11 +6916,17 @@ int run_tp_ep_http_server(const Options &base_opt,
             http_write_text(fd, out);
         } else if (http_is_generation_post(first_req)) {
             first_req.requested_tokens = http_requested_tokens(first_req, base_opt.decode_steps);
+            first_req.cache_key = http_request_cache_key(first_req,
+                                                         served + pending_generation.size(),
+                                                         &first_req.cache_key_explicit);
+            first_req.cache_position =
+                sessions.preview_position(first_req.cache_key, base_opt.position);
 
             std::vector<HttpParsedRequest> batch;
             batch.push_back(first_req);
             http_drain_matching_pending(&pending_generation,
                                         first_req.requested_tokens,
+                                        first_req.cache_position,
                                         base_opt.slots,
                                         &batch);
             while ((int)batch.size() < base_opt.slots &&
@@ -6641,7 +6949,29 @@ int run_tp_ep_http_server(const Options &base_opt,
                     continue;
                 }
                 extra_req.requested_tokens = http_requested_tokens(extra_req, first_req.requested_tokens);
+                extra_req.cache_key = http_request_cache_key(extra_req,
+                                                            served + pending_generation.size(),
+                                                            &extra_req.cache_key_explicit);
+                extra_req.cache_position =
+                    sessions.preview_position(extra_req.cache_key, base_opt.position);
                 if (extra_req.requested_tokens != first_req.requested_tokens) {
+                    bucketed_requests++;
+                    pending_generation.push_back(std::move(extra_req));
+                    continue;
+                }
+                if (extra_req.cache_position != first_req.cache_position) {
+                    bucketed_requests++;
+                    pending_generation.push_back(std::move(extra_req));
+                    continue;
+                }
+                bool duplicate_key = false;
+                for (const auto &req : batch) {
+                    if (req.cache_key == extra_req.cache_key) {
+                        duplicate_key = true;
+                        break;
+                    }
+                }
+                if (duplicate_key) {
                     bucketed_requests++;
                     pending_generation.push_back(std::move(extra_req));
                     continue;
@@ -6649,10 +6979,37 @@ int run_tp_ep_http_server(const Options &base_opt,
                 batch.push_back(extra_req);
             }
 
+            std::vector<TpEpHttpSessionAssignment> assignments(batch.size());
+            std::vector<bool> protected_slots((size_t)base_opt.slots, false);
+            bool assignment_failed = false;
+            for (size_t i = 0; i < batch.size(); ++i) {
+                assignments[i] = sessions.assign(batch[i].cache_key,
+                                                 base_opt.position,
+                                                 protected_slots);
+                if (assignments[i].slot < 0) {
+                    assignment_failed = true;
+                    break;
+                }
+                batch[i].cache_slot = assignments[i].slot;
+                batch[i].cache_hit = assignments[i].hit;
+                batch[i].cache_evicted = assignments[i].evicted;
+                batch[i].evicted_key = assignments[i].evicted_key;
+                batch[i].cache_position = assignments[i].pos_in;
+                protected_slots[(size_t)assignments[i].slot] = true;
+            }
+            if (assignment_failed) {
+                rejected += (uint64_t)batch.size();
+                for (HttpParsedRequest &queued : batch) {
+                    http_write_json(queued.fd, 503, "{\"error\":\"no_cache_slot_available\"}\n");
+                    close(queued.fd);
+                }
+                continue;
+            }
+
             Options req_opt = base_opt;
             req_opt.decode_steps = first_req.requested_tokens;
             req_opt.slots = base_opt.slots;
-            req_opt.position = next_position;
+            req_opt.position = first_req.cache_position;
             req_opt.serving_bench = false;
             ServingBenchResult result;
             const int rc = run_token_major_serving_loop(req_opt,
@@ -6685,7 +7042,8 @@ int run_tp_ep_http_server(const Options &base_opt,
                 generation_batches++;
                 generation_requests += (uint64_t)batch.size();
                 if (batch.size() > 1) coalesced_requests += (uint64_t)batch.size();
-                next_position += (uint64_t)req_opt.decode_steps;
+                next_position = std::max(next_position,
+                                         first_req.cache_position + (uint64_t)req_opt.decode_steps);
                 total_prompt_tokens += client_prompt_tokens;
                 total_generated_tokens += client_generated_tokens;
                 total_continuation_tokens += client_continuation_tokens;
@@ -6701,20 +7059,24 @@ int run_tp_ep_http_server(const Options &base_opt,
                 total_compose_final_ms += result.total_compose_final_ms;
                 last = result;
                 for (size_t i = 0; i < batch.size(); ++i) {
+                    sessions.commit(assignments[i], 1, (uint64_t)req_opt.decode_steps);
                     const uint64_t request_generated = (uint64_t)req_opt.decode_steps;
                     const uint64_t request_continuation = req_opt.decode_steps > 1
                         ? (uint64_t)(req_opt.decode_steps - 1)
                         : 0ull;
                     const bool have_output_head =
                         result.diagnostic_output_head &&
-                        i < result.selected_tokens.size() &&
-                        i < result.selected_logits.size();
+                        batch[i].cache_slot >= 0 &&
+                        (size_t)batch[i].cache_slot < result.selected_tokens.size() &&
+                        (size_t)batch[i].cache_slot < result.selected_logits.size();
                     const uint32_t selected_token = have_output_head
-                        ? result.selected_tokens[i]
+                        ? result.selected_tokens[(size_t)batch[i].cache_slot]
                         : UINT32_MAX;
                     const float selected_logit = have_output_head
-                        ? result.selected_logits[i]
+                        ? result.selected_logits[(size_t)batch[i].cache_slot]
                         : 0.0f;
+                    const std::string escaped_key = http_json_escape(batch[i].cache_key);
+                    const std::string escaped_evicted = http_json_escape(batch[i].evicted_key);
                     char meta[6144];
                     std::snprintf(meta, sizeof(meta),
                                   "\"backend\":\"tp_ep_resident\","
@@ -6733,6 +7095,14 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   "\"coalesced_batch_id\":%llu,"
                                   "\"coalesced_batch_size\":%zu,"
                                   "\"coalesced_slot_index\":%zu,"
+                                  "\"cache_key\":\"%s\","
+                                  "\"cache_key_explicit\":%d,"
+                                  "\"cache_hit\":%d,"
+                                  "\"cache_slot\":%d,"
+                                  "\"cache_pos_in\":%llu,"
+                                  "\"cache_pos_out\":%llu,"
+                                  "\"cache_evicted\":%d,"
+                                  "\"cache_evicted_key\":\"%s\","
                                   "\"microbatch_wait_us\":%d,"
                                   "\"kv_runtime_resident\":%d,"
                                   "\"kv_all_slots_gate\":%d,"
@@ -6774,6 +7144,14 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   (unsigned long long)batch_id,
                                   batch.size(),
                                   i,
+                                  escaped_key.c_str(),
+                                  batch[i].cache_key_explicit ? 1 : 0,
+                                  batch[i].cache_hit ? 1 : 0,
+                                  batch[i].cache_slot,
+                                  (unsigned long long)assignments[i].pos_in,
+                                  (unsigned long long)(assignments[i].pos_in + request_generated),
+                                  batch[i].cache_evicted ? 1 : 0,
+                                  escaped_evicted.c_str(),
                                   base_opt.microbatch_wait_us,
                                   shared_tp_runtime && shared_tp_runtime->initialized ? 1 : 0,
                                   req_opt.tp_kv_all_slots_gate ? 1 : 0,

@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: codex
-revision: 295
+revision: 296
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -78,6 +78,16 @@ not a serial layer-chain.
   tok/s. This is intentionally a correctness mode: all-slot KV readback is
   expensive and should be removed only after real session ownership and prefill
   are implemented.
+- Sprint 296 added the first TP/EP HTTP session-slot layer, based on the
+  serving semantics in `ds4.c` and llama.cpp rather than the old PP appliance.
+  Requests now have cache keys, stable resident slot assignment, LRU eviction,
+  cache-position bucketing, duplicate-session protection within one decode
+  batch, `/v100/slots`, and hit/miss/eviction counters in status/metrics and
+  responses. A V100 smoke shows a repeated `session_id` reusing slot `0` and
+  advancing from `100000 -> 100001 -> 100002` with one miss and one hit. The
+  endpoint is still diagnostic until tokenizer prefill, true prompt token
+  accounting, selected-token feedback, and active-slot-only decode are wired
+  behind this session table.
 - Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
   longer exposes PP/layer-split topology modes. Against the real production
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about
