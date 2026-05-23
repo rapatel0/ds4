@@ -132,6 +132,7 @@ struct RankState {
     int max_routes_per_expert = 0;
     cudaStream_t stream = nullptr;
     cudaStream_t dense_stream = nullptr;
+    cudaStream_t copy_stream = nullptr;
     int *d_offsets = nullptr;
     int *d_route_slots = nullptr;
     __half *d_a = nullptr;
@@ -363,6 +364,7 @@ struct Options {
     bool share_expert_bindings = true;
     bool overlap_ep_dense = true;
     bool direct_remote_compose = false;
+    bool source_copy_schedule = true;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -785,7 +787,8 @@ void usage(const char *argv0) {
                  "       [--share-tp-runtime] [--local-tp-runtime]\n"
                  "       [--shared-expert-bindings] [--local-expert-bindings]\n"
                  "       [--overlap-ep-dense] [--serial-ep-dense]\n"
-                 "       [--direct-remote-compose]\n",
+                 "       [--direct-remote-compose]\n"
+                 "       [--source-copy-schedule] [--dest-copy-schedule]\n",
                  argv0);
 }
 
@@ -881,6 +884,10 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->overlap_ep_dense = false;
         } else if (std::strcmp(arg, "--direct-remote-compose") == 0) {
             opt->direct_remote_compose = true;
+        } else if (std::strcmp(arg, "--source-copy-schedule") == 0) {
+            opt->source_copy_schedule = true;
+        } else if (std::strcmp(arg, "--dest-copy-schedule") == 0) {
+            opt->source_copy_schedule = false;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -2272,6 +2279,7 @@ int open_shared_rank_buffers(const Options &opt, SharedRankBuffers *shared) {
         CHECK_CUDA(cudaSetDevice(r.device));
         CHECK_CUDA(cudaStreamCreate(&r.stream));
         CHECK_CUDA(cudaStreamCreate(&r.dense_stream));
+        CHECK_CUDA(cudaStreamCreate(&r.copy_stream));
         CHECK_CUDA(cudaEventCreate(&r.start));
         CHECK_CUDA(cudaEventCreate(&r.mid));
         CHECK_CUDA(cudaEventCreate(&r.stop));
@@ -2332,6 +2340,7 @@ void close_shared_rank_buffers(SharedRankBuffers *shared) {
         if (r.start) CHECK_CUDA(cudaEventDestroy(r.start));
         if (r.mid) CHECK_CUDA(cudaEventDestroy(r.mid));
         if (r.stop) CHECK_CUDA(cudaEventDestroy(r.stop));
+        if (r.copy_stream) CHECK_CUDA(cudaStreamDestroy(r.copy_stream));
         if (r.dense_stream) CHECK_CUDA(cudaStreamDestroy(r.dense_stream));
         if (r.stream) CHECK_CUDA(cudaStreamDestroy(r.stream));
         r = RankState{};
@@ -2674,31 +2683,66 @@ int run_decode_loop(const Options &opt,
         sync_all();
 
         if (!opt.direct_remote_compose || opt.ep_return_fp16) {
-            for (int dst = 0; dst < kGpus; ++dst) {
-                CHECK_CUDA(cudaSetDevice(ranks[dst].device));
+            if (opt.source_copy_schedule) {
                 for (int src = 0; src < kGpus; ++src) {
-                    if (opt.ep_return_fp16) {
-                        const __half *src_ptr =
-                            ranks[src].d_ep_contrib_half_all + (uint64_t)dst * shard_elems;
-                        CHECK_CUDA(cudaMemcpyPeerAsync(ranks[dst].d_ep_remote_half[src],
-                                                       ranks[dst].device,
-                                                       src_ptr,
-                                                       ranks[src].device,
-                                                       (size_t)return_shard_bytes,
-                                                       ranks[dst].stream));
-                    } else {
-                        const float *src_ptr = ranks[src].d_ep_contrib_all +
-                                               (uint64_t)dst * shard_elems;
-                        CHECK_CUDA(cudaMemcpyPeerAsync(ranks[dst].d_ep_remote[src],
-                                                       ranks[dst].device,
-                                                       src_ptr,
-                                                       ranks[src].device,
-                                                       (size_t)return_shard_bytes,
-                                                       ranks[dst].stream));
+                    CHECK_CUDA(cudaSetDevice(ranks[src].device));
+                    cudaStream_t copy_stream = ranks[src].copy_stream ? ranks[src].copy_stream
+                                                                      : ranks[src].stream;
+                    for (int dst = 0; dst < kGpus; ++dst) {
+                        if (opt.ep_return_fp16) {
+                            const __half *src_ptr =
+                                ranks[src].d_ep_contrib_half_all + (uint64_t)dst * shard_elems;
+                            CHECK_CUDA(cudaMemcpyPeerAsync(ranks[dst].d_ep_remote_half[src],
+                                                           ranks[dst].device,
+                                                           src_ptr,
+                                                           ranks[src].device,
+                                                           (size_t)return_shard_bytes,
+                                                           copy_stream));
+                        } else {
+                            const float *src_ptr = ranks[src].d_ep_contrib_all +
+                                                   (uint64_t)dst * shard_elems;
+                            CHECK_CUDA(cudaMemcpyPeerAsync(ranks[dst].d_ep_remote[src],
+                                                           ranks[dst].device,
+                                                           src_ptr,
+                                                           ranks[src].device,
+                                                           (size_t)return_shard_bytes,
+                                                           copy_stream));
+                        }
                     }
                 }
+                for (int src = 0; src < kGpus; ++src) {
+                    CHECK_CUDA(cudaSetDevice(ranks[src].device));
+                    CHECK_CUDA(cudaStreamSynchronize(ranks[src].copy_stream ?
+                                                    ranks[src].copy_stream :
+                                                    ranks[src].stream));
+                }
+            } else {
+                for (int dst = 0; dst < kGpus; ++dst) {
+                    CHECK_CUDA(cudaSetDevice(ranks[dst].device));
+                    for (int src = 0; src < kGpus; ++src) {
+                        if (opt.ep_return_fp16) {
+                            const __half *src_ptr =
+                                ranks[src].d_ep_contrib_half_all + (uint64_t)dst * shard_elems;
+                            CHECK_CUDA(cudaMemcpyPeerAsync(ranks[dst].d_ep_remote_half[src],
+                                                           ranks[dst].device,
+                                                           src_ptr,
+                                                           ranks[src].device,
+                                                           (size_t)return_shard_bytes,
+                                                           ranks[dst].stream));
+                        } else {
+                            const float *src_ptr = ranks[src].d_ep_contrib_all +
+                                                   (uint64_t)dst * shard_elems;
+                            CHECK_CUDA(cudaMemcpyPeerAsync(ranks[dst].d_ep_remote[src],
+                                                           ranks[dst].device,
+                                                           src_ptr,
+                                                           ranks[src].device,
+                                                           (size_t)return_shard_bytes,
+                                                           ranks[dst].stream));
+                        }
+                    }
+                }
+                sync_all();
             }
-            sync_all();
         }
 
         for (int dst = 0; dst < kGpus; ++dst) {
@@ -3037,6 +3081,7 @@ int run_layer(const Options &opt,
         if (!shared_rank_buffers) {
             CHECK_CUDA(cudaStreamCreate(&r.stream));
             CHECK_CUDA(cudaStreamCreate(&r.dense_stream));
+            CHECK_CUDA(cudaStreamCreate(&r.copy_stream));
             CHECK_CUDA(cudaEventCreate(&r.start));
             CHECK_CUDA(cudaEventCreate(&r.mid));
             CHECK_CUDA(cudaEventCreate(&r.stop));
@@ -3204,6 +3249,7 @@ int run_layer(const Options &opt,
                     "total_ms\t%.6f\tms_per_step\t%.6f\tslot_step_tok_s\t%.6f\t"
                     "dense_hmma\t%d\tdense_f16_cublas\t%d\tdense_f16_cache\t%d\t"
                     "overlap_ep_dense\t%d\tdirect_remote_compose\t%d\t"
+                    "source_copy_schedule\t%d\t"
                     "ep_ms_per_step\t%.6f\tdense_ms_per_step\t%.6f\t"
                     "fused_compose_sum\t%d\tcompose_ms_per_step\t%.6f\t"
                     "dense_loaded_bytes\t%llu\t"
@@ -3219,6 +3265,7 @@ int run_layer(const Options &opt,
                     decode_loop.dense_f16_cache_compose ? 1 : 0,
                     opt.overlap_ep_dense ? 1 : 0,
                     opt.direct_remote_compose ? 1 : 0,
+                    opt.source_copy_schedule ? 1 : 0,
                     decode_loop.ep_ms_per_step,
                     decode_loop.dense_ms_per_step,
                     decode_loop.fused_compose_sum ? 1 : 0,
@@ -3303,6 +3350,7 @@ int run_layer(const Options &opt,
                 "decode_dense_hmma\t%d\tdecode_dense_f16_cublas\t%d\t"
                 "decode_dense_f16_cache\t%d\t"
                 "decode_overlap_ep_dense\t%d\tdecode_direct_remote_compose\t%d\t"
+                "decode_source_copy_schedule\t%d\t"
                 "decode_ep_ms_per_step\t%.6f\tdecode_dense_ms_per_step\t%.6f\t"
                 "decode_fused_compose_sum\t%d\tdecode_compose_ms_per_step\t%.6f\t"
                 "decode_ep_return_dtype\t%s\t"
@@ -3373,6 +3421,7 @@ int run_layer(const Options &opt,
                 decode_loop.dense_f16_cache_compose ? 1 : 0,
                 opt.overlap_ep_dense ? 1 : 0,
                 opt.direct_remote_compose ? 1 : 0,
+                opt.source_copy_schedule ? 1 : 0,
                 decode_loop.ep_ms_per_step,
                 decode_loop.dense_ms_per_step,
                 decode_loop.fused_compose_sum ? 1 : 0,
@@ -3431,6 +3480,7 @@ int run_layer(const Options &opt,
             CHECK_CUDA(cudaEventDestroy(r.start));
             CHECK_CUDA(cudaEventDestroy(r.mid));
             CHECK_CUDA(cudaEventDestroy(r.stop));
+            CHECK_CUDA(cudaStreamDestroy(r.copy_stream));
             CHECK_CUDA(cudaStreamDestroy(r.dense_stream));
             CHECK_CUDA(cudaStreamDestroy(r.stream));
         }
@@ -3605,6 +3655,7 @@ int main(int argc, char **argv) {
                         "shared_api\t%d\tshared_rank_buffers\t%d\tshared_tp_runtime\t%d\t"
                         "shared_expert_bindings\t%d\t"
                         "overlap_ep_dense\t%d\tdirect_remote_compose\t%d\t"
+                        "source_copy_schedule\t%d\t"
                         "wall_ms\t%.6f\tFAIL\n",
                         pass_layers, layer, opt.skip_descriptor_checks ? 0 : 1,
                         opt.skip_predecode_probes ? 0 : 1, shared_api.initialized ? 1 : 0,
@@ -3613,6 +3664,7 @@ int main(int argc, char **argv) {
                         shared_expert_bindings.initialized ? 1 : 0,
                         opt.overlap_ep_dense ? 1 : 0,
                         opt.direct_remote_compose ? 1 : 0,
+                        opt.source_copy_schedule ? 1 : 0,
                         wall_ms);
             close_shared_expert_bindings(&shared_expert_bindings);
             close_shared_tp_runtime(&shared_tp_runtime);
@@ -3636,6 +3688,7 @@ int main(int argc, char **argv) {
                 "shared_rank_buffers\t%d\tshared_tp_runtime\t%d\t"
                 "shared_expert_bindings\t%d\t"
                 "overlap_ep_dense\t%d\tdirect_remote_compose\t%d\t"
+                "source_copy_schedule\t%d\t"
                 "sum_decode_ms_per_token\t%.6f\tprojected_slot_step_tok_s\t%.6f\t"
                 "sum_ep_ms\t%.6f\tsum_dense_ms\t%.6f\tsum_compose_ms\t%.6f\t"
                 "wall_ms\t%.6f\tchecksum\t%llu\tPASS\n",
@@ -3648,6 +3701,7 @@ int main(int argc, char **argv) {
                 shared_expert_bindings.initialized ? 1 : 0,
                 opt.overlap_ep_dense ? 1 : 0,
                 opt.direct_remote_compose ? 1 : 0,
+                opt.source_copy_schedule ? 1 : 0,
                 sum_decode_ms, slot_step_tok_s, sum_ep_ms, sum_dense_ms,
                 sum_compose_ms, wall_ms, (unsigned long long)checksum);
     close_shared_expert_bindings(&shared_expert_bindings);

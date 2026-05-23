@@ -17,7 +17,10 @@ throughput from `831.795688` to `729.339500` slot-step tok/s by increasing
 compose time. Sprint 263 tested direct peer-memory compose and rejected it:
 direct remote reads regress projected throughput from `840.751688` to
 `634.454351` slot-step tok/s by increasing compose time. The remaining
-dominant stage is staged compose/all-to-all with FP32 EP return.
+dominant stage is staged compose/all-to-all with FP32 EP return. Sprint 264
+changed staged peer-copy scheduling from destination streams to source copy
+streams and promoted it: projected throughput improves from `840.494594` to
+`999.490407` slot-step tok/s with checksum preserved.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s
