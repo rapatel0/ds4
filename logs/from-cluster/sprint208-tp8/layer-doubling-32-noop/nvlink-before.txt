@@ -1,0 +1,185 @@
+2026-05-23T03:56:16+00:00
+nvidia-smi nvlink --status
+GPU 0: Tesla V100-SXM2-32GB (UUID: GPU-3ceb3a71-cd56-6d10-075e-0300bd506c22)
+	 Link 0: 25.781 GB/s
+	 Link 1: 25.781 GB/s
+	 Link 2: 25.781 GB/s
+	 Link 3: 25.781 GB/s
+	 Link 4: 25.781 GB/s
+	 Link 5: 25.781 GB/s
+GPU 1: Tesla V100-SXM2-32GB (UUID: GPU-aa23eb12-62a1-161f-b566-3a8b5d0c6278)
+	 Link 0: 25.781 GB/s
+	 Link 1: 25.781 GB/s
+	 Link 2: 25.781 GB/s
+	 Link 3: 25.781 GB/s
+	 Link 4: 25.781 GB/s
+	 Link 5: 25.781 GB/s
+GPU 2: Tesla V100-SXM2-32GB (UUID: GPU-f364b813-c606-1786-40be-f6645f3c33eb)
+	 Link 0: 25.781 GB/s
+	 Link 1: 25.781 GB/s
+	 Link 2: 25.781 GB/s
+	 Link 3: 25.781 GB/s
+	 Link 4: 25.781 GB/s
+	 Link 5: 25.781 GB/s
+GPU 3: Tesla V100-SXM2-32GB (UUID: GPU-07e14590-993d-404b-4a47-f65d0c4b23e0)
+	 Link 0: 25.781 GB/s
+	 Link 1: 25.781 GB/s
+	 Link 2: 25.781 GB/s
+	 Link 3: 25.781 GB/s
+	 Link 4: 25.781 GB/s
+	 Link 5: 25.781 GB/s
+GPU 4: Tesla V100-SXM2-32GB (UUID: GPU-c1aa8bd9-f642-328d-96f8-79d7c38ce61e)
+	 Link 0: 25.781 GB/s
+	 Link 1: 25.781 GB/s
+	 Link 2: 25.781 GB/s
+	 Link 3: 25.781 GB/s
+	 Link 4: 25.781 GB/s
+	 Link 5: 25.781 GB/s
+GPU 5: Tesla V100-SXM2-32GB (UUID: GPU-c275f176-56b9-eb8d-14d7-a3fd15a0ec03)
+	 Link 0: 25.781 GB/s
+	 Link 1: 25.781 GB/s
+	 Link 2: 25.781 GB/s
+	 Link 3: 25.781 GB/s
+	 Link 4: 25.781 GB/s
+	 Link 5: 25.781 GB/s
+GPU 6: Tesla V100-SXM2-32GB (UUID: GPU-d5302639-be81-61f0-5e1a-b8f421bb100b)
+	 Link 0: 25.781 GB/s
+	 Link 1: 25.781 GB/s
+	 Link 2: 25.781 GB/s
+	 Link 3: 25.781 GB/s
+	 Link 4: 25.781 GB/s
+	 Link 5: 25.781 GB/s
+GPU 7: Tesla V100-SXM2-32GB (UUID: GPU-dd6f7287-63a3-17c4-64c2-1eb597391f4b)
+	 Link 0: 25.781 GB/s
+	 Link 1: 25.781 GB/s
+	 Link 2: 25.781 GB/s
+	 Link 3: 25.781 GB/s
+	 Link 4: 25.781 GB/s
+	 Link 5: 25.781 GB/s
+
+nvidia-smi nvlink -gt d
+GPU 0: Tesla V100-SXM2-32GB (UUID: GPU-3ceb3a71-cd56-6d10-075e-0300bd506c22)
+	 Link 0: Data Tx: N/A
+	 Link 0: Data Rx: N/A
+	 Link 1: Data Tx: N/A
+	 Link 1: Data Rx: N/A
+	 Link 2: Data Tx: N/A
+	 Link 2: Data Rx: N/A
+	 Link 3: Data Tx: N/A
+	 Link 3: Data Rx: N/A
+	 Link 4: Data Tx: N/A
+	 Link 4: Data Rx: N/A
+	 Link 5: Data Tx: N/A
+	 Link 5: Data Rx: N/A
+GPU 1: Tesla V100-SXM2-32GB (UUID: GPU-aa23eb12-62a1-161f-b566-3a8b5d0c6278)
+	 Link 0: Data Tx: N/A
+	 Link 0: Data Rx: N/A
+	 Link 1: Data Tx: N/A
+	 Link 1: Data Rx: N/A
+	 Link 2: Data Tx: N/A
+	 Link 2: Data Rx: N/A
+	 Link 3: Data Tx: N/A
+	 Link 3: Data Rx: N/A
+	 Link 4: Data Tx: N/A
+	 Link 4: Data Rx: N/A
+	 Link 5: Data Tx: N/A
+	 Link 5: Data Rx: N/A
+GPU 2: Tesla V100-SXM2-32GB (UUID: GPU-f364b813-c606-1786-40be-f6645f3c33eb)
+	 Link 0: Data Tx: N/A
+	 Link 0: Data Rx: N/A
+	 Link 1: Data Tx: N/A
+	 Link 1: Data Rx: N/A
+	 Link 2: Data Tx: N/A
+	 Link 2: Data Rx: N/A
+	 Link 3: Data Tx: N/A
+	 Link 3: Data Rx: N/A
+	 Link 4: Data Tx: N/A
+	 Link 4: Data Rx: N/A
+	 Link 5: Data Tx: N/A
+	 Link 5: Data Rx: N/A
+GPU 3: Tesla V100-SXM2-32GB (UUID: GPU-07e14590-993d-404b-4a47-f65d0c4b23e0)
+	 Link 0: Data Tx: N/A
+	 Link 0: Data Rx: N/A
+	 Link 1: Data Tx: N/A
+	 Link 1: Data Rx: N/A
+	 Link 2: Data Tx: N/A
+	 Link 2: Data Rx: N/A
+	 Link 3: Data Tx: N/A
+	 Link 3: Data Rx: N/A
+	 Link 4: Data Tx: N/A
+	 Link 4: Data Rx: N/A
+	 Link 5: Data Tx: N/A
+	 Link 5: Data Rx: N/A
+GPU 4: Tesla V100-SXM2-32GB (UUID: GPU-c1aa8bd9-f642-328d-96f8-79d7c38ce61e)
+	 Link 0: Data Tx: N/A
+	 Link 0: Data Rx: N/A
+	 Link 1: Data Tx: N/A
+	 Link 1: Data Rx: N/A
+	 Link 2: Data Tx: N/A
+	 Link 2: Data Rx: N/A
+	 Link 3: Data Tx: N/A
+	 Link 3: Data Rx: N/A
+	 Link 4: Data Tx: N/A
+	 Link 4: Data Rx: N/A
+	 Link 5: Data Tx: N/A
+	 Link 5: Data Rx: N/A
+GPU 5: Tesla V100-SXM2-32GB (UUID: GPU-c275f176-56b9-eb8d-14d7-a3fd15a0ec03)
+	 Link 0: Data Tx: N/A
+	 Link 0: Data Rx: N/A
+	 Link 1: Data Tx: N/A
+	 Link 1: Data Rx: N/A
+	 Link 2: Data Tx: N/A
+	 Link 2: Data Rx: N/A
+	 Link 3: Data Tx: N/A
+	 Link 3: Data Rx: N/A
+	 Link 4: Data Tx: N/A
+	 Link 4: Data Rx: N/A
+	 Link 5: Data Tx: N/A
+	 Link 5: Data Rx: N/A
+GPU 6: Tesla V100-SXM2-32GB (UUID: GPU-d5302639-be81-61f0-5e1a-b8f421bb100b)
+	 Link 0: Data Tx: N/A
+	 Link 0: Data Rx: N/A
+	 Link 1: Data Tx: N/A
+	 Link 1: Data Rx: N/A
+	 Link 2: Data Tx: N/A
+	 Link 2: Data Rx: N/A
+	 Link 3: Data Tx: N/A
+	 Link 3: Data Rx: N/A
+	 Link 4: Data Tx: N/A
+	 Link 4: Data Rx: N/A
+	 Link 5: Data Tx: N/A
+	 Link 5: Data Rx: N/A
+GPU 7: Tesla V100-SXM2-32GB (UUID: GPU-dd6f7287-63a3-17c4-64c2-1eb597391f4b)
+	 Link 0: Data Tx: N/A
+	 Link 0: Data Rx: N/A
+	 Link 1: Data Tx: N/A
+	 Link 1: Data Rx: N/A
+	 Link 2: Data Tx: N/A
+	 Link 2: Data Rx: N/A
+	 Link 3: Data Tx: N/A
+	 Link 3: Data Rx: N/A
+	 Link 4: Data Tx: N/A
+	 Link 4: Data Rx: N/A
+	 Link 5: Data Tx: N/A
+	 Link 5: Data Rx: N/A
+
+nvidia-smi topo -m
+	[4mGPU0	GPU1	GPU2	GPU3	GPU4	GPU5	GPU6	GPU7	CPU Affinity	NUMA Affinity	GPU NUMA ID[0m
+GPU0	 X 	NV1	NV1	NV2	NV2	SYS	SYS	SYS	0-19,40-59	0		N/A
+GPU1	NV1	 X 	NV2	NV1	SYS	NV2	SYS	SYS	0-19,40-59	0		N/A
+GPU2	NV1	NV2	 X 	NV2	SYS	SYS	NV1	SYS	0-19,40-59	0		N/A
+GPU3	NV2	NV1	NV2	 X 	SYS	SYS	SYS	NV1	0-19,40-59	0		N/A
+GPU4	NV2	SYS	SYS	SYS	 X 	NV1	NV1	NV2	20-39,60-79	1		N/A
+GPU5	SYS	NV2	SYS	SYS	NV1	 X 	NV2	NV1	20-39,60-79	1		N/A
+GPU6	SYS	SYS	NV1	SYS	NV1	NV2	 X 	NV2	20-39,60-79	1		N/A
+GPU7	SYS	SYS	SYS	NV1	NV2	NV1	NV2	 X 	20-39,60-79	1		N/A
+
+Legend:
+
+  X    = Self
+  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
+  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node
+  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
+  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
+  PIX  = Connection traversing at most a single PCIe bridge
+  NV#  = Connection traversing a bonded set of # NVLinks

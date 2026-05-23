@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: sprint-execute
-revision: 202
+revision: 204
 ---
 
 # Vision: DS4 V100 Appliance
@@ -51,6 +51,17 @@ serving path.
 Sprint 205 rejects the small-payload async root alternative (`0.860x` at
 `96 routes x 43 layers`). The TP4 production decode branch is now paused; the
 next practical-serving sprint should pivot to persistent fused routed-FFN work.
+Sprint 208 reopens topology investigation with a sharper target: full
+`PP1/TP8` for the 32-slot, 128K-256K serving goal. This is not a reversal of
+the TP4 result. The updated evidence is that raw TP wire volume is small enough
+to keep investigating, while the real risks are synchronization, sharded KV,
+and TP-only scheduler ownership. The first TP8 probes cleared the topology
+gate: 32-slot/256K F8 KV sharded fits at `26.84 GiB` worst GPU, replicated KV
+fails at `50.63 GiB`, and 43-layer TP8 doubling boundary overhead is
+`29.381 ms` at 32 tokens, improving to `37.995 ms` at 128 tokens. The next TP
+sprint should build a bounded one-layer TP8 prototype in new TP-only files; it
+must not introduce a generic scheduler or add TP modes to the PP/layer
+scheduler.
 
 ## Current State
 
@@ -3012,6 +3023,7 @@ GPU utilization with architectural changes, and only then compare against the
 | 2026-05-23 | Completed Sprint 204 concurrent resident TP4 reduction. | Added `DS4_TP4_RESIDENT_ALGO=doubling_async`, issuing pairwise peer exchanges asynchronously on each GPU stream before local add kernels. V100 correctness passed at 96 and 768 routes. The 4-layer resident slice became positive (`1.058x` at 96 routes, `1.187x` at 768 routes), and the 43-layer 768-route shape reached `1.071x`, but the longer 43-layer 96-route repeat was `0.896x`. TP4 is now a larger-batch/prefill candidate only; do not wire it into production decode until a fused/NCCL-grade collective clears the 96-route gate. | Sprint 205+ |
 | 2026-05-23 | Completed Sprint 205 async root TP4 reduction gate. | Added `DS4_TP4_RESIDENT_ALGO=root_async`, a concurrent root gather/reduce/broadcast variant for the resident TP4 layer-slice benchmark. The first cross-device event implementation failed with an invalid resource handle, so the final implementation uses async peer copies plus stream synchronization. V100 correctness passed, but performance was worse than one GPU: `0.970x` at 96 routes x 4 layers, `0.866x` at 768 routes x 4 layers, and `0.860x` at 96 routes x 43 layers. Reject root_async and pause TP4 production decode work. Next sprint should pivot to persistent fused routed-FFN. | Sprint 206+ |
 | 2026-05-23 | Completed Sprint 206 six-route FFN persistent-boundary gate. | Extended the focused TurboMind gate/up benchmark so it measures the exact compact six-route production routed-FFN sequence, `MXFP4 gated gate/up -> MXFP4 down-reduce`, and optionally captures that sequence into a CUDA graph. V100 correctness passed. The 100-iteration smoke measured `0.1597 ms` normal versus `0.1573 ms` graph (`1.016x`), and the 500-iteration repeat measured `0.1459 ms` normal versus `0.1389 ms` graph (`1.050x`). This makes a pure loading/dispatch explanation unlikely for the current six-route bottleneck. The next real lever is a monolithic/software-pipelined routed-FFN kernel or TurboMind/CUTLASS variant that keeps the gated activation tile local across gate/up and down, rather than another graph or wrapper-level optimization. | Sprint 207+ |
+| 2026-05-23 | Completed Sprint 208 separate TP8 investigation path. | Added separate TP8 planner/probe files and ran the first all-8-GPU V100 gates. `PP1/TP8` at 32 slots/256K fits with F8 KV sharding (`26.84 GiB` worst GPU) and fails with replicated KV (`50.63 GiB`), so sharded KV is mandatory. TP8 FP16 recursive-doubling collectives passed at 32/64/128 tokens and measured `0.322599/0.372364/0.436299 ms`. The 43-layer, 2-reduction/layer resident proxy measured `29.381000 ms` at 32 tokens, `32.605223 ms` at 64, and `37.994584 ms` at 128, with all correctness checks passing. Per-link NVLink byte counters were unavailable (`N/A`) in the pod, but link status and effective-wire timing were recorded. Continue to a bounded one-layer TP8 prototype in new TP-only files; do not build a generic scheduler. | Sprint 209 |
 
 ## Open Questions
 

@@ -1,0 +1,84 @@
+DS4 V100 TP planner envelope
+assumptions: MXFP4 routed experts, FP8 dense weights, FP16 activations, no persistent dequantized weights
+configured: slots=32 ctx=262144 kv=f8_e4m3_b128 kv_sharded reserve=4.00 GiB scratch=1.00 GiB mtp=off
+note: TP collective bytes are an execution-risk estimate, not resident memory.
+
+Topology admission summary
+| Topology | TP | PP | Config fits | Worst total | Max slots @128K | Max slots @256K | Max slots @512K | Max slots @1M | TP wire/step @configured |
+|---|---:|---:|---|---:|---:|---:|---:|---:|---:|
+| pp8_tp1_layer | 1 | 8 | yes | 28.91 GiB | 114 | 57 | 28 | 14 | 0.00 MiB |
+| pp4_tp2 | 2 | 4 | yes | 27.27 GiB | 141 | 71 | 35 | 17 | 21.50 MiB |
+| pp2_tp4 | 4 | 2 | yes | 26.95 GiB | 162 | 81 | 40 | 20 | 32.25 MiB |
+| pp1_tp8 | 8 | 1 | yes | 26.84 GiB | 160 | 80 | 40 | 20 | 37.62 MiB |
+
+## pp8_tp1_layer
+  stage map: s0[gpu0:L0-5] s1[gpu1:L6-11] s2[gpu2:L12-17] s3[gpu3:L18-23] s4[gpu4:L24-29] s5[gpu5:L30-34] s6[gpu6:L35-39] s7[gpu7:L40-42]
+  tp=1 pp=8 kv=f8_e4m3_b128 kv_sharded slots=32 ctx=262144
+  configured verdict: fits; worst gpu1 28.91 / 32.00 GiB
+  estimated TP collective wire per decode step: 0.00 MiB
+  estimated pipeline relay wire per decode step: 7.00 MiB
+
+| GPU | Weights | KV | Comp | Scratch | Relay | Globals | Coll. scratch | MTP | Reserve | Total | Headroom |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| gpu0 | 19.99 | 2.59 | 0.001 | 1.00 | 0.002 | 0.99 | 0.000 | 0.00 | 4.00 | 28.57 | 3.43 |
+| gpu1 | 20.02 | 3.89 | 0.002 | 1.00 | 0.002 | 0.00 | 0.000 | 0.00 | 4.00 | 28.91 | 3.09 |
+| gpu2 | 20.02 | 3.89 | 0.002 | 1.00 | 0.002 | 0.00 | 0.000 | 0.00 | 4.00 | 28.91 | 3.09 |
+| gpu3 | 20.02 | 3.89 | 0.002 | 1.00 | 0.002 | 0.00 | 0.000 | 0.00 | 4.00 | 28.91 | 3.09 |
+| gpu4 | 20.02 | 3.89 | 0.002 | 1.00 | 0.002 | 0.00 | 0.000 | 0.00 | 4.00 | 28.91 | 3.09 |
+| gpu5 | 16.69 | 3.85 | 0.001 | 1.00 | 0.002 | 0.00 | 0.000 | 0.00 | 4.00 | 25.55 | 6.45 |
+| gpu6 | 16.67 | 2.62 | 0.002 | 1.00 | 0.002 | 0.00 | 0.000 | 0.00 | 4.00 | 24.30 | 7.70 |
+| gpu7 | 10.02 | 2.56 | 0.001 | 1.00 | 0.002 | 0.99 | 0.000 | 0.00 | 4.00 | 18.57 | 13.43 |
+
+## pp4_tp2
+  stage map: s0[gpu0-gpu1:L0-10] s1[gpu2-gpu3:L11-21] s2[gpu4-gpu5:L22-32] s3[gpu6-gpu7:L33-42]
+  tp=2 pp=4 kv=f8_e4m3_b128 kv_sharded slots=32 ctx=262144
+  configured verdict: fits; worst gpu4 27.27 / 32.00 GiB
+  estimated TP collective wire per decode step: 21.50 MiB
+  estimated pipeline relay wire per decode step: 3.00 MiB
+
+| GPU | Weights | KV | Comp | Scratch | Relay | Globals | Coll. scratch | MTP | Reserve | Total | Headroom |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| gpu0 | 18.38 | 3.22 | 0.001 | 1.00 | 0.002 | 0.49 | 0.000 | 0.00 | 4.00 | 27.10 | 4.90 |
+| gpu1 | 18.38 | 3.22 | 0.001 | 1.00 | 0.002 | 0.49 | 0.000 | 0.00 | 4.00 | 27.10 | 4.90 |
+| gpu2 | 18.38 | 3.25 | 0.002 | 1.00 | 0.002 | 0.00 | 0.000 | 0.00 | 4.00 | 26.64 | 5.36 |
+| gpu3 | 18.38 | 3.25 | 0.002 | 1.00 | 0.002 | 0.00 | 0.000 | 0.00 | 4.00 | 26.64 | 5.36 |
+| gpu4 | 18.39 | 3.87 | 0.001 | 1.00 | 0.002 | 0.00 | 0.000 | 0.00 | 4.00 | 27.27 | 4.73 |
+| gpu5 | 18.39 | 3.87 | 0.001 | 1.00 | 0.002 | 0.00 | 0.000 | 0.00 | 4.00 | 27.27 | 4.73 |
+| gpu6 | 16.72 | 3.24 | 0.001 | 1.00 | 0.002 | 0.49 | 0.000 | 0.00 | 4.00 | 25.45 | 6.55 |
+| gpu7 | 16.72 | 3.24 | 0.001 | 1.00 | 0.002 | 0.49 | 0.000 | 0.00 | 4.00 | 25.45 | 6.55 |
+
+## pp2_tp4
+  stage map: s0[gpu0-gpu3:L0-21] s1[gpu4-gpu7:L22-42]
+  tp=4 pp=2 kv=f8_e4m3_b128 kv_sharded slots=32 ctx=262144
+  configured verdict: fits; worst gpu0 26.95 / 32.00 GiB
+  estimated TP collective wire per decode step: 32.25 MiB
+  estimated pipeline relay wire per decode step: 1.00 MiB
+
+| GPU | Weights | KV | Comp | Scratch | Relay | Globals | Coll. scratch | MTP | Reserve | Total | Headroom |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| gpu0 | 18.46 | 3.24 | 0.001 | 1.00 | 0.002 | 0.25 | 0.000 | 0.00 | 4.00 | 26.95 | 5.05 |
+| gpu1 | 18.46 | 3.24 | 0.001 | 1.00 | 0.002 | 0.25 | 0.000 | 0.00 | 4.00 | 26.95 | 5.05 |
+| gpu2 | 18.46 | 3.24 | 0.001 | 1.00 | 0.002 | 0.25 | 0.000 | 0.00 | 4.00 | 26.95 | 5.05 |
+| gpu3 | 18.46 | 3.24 | 0.001 | 1.00 | 0.002 | 0.25 | 0.000 | 0.00 | 4.00 | 26.95 | 5.05 |
+| gpu4 | 17.63 | 3.55 | 0.001 | 1.00 | 0.002 | 0.25 | 0.000 | 0.00 | 4.00 | 26.43 | 5.57 |
+| gpu5 | 17.63 | 3.55 | 0.001 | 1.00 | 0.002 | 0.25 | 0.000 | 0.00 | 4.00 | 26.43 | 5.57 |
+| gpu6 | 17.63 | 3.55 | 0.001 | 1.00 | 0.002 | 0.25 | 0.000 | 0.00 | 4.00 | 26.43 | 5.57 |
+| gpu7 | 17.63 | 3.55 | 0.001 | 1.00 | 0.002 | 0.25 | 0.000 | 0.00 | 4.00 | 26.43 | 5.57 |
+
+## pp1_tp8
+  stage map: s0[gpu0-gpu7:L0-42]
+  tp=8 pp=1 kv=f8_e4m3_b128 kv_sharded slots=32 ctx=262144
+  configured verdict: fits; worst gpu0 26.84 / 32.00 GiB
+  estimated TP collective wire per decode step: 37.62 MiB
+  estimated pipeline relay wire per decode step: 0.00 MiB
+
+| GPU | Weights | KV | Comp | Scratch | Relay | Globals | Coll. scratch | MTP | Reserve | Total | Headroom |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| gpu0 | 18.20 | 3.40 | 0.001 | 1.00 | 0.000 | 0.25 | 0.000 | 0.00 | 4.00 | 26.84 | 5.16 |
+| gpu1 | 18.20 | 3.40 | 0.001 | 1.00 | 0.000 | 0.25 | 0.000 | 0.00 | 4.00 | 26.84 | 5.16 |
+| gpu2 | 18.20 | 3.40 | 0.001 | 1.00 | 0.000 | 0.25 | 0.000 | 0.00 | 4.00 | 26.84 | 5.16 |
+| gpu3 | 18.20 | 3.40 | 0.001 | 1.00 | 0.000 | 0.25 | 0.000 | 0.00 | 4.00 | 26.84 | 5.16 |
+| gpu4 | 18.20 | 3.40 | 0.001 | 1.00 | 0.000 | 0.25 | 0.000 | 0.00 | 4.00 | 26.84 | 5.16 |
+| gpu5 | 18.20 | 3.40 | 0.001 | 1.00 | 0.000 | 0.25 | 0.000 | 0.00 | 4.00 | 26.84 | 5.16 |
+| gpu6 | 18.20 | 3.40 | 0.001 | 1.00 | 0.000 | 0.25 | 0.000 | 0.00 | 4.00 | 26.84 | 5.16 |
+| gpu7 | 18.20 | 3.40 | 0.001 | 1.00 | 0.000 | 0.25 | 0.000 | 0.00 | 4.00 | 26.84 | 5.16 |

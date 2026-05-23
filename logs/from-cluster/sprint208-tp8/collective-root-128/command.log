@@ -1,0 +1,3 @@
+ds4-v100-tp8-collective-smoke algo=root devices=0,1,2,3,4,5,6,7 root=0 tokens=128 hidden=4096 dtype=f16 bytes_per_tensor=1048576 warmup=10 iters=100
+latency_ms avg=1.046316 min=1.030002 max=1.066664 effective_wire_gbps=14.030
+verify max_abs=0.000000000 ok

@@ -35,6 +35,18 @@ Sprint 205 tested the missing async root variant. It is correct, but slower:
 `0.860x` at `96 routes x 43 layers`. This closes the current TP4 production
 decode branch; next implementation should pivot to persistent fused routed-FFN
 work.
+Sprint 208 re-opened topology investigation for the 32-slot target with a
+separate TP8 path, not a PP scheduler abstraction. The new TP planner shows
+32-slot/256K `PP1/TP8` fits with F8 KV sharding at `26.84 GiB` worst GPU and
+fails with replicated KV at `50.63 GiB`, making KV sharding mandatory. The
+8-GPU FP16 collective smoke passed at 32/64/128 tokens; recursive doubling beat
+root and measured `0.322599 ms`, `0.372364 ms`, and `0.436299 ms`
+respectively. The 43-layer, 2-reduction/layer resident-boundary proxy measured
+`29.381000 ms` at 32 tokens (`1089.139` overhead-only tok/s), `32.605223 ms`
+at 64 tokens (`1962.876` tok/s), and `37.994584 ms` at 128 tokens
+(`3368.901` tok/s). This clears the first TP8 investigation gate but does not
+prove serving; the next TP sprint should build a bounded one-layer TP8
+prototype in new TP-only files with sharded KV ownership inside the boundary.
 
 Current long-context production throughput mode is the Sprint 121 16-slot/256K
 appliance with the Sprint 122 rendezvous fix. Sprint 137 adds an explicit

@@ -1,0 +1,3 @@
+ds4-v100-tp8-layer-proxy algo=doubling devices=0,1,2,3,4,5,6,7 root=0 tokens=128 hidden=4096 dtype=f16 bytes_per_tensor=1048576 layers=43 collectives_per_layer=2 local_op_repeats=64 warmup=2 iters=10
+latency_ms boundary_avg=38.268012 min=37.776634 max=39.285642 per_layer=0.889954 per_collective=0.444977 effective_wire_gbps=37.704 overhead_only_tok_s=3344.830
+verify cross_device_max_abs=0.000000000 ok
