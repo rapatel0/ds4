@@ -51,7 +51,13 @@ run). Sprint 272 tested per-destination copy streams; the 16-step A/B improves
 from `39.288036` to `37.395624 ms/token`, and the 32-step opt-in topline is
 `36.911097 ms/token` proxy / `866.947964` projected slot-step tok/s. Per
 steering, the next focus is TP/EP end-to-end generated/continuation serving,
-not more compose micro-optimization.
+not more compose micro-optimization. Sprint 273 added `--serving-bench` to
+report generated/continuation metrics from the resident token-major TP/EP
+loop. At `32` slots / `256K` / `16` generated tokens it reports
+`875.486234` aggregate generated tok/s and `931.549518` aggregate continuation
+tok/s on decode-only timing, but only about `10.6` tok/s on wall timing
+because the scaffold still invokes heavy per-layer `run_layer()` setup for
+every token/layer.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

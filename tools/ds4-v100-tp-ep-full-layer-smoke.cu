@@ -389,6 +389,7 @@ struct Options {
     bool share_dense_ops = false;
     bool skip_self_compose_copy = true;
     bool multi_copy_streams = false;
+    bool serving_bench = false;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -815,7 +816,7 @@ void usage(const char *argv0) {
                  "       [--source-copy-schedule] [--dest-copy-schedule]\n"
                  "       [--token-major-all-layers] [--shared-dense-ops]\n"
                  "       [--skip-self-compose-copy] [--copy-self-compose]\n"
-                 "       [--multi-copy-streams]\n",
+                 "       [--multi-copy-streams] [--serving-bench]\n",
                  argv0);
 }
 
@@ -927,6 +928,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->skip_self_compose_copy = false;
         } else if (std::strcmp(arg, "--multi-copy-streams") == 0) {
             opt->multi_copy_streams = true;
+        } else if (std::strcmp(arg, "--serving-bench") == 0) {
+            opt->serving_bench = true;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -3858,9 +3861,15 @@ int main(int argc, char **argv) {
         double sum_compose_reduce_ms = 0.0;
         double sum_compose_copy_ms = 0.0;
         double sum_compose_final_ms = 0.0;
+        double first_token_decode_ms = 0.0;
+        double continuation_decode_ms = 0.0;
+        double first_token_wall_ms = 0.0;
+        double continuation_wall_ms = 0.0;
         uint64_t checksum = 0;
         const auto start = std::chrono::steady_clock::now();
         for (int step = 0; step < opt.decode_steps; ++step) {
+            const auto step_start = std::chrono::steady_clock::now();
+            double step_decode_ms = 0.0;
             for (int layer = 0; layer < 43; ++layer) {
                 Options layer_opt = opt;
                 layer_opt.layer = layer;
@@ -3901,6 +3910,7 @@ int main(int argc, char **argv) {
                 if (rc == 0 && s.pass) {
                     pass_invocations++;
                     sum_decode_ms += s.decode_ms_per_step;
+                    step_decode_ms += s.decode_ms_per_step;
                     sum_ep_ms += s.decode_ep_ms_per_step;
                     sum_dense_ms += s.decode_dense_ms_per_step;
                     sum_compose_ms += s.decode_compose_ms_per_step;
@@ -3929,6 +3939,16 @@ int main(int argc, char **argv) {
                     }
                     return rc == 0 ? 1 : rc;
                 }
+            }
+            const auto step_stop = std::chrono::steady_clock::now();
+            const double step_wall_ms =
+                std::chrono::duration<double, std::milli>(step_stop - step_start).count();
+            if (step == 0) {
+                first_token_decode_ms += step_decode_ms;
+                first_token_wall_ms += step_wall_ms;
+            } else {
+                continuation_decode_ms += step_decode_ms;
+                continuation_wall_ms += step_wall_ms;
             }
         }
         const auto stop = std::chrono::steady_clock::now();
@@ -3970,6 +3990,48 @@ int main(int argc, char **argv) {
                     sum_compose_reduce_ms, sum_compose_copy_ms,
                     sum_compose_final_ms,
                     wall_ms, (unsigned long long)checksum);
+        if (opt.serving_bench) {
+            const uint64_t prompt_tokens = (uint64_t)opt.slots;
+            const uint64_t generated_tokens = (uint64_t)opt.slots *
+                                              (uint64_t)opt.decode_steps;
+            const uint64_t continuation_tokens = opt.decode_steps > 1
+                ? (uint64_t)opt.slots * (uint64_t)(opt.decode_steps - 1)
+                : 0ull;
+            const double generated_tok_s_decode = sum_decode_ms > 0.0
+                ? (double)generated_tokens * 1000.0 / sum_decode_ms
+                : 0.0;
+            const double generated_tok_s_wall = wall_ms > 0.0
+                ? (double)generated_tokens * 1000.0 / wall_ms
+                : 0.0;
+            const double continuation_tok_s_decode = continuation_decode_ms > 0.0
+                ? (double)continuation_tokens * 1000.0 / continuation_decode_ms
+                : 0.0;
+            const double continuation_tok_s_wall = continuation_wall_ms > 0.0
+                ? (double)continuation_tokens * 1000.0 / continuation_wall_ms
+                : 0.0;
+            std::printf("tp_ep_serving_bench\tschema\tds4_v100_tp_ep_serving_bench.v1\t"
+                        "requests\t%d\tslots\t%d\tctx\t262144\tgenerated_per_request\t%d\t"
+                        "prompt_tokens\t%llu\tgenerated_tokens\t%llu\t"
+                        "continuation_tokens\t%llu\t"
+                        "first_token_decode_ms\t%.6f\tcontinuation_decode_ms\t%.6f\t"
+                        "first_token_wall_ms\t%.6f\tcontinuation_wall_ms\t%.6f\t"
+                        "total_decode_ms\t%.6f\ttotal_wall_ms\t%.6f\t"
+                        "aggregate_generated_tok_s_decode\t%.6f\t"
+                        "aggregate_generated_tok_s_wall\t%.6f\t"
+                        "aggregate_continuation_tok_s_decode\t%.6f\t"
+                        "aggregate_continuation_tok_s_wall\t%.6f\t"
+                        "checksum\t%llu\tPASS\n",
+                        opt.slots, opt.slots, opt.decode_steps,
+                        (unsigned long long)prompt_tokens,
+                        (unsigned long long)generated_tokens,
+                        (unsigned long long)continuation_tokens,
+                        first_token_decode_ms, continuation_decode_ms,
+                        first_token_wall_ms, continuation_wall_ms,
+                        sum_decode_ms, wall_ms,
+                        generated_tok_s_decode, generated_tok_s_wall,
+                        continuation_tok_s_decode, continuation_tok_s_wall,
+                        (unsigned long long)checksum);
+        }
         free_shared_dense_ops(&shared_dense_ops, opt);
         close_shared_expert_bindings(&shared_expert_bindings);
         close_shared_tp_runtime(&shared_tp_runtime);

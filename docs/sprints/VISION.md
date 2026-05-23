@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 272
+revision: 273
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -236,6 +236,11 @@ not a serial layer-chain.
   micro-optimization. Focus on making TP/EP operational end-to-end with
   generated and continuation tok/s, then return to kernel selection/fusion
   with serving data.
+- Sprint 273 added the first serving-shaped TP/EP metric bridge. Decode-only
+  rates are now visible: `875.486234` aggregate generated tok/s and
+  `931.549518` aggregate continuation tok/s at `32` slots / `256K` /
+  `16` generated tokens. Wall throughput is still only `10.6 tok/s` because
+  the scaffold calls the heavy per-layer runner for every token/layer.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -1125,6 +1130,23 @@ invocations at `36.911097 ms/token` proxy and `866.947964` projected
 slot-step tok/s. Per steering, the next sprint pivots to end-to-end TP/EP
 serving rather than continuing compose micro-optimization.
 
+### Sprint 273 - TP/EP Serving Metric Bridge [complete]
+
+Goal: Expose generated-token and continuation-token metrics from the resident
+token-major TP/EP path.
+
+Outcome: Complete. `tools/ds4-v100-tp-ep-full-layer-smoke` now supports
+`--serving-bench`, emitting generated/continuation token counts and tok/s
+rates. At `32` slots / `256K`, `16` generated tokens/request, shared TP
+runtime, resident expert bindings, source-scheduled multi-copy compose, and
+MTP off, the V100 run passes with checksum `8244145680`. Decode-only metrics
+are `875.486234` aggregate generated tok/s and `931.549518` aggregate
+continuation tok/s. Wall metrics are only `10.612319` generated tok/s and
+`10.616412` continuation tok/s because the token-major scaffold still invokes
+the heavy per-layer `run_layer()` path for every token/layer. Next build a
+resident serving loop that calls the decode body directly without per-layer
+scaffold setup.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1197,6 +1219,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 269 established the longer continuous token-major scaffold baseline. | At 32 steps the path reaches `814.452062` projected slot-step tok/s and compose dominates EP. | Collapse compose/all-to-all or bridge to generated/continuation serving measurement. |
 | 2026-05-23 | Sprint 270 removed same-GPU staged compose copies. | Self-copy traffic was a measurable part of compose cost, but compose remains dominant after removal. | Target destination-side reduction/synchronization or bridge to generated/continuation serving measurement. |
 | 2026-05-23 | Sprint 271 split compose timing and Sprint 272 tested multi-copy streams. | Copy/all-to-all dominates compose, and per-destination copy streams improve the scaffold. | Pivot to TP/EP generated/continuation serving before more kernel micro-optimization. |
+| 2026-05-23 | Sprint 273 added serving-shaped TP/EP metrics. | Decode-only TP/EP rates are promising, but scaffold wall overhead prevents operational serving. | Build a resident serving loop without per-token/per-layer `run_layer()` setup. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 
