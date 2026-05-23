@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 268
+revision: 269
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -220,6 +220,10 @@ not a serial layer-chain.
 - Sprint 268 made token-major runs advance logical position per token step.
   The 4-step scaffold over positions `1024-1027` passes `172/172` invocations
   at `45.770462 ms/token` proxy and `699.140856` projected slot-step tok/s.
+- Sprint 269 ran longer continuous token-major gates. The 32-step run passes
+  `1376/1376` layer invocations at `39.290219 ms/token` proxy and
+  `814.452062` projected slot-step tok/s. Compose/all-to-all is now the
+  dominant measured stage: `742.079181 ms` compose versus `514.766496 ms` EP.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -1048,6 +1052,25 @@ passes `172/172` layer invocations. It reports `45.770462 ms/token` proxy,
 `89.157724 ms` summed compose, `11799.119372 ms` wall, and checksum
 `296236348`.
 
+### Sprint 269 - TP/EP Continuous Token-Major Gate [complete]
+
+Goal: Run longer token-major gates to reduce early-token noise and expose the
+steady scaffold bottleneck.
+
+Rationale: Four token steps are useful for iteration but still include startup
+effects. Before bridging to generated serving, the scaffold needs a longer
+continuous run at the target `32` slots / `256K` shape.
+
+Outcome: Complete. On the V100 pod, the 16-step and 32-step token-major gates
+both pass. The 32-step run covers `1376` layer invocations with shared TP
+runtime, resident expert bindings, EP+dense overlap, source-scheduled staged
+copies, local dense ops, and advancing positions from `4096`. It reports
+`39.290219 ms/token` proxy, `814.452062` projected slot-step tok/s,
+`514.766496 ms` summed EP, `742.079181 ms` summed compose, `91515.672970 ms`
+wall, and checksum `8297177632`. The bottleneck is now clearly the
+compose/all-to-all boundary plus remaining orchestration, not the routed EP
+kernel in isolation.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1117,6 +1140,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 266 tested shared dense-op residency in token-major order. | Correctness holds, but decode proxy regresses despite slightly lower wall time. | Keep dense ops local per layer and target TP runtime/KV orchestration or serving integration next. |
 | 2026-05-23 | Sprint 267 promoted shared TP runtime for token-major all-layer runs. | In serving order, TP/KV runtime residency improves both wall/setup and summed decode proxy. | Reduce token-major compose/all-to-all and bridge the scaffold into generated/continuation serving measurement. |
 | 2026-05-23 | Sprint 268 added token-major position advance. | The scaffold now progresses logical context position across token steps and remains correct. | Run a longer continuous token-major gate, then bridge to generated/continuation serving measurement. |
+| 2026-05-23 | Sprint 269 established the longer continuous token-major scaffold baseline. | At 32 steps the path reaches `814.452062` projected slot-step tok/s and compose dominates EP. | Collapse compose/all-to-all or bridge to generated/continuation serving measurement. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 

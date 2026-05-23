@@ -1,0 +1,4 @@
+tp_ep_all_layer_tp_runtime_shared	devices	8	slots	32	ctx	262144	kv_bytes_per_gpu	3707940864	comp_state_bytes_per_gpu	1803550720	scratch_bytes_per_gpu	1610612736	total_bytes_per_gpu	7122628608	PASS
+tp_ep_all_layer_expert_bindings_shared	layers	43	devices	8	bytes	27594326016	bytes_per_gpu	3449290752	PASS
+tp_ep_all_layer_dense_ops_shared	layers	43	devices	8	mode	local_per_layer	PASS
+tp_ep_token_major_scaffold	steps	32	layers	43	pass_invocations	1376	slots	32	ctx	262144	shared_api	1	shared_rank_buffers	1	shared_tp_runtime	1	shared_expert_bindings	1	overlap_ep_dense	1	shared_dense_ops	0	direct_remote_compose	0	source_copy_schedule	1	sum_decode_ms	1257.287012	ms_per_token	39.290219	projected_slot_step_tok_s	814.452062	sum_ep_ms	514.766496	sum_dense_ms	0.000000	sum_compose_ms	742.079181	wall_ms	91515.672970	checksum	8297177632	PASS

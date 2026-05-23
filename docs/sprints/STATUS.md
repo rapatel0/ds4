@@ -36,7 +36,11 @@ and wall time drops from `34880.753622` to `11661.323548 ms` with checksum
 preserved. Sprint 268 then made token-major runs advance logical position per
 token step. The 4-step gate over positions `1024-1027` passes `172/172`
 invocations and improves the proxy again to `45.770462 ms/token` /
-`699.140856` projected slot-step tok/s, with checksum `296236348`.
+`699.140856` projected slot-step tok/s, with checksum `296236348`. Sprint 269
+ran longer continuous token-major gates. The 32-step run passes `1376/1376`
+invocations at `39.290219 ms/token` proxy / `814.452062` projected slot-step
+tok/s. The measured steady bottleneck is compose/all-to-all:
+`742.079181 ms` summed compose versus `514.766496 ms` summed EP.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s
