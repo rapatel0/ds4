@@ -1,0 +1,1 @@
+{"status":"ok","backend":"tp_ep_resident","tp":8,"ep":8,"pp":1,"ctx":262144,"slots":32,"served_requests":2,"generation_requests":0,"rejected_requests":0,"warmed_ready":true,"resident_ready":true,"last_generated_tok_s_wall":0.000000,"last_continuation_tok_s_wall":0.000000}

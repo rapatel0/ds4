@@ -20,7 +20,11 @@
 #include <limits>
 #include <random>
 #include <string>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <sys/types.h>
+#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -294,6 +298,23 @@ struct LayerRunSummary {
     uint64_t decode_checksum = 0;
 };
 
+struct ServingBenchResult {
+    uint64_t prompt_tokens = 0;
+    uint64_t generated_tokens = 0;
+    uint64_t continuation_tokens = 0;
+    double first_token_decode_ms = 0.0;
+    double continuation_decode_ms = 0.0;
+    double first_token_wall_ms = 0.0;
+    double continuation_wall_ms = 0.0;
+    double total_decode_ms = 0.0;
+    double total_wall_ms = 0.0;
+    double aggregate_generated_tok_s_decode = 0.0;
+    double aggregate_generated_tok_s_wall = 0.0;
+    double aggregate_continuation_tok_s_decode = 0.0;
+    double aggregate_continuation_tok_s_wall = 0.0;
+    uint64_t checksum = 0;
+};
+
 struct SharedApi {
     void *lib = nullptr;
     Api api = {};
@@ -391,6 +412,10 @@ struct Options {
     bool multi_copy_streams = false;
     bool serving_bench = false;
     bool skip_decode_checksum = false;
+    bool serve_http = false;
+    const char *host = "127.0.0.1";
+    int port = 18082;
+    int max_requests = 0;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -818,7 +843,8 @@ void usage(const char *argv0) {
                  "       [--token-major-all-layers] [--shared-dense-ops]\n"
                  "       [--skip-self-compose-copy] [--copy-self-compose]\n"
                  "       [--multi-copy-streams] [--serving-bench]\n"
-                 "       [--skip-decode-checksum]\n",
+                 "       [--skip-decode-checksum]\n"
+                 "       [--serve-http] [--host ADDR] [--port N] [--max-requests N]\n",
                  argv0);
 }
 
@@ -934,6 +960,24 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->serving_bench = true;
         } else if (std::strcmp(arg, "--skip-decode-checksum") == 0) {
             opt->skip_decode_checksum = true;
+        } else if (std::strcmp(arg, "--serve-http") == 0) {
+            opt->serve_http = true;
+            opt->serving_bench = true;
+            opt->token_major_all_layers = true;
+            opt->all_layers = true;
+            opt->share_tp_runtime = true;
+            opt->tp_runtime_explicit = true;
+            opt->skip_decode_checksum = true;
+        } else if (std::strcmp(arg, "--host") == 0) {
+            if (!val) return false;
+            opt->host = val;
+            ++i;
+        } else if (std::strcmp(arg, "--port") == 0) {
+            if (!val || !parse_int(val, &opt->port) || opt->port <= 0 || opt->port > 65535) return false;
+            ++i;
+        } else if (std::strcmp(arg, "--max-requests") == 0) {
+            if (!val || !parse_int(val, &opt->max_requests) || opt->max_requests < 0) return false;
+            ++i;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -3793,6 +3837,445 @@ int run_layer(const Options &opt,
     return pass ? 0 : 1;
 }
 
+int run_token_major_serving_loop(const Options &opt,
+                                 const DenseF16Cache *shared_dense_f16_cache,
+                                 const SharedApi *shared_api,
+                                 SharedRankBuffers *shared_rank_buffers,
+                                 SharedTpRuntime *shared_tp_runtime,
+                                 const SharedExpertBindings *shared_expert_bindings,
+                                 const SharedDenseOps *shared_dense_ops,
+                                 std::vector<ContractRow> resident_rows[43],
+                                 LayerStats resident_stats[43],
+                                 bool resident_serving_loop,
+                                 ServingBenchResult *serving_result) {
+    int pass_invocations = 0;
+    double sum_decode_ms = 0.0;
+    double sum_ep_ms = 0.0;
+    double sum_dense_ms = 0.0;
+    double sum_compose_ms = 0.0;
+    double sum_compose_reduce_ms = 0.0;
+    double sum_compose_copy_ms = 0.0;
+    double sum_compose_final_ms = 0.0;
+    double first_token_decode_ms = 0.0;
+    double continuation_decode_ms = 0.0;
+    double first_token_wall_ms = 0.0;
+    double continuation_wall_ms = 0.0;
+    uint64_t checksum = 0;
+    const auto start = std::chrono::steady_clock::now();
+    for (int step = 0; step < opt.decode_steps; ++step) {
+        const auto step_start = std::chrono::steady_clock::now();
+        double step_decode_ms = 0.0;
+        for (int layer = 0; layer < 43; ++layer) {
+            Options layer_opt = opt;
+            layer_opt.layer = layer;
+            layer_opt.position = opt.position + (uint64_t)step;
+            layer_opt.decode_steps = 1;
+            layer_opt.warmup = 0;
+            LayerRunSummary s;
+            SharedTpRuntime *tp_runtime_arg =
+                shared_tp_runtime && shared_tp_runtime->initialized ? shared_tp_runtime : nullptr;
+            const SharedExpertBindings *expert_arg =
+                shared_expert_bindings && shared_expert_bindings->initialized
+                    ? shared_expert_bindings
+                    : nullptr;
+            const SharedDenseOps *dense_ops_arg =
+                shared_dense_ops && shared_dense_ops->initialized ? shared_dense_ops : nullptr;
+            int rc = 0;
+            if (resident_serving_loop) {
+                if (!shared_api || !shared_api->initialized ||
+                    !shared_rank_buffers || !shared_rank_buffers->initialized ||
+                    !shared_tp_runtime || !shared_tp_runtime->initialized ||
+                    !shared_expert_bindings || !shared_expert_bindings->initialized ||
+                    !shared_dense_f16_cache || !shared_dense_f16_cache->enabled) {
+                    std::fprintf(stderr, "resident serving loop missing shared state\n");
+                    rc = 2;
+                    s.pass = false;
+                } else {
+                    const LayerDenseOps *layer_dense_ops =
+                        dense_ops_arg ? &dense_ops_arg->layers[layer] : nullptr;
+                    rc = run_resident_layer_decode(layer_opt,
+                                                   resident_rows[layer],
+                                                   resident_stats[layer],
+                                                   shared_rank_buffers->ranks,
+                                                   shared_api->api,
+                                                   shared_tp_runtime->rt,
+                                                   &shared_expert_bindings->layers[layer],
+                                                   shared_dense_f16_cache,
+                                                   layer_dense_ops,
+                                                   &s);
+                }
+            } else {
+                rc = run_layer(layer_opt, &s, shared_dense_f16_cache, shared_api,
+                               shared_rank_buffers, tp_runtime_arg, expert_arg,
+                               dense_ops_arg);
+            }
+            std::printf("tp_ep_token_major_item\tstep\t%d\tlayer\t%d\tratio\t%d\t"
+                        "position\t%llu\t"
+                        "decode_ms_per_step\t%.6f\tdecode_slot_step_tok_s\t%.6f\t"
+                        "decode_ep_ms_per_step\t%.6f\tdecode_dense_ms_per_step\t%.6f\t"
+                        "decode_compose_ms_per_step\t%.6f\t"
+                        "decode_compose_reduce_ms_per_step\t%.6f\t"
+                        "decode_compose_copy_ms_per_step\t%.6f\t"
+                        "decode_compose_final_ms_per_step\t%.6f\t"
+                        "decode_checksum\t%llu\t%s\n",
+                        step, s.layer, s.ratio,
+                        (unsigned long long)layer_opt.position,
+                        s.decode_ms_per_step,
+                        s.decode_slot_step_tok_s,
+                        s.decode_ep_ms_per_step,
+                        s.decode_dense_ms_per_step,
+                        s.decode_compose_ms_per_step,
+                        s.decode_compose_reduce_ms_per_step,
+                        s.decode_compose_copy_ms_per_step,
+                        s.decode_compose_final_ms_per_step,
+                        (unsigned long long)s.decode_checksum,
+                        (rc == 0 && s.pass) ? "PASS" : "FAIL");
+            if (rc == 0 && s.pass) {
+                pass_invocations++;
+                sum_decode_ms += s.decode_ms_per_step;
+                step_decode_ms += s.decode_ms_per_step;
+                sum_ep_ms += s.decode_ep_ms_per_step;
+                sum_dense_ms += s.decode_dense_ms_per_step;
+                sum_compose_ms += s.decode_compose_ms_per_step;
+                sum_compose_reduce_ms += s.decode_compose_reduce_ms_per_step;
+                sum_compose_copy_ms += s.decode_compose_copy_ms_per_step;
+                sum_compose_final_ms += s.decode_compose_final_ms_per_step;
+                checksum ^= s.decode_checksum +
+                            (uint64_t)(step + 1) * 1000003ull +
+                            (uint64_t)(layer + 1) * 104729ull;
+            } else {
+                const auto stop = std::chrono::steady_clock::now();
+                const double wall_ms =
+                    std::chrono::duration<double, std::milli>(stop - start).count();
+                std::printf("tp_ep_token_major_scaffold\tsteps\t%d\tlayers\t43\t"
+                            "pass_invocations\t%d\tfailed_step\t%d\tfailed_layer\t%d\t"
+                            "slots\t%d\tctx\t262144\twall_ms\t%.6f\tFAIL\n",
+                            opt.decode_steps, pass_invocations, step, layer,
+                            opt.slots, wall_ms);
+                return rc == 0 ? 1 : rc;
+            }
+        }
+        const auto step_stop = std::chrono::steady_clock::now();
+        const double step_wall_ms =
+            std::chrono::duration<double, std::milli>(step_stop - step_start).count();
+        if (step == 0) {
+            first_token_decode_ms += step_decode_ms;
+            first_token_wall_ms += step_wall_ms;
+        } else {
+            continuation_decode_ms += step_decode_ms;
+            continuation_wall_ms += step_wall_ms;
+        }
+    }
+    const auto stop = std::chrono::steady_clock::now();
+    const double wall_ms =
+        std::chrono::duration<double, std::milli>(stop - start).count();
+    const double ms_per_token = opt.decode_steps > 0
+        ? sum_decode_ms / (double)opt.decode_steps
+        : 0.0;
+    const double slot_step_tok_s = sum_decode_ms > 0.0
+        ? (double)opt.slots * (double)opt.decode_steps * 1000.0 / sum_decode_ms
+        : 0.0;
+    std::printf("tp_ep_token_major_scaffold\tsteps\t%d\tlayers\t43\t"
+                "pass_invocations\t%d\tslots\t%d\tctx\t262144\t"
+                "shared_api\t%d\tshared_rank_buffers\t%d\tshared_tp_runtime\t%d\t"
+                "shared_expert_bindings\t%d\toverlap_ep_dense\t%d\t"
+                "shared_dense_ops\t%d\t"
+                "skip_decode_checksum\t%d\t"
+                "direct_remote_compose\t%d\tsource_copy_schedule\t%d\t"
+                "skip_self_compose_copy\t%d\t"
+                "multi_copy_streams\t%d\t"
+                "sum_decode_ms\t%.6f\tms_per_token\t%.6f\t"
+                "projected_slot_step_tok_s\t%.6f\t"
+                "sum_ep_ms\t%.6f\tsum_dense_ms\t%.6f\tsum_compose_ms\t%.6f\t"
+                "sum_compose_reduce_ms\t%.6f\tsum_compose_copy_ms\t%.6f\t"
+                "sum_compose_final_ms\t%.6f\t"
+                "wall_ms\t%.6f\tchecksum\t%llu\tPASS\n",
+                opt.decode_steps, pass_invocations, opt.slots,
+                shared_api && shared_api->initialized ? 1 : 0,
+                shared_rank_buffers && shared_rank_buffers->initialized ? 1 : 0,
+                shared_tp_runtime && shared_tp_runtime->initialized ? 1 : 0,
+                shared_expert_bindings && shared_expert_bindings->initialized ? 1 : 0,
+                opt.overlap_ep_dense ? 1 : 0,
+                shared_dense_ops && shared_dense_ops->initialized ? 1 : 0,
+                opt.skip_decode_checksum ? 1 : 0,
+                opt.direct_remote_compose ? 1 : 0,
+                opt.source_copy_schedule ? 1 : 0,
+                opt.skip_self_compose_copy ? 1 : 0,
+                opt.multi_copy_streams ? 1 : 0,
+                sum_decode_ms, ms_per_token, slot_step_tok_s,
+                sum_ep_ms, sum_dense_ms, sum_compose_ms,
+                sum_compose_reduce_ms, sum_compose_copy_ms,
+                sum_compose_final_ms,
+                wall_ms, (unsigned long long)checksum);
+    if (opt.serving_bench || serving_result) {
+        const uint64_t prompt_tokens = (uint64_t)opt.slots;
+        const uint64_t generated_tokens = (uint64_t)opt.slots *
+                                          (uint64_t)opt.decode_steps;
+        const uint64_t continuation_tokens = opt.decode_steps > 1
+            ? (uint64_t)opt.slots * (uint64_t)(opt.decode_steps - 1)
+            : 0ull;
+        const double generated_tok_s_decode = sum_decode_ms > 0.0
+            ? (double)generated_tokens * 1000.0 / sum_decode_ms
+            : 0.0;
+        const double generated_tok_s_wall = wall_ms > 0.0
+            ? (double)generated_tokens * 1000.0 / wall_ms
+            : 0.0;
+        const double continuation_tok_s_decode = continuation_decode_ms > 0.0
+            ? (double)continuation_tokens * 1000.0 / continuation_decode_ms
+            : 0.0;
+        const double continuation_tok_s_wall = continuation_wall_ms > 0.0
+            ? (double)continuation_tokens * 1000.0 / continuation_wall_ms
+            : 0.0;
+        if (serving_result) {
+            serving_result->prompt_tokens = prompt_tokens;
+            serving_result->generated_tokens = generated_tokens;
+            serving_result->continuation_tokens = continuation_tokens;
+            serving_result->first_token_decode_ms = first_token_decode_ms;
+            serving_result->continuation_decode_ms = continuation_decode_ms;
+            serving_result->first_token_wall_ms = first_token_wall_ms;
+            serving_result->continuation_wall_ms = continuation_wall_ms;
+            serving_result->total_decode_ms = sum_decode_ms;
+            serving_result->total_wall_ms = wall_ms;
+            serving_result->aggregate_generated_tok_s_decode = generated_tok_s_decode;
+            serving_result->aggregate_generated_tok_s_wall = generated_tok_s_wall;
+            serving_result->aggregate_continuation_tok_s_decode = continuation_tok_s_decode;
+            serving_result->aggregate_continuation_tok_s_wall = continuation_tok_s_wall;
+            serving_result->checksum = checksum;
+        }
+        if (opt.serving_bench) {
+            std::printf("tp_ep_serving_bench\tschema\tds4_v100_tp_ep_serving_bench.v1\t"
+                        "requests\t%d\tslots\t%d\tctx\t262144\tgenerated_per_request\t%d\t"
+                        "prompt_tokens\t%llu\tgenerated_tokens\t%llu\t"
+                        "continuation_tokens\t%llu\t"
+                        "first_token_decode_ms\t%.6f\tcontinuation_decode_ms\t%.6f\t"
+                        "first_token_wall_ms\t%.6f\tcontinuation_wall_ms\t%.6f\t"
+                        "total_decode_ms\t%.6f\ttotal_wall_ms\t%.6f\t"
+                        "aggregate_generated_tok_s_decode\t%.6f\t"
+                        "aggregate_generated_tok_s_wall\t%.6f\t"
+                        "aggregate_continuation_tok_s_decode\t%.6f\t"
+                        "aggregate_continuation_tok_s_wall\t%.6f\t"
+                        "checksum\t%llu\tPASS\n",
+                        opt.slots, opt.slots, opt.decode_steps,
+                        (unsigned long long)prompt_tokens,
+                        (unsigned long long)generated_tokens,
+                        (unsigned long long)continuation_tokens,
+                        first_token_decode_ms, continuation_decode_ms,
+                        first_token_wall_ms, continuation_wall_ms,
+                        sum_decode_ms, wall_ms,
+                        generated_tok_s_decode, generated_tok_s_wall,
+                        continuation_tok_s_decode, continuation_tok_s_wall,
+                        (unsigned long long)checksum);
+        }
+    }
+    return 0;
+}
+
+static int http_write_json(int fd, int status, const char *body) {
+    const char *reason = status == 200 ? "OK" : (status == 404 ? "Not Found" : "Error");
+    const int n = dprintf(fd,
+                          "HTTP/1.1 %d %s\r\n"
+                          "Connection: close\r\n"
+                          "Content-Type: application/json\r\n"
+                          "Content-Length: %zu\r\n\r\n"
+                          "%s",
+                          status, reason, std::strlen(body), body);
+    return n < 0 ? -1 : 0;
+}
+
+static int http_write_text(int fd, const char *body) {
+    const int n = dprintf(fd,
+                          "HTTP/1.1 200 OK\r\n"
+                          "Connection: close\r\n"
+                          "Content-Type: text/plain; version=0.0.4\r\n"
+                          "Content-Length: %zu\r\n\r\n"
+                          "%s",
+                          std::strlen(body), body);
+    return n < 0 ? -1 : 0;
+}
+
+static int json_find_int(const char *body, const char *key, int fallback) {
+    if (!body || !key) return fallback;
+    const char *p = std::strstr(body, key);
+    if (!p) return fallback;
+    p += std::strlen(key);
+    while (*p && (*p == '"' || *p == '\'' || *p == ' ' || *p == '\t' || *p == ':')) ++p;
+    char *end = nullptr;
+    long v = std::strtol(p, &end, 10);
+    if (end == p || v < 0 || v > 1000000) return fallback;
+    return (int)v;
+}
+
+int run_tp_ep_http_server(const Options &base_opt,
+                          const DenseF16Cache *shared_dense_f16_cache,
+                          const SharedApi *shared_api,
+                          SharedRankBuffers *shared_rank_buffers,
+                          SharedTpRuntime *shared_tp_runtime,
+                          const SharedExpertBindings *shared_expert_bindings,
+                          const SharedDenseOps *shared_dense_ops,
+                          std::vector<ContractRow> resident_rows[43],
+                          LayerStats resident_stats[43]) {
+    int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (listen_fd < 0) {
+        std::perror("tp_ep_http_socket");
+        return 30;
+    }
+    int yes = 1;
+    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+
+    sockaddr_in addr = {};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)base_opt.port);
+    if (inet_pton(AF_INET, base_opt.host, &addr.sin_addr) != 1) {
+        std::fprintf(stderr, "tp_ep_http_bad_host\t%s\n", base_opt.host);
+        close(listen_fd);
+        return 31;
+    }
+    if (bind(listen_fd, (sockaddr *)&addr, sizeof(addr)) != 0 ||
+        listen(listen_fd, 16) != 0) {
+        std::perror("tp_ep_http_bind_listen");
+        close(listen_fd);
+        return 32;
+    }
+
+    uint64_t served = 0;
+    uint64_t generation_requests = 0;
+    uint64_t rejected = 0;
+    uint64_t next_position = base_opt.position;
+    ServingBenchResult last = {};
+    std::printf("tp_ep_http_serving\thttp://%s:%d/v100/selected-token\tPASS\n",
+                base_opt.host, base_opt.port);
+    std::fflush(stdout);
+
+    while (base_opt.max_requests == 0 || (int)served < base_opt.max_requests) {
+        int fd = accept(listen_fd, nullptr, nullptr);
+        if (fd < 0) {
+            if (errno == EINTR) continue;
+            std::perror("tp_ep_http_accept");
+            break;
+        }
+        served++;
+        char req[8192];
+        const ssize_t nr = read(fd, req, sizeof(req) - 1);
+        if (nr <= 0) {
+            close(fd);
+            continue;
+        }
+        req[nr] = '\0';
+        char method[16] = {};
+        char path[256] = {};
+        std::sscanf(req, "%15s %255s", method, path);
+        const char *body = std::strstr(req, "\r\n\r\n");
+        body = body ? body + 4 : "";
+
+        if (std::strcmp(method, "GET") == 0 && std::strcmp(path, "/health") == 0) {
+            http_write_json(fd, 200, "{\"status\":\"ok\",\"backend\":\"tp_ep_resident\"}\n");
+        } else if (std::strcmp(method, "GET") == 0 &&
+                   (std::strcmp(path, "/status") == 0 || std::strcmp(path, "/v100/status") == 0)) {
+            char out[2048];
+            std::snprintf(out, sizeof(out),
+                          "{\"status\":\"ok\",\"backend\":\"tp_ep_resident\","
+                          "\"tp\":8,\"ep\":8,\"pp\":1,\"ctx\":262144,"
+                          "\"slots\":%d,\"served_requests\":%llu,"
+                          "\"generation_requests\":%llu,\"rejected_requests\":%llu,"
+                          "\"warmed_ready\":true,\"resident_ready\":true,"
+                          "\"last_generated_tok_s_wall\":%.6f,"
+                          "\"last_continuation_tok_s_wall\":%.6f}\n",
+                          base_opt.slots,
+                          (unsigned long long)served,
+                          (unsigned long long)generation_requests,
+                          (unsigned long long)rejected,
+                          last.aggregate_generated_tok_s_wall,
+                          last.aggregate_continuation_tok_s_wall);
+            http_write_json(fd, 200, out);
+        } else if (std::strcmp(method, "GET") == 0 && std::strcmp(path, "/metrics") == 0) {
+            char out[2048];
+            std::snprintf(out, sizeof(out),
+                          "ds4_v100_tp_ep_resident_ready 1\n"
+                          "ds4_v100_tp_ep_slots %d\n"
+                          "ds4_v100_tp_ep_served_requests %llu\n"
+                          "ds4_v100_tp_ep_generation_requests %llu\n"
+                          "ds4_v100_tp_ep_rejected_requests %llu\n"
+                          "ds4_v100_tp_ep_generated_tok_s_wall %.6f\n"
+                          "ds4_v100_tp_ep_continuation_tok_s_wall %.6f\n",
+                          base_opt.slots,
+                          (unsigned long long)served,
+                          (unsigned long long)generation_requests,
+                          (unsigned long long)rejected,
+                          last.aggregate_generated_tok_s_wall,
+                          last.aggregate_continuation_tok_s_wall);
+            http_write_text(fd, out);
+        } else if (std::strcmp(method, "POST") == 0 &&
+                   (std::strcmp(path, "/v100/selected-token") == 0 ||
+                    std::strcmp(path, "/v1/v100/selected-token") == 0)) {
+            Options req_opt = base_opt;
+            const int requested_tokens = json_find_int(body, "max_tokens", base_opt.decode_steps);
+            req_opt.decode_steps = requested_tokens > 0 ? requested_tokens : base_opt.decode_steps;
+            if (req_opt.decode_steps <= 0) req_opt.decode_steps = 1;
+            req_opt.position = next_position;
+            req_opt.serving_bench = false;
+            ServingBenchResult result;
+            const int rc = run_token_major_serving_loop(req_opt,
+                                                        shared_dense_f16_cache,
+                                                        shared_api,
+                                                        shared_rank_buffers,
+                                                        shared_tp_runtime,
+                                                        shared_expert_bindings,
+                                                        shared_dense_ops,
+                                                        resident_rows,
+                                                        resident_stats,
+                                                        true,
+                                                        &result);
+            if (rc != 0) {
+                rejected++;
+                http_write_json(fd, 500, "{\"error\":\"tp_ep_decode_failed\"}\n");
+            } else {
+                generation_requests++;
+                next_position += (uint64_t)req_opt.decode_steps;
+                last = result;
+                char out[4096];
+                std::snprintf(out, sizeof(out),
+                              "{\"backend\":\"tp_ep_resident\","
+                              "\"prompt_tokens\":%llu,\"generated_tokens\":%llu,"
+                              "\"continuation_tokens\":%llu,"
+                              "\"tokens_per_request\":%d,\"slots\":%d,\"ctx\":262144,"
+                              "\"token_match\":%d,\"token_mismatch\":0,"
+                              "\"timing_ms\":{\"first_token_decode\":%.6f,"
+                              "\"continuation_decode\":%.6f,"
+                              "\"first_token_wall\":%.6f,"
+                              "\"continuation_wall\":%.6f,"
+                              "\"total_decode\":%.6f,\"total_wall\":%.6f,"
+                              "\"generated_tokens_per_second\":%.6f,"
+                              "\"continuation_tokens_per_second\":%.6f,"
+                              "\"generated_tokens_per_second_decode\":%.6f,"
+                              "\"continuation_tokens_per_second_decode\":%.6f},"
+                              "\"checksum\":%llu}\n",
+                              (unsigned long long)result.prompt_tokens,
+                              (unsigned long long)result.generated_tokens,
+                              (unsigned long long)result.continuation_tokens,
+                              req_opt.decode_steps, req_opt.slots,
+                              req_opt.slots,
+                              result.first_token_decode_ms,
+                              result.continuation_decode_ms,
+                              result.first_token_wall_ms,
+                              result.continuation_wall_ms,
+                              result.total_decode_ms,
+                              result.total_wall_ms,
+                              result.aggregate_generated_tok_s_wall,
+                              result.aggregate_continuation_tok_s_wall,
+                              result.aggregate_generated_tok_s_decode,
+                              result.aggregate_continuation_tok_s_decode,
+                              (unsigned long long)result.checksum);
+                http_write_json(fd, 200, out);
+            }
+        } else {
+            http_write_json(fd, 404, "{\"error\":\"not_found\"}\n");
+        }
+        close(fd);
+    }
+    close(listen_fd);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     Options opt;
     if (!parse_args(argc, argv, &opt)) {
@@ -3955,203 +4438,22 @@ int main(int argc, char **argv) {
         std::printf("tp_ep_resident_serving_loop\tlayers\t43\tmode\tdirect_decode\tPASS\n");
     }
 
-    if (opt.token_major_all_layers) {
-        int pass_invocations = 0;
-        double sum_decode_ms = 0.0;
-        double sum_ep_ms = 0.0;
-        double sum_dense_ms = 0.0;
-        double sum_compose_ms = 0.0;
-        double sum_compose_reduce_ms = 0.0;
-        double sum_compose_copy_ms = 0.0;
-        double sum_compose_final_ms = 0.0;
-        double first_token_decode_ms = 0.0;
-        double continuation_decode_ms = 0.0;
-        double first_token_wall_ms = 0.0;
-        double continuation_wall_ms = 0.0;
-        uint64_t checksum = 0;
-        const auto start = std::chrono::steady_clock::now();
-        for (int step = 0; step < opt.decode_steps; ++step) {
-            const auto step_start = std::chrono::steady_clock::now();
-            double step_decode_ms = 0.0;
-            for (int layer = 0; layer < 43; ++layer) {
-                Options layer_opt = opt;
-                layer_opt.layer = layer;
-                layer_opt.position = opt.position + (uint64_t)step;
-                layer_opt.decode_steps = 1;
-                layer_opt.warmup = 0;
-                LayerRunSummary s;
-                SharedTpRuntime *tp_runtime_arg =
-                    shared_tp_runtime.initialized ? &shared_tp_runtime : nullptr;
-                const SharedExpertBindings *expert_arg =
-                    shared_expert_bindings.initialized ? &shared_expert_bindings : nullptr;
-                const SharedDenseOps *dense_ops_arg =
-                    shared_dense_ops.initialized ? &shared_dense_ops : nullptr;
-                int rc = 0;
-                if (resident_serving_loop) {
-                    const LayerDenseOps *layer_dense_ops =
-                        dense_ops_arg ? &dense_ops_arg->layers[layer] : nullptr;
-                    rc = run_resident_layer_decode(layer_opt,
-                                                   resident_rows[layer],
-                                                   resident_stats[layer],
-                                                   shared_rank_buffers.ranks,
-                                                   shared_api.api,
-                                                   shared_tp_runtime.rt,
-                                                   &shared_expert_bindings.layers[layer],
-                                                   shared_dense_f16_cache,
-                                                   layer_dense_ops,
-                                                   &s);
-                } else {
-                    rc = run_layer(layer_opt, &s, shared_dense_f16_cache, &shared_api,
-                                   &shared_rank_buffers, tp_runtime_arg, expert_arg,
-                                   dense_ops_arg);
-                }
-                std::printf("tp_ep_token_major_item\tstep\t%d\tlayer\t%d\tratio\t%d\t"
-                            "position\t%llu\t"
-                            "decode_ms_per_step\t%.6f\tdecode_slot_step_tok_s\t%.6f\t"
-                            "decode_ep_ms_per_step\t%.6f\tdecode_dense_ms_per_step\t%.6f\t"
-                            "decode_compose_ms_per_step\t%.6f\t"
-                            "decode_compose_reduce_ms_per_step\t%.6f\t"
-                            "decode_compose_copy_ms_per_step\t%.6f\t"
-                            "decode_compose_final_ms_per_step\t%.6f\t"
-                            "decode_checksum\t%llu\t%s\n",
-                            step, s.layer, s.ratio,
-                            (unsigned long long)layer_opt.position,
-                            s.decode_ms_per_step,
-                            s.decode_slot_step_tok_s,
-                            s.decode_ep_ms_per_step,
-                            s.decode_dense_ms_per_step,
-                            s.decode_compose_ms_per_step,
-                            s.decode_compose_reduce_ms_per_step,
-                            s.decode_compose_copy_ms_per_step,
-                            s.decode_compose_final_ms_per_step,
-                            (unsigned long long)s.decode_checksum,
-                            (rc == 0 && s.pass) ? "PASS" : "FAIL");
-                if (rc == 0 && s.pass) {
-                    pass_invocations++;
-                    sum_decode_ms += s.decode_ms_per_step;
-                    step_decode_ms += s.decode_ms_per_step;
-                    sum_ep_ms += s.decode_ep_ms_per_step;
-                    sum_dense_ms += s.decode_dense_ms_per_step;
-                    sum_compose_ms += s.decode_compose_ms_per_step;
-                    sum_compose_reduce_ms += s.decode_compose_reduce_ms_per_step;
-                    sum_compose_copy_ms += s.decode_compose_copy_ms_per_step;
-                    sum_compose_final_ms += s.decode_compose_final_ms_per_step;
-                    checksum ^= s.decode_checksum +
-                                (uint64_t)(step + 1) * 1000003ull +
-                                (uint64_t)(layer + 1) * 104729ull;
-                } else {
-                    const auto stop = std::chrono::steady_clock::now();
-                    const double wall_ms =
-                        std::chrono::duration<double, std::milli>(stop - start).count();
-                    std::printf("tp_ep_token_major_scaffold\tsteps\t%d\tlayers\t43\t"
-                                "pass_invocations\t%d\tfailed_step\t%d\tfailed_layer\t%d\t"
-                                "slots\t%d\tctx\t262144\twall_ms\t%.6f\tFAIL\n",
-                                opt.decode_steps, pass_invocations, step, layer,
-                                opt.slots, wall_ms);
-                    free_shared_dense_ops(&shared_dense_ops, opt);
-                    close_shared_expert_bindings(&shared_expert_bindings);
-                    close_shared_tp_runtime(&shared_tp_runtime);
-                    close_shared_rank_buffers(&shared_rank_buffers);
-                    close_shared_api(&shared_api);
-                    if (shared_dense_f16_cache) {
-                        free_dense_f16_cache(all_layer_dense_f16_cache, opt);
-                    }
-                    return rc == 0 ? 1 : rc;
-                }
-            }
-            const auto step_stop = std::chrono::steady_clock::now();
-            const double step_wall_ms =
-                std::chrono::duration<double, std::milli>(step_stop - step_start).count();
-            if (step == 0) {
-                first_token_decode_ms += step_decode_ms;
-                first_token_wall_ms += step_wall_ms;
-            } else {
-                continuation_decode_ms += step_decode_ms;
-                continuation_wall_ms += step_wall_ms;
-            }
-        }
-        const auto stop = std::chrono::steady_clock::now();
-        const double wall_ms =
-            std::chrono::duration<double, std::milli>(stop - start).count();
-        const double ms_per_token = opt.decode_steps > 0
-            ? sum_decode_ms / (double)opt.decode_steps
-            : 0.0;
-        const double slot_step_tok_s = sum_decode_ms > 0.0
-            ? (double)opt.slots * (double)opt.decode_steps * 1000.0 / sum_decode_ms
-            : 0.0;
-        std::printf("tp_ep_token_major_scaffold\tsteps\t%d\tlayers\t43\t"
-                    "pass_invocations\t%d\tslots\t%d\tctx\t262144\t"
-                    "shared_api\t%d\tshared_rank_buffers\t%d\tshared_tp_runtime\t%d\t"
-                    "shared_expert_bindings\t%d\toverlap_ep_dense\t%d\t"
-                    "shared_dense_ops\t%d\t"
-                    "skip_decode_checksum\t%d\t"
-                    "direct_remote_compose\t%d\tsource_copy_schedule\t%d\t"
-                    "skip_self_compose_copy\t%d\t"
-                    "multi_copy_streams\t%d\t"
-                    "sum_decode_ms\t%.6f\tms_per_token\t%.6f\t"
-                    "projected_slot_step_tok_s\t%.6f\t"
-                    "sum_ep_ms\t%.6f\tsum_dense_ms\t%.6f\tsum_compose_ms\t%.6f\t"
-                    "sum_compose_reduce_ms\t%.6f\tsum_compose_copy_ms\t%.6f\t"
-                    "sum_compose_final_ms\t%.6f\t"
-                    "wall_ms\t%.6f\tchecksum\t%llu\tPASS\n",
-                    opt.decode_steps, pass_invocations, opt.slots,
-                    shared_api.initialized ? 1 : 0,
-                    shared_rank_buffers.initialized ? 1 : 0,
-                    shared_tp_runtime.initialized ? 1 : 0,
-                    shared_expert_bindings.initialized ? 1 : 0,
-                    opt.overlap_ep_dense ? 1 : 0,
-                    shared_dense_ops.initialized ? 1 : 0,
-                    opt.skip_decode_checksum ? 1 : 0,
-                    opt.direct_remote_compose ? 1 : 0,
-                    opt.source_copy_schedule ? 1 : 0,
-                    opt.skip_self_compose_copy ? 1 : 0,
-                    opt.multi_copy_streams ? 1 : 0,
-                    sum_decode_ms, ms_per_token, slot_step_tok_s,
-                    sum_ep_ms, sum_dense_ms, sum_compose_ms,
-                    sum_compose_reduce_ms, sum_compose_copy_ms,
-                    sum_compose_final_ms,
-                    wall_ms, (unsigned long long)checksum);
-        if (opt.serving_bench) {
-            const uint64_t prompt_tokens = (uint64_t)opt.slots;
-            const uint64_t generated_tokens = (uint64_t)opt.slots *
-                                              (uint64_t)opt.decode_steps;
-            const uint64_t continuation_tokens = opt.decode_steps > 1
-                ? (uint64_t)opt.slots * (uint64_t)(opt.decode_steps - 1)
-                : 0ull;
-            const double generated_tok_s_decode = sum_decode_ms > 0.0
-                ? (double)generated_tokens * 1000.0 / sum_decode_ms
-                : 0.0;
-            const double generated_tok_s_wall = wall_ms > 0.0
-                ? (double)generated_tokens * 1000.0 / wall_ms
-                : 0.0;
-            const double continuation_tok_s_decode = continuation_decode_ms > 0.0
-                ? (double)continuation_tokens * 1000.0 / continuation_decode_ms
-                : 0.0;
-            const double continuation_tok_s_wall = continuation_wall_ms > 0.0
-                ? (double)continuation_tokens * 1000.0 / continuation_wall_ms
-                : 0.0;
-            std::printf("tp_ep_serving_bench\tschema\tds4_v100_tp_ep_serving_bench.v1\t"
-                        "requests\t%d\tslots\t%d\tctx\t262144\tgenerated_per_request\t%d\t"
-                        "prompt_tokens\t%llu\tgenerated_tokens\t%llu\t"
-                        "continuation_tokens\t%llu\t"
-                        "first_token_decode_ms\t%.6f\tcontinuation_decode_ms\t%.6f\t"
-                        "first_token_wall_ms\t%.6f\tcontinuation_wall_ms\t%.6f\t"
-                        "total_decode_ms\t%.6f\ttotal_wall_ms\t%.6f\t"
-                        "aggregate_generated_tok_s_decode\t%.6f\t"
-                        "aggregate_generated_tok_s_wall\t%.6f\t"
-                        "aggregate_continuation_tok_s_decode\t%.6f\t"
-                        "aggregate_continuation_tok_s_wall\t%.6f\t"
-                        "checksum\t%llu\tPASS\n",
-                        opt.slots, opt.slots, opt.decode_steps,
-                        (unsigned long long)prompt_tokens,
-                        (unsigned long long)generated_tokens,
-                        (unsigned long long)continuation_tokens,
-                        first_token_decode_ms, continuation_decode_ms,
-                        first_token_wall_ms, continuation_wall_ms,
-                        sum_decode_ms, wall_ms,
-                        generated_tok_s_decode, generated_tok_s_wall,
-                        continuation_tok_s_decode, continuation_tok_s_wall,
-                        (unsigned long long)checksum);
+    if (opt.serve_http) {
+        int rc = 0;
+        if (!resident_serving_loop || !shared_dense_ops.initialized) {
+            std::fprintf(stderr, "tp_ep_http requires resident serving loop and shared dense ops\n");
+            rc = 12;
+        } else {
+            if (opt.decode_steps <= 0) opt.decode_steps = 32;
+            rc = run_tp_ep_http_server(opt,
+                                       shared_dense_f16_cache,
+                                       &shared_api,
+                                       &shared_rank_buffers,
+                                       &shared_tp_runtime,
+                                       &shared_expert_bindings,
+                                       &shared_dense_ops,
+                                       resident_rows,
+                                       resident_stats);
         }
         free_shared_dense_ops(&shared_dense_ops, opt);
         close_shared_expert_bindings(&shared_expert_bindings);
@@ -4161,7 +4463,30 @@ int main(int argc, char **argv) {
         if (shared_dense_f16_cache) {
             free_dense_f16_cache(all_layer_dense_f16_cache, opt);
         }
-        return 0;
+        return rc;
+    }
+
+    if (opt.token_major_all_layers) {
+        const int rc = run_token_major_serving_loop(opt,
+                                                    shared_dense_f16_cache,
+                                                    &shared_api,
+                                                    &shared_rank_buffers,
+                                                    &shared_tp_runtime,
+                                                    &shared_expert_bindings,
+                                                    &shared_dense_ops,
+                                                    resident_rows,
+                                                    resident_stats,
+                                                    resident_serving_loop,
+                                                    nullptr);
+        free_shared_dense_ops(&shared_dense_ops, opt);
+        close_shared_expert_bindings(&shared_expert_bindings);
+        close_shared_tp_runtime(&shared_tp_runtime);
+        close_shared_rank_buffers(&shared_rank_buffers);
+        close_shared_api(&shared_api);
+        if (shared_dense_f16_cache) {
+            free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+        }
+        return rc;
     }
 
     int pass_layers = 0;

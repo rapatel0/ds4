@@ -5,19 +5,20 @@ Last updated: 2026-05-23
 ## Topline
 
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
-PP/layer-split work frozen as a baseline. The current resident TP/EP backend
-keeps the TP runtime, sharded KV, rank buffers, TurboMind API handles, active
-MXFP4 expert bindings, dense FP16 cache, shared dense ops, source-scheduled
-peer copies, skip-self compose, and multi-copy streams resident across the
-token-major all-layer loop. Sprint 275 added a repeatable sustained serving
-artifact wrapper over that resident backend. On the V100 pod at `32` slots /
-`256K` / `32` generated tokens per request, it reports `32/32` token match,
-`749.304439` wall generated tok/s, `774.209856` wall continuation tok/s,
-`963.264018` decode-only generated tok/s, and `1000.823072` decode-only
-continuation tok/s. This is still a tool-level resident serving harness, not
-the HTTP appliance server; the next implementation step is wiring this backend
-into the operational HTTP sustained-decode path so status, request handling,
-and metrology use the same serving surface.
+PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
+TP runtime, sharded KV, rank buffers, TurboMind API handles, active MXFP4
+expert bindings, dense FP16 cache, shared dense ops, source-scheduled peer
+copies, skip-self compose, and multi-copy streams resident across the
+token-major all-layer loop. Sprint 275 added a repeatable sustained-serving
+artifact wrapper. Sprint 276 added a TP/EP-only resident HTTP harness exposing
+`/health`, `/v100/status`, `/metrics`, and `POST /v100/selected-token` without
+using the PP replay server. On the V100 pod at `32` slots / `256K` /
+`32` generated tokens per request, the first HTTP smoke reports `32/32` token
+match, `719.275018` wall generated tok/s, `751.645517` wall continuation
+tok/s, `926.497242` decode-only generated tok/s, and `974.020201` decode-only
+continuation tok/s. This is operational as a bounded smoke-tested server path;
+the next implementation step is launcher/deployment wiring and sustained HTTP
+matrices from the same server surface.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

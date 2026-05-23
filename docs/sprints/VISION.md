@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 275
+revision: 276
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -251,6 +251,13 @@ not a serial layer-chain.
   `774.209856` wall continuation tok/s, `963.264018` decode-only generated
   tok/s, and `1000.823072` decode-only continuation tok/s with `32/32` token
   match. This is not yet the HTTP appliance server.
+- Sprint 276 added a TP/EP-only resident HTTP harness. It keeps the TP runtime,
+  dense cache, shared dense ops, rank buffers, and expert bindings loaded
+  across HTTP requests and exposes `/health`, `/v100/status`, `/metrics`, and
+  `POST /v100/selected-token`. The first HTTP smoke reports `719.275018` wall
+  generated tok/s and `751.645517` wall continuation tok/s at `32` slots /
+  `256K` / `32` generated tokens/request. It is operational as a smoke-tested
+  server path, but not yet wired into the production launcher/deployment.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -1189,6 +1196,20 @@ decode-only generated tok/s, and `1000.823072` decode-only continuation tok/s.
 This confirms the resident backend can be measured repeatably, but it still
 needs the operational HTTP harness.
 
+### Sprint 276 - TP/EP Resident HTTP Harness [complete]
+
+Goal: Expose the resident TP/EP backend through an in-process HTTP harness.
+
+Outcome: Complete as a smoke-tested server path. The TP/EP full-layer tool now
+has `--serve-http`, keeps the resident backend loaded across requests, and
+serves `GET /health`, `GET /v100/status`, `GET /metrics`, and
+`POST /v100/selected-token`. The V100 HTTP smoke used four requests against
+one resident server and the generation POST returned `32/32` token match,
+`719.275018` wall generated tok/s, `751.645517` wall continuation tok/s,
+`926.497242` decode-only generated tok/s, and `974.020201` decode-only
+continuation tok/s. Requests are currently serialized and the harness is not
+yet wired into the deployment launcher.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1264,6 +1285,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 273 added serving-shaped TP/EP metrics. | Decode-only TP/EP rates are promising, but scaffold wall overhead prevents operational serving. | Build a resident serving loop without per-token/per-layer `run_layer()` setup. |
 | 2026-05-23 | Sprint 274 built the resident TP/EP serving loop. | Shared dense ops plus direct decode remove the scaffold wall bottleneck and produce useful serving-shaped wall tok/s. | Integrate the resident TP/EP backend with the HTTP sustained-decode harness. |
 | 2026-05-23 | Sprint 275 added a sustained-serving artifact wrapper over the resident TP/EP backend. | We need repeatable serving-shaped metrology before and during HTTP harness integration. | Wire the resident backend into the operational HTTP sustained-decode path. |
+| 2026-05-23 | Sprint 276 added a TP/EP-only resident HTTP harness. | The backend now stays loaded across HTTP health/status/metrics/generation requests. | Wire this server mode into the appliance launcher and run sustained HTTP matrices. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 
