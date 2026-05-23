@@ -14,6 +14,7 @@ tp_ep_bin="./tools/ds4-v100-tp-ep-full-layer-smoke"
 turbomind_lib="/workspace/ds4-sprint181/build/turbomind-v100/libggml-turbomind.so"
 run_appliance="./tools/ds4-v100-run-appliance.sh"
 copy_event_compose="1"
+ep_return_fp16="0"
 
 usage() {
     cat <<'USAGE'
@@ -37,6 +38,7 @@ Options:
   --run-appliance FILE
   --copy-event-compose
   --no-copy-event-compose
+  --ep-return-fp16
   --help
 USAGE
 }
@@ -62,6 +64,7 @@ while [ "$#" -gt 0 ]; do
         --run-appliance) run_appliance="$2"; shift 2 ;;
         --copy-event-compose) copy_event_compose="1"; shift ;;
         --no-copy-event-compose) copy_event_compose="0"; shift ;;
+        --ep-return-fp16) ep_return_fp16="1"; shift ;;
         --help|-h) usage; exit 0 ;;
         *) fail "unknown option: $1" ;;
     esac
@@ -122,6 +125,7 @@ for tokens in "${token_values[@]}"; do
     DS4_V100_PORT="$port" \
     DS4_V100_MAX_REQUESTS=$((generation_requests + 4)) \
     DS4_V100_TP_EP_COPY_EVENT_COMPOSE="$copy_event_compose" \
+    DS4_V100_TP_EP_RETURN_FP16="$ep_return_fp16" \
     DS4_V100_LOG_DIR="$case_dir/runtime" \
     "$run_appliance" >"$server_log" 2>"$server_err" &
     server_pid=$!

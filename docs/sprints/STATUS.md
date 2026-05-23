@@ -34,7 +34,12 @@ promoted event-wait compose copy. Same-binary 64-token serving A/B improves
 wall generated throughput from `752.669235` to `771.276064` tok/s and wall
 continuation throughput from `757.403683` to `775.670776` tok/s, with
 aggregate `96/96` token match. The current promoted TP/EP serving default is
-therefore `DS4_V100_TP_EP_COPY_EVENT_COMPOSE=1`.
+therefore `DS4_V100_TP_EP_COPY_EVENT_COMPOSE=1`. Sprint 283 rechecked FP16 EP
+return under that event-wait path. It remains rejected: same-binary 64-token
+serving A/B regresses from `766.883263` to `635.936079` wall generated tok/s
+and from `997.165341` to `793.283316` decode generated tok/s. The diagnostic
+toggle exists as `DS4_V100_TP_EP_RETURN_FP16`, but the serving default remains
+`0`.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

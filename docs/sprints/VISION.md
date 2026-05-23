@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 282
+revision: 283
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -287,6 +287,10 @@ not a serial layer-chain.
   appliance default. Same-binary 64-token serving A/B improves wall generated
   throughput from `752.669235` to `771.276064` tok/s while preserving
   aggregate `96/96` token match.
+- Sprint 283 rechecked FP16 EP return under event-wait compose. It remains
+  rejected: same-binary 64-token serving throughput regresses from
+  `766.883263` to `635.936079` wall generated tok/s, despite preserving
+  aggregate `96/96` token match. The FP32 return path stays default.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -1325,6 +1329,19 @@ The appliance launcher and Kubernetes defaults now enable
 from `752.669235` to `771.276064` and wall continuation tok/s from
 `757.403683` to `775.670776`, with aggregate `96/96` token match.
 
+### Sprint 283 - TP/EP FP16 Return Recheck [complete]
+
+Goal: Recheck whether FP16 EP return becomes useful after event-wait compose.
+
+Outcome: Complete. The launcher and HTTP bench now expose
+`DS4_V100_TP_EP_RETURN_FP16` / `--ep-return-fp16` as a diagnostic toggle, with
+the appliance default still off. Same-binary 64-token HTTP A/B at `32` slots /
+`256K` / three generation requests shows FP16 return regresses wall generated
+tok/s from `766.883263` to `635.936079` and decode generated tok/s from
+`997.165341` to `793.283316`, while preserving aggregate `96/96` token match.
+The extra cast/add/final-compose work dominates the reduced copy payload on
+V100, so FP16 return remains rejected.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1407,6 +1424,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 280 added resident multi-request HTTP metrology. | One loaded TP/EP server now serves repeated generation requests and exposes cumulative counters. | Add request coalescing/admission so independent HTTP requests can fill the 32 active slots. |
 | 2026-05-23 | Sprint 281 exposed TP/EP stage timing in HTTP artifacts. | Operational metrology now shows compose-copy as the largest individual stage. | Optimize compose-copy movement/synchronization, then add true request coalescing. |
 | 2026-05-23 | Sprint 282 promoted event-wait compose copy. | Moving copy dependency waits onto CUDA events improves same-binary serving throughput by about `2.5%`. | Reduce FP32 contribution traffic or fuse staged all-to-all reduction more aggressively. |
+| 2026-05-23 | Sprint 283 rejected FP16 EP return under event-wait compose. | Reduced payload bytes do not pay for the extra cast/add/final-compose work on V100. | Stay on FP32 return and attack staged contribution traffic/fusion directly. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 
