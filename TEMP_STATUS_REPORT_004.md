@@ -10,25 +10,27 @@ is operational and benchmarked.
 
 ## Current TP/EP Topline
 
-Best current TP/EP scaffold result:
+Best current TP/EP serving-shaped result:
 
 ```text
 32 slots / 256K context
-token-major all-layer scaffold
-32 decode steps
+resident token-major all-layer serving loop
+32 generated tokens/request
 shared TP runtime
 resident expert bindings
+shared dense ops
 EP+dense overlap
 source-scheduled staged copies
 skip self compose copy
+multi-copy streams
 
-ms/token proxy:              37.912062
-projected slot-step tok/s:  844.058544
-pass:                       1376/1376 layer invocations
-checksum:                   8297177632
+wall generated tok/s:        669.222644
+wall continuation tok/s:     690.469286
+decode generated tok/s:      876.524260
+decode continuation tok/s:   910.270244
 ```
 
-This is scaffold throughput, not generated-token serving throughput.
+This is still a tool-level serving loop, not the HTTP sustained-decode harness.
 
 ## Recent Sprints
 
@@ -38,10 +40,12 @@ This is scaffold throughput, not generated-token serving throughput.
 | 268 | Advanced logical position per token step | `47.902324 -> 45.770462 ms/token` proxy |
 | 269 | Ran longer continuous token-major gates | 32-step baseline: `39.290219 ms/token`, `814.452062` projected slot-step tok/s |
 | 270 | Skipped same-GPU staged compose copies | 32-step topline: `37.912062 ms/token`, `844.058544` projected slot-step tok/s |
+| 273 | Added serving-shaped generated/continuation metrics | Decode-only `875.486234` generated tok/s, but wall was still `10.612319` tok/s |
+| 274 | Added direct resident serving loop | Wall `669.222644` generated tok/s / `690.469286` continuation tok/s |
 
 ## Bottleneck Read
 
-The current measured bottleneck is still compose/all-to-all:
+The current measured decode bottleneck is still compose/all-to-all:
 
 ```text
 32-step skip-self run:
@@ -55,8 +59,8 @@ all-to-all boundary rather than self-copy bytes alone.
 
 ## Not Yet Done
 
-- Generated-token TP/EP serving is not shipped yet.
-- Current measurements are scaffold proxy results, not model tok/s.
+- HTTP TP/EP serving is not shipped yet.
+- Current measurements are tool-level serving loop results, not the standard sustained HTTP load-client report.
 - MTP is still deferred.
 - Dense low-bit fused production kernels are not the current bottleneck in this
   scaffold because dense is using the FP16 cache/cuBLAS fallback and reports
@@ -71,5 +75,5 @@ Either:
 2. Bridge the token-major scaffold into generated/continuation serving so
    actual tok/s can be measured with the current TP/EP schedule.
 
-Given the current proxy is now stable, the next high-value step is probably
-the serving bridge unless a simple compose reduction optimization is available.
+The next high-value step is the HTTP sustained-decode harness bridge so this
+backend can report the same operational artifacts as the frozen PP appliance.

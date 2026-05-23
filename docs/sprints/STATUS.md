@@ -57,7 +57,12 @@ loop. At `32` slots / `256K` / `16` generated tokens it reports
 `875.486234` aggregate generated tok/s and `931.549518` aggregate continuation
 tok/s on decode-only timing, but only about `10.6` tok/s on wall timing
 because the scaffold still invokes heavy per-layer `run_layer()` setup for
-every token/layer.
+every token/layer. Sprint 274 replaced that hot path with a direct resident
+serving loop. With shared dense ops enabled, the current TP/EP serving-shaped
+topline at `32` slots / `256K` / `32` generated tokens per request is
+`669.222644` wall generated tok/s and `690.469286` wall continuation tok/s;
+decode-only rates are `876.524260` generated tok/s and `910.270244`
+continuation tok/s.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

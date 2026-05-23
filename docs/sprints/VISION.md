@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 273
+revision: 274
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -241,6 +241,10 @@ not a serial layer-chain.
   `931.549518` aggregate continuation tok/s at `32` slots / `256K` /
   `16` generated tokens. Wall throughput is still only `10.6 tok/s` because
   the scaffold calls the heavy per-layer runner for every token/layer.
+- Sprint 274 made the TP/EP serving loop resident enough for useful
+  operational metrology. With shared dense ops, `32` slots / `256K` /
+  `32` generated tokens/request reports `669.222644` wall generated tok/s and
+  `690.469286` wall continuation tok/s.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -1147,6 +1151,22 @@ the heavy per-layer `run_layer()` path for every token/layer. Next build a
 resident serving loop that calls the decode body directly without per-layer
 scaffold setup.
 
+### Sprint 274 - TP/EP Resident Serving Loop [complete]
+
+Goal: Remove the per-token/per-layer `run_layer()` scaffold from TP/EP
+serving-bench mode.
+
+Outcome: Complete. `--serving-bench` now uses a direct resident decode loop
+when shared TP runtime, resident expert bindings, shared rank buffers, and the
+shared dense cache are available. It parses layer contracts once, binds
+resident expert/dense state, skips serving-mode checksum readback, and calls
+the decode body directly. At `32` slots / `256K`, shared dense ops are required
+for wall throughput. The best V100 run so far uses `32` generated
+tokens/request and reports `669.222644` wall generated tok/s,
+`690.469286` wall continuation tok/s, `876.524260` decode generated tok/s,
+and `910.270244` decode continuation tok/s. Next wrap this backend in the
+HTTP sustained-decode harness.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1220,6 +1240,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 270 removed same-GPU staged compose copies. | Self-copy traffic was a measurable part of compose cost, but compose remains dominant after removal. | Target destination-side reduction/synchronization or bridge to generated/continuation serving measurement. |
 | 2026-05-23 | Sprint 271 split compose timing and Sprint 272 tested multi-copy streams. | Copy/all-to-all dominates compose, and per-destination copy streams improve the scaffold. | Pivot to TP/EP generated/continuation serving before more kernel micro-optimization. |
 | 2026-05-23 | Sprint 273 added serving-shaped TP/EP metrics. | Decode-only TP/EP rates are promising, but scaffold wall overhead prevents operational serving. | Build a resident serving loop without per-token/per-layer `run_layer()` setup. |
+| 2026-05-23 | Sprint 274 built the resident TP/EP serving loop. | Shared dense ops plus direct decode remove the scaffold wall bottleneck and produce useful serving-shaped wall tok/s. | Integrate the resident TP/EP backend with the HTTP sustained-decode harness. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 
