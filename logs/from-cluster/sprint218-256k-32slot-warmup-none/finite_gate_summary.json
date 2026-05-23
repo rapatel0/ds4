@@ -1,0 +1,18 @@
+{
+  "active_microbatch": 32,
+  "ctx": 262144,
+  "decision": "unexpected_pass",
+  "first_error_body": "",
+  "first_hc_nonfinite": "",
+  "layer_checks": "0",
+  "max_gpu_util_percent": 89.0,
+  "max_memory_used_mib": 24124.0,
+  "pre_output_check": "0",
+  "requests": 32,
+  "schema": "ds4_v100_256k_finite_gate.v1",
+  "slots": 32,
+  "startup_warmup": "1",
+  "status_200": 32,
+  "status_other": 0,
+  "tokens": 16
+}

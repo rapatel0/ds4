@@ -1,7 +1,7 @@
 # Sprint 218 - 256K Batch Non-Finite Source Isolation
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete
 
 ## Overview
 
@@ -89,20 +89,20 @@ currently enforced.
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists and is committed before execution evidence is staged.
-- [ ] `DS4_V100_DEBUG_HC_FINITE=1` instrumentation is default-off and has no
+- [x] Sprint plan exists and is committed before execution evidence is staged.
+- [x] `DS4_V100_DEBUG_HC_FINITE=1` instrumentation is default-off and has no
       production-path cost beyond the env check.
-- [ ] The debug path reports first non-finite HC location or proves HC is
+- [x] The debug path reports first non-finite HC location or proves HC is
       finite before output-head selection.
-- [ ] Focused finite gate wrapper exists and passes `bash -n`.
-- [ ] V100 build passes in `/workspace/ds4-sprint181`.
-- [ ] V100 `18`-slot/`256K` diagnostic run completes or fails with exact
+- [x] Focused finite gate wrapper exists and passes `bash -n`.
+- [x] V100 build passes in `/workspace/ds4-sprint181`.
+- [x] V100 `18`-slot/`256K` diagnostic run completes or fails with exact
       phase/layer/slot evidence recorded.
-- [ ] Logs are copied to
-      `logs/from-cluster/sprint218-256k-finite-source/`.
-- [ ] `docs/sprints/STATUS.md`, `docs/sprints/VISION.md`, and the appliance
+- [x] Logs are copied to
+      `logs/from-cluster/sprint218-256k-*`.
+- [x] `docs/sprints/STATUS.md`, `docs/sprints/VISION.md`, and the appliance
       runbook are updated if operator guidance changes.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Changes are committed with explicit `git add` paths.
 
 ## Verification Strategy
 
@@ -168,3 +168,94 @@ identifiers.
 - Sprint 217 failure evidence for `256K` active batches above 16.
 - Production pack `/workspace/packs/ds4-appliance-full-tm-gated-s181`.
 - V100 build pod `llm/llamacpp-build-8gpu`.
+
+## Execution
+
+Implemented default-off HC finite diagnostics in `ds4_v100_scheduler.c`:
+
+- `DS4_V100_DEBUG_HC_FINITE=1` enables the diagnostic family.
+- `DS4_V100_DEBUG_HC_FINITE_LAYER_CHECKS=0|1` controls per-layer HC readback.
+- `DS4_V100_DEBUG_HC_FINITE_PRE_OUTPUT=0|1` controls the pre-output-head HC
+  check.
+
+Added `tools/ds4-v100-256k-finite-gate.sh`, a body-capturing V100 diagnostic
+wrapper. It can reproduce the cold path, enable only pre-output checks, enable
+full layer checks, and toggle launcher startup warmup.
+
+Local validation:
+
+```text
+bash -n tools/ds4-v100-256k-finite-gate.sh
+bash -n tools/ds4-v100-run-appliance.sh
+```
+
+V100 build validation:
+
+```text
+cd /workspace/ds4-sprint181
+make -j80 CUDA_ARCH=sm_70 tools/ds4-v100-replay
+```
+
+## V100 Evidence
+
+Cold `18`-slot/`256K` reproduction with no HC checks and no startup warmup:
+
+| Ctx | Slots | Startup warmup | Layer checks | Pre-output check | Status 200 | Status other | Max memory |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 262,144 | 18 | off | off | off | 0 | 18 | `24076 MiB` |
+
+First body:
+
+```json
+{"error":"output-head fast selected-token sequence failed"}
+```
+
+Pre-output-only diagnostic with the same cold shape:
+
+```text
+HC non-finite: phase=pre-output-head stage=7 gpu=7 layer=-1 slot=0 token=4294967295 position=4294967295 index=0 value=nan
+```
+
+Full per-layer diagnostic with the same cold shape:
+
+```text
+HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan
+```
+
+That localizes the cold failure before the output head. The first visible NaN
+appears in stage 1 / GPU 1 at layer 6 during the first token/position path.
+
+The same body-capturing wrapper with launcher startup warmup enabled changes
+the result:
+
+| Ctx | Slots | Startup warmup | Status 200 | Status other | Max GPU util | Max memory |
+|---:|---:|---:|---:|---:|---:|---:|
+| 262,144 | 32 | on | 32 | 0 | `89%` | `24124 MiB` |
+
+The warmed production appliance soak then validated the actual target shape:
+
+| Ctx | Slots | Tokens/request | Requests | Generated tok/s | Prompt tok/s | Continuation tok/s | Correctness |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 262,144 | 32 | 64 | 32 | `68.631068` | `19.302488` | `67.558707` | 32/32 |
+
+Evidence copied back:
+
+```text
+logs/from-cluster/sprint218-256k-finite-none-nowarmup/
+logs/from-cluster/sprint218-256k-finite-preoutput-nowarmup/
+logs/from-cluster/sprint218-256k-finite-layer-nowarmup/
+logs/from-cluster/sprint218-256k-32slot-warmup-none/
+logs/from-cluster/sprint218-256k-32slot-warmup-soak/
+```
+
+## Decision
+
+Sprint 217's raw failure was real, but it was a cold-start/runtime
+initialization failure in the non-warmed path, not proof that `256K`/`32`
+cannot serve. The appliance launcher already resolves `DS4_V100_STARTUP_WARMUP`
+to enabled when `active_microbatch > 1`; with that warmed path, `32` slots at
+`256K` passes correctness and improves practical long-context throughput.
+
+Updated `tools/ds4-v100-run-appliance.sh` so `ctx=262144` admits `32` slots
+only when startup warmup resolves enabled. The same config with
+`DS4_V100_STARTUP_WARMUP=0` still fails closed at the old cap of `16`.

@@ -1,0 +1,1 @@
+{"error":"HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan"}

@@ -142,16 +142,19 @@ the same target work serially. The practical-serving branch should now either
 build that MTP verification/state-advance primitive explicitly or pivot to the
 256K attention/KV execution boundary.
 Sprint 217 tests the second near-term practical lever: raising `256K` serving
-from 16 active slots toward the desired 32 active slots. This also rejects the
-easy path. The experimental launcher override proves admission can be requested
-and the model still fits in VRAM, but active batches above 16 fail correctness
-before generation completes. The 18/20/24/32-slot `256K` probes all returned
-HTTP 500 with zero successful generations while max observed memory stayed near
-`24.1 GiB`; manual reproduction shows non-finite logits when the output-head
-fastpath is disabled. The vision consequence is that `256K`/32-slot serving is
-blocked by a numerical or batch-width bug in the long-context active-batch path,
-not by capacity. The next sprint should isolate that non-finite source directly
-instead of changing admission caps or continuing MTP accounting.
+from 16 active slots toward the desired 32 active slots. The first read looked
+like a correctness rejection, but Sprint 218 shows the sharper truth: the
+failure is in the cold, non-warmed runtime path. Without launcher startup
+warmup, an `18`-slot/`256K` run first exposes NaN HC at `stage=1`, `gpu=1`,
+`layer=6`, `slot=0`, `token=0`, `position=0`; pre-output-head checking proves
+bad HC reaches the output stage before logits. With the warmed appliance path,
+`32` slots at `256K` passes `32/32` correctness, uses about `24.1 GiB` max
+VRAM, and measures `68.631068` generated tok/s with `67.558707` continuation
+tok/s. The launcher now admits `ctx=262144`, `slots=32` only when startup
+warmup resolves enabled, while the cold `STARTUP_WARMUP=0` path remains capped
+at 16. The vision consequence is positive: the practical 32-slot/256K target is
+usable in the warmed production appliance path, and the remaining issue is to
+replace the warmup dependency with an explicit initialization fix.
 
 ## Current State
 

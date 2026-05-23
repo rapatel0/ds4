@@ -1,0 +1,128 @@
+[
+  {
+    "body": "{\"error\":\"HC non-finite: phase=pre-output-head stage=7 gpu=7 layer=-1 slot=0 token=4294967295 position=4294967295 index=0 value=nan\"}\n",
+    "elapsed_ms": 5217.784799053334,
+    "error": "",
+    "index": 0,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=pre-output-head stage=7 gpu=7 layer=-1 slot=0 token=4294967295 position=4294967295 index=0 value=nan\"}\n",
+    "elapsed_ms": 5220.6229120492935,
+    "error": "",
+    "index": 1,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=pre-output-head stage=7 gpu=7 layer=-1 slot=0 token=4294967295 position=4294967295 index=0 value=nan\"}\n",
+    "elapsed_ms": 5220.798810012639,
+    "error": "",
+    "index": 2,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=pre-output-head stage=7 gpu=7 layer=-1 slot=0 token=4294967295 position=4294967295 index=0 value=nan\"}\n",
+    "elapsed_ms": 5217.634309898131,
+    "error": "",
+    "index": 3,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=pre-output-head stage=7 gpu=7 layer=-1 slot=0 token=4294967295 position=4294967295 index=0 value=nan\"}\n",
+    "elapsed_ms": 5216.305235982873,
+    "error": "",
+    "index": 4,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=pre-output-head stage=7 gpu=7 layer=-1 slot=0 token=4294967295 position=4294967295 index=0 value=nan\"}\n",
+    "elapsed_ms": 5218.308573937975,
+    "error": "",
+    "index": 5,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=pre-output-head stage=7 gpu=7 layer=-1 slot=0 token=4294967295 position=4294967295 index=0 value=nan\"}\n",
+    "elapsed_ms": 5214.055754011497,
+    "error": "",
+    "index": 6,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=pre-output-head stage=7 gpu=7 layer=-1 slot=0 token=4294967295 position=4294967295 index=0 value=nan\"}\n",
+    "elapsed_ms": 5216.403983067721,
+    "error": "",
+    "index": 7,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=pre-output-head stage=7 gpu=7 layer=-1 slot=0 token=4294967295 position=4294967295 index=0 value=nan\"}\n",
+    "elapsed_ms": 5214.168315054849,
+    "error": "",
+    "index": 8,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=pre-output-head stage=7 gpu=7 layer=-1 slot=0 token=4294967295 position=4294967295 index=0 value=nan\"}\n",
+    "elapsed_ms": 5215.160734020174,
+    "error": "",
+    "index": 9,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=pre-output-head stage=7 gpu=7 layer=-1 slot=0 token=4294967295 position=4294967295 index=0 value=nan\"}\n",
+    "elapsed_ms": 5212.962626013905,
+    "error": "",
+    "index": 10,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=pre-output-head stage=7 gpu=7 layer=-1 slot=0 token=4294967295 position=4294967295 index=0 value=nan\"}\n",
+    "elapsed_ms": 5213.997657992877,
+    "error": "",
+    "index": 11,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=pre-output-head stage=7 gpu=7 layer=-1 slot=0 token=4294967295 position=4294967295 index=0 value=nan\"}\n",
+    "elapsed_ms": 5214.286045986228,
+    "error": "",
+    "index": 12,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=pre-output-head stage=7 gpu=7 layer=-1 slot=0 token=4294967295 position=4294967295 index=0 value=nan\"}\n",
+    "elapsed_ms": 5213.279168005101,
+    "error": "",
+    "index": 13,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=pre-output-head stage=7 gpu=7 layer=-1 slot=0 token=4294967295 position=4294967295 index=0 value=nan\"}\n",
+    "elapsed_ms": 5213.054895983078,
+    "error": "",
+    "index": 14,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=pre-output-head stage=7 gpu=7 layer=-1 slot=0 token=4294967295 position=4294967295 index=0 value=nan\"}\n",
+    "elapsed_ms": 5214.539131964557,
+    "error": "",
+    "index": 15,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=pre-output-head stage=7 gpu=7 layer=-1 slot=0 token=4294967295 position=4294967295 index=0 value=nan\"}\n",
+    "elapsed_ms": 5214.092342066579,
+    "error": "",
+    "index": 16,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=pre-output-head stage=7 gpu=7 layer=-1 slot=0 token=4294967295 position=4294967295 index=0 value=nan\"}\n",
+    "elapsed_ms": 5213.109228061512,
+    "error": "",
+    "index": 17,
+    "status": 500
+  }
+]

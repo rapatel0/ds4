@@ -1,0 +1,20 @@
+# DS4 V100 256K Finite Gate
+
+Decision: `hc_nonfinite_localized`
+
+| Ctx | Slots | Requests | Status 200 | Status other | Max GPU util | Max memory MiB |
+|---:|---:|---:|---:|---:|---:|---:|
+| 262144 | 18 | 18 | 0 | 18 | 46.000% | 24076.0 |
+
+First HC non-finite:
+
+```text
+ds4-v100-scheduler: HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan
+```
+
+First non-200 body:
+
+```json
+{"error":"HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan"}
+
+```

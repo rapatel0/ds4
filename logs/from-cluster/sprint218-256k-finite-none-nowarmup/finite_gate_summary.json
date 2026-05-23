@@ -1,0 +1,18 @@
+{
+  "active_microbatch": 18,
+  "ctx": 262144,
+  "decision": "failed_without_hc_nonfinite",
+  "first_error_body": "{\"error\":\"output-head fast selected-token sequence failed\"}\n",
+  "first_hc_nonfinite": "",
+  "layer_checks": "0",
+  "max_gpu_util_percent": 69.0,
+  "max_memory_used_mib": 24076.0,
+  "pre_output_check": "0",
+  "requests": 18,
+  "schema": "ds4_v100_256k_finite_gate.v1",
+  "slots": 18,
+  "startup_warmup": "0",
+  "status_200": 0,
+  "status_other": 18,
+  "tokens": 16
+}

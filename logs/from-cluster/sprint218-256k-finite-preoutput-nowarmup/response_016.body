@@ -1,0 +1,1 @@
+{"error":"HC non-finite: phase=pre-output-head stage=7 gpu=7 layer=-1 slot=0 token=4294967295 position=4294967295 index=0 value=nan"}

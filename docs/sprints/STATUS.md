@@ -133,23 +133,21 @@ fields were `target_forwards=16`, `effective_output_tokens=16`, and
 current replay batching is across slots at the same decode step, while MTP
 needs a one-slot multi-position target verification/state-advance primitive to
 save target forwards. MTP remains default-off for production throughput.
-Sprint 217 tested whether the `256K` slot cap was merely conservative. It is
-not. The launcher `--check` passes with
-`DS4_V100_EXPERIMENTAL_CTX_SLOT_CAP` for 18/20/24/32 active slots, and the
-resident pack opens, but real concurrent generation fails above the production
-cap. The 18/20/24/32-slot probes all returned `0` successful requests with
-HTTP 500s before any generation batch was counted; worst observed memory stayed
-around `24.1 GiB`, so this is not a VRAM-fit failure. Manual 32-concurrent
-reproduction reported `output-head fast selected-token sequence failed`; with
-the fastpath disabled it reported `output-head logits contained non-finite
-values`. A single request with `slots=32`, `active_microbatch=32`, and `256K`
-does return HTTP 200. The cap remains `16` slots at `256K`; the next practical
-serving target is isolating the non-finite source in the long-context
-active-batch-greater-than-16 path.
+Sprint 217 tested whether the `256K` slot cap was merely conservative and
+found a real cold-path failure above 16 active slots. Sprint 218 localized that
+failure: without launcher startup warmup, an `18`-slot/`256K` run first reports
+NaN HC at `stage=1`, `gpu=1`, `layer=6`, `slot=0`, `token=0`, `position=0`.
+Pre-output-head checking shows NaN HC reaches the output stage before logits,
+so the output-head fastpath is not the first source. With launcher startup
+warmup enabled, the same warmed appliance path passes the full target shape:
+`32` slots at `256K` returns `32/32` matches, max memory stays near
+`24.1 GiB`, and the appliance soak measures `68.631068` generated tok/s,
+`19.302488` prompt tok/s, and `67.558707` continuation tok/s. The launcher now
+admits `ctx=262144`, `slots=32` only when startup warmup resolves enabled; the
+cold `DS4_V100_STARTUP_WARMUP=0` path still fails closed at cap `16`.
 
-Current maximum-context production mode remains the Sprint 215 16-slot/256K
-appliance result, while the best practical long-context throughput mode is now
-Sprint 215's 32-slot/128K matrix result. Sprint 137 adds an explicit
+Current maximum-context production mode is now the Sprint 218 warmed
+32-slot/256K appliance result. Sprint 137 adds an explicit
 128-slot/32K short-context throughput mode. Sprint 139 raises the best observed
 gated-appliance 128-slot/32K run to `60.130047` generated tok/s, while showing
 the fixed-shape gate/up probe itself only contributes about `0.1%` end-to-end.

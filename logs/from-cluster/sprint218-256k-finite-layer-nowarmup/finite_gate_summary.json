@@ -1,0 +1,18 @@
+{
+  "active_microbatch": 18,
+  "ctx": 262144,
+  "decision": "hc_nonfinite_localized",
+  "first_error_body": "{\"error\":\"HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan\"}\n",
+  "first_hc_nonfinite": "ds4-v100-scheduler: HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan",
+  "layer_checks": "1",
+  "max_gpu_util_percent": 46.0,
+  "max_memory_used_mib": 24076.0,
+  "pre_output_check": "1",
+  "requests": 18,
+  "schema": "ds4_v100_256k_finite_gate.v1",
+  "slots": 18,
+  "startup_warmup": "0",
+  "status_200": 0,
+  "status_other": 18,
+  "tokens": 16
+}

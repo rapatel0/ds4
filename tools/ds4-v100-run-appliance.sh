@@ -308,13 +308,28 @@ fi
 [ "$DS4_V100_SLOTS" -ge 1 ] && [ "$DS4_V100_SLOTS" -le 256 ] || fail "DS4_V100_SLOTS must be between 1 and 256"
 [ "$DS4_V100_ACTIVE_MICROBATCH" -ge 1 ] || fail "DS4_V100_ACTIVE_MICROBATCH must be positive"
 [ "$DS4_V100_ACTIVE_MICROBATCH" -le "$DS4_V100_SLOTS" ] || fail "DS4_V100_ACTIVE_MICROBATCH must be in [1,DS4_V100_SLOTS]"
+ctx_cap_startup_warmup=0
+case "$DS4_V100_STARTUP_WARMUP" in
+    auto)
+        if [ "$DS4_V100_ACTIVE_MICROBATCH" -gt 1 ]; then
+            ctx_cap_startup_warmup=1
+        fi
+        ;;
+    0|false|off) ctx_cap_startup_warmup=0 ;;
+    1|true|on) ctx_cap_startup_warmup=1 ;;
+    *) fail "DS4_V100_STARTUP_WARMUP must be auto, 0, or 1" ;;
+esac
 ctx_slot_cap=256
 if [ "$DS4_V100_CTX" -gt 524288 ]; then
     ctx_slot_cap=7
 elif [ "$DS4_V100_CTX" -gt 262144 ]; then
     ctx_slot_cap=14
 elif [ "$DS4_V100_CTX" -gt 131072 ]; then
-    ctx_slot_cap=16
+    if [ "$ctx_cap_startup_warmup" -eq 1 ]; then
+        ctx_slot_cap=32
+    else
+        ctx_slot_cap=16
+    fi
 elif [ "$DS4_V100_CTX" -gt 65536 ]; then
     ctx_slot_cap=32
 elif [ "$DS4_V100_CTX" -gt 32768 ]; then

@@ -270,17 +270,16 @@ Latest practical long-context matrix:
 
 | Context | Slots | MTP | Generated tok/s | Prompt tok/s | Continuation tok/s | Correctness | Recommendation |
 |---:|---:|---|---:|---:|---:|---:|---|
-| 262,144 | 16 | off | `62.602937` | `17.607076` | `61.624766` | 16/16 | maximum-context production mode |
-| 131,072 | 32 | off | `69.488893` | `19.543751` | `68.403129` | 32/32 | best current practical long-context throughput |
-| 262,144 | 32 | off | n/a | n/a | n/a | n/a | rejected by admission cap |
+| 262,144 | 32 | off | `68.631068` | `19.302488` | `67.558707` | 32/32 | maximum-context production mode; requires startup warmup |
+| 131,072 | 32 | off | `69.488893` | `19.543751` | `68.403129` | 32/32 | slightly faster shorter-context mode |
+| 262,144 | 16 | off | `62.602937` | `17.607076` | `61.624766` | 16/16 | conservative fallback |
 
-The `32`-slot/`256K` rejection is intentional:
-`DS4_V100_SLOTS=32 exceeds ctx=262144 admission cap 16`.
-Sprint 217 tested the cap with `DS4_V100_EXPERIMENTAL_CTX_SLOT_CAP` at
-18/20/24/32 active slots. The model still opened and max observed memory stayed
-near `24.1 GiB`, but all active-batch widths above 16 failed generation with
-non-finite output/logit behavior. Keep the production cap at 16 until the
-`256K` long-context active-batch path is fixed.
+`32` slots at `256K` is admitted only for the warmed appliance path. Sprint 218
+found that the cold path without launcher startup warmup can produce NaN HC at
+`stage=1`, `gpu=1`, `layer=6`, `slot=0`, `token=0`, `position=0`. The launcher
+therefore keeps `DS4_V100_STARTUP_WARMUP=0` at the old `16`-slot cap for
+`256K`, while the default `auto` warmup policy admits the validated `32`-slot
+production mode.
 
 Focused MTP speculative gate:
 

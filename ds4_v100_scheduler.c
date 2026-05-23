@@ -157,6 +157,106 @@ static bool scheduler_env_enabled(const char *name) {
     return true;
 }
 
+static bool scheduler_debug_hc_finite_enabled(void) {
+    return scheduler_env_enabled("DS4_V100_DEBUG_HC_FINITE");
+}
+
+static bool scheduler_env_disabled(const char *name) {
+    const char *v = name ? getenv(name) : NULL;
+    if (!v || !v[0]) return false;
+    return !scheduler_env_enabled(name);
+}
+
+static bool scheduler_debug_hc_finite_layer_checks_enabled(void) {
+    if (!scheduler_debug_hc_finite_enabled()) return false;
+    if (scheduler_env_disabled("DS4_V100_DEBUG_HC_FINITE_LAYER_CHECKS")) return false;
+    return true;
+}
+
+static bool scheduler_debug_hc_finite_pre_output_enabled(void) {
+    if (!scheduler_debug_hc_finite_enabled()) return false;
+    if (scheduler_env_disabled("DS4_V100_DEBUG_HC_FINITE_PRE_OUTPUT")) return false;
+    return true;
+}
+
+static int scheduler_hc_finite_error(const ds4_v100_stage_scheduler *sched,
+                                     const char *phase,
+                                     int layer,
+                                     uint32_t slot,
+                                     uint32_t token,
+                                     uint32_t position,
+                                     uint64_t index,
+                                     float value,
+                                     char *err,
+                                     size_t errlen) {
+    char msg[512];
+    const int n = snprintf(msg,
+                           sizeof(msg),
+                           "HC non-finite: phase=%s stage=%d gpu=%d layer=%d slot=%u token=%u position=%u index=%" PRIu64 " value=%g",
+                           phase ? phase : "unknown",
+                           sched ? sched->stage.stage_id : -1,
+                           sched ? sched->stage.gpu : -1,
+                           layer,
+                           slot,
+                           token,
+                           position,
+                           index,
+                           value);
+    if (err && errlen) {
+        if (n < 0) {
+            snprintf(err, errlen, "HC non-finite diagnostic formatting failed");
+        } else {
+            snprintf(err, errlen, "%s", msg);
+        }
+    }
+    fprintf(stderr, "ds4-v100-scheduler: %s\n", msg);
+    return 1;
+}
+
+static int scheduler_check_hc_finite(const ds4_v100_stage_scheduler *sched,
+                                     const ds4_gpu_tensor *hc,
+                                     const char *phase,
+                                     int layer,
+                                     uint32_t slot,
+                                     uint32_t token,
+                                     uint32_t position,
+                                     char *err,
+                                     size_t errlen) {
+    if (!hc) {
+        return scheduler_errorf(err, errlen, "missing HC tensor for finite check slot %d",
+                                (int)slot);
+    }
+    const uint64_t hc_values = (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS;
+    const uint64_t hc_bytes = hc_values * sizeof(float);
+    float *host = (float *)malloc((size_t)hc_bytes);
+    if (!host) {
+        return scheduler_error(err, errlen, "failed to allocate HC finite check buffer");
+    }
+    if (!ds4_gpu_tensor_read(hc, 0, host, hc_bytes)) {
+        free(host);
+        return scheduler_errorf(err, errlen, "HC finite check readback failed for slot %d",
+                                (int)slot);
+    }
+    for (uint64_t i = 0; i < hc_values; i++) {
+        if (!isfinite(host[i])) {
+            const float value = host[i];
+            free(host);
+            return scheduler_hc_finite_error(sched,
+                                             phase,
+                                             layer,
+                                             slot,
+                                             token,
+                                             position,
+                                             i,
+                                             value,
+                                             err,
+                                             errlen);
+        }
+    }
+    free(host);
+    return 0;
+}
+
 static int scheduler_parse_i32_value(const char *s,
                                      const char *name,
                                      int min_value,
@@ -1433,6 +1533,7 @@ int ds4_v100_stage_scheduler_decode_hc_layer_span(
 
     uint32_t executed = 0;
     const bool use_layer_batch = scheduler_use_layer_batch();
+    const bool debug_hc_finite = scheduler_debug_hc_finite_layer_checks_enabled();
     for (int layer = first_layer; layer <= last_layer; layer++) {
         ds4_v100_layer_execute_config cfgs[DS4_V100_SCHED_MAX_SLOTS];
         const ds4_gpu_tensor *hidden_hc[DS4_V100_SCHED_MAX_SLOTS];
@@ -1535,6 +1636,18 @@ int ds4_v100_stage_scheduler_decode_hc_layer_span(
             ds4_gpu_tensor *tmp = cur[rel];
             cur[rel] = next[rel];
             next[rel] = tmp;
+            if (debug_hc_finite &&
+                scheduler_check_hc_finite(sched,
+                                          cur[rel],
+                                          use_layer_batch && n_slots > 1 ? "decode-layer-batch" : "decode-layer-slot",
+                                          layer,
+                                          slot_start + rel,
+                                          tokens[rel],
+                                          positions[rel],
+                                          err,
+                                          errlen)) {
+                return 1;
+            }
         }
         executed++;
     }
@@ -2564,6 +2677,26 @@ int ds4_v100_stage_scheduler_select_token_batch(ds4_v100_stage_scheduler *sched,
         n_slots > sched->active_slots - slot_start ||
         n_slots > DS4_V100_SCHED_MAX_SLOTS) {
         return scheduler_error(err, errlen, "missing scheduler output-head batch input");
+    }
+    if (scheduler_debug_hc_finite_pre_output_enabled()) {
+        if (!ds4_gpu_set_device(sched->stage.gpu)) {
+            return scheduler_errorf(err, errlen, "failed to set scheduler device gpu%d",
+                                    sched->stage.gpu);
+        }
+        for (uint32_t rel = 0; rel < n_slots; rel++) {
+            const uint32_t slot = slot_start + rel;
+            if (scheduler_check_hc_finite(sched,
+                                          sched->cur_hc[slot],
+                                          "pre-output-head",
+                                          -1,
+                                          slot,
+                                          UINT32_MAX,
+                                          UINT32_MAX,
+                                          err,
+                                          errlen)) {
+                return 1;
+            }
+        }
     }
     if (n_slots == 1 ||
         !output_head_fastpath_enabled() ||

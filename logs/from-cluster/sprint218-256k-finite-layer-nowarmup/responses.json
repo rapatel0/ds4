@@ -1,0 +1,128 @@
+[
+  {
+    "body": "{\"error\":\"HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan\"}\n",
+    "elapsed_ms": 1043.5459490399808,
+    "error": "",
+    "index": 0,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan\"}\n",
+    "elapsed_ms": 1044.3039269885048,
+    "error": "",
+    "index": 1,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan\"}\n",
+    "elapsed_ms": 1041.4779200218618,
+    "error": "",
+    "index": 2,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan\"}\n",
+    "elapsed_ms": 1040.2023220667616,
+    "error": "",
+    "index": 3,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan\"}\n",
+    "elapsed_ms": 1040.627151960507,
+    "error": "",
+    "index": 4,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan\"}\n",
+    "elapsed_ms": 1041.783993015997,
+    "error": "",
+    "index": 5,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan\"}\n",
+    "elapsed_ms": 1039.5637910114601,
+    "error": "",
+    "index": 6,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan\"}\n",
+    "elapsed_ms": 1038.0053370026872,
+    "error": "",
+    "index": 7,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan\"}\n",
+    "elapsed_ms": 1034.2046399600804,
+    "error": "",
+    "index": 8,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan\"}\n",
+    "elapsed_ms": 1036.7849270114675,
+    "error": "",
+    "index": 9,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan\"}\n",
+    "elapsed_ms": 1035.7523860875517,
+    "error": "",
+    "index": 10,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan\"}\n",
+    "elapsed_ms": 1038.0097059533,
+    "error": "",
+    "index": 11,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan\"}\n",
+    "elapsed_ms": 1034.0599329210818,
+    "error": "",
+    "index": 12,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan\"}\n",
+    "elapsed_ms": 1037.3175130225718,
+    "error": "",
+    "index": 13,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan\"}\n",
+    "elapsed_ms": 1038.4687399491668,
+    "error": "",
+    "index": 14,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan\"}\n",
+    "elapsed_ms": 1034.148228005506,
+    "error": "",
+    "index": 15,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan\"}\n",
+    "elapsed_ms": 1037.2629460180178,
+    "error": "",
+    "index": 16,
+    "status": 500
+  },
+  {
+    "body": "{\"error\":\"HC non-finite: phase=decode-layer-slot stage=1 gpu=1 layer=6 slot=0 token=0 position=0 index=0 value=nan\"}\n",
+    "elapsed_ms": 1035.583634977229,
+    "error": "",
+    "index": 17,
+    "status": 500
+  }
+]

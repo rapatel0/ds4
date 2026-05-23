@@ -1,0 +1,5 @@
+ds4-v100-run-appliance: warning: using experimental ctx slot cap override: 18
+ds4-v100-replay: serving http://127.0.0.1:19300/v100/selected-token
+ds4: CUDA loading model tensors into device cache
+ds4: TurboMind down-reduce epilogue selected total_routes=6
+ds4-v100-scheduler: HC non-finite: phase=pre-output-head stage=7 gpu=7 layer=-1 slot=0 token=4294967295 position=4294967295 index=0 value=nan
