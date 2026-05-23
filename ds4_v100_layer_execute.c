@@ -448,6 +448,13 @@ static bool single_slot_batch_scratch_enabled(void) {
            env_flag_enabled("DS4_V100_TURBOMIND_GRAPH");
 }
 
+static bool single_slot_attention_scratch_enabled(void) {
+    if (single_slot_batch_scratch_enabled()) return true;
+    const char *v = getenv("DS4_V100_SINGLE_SLOT_ATTN_SCRATCH");
+    if (v && *v) return env_flag_enabled("DS4_V100_SINGLE_SLOT_ATTN_SCRATCH");
+    return true;
+}
+
 static double monotonic_ms(void);
 static int profile_mark(double *last_ms, double *bucket_ms);
 
@@ -1442,7 +1449,7 @@ static int execute_attention_output(const ds4_v100_layer_state *state,
     ds4_gpu_tensor *heads = NULL;
     ds4_gpu_tensor *low = NULL;
     const bool use_scratch =
-        cfg->batch_scratch != NULL && single_slot_batch_scratch_enabled();
+        cfg->batch_scratch != NULL && single_slot_attention_scratch_enabled();
     if (use_scratch &&
         ensure_batch_scratch(cfg->batch_scratch,
                              hidden_n,
