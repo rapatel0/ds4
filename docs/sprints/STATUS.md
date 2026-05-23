@@ -192,6 +192,14 @@ metadata in `/v100/status`, `/metrics`, and responses. V100 validation with
 `100001 -> 100002`, and status reporting `cache_hits=1`, `cache_misses=1`,
 `cache_evictions=0`, `next_position=100002`. This is still diagnostic serving,
 but the serving cursor is no longer only global scratch state.
+Sprint 297 added a prompt-fingerprint cache guard on top of that session
+table. A repeated `session_id` now only hits resident KV/HC if the prompt
+fingerprint matches; a changed prompt resets the slot to the base position and
+records a miss. The V100 smoke shows `alpha/hello` miss then hit on slot `0`
+from `100000 -> 100001 -> 100002`, followed by `alpha/goodbye` as
+`cache_hit=0`, `cache_prompt_match=0`, `100000 -> 100001`. Status reports
+`cache_hits=1`, `cache_misses=2`, `cache_evictions=0`. This is still
+string-fingerprint protection, not tokenizer-prefix reuse.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

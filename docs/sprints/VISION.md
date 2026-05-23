@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: codex
-revision: 296
+revision: 297
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -88,6 +88,11 @@ not a serial layer-chain.
   endpoint is still diagnostic until tokenizer prefill, true prompt token
   accounting, selected-token feedback, and active-slot-only decode are wired
   behind this session table.
+- Sprint 297 added a prompt-fingerprint guard to that session layer. Reusing a
+  `session_id` with the same prompt now hits resident state; reusing it with a
+  different prompt resets the slot and records a miss. This is a temporary
+  string-level guardrail until tokenizer-level prefix matching and suffix
+  prefill are implemented.
 - Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
   longer exposes PP/layer-split topology modes. Against the real production
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about

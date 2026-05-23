@@ -6284,9 +6284,12 @@ struct HttpParsedRequest {
     int requested_tokens = 0;
     std::string cache_key;
     bool cache_key_explicit = false;
+    bool prompt_fingerprint_present = false;
+    uint64_t prompt_fingerprint = 0;
     uint64_t cache_position = 0;
     int cache_slot = -1;
     bool cache_hit = false;
+    bool cache_prompt_match = true;
     bool cache_evicted = false;
     std::string evicted_key;
 };
@@ -6443,12 +6446,25 @@ static std::string http_request_cache_key(const HttpParsedRequest &req,
     return buf;
 }
 
+static void http_request_prompt_fingerprint(HttpParsedRequest *req) {
+    const std::string prompt = json_find_string(req->body.c_str(), "\"prompt\"");
+    if (prompt.empty()) {
+        req->prompt_fingerprint_present = false;
+        req->prompt_fingerprint = 0;
+        return;
+    }
+    req->prompt_fingerprint_present = true;
+    req->prompt_fingerprint = fnv1a64(prompt);
+}
+
 struct TpEpHttpSessionSlot {
     int id = -1;
     bool occupied = false;
     bool kv_valid = false;
     bool hc_valid = false;
+    bool prompt_fingerprint_known = false;
     std::string key;
+    uint64_t prompt_fingerprint = 0;
     uint64_t pos = 0;
     uint64_t prompt_tokens = 0;
     uint64_t generated_tokens = 0;
@@ -6460,6 +6476,7 @@ struct TpEpHttpSessionSlot {
 struct TpEpHttpSessionAssignment {
     int slot = -1;
     bool hit = false;
+    bool prompt_match = true;
     bool evicted = false;
     std::string evicted_key;
     uint64_t pos_in = 0;
@@ -6487,15 +6504,33 @@ struct TpEpHttpSessionTable {
         return -1;
     }
 
-    uint64_t preview_position(const std::string &key, uint64_t base_pos) const {
+    bool slot_prompt_matches(const TpEpHttpSessionSlot &slot,
+                             bool prompt_present,
+                             uint64_t prompt_fingerprint) const {
+        if (!prompt_present) return true;
+        return slot.prompt_fingerprint_known &&
+               slot.prompt_fingerprint == prompt_fingerprint;
+    }
+
+    uint64_t preview_position(const std::string &key,
+                              bool prompt_present,
+                              uint64_t prompt_fingerprint,
+                              uint64_t base_pos) const {
         const int idx = find(key);
-        if (idx >= 0 && slots[(size_t)idx].kv_valid && slots[(size_t)idx].hc_valid) {
+        if (idx >= 0 &&
+            slots[(size_t)idx].kv_valid &&
+            slots[(size_t)idx].hc_valid &&
+            slot_prompt_matches(slots[(size_t)idx],
+                                prompt_present,
+                                prompt_fingerprint)) {
             return slots[(size_t)idx].pos;
         }
         return base_pos;
     }
 
     TpEpHttpSessionAssignment assign(const std::string &key,
+                                     bool prompt_present,
+                                     uint64_t prompt_fingerprint,
                                      uint64_t base_pos,
                                      const std::vector<bool> &protected_slots) {
         TpEpHttpSessionAssignment a;
@@ -6504,8 +6539,11 @@ struct TpEpHttpSessionTable {
         int idx = find(key);
         if (idx >= 0) {
             auto &slot = slots[(size_t)idx];
+            const bool prompt_match =
+                slot_prompt_matches(slot, prompt_present, prompt_fingerprint);
             a.slot = idx;
-            a.hit = slot.kv_valid && slot.hc_valid;
+            a.prompt_match = prompt_match;
+            a.hit = slot.kv_valid && slot.hc_valid && prompt_match;
             a.pos_in = a.hit ? slot.pos : base_pos;
             slot.last_used = clock;
             if (a.hit) {
@@ -6514,7 +6552,13 @@ struct TpEpHttpSessionTable {
             } else {
                 misses++;
                 slot.misses++;
+                slot.kv_valid = false;
+                slot.hc_valid = false;
                 slot.pos = base_pos;
+                if (prompt_present) {
+                    slot.prompt_fingerprint_known = true;
+                    slot.prompt_fingerprint = prompt_fingerprint;
+                }
             }
             return a;
         }
@@ -6549,7 +6593,9 @@ struct TpEpHttpSessionTable {
         slot.occupied = true;
         slot.kv_valid = false;
         slot.hc_valid = false;
+        slot.prompt_fingerprint_known = prompt_present;
         slot.key = key;
+        slot.prompt_fingerprint = prompt_present ? prompt_fingerprint : 0;
         slot.pos = base_pos;
         slot.prompt_tokens = 0;
         slot.generated_tokens = 0;
@@ -6560,6 +6606,7 @@ struct TpEpHttpSessionTable {
 
         a.slot = idx;
         a.hit = false;
+        a.prompt_match = true;
         a.pos_in = base_pos;
         return a;
     }
@@ -6601,6 +6648,8 @@ struct TpEpHttpSessionTable {
             n = std::snprintf(out + used_bytes, out_size - used_bytes,
                               "%s{\"id\":%d,\"occupied\":%d,\"key\":\"%s\","
                               "\"pos\":%llu,\"kv_valid\":%d,\"hc_valid\":%d,"
+                              "\"prompt_fingerprint_known\":%d,"
+                              "\"prompt_fingerprint\":%llu,"
                               "\"prompt_tokens\":%llu,\"generated_tokens\":%llu,"
                               "\"hits\":%llu,\"misses\":%llu}",
                               i == 0 ? "" : ",",
@@ -6608,6 +6657,8 @@ struct TpEpHttpSessionTable {
                               (unsigned long long)slot.pos,
                               slot.kv_valid ? 1 : 0,
                               slot.hc_valid ? 1 : 0,
+                              slot.prompt_fingerprint_known ? 1 : 0,
+                              (unsigned long long)slot.prompt_fingerprint,
                               (unsigned long long)slot.prompt_tokens,
                               (unsigned long long)slot.generated_tokens,
                               (unsigned long long)slot.hits,
@@ -6919,8 +6970,12 @@ int run_tp_ep_http_server(const Options &base_opt,
             first_req.cache_key = http_request_cache_key(first_req,
                                                          served + pending_generation.size(),
                                                          &first_req.cache_key_explicit);
+            http_request_prompt_fingerprint(&first_req);
             first_req.cache_position =
-                sessions.preview_position(first_req.cache_key, base_opt.position);
+                sessions.preview_position(first_req.cache_key,
+                                          first_req.prompt_fingerprint_present,
+                                          first_req.prompt_fingerprint,
+                                          base_opt.position);
 
             std::vector<HttpParsedRequest> batch;
             batch.push_back(first_req);
@@ -6952,8 +7007,12 @@ int run_tp_ep_http_server(const Options &base_opt,
                 extra_req.cache_key = http_request_cache_key(extra_req,
                                                             served + pending_generation.size(),
                                                             &extra_req.cache_key_explicit);
+                http_request_prompt_fingerprint(&extra_req);
                 extra_req.cache_position =
-                    sessions.preview_position(extra_req.cache_key, base_opt.position);
+                    sessions.preview_position(extra_req.cache_key,
+                                              extra_req.prompt_fingerprint_present,
+                                              extra_req.prompt_fingerprint,
+                                              base_opt.position);
                 if (extra_req.requested_tokens != first_req.requested_tokens) {
                     bucketed_requests++;
                     pending_generation.push_back(std::move(extra_req));
@@ -6984,6 +7043,8 @@ int run_tp_ep_http_server(const Options &base_opt,
             bool assignment_failed = false;
             for (size_t i = 0; i < batch.size(); ++i) {
                 assignments[i] = sessions.assign(batch[i].cache_key,
+                                                 batch[i].prompt_fingerprint_present,
+                                                 batch[i].prompt_fingerprint,
                                                  base_opt.position,
                                                  protected_slots);
                 if (assignments[i].slot < 0) {
@@ -6992,6 +7053,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                 }
                 batch[i].cache_slot = assignments[i].slot;
                 batch[i].cache_hit = assignments[i].hit;
+                batch[i].cache_prompt_match = assignments[i].prompt_match;
                 batch[i].cache_evicted = assignments[i].evicted;
                 batch[i].evicted_key = assignments[i].evicted_key;
                 batch[i].cache_position = assignments[i].pos_in;
@@ -7098,6 +7160,8 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   "\"cache_key\":\"%s\","
                                   "\"cache_key_explicit\":%d,"
                                   "\"cache_hit\":%d,"
+                                  "\"cache_prompt_match\":%d,"
+                                  "\"cache_prompt_fingerprint\":%llu,"
                                   "\"cache_slot\":%d,"
                                   "\"cache_pos_in\":%llu,"
                                   "\"cache_pos_out\":%llu,"
@@ -7147,6 +7211,8 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   escaped_key.c_str(),
                                   batch[i].cache_key_explicit ? 1 : 0,
                                   batch[i].cache_hit ? 1 : 0,
+                                  batch[i].cache_prompt_match ? 1 : 0,
+                                  (unsigned long long)batch[i].prompt_fingerprint,
                                   batch[i].cache_slot,
                                   (unsigned long long)assignments[i].pos_in,
                                   (unsigned long long)(assignments[i].pos_in + request_generated),
