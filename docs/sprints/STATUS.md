@@ -546,6 +546,16 @@ This is not promoted: Sprint 169 showed graph replay can help direct replay
 while regressing served throughput. The required next gate is a same-binary
 16-slot/256K served A/B before treating graph replay as a practical serving
 optimization.
+Sprint 199 ran that missing served gate and promoted the combined
+`fused6_reduce + graph replay` stack for the Sprint 181+ production V100
+appliance pack. Same-binary 16-slot/256K serving improved from `54.725463`
+generated / `53.870377` continuation tok/s with `fused6_reduce` graph off to
+`67.886268` / `66.825545` with graph on, with `16/16` token match. Against the
+routed-executor-off production control (`56.719099` / `55.832863`), the
+promoted stack is about `+19.7%` continuation. The launcher and V100 env
+template now default to `DS4_V100_TURBOMIND_GATED_SILU=1`,
+`DS4_V100_TURBOMIND_ROUTED_EXECUTOR=fused6_reduce`, and
+`DS4_V100_TURBOMIND_GRAPH=1` for the production pack.
 
 The concise current status is also tracked in
 `docs/sprints/EXPERIMENT-STATUS.md`.

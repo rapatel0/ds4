@@ -1,0 +1,218 @@
+ds4-v100-replay: serving http://127.0.0.1:18410/v100/selected-token
+ds4: CUDA loading model tensors into device cache
+ds4: turbomind_graph warmup key gpu=0 tokens=1 routes=6
+ds4: TurboMind down-reduce epilogue selected total_routes=6
+ds4: turbomind_graph warmup key gpu=0 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=0 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=0 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=0 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=0 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=1 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=1 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=1 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=1 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=1 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=1 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=2 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=2 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=2 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=2 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=2 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=2 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=3 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=3 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=3 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=3 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=3 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=3 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=4 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=4 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=4 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=4 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=4 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=4 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=5 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=5 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=5 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=5 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=5 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=6 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=6 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=6 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=6 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=6 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=7 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=7 tokens=1 routes=6
+ds4: turbomind_graph warmup key gpu=7 tokens=1 routes=6
+ds4: turbomind_graph captured gpu=0 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=0 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=0 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=0 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=0 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=0 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=0 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=0 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=0 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=0 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=0 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=0 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=1 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=1 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=1 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=1 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=1 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=1 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=1 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=1 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=1 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=1 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=1 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=1 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=2 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=2 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=2 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=2 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=2 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=2 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=2 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=2 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=2 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=2 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=2 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=2 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=3 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=3 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=3 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=3 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=3 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=3 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=3 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=3 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=3 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=3 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=3 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=3 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=4 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=4 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=4 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=4 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=4 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=4 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=4 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=4 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=4 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=4 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=4 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=4 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=5 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=5 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=5 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=5 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=5 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=5 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=5 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=5 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=5 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=5 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=6 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=6 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=6 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=6 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=6 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=6 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=6 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=6 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=6 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=6 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=7 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=7 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=7 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=7 tokens=1 routes=6 launches=1
+ds4: turbomind_graph captured gpu=7 tokens=1 routes=6 scratch=0.03 MiB
+ds4: turbomind_graph launched gpu=7 tokens=1 routes=6 launches=1
+ds4: turbomind_graph launched gpu=0 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=0 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=0 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=0 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=0 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=0 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=1 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=1 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=1 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=1 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=1 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=1 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=2 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=2 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=2 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=2 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=2 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=2 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=3 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=3 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=3 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=3 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=3 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=3 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=4 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=4 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=4 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=4 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=4 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=4 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=5 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=5 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=5 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=5 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=5 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=6 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=6 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=6 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=6 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=6 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=7 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=7 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=7 tokens=1 routes=6 launches=2
+ds4: turbomind_graph launched gpu=0 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=0 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=0 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=0 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=0 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=0 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=1 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=1 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=1 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=1 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=1 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=1 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=2 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=2 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=2 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=2 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=2 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=2 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=3 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=3 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=3 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=3 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=3 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=3 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=4 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=4 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=4 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=4 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=4 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=4 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=5 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=5 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=5 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=5 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=5 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=6 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=6 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=6 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=6 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=6 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=7 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=7 tokens=1 routes=6 launches=3
+ds4: turbomind_graph launched gpu=7 tokens=1 routes=6 launches=3

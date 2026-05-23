@@ -437,3 +437,11 @@ readback. Short direct replay on V100 matched output IDs
 `17.980888` tok/s, with `43` captures, `129` launches, and `0` failures. Keep
 graph replay default-off until the same-binary 16-slot/256K served A/B passes;
 the older Sprint 169 graph path regressed served throughput.
+After Sprint 199, the served gate has passed for the current production pack.
+At 16-slot/256K, `fused6_reduce` graph off measured `54.725463` generated /
+`53.870377` continuation tok/s, while `fused6_reduce` graph on measured
+`67.886268` / `66.825545`, both with `16/16` token match. The graph server log
+reported `43` captures, `129` launches, and `0` launch/capture failures. A
+separate routed-executor-off production control measured `56.719099` generated
+/ `55.832863` continuation tok/s, so the promoted stack is about `+19.7%`
+continuation versus the prior production control in this harness.
