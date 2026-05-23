@@ -308,7 +308,7 @@ descriptor-backed EP path still passing. This is not yet optimized HMMA/CUTLASS
 dense math and not full-layer logits equivalence, but it proves the packed
 dense compute path inside TP/EP.
 
-### Sprint 237 - Layer-2 Dense Coverage Gate [planned]
+### Sprint 237 - Layer-2 Dense Coverage Gate [complete]
 
 Goal: Extend the Sprint 236 packed-F8 dense compute gate from one tensor to
 all compatible layer-2 F8 dense TP tensor groups, with per-tensor timing,
@@ -318,7 +318,13 @@ Rationale: Serving should not start from a path where only one dense tensor can
 compute. The TP/EP layer needs broader dense-family coverage before full-layer
 decode and serving gates are meaningful.
 
-Outcome: Pending.
+Outcome: Complete for layer-2 F8 dense tensors. The TP/EP full-layer smoke now
+supports `--dense-compute-all-f8`, discovers all compatible layer-2 F8 dense TP
+tensor groups, and executes all nine groups from packed production bytes. The
+V100 run passes with `141606912` packed bytes loaded, worst dense compute time
+`0.654029 ms`, exact repeat, worst CPU oracle error `0.000000015`, KV
+`max_abs=0`, EP `worst_ep_ms=0.241766`, and final `PASS`. BF16 dense/control
+math and real layer dataflow remain open.
 
 ### Sprint 238 - Full-Layer TP/EP Decode [planned]
 
@@ -400,6 +406,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 234 proved descriptor-backed routed expert byte binding for layer `2`. | Real packed expert bytes now flow into the separate TP/EP path; the remaining gap is full-layer math and all-layer decode. | Build descriptor-backed full-layer TP/EP decode with MTP off. |
 | 2026-05-23 | Sprint 235 proved a descriptor-backed full-layer scaffold for layer `2`. | All descriptor families now have a concrete TP/EP binding outside the PP path, but dense/control rows are checksum scaffolds, not math. | Replace dense/control checksum stages with real low-bit dense execution for representative full-layer decode. |
 | 2026-05-23 | Sprint 236 proved real packed-F8 dense compute for `blk.2.attn_q_a.weight` in the TP/EP path. | The runtime can now compute from packed dense bytes, but only for one representative tensor and with a straightforward FP32 dot kernel. | Extend dense compute coverage or replace this gate with fused HMMA/CUTLASS dense blocks. |
+| 2026-05-23 | Sprint 237 proved packed-F8 dense compute coverage for all compatible layer-2 F8 dense tensors. | F8 dense families execute from production bytes; BF16 compressor/indexer math and real layer dataflow remain. | Add BF16 compute coverage or compose dense outputs into representative full-layer decode. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit in Sprint 236 or equivalent after TP/EP serving exists. |
 

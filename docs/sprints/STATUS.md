@@ -348,6 +348,22 @@ passes in the same run: `288` layer rows, KV `max_abs=0`, EP
 `worst_ep_ms=0.242517`, and final `PASS`. TP/EP is still not serving and not
 full-layer logits-equivalent, but packed dense bytes now feed real GPU compute
 inside the separate TP/EP path.
+Sprint 237 broadens that to layer-2 F8 dense coverage. The TP/EP-only
+full-layer smoke now supports `--dense-compute-all-f8`, discovers all compatible
+layer-2 F8 dense TP tensor groups from the real contract, and executes all
+nine groups. The V100 run covers `blk.2.attn_kv_latent.weight`,
+`blk.2.attn_output_a.weight`, `blk.2.attn_output_b.weight`,
+`blk.2.attn_q_a.weight`, `blk.2.attn_q_b.weight`,
+`blk.2.ffn_down_shexp.weight`, `blk.2.ffn_gate_shexp.weight`,
+`blk.2.ffn_up_shexp.weight`, and `blk.2.indexer.attn_q_b.weight`. Aggregate
+packed bytes loaded are `141606912`, worst dense compute time is `0.654029 ms`,
+repeat is exact (`dense_compute_repeat_bad=0`,
+`dense_compute_repeat_nan=0`), and worst bounded CPU oracle error is
+`0.000000015`. The full scaffold still passes in the same run with `288` layer
+rows, KV `max_abs=0`, EP `worst_ep_ms=0.241766`, and final `PASS`. TP/EP is
+still not serving and still excludes BF16 compressor/indexer dense math, but
+the F8 dense tensor families for layer `2` now execute from packed bytes in
+the separate TP/EP path.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit

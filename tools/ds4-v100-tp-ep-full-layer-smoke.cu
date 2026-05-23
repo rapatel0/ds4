@@ -198,6 +198,7 @@ struct Options {
     int warmup = 5;
     int iters = 30;
     const char *dense_compute_tensor = nullptr;
+    bool dense_compute_all_f8 = false;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -384,7 +385,7 @@ void usage(const char *argv0) {
                  "       [--lib PATH] [--devices 0,1,2,3,4,5,6,7]\n"
                  "       [--slots N] [--top-k N] [--layer N] [--kv-slot N]\n"
                  "       [--position N] [--warmup N] [--iters N]\n"
-                 "       [--dense-compute-tensor NAME]\n",
+                 "       [--dense-compute-tensor NAME] [--dense-compute-all-f8]\n",
                  argv0);
 }
 
@@ -438,6 +439,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             if (!val) return false;
             opt->dense_compute_tensor = val;
             ++i;
+        } else if (std::strcmp(arg, "--dense-compute-all-f8") == 0) {
+            opt->dense_compute_all_f8 = true;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -446,7 +449,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
         }
     }
     return opt->pack_dir && opt->contract_path && opt->tm_index_path &&
-           opt->top_k <= kActiveLocalExperts && opt->layer >= 0;
+           opt->top_k <= kActiveLocalExperts && opt->layer >= 0 &&
+           !(opt->dense_compute_tensor && opt->dense_compute_all_f8);
 }
 
 bool parse_contract_row(const std::vector<std::string> &f, ContractRow *out) {
@@ -660,20 +664,33 @@ bool select_dense_rows(const std::vector<ContractRow> &rows,
     return true;
 }
 
+std::vector<std::string> discover_f8_dense_tensors(const std::vector<ContractRow> &rows) {
+    std::vector<std::string> out;
+    for (const ContractRow &r : rows) {
+        if (r.record_type != "dense_tp" || r.source_dtype != "f8_e4m3_b128") continue;
+        if (std::find(out.begin(), out.end(), r.tensor_id) == out.end()) {
+            out.push_back(r.tensor_id);
+        }
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 int run_dense_compute_gate(const Options &opt,
                            const std::vector<ContractRow> &rows,
+                           const char *tensor,
                            DenseComputeStats *stats) {
-    if (!opt.dense_compute_tensor) return 0;
+    if (!tensor) return 0;
     stats->enabled = true;
-    stats->tensor_id = opt.dense_compute_tensor;
+    stats->tensor_id = tensor;
     stats->slots = opt.slots;
 
     std::vector<ContractRow> selected;
     int cols = 0;
     int total_rows = 0;
-    if (!select_dense_rows(rows, opt.dense_compute_tensor, &selected, &cols, &total_rows)) {
+    if (!select_dense_rows(rows, tensor, &selected, &cols, &total_rows)) {
         std::fprintf(stderr, "dense compute tensor validation failed for %s\n",
-                     opt.dense_compute_tensor);
+                     tensor);
         return 1;
     }
     const int rows_per_gpu = total_rows / kGpus;
@@ -1071,10 +1088,43 @@ int main(int argc, char **argv) {
         std::chrono::duration<double, std::milli>(descriptor_stop - descriptor_start).count();
 
     DenseComputeStats dense_compute;
-    if (run_dense_compute_gate(opt, rows, &dense_compute) != 0) {
-        std::fprintf(stderr, "dense compute gate failed for %s\n",
-                     opt.dense_compute_tensor ? opt.dense_compute_tensor : "(disabled)");
-        return 3;
+    std::vector<DenseComputeStats> dense_compute_results;
+    std::vector<std::string> dense_tensors;
+    if (opt.dense_compute_all_f8) {
+        dense_tensors = discover_f8_dense_tensors(rows);
+    } else if (opt.dense_compute_tensor) {
+        dense_tensors.emplace_back(opt.dense_compute_tensor);
+    }
+    for (const std::string &tensor : dense_tensors) {
+        DenseComputeStats one;
+        if (run_dense_compute_gate(opt, rows, tensor.c_str(), &one) != 0) {
+            std::fprintf(stderr, "dense compute gate failed for %s\n", tensor.c_str());
+            return 3;
+        }
+        std::printf("dense_compute_tensor\ttensor\t%s\trows_per_gpu\t%d\tcols\t%d\t"
+                    "slots\t%d\tloaded_bytes\t%llu\tcompute_ms\t%.6f\t"
+                    "repeat_max_abs\t%.9f\trepeat_bad\t%d\trepeat_nan\t%d\t"
+                    "oracle_max_abs\t%.9f\toracle_bad\t%d\t%s\n",
+                    one.tensor_id.c_str(), one.rows_per_gpu, one.cols, one.slots,
+                    (unsigned long long)one.loaded_bytes, one.compute_ms,
+                    one.repeat_max_abs, one.repeat_bad, one.repeat_nan,
+                    one.oracle_max_abs, one.oracle_bad, one.pass ? "PASS" : "FAIL");
+        dense_compute_results.push_back(one);
+        dense_compute.enabled = true;
+        dense_compute.tensor_id = opt.dense_compute_all_f8 ? "all_f8" : one.tensor_id;
+        dense_compute.rows_per_gpu = std::max(dense_compute.rows_per_gpu, one.rows_per_gpu);
+        dense_compute.cols = std::max(dense_compute.cols, one.cols);
+        dense_compute.slots = one.slots;
+        dense_compute.loaded_bytes += one.loaded_bytes;
+        dense_compute.compute_ms = std::max(dense_compute.compute_ms, one.compute_ms);
+        dense_compute.repeat_max_abs =
+            std::max(dense_compute.repeat_max_abs, one.repeat_max_abs);
+        dense_compute.oracle_max_abs =
+            std::max(dense_compute.oracle_max_abs, one.oracle_max_abs);
+        dense_compute.repeat_bad += one.repeat_bad;
+        dense_compute.repeat_nan += one.repeat_nan;
+        dense_compute.oracle_bad += one.oracle_bad;
+        dense_compute.pass = dense_compute.pass && one.pass;
     }
 
     ds4_v100_tp_runtime_config cfg;

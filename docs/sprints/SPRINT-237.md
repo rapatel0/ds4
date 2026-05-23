@@ -1,7 +1,7 @@
 # Sprint 237 - Layer-2 Dense Coverage Gate
 
 Date: 2026-05-23
-Status: Planned
+Status: Complete
 
 ## Overview
 
@@ -97,20 +97,80 @@ coverage.
 
 ## Definition Of Done
 
-- [ ] Sprint plan exists and is committed before implementation evidence.
-- [ ] Dense coverage mode is implemented only in the separate TP/EP tool.
-- [ ] No PP scheduler files are modified.
-- [ ] Tool discovers all layer-2 F8 dense TP tensor groups from the real
+- [x] Sprint plan exists and is committed before implementation evidence.
+- [x] Dense coverage mode is implemented only in the separate TP/EP tool.
+- [x] No PP scheduler files are modified.
+- [x] Tool discovers all layer-2 F8 dense TP tensor groups from the real
       contract.
-- [ ] Tool executes every compatible F8 dense tensor group.
-- [ ] Tool reports skipped tensors explicitly, if any.
-- [ ] Each executed tensor passes finite repeat checks.
-- [ ] Each executed tensor passes bounded CPU oracle comparison.
-- [ ] Existing full-layer scaffold, KV, and EP checks still pass.
-- [ ] Evidence is copied to
+- [x] Tool executes every compatible F8 dense tensor group.
+- [x] Tool reports skipped tensors explicitly, if any.
+- [x] Each executed tensor passes finite repeat checks.
+- [x] Each executed tensor passes bounded CPU oracle comparison.
+- [x] Existing full-layer scaffold, KV, and EP checks still pass.
+- [x] Evidence is copied to
       `logs/from-cluster/sprint237-tp-dense-coverage/`.
-- [ ] Status and vision docs are updated with the decision.
-- [ ] Changes are committed with explicit `git add` paths.
+- [x] Status and vision docs are updated with the decision.
+- [x] Changes are committed with explicit `git add` paths.
+
+## Evidence
+
+V100 pod: `llm/llamacpp-build-8gpu`
+
+Pack: `/workspace/packs/ds4-appliance-full-tm-gated-s181`
+
+Contract:
+`/workspace/logs/sprint228-tp-ep-pack-contract/contract/tp-ep-pack-contract.tsv`
+
+Command shape:
+
+- `32` slots;
+- `256K` context;
+- `top_k=6`;
+- layer `2`;
+- `--dense-compute-all-f8`;
+- MTP off.
+
+Executed F8 dense tensor groups:
+
+| Tensor | Rows/GPU | Cols | Packed bytes | Compute ms | Oracle max_abs | Result |
+|---|---:|---:|---:|---:|---:|---|
+| `blk.2.attn_kv_latent.weight` | `64` | `4096` | `2113536` | `0.050893` | `0.000000007` | `PASS` |
+| `blk.2.attn_output_a.weight` | `1024` | `4096` | `33816576` | `0.566170` | `0.000000007` | `PASS` |
+| `blk.2.attn_output_b.weight` | `512` | `8192` | `33816576` | `0.556032` | `0.000000015` | `PASS` |
+| `blk.2.attn_q_a.weight` | `128` | `4096` | `4227072` | `0.082227` | `0.000000007` | `PASS` |
+| `blk.2.attn_q_b.weight` | `4096` | `1024` | `33816576` | `0.654029` | `0.000000007` | `PASS` |
+| `blk.2.ffn_down_shexp.weight` | `512` | `2048` | `8454144` | `0.155238` | `0.000000002` | `PASS` |
+| `blk.2.ffn_gate_shexp.weight` | `256` | `4096` | `8454144` | `0.149197` | `0.000000007` | `PASS` |
+| `blk.2.ffn_up_shexp.weight` | `256` | `4096` | `8454144` | `0.149299` | `0.000000005` | `PASS` |
+| `blk.2.indexer.attn_q_b.weight` | `1024` | `1024` | `8454144` | `0.169267` | `0.000000015` | `PASS` |
+
+Aggregate dense coverage:
+
+| Metric | Value |
+|---|---:|
+| compatible F8 tensor groups | `9` |
+| executed F8 tensor groups | `9` |
+| skipped F8 tensor groups | `0` |
+| total packed bytes loaded | `141606912` |
+| worst dense compute ms | `0.654029` |
+| repeat max_abs | `0.000000000` |
+| repeat bad/nan | `0 / 0` |
+| worst CPU oracle max_abs | `0.000000015` |
+| CPU oracle bad | `0` |
+
+Full scaffold result remained passing:
+
+| Metric | Value |
+|---|---:|
+| total layer rows | `288` |
+| dense rows | `112` |
+| control rows | `136` |
+| expert rows | `16` |
+| KV rows | `16` |
+| comp rows | `8` |
+| KV max_abs | `0.000000000` |
+| worst EP ms | `0.241766` |
+| result | `PASS` |
 
 ## Risks
 
@@ -124,4 +184,12 @@ coverage.
 
 ## Decision
 
-Pending.
+Complete. The TP/EP-only full-layer smoke now supports `--dense-compute-all-f8`
+and executes every compatible layer-2 F8 dense TP tensor group from the real
+contract. All nine groups pass finite repeat and bounded CPU oracle checks, and
+the full descriptor scaffold, KV gate, and descriptor-backed EP path still pass.
+
+This still excludes BF16 dense/control math and does not connect the tensor
+outputs into a real next hidden state. The next sprint should either add BF16
+compute coverage for compressor/indexer tensors or start composing the dense
+outputs into the representative layer dataflow.
