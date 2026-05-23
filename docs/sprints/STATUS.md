@@ -496,6 +496,18 @@ slot-step tok/s; cache-backed FP16/cuBLAS passes at `1.015128 ms/step` and
 rows into `302514176` cache bytes. Decision: dense cache lookup is now wired
 into decode execution. Next lift it from the two composition tensors to a
 descriptor-selected dense execution table for every layer.
+Sprint 248 adds that descriptor-selected dense execution table to the TP/EP
+dense-cache workbench. The new `--execute-table` mode groups complete
+`dense_tp` contract rows by `(layer, tensor_id)` and runs cache-backed
+FP16/cuBLAS GEMMs across all eight GPUs. The layer-2 table passes with `14`
+groups, `112` GEMMs per iteration, `1.384323 ms/iteration`, `6.992914`
+dense-table TFLOP/s, and zero nonfinite outputs. The all-layer table passes
+with `510` transformer-layer groups, `4080` GEMMs per iteration,
+`394684006400` FLOPs per iteration, `51.003671 ms/iteration`, `7.738345`
+dense-table TFLOP/s, checksum `15841839914005485`, and zero nonfinite outputs.
+Decision: hardcoded layer-2 dense selection is no longer the all-layer blocker.
+Next compose this dense table with EP routed experts, KV/update, and
+layer-to-layer hidden flow in a resident all-layer TP/EP loop.
 
 Current maximum-context production mode is now the Sprint 219 warmed
 32-slot/256K appliance result. Sprint 137 adds an explicit

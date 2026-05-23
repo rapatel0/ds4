@@ -2,6 +2,7 @@
 
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#include <cublas_v2.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -36,6 +37,10 @@ struct Options {
     const char *contract_path = nullptr;
     int devices[kGpus] = {0, 1, 2, 3, 4, 5, 6, 7};
     int layer = -999;
+    int slots = 32;
+    int warmup = 1;
+    int iters = 5;
+    bool execute_table = false;
 };
 
 struct DenseRow {
@@ -74,6 +79,32 @@ struct GpuPlan {
     size_t free_after_temp_free = 0;
     double host_read_ms = 0.0;
     double h2d_convert_ms = 0.0;
+    unsigned long long checksum = 0;
+    unsigned long long nonfinite = 0;
+};
+
+struct DenseGroup {
+    std::string tensor_id;
+    int layer = -1;
+    int cols = 0;
+    int rows_per_gpu = 0;
+    uint64_t cache_offset[kGpus] = {};
+    bool have[kGpus] = {};
+};
+
+struct ExecuteStats {
+    bool enabled = false;
+    bool pass = true;
+    uint64_t groups = 0;
+    uint64_t layer_groups = 0;
+    uint64_t gemms_per_iter = 0;
+    uint64_t total_gemms = 0;
+    uint64_t max_cols = 0;
+    uint64_t max_rows_per_gpu = 0;
+    uint64_t flops_per_iter = 0;
+    double total_ms = 0.0;
+    double ms_per_iter = 0.0;
+    double dense_table_tflops = 0.0;
     unsigned long long checksum = 0;
     unsigned long long nonfinite = 0;
 };
@@ -301,12 +332,223 @@ __global__ void checksum_half_kernel(const __half *data,
     atomicAdd(nonfinite, bad);
 }
 
+__global__ void fill_half_kernel(__half *out, uint64_t elems, uint32_t seed) {
+    for (uint64_t idx = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+         idx < elems;
+         idx += (uint64_t)blockDim.x * gridDim.x) {
+        const uint32_t m = (uint32_t)((idx * 17ull + (uint64_t)seed * 97ull) % 4093ull);
+        out[idx] = __float2half(((float)m - 2048.0f) * 0.00005f);
+    }
+}
+
+__global__ void checksum_float_kernel(const float *data,
+                                      uint64_t elems,
+                                      unsigned long long *checksum,
+                                      unsigned long long *nonfinite) {
+    unsigned long long local = 0;
+    unsigned long long bad = 0;
+    for (uint64_t idx = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+         idx < elems;
+         idx += (uint64_t)blockDim.x * gridDim.x) {
+        const float v = data[idx];
+        uint32_t bits = 0;
+        memcpy(&bits, &v, sizeof(bits));
+        local += (unsigned long long)bits * (unsigned long long)((idx % 251u) + 1u);
+        if (!isfinite(v)) bad++;
+    }
+    atomicAdd(checksum, local);
+    atomicAdd(nonfinite, bad);
+}
+
+static DenseGroup *find_or_add_group(std::vector<DenseGroup> *groups, const DenseRow &r) {
+    for (DenseGroup &g : *groups) {
+        if (g.layer == r.layer && g.tensor_id == r.tensor_id) return &g;
+    }
+    groups->push_back(DenseGroup{});
+    DenseGroup &g = groups->back();
+    g.tensor_id = r.tensor_id;
+    g.layer = r.layer;
+    g.cols = r.cols;
+    g.rows_per_gpu = r.rows_per_gpu;
+    return &g;
+}
+
+static std::vector<DenseGroup> build_dense_groups(const std::vector<DenseRow> &rows) {
+    std::vector<DenseGroup> groups;
+    for (const DenseRow &r : rows) {
+        if (r.layer < 0) continue;
+        DenseGroup *g = find_or_add_group(&groups, r);
+        if (g->cols != r.cols || g->rows_per_gpu != r.rows_per_gpu) continue;
+        g->cache_offset[r.gpu] = r.cache_offset;
+        g->have[r.gpu] = true;
+    }
+    std::vector<DenseGroup> complete;
+    for (const DenseGroup &g : groups) {
+        bool ok = true;
+        for (int gpu = 0; gpu < kGpus; ++gpu) ok = ok && g.have[gpu];
+        if (ok) complete.push_back(g);
+    }
+    std::sort(complete.begin(), complete.end(),
+              [](const DenseGroup &a, const DenseGroup &b) {
+                  if (a.layer != b.layer) return a.layer < b.layer;
+                  return a.tensor_id < b.tensor_id;
+              });
+    return complete;
+}
+
+static int execute_dense_table(const Options &opt,
+                               const std::vector<DenseRow> &rows,
+                               uint8_t *d_cache[kGpus],
+                               ExecuteStats *stats) {
+    if (!opt.execute_table) return 0;
+    stats->enabled = true;
+    const std::vector<DenseGroup> groups = build_dense_groups(rows);
+    stats->groups = groups.size();
+    for (const DenseGroup &g : groups) {
+        stats->max_cols = std::max<uint64_t>(stats->max_cols, (uint64_t)g.cols);
+        stats->max_rows_per_gpu =
+            std::max<uint64_t>(stats->max_rows_per_gpu, (uint64_t)g.rows_per_gpu);
+        stats->flops_per_iter +=
+            2ull * (uint64_t)opt.slots * (uint64_t)g.cols *
+            (uint64_t)g.rows_per_gpu * (uint64_t)kGpus;
+    }
+    stats->layer_groups = groups.size();
+    stats->gemms_per_iter = groups.size() * (uint64_t)kGpus;
+    stats->total_gemms = stats->gemms_per_iter * (uint64_t)opt.iters;
+    if (groups.empty()) return 1;
+
+    cublasHandle_t blas[kGpus] = {};
+    cudaStream_t streams[kGpus] = {};
+    __half *d_x[kGpus] = {};
+    float *d_out[kGpus] = {};
+    unsigned long long *d_checksum[kGpus] = {};
+    unsigned long long *d_nonfinite[kGpus] = {};
+    const uint64_t max_x_elems = (uint64_t)opt.slots * stats->max_cols;
+    const uint64_t max_out_elems = (uint64_t)opt.slots * stats->max_rows_per_gpu;
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        CHECK_CUDA(cudaStreamCreate(&streams[gpu]));
+        CHECK_CUDA(cudaMalloc(&d_x[gpu], (size_t)max_x_elems * sizeof(__half)));
+        CHECK_CUDA(cudaMalloc(&d_out[gpu], (size_t)max_out_elems * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&d_checksum[gpu], sizeof(unsigned long long)));
+        CHECK_CUDA(cudaMalloc(&d_nonfinite[gpu], sizeof(unsigned long long)));
+        CHECK_CUDA(cudaMemset(d_checksum[gpu], 0, sizeof(unsigned long long)));
+        CHECK_CUDA(cudaMemset(d_nonfinite[gpu], 0, sizeof(unsigned long long)));
+        cublasStatus_t st = cublasCreate(&blas[gpu]);
+        if (st != CUBLAS_STATUS_SUCCESS) return 2;
+        (void)cublasSetMathMode(blas[gpu], CUBLAS_TENSOR_OP_MATH);
+        (void)cublasSetStream(blas[gpu], streams[gpu]);
+    }
+
+    auto run_group = [&](const DenseGroup &g, bool checksum) -> int {
+        const uint64_t x_elems = (uint64_t)opt.slots * (uint64_t)g.cols;
+        const uint64_t out_elems = (uint64_t)opt.slots * (uint64_t)g.rows_per_gpu;
+        const float alpha = 1.0f;
+        const float beta = 0.0f;
+        for (int gpu = 0; gpu < kGpus; ++gpu) {
+            CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+            const unsigned int x_grid =
+                (unsigned int)std::min<uint64_t>(65535, (x_elems + 255) / 256);
+            fill_half_kernel<<<x_grid, 256, 0, streams[gpu]>>>(
+                d_x[gpu], x_elems, (uint32_t)(g.layer * 131 + gpu * 17 + g.cols));
+            CHECK_CUDA(cudaGetLastError());
+            const __half *w =
+                reinterpret_cast<const __half *>(d_cache[gpu] + g.cache_offset[gpu]);
+            cublasStatus_t st = cublasGemmEx(blas[gpu],
+                                             CUBLAS_OP_T,
+                                             CUBLAS_OP_N,
+                                             g.rows_per_gpu,
+                                             opt.slots,
+                                             g.cols,
+                                             &alpha,
+                                             w,
+                                             CUDA_R_16F,
+                                             g.cols,
+                                             d_x[gpu],
+                                             CUDA_R_16F,
+                                             g.cols,
+                                             &beta,
+                                             d_out[gpu],
+                                             CUDA_R_32F,
+                                             g.rows_per_gpu,
+                                             CUDA_R_32F,
+                                             CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+            if (st != CUBLAS_STATUS_SUCCESS) return 3;
+            if (checksum) {
+                const unsigned int out_grid =
+                    (unsigned int)std::min<uint64_t>(65535, (out_elems + 255) / 256);
+                checksum_float_kernel<<<out_grid, 256, 0, streams[gpu]>>>(
+                    d_out[gpu], out_elems, d_checksum[gpu], d_nonfinite[gpu]);
+                CHECK_CUDA(cudaGetLastError());
+            }
+        }
+        for (int gpu = 0; gpu < kGpus; ++gpu) {
+            CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+            CHECK_CUDA(cudaStreamSynchronize(streams[gpu]));
+        }
+        return 0;
+    };
+
+    for (int i = 0; i < opt.warmup; ++i) {
+        for (const DenseGroup &g : groups) {
+            const int rc = run_group(g, false);
+            if (rc != 0) return rc;
+        }
+    }
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < opt.iters; ++i) {
+        for (const DenseGroup &g : groups) {
+            const int rc = run_group(g, false);
+            if (rc != 0) return rc;
+        }
+    }
+    const auto stop = std::chrono::steady_clock::now();
+    stats->total_ms = std::chrono::duration<double, std::milli>(stop - start).count();
+    stats->ms_per_iter = stats->total_ms / (double)opt.iters;
+    stats->dense_table_tflops =
+        stats->ms_per_iter > 0.0
+            ? (double)stats->flops_per_iter / (stats->ms_per_iter * 1.0e9)
+            : 0.0;
+
+    for (const DenseGroup &g : groups) {
+        const int rc = run_group(g, true);
+        if (rc != 0) return rc;
+    }
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        unsigned long long h_checksum = 0;
+        unsigned long long h_bad = 0;
+        CHECK_CUDA(cudaMemcpy(&h_checksum, d_checksum[gpu], sizeof(h_checksum),
+                              cudaMemcpyDeviceToHost));
+        CHECK_CUDA(cudaMemcpy(&h_bad, d_nonfinite[gpu], sizeof(h_bad),
+                              cudaMemcpyDeviceToHost));
+        stats->checksum ^= h_checksum + (unsigned long long)(gpu + 1) * 1000003ull;
+        stats->nonfinite += h_bad;
+    }
+    if (stats->checksum == 0 || stats->nonfinite != 0) stats->pass = false;
+
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        if (blas[gpu]) (void)cublasDestroy(blas[gpu]);
+        if (d_x[gpu]) CHECK_CUDA(cudaFree(d_x[gpu]));
+        if (d_out[gpu]) CHECK_CUDA(cudaFree(d_out[gpu]));
+        if (d_checksum[gpu]) CHECK_CUDA(cudaFree(d_checksum[gpu]));
+        if (d_nonfinite[gpu]) CHECK_CUDA(cudaFree(d_nonfinite[gpu]));
+        if (streams[gpu]) CHECK_CUDA(cudaStreamDestroy(streams[gpu]));
+    }
+    return stats->pass ? 0 : 4;
+}
+
 static void usage(const char *argv0) {
     std::fprintf(stderr,
                  "Usage: %s --pack-dir DIR --contract FILE [options]\n"
                  "Options:\n"
                  "  --devices 0,1,2,3,4,5,6,7  CUDA devices\n"
-                 "  --layer N                    Filter to one layer. Default: all dense rows\n",
+                 "  --layer N                    Filter to one layer. Default: all dense rows\n"
+                 "  --execute-table              Run cache-backed cuBLAS over dense layer groups\n"
+                 "  --slots N                    Active tokens for table execution. Default: 32\n"
+                 "  --warmup N                   Warmup table iterations. Default: 1\n"
+                 "  --iters N                    Timed table iterations. Default: 5\n",
                  argv0);
 }
 
@@ -326,6 +568,17 @@ static bool parse_args(int argc, char **argv, Options *opt) {
         } else if (!std::strcmp(a, "--layer") && v) {
             if (!parse_int(v, &opt->layer)) return false;
             ++i;
+        } else if (!std::strcmp(a, "--slots") && v) {
+            if (!parse_int(v, &opt->slots) || opt->slots <= 0) return false;
+            ++i;
+        } else if (!std::strcmp(a, "--warmup") && v) {
+            if (!parse_int(v, &opt->warmup) || opt->warmup < 0) return false;
+            ++i;
+        } else if (!std::strcmp(a, "--iters") && v) {
+            if (!parse_int(v, &opt->iters) || opt->iters <= 0) return false;
+            ++i;
+        } else if (!std::strcmp(a, "--execute-table")) {
+            opt->execute_table = true;
         } else if (!std::strcmp(a, "--help") || !std::strcmp(a, "-h")) {
             usage(argv[0]);
             std::exit(0);
@@ -434,6 +687,9 @@ int main(int argc, char **argv) {
     uint64_t total_rows = 0;
     uint64_t total_cache = 0;
     uint64_t total_source = 0;
+    ExecuteStats execute;
+    const int execute_rc = execute_dense_table(opt, rows, d_cache, &execute);
+    if (execute_rc != 0) pass = false;
     for (int gpu = 0; gpu < kGpus; ++gpu) {
         CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
         if (d_temp[gpu]) CHECK_CUDA(cudaFree(d_temp[gpu]));
@@ -471,6 +727,29 @@ int main(int argc, char **argv) {
                     plan[gpu].h2d_convert_ms,
                     plan[gpu].checksum,
                     plan[gpu].nonfinite);
+    }
+
+    if (execute.enabled) {
+        std::printf("tp_ep_dense_table_execute\tlayer\t%s\tslots\t%d\t"
+                    "groups\t%llu\tgemms_per_iter\t%llu\titers\t%d\t"
+                    "total_gemms\t%llu\tmax_cols\t%llu\tmax_rows_per_gpu\t%llu\t"
+                    "flops_per_iter\t%llu\ttotal_ms\t%.6f\tms_per_iter\t%.6f\t"
+                    "dense_table_tflops\t%.6f\tchecksum\t%llu\tnonfinite\t%llu\t%s\n",
+                    opt.layer == -999 ? "all" : std::to_string(opt.layer).c_str(),
+                    opt.slots,
+                    (unsigned long long)execute.groups,
+                    (unsigned long long)execute.gemms_per_iter,
+                    opt.iters,
+                    (unsigned long long)execute.total_gemms,
+                    (unsigned long long)execute.max_cols,
+                    (unsigned long long)execute.max_rows_per_gpu,
+                    (unsigned long long)execute.flops_per_iter,
+                    execute.total_ms,
+                    execute.ms_per_iter,
+                    execute.dense_table_tflops,
+                    execute.checksum,
+                    execute.nonfinite,
+                    execute.pass ? "PASS" : "FAIL");
     }
 
     std::printf("tp_ep_dense_cache_smoke\tlayer\t%s\trows\t%llu\tsource_gib\t%.6f\t"

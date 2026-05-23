@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 247
+revision: 248
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -117,6 +117,12 @@ not a serial layer-chain.
   checksum while using cache pointers. The remaining gap is lifting this from
   two composition tensors to a descriptor-selected dense table for every
   layer.
+- Sprint 248 added that descriptor-selected dense execution table. The
+  all-layer dense-table gate runs `510` transformer-layer groups and `4080`
+  cache-backed FP16/cuBLAS GEMMs per 32-slot iteration, passing at
+  `51.003671 ms/iteration`, `7.738345` dense-table TFLOP/s, and zero
+  nonfinite outputs. The remaining gap is composing dense, EP, KV, and
+  hidden-state flow into a resident all-layer TP/EP loop.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -562,6 +568,26 @@ and `19482.326340` slot-step tok/s; private FP16/cuBLAS passes at
 layer-2 dense rows into `302514176` cache bytes. Next lift this into a
 descriptor-selected dense execution table for every layer.
 
+### Sprint 248 - TP/EP All-Layer Dense Execution Table [complete]
+
+Goal: Build and validate a descriptor-selected dense execution table across
+the transformer layers.
+
+Rationale: The layer-2 cache-backed decode path still selected two dense
+tensors by name. TP/EP serving needs the runtime to enumerate dense work from
+the contract across all layers.
+
+Outcome: Complete. `tools/ds4-v100-tp-ep-dense-cache-smoke` now supports
+`--execute-table`, which groups complete `dense_tp` rows by `(layer,
+tensor_id)` and runs cache-backed FP16/cuBLAS GEMMs for each group on all TP
+ranks. The layer-2 gate passes with `14` groups, `112` GEMMs per iteration,
+and `1.384323 ms/iteration`. The all-layer gate passes with `510`
+transformer-layer groups, `4080` GEMMs per iteration, `394684006400` FLOPs
+per iteration, `51.003671 ms/iteration`, `7.738345` dense-table TFLOP/s,
+checksum `15841839914005485`, and zero nonfinite outputs. Next compose this
+dense table with EP routed experts, KV/update, and hidden-state flow in a
+resident all-layer TP/EP loop.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -610,6 +636,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 245 proved dense FP16 runtime cache fits the `32` slot / `256K` TP/EP budget when replacing dense source tensors in VRAM. | This gives us a working tensor-core dense fallback while preserving the quantized source pack offline. | Build the TP/EP dense-cache loader/runtime path for all dense tensors and benchmark resident all-layer decode. |
 | 2026-05-23 | Sprint 246 materialized all dense TP rows into FP16 cache arenas on the V100 pod. | The dense-cache path is now an executable runtime primitive, not just an estimate. | Wire dense cache lookup into resident layer execution and benchmark all-layer decode. |
 | 2026-05-23 | Sprint 247 wired dense cache lookup into the representative TP/EP decode loop. | Execution can now consume cache-resident FP16 dense weights instead of private per-op copies. | Build a descriptor-selected dense execution table across all layers. |
+| 2026-05-23 | Sprint 248 built the descriptor-selected all-layer dense execution table. | Dense no longer depends on hardcoded layer-2 tensor selection. | Compose dense, EP, KV, and hidden-state flow in a resident all-layer TP/EP loop. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 
