@@ -15,6 +15,7 @@ turbomind_lib="/workspace/ds4-sprint181/build/turbomind-v100/libggml-turbomind.s
 run_appliance="./tools/ds4-v100-run-appliance.sh"
 copy_event_compose="1"
 ep_return_fp16="0"
+compact_route_compose="1"
 
 usage() {
     cat <<'USAGE'
@@ -39,6 +40,8 @@ Options:
   --copy-event-compose
   --no-copy-event-compose
   --ep-return-fp16
+  --compact-route-compose
+  --no-compact-route-compose
   --help
 USAGE
 }
@@ -65,6 +68,8 @@ while [ "$#" -gt 0 ]; do
         --copy-event-compose) copy_event_compose="1"; shift ;;
         --no-copy-event-compose) copy_event_compose="0"; shift ;;
         --ep-return-fp16) ep_return_fp16="1"; shift ;;
+        --compact-route-compose) compact_route_compose="1"; shift ;;
+        --no-compact-route-compose) compact_route_compose="0"; shift ;;
         --help|-h) usage; exit 0 ;;
         *) fail "unknown option: $1" ;;
     esac
@@ -126,6 +131,7 @@ for tokens in "${token_values[@]}"; do
     DS4_V100_MAX_REQUESTS=$((generation_requests + 4)) \
     DS4_V100_TP_EP_COPY_EVENT_COMPOSE="$copy_event_compose" \
     DS4_V100_TP_EP_RETURN_FP16="$ep_return_fp16" \
+    DS4_V100_TP_EP_COMPACT_ROUTE_COMPOSE="$compact_route_compose" \
     DS4_V100_LOG_DIR="$case_dir/runtime" \
     "$run_appliance" >"$server_log" 2>"$server_err" &
     server_pid=$!

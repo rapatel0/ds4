@@ -139,6 +139,7 @@ struct RankState {
     cudaStream_t copy_stream = nullptr;
     cudaStream_t copy_streams[kGpus] = {};
     cudaEvent_t copy_done[kGpus] = {};
+    int *d_route_index_by_slot[kGpus] = {};
     int *d_offsets = nullptr;
     int *d_route_slots = nullptr;
     __half *d_a = nullptr;
@@ -414,6 +415,7 @@ struct Options {
     bool direct_remote_compose = false;
     bool source_copy_schedule = true;
     bool copy_event_compose = false;
+    bool compact_route_compose = false;
     bool token_major_all_layers = false;
     bool share_dense_ops = false;
     bool skip_self_compose_copy = true;
@@ -664,6 +666,22 @@ __global__ void ep_reduce_all_dest_shards_kernel(float *contrib,
     atomicAdd(contrib + out_idx, __half2float(route_hidden[i]));
 }
 
+__global__ void ep_pack_route_dest_shards_kernel(float *packed,
+                                                 const __half *route_hidden,
+                                                 int routes,
+                                                 int slots) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t total = (uint64_t)routes * kHidden;
+    if (i >= total) return;
+    const int route = (int)(i / kHidden);
+    const int h = (int)(i % kHidden);
+    const int dest = h / (kHidden / kGpus);
+    const int local_h = h % (kHidden / kGpus);
+    const uint64_t out_idx =
+        ((uint64_t)dest * slots + (uint64_t)route) * (kHidden / kGpus) + local_h;
+    packed[out_idx] = __half2float(route_hidden[i]);
+}
+
 __global__ void add_f32_kernel(float *dst, const float *src, uint64_t n) {
     const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) dst[i] += src[i];
@@ -694,6 +712,55 @@ __global__ void compose_next_hidden_kernel(float *next,
         ((float)(rank + 1) * 0.01f) + ((float)slot * 0.001f) +
         ((float)local_h * 0.00001f);
     next[i] = residual + attn[i] + shared[i] + ep_sum[i] * 0.125f;
+}
+
+__global__ void compose_next_hidden_compact8_kernel(float *next,
+                                                    const float *attn,
+                                                    const float *shared,
+                                                    const float *r0,
+                                                    const float *r1,
+                                                    const float *r2,
+                                                    const float *r3,
+                                                    const float *r4,
+                                                    const float *r5,
+                                                    const float *r6,
+                                                    const float *r7,
+                                                    const int *idx0,
+                                                    const int *idx1,
+                                                    const int *idx2,
+                                                    const int *idx3,
+                                                    const int *idx4,
+                                                    const int *idx5,
+                                                    const int *idx6,
+                                                    const int *idx7,
+                                                    int rank,
+                                                    int slots) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t elems = (uint64_t)slots * (kHidden / kGpus);
+    if (i >= elems) return;
+    const int slot = (int)(i / (kHidden / kGpus));
+    const int local_h = (int)(i % (kHidden / kGpus));
+    const float residual =
+        ((float)(rank + 1) * 0.01f) + ((float)slot * 0.001f) +
+        ((float)local_h * 0.00001f);
+    float ep = 0.0f;
+    const int i0 = idx0[slot];
+    const int i1 = idx1[slot];
+    const int i2 = idx2[slot];
+    const int i3 = idx3[slot];
+    const int i4 = idx4[slot];
+    const int i5 = idx5[slot];
+    const int i6 = idx6[slot];
+    const int i7 = idx7[slot];
+    if (i0 >= 0) ep += r0[(uint64_t)i0 * (kHidden / kGpus) + local_h];
+    if (i1 >= 0) ep += r1[(uint64_t)i1 * (kHidden / kGpus) + local_h];
+    if (i2 >= 0) ep += r2[(uint64_t)i2 * (kHidden / kGpus) + local_h];
+    if (i3 >= 0) ep += r3[(uint64_t)i3 * (kHidden / kGpus) + local_h];
+    if (i4 >= 0) ep += r4[(uint64_t)i4 * (kHidden / kGpus) + local_h];
+    if (i5 >= 0) ep += r5[(uint64_t)i5 * (kHidden / kGpus) + local_h];
+    if (i6 >= 0) ep += r6[(uint64_t)i6 * (kHidden / kGpus) + local_h];
+    if (i7 >= 0) ep += r7[(uint64_t)i7 * (kHidden / kGpus) + local_h];
+    next[i] = residual + attn[i] + shared[i] + ep * 0.125f;
 }
 
 __global__ void compose_next_hidden_sum8_kernel(float *next,
@@ -849,6 +916,7 @@ void usage(const char *argv0) {
                  "       [--direct-remote-compose]\n"
                  "       [--source-copy-schedule] [--dest-copy-schedule]\n"
                  "       [--copy-event-compose]\n"
+                 "       [--compact-route-compose]\n"
                  "       [--token-major-all-layers] [--shared-dense-ops]\n"
                  "       [--skip-self-compose-copy] [--copy-self-compose]\n"
                  "       [--multi-copy-streams] [--serving-bench]\n"
@@ -957,6 +1025,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->source_copy_schedule = false;
         } else if (std::strcmp(arg, "--copy-event-compose") == 0) {
             opt->copy_event_compose = true;
+        } else if (std::strcmp(arg, "--compact-route-compose") == 0) {
+            opt->compact_route_compose = true;
         } else if (std::strcmp(arg, "--token-major-all-layers") == 0) {
             opt->token_major_all_layers = true;
         } else if (std::strcmp(arg, "--shared-dense-ops") == 0) {
@@ -2414,6 +2484,24 @@ void build_offsets_for_rank(int rank, int slots, int top_k,
     *max_routes_per_expert = max_routes;
 }
 
+void build_route_index_by_slot_for_rank(int rank, int slots, int top_k,
+                                        std::vector<int> *route_index_by_slot) {
+    std::vector<int> offsets;
+    std::vector<int> route_slots;
+    int routes = 0;
+    int active_experts = 0;
+    int max_routes_per_expert = 0;
+    build_offsets_for_rank(rank, slots, top_k, &offsets, &route_slots, &routes,
+                           &active_experts, &max_routes_per_expert);
+    route_index_by_slot->assign((size_t)slots, -1);
+    for (int route = 0; route < routes; ++route) {
+        const int slot = route_slots[(size_t)route];
+        if (slot >= 0 && slot < slots) {
+            (*route_index_by_slot)[(size_t)slot] = route;
+        }
+    }
+}
+
 int open_shared_rank_buffers(const Options &opt, SharedRankBuffers *shared) {
     shared->core_bytes = 0;
     for (int p = 0; p < kGpus; ++p) {
@@ -2431,6 +2519,18 @@ int open_shared_rank_buffers(const Options &opt, SharedRankBuffers *shared) {
         CHECK_CUDA(cudaEventCreate(&r.start));
         CHECK_CUDA(cudaEventCreate(&r.mid));
         CHECK_CUDA(cudaEventCreate(&r.stop));
+        for (int src = 0; src < kGpus; ++src) {
+            std::vector<int> route_index_by_slot;
+            build_route_index_by_slot_for_rank(src, opt.slots, opt.top_k,
+                                               &route_index_by_slot);
+            CHECK_CUDA(cudaMalloc(&r.d_route_index_by_slot[src],
+                                  route_index_by_slot.size() * sizeof(int)));
+            CHECK_CUDA(cudaMemcpy(r.d_route_index_by_slot[src],
+                                  route_index_by_slot.data(),
+                                  route_index_by_slot.size() * sizeof(int),
+                                  cudaMemcpyHostToDevice));
+            shared->core_bytes += route_index_by_slot.size() * sizeof(int);
+        }
 
         std::vector<int> offsets;
         std::vector<int> route_slots;
@@ -2488,6 +2588,9 @@ void close_shared_rank_buffers(SharedRankBuffers *shared) {
         if (r.start) CHECK_CUDA(cudaEventDestroy(r.start));
         if (r.mid) CHECK_CUDA(cudaEventDestroy(r.mid));
         if (r.stop) CHECK_CUDA(cudaEventDestroy(r.stop));
+        for (int src = 0; src < kGpus; ++src) {
+            if (r.d_route_index_by_slot[src]) CHECK_CUDA(cudaFree(r.d_route_index_by_slot[src]));
+        }
         for (int q = 0; q < kGpus; ++q) {
             if (r.copy_done[q]) CHECK_CUDA(cudaEventDestroy(r.copy_done[q]));
             if (r.copy_streams[q]) CHECK_CUDA(cudaStreamDestroy(r.copy_streams[q]));
@@ -2564,7 +2667,8 @@ int run_next_hidden_compose(const Options &opt,
     if (!opt.compose_next_hidden) return 0;
     stats->enabled = true;
     stats->ep_return_fp16 = opt.ep_return_fp16;
-    stats->fused_compose_sum = opt.fuse_compose_sum && !opt.ep_return_fp16;
+    stats->fused_compose_sum =
+        opt.fuse_compose_sum && !opt.ep_return_fp16 && !opt.compact_route_compose;
     stats->dense_hmma_compose = opt.dense_hmma_compose;
     stats->dense_f16_cublas_compose = opt.dense_f16_cublas_compose;
 
@@ -2589,9 +2693,19 @@ int run_next_hidden_compose(const Options &opt,
     const uint64_t all_contrib_bytes = all_contrib_elems * sizeof(float);
     const bool skip_self_copy = opt.skip_self_compose_copy && !opt.ep_return_fp16;
     stats->ep_contribution_bytes = all_contrib_bytes * kGpus;
-    stats->ep_return_bytes = return_shard_bytes *
-                             (skip_self_copy ? (kGpus * kGpus - kGpus)
-                                             : (kGpus * kGpus));
+    if (opt.compact_route_compose && !opt.ep_return_fp16) {
+        uint64_t compact_return_bytes = 0;
+        for (int src = 0; src < kGpus; ++src) {
+            compact_return_bytes +=
+                (uint64_t)ranks[src].routes * (kHidden / kGpus) * sizeof(float) *
+                (skip_self_copy ? (kGpus - 1) : kGpus);
+        }
+        stats->ep_return_bytes = compact_return_bytes;
+    } else {
+        stats->ep_return_bytes = return_shard_bytes *
+                                 (skip_self_copy ? (kGpus * kGpus - kGpus)
+                                                 : (kGpus * kGpus));
+    }
     if (ensure_compose_buffers(opt, ranks) != 0) {
         free_device_dense_outputs(attn, opt);
         free_device_dense_outputs(shared, opt);
@@ -2769,7 +2883,8 @@ int run_decode_loop(const Options &opt,
     if (opt.decode_steps <= 0) return 0;
     stats->enabled = true;
     stats->ep_return_fp16 = opt.ep_return_fp16;
-    stats->fused_compose_sum = opt.fuse_compose_sum && !opt.ep_return_fp16;
+    stats->fused_compose_sum =
+        opt.fuse_compose_sum && !opt.ep_return_fp16 && !opt.compact_route_compose;
     stats->dense_hmma_compose = opt.dense_hmma_compose;
     stats->dense_f16_cublas_compose = opt.dense_f16_cublas_compose;
     stats->dense_f16_cache_compose = opt.dense_f16_cache_compose;
@@ -2806,9 +2921,19 @@ int run_decode_loop(const Options &opt,
     const uint64_t all_contrib_bytes = all_contrib_elems * sizeof(float);
     const bool skip_self_copy = opt.skip_self_compose_copy && !opt.ep_return_fp16;
     stats->ep_contribution_bytes = all_contrib_bytes * kGpus;
-    stats->ep_return_bytes = return_shard_bytes *
-                             (skip_self_copy ? (kGpus * kGpus - kGpus)
-                                             : (kGpus * kGpus));
+    if (opt.compact_route_compose && !opt.ep_return_fp16) {
+        uint64_t compact_return_bytes = 0;
+        for (int src = 0; src < kGpus; ++src) {
+            compact_return_bytes +=
+                (uint64_t)ranks[src].routes * (kHidden / kGpus) * sizeof(float) *
+                (skip_self_copy ? (kGpus - 1) : kGpus);
+        }
+        stats->ep_return_bytes = compact_return_bytes;
+    } else {
+        stats->ep_return_bytes = return_shard_bytes *
+                                 (skip_self_copy ? (kGpus * kGpus - kGpus)
+                                                 : (kGpus * kGpus));
+    }
     if (ensure_compose_buffers(opt, ranks) != 0) {
         if (!shared_dense_ops) {
             free_resident_f8_dense(attn, opt);
@@ -2862,17 +2987,26 @@ int run_decode_loop(const Options &opt,
         auto t2 = std::chrono::steady_clock::now();
 
         const int block = 256;
+        const bool compact_route = opt.compact_route_compose &&
+                                   !opt.ep_return_fp16 &&
+                                   !opt.direct_remote_compose;
         for (int p = 0; p < kGpus; ++p) {
             RankState &r = ranks[p];
             CHECK_CUDA(cudaSetDevice(r.device));
-            int grid = (int)((all_contrib_elems + block - 1) / block);
-            zero_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_contrib_all,
-                                                          all_contrib_elems);
-            CHECK_CUDA(cudaGetLastError());
             const uint64_t route_hidden_elems = (uint64_t)r.routes * kHidden;
-            grid = (int)((route_hidden_elems + block - 1) / block);
-            ep_reduce_all_dest_shards_kernel<<<grid, block, 0, r.stream>>>(
-                r.d_ep_contrib_all, r.d_down, r.d_route_slots, r.routes, opt.slots);
+            int grid = (int)((route_hidden_elems + block - 1) / block);
+            if (compact_route) {
+                ep_pack_route_dest_shards_kernel<<<grid, block, 0, r.stream>>>(
+                    r.d_ep_contrib_all, r.d_down, r.routes, opt.slots);
+            } else {
+                grid = (int)((all_contrib_elems + block - 1) / block);
+                zero_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_contrib_all,
+                                                              all_contrib_elems);
+                CHECK_CUDA(cudaGetLastError());
+                grid = (int)((route_hidden_elems + block - 1) / block);
+                ep_reduce_all_dest_shards_kernel<<<grid, block, 0, r.stream>>>(
+                    r.d_ep_contrib_all, r.d_down, r.d_route_slots, r.routes, opt.slots);
+            }
             CHECK_CUDA(cudaGetLastError());
             if (opt.ep_return_fp16) {
                 grid = (int)((all_contrib_elems + block - 1) / block);
@@ -2908,11 +3042,15 @@ int run_decode_loop(const Options &opt,
                         } else {
                             const float *src_ptr = ranks[src].d_ep_contrib_all +
                                                    (uint64_t)dst * shard_elems;
+                            const size_t copy_bytes = compact_route
+                                ? (size_t)((uint64_t)ranks[src].routes *
+                                           (kHidden / kGpus) * sizeof(float))
+                                : (size_t)return_shard_bytes;
                             CHECK_CUDA(cudaMemcpyPeerAsync(ranks[dst].d_ep_remote[src],
                                                            ranks[dst].device,
                                                            src_ptr,
                                                            ranks[src].device,
-                                                           (size_t)return_shard_bytes,
+                                                           copy_bytes,
                                                            copy_stream));
                         }
                         if (opt.copy_event_compose) {
@@ -2953,11 +3091,15 @@ int run_decode_loop(const Options &opt,
                         } else {
                             const float *src_ptr = ranks[src].d_ep_contrib_all +
                                                    (uint64_t)dst * shard_elems;
+                            const size_t copy_bytes = compact_route
+                                ? (size_t)((uint64_t)ranks[src].routes *
+                                           (kHidden / kGpus) * sizeof(float))
+                                : (size_t)return_shard_bytes;
                             CHECK_CUDA(cudaMemcpyPeerAsync(ranks[dst].d_ep_remote[src],
                                                            ranks[dst].device,
                                                            src_ptr,
                                                            ranks[src].device,
-                                                           (size_t)return_shard_bytes,
+                                                           copy_bytes,
                                                            ranks[dst].stream));
                         }
                     }
@@ -2978,7 +3120,40 @@ int run_decode_loop(const Options &opt,
                 }
             }
             int grid = (int)((shard_elems + block - 1) / block);
-            if (stats->fused_compose_sum) {
+            if (compact_route) {
+                const float *r0 = skip_self_copy && dst == 0
+                    ? ranks[0].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : r.d_ep_remote[0];
+                const float *r1 = skip_self_copy && dst == 1
+                    ? ranks[1].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : r.d_ep_remote[1];
+                const float *r2 = skip_self_copy && dst == 2
+                    ? ranks[2].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : r.d_ep_remote[2];
+                const float *r3 = skip_self_copy && dst == 3
+                    ? ranks[3].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : r.d_ep_remote[3];
+                const float *r4 = skip_self_copy && dst == 4
+                    ? ranks[4].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : r.d_ep_remote[4];
+                const float *r5 = skip_self_copy && dst == 5
+                    ? ranks[5].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : r.d_ep_remote[5];
+                const float *r6 = skip_self_copy && dst == 6
+                    ? ranks[6].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : r.d_ep_remote[6];
+                const float *r7 = skip_self_copy && dst == 7
+                    ? ranks[7].d_ep_contrib_all + (uint64_t)dst * shard_elems
+                    : r.d_ep_remote[7];
+                compose_next_hidden_compact8_kernel<<<grid, block, 0, r.stream>>>(
+                    r.d_next_hidden, attn_op->d_out[(size_t)dst], shared_op->d_out[(size_t)dst],
+                    r0, r1, r2, r3, r4, r5, r6, r7,
+                    r.d_route_index_by_slot[0], r.d_route_index_by_slot[1],
+                    r.d_route_index_by_slot[2], r.d_route_index_by_slot[3],
+                    r.d_route_index_by_slot[4], r.d_route_index_by_slot[5],
+                    r.d_route_index_by_slot[6], r.d_route_index_by_slot[7],
+                    dst, opt.slots);
+            } else if (stats->fused_compose_sum) {
                 const float *r0 = skip_self_copy && dst == 0
                     ? ranks[0].d_ep_contrib_all + (uint64_t)dst * shard_elems
                     : opt.direct_remote_compose && !opt.ep_return_fp16
@@ -3432,6 +3607,17 @@ int run_layer(const Options &opt,
             CHECK_CUDA(cudaEventCreate(&r.start));
             CHECK_CUDA(cudaEventCreate(&r.mid));
             CHECK_CUDA(cudaEventCreate(&r.stop));
+            for (int src = 0; src < kGpus; ++src) {
+                std::vector<int> route_index_by_slot;
+                build_route_index_by_slot_for_rank(src, opt.slots, opt.top_k,
+                                                   &route_index_by_slot);
+                CHECK_CUDA(cudaMalloc(&r.d_route_index_by_slot[src],
+                                      route_index_by_slot.size() * sizeof(int)));
+                CHECK_CUDA(cudaMemcpy(r.d_route_index_by_slot[src],
+                                      route_index_by_slot.data(),
+                                      route_index_by_slot.size() * sizeof(int),
+                                      cudaMemcpyHostToDevice));
+            }
 
             std::vector<int> offsets;
             std::vector<int> route_slots;
@@ -3847,6 +4033,9 @@ int run_layer(const Options &opt,
             CHECK_CUDA(cudaEventDestroy(r.start));
             CHECK_CUDA(cudaEventDestroy(r.mid));
             CHECK_CUDA(cudaEventDestroy(r.stop));
+            for (int src = 0; src < kGpus; ++src) {
+                if (r.d_route_index_by_slot[src]) CHECK_CUDA(cudaFree(r.d_route_index_by_slot[src]));
+            }
             for (int q = 0; q < kGpus; ++q) {
                 if (r.copy_done[q]) CHECK_CUDA(cudaEventDestroy(r.copy_done[q]));
                 if (r.copy_streams[q]) CHECK_CUDA(cudaStreamDestroy(r.copy_streams[q]));

@@ -39,7 +39,15 @@ return under that event-wait path. It remains rejected: same-binary 64-token
 serving A/B regresses from `766.883263` to `635.936079` wall generated tok/s
 and from `997.165341` to `793.283316` decode generated tok/s. The diagnostic
 toggle exists as `DS4_V100_TP_EP_RETURN_FP16`, but the serving default remains
-`0`.
+`0`. Sprint 284 added and promoted compact route-compose. Same-binary
+64-token serving A/B improves wall generated throughput from `711.177884` to
+`791.453850` tok/s and wall continuation throughput from `719.489689` to
+`796.894336` tok/s, with aggregate `96/96` token match. The 32-token compact
+sanity run reaches `802.701663` wall generated tok/s and `813.475877` wall
+continuation tok/s. The current promoted TP/EP serving defaults are therefore
+`DS4_V100_TP_EP_COPY_EVENT_COMPOSE=1`,
+`DS4_V100_TP_EP_COMPACT_ROUTE_COMPOSE=1`, and
+`DS4_V100_TP_EP_RETURN_FP16=0`.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

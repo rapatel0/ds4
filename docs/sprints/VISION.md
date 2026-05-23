@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 283
+revision: 284
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -291,6 +291,11 @@ not a serial layer-chain.
   rejected: same-binary 64-token serving throughput regresses from
   `766.883263` to `635.936079` wall generated tok/s, despite preserving
   aggregate `96/96` token match. The FP32 return path stays default.
+- Sprint 284 added compact route-compose and promoted it as the TP/EP
+  appliance default. Same-binary 64-token serving A/B improves wall generated
+  tok/s from `711.177884` to `791.453850`, with aggregate `96/96` token
+  match. The 32-token compact sanity run reaches `802.701663` wall generated
+  tok/s and `813.475877` wall continuation tok/s.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -1342,6 +1347,19 @@ tok/s from `766.883263` to `635.936079` and decode generated tok/s from
 The extra cast/add/final-compose work dominates the reduced copy payload on
 V100, so FP16 return remains rejected.
 
+### Sprint 284 - TP/EP Compact Route Compose [complete]
+
+Goal: Reduce staged FP32 contribution traffic without changing return dtype.
+
+Outcome: Complete. `--compact-route-compose` packs EP contributions in
+route-major form, copies only `routes * hidden_shard` elements per
+source/destination, and composes back to slot-major hidden rows on the
+destination GPU. The launcher, bench, and Kubernetes defaults now enable
+`DS4_V100_TP_EP_COMPACT_ROUTE_COMPOSE=1`. Same-binary 64-token HTTP A/B at
+`32` slots / `256K` / three generation requests improves wall generated tok/s
+from `711.177884` to `791.453850` and wall continuation tok/s from
+`719.489689` to `796.894336`, with aggregate `96/96` token match.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -1425,6 +1443,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 281 exposed TP/EP stage timing in HTTP artifacts. | Operational metrology now shows compose-copy as the largest individual stage. | Optimize compose-copy movement/synchronization, then add true request coalescing. |
 | 2026-05-23 | Sprint 282 promoted event-wait compose copy. | Moving copy dependency waits onto CUDA events improves same-binary serving throughput by about `2.5%`. | Reduce FP32 contribution traffic or fuse staged all-to-all reduction more aggressively. |
 | 2026-05-23 | Sprint 283 rejected FP16 EP return under event-wait compose. | Reduced payload bytes do not pay for the extra cast/add/final-compose work on V100. | Stay on FP32 return and attack staged contribution traffic/fusion directly. |
+| 2026-05-23 | Sprint 284 promoted compact route-compose. | Route-major EP contribution packing reduces staged FP32 traffic and improves same-binary serving throughput by about `11%`. | Re-establish promoted 32/64 topline and add true request coalescing/admission. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 
