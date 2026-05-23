@@ -14,8 +14,10 @@ checksum `204721433`. Overlap improves the projected scaffold rate from
 `50.691201 ms/token` to `37.822268 ms/token`. Sprint 262 rechecked FP16 EP
 return under this new regime and rejected it: FP16 return regresses projected
 throughput from `831.795688` to `729.339500` slot-step tok/s by increasing
-compose time. The remaining dominant stage is compose/all-to-all with FP32 EP
-return.
+compose time. Sprint 263 tested direct peer-memory compose and rejected it:
+direct remote reads regress projected throughput from `840.751688` to
+`634.454351` slot-step tok/s by increasing compose time. The remaining
+dominant stage is staged compose/all-to-all with FP32 EP return.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: vision
-revision: 262
+revision: 263
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -198,6 +198,9 @@ not a serial layer-chain.
 - Sprint 262 rechecked FP16 EP return under the resident overlapped schedule.
   It is still rejected: projected throughput regresses from `831.795688` to
   `729.339500` slot-step tok/s because compose time increases.
+- Sprint 263 tested direct peer-memory compose. It is rejected: direct remote
+  reads regress projected throughput from `840.751688` to `634.454351`
+  slot-step tok/s because compose time increases. Keep staged peer copies.
 - Prior TP evidence remains useful:
   - TP8 sharded KV at `32` slots / `256K` fits, while replicated KV does not.
   - TP8 one-layer synthetic and FP16 fixture probes proved resident TP work can
@@ -915,6 +918,24 @@ with checksum `204721433` in both modes. FP32 return reports
 FP16 return remains rejected because the cast/expand path increases compose
 time from `25.608539 ms` to `31.200853 ms`.
 
+### Sprint 263 - TP/EP Direct Remote Compose Probe [complete]
+
+Goal: Test whether compose can skip staged peer copies and read EP
+contributions directly from source GPUs over peer memory.
+
+Rationale: The staged compose path performs explicit peer copies into
+destination-local buffers, then launches the compose kernel. Direct remote
+reads could remove that staging boundary if NVLink remote reads are fast enough.
+
+Outcome: Complete. `tools/ds4-v100-tp-ep-full-layer-smoke` now supports
+`--direct-remote-compose` as an opt-in diagnostic. The V100 50-step A/B at
+`32` slots / `256K`, resident expert bindings, local TP runtime, EP+dense
+overlap, and FP32 EP return passes `43/43` layers with checksum `204721433` in
+both modes. Staged compose reports `840.751688` projected slot-step tok/s;
+direct remote compose reports `634.454351`. Direct remote compose is rejected
+because remote reads increase compose time from `25.368965 ms` to
+`37.776787 ms`.
+
 ## Experiment Backlog
 
 These experiments should be run inside the TP/EP sprints, not as PP variants:
@@ -978,6 +999,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 260 hoisted active TurboMind expert bindings into a resident all-layer cache. | This matches the production appliance requirement and removes per-layer expert reload churn. | Move toward a real serving loop or reduce the EP/dense/compose boundary now that major setup state is resident. |
 | 2026-05-23 | Sprint 261 overlapped routed EP with dense cuBLAS work on separate streams. | EP and dense are independent until compose, and overlap produced a 34% scaffold throughput gain. | Optimize compose/all-to-all or convert the scaffold into a serving loop. |
 | 2026-05-23 | Sprint 262 rechecked FP16 EP return under the resident overlapped schedule. | FP16 return still regresses total decode because compose gets slower. | Keep FP32 return and target fused/direct compose-all-to-all instead of standalone cast staging. |
+| 2026-05-23 | Sprint 263 tested direct peer-memory compose. | Direct remote reads preserve correctness but regress compose time and total throughput. | Keep staged peer copies; optimize staged-copy scheduling or destination-side reduction. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 
