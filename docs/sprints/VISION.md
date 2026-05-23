@@ -263,17 +263,34 @@ KV `max_abs=0`, and deterministic finite repeat output. This is still not
 serving and not logits-equivalent; dense/control/router/attention descriptor
 execution is the next gate.
 
-### Sprint 235 - Full-Layer TP/EP Decode [planned]
+### Sprint 235 - Descriptor-Backed Full-Layer TP/EP Scaffold [planned]
 
-Goal: Scale the TP/EP runtime from one descriptor-backed layer to all 43 layers
-with MTP off and prove selected-token/decode correctness.
+Goal: Expand from descriptor-backed routed experts to a full layer-2 TP/EP
+scaffold that parses, loads, and device-checks dense/control descriptors,
+preserves sharded KV correctness, and runs descriptor-backed EP experts with
+MTP off.
 
-Rationale: TP is not operational until all layers run in the TP/EP ownership
-model without gathering hidden state back to PP layout between layers.
+Rationale: TP is not operational until every layer family has a concrete
+descriptor-backed runtime binding. Sprint 234 proved expert bytes; Sprint 235
+must prove that the full-layer ownership model can bind real dense/control,
+KV/state, and expert rows in the separate TP/EP codepath before replacing
+checksum stages with true DS4 math and scaling to all 43 layers.
 
 Outcome: Pending.
 
-### Sprint 236 - TP/EP Serving Gate [planned]
+### Sprint 236 - Full-Layer TP/EP Decode [planned]
+
+Goal: Replace Sprint 235 dense/control checksum stages with real low-bit dense
+execution for a representative layer and prove selected-token/decode
+correctness with MTP off.
+
+Rationale: The full-layer scaffold is not a logits-equivalent layer. The next
+gate must turn descriptor-backed residency into real layer math while
+preserving TP/EP hidden and KV layout.
+
+Outcome: Pending.
+
+### Sprint 237 - TP/EP Serving Gate [planned]
 
 Goal: Serve continuous multi-slot requests through the TP/EP runtime at
 `32` slots / `256K`, MTP off.
@@ -284,7 +301,7 @@ GPU utilization, collective time, expert time, and correctness.
 
 Outcome: Pending.
 
-### Sprint 237 - TP/EP Throughput Optimization [tentative]
+### Sprint 238 - TP/EP Throughput Optimization [tentative]
 
 Goal: Optimize the measured TP/EP bottleneck after Sprint 234 identifies it.
 
@@ -294,7 +311,7 @@ sprint should follow measured evidence, not guesswork.
 
 Outcome: Pending.
 
-### Sprint 238 - Multi-Slot MTP On TP/EP [tentative]
+### Sprint 239 - Multi-Slot MTP On TP/EP [tentative]
 
 Goal: Add MTP to the TP/EP serving path only after TP/EP decode is correct and
 benchmarked.
