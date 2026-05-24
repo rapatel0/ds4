@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: codex
-revision: 301
+revision: 302
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -121,6 +121,11 @@ not a serial layer-chain.
   BF16 embedding seed, and repeats. This gives the TP/EP path the correct
   autoregressive shape before optimization. Text tokenizer I/O, prompt
   prefill, active-slot-only decode, and MTP remain open.
+- Sprint 302 added diagnostic prompt prefill on cache misses. Tokens before
+  the prompt tail are evaluated through the TP/EP loop without output-head
+  selection, then generation starts from the final prompt token. This gives the
+  endpoint the minimal prompt/prefix semantics needed before text I/O and
+  performance optimization. Fast batched prefill is still a later optimization.
 - Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
   longer exposes PP/layer-split topology modes. Against the real production
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about

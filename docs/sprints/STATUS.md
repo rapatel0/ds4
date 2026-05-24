@@ -244,6 +244,15 @@ generated-token sequence. The V100 smoke with `session_id=multi`,
 `252.798645` decode generated tok/s for this correctness-oriented single
 request. The endpoint still lacks tokenizer text I/O, real prompt prefill,
 active-slot-only decode, and MTP.
+Sprint 302 added the first diagnostic prompt-prefill bridge on cache misses.
+Prompt tokens before the tail now run through TP/EP one-token passes without
+output-head selection, updating resident KV/HC state before generation starts
+from the final prompt token. The V100 smoke with `session_id=prefill`,
+`prompt_tokens=[21,22,23]`, and `max_tokens=2` reports
+`prompt_prefill_tokens=2`, `generated_token_ids=2`, slot cursor
+`100000 -> 100004`, and `next_position=100004`. The generated section reports
+`212.692685` wall tok/s / `351.116767` decode tok/s. This is correctness
+prefill, not optimized batched prefill.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

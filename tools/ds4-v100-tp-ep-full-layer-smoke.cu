@@ -6439,6 +6439,7 @@ struct HttpParsedRequest {
     std::string evicted_key;
     uint32_t decode_input_token = UINT32_MAX;
     std::vector<uint32_t> generated_token_ids;
+    uint64_t prompt_prefill_tokens = 0;
 };
 
 static int http_content_length(const char *req) {
@@ -6828,12 +6829,13 @@ struct TpEpHttpSessionTable {
     void commit(const TpEpHttpSessionAssignment &a,
                 uint64_t prompt_tokens,
                 uint64_t generated_tokens,
+                uint64_t position_advance,
                 const std::vector<uint32_t> &selected_tokens) {
         if (a.slot < 0 || a.slot >= (int)slots.size()) return;
         auto &slot = slots[(size_t)a.slot];
         slot.kv_valid = true;
         slot.hc_valid = true;
-        slot.pos = a.pos_in + generated_tokens;
+        slot.pos = a.pos_in + position_advance;
         slot.prompt_tokens += prompt_tokens;
         slot.generated_tokens += generated_tokens;
         for (uint32_t selected_token : selected_tokens) {
@@ -7327,11 +7329,62 @@ int run_tp_ep_http_server(const Options &base_opt,
                     decode_input_tokens[(size_t)batch[i].cache_slot] = input_token;
                 }
             }
-            ServingBenchResult result;
+            int max_prompt_prefill_steps = 0;
             int rc = 0;
+            for (size_t i = 0; i < batch.size(); ++i) {
+                if (!assignments[i].hit && batch[i].prompt_token_ids.size() > 1) {
+                    max_prompt_prefill_steps = std::max(
+                        max_prompt_prefill_steps,
+                        (int)batch[i].prompt_token_ids.size() - 1);
+                }
+            }
+            for (int prefill_step = 0; prefill_step < max_prompt_prefill_steps; ++prefill_step) {
+                bool any_prefill = false;
+                std::vector<uint32_t> prefill_input_tokens((size_t)req_opt.slots, 0u);
+                for (size_t i = 0; i < batch.size(); ++i) {
+                    const int slot = batch[i].cache_slot;
+                    if (assignments[i].hit || slot < 0 || slot >= req_opt.slots) continue;
+                    if ((size_t)prefill_step + 1u >= batch[i].prompt_token_ids.size()) continue;
+                    const uint32_t tok = batch[i].prompt_token_ids[(size_t)prefill_step];
+                    prefill_input_tokens[(size_t)slot] = tok;
+                    batch[i].prompt_prefill_tokens++;
+                    any_prefill = true;
+                }
+                if (!any_prefill) continue;
+                Options prefill_opt = req_opt;
+                prefill_opt.position = first_req.cache_position + (uint64_t)prefill_step;
+                ServingBenchResult prefill_result;
+                rc = run_token_major_serving_loop(prefill_opt,
+                                                  shared_dense_f16_cache,
+                                                  shared_api,
+                                                  shared_rank_buffers,
+                                                  shared_tp_runtime,
+                                                  shared_expert_bindings,
+                                                  shared_dense_ops,
+                                                  nullptr,
+                                                  shared_hc_controls,
+                                                  shared_token_embedding,
+                                                  &prefill_input_tokens,
+                                                  resident_rows,
+                                                  resident_stats,
+                                                  true,
+                                                  &prefill_result);
+                if (rc != 0) break;
+                total_decode_ms += prefill_result.total_decode_ms;
+                total_wall_ms += prefill_result.total_wall_ms;
+                total_ep_ms += prefill_result.total_ep_ms;
+                total_dense_ms += prefill_result.total_dense_ms;
+                total_compose_ms += prefill_result.total_compose_ms;
+                total_compose_reduce_ms += prefill_result.total_compose_reduce_ms;
+                total_compose_copy_ms += prefill_result.total_compose_copy_ms;
+                total_compose_final_ms += prefill_result.total_compose_final_ms;
+            }
+            ServingBenchResult result;
             bool missing_output_head = false;
-            for (int step = 0; step < requested_decode_steps; ++step) {
-                req_opt.position = first_req.cache_position + (uint64_t)step;
+            for (int step = 0; rc == 0 && step < requested_decode_steps; ++step) {
+                req_opt.position = first_req.cache_position +
+                                   (uint64_t)max_prompt_prefill_steps +
+                                   (uint64_t)step;
                 ServingBenchResult step_result;
                 rc = run_token_major_serving_loop(req_opt,
                                                   shared_dense_f16_cache,
@@ -7449,7 +7502,9 @@ int run_tp_ep_http_server(const Options &base_opt,
                 generation_requests += (uint64_t)batch.size();
                 if (batch.size() > 1) coalesced_requests += (uint64_t)batch.size();
                 next_position = std::max(next_position,
-                                         first_req.cache_position + (uint64_t)req_opt.decode_steps);
+                                         first_req.cache_position +
+                                             (uint64_t)max_prompt_prefill_steps +
+                                             (uint64_t)req_opt.decode_steps);
                 total_prompt_tokens += client_prompt_tokens;
                 total_generated_tokens += client_generated_tokens;
                 total_continuation_tokens += client_continuation_tokens;
@@ -7488,6 +7543,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                     sessions.commit(assignments[i],
                                     committed_prompt_tokens,
                                     request_generated,
+                                    batch[i].prompt_prefill_tokens + request_generated,
                                     batch[i].generated_token_ids);
                     const TpEpHttpSessionSlot *slot_state = nullptr;
                     if (batch[i].cache_slot >= 0 &&
@@ -7509,11 +7565,12 @@ int run_tp_ep_http_server(const Options &base_opt,
                     std::snprintf(meta, sizeof(meta),
                                   "\"backend\":\"tp_ep_resident\","
                                   "\"diagnostic\":true,"
-                                  "\"diagnostic_note\":\"tokenized per-step feedback is wired; tokenizer text and prompt prefill are not fully wired yet\","
+                                  "\"diagnostic_note\":\"tokenized prompt prefill and per-step feedback are wired; tokenizer text is not fully wired yet\","
                                   "\"diagnostic_output_head\":%d,"
                                   "\"diagnostic_output_head_proxy_hc\":%d,"
                                   "\"token_input_seed\":%d,"
                                   "\"decode_input_token\":%u,"
+                                  "\"prompt_prefill_tokens\":%llu,"
                                   "\"generated_token_ids\":%zu,"
                                   "\"selected_token\":%u,"
                                   "\"selected_logit\":%.9f,"
@@ -7572,6 +7629,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   result.diagnostic_output_head_proxy_hc ? 1 : 0,
                                   result.token_input_seed ? 1 : 0,
                                   batch[i].decode_input_token,
+                                  (unsigned long long)batch[i].prompt_prefill_tokens,
                                   batch[i].generated_token_ids.size(),
                                   selected_token,
                                   selected_logit,
@@ -7591,7 +7649,8 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   (unsigned long long)batch[i].prompt_fingerprint,
                                   batch[i].cache_slot,
                                   (unsigned long long)assignments[i].pos_in,
-                                  (unsigned long long)(assignments[i].pos_in + request_generated),
+                                  (unsigned long long)(assignments[i].pos_in +
+                                      batch[i].prompt_prefill_tokens + request_generated),
                                   batch[i].cache_evicted ? 1 : 0,
                                   escaped_evicted.c_str(),
                                   batch[i].prompt_token_ids.size(),
