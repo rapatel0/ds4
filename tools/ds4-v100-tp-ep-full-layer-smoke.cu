@@ -12082,7 +12082,7 @@ int run_tp_ep_http_server(const Options &base_opt,
             const double cumulative_continuation_tok_s_decode = total_continuation_decode_ms > 0.0
                 ? (double)total_continuation_tokens * 1000.0 / total_continuation_decode_ms
                 : 0.0;
-            char out[6144];
+            char out[8192];
             std::snprintf(out, sizeof(out),
                           "{\"status\":\"ok\",\"backend\":\"tp_ep_resident\","
                           "\"tp\":8,\"ep\":8,\"pp\":1,\"ctx\":262144,"
@@ -12094,6 +12094,10 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "\"kv_runtime_resident\":%d,"
                           "\"kv_all_slots_gate\":%d,"
                           "\"hc_persist_state_gate\":%d,"
+                          "\"true_ds4_attention_typed_kv_raw_gate\":%d,"
+                          "\"true_ds4_attention_typed_kv_compressed_gate\":%d,"
+                          "\"true_ds4_attention_typed_kv_indexer_gate\":%d,"
+                          "\"true_ds4_attention_typed_kv_history_gate\":%d,"
                           "\"cache_slots_total\":%zu,"
                           "\"cache_slots_used\":%d,"
                           "\"cache_hits\":%llu,"
@@ -12129,6 +12133,10 @@ int run_tp_ep_http_server(const Options &base_opt,
                           shared_tp_runtime && shared_tp_runtime->initialized ? 1 : 0,
                           base_opt.tp_kv_all_slots_gate ? 1 : 0,
                           base_opt.tp_hc_persist_state_gate ? 1 : 0,
+                          base_opt.true_ds4_attention_typed_kv_raw_gate ? 1 : 0,
+                          base_opt.true_ds4_attention_typed_kv_compressed_gate ? 1 : 0,
+                          base_opt.true_ds4_attention_typed_kv_indexer_gate ? 1 : 0,
+                          base_opt.true_ds4_attention_typed_kv_history_gate ? 1 : 0,
                           sessions.slots.size(),
                           sessions.used(),
                           (unsigned long long)sessions.hits,
@@ -12170,7 +12178,7 @@ int run_tp_ep_http_server(const Options &base_opt,
             const double cumulative_continuation_tok_s_decode = total_continuation_decode_ms > 0.0
                 ? (double)total_continuation_tokens * 1000.0 / total_continuation_decode_ms
                 : 0.0;
-            char out[4096];
+            char out[6144];
             std::snprintf(out, sizeof(out),
                           "ds4_v100_tp_ep_resident_ready 1\n"
                           "ds4_v100_tp_ep_slots %d\n"
@@ -12184,6 +12192,10 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "ds4_v100_tp_ep_kv_runtime_resident %d\n"
                           "ds4_v100_tp_ep_kv_all_slots_gate %d\n"
                           "ds4_v100_tp_ep_hc_persist_state_gate %d\n"
+                          "ds4_v100_tp_ep_true_ds4_attention_typed_kv_raw_gate %d\n"
+                          "ds4_v100_tp_ep_true_ds4_attention_typed_kv_compressed_gate %d\n"
+                          "ds4_v100_tp_ep_true_ds4_attention_typed_kv_indexer_gate %d\n"
+                          "ds4_v100_tp_ep_true_ds4_attention_typed_kv_history_gate %d\n"
                           "ds4_v100_tp_ep_cache_slots_total %zu\n"
                           "ds4_v100_tp_ep_cache_slots_used %d\n"
                           "ds4_v100_tp_ep_cache_hits %llu\n"
@@ -12218,6 +12230,10 @@ int run_tp_ep_http_server(const Options &base_opt,
                           shared_tp_runtime && shared_tp_runtime->initialized ? 1 : 0,
                           base_opt.tp_kv_all_slots_gate ? 1 : 0,
                           base_opt.tp_hc_persist_state_gate ? 1 : 0,
+                          base_opt.true_ds4_attention_typed_kv_raw_gate ? 1 : 0,
+                          base_opt.true_ds4_attention_typed_kv_compressed_gate ? 1 : 0,
+                          base_opt.true_ds4_attention_typed_kv_indexer_gate ? 1 : 0,
+                          base_opt.true_ds4_attention_typed_kv_history_gate ? 1 : 0,
                           sessions.slots.size(),
                           sessions.used(),
                           (unsigned long long)sessions.hits,
@@ -12646,7 +12662,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                         decode_token_text(tokenizer.engine, batch[i].generated_token_ids);
                     const std::string escaped_generated_text =
                         http_json_escape(generated_text);
-                    char meta[8192];
+                    char meta[10240];
                     std::snprintf(meta, sizeof(meta),
                                   "\"backend\":\"tp_ep_resident\","
                                   "\"diagnostic\":true,"
@@ -12690,6 +12706,10 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   "\"kv_runtime_resident\":%d,"
                                   "\"kv_all_slots_gate\":%d,"
                                   "\"hc_persist_state_gate\":%d,"
+                                  "\"true_ds4_attention_typed_kv_raw_gate\":%d,"
+                                  "\"true_ds4_attention_typed_kv_compressed_gate\":%d,"
+                                  "\"true_ds4_attention_typed_kv_indexer_gate\":%d,"
+                                  "\"true_ds4_attention_typed_kv_history_gate\":%d,"
                                   "\"decode_slots\":%d,"
                                   "\"prompt_tokens\":%llu,"
                                   "\"generated_tokens\":%llu,"
@@ -12755,6 +12775,10 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   shared_tp_runtime && shared_tp_runtime->initialized ? 1 : 0,
                                   req_opt.tp_kv_all_slots_gate ? 1 : 0,
                                   req_opt.tp_hc_persist_state_gate ? 1 : 0,
+                                  req_opt.true_ds4_attention_typed_kv_raw_gate ? 1 : 0,
+                                  req_opt.true_ds4_attention_typed_kv_compressed_gate ? 1 : 0,
+                                  req_opt.true_ds4_attention_typed_kv_indexer_gate ? 1 : 0,
+                                  req_opt.true_ds4_attention_typed_kv_history_gate ? 1 : 0,
                                   req_opt.slots,
                                   (unsigned long long)request_prompt_tokens,
                                   (unsigned long long)request_generated,

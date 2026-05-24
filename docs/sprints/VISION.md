@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 341
+revision: 342
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -155,9 +155,20 @@ not a serial layer-chain.
   token-major run from position `262136` for `8` decode steps passes all `344`
   layer-step invocations, emits `328` typed-history lines, and reaches
   `visible_attn_rows=2`, `loaded_attn_rows=2`, `loaded_indexer_rows=2` on all
-  `21` ratio-4 layers. The next integration step is promoting the typed KV
-  path from full-layer smoke into tokenizer-enabled HTTP serving with resident
-  session/KV reuse.
+  `21` ratio-4 layers.
+- Sprint 337 promoted the typed KV gates into tokenizer-enabled TP/EP HTTP
+  serving. `DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_HISTORY=1` now
+  cascades the typed raw-SWA, compressed-attention, ratio-4 indexer, and
+  history gates through the appliance launcher, and the server reports those
+  gates in `/status`, `/metrics`, and response metadata. A `32` slot / `256K`
+  HTTP smoke returned `200` for two `/v1/chat/completions` requests using the
+  same `session_id`; the second request reused resident slot `0`
+  (`cache_hit=1`) and advanced from `100014` to `100016`. Server logs show
+  typed KV PASS-line counts of `685` raw, `83` compressed-attention, `83`
+  indexer, and `653` history rows, including `84` lines with
+  `loaded_attn_rows=2` and `loaded_indexer_rows=2`. The next integration step
+  is a longer typed-KV HTTP run and an A/B against the no-typed-KV serving
+  baseline so the cost of the production typed KV path is quantified.
 - The system is not production-ready yet because the bridge HC sequence has
   not been proven equivalent to the DeepSeek V4 reference layer semantics, and
   production serving still needs readiness/overload/cancellation/streaming

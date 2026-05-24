@@ -1,0 +1,1 @@
+{"model": "ds4-v100-tp-ep-diagnostic", "messages": [{"role": "user", "content": "Say one short sentence about tensor parallel serving."}], "max_tokens": 2, "session_id": "s337-typed-kv"}
