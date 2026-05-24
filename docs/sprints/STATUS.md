@@ -233,6 +233,17 @@ the same session and uses `77960` as `decode_input_token`, with generated-token
 history advancing to `2`. This is request-boundary feedback only. The next
 serving gap is a per-step output-head/sample/feed loop for `max_tokens > 1`,
 plus tokenizer text I/O and prompt prefill.
+Sprint 301 implemented that per-step loop for the diagnostic HTTP endpoint.
+For `max_tokens > 1`, the server now runs one TP/EP decode step, runs the
+diagnostic output head, feeds the selected token back through the resident
+BF16 token embedding seed, and repeats. Session commit appends the full
+generated-token sequence. The V100 smoke with `session_id=multi`,
+`prompt_tokens=[11,12,13]`, and `max_tokens=3` starts from decode input token
+`13`, records `3` generated token IDs, advances the slot cursor
+`100000 -> 100003`, and reports `153.126777` wall generated tok/s /
+`252.798645` decode generated tok/s for this correctness-oriented single
+request. The endpoint still lacks tokenizer text I/O, real prompt prefill,
+active-slot-only decode, and MTP.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

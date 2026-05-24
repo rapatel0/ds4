@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: codex
-revision: 300
+revision: 301
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -115,6 +115,12 @@ not a serial layer-chain.
   in `ds4.c` and llama.cpp, but only across one-token HTTP requests. A true
   completion endpoint still needs prompt prefill and an internal
   output-head/sample/feed loop for multi-token generation.
+- Sprint 301 added that internal per-step feedback loop for diagnostic
+  `max_tokens > 1` requests. The endpoint now decodes one token, runs the
+  vocab-sharded output head, feeds the selected token back through the resident
+  BF16 embedding seed, and repeats. This gives the TP/EP path the correct
+  autoregressive shape before optimization. Text tokenizer I/O, prompt
+  prefill, active-slot-only decode, and MTP remain open.
 - Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
   longer exposes PP/layer-split topology modes. Against the real production
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about

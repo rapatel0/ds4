@@ -6438,6 +6438,7 @@ struct HttpParsedRequest {
     bool cache_evicted = false;
     std::string evicted_key;
     uint32_t decode_input_token = UINT32_MAX;
+    std::vector<uint32_t> generated_token_ids;
 };
 
 static int http_content_length(const char *req) {
@@ -6827,7 +6828,7 @@ struct TpEpHttpSessionTable {
     void commit(const TpEpHttpSessionAssignment &a,
                 uint64_t prompt_tokens,
                 uint64_t generated_tokens,
-                uint32_t selected_token) {
+                const std::vector<uint32_t> &selected_tokens) {
         if (a.slot < 0 || a.slot >= (int)slots.size()) return;
         auto &slot = slots[(size_t)a.slot];
         slot.kv_valid = true;
@@ -6835,9 +6836,11 @@ struct TpEpHttpSessionTable {
         slot.pos = a.pos_in + generated_tokens;
         slot.prompt_tokens += prompt_tokens;
         slot.generated_tokens += generated_tokens;
-        if (selected_token != UINT32_MAX) {
-            slot.generated_token_ids.push_back(selected_token);
-            slot.last_selected_token = selected_token;
+        for (uint32_t selected_token : selected_tokens) {
+            if (selected_token != UINT32_MAX) {
+                slot.generated_token_ids.push_back(selected_token);
+                slot.last_selected_token = selected_token;
+            }
         }
         slot.last_used = ++clock;
     }
@@ -7295,7 +7298,8 @@ int run_tp_ep_http_server(const Options &base_opt,
             }
 
             Options req_opt = base_opt;
-            req_opt.decode_steps = first_req.requested_tokens;
+            const int requested_decode_steps = first_req.requested_tokens;
+            req_opt.decode_steps = 1;
             req_opt.slots = base_opt.slots;
             req_opt.position = first_req.cache_position;
             req_opt.serving_bench = false;
@@ -7324,25 +7328,108 @@ int run_tp_ep_http_server(const Options &base_opt,
                 }
             }
             ServingBenchResult result;
-            const int rc = run_token_major_serving_loop(req_opt,
-                                                        shared_dense_f16_cache,
-                                                        shared_api,
-                                                        shared_rank_buffers,
-                                                        shared_tp_runtime,
-                                                        shared_expert_bindings,
-                                                        shared_dense_ops,
-                                                        shared_output_head,
-                                                        shared_hc_controls,
-                                                        shared_token_embedding,
-                                                        &decode_input_tokens,
-                                                        resident_rows,
-                                                        resident_stats,
-                                                        true,
-                                                        &result);
+            int rc = 0;
+            bool missing_output_head = false;
+            for (int step = 0; step < requested_decode_steps; ++step) {
+                req_opt.position = first_req.cache_position + (uint64_t)step;
+                ServingBenchResult step_result;
+                rc = run_token_major_serving_loop(req_opt,
+                                                  shared_dense_f16_cache,
+                                                  shared_api,
+                                                  shared_rank_buffers,
+                                                  shared_tp_runtime,
+                                                  shared_expert_bindings,
+                                                  shared_dense_ops,
+                                                  shared_output_head,
+                                                  shared_hc_controls,
+                                                  shared_token_embedding,
+                                                  &decode_input_tokens,
+                                                  resident_rows,
+                                                  resident_stats,
+                                                  true,
+                                                  &step_result);
+                if (rc != 0) break;
+                if (!step_result.diagnostic_output_head ||
+                    step_result.selected_tokens.size() < (size_t)req_opt.slots) {
+                    missing_output_head = true;
+                    break;
+                }
+                result.prompt_tokens = step == 0 ? step_result.prompt_tokens : result.prompt_tokens;
+                result.generated_tokens += (uint64_t)req_opt.slots;
+                result.continuation_tokens = requested_decode_steps > 1
+                    ? (uint64_t)req_opt.slots * (uint64_t)(requested_decode_steps - 1)
+                    : 0ull;
+                if (step == 0) {
+                    result.first_token_decode_ms += step_result.first_token_decode_ms;
+                    result.first_token_wall_ms += step_result.first_token_wall_ms;
+                } else {
+                    result.continuation_decode_ms += step_result.first_token_decode_ms;
+                    result.continuation_wall_ms += step_result.first_token_wall_ms;
+                }
+                result.total_decode_ms += step_result.total_decode_ms;
+                result.total_wall_ms += step_result.total_wall_ms;
+                result.total_ep_ms += step_result.total_ep_ms;
+                result.total_dense_ms += step_result.total_dense_ms;
+                result.total_compose_ms += step_result.total_compose_ms;
+                result.total_compose_reduce_ms += step_result.total_compose_reduce_ms;
+                result.total_compose_copy_ms += step_result.total_compose_copy_ms;
+                result.total_compose_final_ms += step_result.total_compose_final_ms;
+                result.total_hc_current_input_ms += step_result.total_hc_current_input_ms;
+                result.diagnostic_output_head = step_result.diagnostic_output_head;
+                result.diagnostic_output_head_proxy_hc =
+                    step_result.diagnostic_output_head_proxy_hc;
+                result.output_head_ms += step_result.output_head_ms;
+                result.output_head_gather_ms += step_result.output_head_gather_ms;
+                result.output_head_prep_ms += step_result.output_head_prep_ms;
+                result.output_head_broadcast_ms += step_result.output_head_broadcast_ms;
+                result.output_head_projection_ms += step_result.output_head_projection_ms;
+                result.output_head_top1_ms += step_result.output_head_top1_ms;
+                result.token_input_seed = result.token_input_seed ||
+                                          step_result.token_input_seed;
+                if (step == 0) result.first_input_token = step_result.first_input_token;
+                result.selected_tokens = step_result.selected_tokens;
+                result.selected_logits = step_result.selected_logits;
+                result.checksum ^= step_result.checksum +
+                                   (uint64_t)(step + 1) * 0x9e3779b185ebca87ull;
+                for (size_t i = 0; i < batch.size(); ++i) {
+                    const int slot = batch[i].cache_slot;
+                    if (slot >= 0 &&
+                        (size_t)slot < step_result.selected_tokens.size()) {
+                        const uint32_t tok = step_result.selected_tokens[(size_t)slot];
+                        batch[i].generated_token_ids.push_back(tok);
+                        decode_input_tokens[(size_t)slot] = tok;
+                    }
+                }
+            }
+            if (result.total_decode_ms > 0.0) {
+                result.aggregate_generated_tok_s_decode =
+                    (double)result.generated_tokens * 1000.0 / result.total_decode_ms;
+                result.aggregate_continuation_tok_s_decode =
+                    result.continuation_decode_ms > 0.0
+                        ? (double)result.continuation_tokens * 1000.0 /
+                              result.continuation_decode_ms
+                        : 0.0;
+            }
+            if (result.total_wall_ms > 0.0) {
+                result.aggregate_generated_tok_s_wall =
+                    (double)result.generated_tokens * 1000.0 / result.total_wall_ms;
+                result.aggregate_continuation_tok_s_wall =
+                    result.continuation_wall_ms > 0.0
+                        ? (double)result.continuation_tokens * 1000.0 /
+                              result.continuation_wall_ms
+                        : 0.0;
+            }
+            req_opt.decode_steps = requested_decode_steps;
             if (rc != 0) {
                 rejected += (uint64_t)batch.size();
                 for (HttpParsedRequest &queued : batch) {
                     http_write_json(queued.fd, 500, "{\"error\":\"tp_ep_decode_failed\"}\n");
+                    close(queued.fd);
+                }
+            } else if (missing_output_head) {
+                rejected += (uint64_t)batch.size();
+                for (HttpParsedRequest &queued : batch) {
+                    http_write_json(queued.fd, 500, "{\"error\":\"tp_ep_output_head_missing\"}\n");
                     close(queued.fd);
                 }
             } else {
@@ -7401,7 +7488,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                     sessions.commit(assignments[i],
                                     committed_prompt_tokens,
                                     request_generated,
-                                    have_output_head ? selected_token : UINT32_MAX);
+                                    batch[i].generated_token_ids);
                     const TpEpHttpSessionSlot *slot_state = nullptr;
                     if (batch[i].cache_slot >= 0 &&
                         batch[i].cache_slot < (int)sessions.slots.size()) {
@@ -7422,11 +7509,12 @@ int run_tp_ep_http_server(const Options &base_opt,
                     std::snprintf(meta, sizeof(meta),
                                   "\"backend\":\"tp_ep_resident\","
                                   "\"diagnostic\":true,"
-                                  "\"diagnostic_note\":\"tokenized request-boundary feedback is wired; tokenizer text, prompt prefill, and per-step multi-token feedback are not fully wired yet\","
+                                  "\"diagnostic_note\":\"tokenized per-step feedback is wired; tokenizer text and prompt prefill are not fully wired yet\","
                                   "\"diagnostic_output_head\":%d,"
                                   "\"diagnostic_output_head_proxy_hc\":%d,"
                                   "\"token_input_seed\":%d,"
                                   "\"decode_input_token\":%u,"
+                                  "\"generated_token_ids\":%zu,"
                                   "\"selected_token\":%u,"
                                   "\"selected_logit\":%.9f,"
                                   "\"output_head_ms\":%.6f,"
@@ -7484,6 +7572,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   result.diagnostic_output_head_proxy_hc ? 1 : 0,
                                   result.token_input_seed ? 1 : 0,
                                   batch[i].decode_input_token,
+                                  batch[i].generated_token_ids.size(),
                                   selected_token,
                                   selected_logit,
                                   result.output_head_ms,
