@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 325
+revision: 326
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -262,6 +262,14 @@ not a serial layer-chain.
   `95933`, so the reduction fix does affect live output, but TP/EP still needs
   true compressed-KV/indexer attention and attention-output hidden-state
   promotion before production readiness.
+- Sprint 320 added the TP/EP true-attention output projection gate. The gate
+  proves the real DS4 `attn_output_a -> attn_output_b` projection sequence
+  runs at `32` slots / `256K` / `4` steps with final scaffold
+  `pass_invocations=172`, zero failure rows, and finite output shards. The
+  pack also corrected the topology assumption: `attn_output_a` consumes
+  rank-local `[slots][4096]` heads, then the runtime gathers the
+  `[slots][8192]` intermediate for `attn_output_b`. The output is still
+  diagnostic; the next semantic step is hidden-state promotion.
 - Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
   longer exposes PP/layer-split topology modes. Against the real production
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about
@@ -2014,6 +2022,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-24 | Sprint 317 identified a TP/EP block-reduction broadcast bug. | The KV norm reference gate showed huge same-input drift between stable and plain RMSNorm; code inspection found `block_sum_256_f32` and `block_max_256_f32` only return the reduced value to the first warp, so threads `32..255` normalize with the wrong scale. | Fix the reduction helpers, then rerun KV norm reference, saturation, and raw-window gates before continuing attention semantics. |
 | 2026-05-24 | Sprint 318 fixed TP/EP block-reduction broadcast. | KV norm reference drift dropped to `~1e-6`, raw-SWA max dropped from `65504` to `~6.29`, and the combined `32` slot / `256K` / `4` step gate passed all 172 layer-step invocations with zero failures. | Rerun reference parity and continue compressed-KV/indexer plus attention-output semantics. |
 | 2026-05-24 | Sprint 319 reran the TP/EP HTTP reference parity gate after the reduction fix. | The official `short_reasoning_plain` vector still fails, but the live output changed from `ICC` / token `95933` to `)Skip` / token `83480`, proving the reduction fix reaches the askable serving path. | Implement the remaining true DS4 attention semantics: compressed KV/indexer row selection, raw+compressed attention merge, `attn_output_a -> attn_output_b`, and hidden-state promotion. |
+| 2026-05-24 | Sprint 320 added a TP/EP true-attention output projection gate. | The real `attn_output_a -> attn_output_b` sequence now runs over rank-local 4096-wide attention heads and gathers the 8192-wide intermediate before producing per-rank hidden shards; the `32` slot / `256K` / `4` step V100 gate passes structurally with 172 layer-step invocations and zero failures. | Promote `attn_output_b` shards into the attention residual/current-hidden path, then rerun the reference parity vector. |
 
 ## Open Questions
 
