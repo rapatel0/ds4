@@ -26,6 +26,10 @@ Sprint 306 verifies the same tokenizer-enabled path with `32` concurrent text
 chat requests: one full coalesced 32-slot batch, `7` prompt tokens/request,
 `6` prefill tokens/request, `256` generated tokens total, `214.155740` server
 wall tok/s, and `355.130754` server decode tok/s.
+Sprint 307 adds the production parity harness and confirms the current TP/EP
+path is not yet faithful DS4 output: `short_reasoning_plain` expected selected
+text `16` but TP/EP returned `ICC`. The active blocker is now semantic parity
+of the HC/layer/output-head path, not API reachability.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

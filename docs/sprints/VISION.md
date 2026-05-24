@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
-last_updated: 2026-05-23
-last_updated_by: codex
-revision: 306
+last_updated: 2026-05-24
+last_updated_by: vision
+revision: 308
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -53,21 +53,23 @@ not a serial layer-chain.
   `32` slots / `256K`, `64/64` token match, `50.434232` generated tok/s,
   `47.282093` continuation tok/s, average GPU utilization `47.076%`, max
   GPU utilization `96%`.
-- The TP/EP path is now operational as a resident diagnostic serving harness:
-  coalesced `/v1/completions` requests can drive a 32-slot, 256K TP8/EP8
-  token-major loop and return vocab-sharded selected-token metadata. Sprint
-  294 moved the routed expert input off fixed synthetic activations and onto a
-  current vector derived from real per-layer `hc_attn_*` controls and the
-  resident sharded HC state. It is still not real DeepSeek text serving because
-  prompt prefill, tokenizer text, selected-token feedback, exact attention/FFN
-  HC sequencing, and multi-token recurrent decode are not complete.
-- Current TP/EP prototype scaffold metric with HC-current input and HC final
-  expand enabled: `32` slots / `256K` / 1-token `/v1/completions` forms one
-  32-request batch, returns `32/32` HTTP 200 responses, and reports
-  `145.914985` wall generated tok/s / `225.722945` decode generated tok/s.
-  Direct all-layer validation reports `238.789977` projected decode tok/s,
-  with `40.646652 ms` spent in the HC-current bridge and `22.678353 ms` in HC
-  final expand. This is a serving scaffold, not a final performance target.
+- The TP/EP path is now operational as a resident diagnostic text-serving
+  harness. It accepts `/v1/completions` and `/v1/chat/completions`, tokenizes
+  text prompts through the existing DS4 tokenizer, runs tokenized prompt
+  prefill, performs multi-token autoregressive output-head/sample/feed, returns
+  decoded text plus token IDs, and keeps session KV/HC cursors resident across
+  requests.
+- Current TP/EP text-chat metric from Sprint 306: `32` concurrent chat
+  requests at `32` slots / `256K` formed one coalesced batch, tokenized each
+  request to `7` prompt tokens, prefilling `6`, generated `256` total tokens,
+  and returned `32/32` HTTP 200 responses. Server-side generated-section
+  throughput was `214.155740` wall tok/s / `355.130754` decode tok/s.
+  Client-side effective throughput including HTTP orchestration was
+  `110.036538` tok/s.
+- The system is not production-ready yet because the bridge HC sequence has
+  not been proven equivalent to the DeepSeek V4 reference layer semantics, and
+  production serving still needs readiness/overload/cancellation/streaming
+  behavior plus a persistent deployment gate.
 - Sprint 295 added stricter cached-state guardrails for downstream-serving
   work: `DS4_V100_TP_EP_KV_ALL_SLOTS=1` updates and verifies sharded KV rows
   for every active slot instead of only the old diagnostic `kv_slot=7`, and
@@ -156,6 +158,11 @@ not a serial layer-chain.
   request had `7` prompt tokens, `6` diagnostic prefill steps, and `8`
   generated tokens. The server reported `214.155740` wall tok/s /
   `355.130754` decode tok/s for `256` generated tokens.
+- Sprint 307 added the first end-to-end reference-vector parity harness for
+  the TP/EP HTTP path. The initial V100 gate intentionally used the official
+  `short_reasoning_plain` vector and failed: expected selected text `16`
+  (`3136` hex), while TP/EP returned `ICC` (`494343` hex), token ID `95933`.
+  This confirms the system is askable but not yet trustworthy as DS4 output.
 - Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
   longer exposes PP/layer-split topology modes. Against the real production
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about
@@ -435,7 +442,88 @@ not a serial layer-chain.
 - MTP stays out of the critical path until TP/EP serving is correct and
   measured.
 
+## Production Readiness Sequence
+
+The remaining work is ordered by production risk, not by benchmark curiosity.
+
+1. **Reference parity gate.** Prove the TP/EP token loop matches the DS4
+   reference semantics closely enough to trust generated tokens. This means
+   layer/HC sequence parity, logits/top-token comparisons on fixed prompts, and
+   long-context cache reuse checks at `128K` and `256K`.
+2. **Persistent serving gate.** Run the TP/EP server as a long-lived appliance
+   process with `MAX_REQUESTS=0`, readiness that reflects tokenizer/model/GPU
+   residency, stable session reset/eviction semantics, overload behavior,
+   cancellation/timeout handling, and operational logs/metrics.
+3. **API completeness gate.** Finish role-aware multi-message chat parsing,
+   stop/EOS behavior, streaming responses, and clear error contracts for bad
+   requests, context overflow, queue saturation, and session conflicts.
+4. **Performance gate.** Replace correctness-oriented prompt prefill with
+   optimized batched prefill, add active-slot-only decode for low occupancy,
+   then optimize the final parity-preserving HC/compose path.
+5. **MTP gate.** Add MTP only after base TP/EP serving is correct and
+   continuously benchmarkable. MTP should be measured as a decode multiplier
+   across `1`, `8`, `16`, and `32` active slots, not as a sidecar smoke.
+
 ## Sprint Sequence
+
+### Sprint 307 - TP/EP Reference Parity Harness [complete]
+
+Goal: Build a repeatable reference-comparison harness for the tokenizer-enabled
+TP/EP server path.
+
+Rationale: The API can now return text, but production readiness depends on
+proving that the generated tokens are faithful DS4 behavior.
+
+Outcome: Complete as a harness, failing as a production gate.
+`tools/ds4-v100-tp-ep-reference-parity.py` now compares the live HTTP path
+against official selected-token vectors. The first V100 run for
+`short_reasoning_plain` expected `16` and received `ICC`, so semantic parity
+remains the active blocker.
+
+### Sprint 308 - TP/EP HC Semantic Parity [planned]
+
+Goal: Close the semantic gap exposed by Sprint 307 by replacing bridge HC
+shortcuts with reference-faithful DS4 attention/FFN ordering and output-head
+inputs.
+
+Rationale: Persistent deployment would only make an incorrect model easier to
+call. The next production sprint must identify and fix the source of the
+selected-token mismatch before serving hardening or MTP.
+
+### Sprint 309 - Persistent Appliance Deployment Gate [planned]
+
+Goal: Convert the current benchmark-run launcher into a persistent server gate.
+
+Rationale: The V100 pod currently proves request batches, not long-lived
+service operation. Production readiness needs `MAX_REQUESTS=0`, port-forward
+or service access, readiness/metrics checks, graceful shutdown, overload
+behavior, and a smoke that proves the server remains askable after repeated
+sessions.
+
+### Sprint 310 - API Semantics And Streaming [planned]
+
+Goal: Finish the minimum practical chat API behavior around the TP/EP runtime.
+
+Rationale: The current chat route is intentionally simple. Practical use needs
+role-aware multi-message parsing, stop/EOS handling, streaming chunks, clear
+context/queue/session errors, and compatible usage accounting.
+
+### Sprint 311 - Prefill And Active-Slot Performance [planned]
+
+Goal: Optimize the serving path after parity and API behavior are locked.
+
+Rationale: Current throughput is dominated by correctness-oriented prefill and
+the bridge HC sequence. The first production performance sprint should measure
+prefill and decode separately, avoid full-32-slot work for low occupancy, and
+only then tune kernels/fusion against the final graph shape.
+
+### Sprint 312 - TP/EP MTP Decode Multiplier [tentative]
+
+Goal: Add MTP to the TP/EP appliance as a measured decode accelerator.
+
+Rationale: MTP is likely the largest user-visible speed multiplier, but it
+should not be merged before base TP/EP serving is correct and operationally
+measurable.
 
 ### Sprint 226 - TP/EP Planner And Topology Contract [complete]
 
@@ -1780,14 +1868,17 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Sprint 293 added TP/EP HC final-expand using real layer HC FFN controls. | The output-head bridge no longer depends on arbitrary row-scaled proxy HC; 32-concurrent completions pass with `proxy_hc=0`, `160.904882` wall tok/s, and `271.342877` decode tok/s for the 1-token diagnostic case. | Implement the full DS4 HC attention/FFN pre/post sequence, then token feedback and text output. |
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
+| 2026-05-24 | Reframed the vision from "make the API respond" to production readiness. | Sprints 303-306 made the TP/EP path askable through text/chat APIs, but the remaining risk is trustworthiness and service hardening, not another endpoint wrapper. | Sprint 307 starts reference parity before persistent deployment and performance/MTP work. |
 
 ## Open Questions
 
-1. Does TP8 remain the primary target after the first collective and expert
-   gates, or should TP4/EP8 be used as a temporary correctness stepping stone?
-2. Should the first TP/EP pack preserve current TurboMind expert layout exactly
-   or repack experts for EP ownership immediately?
-3. What correctness tolerance is acceptable for TP/EP low-bit reductions versus
-   the frozen PP baseline?
-4. Should the first serving target be strictly `32` slots / `256K`, or should
-   the TP runtime also gate `32` slots / `128K` as a faster iteration target?
+1. What exact reference tolerance should gate TP/EP production readiness:
+   top-token match only, bounded logit drift, or prompt-level output agreement?
+2. Which prompt suite should become the fixed parity set for DS4 Flash on V100:
+   short chat, long-context retrieval, tool-like JSON, coding, or all of them?
+3. Should persistent service exposure first be plain port-forwarded HTTP on the
+   build pod, or a Kubernetes service/deployment using the same node-local
+   model paths?
+4. Should active-slot-only decode land before or after streaming? Active-slot
+   decode helps low-occupancy use; streaming improves practical UX and timeout
+   behavior.
