@@ -1,0 +1,27 @@
+{
+  "cases": 1,
+  "passed": 0,
+  "failed": 1,
+  "results": [
+    {
+      "case": "short_reasoning_plain",
+      "ctx": 4096,
+      "steps": 1,
+      "expected_hex": "3136",
+      "actual_hex": "756572616b",
+      "expected_text": "16",
+      "actual_text": "uerak",
+      "match": false,
+      "tokenizer_ready": 1,
+      "prompt_tokens": 18,
+      "prompt_prefill_tokens": 17,
+      "generated_token_ids": 1,
+      "generated_token_sequence": [
+        114220
+      ],
+      "slot_position": 100018,
+      "wall_tok_s": 45.817557,
+      "decode_tok_s": 50.094226
+    }
+  ]
+}

@@ -911,14 +911,19 @@ __global__ void shared_swiglu_shard_to_float_kernel(float *mid,
                                                     const float *up,
                                                     uint32_t rank,
                                                     uint32_t rows_per_gpu,
-                                                    uint32_t slots) {
+                                                    uint32_t slots,
+                                                    float clamp) {
     const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
     const uint64_t n = (uint64_t)slots * (uint64_t)rows_per_gpu;
     if (i >= n) return;
     const uint32_t slot = (uint32_t)(i / rows_per_gpu);
     const uint32_t local = (uint32_t)(i % rows_per_gpu);
-    const float g = gate[(uint64_t)slot * rows_per_gpu + local];
-    const float u = up[(uint64_t)slot * rows_per_gpu + local];
+    float g = gate[(uint64_t)slot * rows_per_gpu + local];
+    float u = up[(uint64_t)slot * rows_per_gpu + local];
+    if (clamp > 1.0e-6f) {
+        g = fminf(g, clamp);
+        u = fminf(fmaxf(u, -clamp), clamp);
+    }
     const float silu = g / (1.0f + expf(-g));
     mid[(uint64_t)slot * kMid + (uint64_t)rank * rows_per_gpu + local] =
         silu * u;
@@ -1051,6 +1056,7 @@ __global__ void add_half_to_f32_kernel(float *dst, const __half *src, uint64_t n
 }
 
 __global__ void compose_next_hidden_kernel(float *next,
+                                           const float *current,
                                            const float *attn,
                                            const float *shared,
                                            const float *ep_sum,
@@ -1061,13 +1067,15 @@ __global__ void compose_next_hidden_kernel(float *next,
     if (i >= elems) return;
     const int slot = (int)(i / (kHidden / kGpus));
     const int local_h = (int)(i % (kHidden / kGpus));
-    const float residual =
+    const float synthetic =
         ((float)(rank + 1) * 0.01f) + ((float)slot * 0.001f) +
         ((float)local_h * 0.00001f);
+    const float residual = current ? current[i] : synthetic;
     next[i] = residual + attn[i] + shared[i] + ep_sum[i];
 }
 
 __global__ void compose_next_hidden_compact8_kernel(float *next,
+                                                    const float *current,
                                                     const float *attn,
                                                     const float *shared,
                                                     const float *r0,
@@ -1093,9 +1101,10 @@ __global__ void compose_next_hidden_compact8_kernel(float *next,
     if (i >= elems) return;
     const int slot = (int)(i / (kHidden / kGpus));
     const int local_h = (int)(i % (kHidden / kGpus));
-    const float residual =
+    const float synthetic =
         ((float)(rank + 1) * 0.01f) + ((float)slot * 0.001f) +
         ((float)local_h * 0.00001f);
+    const float residual = current ? current[i] : synthetic;
     float ep = 0.0f;
     const int i0 = idx0[slot];
     const int i1 = idx1[slot];
@@ -1117,6 +1126,7 @@ __global__ void compose_next_hidden_compact8_kernel(float *next,
 }
 
 __global__ void compose_next_hidden_sum8_kernel(float *next,
+                                                const float *current,
                                                 const float *attn,
                                                 const float *shared,
                                                 const float *r0,
@@ -1134,9 +1144,10 @@ __global__ void compose_next_hidden_sum8_kernel(float *next,
     if (i >= elems) return;
     const int slot = (int)(i / (kHidden / kGpus));
     const int local_h = (int)(i % (kHidden / kGpus));
-    const float residual =
+    const float synthetic =
         ((float)(rank + 1) * 0.01f) + ((float)slot * 0.001f) +
         ((float)local_h * 0.00001f);
+    const float residual = current ? current[i] : synthetic;
     const float ep =
         r0[i] + r1[i] + r2[i] + r3[i] + r4[i] + r5[i] + r6[i] + r7[i];
     next[i] = residual + attn[i] + shared[i] + ep;
@@ -4343,7 +4354,8 @@ int materialize_shared_swiglu_down_input(const Options &opt,
             ranks[src].stream>>>(down.d_x[(size_t)src],
                                  gate.d_out[(size_t)src],
                                  up.d_out[(size_t)src],
-                                 (uint32_t)src, rows, (uint32_t)opt.slots);
+                                 (uint32_t)src, rows, (uint32_t)opt.slots,
+                                 kRoutedSwigluClamp);
         CHECK_CUDA(cudaGetLastError());
     }
     for (int src = 0; src < kGpus; ++src) {
@@ -5434,8 +5446,9 @@ int run_next_hidden_compose(const Options &opt,
                     ? ranks[7].d_ep_contrib_all + (uint64_t)dst * shard_elems
                     : r.d_ep_remote[7];
                 compose_next_hidden_sum8_kernel<<<grid, block, 0, r.stream>>>(
-                    r.d_next_hidden, attn.d_out[(size_t)dst], shared.d_out[(size_t)dst],
-                    r0, r1, r2, r3, r4, r5, r6, r7, dst, opt.slots);
+                    r.d_next_hidden, r.d_current_shard, attn.d_out[(size_t)dst],
+                    shared.d_out[(size_t)dst], r0, r1, r2, r3, r4, r5, r6, r7,
+                    dst, opt.slots);
             } else {
                 zero_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_sum, shard_elems);
                 CHECK_CUDA(cudaGetLastError());
@@ -5454,8 +5467,8 @@ int run_next_hidden_compose(const Options &opt,
                 }
                 CHECK_CUDA(cudaGetLastError());
                 compose_next_hidden_kernel<<<grid, block, 0, r.stream>>>(
-                    r.d_next_hidden, attn.d_out[(size_t)dst], shared.d_out[(size_t)dst],
-                    r.d_ep_sum, dst, opt.slots);
+                    r.d_next_hidden, r.d_current_shard, attn.d_out[(size_t)dst],
+                    shared.d_out[(size_t)dst], r.d_ep_sum, dst, opt.slots);
             }
             CHECK_CUDA(cudaGetLastError());
         }
@@ -5974,8 +5987,8 @@ int run_decode_loop(const Options &opt,
                     ? ranks[7].d_ep_contrib_all + (uint64_t)dst * shard_elems
                     : r.d_ep_remote[7];
                 compose_next_hidden_compact8_kernel<<<grid, block, 0, r.stream>>>(
-                    r.d_next_hidden, attn_op->d_out[(size_t)dst], shared_op->d_out[(size_t)dst],
-                    r0, r1, r2, r3, r4, r5, r6, r7,
+                    r.d_next_hidden, r.d_current_shard, attn_op->d_out[(size_t)dst],
+                    shared_op->d_out[(size_t)dst], r0, r1, r2, r3, r4, r5, r6, r7,
                     r.d_route_index_by_slot[0], r.d_route_index_by_slot[1],
                     r.d_route_index_by_slot[2], r.d_route_index_by_slot[3],
                     r.d_route_index_by_slot[4], r.d_route_index_by_slot[5],
@@ -6023,8 +6036,9 @@ int run_decode_loop(const Options &opt,
                     ? ranks[7].d_ep_contrib_all + (uint64_t)dst * shard_elems
                     : r.d_ep_remote[7];
                 compose_next_hidden_sum8_kernel<<<grid, block, 0, r.stream>>>(
-                    r.d_next_hidden, attn_op->d_out[(size_t)dst], shared_op->d_out[(size_t)dst],
-                    r0, r1, r2, r3, r4, r5, r6, r7, dst, opt.slots);
+                    r.d_next_hidden, r.d_current_shard, attn_op->d_out[(size_t)dst],
+                    shared_op->d_out[(size_t)dst], r0, r1, r2, r3, r4, r5, r6, r7,
+                    dst, opt.slots);
             } else {
                 zero_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_sum, shard_elems);
                 CHECK_CUDA(cudaGetLastError());
@@ -6043,8 +6057,8 @@ int run_decode_loop(const Options &opt,
                 }
                 CHECK_CUDA(cudaGetLastError());
                 compose_next_hidden_kernel<<<grid, block, 0, r.stream>>>(
-                    r.d_next_hidden, attn_op->d_out[(size_t)dst], shared_op->d_out[(size_t)dst],
-                    r.d_ep_sum, dst, opt.slots);
+                    r.d_next_hidden, r.d_current_shard, attn_op->d_out[(size_t)dst],
+                    shared_op->d_out[(size_t)dst], r.d_ep_sum, dst, opt.slots);
             }
             CHECK_CUDA(cudaGetLastError());
         }

@@ -348,6 +348,56 @@ This closes the immediate routed-executor numeric failure. The next parity
 gap is no longer a route crash; it is the remaining proxy hidden/attention/HC
 bridge in the TP/EP serving graph.
 
+The compose stage also had one remaining diagnostic shortcut: it added a
+synthetic residual instead of the true current hidden shard. The TP/EP compose
+kernels now accept `d_current_shard` and fall back to the old synthetic
+residual only when no current shard exists. With `DS4_V100_TP_EP_HC_CURRENT_INPUT=1`
+the 32-slot / 256K parity run completes without non-finites, but still misses
+top-token parity:
+
+```json
+{
+  "case": "short_reasoning_plain",
+  "expected_text": "16",
+  "actual_text": "ombonana",
+  "generated_token_sequence": [109614],
+  "decode_tok_s": 49.703666
+}
+```
+
+Finally, the true shared-FFN FP32 midpoint was updated to match the reference
+DS4 SwiGLU clamp behavior (`gate <= 10`, `up in [-10, 10]`). This removes the
+million-scale shared midpoint/down values while preserving FP32 midpoint
+materialization:
+
+```text
+before shared clamp:
+  layer 3 shared_mid max_abs=1148163.88
+  layer 3 shared_down max_abs=300071.812
+
+after shared clamp:
+  layer 3 shared_mid max_abs=99.9954605
+  layer 3 shared_down max_abs=232.418732
+```
+
+The clamped-current run still misses parity:
+
+```json
+{
+  "case": "short_reasoning_plain",
+  "expected_text": "16",
+  "actual_text": "uerak",
+  "generated_token_sequence": [114220],
+  "decode_tok_s": 50.094226
+}
+```
+
+This is useful progress because the observed failure has moved from numerical
+instability to a graph-semantics mismatch. Current conclusion: true shared FFN,
+routed normalized input, route weights, current residual compose, and endpoint
+wiring are live; the remaining parity blocker is the simplified attention/HC
+bridge and token-state semantics, not another obvious FFN nonfinite.
+
 ## Artifacts
 
 - `logs/from-cluster/sprint308-all-local-experts-parity/cluster/server.out`
@@ -377,6 +427,8 @@ bridge in the TP/EP serving graph.
 - `logs/from-cluster/sprint308-true-shared-f32mid-routed-norm/20260524-133530/`
 - `logs/from-cluster/sprint308-routed-norm-clamped-gate/20260524-134337/`
 - `logs/from-cluster/sprint308-routed-norm-clamped-gate-v2/20260524-134718/`
+- `logs/from-cluster/sprint308-current-residual-compose/20260524-135408/`
+- `logs/from-cluster/sprint308-current-residual-shared-clamp/20260524-135928/`
 
 ## Production Gate
 
