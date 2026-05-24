@@ -1,0 +1,11 @@
+tp_ep_model_router_route_stats	layer	0	routes	0,2,0,0,0,0,2,2	max_routes_per_expert	0,1,0,0,0,0,1,1
+tp_ep_route_tensor_stats	tag	route_input	layer	0	rank	1	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	38.53125
+tp_ep_route_tensor_stats	tag	route_input	layer	0	rank	6	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	38.53125
+tp_ep_route_tensor_stats	tag	route_input	layer	0	rank	7	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	38.53125
+tp_ep_route_tensor_stats	tag	route_gated	layer	0	rank	1	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	0
+tp_ep_route_tensor_stats	tag	route_down	layer	0	rank	1	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	0
+tp_ep_route_tensor_stats	tag	route_gated	layer	0	rank	6	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	0
+tp_ep_route_tensor_stats	tag	route_down	layer	0	rank	6	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	0
+tp_ep_route_tensor_stats	tag	route_gated	layer	0	rank	7	elems	8192	finite_bad	1	first_bad	362	max_abs	46176
+tp_ep_route_tensor_stats	tag	route_down	layer	0	rank	7	elems	8192	finite_bad	4096	first_bad	0	max_abs	1375
+tp_ep_http_decode_failed	rc	5	batch	1	requested_steps	1	position	100000

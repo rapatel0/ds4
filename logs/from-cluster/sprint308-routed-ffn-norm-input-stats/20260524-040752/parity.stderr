@@ -1,0 +1,13 @@
+Traceback (most recent call last):
+  File "/workspace/ds4-sprint181/tools/ds4-v100-tp-ep-reference-parity.py", line 191, in <module>
+    sys.exit(main())
+  File "/workspace/ds4-sprint181/tools/ds4-v100-tp-ep-reference-parity.py", line 175, in main
+    results = [run_case(root, args.host, args.port, case, args.timeout) for case in cases]
+  File "/workspace/ds4-sprint181/tools/ds4-v100-tp-ep-reference-parity.py", line 175, in <listcomp>
+    results = [run_case(root, args.host, args.port, case, args.timeout) for case in cases]
+  File "/workspace/ds4-sprint181/tools/ds4-v100-tp-ep-reference-parity.py", line 119, in run_case
+    data = post_json(
+  File "/workspace/ds4-sprint181/tools/ds4-v100-tp-ep-reference-parity.py", line 82, in post_json
+    raise RuntimeError(f"HTTP {resp.status}: {text[:500]}")
+RuntimeError: HTTP 500: {"error":"tp_ep_decode_failed"}
+

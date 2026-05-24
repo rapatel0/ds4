@@ -195,6 +195,27 @@ synthetic/no-op for active slots; the remaining mismatch is now in the layer
 semantics still being bridged: full shared FFN, normalized routed-expert input,
 and full DS4 attention/compressed-KV/indexer math.
 
+The routed-FFN-normalized-input stats run narrows the immediate numeric
+failure further:
+
+```text
+route_input layer 0 rank 1 finite_bad=0 max_abs=38.53125
+route_input layer 0 rank 6 finite_bad=0 max_abs=38.53125
+route_input layer 0 rank 7 finite_bad=0 max_abs=38.53125
+route_gated layer 0 rank 1 finite_bad=0 max_abs=0
+route_down  layer 0 rank 1 finite_bad=0 max_abs=0
+route_gated layer 0 rank 6 finite_bad=0 max_abs=0
+route_down  layer 0 rank 6 finite_bad=0 max_abs=0
+route_gated layer 0 rank 7 finite_bad=1 max_abs=46176
+route_down  layer 0 rank 7 finite_bad=4096 max_abs=1375
+```
+
+So the `ffn_normed` route input itself is finite. The failure appears inside
+the routed expert invocation/table/scale path for the rank-7 selected experts,
+while ranks 1 and 6 unexpectedly produce all-zero expert outputs. The next
+debug step should print selected global/local expert IDs and inspect the
+rank-local TurboMind pointer/scale bindings for those experts.
+
 ## Artifacts
 
 - `logs/from-cluster/sprint308-all-local-experts-parity/cluster/server.out`
@@ -214,6 +235,7 @@ and full DS4 attention/compressed-KV/indexer math.
 - `logs/from-cluster/sprint308-model-router-norm-router-raw-expert-rerun/20260524-034449/`
 - `logs/from-cluster/sprint308-model-router-active-mask-parity/20260524-035442/`
 - `logs/from-cluster/sprint308-routed-ffn-norm-input-parity/20260524-040200/`
+- `logs/from-cluster/sprint308-routed-ffn-norm-input-stats/20260524-040752/`
 
 ## Production Gate
 

@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: vision
-revision: 311
+revision: 312
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -177,8 +177,12 @@ not a serial layer-chain.
   semantics: normalized routed-expert input, full shared FFN, and full DS4
   attention/compressed-KV/indexer math. The normalized routed-input diagnostic
   is now separately gated and fails at layer `0` with
-  `decode_finite_bad=16384`, which makes it the next narrow correctness
-  target before promoting true FFN input semantics.
+  `decode_finite_bad=16384`. Follow-up tensor stats show the normalized route
+  input is finite (`max_abs=38.53125`), but rank `7` produces non-finite
+  TurboMind gate/down output while ranks `1` and `6` produce zero expert
+  output. That makes rank-local expert binding or MXFP4 scale/table handling
+  the next narrow correctness target before promoting true FFN input
+  semantics.
 - Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
   longer exposes PP/layer-split topology modes. Against the real production
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about
@@ -527,10 +531,12 @@ reference request, but the top-token parity vector still fails:
 `237.349475` decode tok/s. A direct attempt to feed routed experts from
 `ffn_normed` now has a separate diagnostic gate,
 `DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT=1`, and fails immediately at layer `0`
-with `decode_finite_bad=16384` / `rc=5`. The stable bridge currently uses
-FFN-normalized router logits with raw HC-current routed expert input. The next
-parity work is a targeted routed-expert input microbench, then the true
-shared-FFN path, then full DS4 attention semantics.
+with `decode_finite_bad=16384` / `rc=5`. Tensor stats show finite route input
+but non-finite rank-7 TurboMind output and zero rank-1/rank-6 output. The
+stable bridge currently uses FFN-normalized router logits with raw HC-current
+routed expert input. The next parity work is to inspect selected expert IDs
+and rank-local TurboMind pointer/scale bindings, then the true shared-FFN
+path, then full DS4 attention semantics.
 
 ### Sprint 309 - Persistent Appliance Deployment Gate [planned]
 

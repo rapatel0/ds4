@@ -4590,6 +4590,30 @@ int run_down(RankState &rank, const Api &api) {
                     rank.d_down, rank.stream);
 }
 
+void log_route_half_stats(const char *tag, int layer, int rank_id,
+                          const __half *ptr, size_t elems, cudaStream_t stream) {
+    if (!ptr || elems == 0) return;
+    CHECK_CUDA(cudaStreamSynchronize(stream));
+    std::vector<__half> host(elems);
+    CHECK_CUDA(cudaMemcpy(host.data(), ptr, elems * sizeof(__half),
+                          cudaMemcpyDeviceToHost));
+    int finite_bad = 0;
+    size_t first_bad = (size_t)-1;
+    float max_abs = 0.0f;
+    for (size_t i = 0; i < elems; ++i) {
+        const float v = __half2float(host[i]);
+        if (!std::isfinite(v)) {
+            if (finite_bad == 0) first_bad = i;
+            ++finite_bad;
+        } else {
+            max_abs = fmaxf(max_abs, fabsf(v));
+        }
+    }
+    std::fprintf(stderr,
+                 "tp_ep_route_tensor_stats\ttag\t%s\tlayer\t%d\trank\t%d\telems\t%zu\tfinite_bad\t%d\tfirst_bad\t%zu\tmax_abs\t%.9g\n",
+                 tag, layer, rank_id, elems, finite_bad, first_bad, max_abs);
+}
+
 float elapsed_ms(cudaEvent_t start, cudaEvent_t stop) {
     float ms = 0.0f;
     CHECK_CUDA(cudaEventElapsedTime(&ms, start, stop));
@@ -5312,6 +5336,17 @@ int run_decode_loop(const Options &opt,
             }
         }
         auto t0 = std::chrono::steady_clock::now();
+        if (opt.routed_ffn_norm_input_gate && opt.layer <= 2) {
+            for (int p = 0; p < kGpus; ++p) {
+                RankState &r = ranks[p];
+                const size_t elems = (size_t)r.routes * kHidden;
+                if (elems > 0) {
+                    CHECK_CUDA(cudaSetDevice(r.device));
+                    log_route_half_stats("route_input", opt.layer, p,
+                                         r.d_a, elems, r.stream);
+                }
+            }
+        }
         for (int p = 0; p < kGpus; ++p) {
             if (run_gate(ranks[p], api) != 0 || run_down(ranks[p], api) != 0) return 1;
         }
@@ -5336,6 +5371,20 @@ int run_decode_loop(const Options &opt,
             auto t2 = std::chrono::steady_clock::now();
             ep_stage_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
             dense_stage_ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
+        }
+        if (opt.routed_ffn_norm_input_gate && opt.layer <= 2) {
+            for (int p = 0; p < kGpus; ++p) {
+                RankState &r = ranks[p];
+                const size_t gated_elems = (size_t)r.routes * kFusedN;
+                const size_t down_elems = (size_t)r.routes * kHidden;
+                if (gated_elems > 0) {
+                    CHECK_CUDA(cudaSetDevice(r.device));
+                    log_route_half_stats("route_gated", opt.layer, p,
+                                         r.d_gated, gated_elems, r.stream);
+                    log_route_half_stats("route_down", opt.layer, p,
+                                         r.d_down, down_elems, r.stream);
+                }
+            }
         }
         auto t2 = std::chrono::steady_clock::now();
 
