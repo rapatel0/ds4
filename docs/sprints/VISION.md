@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 320
+revision: 321
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -224,6 +224,13 @@ not a serial layer-chain.
   `valid_rows=1..4` and zero failures. This moves the raw-SWA read closer to
   DS4 semantics, but still does not include RoPE, compressed KV, ratio-4
   indexer selection, or attention output projection.
+- Sprint 315 added `DS4_V100_TP_EP_TRUE_DS4_ATTENTION_ROPE=1`, which applies
+  DS4-style tail RoPE to q-head shards and latent KV rows before the raw-SWA
+  diagnostic store/read. A `32` slot / `256K` / `4` step V100 gate passes 172
+  RoPE invocations, 172 token-major layer invocations, and zero failures. One
+  raw-window diagnostic line was stdout-interleaved, but the final scaffold
+  reports 172 pass invocations. The remaining blocker is early-layer
+  `65504` raw-KV saturation, not RoPE plumbing.
 - Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
   longer exposes PP/layer-split topology modes. Against the real production
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about
@@ -1971,6 +1978,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-24 | Sprint 312 added the first true-attention state-update gate. | The TP/EP runtime now normalizes local q-head shards and writes diagnostic raw SWA KV rows for all 43 layers at `32` slots / `256K`; the state gate passes, but raw KV saturates to `65504` in early layers. | Isolate raw-KV saturation, then add q-head RoPE, attn_sinks, raw-SWA attention read, and `attn_output_a -> attn_output_b` before feeding attention output into hidden state. |
 | 2026-05-24 | Sprint 313 added the first true-attention raw-read gate. | The TP/EP runtime now loads `attn_sinks` and executes a sink-aware one-row raw-SWA attention read for all 43 layers at `32` slots / `256K`; the raw-read gate passes but inherits early-layer saturation. | Replace the one-row diagnostic read with full q-RoPE, raw-window, compressed-KV/indexer, and attention-output projection semantics, then rerun reference parity. |
 | 2026-05-24 | Sprint 314 added a raw-window attention-read gate. | The TP/EP runtime now reads resident raw-SWA rows accumulated across token-major steps; the `32` slot / `256K` / `4` step V100 gate has 172 raw-window passes, `valid_rows=1..4`, and zero failures. | Add RoPE plus compressed-KV/indexer read semantics, then wire `attn_output_a -> attn_output_b` only after saturation is isolated. |
+| 2026-05-24 | Sprint 315 added true-attention RoPE before raw-SWA storage/read. | The TP/EP runtime now applies DS4-style tail RoPE to q-head shards and latent KV rows; the `32` slot / `256K` / `4` step V100 scaffold has 172 RoPE passes, 172 token-major layer passes, and zero failures. One raw-window diagnostic line was stdout-interleaved, but the final scaffold reports 172 pass invocations. | Isolate the early-layer `65504` raw-KV saturation in the HC-current/projection/KV-store contract before compressed-KV/indexer read or attention-output promotion. |
 
 ## Open Questions
 

@@ -43,6 +43,12 @@ constexpr int kHeadCount = 64;
 constexpr int kLocalHeads = kHeadCount / kGpus;
 constexpr int kRawSwaRows = 128;
 constexpr int kRotaryDim = 64;
+constexpr uint32_t kRopeOrigCtx = 65536;
+constexpr float kRopeFreqBase = 10000.0f;
+constexpr float kCompressRopeFreqBase = 160000.0f;
+constexpr float kRopeScaleFactor = 16.0f;
+constexpr float kRopeYarnBetaFast = 32.0f;
+constexpr float kRopeYarnBetaSlow = 1.0f;
 constexpr int kFusedN = 2 * kMid;
 constexpr int kGlobalExperts = 256;
 constexpr int kLocalExperts = kGlobalExperts / kGpus;
@@ -503,6 +509,7 @@ struct Options {
     bool true_ds4_attention_residency_gate = false;
     bool true_ds4_attention_projection_gate = false;
     bool true_ds4_attention_state_gate = false;
+    bool true_ds4_attention_rope_gate = false;
     bool true_ds4_attention_raw_read_gate = false;
     bool true_ds4_attention_raw_window_gate = false;
     uint32_t true_ds4_attention_raw_valid_rows = 1;
@@ -1089,6 +1096,66 @@ __global__ void kv_fp8_round_store_raw_swa_kernel(float *raw_swa,
     }
     v = __half2float(f32_to_half_saturate(v));
     raw_swa[((uint64_t)slot * raw_rows + raw_row) * head_dim + col] = v;
+}
+
+__device__ float rope_yarn_ramp_tp_dev(float low, float high, int i0) {
+    const float y = ((float)(i0 / 2) - low) / fmaxf(0.001f, high - low);
+    return 1.0f - fminf(1.0f, fmaxf(0.0f, y));
+}
+
+__global__ void rope_tail_rows_kernel(float *x,
+                                      uint32_t rows,
+                                      uint32_t head_dim,
+                                      uint32_t n_rot,
+                                      uint32_t pos,
+                                      uint32_t n_ctx_orig,
+                                      int inverse,
+                                      float freq_base,
+                                      float freq_scale,
+                                      float ext_factor,
+                                      float attn_factor,
+                                      float beta_fast,
+                                      float beta_slow) {
+    const uint32_t row = blockIdx.x;
+    if (row >= rows || n_rot > head_dim || (n_rot & 1u)) return;
+    float *xr = x + (uint64_t)row * head_dim;
+    const uint32_t n_nope = head_dim - n_rot;
+    float corr0 = 0.0f, corr1 = 0.0f;
+    if (ext_factor != 0.0f) {
+        const float denom = 2.0f * logf(freq_base);
+        corr0 = floorf((float)n_rot *
+                       logf((float)n_ctx_orig /
+                            (beta_fast * 2.0f * (float)M_PI)) /
+                       denom);
+        corr1 = ceilf((float)n_rot *
+                      logf((float)n_ctx_orig /
+                           (beta_slow * 2.0f * (float)M_PI)) /
+                      denom);
+        corr0 = fmaxf(0.0f, corr0);
+        corr1 = fminf((float)(n_rot - 1), corr1);
+    }
+    float *tail = xr + n_nope;
+    for (uint32_t pair = threadIdx.x; pair < n_rot / 2u; pair += blockDim.x) {
+        const uint32_t i = pair * 2u;
+        const float theta_extrap =
+            (float)pos * powf(freq_base, -((float)i) / (float)n_rot);
+        const float theta_interp = freq_scale * theta_extrap;
+        float theta = theta_interp;
+        float mscale = attn_factor;
+        if (ext_factor != 0.0f) {
+            const float ramp_mix =
+                rope_yarn_ramp_tp_dev(corr0, corr1, (int)i) * ext_factor;
+            theta = theta_interp * (1.0f - ramp_mix) + theta_extrap * ramp_mix;
+            mscale *= 1.0f + 0.1f * logf(1.0f / freq_scale);
+        }
+        const float c = cosf(theta) * mscale;
+        float s = sinf(theta) * mscale;
+        if (inverse) s = -s;
+        const float x0 = tail[i + 0];
+        const float x1 = tail[i + 1];
+        tail[i + 0] = x0 * c - x1 * s;
+        tail[i + 1] = x0 * s + x1 * c;
+    }
 }
 
 __global__ void attention_raw_swa_one_row_kernel(float *out_heads,
@@ -1904,6 +1971,7 @@ void usage(const char *argv0) {
                  "       [--true-ds4-attention-residency-gate]\n"
                  "       [--true-ds4-attention-projection-gate]\n"
                  "       [--true-ds4-attention-state-gate]\n"
+                 "       [--true-ds4-attention-rope-gate]\n"
                  "       [--true-ds4-attention-raw-read-gate]\n"
                  "       [--true-ds4-attention-raw-window-gate]\n"
                  "       [--reference-hc-reduce-gate]\n"
@@ -2100,6 +2168,14 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--true-ds4-attention-rope-gate") == 0) {
+            opt->true_ds4_attention_rope_gate = true;
+            opt->true_ds4_attention_state_gate = true;
+            opt->true_ds4_attention_projection_gate = true;
+            opt->true_ds4_attention_residency_gate = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--true-ds4-attention-raw-read-gate") == 0) {
             opt->true_ds4_attention_raw_read_gate = true;
             opt->true_ds4_attention_state_gate = true;
@@ -2110,6 +2186,7 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--true-ds4-attention-raw-window-gate") == 0) {
             opt->true_ds4_attention_raw_window_gate = true;
+            opt->true_ds4_attention_rope_gate = true;
             opt->true_ds4_attention_raw_read_gate = true;
             opt->true_ds4_attention_state_gate = true;
             opt->true_ds4_attention_projection_gate = true;
@@ -2156,6 +2233,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->true_ds4_attention_residency_gate) &&
            (!opt->true_ds4_attention_state_gate ||
             opt->true_ds4_attention_projection_gate) &&
+           (!opt->true_ds4_attention_rope_gate ||
+            opt->true_ds4_attention_state_gate) &&
            (!opt->true_ds4_attention_raw_read_gate ||
             opt->true_ds4_attention_state_gate) &&
            (!opt->true_ds4_attention_raw_window_gate ||
@@ -6331,6 +6410,18 @@ int run_true_ds4_attention_state_update(const Options &opt,
     const uint64_t kv_elems = (uint64_t)opt.slots * (uint64_t)kHeadDim;
     const uint64_t raw_elems =
         (uint64_t)opt.slots * (uint64_t)kRawSwaRows * (uint64_t)kHeadDim;
+    const int ratio = ds4_layer_ratio(layer);
+    const bool compressed = ratio != 0;
+    const float freq_base =
+        compressed ? kCompressRopeFreqBase : kRopeFreqBase;
+    const float freq_scale =
+        compressed && kRopeScaleFactor > 0.0f ? 1.0f / kRopeScaleFactor : 1.0f;
+    const float ext_factor =
+        compressed && kRopeScaleFactor > 1.0f ? 1.0f : 0.0f;
+    float attn_factor = 1.0f;
+    if (ext_factor != 0.0f && freq_scale > 0.0f) {
+        attn_factor /= 1.0f + 0.1f * logf(1.0f / freq_scale);
+    }
     for (int rank = 0; rank < kGpus; ++rank) {
         RankState &r = ranks[rank];
         CHECK_CUDA(cudaSetDevice(r.device));
@@ -6343,6 +6434,19 @@ int run_true_ds4_attention_state_update(const Options &opt,
             r.dense_stream ? r.dense_stream : r.stream>>>(
             ops->attn_q_b.d_out[(size_t)rank], (uint32_t)opt.slots,
             (uint32_t)kLocalHeads, (uint32_t)kHeadDim, 1.0e-6f);
+        CHECK_CUDA(cudaGetLastError());
+        if (opt.true_ds4_attention_rope_gate) {
+            rope_tail_rows_kernel<<<
+                (unsigned int)(opt.slots * kLocalHeads), 64, 0,
+                r.dense_stream ? r.dense_stream : r.stream>>>(
+                ops->attn_q_b.d_out[(size_t)rank],
+                (uint32_t)(opt.slots * kLocalHeads), (uint32_t)kHeadDim,
+                (uint32_t)kRotaryDim, (uint32_t)opt.position,
+                compressed ? kRopeOrigCtx : 0u, 0, freq_base, freq_scale,
+                ext_factor, attn_factor, kRopeYarnBetaFast,
+                kRopeYarnBetaSlow);
+            CHECK_CUDA(cudaGetLastError());
+        }
         if (rank == 0) {
             CHECK_CUDA(cudaMemcpyAsync(r.d_attn_kv_full, hc->d_kv_normed,
                                        (size_t)kv_elems * sizeof(float),
@@ -6352,6 +6456,16 @@ int run_true_ds4_attention_state_update(const Options &opt,
                                            hc->d_kv_normed, opt.devices[0],
                                            (size_t)kv_elems * sizeof(float),
                                            r.stream));
+        }
+        if (opt.true_ds4_attention_rope_gate) {
+            rope_tail_rows_kernel<<<
+                (unsigned int)opt.slots, 64, 0, r.stream>>>(
+                r.d_attn_kv_full, (uint32_t)opt.slots, (uint32_t)kHeadDim,
+                (uint32_t)kRotaryDim, (uint32_t)opt.position,
+                compressed ? kRopeOrigCtx : 0u, 0, freq_base, freq_scale,
+                ext_factor, attn_factor, kRopeYarnBetaFast,
+                kRopeYarnBetaSlow);
+            CHECK_CUDA(cudaGetLastError());
         }
         kv_fp8_round_store_raw_swa_kernel<<<
             (unsigned int)((kv_elems + block - 1) / block), block, 0,
@@ -6383,6 +6497,13 @@ int run_true_ds4_attention_state_update(const Options &opt,
         log_tensor_f32_stats("true_attn_raw_swa_rank0", layer, 0,
                              ranks[0].d_attn_raw_swa, (size_t)raw_elems,
                              ranks[0].stream);
+    }
+    if (opt.true_ds4_attention_rope_gate) {
+        std::printf("tp_ep_true_attention_rope\tlayer\t%d\tslots\t%d\t"
+                    "local_heads\t%d\thead_dim\t%d\trotary_dim\t%d\t"
+                    "freq_base\t%.1f\tfreq_scale\t%.9f\tposition\t%llu\tPASS\n",
+                    layer, opt.slots, kLocalHeads, kHeadDim, kRotaryDim,
+                    freq_base, freq_scale, (unsigned long long)opt.position);
     }
     std::printf("tp_ep_true_attention_state_update\tlayer\t%d\tslots\t%d\t"
                 "local_heads\t%d\thead_dim\t%d\traw_rows\t%d\traw_row\t%u\t"
