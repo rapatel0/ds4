@@ -4744,6 +4744,20 @@ int upload_model_router_route_plan(const Options &opt,
         }
     }
     if (opt.compact_route_compose && compact_duplicate) return 3;
+    if (opt.routed_ffn_norm_input_gate && opt.layer >= 0 && opt.layer <= 2) {
+        for (int slot = 0; slot < opt.slots; ++slot) {
+            for (int k = 0; k < opt.top_k; ++k) {
+                const int expert = selected[(size_t)slot * opt.top_k + (size_t)k];
+                if (expert < 0) continue;
+                const int rank = expert / kLocalExperts;
+                const int local = expert % kLocalExperts;
+                const float w = weights[(size_t)slot * opt.top_k + (size_t)k];
+                std::fprintf(stderr,
+                             "tp_ep_model_router_route_id\tlayer\t%d\tslot\t%d\tk\t%d\texpert\t%d\trank\t%d\tlocal\t%d\tweight\t%.9g\n",
+                             opt.layer, slot, k, expert, rank, local, w);
+            }
+        }
+    }
 
     for (int rank = 0; rank < kGpus; ++rank) {
         offsets[rank].assign((size_t)kLocalExperts + 1, 0);

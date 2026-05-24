@@ -216,6 +216,22 @@ while ranks 1 and 6 unexpectedly produce all-zero expert outputs. The next
 debug step should print selected global/local expert IDs and inspect the
 rank-local TurboMind pointer/scale bindings for those experts.
 
+The follow-up route-ID trace identified the exact layer-0 routes:
+
+```text
+slot 0 k0 expert 254 rank 7 local 30 weight 5.48186296e-09
+slot 0 k1 expert 222 rank 6 local 30 weight 0.000506118406
+slot 0 k2 expert 245 rank 7 local 21 weight 0.145689547
+slot 0 k3 expert 200 rank 6 local 8  weight 1.34319687
+slot 0 k4 expert 53  rank 1 local 21 weight 2.10904183e-08
+slot 0 k5 expert 35  rank 1 local 3  weight 0.0106075406
+```
+
+Rank `7` local experts `30` and `21` are the immediate non-finite path.
+Rank `6` local experts `30` and `8` include the largest route weight but
+produce zero gate/down output. This points at expert binding/table/scale
+handling or a route layout mismatch, not bad router logits.
+
 ## Artifacts
 
 - `logs/from-cluster/sprint308-all-local-experts-parity/cluster/server.out`
@@ -236,6 +252,7 @@ rank-local TurboMind pointer/scale bindings for those experts.
 - `logs/from-cluster/sprint308-model-router-active-mask-parity/20260524-035442/`
 - `logs/from-cluster/sprint308-routed-ffn-norm-input-parity/20260524-040200/`
 - `logs/from-cluster/sprint308-routed-ffn-norm-input-stats/20260524-040752/`
+- `logs/from-cluster/sprint308-routed-ffn-norm-route-ids/20260524-041250/`
 
 ## Production Gate
 
