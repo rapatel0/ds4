@@ -584,12 +584,15 @@ __device__ float warp_sum_f32(float v) {
 
 __device__ float block_sum_256_f32(float v) {
     __shared__ float warp_sums[8];
+    __shared__ float block_sum;
     v = warp_sum_f32(v);
     if ((threadIdx.x & 31u) == 0u) warp_sums[threadIdx.x >> 5] = v;
     __syncthreads();
     v = threadIdx.x < 8u ? warp_sums[threadIdx.x] : 0.0f;
     if (threadIdx.x < 32u) v = warp_sum_f32(v);
-    return v;
+    if (threadIdx.x == 0u) block_sum = v;
+    __syncthreads();
+    return block_sum;
 }
 
 __device__ float warp_max_f32(float v) {
@@ -601,12 +604,15 @@ __device__ float warp_max_f32(float v) {
 
 __device__ float block_max_256_f32(float v) {
     __shared__ float warp_maxes[8];
+    __shared__ float block_max;
     v = warp_max_f32(v);
     if ((threadIdx.x & 31u) == 0u) warp_maxes[threadIdx.x >> 5] = v;
     __syncthreads();
     v = threadIdx.x < 8u ? warp_maxes[threadIdx.x] : 0.0f;
     if (threadIdx.x < 32u) v = warp_max_f32(v);
-    return v;
+    if (threadIdx.x == 0u) block_max = v;
+    __syncthreads();
+    return block_max;
 }
 
 __device__ __half f32_to_half_saturate(float v) {

@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 323
+revision: 324
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -248,6 +248,12 @@ not a serial layer-chain.
   KV norm reference comparison shows huge per-element drift even when stable
   and reference maxima match. The next sprint must fix reduction broadcast
   before any compressed-KV/indexer work.
+- Sprint 318 fixed the TP/EP block-reduction broadcast bug. The combined
+  `32` slot / `256K` / `4` step V100 gate now has 172 KV-norm reference rows,
+  172 saturation rows, 172 raw-window rows, and zero failures. KV norm
+  reference drift dropped from `847034.125` max-abs to `9.53674316e-07`, and
+  raw-SWA row max dropped from `65504` to `6.28515625`. The artificial
+  attention-prefix saturation blocker is removed.
 - Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
   longer exposes PP/layer-split topology modes. Against the real production
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about
@@ -1998,6 +2004,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-24 | Sprint 315 added true-attention RoPE before raw-SWA storage/read. | The TP/EP runtime now applies DS4-style tail RoPE to q-head shards and latent KV rows; the `32` slot / `256K` / `4` step V100 scaffold has 172 RoPE passes, 172 token-major layer passes, and zero failures. One raw-window diagnostic line was stdout-interleaved, but the final scaffold reports 172 pass invocations. | Isolate the early-layer `65504` raw-KV saturation in the HC-current/projection/KV-store contract before compressed-KV/indexer read or attention-output promotion. |
 | 2026-05-24 | Sprint 316 localized true-attention saturation to the KV normalization path. | The new saturation audit gate passed at `32` slots / `256K` / `4` steps and showed `kv_normed` first exceeds FP16 range at layer `1`, before KV RoPE and before raw-SWA storage; q-heads remain bounded after head RMSNorm/RoPE. | Compare TP/EP `attn_kv_a_norm` against the DS4 reference normalization/scaling contract and fix that before compressed-KV/indexer work. |
 | 2026-05-24 | Sprint 317 identified a TP/EP block-reduction broadcast bug. | The KV norm reference gate showed huge same-input drift between stable and plain RMSNorm; code inspection found `block_sum_256_f32` and `block_max_256_f32` only return the reduced value to the first warp, so threads `32..255` normalize with the wrong scale. | Fix the reduction helpers, then rerun KV norm reference, saturation, and raw-window gates before continuing attention semantics. |
+| 2026-05-24 | Sprint 318 fixed TP/EP block-reduction broadcast. | KV norm reference drift dropped to `~1e-6`, raw-SWA max dropped from `65504` to `~6.29`, and the combined `32` slot / `256K` / `4` step gate passed all 172 layer-step invocations with zero failures. | Rerun reference parity and continue compressed-KV/indexer plus attention-output semantics. |
 
 ## Open Questions
 
