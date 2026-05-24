@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 336
+revision: 337
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -121,8 +121,16 @@ not a serial layer-chain.
   decodes the distributed row back to device f32 buffers using peer reads. At
   `32` slots / `256K`, layer `2`, slot `31`, position `262140`, both attention
   and indexer device roundtrips pass with `bad values=0` and
-  `max_abs=0.000000000`. The next integration step is to call these APIs from
-  the full-layer TP/EP smoke for raw-SWA, then compressed attention/indexer rows.
+  `max_abs=0.000000000`.
+- Sprint 332 wired those device KV APIs into the full-layer TP/EP attention
+  state path for raw-SWA. With
+  `--true-ds4-attention-typed-kv-raw-gate`, each slot's `512`-wide raw-SWA
+  row is stored through the runtime's F8 E4M3 block-128 physical KV shards and
+  loaded back into the attention read staging buffer. The `32` slot / `256K` /
+  position `262140` all-layer shared-state gate emits typed raw-SWA PASS lines
+  for all `43` layers and ends with `pass_layers=43`, projected
+  `93.259761` slot-step tok/s. The next integration step is typed compressed
+  attention rows and ratio-4 indexer rows.
 - The system is not production-ready yet because the bridge HC sequence has
   not been proven equivalent to the DeepSeek V4 reference layer semantics, and
   production serving still needs readiness/overload/cancellation/streaming
