@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 345
+revision: 346
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -205,6 +205,18 @@ not a serial layer-chain.
   far below control, so the next bottleneck is likely typed KV store overhead
   itself. The next step is to measure store-only cost by row family and then
   batch row stores or fuse stores into producer kernels.
+- Sprint 341 measured typed KV store-family cost. Diagnostic store suppression
+  variants showed that stores are not the primary remaining regression:
+  control measured `308.223158` wall tok/s / `722.800920` decode tok/s,
+  typed-history baseline measured `75.577828` / `87.938497`, and the
+  diagnostic no-store candidate measured only `79.039985` / `93.242875`.
+  Individual family suppression was also mostly flat: no raw store
+  `77.304656`, no compressed store `74.992652`, and no indexer store
+  `73.921469` wall tok/s. The next bottleneck is therefore likely diagnostic
+  overhead in the typed path itself: per-layer/device synchronizations, verbose
+  typed PASS logging, and typed-history/indexer bookkeeping in the hot serving
+  loop. The next step is to gate or remove that overhead while preserving typed
+  production KV semantics.
 - The system is not production-ready yet because the bridge HC sequence has
   not been proven equivalent to the DeepSeek V4 reference layer semantics, and
   production serving still needs readiness/overload/cancellation/streaming

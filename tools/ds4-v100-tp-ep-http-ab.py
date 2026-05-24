@@ -33,7 +33,8 @@ def http_post(base, path, payload, timeout=900):
         return exc.code, exc.read()
 
 
-def run_case(args, name, port, typed):
+def run_case(args, name, port, typed, skip_stores=None):
+    skip_stores = set(skip_stores or [])
     case_dir = args.artifact_dir / name
     case_dir.mkdir(parents=True, exist_ok=True)
 
@@ -56,7 +57,13 @@ def run_case(args, name, port, typed):
             "DS4_V100_PORT": str(port),
             "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_HISTORY": "1" if typed else "0",
             "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_SKIP_CURRENT_LOAD":
-                "1" if typed and args.typed_skip_current_load else "0",
+                "1" if typed and (args.typed_skip_current_load or skip_stores) else "0",
+            "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_SKIP_RAW_STORE":
+                "1" if "raw" in skip_stores else "0",
+            "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_SKIP_COMPRESSED_STORE":
+                "1" if "compressed" in skip_stores else "0",
+            "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_SKIP_INDEXER_STORE":
+                "1" if "indexer" in skip_stores else "0",
         }
     )
 
@@ -166,6 +173,15 @@ def run_case(args, name, port, typed):
             "typed_skip_current_load_meta": first.get(
                 "true_ds4_attention_typed_kv_skip_current_load_gate"
             ),
+            "typed_skip_raw_store_meta": first.get(
+                "true_ds4_attention_typed_kv_skip_raw_store_gate"
+            ),
+            "typed_skip_compressed_store_meta": first.get(
+                "true_ds4_attention_typed_kv_skip_compressed_store_gate"
+            ),
+            "typed_skip_indexer_store_meta": first.get(
+                "true_ds4_attention_typed_kv_skip_indexer_store_gate"
+            ),
             "typed_raw_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_raw", server_text)),
             "typed_compressed_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_compressed", server_text)),
             "typed_indexer_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_indexer", server_text)),
@@ -174,6 +190,8 @@ def run_case(args, name, port, typed):
             "history_loaded_indexer_rows_2": len(re.findall(r"loaded_indexer_rows\t2", server_text)),
             "history_reloaded_attn_rows_nonzero": len(re.findall(r"reloaded_attn_rows\t[1-9]", server_text)),
             "history_reloaded_indexer_rows_nonzero": len(re.findall(r"reloaded_indexer_rows\t[1-9]", server_text)),
+            "typed_current_store_0": len(re.findall(r"current_store\t0", server_text)),
+            "typed_current_store_1": len(re.findall(r"current_store\t1", server_text)),
             "typed_current_load_0": len(re.findall(r"current_load\t0", server_text)),
             "typed_current_load_1": len(re.findall(r"current_load\t1", server_text)),
         }
@@ -191,7 +209,30 @@ def run_case(args, name, port, typed):
                 pass
         server_out.close()
         server_err.close()
-        time.sleep(3)
+        wait_for_gpu_idle(args.case_cooldown_seconds)
+
+
+def wait_for_gpu_idle(timeout_s):
+    deadline = time.time() + max(0, timeout_s)
+    while time.time() < deadline:
+        try:
+            proc = subprocess.run(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=memory.used",
+                    "--format=csv,noheader,nounits",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                check=False,
+            )
+            used = [int(x.strip()) for x in proc.stdout.splitlines() if x.strip()]
+            if used and max(used) == 0:
+                return
+        except Exception:
+            pass
+        time.sleep(1)
 
 
 def main():
@@ -211,16 +252,48 @@ def main():
     parser.add_argument("--requests", type=int, default=32)
     parser.add_argument("--max-requests", type=int, default=80)
     parser.add_argument("--typed-skip-current-load", action="store_true")
+    parser.add_argument(
+        "--typed-store-variant",
+        action="append",
+        choices=["baseline", "no-raw", "no-compressed", "no-indexer", "no-stores"],
+        default=[],
+        help="additional typed candidates for store-family cost isolation",
+    )
     parser.add_argument("--control-port", type=int, default=18338)
     parser.add_argument("--typed-port", type=int, default=18339)
     parser.add_argument("--readiness-seconds", type=int, default=240)
+    parser.add_argument("--case-cooldown-seconds", type=int, default=20)
+    parser.add_argument("--skip-control", action="store_true")
     args = parser.parse_args()
 
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
-    summaries = [
-        run_case(args, "control", args.control_port, False),
-        run_case(args, "typed-history", args.typed_port, True),
-    ]
+    summaries = []
+    if not args.skip_control:
+        summaries.append(run_case(args, "control", args.control_port, False))
+    variants = args.typed_store_variant or ["baseline"]
+    port = args.typed_port
+    for variant in variants:
+        if variant == "baseline":
+            summaries.append(run_case(args, "typed-history", port, True))
+        elif variant == "no-raw":
+            summaries.append(run_case(args, "typed-no-raw-store", port, True, {"raw"}))
+        elif variant == "no-compressed":
+            summaries.append(
+                run_case(args, "typed-no-compressed-store", port, True, {"compressed"})
+            )
+        elif variant == "no-indexer":
+            summaries.append(run_case(args, "typed-no-indexer-store", port, True, {"indexer"}))
+        elif variant == "no-stores":
+            summaries.append(
+                run_case(
+                    args,
+                    "typed-no-stores",
+                    port,
+                    True,
+                    {"raw", "compressed", "indexer"},
+                )
+            )
+        port += 1
     (args.artifact_dir / "summary.json").write_text(json.dumps(summaries, indent=2, sort_keys=True) + "\n")
     keys = [
         "case",
@@ -239,6 +312,9 @@ def main():
         "cache_misses",
         "typed_gate_meta",
         "typed_skip_current_load_meta",
+        "typed_skip_raw_store_meta",
+        "typed_skip_compressed_store_meta",
+        "typed_skip_indexer_store_meta",
         "typed_raw_lines",
         "typed_compressed_lines",
         "typed_indexer_lines",
@@ -247,6 +323,8 @@ def main():
         "history_loaded_indexer_rows_2",
         "history_reloaded_attn_rows_nonzero",
         "history_reloaded_indexer_rows_nonzero",
+        "typed_current_store_0",
+        "typed_current_store_1",
         "typed_current_load_0",
         "typed_current_load_1",
     ]
