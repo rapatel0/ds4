@@ -22,6 +22,10 @@ with content `"Hello"` tokenizes to `5` prompt tokens, prefills `4`, generates
 wall tok/s / `350.755948` decode tok/s. Full role-aware chat parsing,
 streaming, active-slot-only decode, optimized batched prefill, exact DS4 HC
 parity, and MTP remain open.
+Sprint 306 verifies the same tokenizer-enabled path with `32` concurrent text
+chat requests: one full coalesced 32-slot batch, `7` prompt tokens/request,
+`6` prefill tokens/request, `256` generated tokens total, `214.155740` server
+wall tok/s, and `355.130754` server decode tok/s.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

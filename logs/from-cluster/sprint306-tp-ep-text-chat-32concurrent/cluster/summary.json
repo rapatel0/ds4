@@ -1,0 +1,22 @@
+{
+  "responses": 32,
+  "client_elapsed_s": 2.3264999389648438,
+  "client_effective_tok_s": 110.03653845523203,
+  "coalesced_batch_ids": [
+    1
+  ],
+  "coalesced_batch_sizes": [
+    32
+  ],
+  "prompt_tokens_min": 7,
+  "prompt_tokens_max": 7,
+  "prefill_tokens_min": 6,
+  "prefill_tokens_max": 6,
+  "generated_tokens_total": 256,
+  "response_wall_tok_s_min": 214.15574,
+  "response_wall_tok_s_max": 214.15574,
+  "response_wall_tok_s_mean": 214.15574,
+  "response_decode_tok_s_min": 355.130754,
+  "response_decode_tok_s_max": 355.130754,
+  "response_decode_tok_s_mean": 355.130754
+}

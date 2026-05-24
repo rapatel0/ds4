@@ -286,6 +286,13 @@ reports `tokenizer_ready=1`, `request_prompt_token_ids=5`,
 tok/s / `350.755948` decode tok/s. The remaining API gaps are full role-aware
 chat parsing, streaming, active-slot-only decode, optimized/batched prefill,
 exact DS4 HC parity, and MTP.
+Sprint 306 benchmarked that tokenizer-enabled chat path with 32 concurrent
+text requests. The run formed one full 32-slot coalesced batch at `256K`,
+tokenized each request to `7` prompt tokens, ran `6` diagnostic prefill tokens
+per request, generated `256` total tokens, and returned `32/32` HTTP 200
+responses. Server-side generated-section throughput was `214.155740` wall
+tok/s / `355.130754` decode tok/s; client-side effective throughput including
+HTTP orchestration was `110.036538` tok/s.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

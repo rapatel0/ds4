@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: codex
-revision: 305
+revision: 306
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -151,6 +151,11 @@ not a serial layer-chain.
   steps, generated token IDs `[95933,89868]`, decoded text `ICCungtod`, and
   `213.595353` wall tok/s / `350.755948` decode tok/s for the generated
   section.
+- Sprint 306 ran the first 32-concurrent tokenizer-enabled text chat
+  benchmark. All requests coalesced into one 32-slot batch at `256K`; each
+  request had `7` prompt tokens, `6` diagnostic prefill steps, and `8`
+  generated tokens. The server reported `214.155740` wall tok/s /
+  `355.130754` decode tok/s for `256` generated tokens.
 - Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
   longer exposes PP/layer-split topology modes. Against the real production
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about
