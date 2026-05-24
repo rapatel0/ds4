@@ -1,8 +1,9 @@
 ---
 sprint: 325
 title: TP/EP Layer-Local Compressed Attention Reference Diff
-status: planned
+status: completed
 started: 2026-05-24
+completed: 2026-05-24
 branch: claude-takeover
 ---
 
@@ -100,13 +101,85 @@ PASS/FAIL
 
 ## Definition of Done
 
-- CUDA build passes on the V100 pod.
-- Layer-2 ratio-4 diagnostic runs at `slots=1` and `position=100003`.
-- Layer-2 ratio-4 diagnostic runs at `slots=32` and `position=262143`.
-- The diagnostic prints diff summaries for all target tensors.
-- The sprint records the first divergent tensor and proposes the next fix.
-- `VISION.md`, `TEMP_STATUS_REPORT_037.md`, cluster artifacts, and this sprint
-  doc are updated and committed.
+- [x] CUDA build passes on the V100 pod.
+- [x] Layer-2 ratio-4 diagnostic runs at `slots=1` and `position=100003`.
+- [x] Layer-2 ratio-4 diagnostic runs at `slots=32` and `position=262143`.
+- [x] The diagnostic prints diff summaries for all target tensors.
+- [x] The sprint records the first divergent tensor and proposes the next fix.
+- [x] `VISION.md`, `TEMP_STATUS_REPORT_037.md`, cluster artifacts, and this
+  sprint doc are updated and committed.
+
+## Outcome
+
+Implemented `--true-ds4-compressed-reference-diff-gate` in the TP/EP
+full-layer smoke. The gate compares compact same-kernel reference-layout
+tensors for ratio-4 compressed attention:
+
+- `attn_comp_kv_current_peer_copy`
+- `attn_comp_score_current_peer_copy`
+- `attn_comp_row0_compact_reference`
+- `index_comp_row0_compact_reference`
+- `indexer_score_row0_compact_reference`
+
+This is intentionally a compact diagnostic reference. It is not yet a full
+non-TP `ds4_v100_layer_execute` reference replay, and it only validates the
+currently bounded one-row compressed-cache path.
+
+The first all-layer attempt found a concrete bug: layer `2` passed, but layer
+`4` diverged at `attn_comp_row0_compact_reference`. The root cause was that the
+smoke reused raw-SWA, attention-compressed, and indexer-compressed state across
+layers. The fix gives each layer its own raw/compressed/indexer state buffers
+and aliases the active layer into the existing execution code.
+
+After the fix:
+
+- `slots=1`, `position=100003`: all `43` layers passed; ratio-4 compact
+  reference diffs pass through layer `42`.
+- `slots=32`, `position=262143`: all `43` layers passed; ratio-4 compact
+  reference diffs pass through layer `42`.
+- The prior layer-4 `attn_comp_row0_compact_reference` failure now reports
+  `max_abs=0` and `PASS`.
+
+The bounded compressed-row cache capacity is now `1` in this diagnostic path.
+That matches the currently implemented one-row visible compressed attention
+semantics and avoids allocating a full `slots * 1024 * 512 * 43` float cache in
+the smoke. A production TP runtime still needs the full compressed-row cache,
+row selection, and long-history lifecycle.
+
+## Validation
+
+Build on `llm/llamacpp-build-8gpu`:
+
+```text
+make -j80 CUDA_HOME=/usr/local/cuda CUDA_ARCH=sm_70 tools/ds4-v100-tp-ep-full-layer-smoke
+```
+
+Result: PASS. The only warning is the existing unused
+`rms_norm_plain_rows_kernel` warning.
+
+Cluster artifacts:
+
+- `logs/from-cluster/sprint325-compressed-reference-diff-v2/cluster/alllayers-slots1-pos100003.log`
+- `logs/from-cluster/sprint325-compressed-reference-diff-v2/cluster/alllayers-slots32-pos262143-row1.log`
+
+Topline diagnostic metrics:
+
+| Case | Result | Projected slot-step tok/s | Checksum |
+|---|---:|---:|---:|
+| `slots=1`, `position=100003` | PASS | `3.656366` | `4518783943` |
+| `slots=32`, `position=262143` | PASS | `39.258626` | `1089553077` |
+
+These are heavily instrumented diagnostic all-layer smoke metrics, not serving
+throughput.
+
+## Next Fix
+
+Move from compact same-layout compressed-row diffs to full attention semantics:
+
+- full compressed-row cache beyond one visible row
+- ratio-4 / ratio-128 row selection against resident history
+- raw+compressed attention output parity against the reference layer path
+- HTTP parity rerun once attention output is proven locally
 
 ## Risks
 

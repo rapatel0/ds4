@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 329
+revision: 330
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -66,6 +66,14 @@ not a serial layer-chain.
   throughput was `214.155740` wall tok/s / `355.130754` decode tok/s.
   Client-side effective throughput including HTTP orchestration was
   `110.036538` tok/s.
+- Latest TP/EP attention-correctness work from Sprint 325 added a compact
+  compressed-reference diff gate and fixed a real layer-state bug in the smoke
+  path. Raw-SWA, attention-compressed, and indexer-compressed buffers are now
+  layer-local in the diagnostic harness. The `slots=1`, `position=100003` and
+  `slots=32`, `position=262143` all-layer gates both pass their compact
+  ratio-4 compressed-row/indexer-score diffs through layer `42`; the `32` slot
+  diagnostic reports `39.258626` projected slot-step tok/s. This is still a
+  bounded one-row diagnostic, not production long-history compressed KV.
 - The system is not production-ready yet because the bridge HC sequence has
   not been proven equivalent to the DeepSeek V4 reference layer semantics, and
   production serving still needs readiness/overload/cancellation/streaming
@@ -2045,6 +2053,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-24 | Sprint 322 promoted post-attention hidden into FFN inputs. | The TP/EP runtime now materializes `current + attn_output_b`, recomputes FFN norm/router/shared/routed inputs from that tensor, and passes the `32` slot / `256K` all-layer gate; HTTP parity still fails but changes to `mere` / token `88445`. | Implement true compressed-KV/indexer attention and raw+compressed attention merge, then rerun reference parity. |
 | 2026-05-24 | Sprint 323 added the first TP/EP compressed-KV/indexer projection gate. | The TP/EP runtime now binds BF16 compressor/indexer dense tensors through the FP16-cache/cuBLAS resident path and executes compressor plus ratio-4 indexer projections for all 43 layers at `32` slots / `256K`. The all-layer gate passes with 43 compressed-projection rows and `19.630630` projected slot-step tok/s. HTTP parity now runs without OOM after freeing unused dense float staging buffers and moving token embeddings to host-backed per-slot row uploads; parity still fails but changes to `MARK` / token `110609`. | Implement real compressed-row storage, indexer scores/top-k over stored rows, and raw+compressed attention softmax/value merge. |
 | 2026-05-24 | Sprint 324 added bounded TP/EP compressed-row storage and raw+compressed attention read. | The TP/EP runtime now gathers compressor/indexer TP shards, stores compressor state with APE, emits pooled/RMSNorm/RoPE/F16-rounded compressed rows, shifts ratio-4 state, computes a bounded one-row indexer score/top-k, and merges a visible compressed row into the attention read. The `32` slot / `256K` all-layer smoke passes with `pass_invocations=43` and `19.160884` projected slot-step tok/s. HTTP parity still fails and returns `mere` / token `88445`, so this structural path is active but not yet reference-equivalent. | Compare TP/EP layer-2 ratio-4 emitted compressed rows, indexer scores, selected rows, and raw+compressed attention output against the non-TP reference path. |
+| 2026-05-24 | Sprint 325 added a compact compressed-reference diff gate and fixed layer-local attention state. | The first all-layer diagnostic found layer `4` diverging at `attn_comp_row0_compact_reference` because raw-SWA, attention-compressed, and indexer-compressed buffers were reused across layers in the smoke path. The buffers are now layer-local; `slots=1` / `position=100003` and `slots=32` / `position=262143` both pass all 43 layers, and ratio-4 compact compressed-row/indexer-score diffs pass through layer `42`. The `32` slot diagnostic reports `39.258626` projected slot-step tok/s. | Replace the compact one-row diagnostic with full production compressed-row cache/history selection and raw+compressed attention output parity against the reference layer path, then rerun HTTP parity. |
 
 ## Open Questions
 

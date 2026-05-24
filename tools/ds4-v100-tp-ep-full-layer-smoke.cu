@@ -50,7 +50,7 @@ constexpr int kIndexerHead = 64;
 constexpr int kIndexerTopK = 512;
 constexpr int kCompWidthMax = 2 * kHeadDim;
 constexpr int kCompStateRowsMax = 128;
-constexpr int kBoundedCompRows = 1024;
+constexpr int kBoundedCompRows = 1;
 constexpr int kIndexCompWidth = 2 * kIndexerHeadDim;
 constexpr int kIndexCompStateRows = 8;
 constexpr uint32_t kRopeOrigCtx = 65536;
@@ -198,6 +198,7 @@ struct RankState {
     float *d_hc_split = nullptr;
     float *d_attn_kv_full = nullptr;
     float *d_attn_raw_swa = nullptr;
+    float *d_attn_raw_swa_layers[43] = {};
     float *d_attn_sinks = nullptr;
     float *d_attn_heads = nullptr;
     float *d_attn_output_a_full = nullptr;
@@ -207,11 +208,17 @@ struct RankState {
     float *d_attn_comp_state_kv = nullptr;
     float *d_attn_comp_state_score = nullptr;
     float *d_attn_comp_rows = nullptr;
+    float *d_attn_comp_state_kv_layers[43] = {};
+    float *d_attn_comp_state_score_layers[43] = {};
+    float *d_attn_comp_rows_layers[43] = {};
     float *d_index_comp_kv_cur = nullptr;
     float *d_index_comp_score_cur = nullptr;
     float *d_index_comp_state_kv = nullptr;
     float *d_index_comp_state_score = nullptr;
     float *d_index_comp_rows = nullptr;
+    float *d_index_comp_state_kv_layers[43] = {};
+    float *d_index_comp_state_score_layers[43] = {};
+    float *d_index_comp_rows_layers[43] = {};
     float *d_indexer_scores = nullptr;
     uint32_t *d_indexer_topk = nullptr;
     bool hc_initialized = false;
@@ -548,6 +555,7 @@ struct Options {
     bool true_ds4_post_attention_ffn_input_gate = false;
     bool true_ds4_compressed_kv_gate = false;
     bool true_ds4_indexer_attention_gate = false;
+    bool true_ds4_compressed_reference_diff_gate = false;
     uint32_t true_ds4_attention_raw_valid_rows = 1;
 };
 
@@ -1506,6 +1514,20 @@ __global__ void round_comp_emit_slots_kernel(float *rows,
     row[d] = __half2float(f32_to_half_saturate(row[d]));
 }
 
+__global__ void pack_comp_row_kernel(float *dst,
+                                     const float *rows,
+                                     uint32_t slots,
+                                     uint32_t head_dim,
+                                     uint32_t comp_row,
+                                     uint32_t row_cap) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t n = (uint64_t)slots * head_dim;
+    if (i >= n || comp_row >= row_cap) return;
+    const uint32_t slot = (uint32_t)(i / head_dim);
+    const uint32_t d = (uint32_t)(i - (uint64_t)slot * head_dim);
+    dst[i] = rows[((uint64_t)slot * row_cap + comp_row) * (uint64_t)head_dim + d];
+}
+
 __global__ void compressor_shift_ratio4_slots_kernel(float *state_kv,
                                                      float *state_score,
                                                      uint32_t slots,
@@ -2419,6 +2441,7 @@ void usage(const char *argv0) {
                  "       [--true-ds4-post-attention-ffn-input-gate]\n"
                  "       [--true-ds4-compressed-kv-gate]\n"
                  "       [--true-ds4-indexer-attention-gate]\n"
+                 "       [--true-ds4-compressed-reference-diff-gate]\n"
                  "       [--reference-hc-reduce-gate]\n"
                  "       [--reference-hc-state-guard-gate]\n"
                  "       [--diagnostic-output-head]\n",
@@ -2696,6 +2719,15 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--true-ds4-compressed-reference-diff-gate") == 0) {
+            opt->true_ds4_compressed_reference_diff_gate = true;
+            opt->true_ds4_indexer_attention_gate = true;
+            opt->true_ds4_compressed_kv_gate = true;
+            opt->true_ds4_attention_projection_gate = true;
+            opt->true_ds4_attention_residency_gate = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--reference-hc-reduce-gate") == 0) {
             opt->reference_hc_reduce_gate = true;
             opt->tp_hc_current_input_gate = true;
@@ -2754,6 +2786,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->true_ds4_attention_projection_gate) &&
            (!opt->true_ds4_indexer_attention_gate ||
             opt->true_ds4_compressed_kv_gate) &&
+           (!opt->true_ds4_compressed_reference_diff_gate ||
+            opt->true_ds4_indexer_attention_gate) &&
            !(opt->dense_compute_tensor &&
              (opt->dense_compute_all_f8 || opt->dense_compute_all_bf16));
 }
@@ -6281,6 +6315,49 @@ TensorF32DiffStats collect_tensor_f32_diff_stats(const float *a, const float *b,
     return stats;
 }
 
+void log_tensor_f32_diff_summary(const char *tag, int layer,
+                                 const float *got, const float *ref,
+                                 size_t elems, cudaStream_t stream) {
+    CHECK_CUDA(cudaStreamSynchronize(stream));
+    std::vector<float> hg(elems);
+    std::vector<float> hr(elems);
+    CHECK_CUDA(cudaMemcpy(hg.data(), got, elems * sizeof(float),
+                          cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(hr.data(), ref, elems * sizeof(float),
+                          cudaMemcpyDeviceToHost));
+    double sq = 0.0;
+    float max_abs = 0.0f;
+    float max_rel = 0.0f;
+    float got_max = 0.0f;
+    float ref_max = 0.0f;
+    int finite_bad = 0;
+    size_t first_bad = (size_t)-1;
+    for (size_t i = 0; i < elems; ++i) {
+        const float g = hg[i];
+        const float r = hr[i];
+        if (!std::isfinite(g) || !std::isfinite(r)) {
+            if (finite_bad == 0) first_bad = i;
+            ++finite_bad;
+            continue;
+        }
+        got_max = fmaxf(got_max, fabsf(g));
+        ref_max = fmaxf(ref_max, fabsf(r));
+        const float diff = fabsf(g - r);
+        const float rel = diff / fmaxf(fabsf(r), 1.0e-12f);
+        max_abs = fmaxf(max_abs, diff);
+        max_rel = fmaxf(max_rel, rel);
+        sq += (double)diff * (double)diff;
+    }
+    const double rms = elems ? std::sqrt(sq / (double)elems) : 0.0;
+    const char *status = (finite_bad == 0 && max_abs <= 1.0e-5f) ? "PASS" : "DIFF";
+    std::printf("tp_ep_compressed_reference_diff\tlayer\t%d\ttensor\t%s\t"
+                "elems\t%zu\tmax_abs\t%.9g\trms\t%.9g\tmax_rel\t%.9g\t"
+                "finite_bad\t%d\tfirst_bad\t%zu\tgot_max\t%.9g\t"
+                "reference_max\t%.9g\t%s\n",
+                layer, tag, elems, max_abs, rms, max_rel, finite_bad,
+                first_bad, got_max, ref_max, status);
+}
+
 void log_tensor_f32_stats(const char *tag, int layer, int rank_id,
                           const float *ptr, size_t elems, cudaStream_t stream) {
     const TensorF32Stats stats = collect_tensor_f32_stats(ptr, elems, stream);
@@ -6665,7 +6742,11 @@ void close_shared_rank_buffers(SharedRankBuffers *shared) {
         if (r.d_final_hc_shard) CHECK_CUDA(cudaFree(r.d_final_hc_shard));
         if (r.d_hc_scratch_shard) CHECK_CUDA(cudaFree(r.d_hc_scratch_shard));
         if (r.d_hc_split) CHECK_CUDA(cudaFree(r.d_hc_split));
-        if (r.d_attn_raw_swa) CHECK_CUDA(cudaFree(r.d_attn_raw_swa));
+        for (int layer = 0; layer < 43; ++layer) {
+            if (r.d_attn_raw_swa_layers[layer]) {
+                CHECK_CUDA(cudaFree(r.d_attn_raw_swa_layers[layer]));
+            }
+        }
         if (r.d_attn_kv_full) CHECK_CUDA(cudaFree(r.d_attn_kv_full));
         if (r.d_attn_heads) CHECK_CUDA(cudaFree(r.d_attn_heads));
         if (r.d_attn_output_a_full) CHECK_CUDA(cudaFree(r.d_attn_output_a_full));
@@ -6673,14 +6754,30 @@ void close_shared_rank_buffers(SharedRankBuffers *shared) {
         if (r.d_attn_sinks) CHECK_CUDA(cudaFree(r.d_attn_sinks));
         if (r.d_indexer_topk) CHECK_CUDA(cudaFree(r.d_indexer_topk));
         if (r.d_indexer_scores) CHECK_CUDA(cudaFree(r.d_indexer_scores));
-        if (r.d_index_comp_rows) CHECK_CUDA(cudaFree(r.d_index_comp_rows));
-        if (r.d_index_comp_state_score) CHECK_CUDA(cudaFree(r.d_index_comp_state_score));
-        if (r.d_index_comp_state_kv) CHECK_CUDA(cudaFree(r.d_index_comp_state_kv));
+        for (int layer = 0; layer < 43; ++layer) {
+            if (r.d_index_comp_rows_layers[layer]) {
+                CHECK_CUDA(cudaFree(r.d_index_comp_rows_layers[layer]));
+            }
+            if (r.d_index_comp_state_score_layers[layer]) {
+                CHECK_CUDA(cudaFree(r.d_index_comp_state_score_layers[layer]));
+            }
+            if (r.d_index_comp_state_kv_layers[layer]) {
+                CHECK_CUDA(cudaFree(r.d_index_comp_state_kv_layers[layer]));
+            }
+        }
         if (r.d_index_comp_score_cur) CHECK_CUDA(cudaFree(r.d_index_comp_score_cur));
         if (r.d_index_comp_kv_cur) CHECK_CUDA(cudaFree(r.d_index_comp_kv_cur));
-        if (r.d_attn_comp_rows) CHECK_CUDA(cudaFree(r.d_attn_comp_rows));
-        if (r.d_attn_comp_state_score) CHECK_CUDA(cudaFree(r.d_attn_comp_state_score));
-        if (r.d_attn_comp_state_kv) CHECK_CUDA(cudaFree(r.d_attn_comp_state_kv));
+        for (int layer = 0; layer < 43; ++layer) {
+            if (r.d_attn_comp_rows_layers[layer]) {
+                CHECK_CUDA(cudaFree(r.d_attn_comp_rows_layers[layer]));
+            }
+            if (r.d_attn_comp_state_score_layers[layer]) {
+                CHECK_CUDA(cudaFree(r.d_attn_comp_state_score_layers[layer]));
+            }
+            if (r.d_attn_comp_state_kv_layers[layer]) {
+                CHECK_CUDA(cudaFree(r.d_attn_comp_state_kv_layers[layer]));
+            }
+        }
         if (r.d_attn_comp_score_cur) CHECK_CUDA(cudaFree(r.d_attn_comp_score_cur));
         if (r.d_attn_comp_kv_cur) CHECK_CUDA(cudaFree(r.d_attn_comp_kv_cur));
         if (r.start) CHECK_CUDA(cudaEventDestroy(r.start));
@@ -6735,6 +6832,13 @@ int ensure_compose_buffers(const Options &opt, RankState ranks[kGpus]) {
     const uint64_t shard_bytes = shard_elems * sizeof(float);
     const uint64_t all_contrib_elems = (uint64_t)kGpus * shard_elems;
     const uint64_t all_contrib_bytes = all_contrib_elems * sizeof(float);
+    const int layer = opt.layer;
+    if ((opt.true_ds4_attention_state_gate || opt.true_ds4_compressed_kv_gate ||
+         opt.true_ds4_indexer_attention_gate) &&
+        (layer < 0 || layer >= 43)) {
+        return 20;
+    }
+    const int ratio = (layer >= 0 && layer < 43) ? ds4_layer_ratio(layer) : 0;
     for (int p = 0; p < kGpus; ++p) {
         RankState &r = ranks[p];
         CHECK_CUDA(cudaSetDevice(r.device));
@@ -6766,14 +6870,17 @@ int ensure_compose_buffers(const Options &opt, RankState ranks[kGpus]) {
             CHECK_CUDA(cudaMalloc(&r.d_attn_kv_full,
                                   (size_t)opt.slots * kHeadDim * sizeof(float)));
         }
-        if (opt.true_ds4_attention_state_gate && !r.d_attn_raw_swa) {
-            CHECK_CUDA(cudaMalloc(&r.d_attn_raw_swa,
-                                  (size_t)opt.slots * kRawSwaRows *
-                                      (size_t)kHeadDim * sizeof(float)));
-            CHECK_CUDA(cudaMemsetAsync(r.d_attn_raw_swa, 0,
-                                       (size_t)opt.slots * kRawSwaRows *
-                                           (size_t)kHeadDim * sizeof(float),
-                                       r.stream));
+        if (opt.true_ds4_attention_state_gate) {
+            if (!r.d_attn_raw_swa_layers[layer]) {
+                CHECK_CUDA(cudaMalloc(&r.d_attn_raw_swa_layers[layer],
+                                      (size_t)opt.slots * kRawSwaRows *
+                                          (size_t)kHeadDim * sizeof(float)));
+                CHECK_CUDA(cudaMemsetAsync(r.d_attn_raw_swa_layers[layer], 0,
+                                           (size_t)opt.slots * kRawSwaRows *
+                                               (size_t)kHeadDim * sizeof(float),
+                                           r.stream));
+            }
+            r.d_attn_raw_swa = r.d_attn_raw_swa_layers[layer];
         }
         if (opt.true_ds4_attention_raw_read_gate && !r.d_attn_sinks) {
             CHECK_CUDA(cudaMalloc(&r.d_attn_sinks,
@@ -6792,63 +6899,77 @@ int ensure_compose_buffers(const Options &opt, RankState ranks[kGpus]) {
         if (opt.true_ds4_post_attention_ffn_input_gate && !r.d_post_attn_shard) {
             CHECK_CUDA(cudaMalloc(&r.d_post_attn_shard, (size_t)shard_bytes));
         }
-        if (opt.true_ds4_compressed_kv_gate && !r.d_attn_comp_kv_cur) {
-            CHECK_CUDA(cudaMalloc(&r.d_attn_comp_kv_cur,
-                                  (size_t)opt.slots * kCompWidthMax * sizeof(float)));
-            CHECK_CUDA(cudaMalloc(&r.d_attn_comp_score_cur,
-                                  (size_t)opt.slots * kCompWidthMax * sizeof(float)));
-            CHECK_CUDA(cudaMalloc(&r.d_attn_comp_state_kv,
-                                  (size_t)opt.slots * kCompStateRowsMax *
-                                      (size_t)kCompWidthMax * sizeof(float)));
-            CHECK_CUDA(cudaMalloc(&r.d_attn_comp_state_score,
-                                  (size_t)opt.slots * kCompStateRowsMax *
-                                      (size_t)kCompWidthMax * sizeof(float)));
-            CHECK_CUDA(cudaMalloc(&r.d_attn_comp_rows,
-                                  (size_t)opt.slots * kBoundedCompRows *
-                                      (size_t)kHeadDim * sizeof(float)));
-            CHECK_CUDA(cudaMemsetAsync(r.d_attn_comp_state_kv, 0,
-                                       (size_t)opt.slots * kCompStateRowsMax *
-                                           (size_t)kCompWidthMax * sizeof(float),
-                                       r.stream));
-            CHECK_CUDA(cudaMemsetAsync(r.d_attn_comp_state_score, 0,
-                                       (size_t)opt.slots * kCompStateRowsMax *
-                                           (size_t)kCompWidthMax * sizeof(float),
-                                       r.stream));
-            CHECK_CUDA(cudaMemsetAsync(r.d_attn_comp_rows, 0,
-                                       (size_t)opt.slots * kBoundedCompRows *
-                                           (size_t)kHeadDim * sizeof(float),
-                                       r.stream));
+        if (opt.true_ds4_compressed_kv_gate && ratio != 0) {
+            if (!r.d_attn_comp_kv_cur) {
+                CHECK_CUDA(cudaMalloc(&r.d_attn_comp_kv_cur,
+                                      (size_t)opt.slots * kCompWidthMax * sizeof(float)));
+                CHECK_CUDA(cudaMalloc(&r.d_attn_comp_score_cur,
+                                      (size_t)opt.slots * kCompWidthMax * sizeof(float)));
+            }
+            if (!r.d_attn_comp_state_kv_layers[layer]) {
+                CHECK_CUDA(cudaMalloc(&r.d_attn_comp_state_kv_layers[layer],
+                                      (size_t)opt.slots * kCompStateRowsMax *
+                                          (size_t)kCompWidthMax * sizeof(float)));
+                CHECK_CUDA(cudaMalloc(&r.d_attn_comp_state_score_layers[layer],
+                                      (size_t)opt.slots * kCompStateRowsMax *
+                                          (size_t)kCompWidthMax * sizeof(float)));
+                CHECK_CUDA(cudaMalloc(&r.d_attn_comp_rows_layers[layer],
+                                      (size_t)opt.slots * kBoundedCompRows *
+                                          (size_t)kHeadDim * sizeof(float)));
+                CHECK_CUDA(cudaMemsetAsync(r.d_attn_comp_state_kv_layers[layer], 0,
+                                           (size_t)opt.slots * kCompStateRowsMax *
+                                               (size_t)kCompWidthMax * sizeof(float),
+                                           r.stream));
+                CHECK_CUDA(cudaMemsetAsync(r.d_attn_comp_state_score_layers[layer], 0,
+                                           (size_t)opt.slots * kCompStateRowsMax *
+                                               (size_t)kCompWidthMax * sizeof(float),
+                                           r.stream));
+                CHECK_CUDA(cudaMemsetAsync(r.d_attn_comp_rows_layers[layer], 0,
+                                           (size_t)opt.slots * kBoundedCompRows *
+                                               (size_t)kHeadDim * sizeof(float),
+                                           r.stream));
+            }
+            r.d_attn_comp_state_kv = r.d_attn_comp_state_kv_layers[layer];
+            r.d_attn_comp_state_score = r.d_attn_comp_state_score_layers[layer];
+            r.d_attn_comp_rows = r.d_attn_comp_rows_layers[layer];
         }
-        if (opt.true_ds4_indexer_attention_gate && !r.d_index_comp_kv_cur) {
-            CHECK_CUDA(cudaMalloc(&r.d_index_comp_kv_cur,
-                                  (size_t)opt.slots * kIndexCompWidth * sizeof(float)));
-            CHECK_CUDA(cudaMalloc(&r.d_index_comp_score_cur,
-                                  (size_t)opt.slots * kIndexCompWidth * sizeof(float)));
-            CHECK_CUDA(cudaMalloc(&r.d_index_comp_state_kv,
-                                  (size_t)opt.slots * kIndexCompStateRows *
-                                      (size_t)kIndexCompWidth * sizeof(float)));
-            CHECK_CUDA(cudaMalloc(&r.d_index_comp_state_score,
-                                  (size_t)opt.slots * kIndexCompStateRows *
-                                      (size_t)kIndexCompWidth * sizeof(float)));
-            CHECK_CUDA(cudaMalloc(&r.d_index_comp_rows,
-                                  (size_t)opt.slots * kBoundedCompRows *
-                                      (size_t)kIndexerHeadDim * sizeof(float)));
-            CHECK_CUDA(cudaMalloc(&r.d_indexer_scores,
-                                  (size_t)opt.slots * sizeof(float)));
-            CHECK_CUDA(cudaMalloc(&r.d_indexer_topk,
-                                  (size_t)opt.slots * kIndexerTopK * sizeof(uint32_t)));
-            CHECK_CUDA(cudaMemsetAsync(r.d_index_comp_state_kv, 0,
-                                       (size_t)opt.slots * kIndexCompStateRows *
-                                           (size_t)kIndexCompWidth * sizeof(float),
-                                       r.stream));
-            CHECK_CUDA(cudaMemsetAsync(r.d_index_comp_state_score, 0,
-                                       (size_t)opt.slots * kIndexCompStateRows *
-                                           (size_t)kIndexCompWidth * sizeof(float),
-                                       r.stream));
-            CHECK_CUDA(cudaMemsetAsync(r.d_index_comp_rows, 0,
-                                       (size_t)opt.slots * kBoundedCompRows *
-                                           (size_t)kIndexerHeadDim * sizeof(float),
-                                       r.stream));
+        if (opt.true_ds4_indexer_attention_gate && ratio == 4) {
+            if (!r.d_index_comp_kv_cur) {
+                CHECK_CUDA(cudaMalloc(&r.d_index_comp_kv_cur,
+                                      (size_t)opt.slots * kIndexCompWidth * sizeof(float)));
+                CHECK_CUDA(cudaMalloc(&r.d_index_comp_score_cur,
+                                      (size_t)opt.slots * kIndexCompWidth * sizeof(float)));
+                CHECK_CUDA(cudaMalloc(&r.d_indexer_scores,
+                                      (size_t)opt.slots * sizeof(float)));
+                CHECK_CUDA(cudaMalloc(&r.d_indexer_topk,
+                                      (size_t)opt.slots * kIndexerTopK * sizeof(uint32_t)));
+            }
+            if (!r.d_index_comp_state_kv_layers[layer]) {
+                CHECK_CUDA(cudaMalloc(&r.d_index_comp_state_kv_layers[layer],
+                                      (size_t)opt.slots * kIndexCompStateRows *
+                                          (size_t)kIndexCompWidth * sizeof(float)));
+                CHECK_CUDA(cudaMalloc(&r.d_index_comp_state_score_layers[layer],
+                                      (size_t)opt.slots * kIndexCompStateRows *
+                                          (size_t)kIndexCompWidth * sizeof(float)));
+                CHECK_CUDA(cudaMalloc(&r.d_index_comp_rows_layers[layer],
+                                      (size_t)opt.slots * kBoundedCompRows *
+                                          (size_t)kIndexerHeadDim * sizeof(float)));
+                CHECK_CUDA(cudaMemsetAsync(r.d_index_comp_state_kv_layers[layer], 0,
+                                           (size_t)opt.slots * kIndexCompStateRows *
+                                               (size_t)kIndexCompWidth * sizeof(float),
+                                           r.stream));
+                CHECK_CUDA(cudaMemsetAsync(r.d_index_comp_state_score_layers[layer], 0,
+                                           (size_t)opt.slots * kIndexCompStateRows *
+                                               (size_t)kIndexCompWidth * sizeof(float),
+                                           r.stream));
+                CHECK_CUDA(cudaMemsetAsync(r.d_index_comp_rows_layers[layer], 0,
+                                           (size_t)opt.slots * kBoundedCompRows *
+                                               (size_t)kIndexerHeadDim * sizeof(float),
+                                           r.stream));
+            }
+            r.d_index_comp_state_kv = r.d_index_comp_state_kv_layers[layer];
+            r.d_index_comp_state_score = r.d_index_comp_state_score_layers[layer];
+            r.d_index_comp_rows = r.d_index_comp_rows_layers[layer];
         }
         for (int src = 0; src < kGpus; ++src) {
             if (!r.d_ep_remote[src]) CHECK_CUDA(cudaMalloc(&r.d_ep_remote[src],
@@ -7326,6 +7447,193 @@ int run_true_ds4_attention_projection_prefix(const Options &opt,
     return 0;
 }
 
+int run_true_ds4_compressed_reference_diff_gate(const Options &opt,
+                                                SharedHcControls *hc,
+                                                RankState ranks[kGpus],
+                                                int layer,
+                                                int ratio,
+                                                int comp_width,
+                                                uint32_t emitted) {
+    if (!opt.true_ds4_compressed_reference_diff_gate) return 0;
+    if (!hc || !hc->initialized || layer < 0 || layer >= 43) return 1;
+    if (ratio != 4 || !emitted) {
+        std::printf("tp_ep_compressed_reference_diff\tlayer\t%d\tratio\t%d\t"
+                    "emitted\t%u\tSKIP\n",
+                    layer, ratio, emitted);
+        return 0;
+    }
+    RankState &r0 = ranks[0];
+    CHECK_CUDA(cudaSetDevice(r0.device));
+    if (!hc->d_attn_comp_kv_full || !hc->d_attn_comp_score_full ||
+        !hc->d_attn_compress_ape[layer] || !hc->d_attn_compress_norm[layer] ||
+        !r0.d_attn_comp_kv_cur || !r0.d_attn_comp_score_cur ||
+        !r0.d_attn_comp_rows || !r0.d_index_comp_rows ||
+        !r0.d_indexer_scores || !r0.d_indexer_topk ||
+        !hc->d_index_comp_kv_full || !hc->d_index_comp_score_full ||
+        !hc->d_indexer_compress_ape[layer] ||
+        !hc->d_indexer_compress_norm[layer] ||
+        !hc->d_indexer_q_full || !hc->d_indexer_w_full) {
+        return 2;
+    }
+
+    const int block = 256;
+    const uint32_t state_rows = (uint32_t)(2 * ratio);
+    const uint32_t comp_row = 0u;
+    const float comp_freq_scale = 1.0f / kRopeScaleFactor;
+    const float comp_ext_factor = 1.0f;
+    float comp_attn_factor = 1.0f;
+    comp_attn_factor /= 1.0f + 0.1f * logf(1.0f / comp_freq_scale);
+    const size_t attn_state_elems =
+        (size_t)opt.slots * state_rows * (size_t)comp_width;
+    const size_t attn_row_elems = (size_t)opt.slots * kHeadDim;
+    const size_t index_state_elems =
+        (size_t)opt.slots * kIndexCompStateRows * (size_t)kIndexCompWidth;
+    const size_t index_row_elems = (size_t)opt.slots * kIndexerHeadDim;
+
+    float *d_attn_state_kv = nullptr;
+    float *d_attn_state_score = nullptr;
+    float *d_attn_row_ref = nullptr;
+    float *d_attn_row_tp = nullptr;
+    float *d_index_state_kv = nullptr;
+    float *d_index_state_score = nullptr;
+    float *d_index_row_ref = nullptr;
+    float *d_index_row_tp = nullptr;
+    float *d_index_score_ref = nullptr;
+    uint32_t *d_index_topk_ref = nullptr;
+
+    CHECK_CUDA(cudaMalloc(&d_attn_state_kv, attn_state_elems * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_attn_state_score, attn_state_elems * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_attn_row_ref, attn_row_elems * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_attn_row_tp, attn_row_elems * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_index_state_kv, index_state_elems * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_index_state_score, index_state_elems * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_index_row_ref, index_row_elems * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_index_row_tp, index_row_elems * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_index_score_ref, (size_t)opt.slots * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_index_topk_ref,
+                          (size_t)opt.slots * kIndexerTopK * sizeof(uint32_t)));
+    CHECK_CUDA(cudaMemset(d_attn_state_kv, 0, attn_state_elems * sizeof(float)));
+    CHECK_CUDA(cudaMemset(d_attn_state_score, 0, attn_state_elems * sizeof(float)));
+    CHECK_CUDA(cudaMemset(d_index_state_kv, 0, index_state_elems * sizeof(float)));
+    CHECK_CUDA(cudaMemset(d_index_state_score, 0, index_state_elems * sizeof(float)));
+
+    log_tensor_f32_diff_summary("attn_comp_kv_current_peer_copy", layer,
+                                r0.d_attn_comp_kv_cur,
+                                hc->d_attn_comp_kv_full,
+                                (size_t)opt.slots * (size_t)comp_width,
+                                r0.stream);
+    log_tensor_f32_diff_summary("attn_comp_score_current_peer_copy", layer,
+                                r0.d_attn_comp_score_cur,
+                                hc->d_attn_comp_score_full,
+                                (size_t)opt.slots * (size_t)comp_width,
+                                r0.stream);
+
+    compressor_store_slots_kernel<<<
+        (unsigned int)(((uint64_t)opt.slots * (uint64_t)comp_width + block - 1) /
+                       block),
+        block>>>(hc->d_attn_comp_kv_full, hc->d_attn_comp_score_full,
+                 d_attn_state_kv, d_attn_state_score,
+                 hc->d_attn_compress_ape[layer], (uint32_t)opt.slots,
+                 (uint32_t)kHeadDim, (uint32_t)ratio, (uint32_t)opt.position,
+                 state_rows, (uint32_t)comp_width);
+    compressor_pool_emit_slots_kernel<<<
+        dim3((unsigned int)((kHeadDim + block - 1) / block),
+             (unsigned int)opt.slots, 1u),
+        block>>>(d_attn_row_ref, d_attn_state_kv, d_attn_state_score,
+                 (uint32_t)opt.slots, (uint32_t)kHeadDim, (uint32_t)ratio,
+                 comp_row, 1u, state_rows, (uint32_t)comp_width);
+    compressor_norm_emit_slots_kernel<<<(unsigned int)opt.slots, 256>>>(
+        d_attn_row_ref, hc->d_attn_compress_norm[layer], (uint32_t)opt.slots,
+        (uint32_t)kHeadDim, comp_row, 1u, 1.0e-6f);
+    if (opt.true_ds4_attention_rope_gate) {
+        rope_tail_comp_emit_slots_kernel<<<(unsigned int)opt.slots, 64>>>(
+            d_attn_row_ref, (uint32_t)opt.slots, (uint32_t)kHeadDim,
+            (uint32_t)kRotaryDim, comp_row, 1u,
+            (uint32_t)(opt.position + 1ull - (uint64_t)ratio),
+            kRopeOrigCtx, kCompressRopeFreqBase, comp_freq_scale,
+            comp_ext_factor, comp_attn_factor, kRopeYarnBetaFast,
+            kRopeYarnBetaSlow);
+    }
+    round_comp_emit_slots_kernel<<<
+        (unsigned int)(((uint64_t)opt.slots * kHeadDim + block - 1) / block),
+        block>>>(d_attn_row_ref, (uint32_t)opt.slots, (uint32_t)kHeadDim,
+                 comp_row, 1u);
+    pack_comp_row_kernel<<<
+        (unsigned int)(((uint64_t)opt.slots * kHeadDim + block - 1) / block),
+        block>>>(d_attn_row_tp, r0.d_attn_comp_rows, (uint32_t)opt.slots,
+                 (uint32_t)kHeadDim, comp_row, (uint32_t)kBoundedCompRows);
+    CHECK_CUDA(cudaGetLastError());
+    CHECK_CUDA(cudaDeviceSynchronize());
+    log_tensor_f32_diff_summary("attn_comp_row0_compact_reference", layer,
+                                d_attn_row_tp, d_attn_row_ref, attn_row_elems,
+                                nullptr);
+
+    compressor_store_slots_kernel<<<
+        (unsigned int)(((uint64_t)opt.slots * kIndexCompWidth + block - 1) /
+                       block),
+        block>>>(hc->d_index_comp_kv_full, hc->d_index_comp_score_full,
+                 d_index_state_kv, d_index_state_score,
+                 hc->d_indexer_compress_ape[layer], (uint32_t)opt.slots,
+                 (uint32_t)kIndexerHeadDim, 4u, (uint32_t)opt.position,
+                 (uint32_t)kIndexCompStateRows, (uint32_t)kIndexCompWidth);
+    compressor_pool_emit_slots_kernel<<<
+        dim3((unsigned int)((kIndexerHeadDim + block - 1) / block),
+             (unsigned int)opt.slots, 1u),
+        block>>>(d_index_row_ref, d_index_state_kv, d_index_state_score,
+                 (uint32_t)opt.slots, (uint32_t)kIndexerHeadDim, 4u,
+                 comp_row, 1u, (uint32_t)kIndexCompStateRows,
+                 (uint32_t)kIndexCompWidth);
+    compressor_norm_emit_slots_kernel<<<(unsigned int)opt.slots, 256>>>(
+        d_index_row_ref, hc->d_indexer_compress_norm[layer],
+        (uint32_t)opt.slots, (uint32_t)kIndexerHeadDim, comp_row, 1u,
+        1.0e-6f);
+    if (opt.true_ds4_attention_rope_gate) {
+        rope_tail_comp_emit_slots_kernel<<<(unsigned int)opt.slots, 64>>>(
+            d_index_row_ref, (uint32_t)opt.slots,
+            (uint32_t)kIndexerHeadDim, (uint32_t)kRotaryDim, comp_row, 1u,
+            (uint32_t)(opt.position + 1ull - 4ull),
+            kRopeOrigCtx, kCompressRopeFreqBase, comp_freq_scale,
+            comp_ext_factor, comp_attn_factor, kRopeYarnBetaFast,
+            kRopeYarnBetaSlow);
+    }
+    round_comp_emit_slots_kernel<<<
+        (unsigned int)(((uint64_t)opt.slots * kIndexerHeadDim + block - 1) /
+                       block),
+        block>>>(d_index_row_ref, (uint32_t)opt.slots,
+                 (uint32_t)kIndexerHeadDim, comp_row, 1u);
+    pack_comp_row_kernel<<<
+        (unsigned int)(((uint64_t)opt.slots * kIndexerHeadDim + block - 1) /
+                       block),
+        block>>>(d_index_row_tp, r0.d_index_comp_rows, (uint32_t)opt.slots,
+                 (uint32_t)kIndexerHeadDim, comp_row,
+                 (uint32_t)kBoundedCompRows);
+    indexer_score_row0_slots_kernel<<<(unsigned int)opt.slots, 256>>>(
+        d_index_score_ref, d_index_topk_ref, hc->d_indexer_q_full,
+        hc->d_indexer_w_full, d_index_row_ref, (uint32_t)opt.slots,
+        comp_row, 1u, (uint32_t)kIndexerTopK,
+        1.0f / sqrtf((float)(kIndexerHead * kIndexerHeadDim)));
+    CHECK_CUDA(cudaGetLastError());
+    CHECK_CUDA(cudaDeviceSynchronize());
+    log_tensor_f32_diff_summary("index_comp_row0_compact_reference", layer,
+                                d_index_row_tp, d_index_row_ref,
+                                index_row_elems, nullptr);
+    log_tensor_f32_diff_summary("indexer_score_row0_compact_reference", layer,
+                                r0.d_indexer_scores, d_index_score_ref,
+                                (size_t)opt.slots, nullptr);
+
+    CHECK_CUDA(cudaFree(d_index_topk_ref));
+    CHECK_CUDA(cudaFree(d_index_score_ref));
+    CHECK_CUDA(cudaFree(d_index_row_tp));
+    CHECK_CUDA(cudaFree(d_index_row_ref));
+    CHECK_CUDA(cudaFree(d_index_state_score));
+    CHECK_CUDA(cudaFree(d_index_state_kv));
+    CHECK_CUDA(cudaFree(d_attn_row_tp));
+    CHECK_CUDA(cudaFree(d_attn_row_ref));
+    CHECK_CUDA(cudaFree(d_attn_state_score));
+    CHECK_CUDA(cudaFree(d_attn_state_kv));
+    return 0;
+}
+
 int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                                                SharedHcControls *hc,
                                                const LayerDenseOps *ops,
@@ -7795,6 +8103,10 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
         }
     }
+
+    const int diff_rc = run_true_ds4_compressed_reference_diff_gate(
+        opt, hc, ranks, layer, ratio, comp_width, emitted);
+    if (diff_rc != 0) return diff_rc;
 
     const auto stop = std::chrono::steady_clock::now();
     const double ms = std::chrono::duration<double, std::milli>(stop - start).count();
@@ -10029,12 +10341,44 @@ int run_layer(const Options &opt,
             if (r.d_final_hc_shard) CHECK_CUDA(cudaFree(r.d_final_hc_shard));
             if (r.d_hc_scratch_shard) CHECK_CUDA(cudaFree(r.d_hc_scratch_shard));
             if (r.d_hc_split) CHECK_CUDA(cudaFree(r.d_hc_split));
-            if (r.d_attn_raw_swa) CHECK_CUDA(cudaFree(r.d_attn_raw_swa));
+            for (int layer = 0; layer < 43; ++layer) {
+                if (r.d_attn_raw_swa_layers[layer]) {
+                    CHECK_CUDA(cudaFree(r.d_attn_raw_swa_layers[layer]));
+                }
+            }
             if (r.d_attn_kv_full) CHECK_CUDA(cudaFree(r.d_attn_kv_full));
             if (r.d_attn_heads) CHECK_CUDA(cudaFree(r.d_attn_heads));
             if (r.d_attn_output_a_full) CHECK_CUDA(cudaFree(r.d_attn_output_a_full));
             if (r.d_post_attn_shard) CHECK_CUDA(cudaFree(r.d_post_attn_shard));
             if (r.d_attn_sinks) CHECK_CUDA(cudaFree(r.d_attn_sinks));
+            if (r.d_indexer_topk) CHECK_CUDA(cudaFree(r.d_indexer_topk));
+            if (r.d_indexer_scores) CHECK_CUDA(cudaFree(r.d_indexer_scores));
+            for (int layer = 0; layer < 43; ++layer) {
+                if (r.d_index_comp_rows_layers[layer]) {
+                    CHECK_CUDA(cudaFree(r.d_index_comp_rows_layers[layer]));
+                }
+                if (r.d_index_comp_state_score_layers[layer]) {
+                    CHECK_CUDA(cudaFree(r.d_index_comp_state_score_layers[layer]));
+                }
+                if (r.d_index_comp_state_kv_layers[layer]) {
+                    CHECK_CUDA(cudaFree(r.d_index_comp_state_kv_layers[layer]));
+                }
+            }
+            if (r.d_index_comp_score_cur) CHECK_CUDA(cudaFree(r.d_index_comp_score_cur));
+            if (r.d_index_comp_kv_cur) CHECK_CUDA(cudaFree(r.d_index_comp_kv_cur));
+            for (int layer = 0; layer < 43; ++layer) {
+                if (r.d_attn_comp_rows_layers[layer]) {
+                    CHECK_CUDA(cudaFree(r.d_attn_comp_rows_layers[layer]));
+                }
+                if (r.d_attn_comp_state_score_layers[layer]) {
+                    CHECK_CUDA(cudaFree(r.d_attn_comp_state_score_layers[layer]));
+                }
+                if (r.d_attn_comp_state_kv_layers[layer]) {
+                    CHECK_CUDA(cudaFree(r.d_attn_comp_state_kv_layers[layer]));
+                }
+            }
+            if (r.d_attn_comp_score_cur) CHECK_CUDA(cudaFree(r.d_attn_comp_score_cur));
+            if (r.d_attn_comp_kv_cur) CHECK_CUDA(cudaFree(r.d_attn_comp_kv_cur));
             CHECK_CUDA(cudaEventDestroy(r.start));
             CHECK_CUDA(cudaEventDestroy(r.mid));
             CHECK_CUDA(cudaEventDestroy(r.stop));
