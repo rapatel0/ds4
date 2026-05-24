@@ -167,6 +167,8 @@ def run_case(args, name, port, typed):
             "typed_history_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_history", server_text)),
             "history_loaded_attn_rows_2": len(re.findall(r"loaded_attn_rows\t2", server_text)),
             "history_loaded_indexer_rows_2": len(re.findall(r"loaded_indexer_rows\t2", server_text)),
+            "history_reloaded_attn_rows_nonzero": len(re.findall(r"reloaded_attn_rows\t[1-9]", server_text)),
+            "history_reloaded_indexer_rows_nonzero": len(re.findall(r"reloaded_indexer_rows\t[1-9]", server_text)),
         }
         (case_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
         print(json.dumps(summary, sort_keys=True), flush=True)
@@ -234,6 +236,8 @@ def main():
         "typed_history_lines",
         "history_loaded_attn_rows_2",
         "history_loaded_indexer_rows_2",
+        "history_reloaded_attn_rows_nonzero",
+        "history_reloaded_indexer_rows_nonzero",
     ]
     with open(args.artifact_dir / "summary.tsv", "w") as out:
         out.write("\t".join(keys) + "\n")

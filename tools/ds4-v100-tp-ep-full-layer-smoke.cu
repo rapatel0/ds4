@@ -213,6 +213,8 @@ struct RankState {
     float *d_attn_comp_rows_layers[43] = {};
     uint32_t attn_comp_rows_written_layers[43] = {};
     uint64_t attn_comp_row_position_layers[43][kBoundedCompRows] = {};
+    uint64_t attn_comp_row_loaded_position_layers[43][kBoundedCompRows] = {};
+    bool attn_comp_row_loaded_layers[43][kBoundedCompRows] = {};
     float *d_index_comp_kv_cur = nullptr;
     float *d_index_comp_score_cur = nullptr;
     float *d_index_comp_state_kv = nullptr;
@@ -223,6 +225,8 @@ struct RankState {
     float *d_index_comp_rows_layers[43] = {};
     uint32_t index_comp_rows_written_layers[43] = {};
     uint64_t index_comp_row_position_layers[43][kBoundedCompRows] = {};
+    uint64_t index_comp_row_loaded_position_layers[43][kBoundedCompRows] = {};
+    bool index_comp_row_loaded_layers[43][kBoundedCompRows] = {};
     float *d_indexer_scores = nullptr;
     uint32_t *d_indexer_topk = nullptr;
     bool hc_initialized = false;
@@ -7933,6 +7937,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 (uint32_t)kBoundedCompRows;
             if (rank == 0) emitted_comp_row = comp_row;
             r.attn_comp_row_position_layers[layer][comp_row] = opt.position;
+            r.attn_comp_row_loaded_layers[layer][comp_row] = false;
             compressor_pool_emit_slots_kernel<<<
                 dim3((unsigned int)((kHeadDim + block - 1) / block),
                      (unsigned int)opt.slots, 1u),
@@ -8040,6 +8045,11 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
         for (int rank = 0; rank < kGpus; ++rank) {
             CHECK_CUDA(cudaSetDevice(ranks[rank].device));
             CHECK_CUDA(cudaDeviceSynchronize());
+        }
+        for (int rank = 0; rank < kGpus; ++rank) {
+            ranks[rank].attn_comp_row_loaded_layers[layer][emitted_comp_row] = true;
+            ranks[rank].attn_comp_row_loaded_position_layers[layer][emitted_comp_row] =
+                opt.position;
         }
         std::printf("tp_ep_true_attention_typed_kv_compressed\tlayer\t%d\t"
                     "slots\t%d\tratio\t%d\tposition\t%llu\t"
@@ -8241,6 +8251,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                     r.index_comp_rows_written_layers[layer] %
                     (uint32_t)kBoundedCompRows;
                 r.index_comp_row_position_layers[layer][comp_row] = opt.position;
+                r.index_comp_row_loaded_layers[layer][comp_row] = false;
                 const uint32_t visible_after =
                     std::min(r.index_comp_rows_written_layers[layer] + 1u,
                              (uint32_t)kBoundedCompRows);
@@ -8371,6 +8382,11 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             for (int rank = 0; rank < kGpus; ++rank) {
                 CHECK_CUDA(cudaSetDevice(ranks[rank].device));
                 CHECK_CUDA(cudaDeviceSynchronize());
+            }
+            for (int rank = 0; rank < kGpus; ++rank) {
+                ranks[rank].index_comp_row_loaded_layers[layer][bounded_row] = true;
+                ranks[rank].index_comp_row_loaded_position_layers[layer][bounded_row] =
+                    opt.position;
             }
             CHECK_CUDA(cudaSetDevice(ranks[0].device));
             indexer_score_bounded_rows_slots_kernel<<<
@@ -8730,8 +8746,14 @@ int run_true_ds4_attention_typed_kv_history_load(const Options &opt,
                  (uint32_t)kBoundedCompRows);
     char err[512] = {0};
     int loaded_attn = 0;
+    int reloaded_attn = 0;
     for (uint32_t row = 0; row < visible_attn; ++row) {
         const uint64_t pos = ranks[0].attn_comp_row_position_layers[layer][row];
+        if (ranks[0].attn_comp_row_loaded_layers[layer][row] &&
+            ranks[0].attn_comp_row_loaded_position_layers[layer][row] == pos) {
+            loaded_attn++;
+            continue;
+        }
         for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
             void *dst[kGpus] = {};
             const size_t row_offset =
@@ -8751,6 +8773,11 @@ int run_true_ds4_attention_typed_kv_history_load(const Options &opt,
             }
         }
         loaded_attn++;
+        reloaded_attn++;
+        for (int rank = 0; rank < kGpus; ++rank) {
+            ranks[rank].attn_comp_row_loaded_layers[layer][row] = true;
+            ranks[rank].attn_comp_row_loaded_position_layers[layer][row] = pos;
+        }
     }
     for (int rank = 0; rank < kGpus; ++rank) {
         CHECK_CUDA(cudaSetDevice(ranks[rank].device));
@@ -8758,6 +8785,7 @@ int run_true_ds4_attention_typed_kv_history_load(const Options &opt,
     }
 
     int loaded_indexer = 0;
+    int reloaded_indexer = 0;
     if (opt.true_ds4_indexer_attention_gate && ratio == 4 && visible_attn > 0) {
         if (!hc || !hc->initialized || !hc->d_indexer_q_full ||
             !hc->d_indexer_w_full || !ranks[0].d_indexer_scores ||
@@ -8769,6 +8797,11 @@ int run_true_ds4_attention_typed_kv_history_load(const Options &opt,
                      (uint32_t)kBoundedCompRows);
         for (uint32_t row = 0; row < visible_index; ++row) {
             const uint64_t pos = ranks[0].index_comp_row_position_layers[layer][row];
+            if (ranks[0].index_comp_row_loaded_layers[layer][row] &&
+                ranks[0].index_comp_row_loaded_position_layers[layer][row] == pos) {
+                loaded_indexer++;
+                continue;
+            }
             for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
                 void *dst[kGpus] = {};
                 const size_t row_offset =
@@ -8788,6 +8821,11 @@ int run_true_ds4_attention_typed_kv_history_load(const Options &opt,
                 }
             }
             loaded_indexer++;
+            reloaded_indexer++;
+            for (int rank = 0; rank < kGpus; ++rank) {
+                ranks[rank].index_comp_row_loaded_layers[layer][row] = true;
+                ranks[rank].index_comp_row_loaded_position_layers[layer][row] = pos;
+            }
         }
         for (int rank = 0; rank < kGpus; ++rank) {
             CHECK_CUDA(cudaSetDevice(ranks[rank].device));
@@ -8831,9 +8869,10 @@ int run_true_ds4_attention_typed_kv_history_load(const Options &opt,
 
     std::printf("tp_ep_true_attention_typed_kv_history\tlayer\t%d\tslots\t%d\t"
                 "ratio\t%d\tvisible_attn_rows\t%u\tloaded_attn_rows\t%d\t"
-                "loaded_indexer_rows\t%d\tPASS\n",
+                "loaded_indexer_rows\t%d\treloaded_attn_rows\t%d\t"
+                "reloaded_indexer_rows\t%d\tPASS\n",
                 layer, opt.slots, ratio, visible_attn, loaded_attn,
-                loaded_indexer);
+                loaded_indexer, reloaded_attn, reloaded_indexer);
     return 0;
 }
 

@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 343
+revision: 344
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -180,6 +180,17 @@ not a serial layer-chain.
   decode tok/s. Typed KV is therefore operational as the correctness-facing
   path, but remains opt-in until the staging overhead is reduced through direct
   typed-row attention reads or a narrower reload cache.
+- Sprint 339 added that narrower reload cache for bounded compressed/indexer
+  history rows. The cache worked: in the same `32` concurrent / `32` slot /
+  `256K` / `8` token HTTP A/B, all `899` typed-history lines reported
+  `reloaded_attn_rows=0` and `reloaded_indexer_rows=0` while preserving visible
+  loaded-row evidence. Typed-history server wall throughput improved from
+  Sprint 338's `56.495098` tok/s to `68.358523` tok/s, but remained far below
+  the same-run no-typed-KV control at `311.293794` tok/s. The remaining
+  bottleneck is therefore likely the same-step typed KV roundtrip for current
+  raw/compressed/indexer rows. The next step is to store production typed rows
+  while reusing the already-computed f32 staging row for immediate attention,
+  instead of loading the same row back from typed KV in the hot layer step.
 - The system is not production-ready yet because the bridge HC sequence has
   not been proven equivalent to the DeepSeek V4 reference layer semantics, and
   production serving still needs readiness/overload/cancellation/streaming

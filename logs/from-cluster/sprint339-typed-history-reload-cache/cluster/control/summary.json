@@ -1,0 +1,23 @@
+{
+  "cache_hits": 0,
+  "cache_misses": 32,
+  "case": "control",
+  "client_generated_tok_s": 101.07997291836273,
+  "coalesced_batch_size": 32,
+  "elapsed_s": 2.5326480865478516,
+  "generated_tokens_meta": 256,
+  "history_loaded_attn_rows_2": 0,
+  "history_loaded_indexer_rows_2": 0,
+  "http_200": 32,
+  "requests": 32,
+  "server_continuation_tok_s": 311.676963,
+  "server_continuation_tok_s_decode": 736.050541,
+  "server_generated_tok_s": 311.293794,
+  "server_generated_tok_s_decode": 735.203733,
+  "typed_compressed_lines": 0,
+  "typed_gate_meta": 0,
+  "typed_history": false,
+  "typed_history_lines": 0,
+  "typed_indexer_lines": 0,
+  "typed_raw_lines": 0
+}
