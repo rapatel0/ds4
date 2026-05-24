@@ -41,7 +41,7 @@ constexpr int kMid = 2048;
 constexpr int kFusedN = 2 * kMid;
 constexpr int kGlobalExperts = 256;
 constexpr int kLocalExperts = kGlobalExperts / kGpus;
-constexpr int kActiveLocalExperts = 6;
+constexpr int kPackedLocalExperts = kLocalExperts;
 constexpr int kGroupSize = 32;
 constexpr int kDType = GGML_TM_DTYPE_MXFP4;
 constexpr int kHcRows = 4;
@@ -140,6 +140,7 @@ struct RankState {
     int rank = 0;
     int device = 0;
     int routes = 0;
+    int route_capacity = 0;
     int active_experts = 0;
     int max_routes_per_expert = 0;
     cudaStream_t stream = nullptr;
@@ -1539,7 +1540,7 @@ bool parse_args(int argc, char **argv, Options *opt) {
         }
     }
     return opt->pack_dir && opt->contract_path && opt->tm_index_path &&
-           opt->top_k <= kActiveLocalExperts && opt->layer >= 0 &&
+           opt->top_k <= kPackedLocalExperts && opt->layer >= 0 &&
            !(opt->dense_hmma_compose && opt->dense_f16_cublas_compose) &&
            (!opt->dense_f16_cache_compose || opt->dense_f16_cublas_compose) &&
            !(opt->dense_compute_tensor &&
@@ -4241,7 +4242,7 @@ void close_shared_expert_bindings(SharedExpertBindings *shared);
 
 int open_shared_expert_bindings(const Options &opt, SharedExpertBindings *shared) {
     std::vector<int> active;
-    for (int e = 0; e < kActiveLocalExperts; ++e) active.push_back(e);
+    for (int e = 0; e < kPackedLocalExperts; ++e) active.push_back(e);
 
     for (int layer = 0; layer < 43; ++layer) {
         LayerExpertCache &cache = shared->layers[layer];
@@ -4336,7 +4337,7 @@ void build_offsets_for_rank(int rank, int slots, int top_k,
         for (int k = 0; k < top_k; ++k) {
             const int dst_rank = (slot * top_k + k) % kGpus;
             if (dst_rank != rank) continue;
-            const int local = (slot + k * 7 + rank) % kActiveLocalExperts;
+            const int local = (slot + k * 7 + rank) % kPackedLocalExperts;
             counts[(size_t)local]++;
         }
     }
@@ -4358,7 +4359,7 @@ void build_offsets_for_rank(int rank, int slots, int top_k,
             for (int k = 0; k < top_k; ++k) {
                 const int dst_rank = (slot * top_k + k) % kGpus;
                 if (dst_rank != rank) continue;
-                const int local = (slot + k * 7 + rank) % kActiveLocalExperts;
+                const int local = (slot + k * 7 + rank) % kPackedLocalExperts;
                 const int idx = cursor[(size_t)local]++;
                 (*route_slots)[(size_t)idx] = slot;
             }
@@ -4422,29 +4423,33 @@ int open_shared_rank_buffers(const Options &opt, SharedRankBuffers *shared) {
         build_offsets_for_rank(p, opt.slots, opt.top_k, &offsets, &route_slots, &r.routes,
                                &r.active_experts, &r.max_routes_per_expert);
 
-        const size_t a_elems = (size_t)r.routes * kHidden;
+        r.route_capacity = opt.slots * opt.top_k;
+        const size_t route_capacity_elems = (size_t)r.route_capacity * kHidden;
         CHECK_CUDA(cudaMalloc(&r.d_offsets, offsets.size() * sizeof(int)));
         CHECK_CUDA(cudaMemcpy(r.d_offsets, offsets.data(), offsets.size() * sizeof(int),
                               cudaMemcpyHostToDevice));
-        CHECK_CUDA(cudaMalloc(&r.d_route_slots, route_slots.size() * sizeof(int)));
+        CHECK_CUDA(cudaMalloc(&r.d_route_slots,
+                              (size_t)r.route_capacity * sizeof(int)));
         CHECK_CUDA(cudaMemcpy(r.d_route_slots, route_slots.data(),
                               route_slots.size() * sizeof(int), cudaMemcpyHostToDevice));
-        CHECK_CUDA(cudaMalloc(&r.d_a, a_elems * sizeof(__half)));
-        CHECK_CUDA(cudaMalloc(&r.d_gated, (size_t)r.routes * kMid * sizeof(__half)));
-        CHECK_CUDA(cudaMalloc(&r.d_down, a_elems * sizeof(__half)));
+        CHECK_CUDA(cudaMalloc(&r.d_a, route_capacity_elems * sizeof(__half)));
+        CHECK_CUDA(cudaMalloc(&r.d_gated,
+                              (size_t)r.route_capacity * kMid * sizeof(__half)));
+        CHECK_CUDA(cudaMalloc(&r.d_down, route_capacity_elems * sizeof(__half)));
 
         std::mt19937 rng(0xE2350000u + (uint32_t)p * 97u);
         std::uniform_real_distribution<float> dist(-0.003f, 0.003f);
-        std::vector<__half> h_a(a_elems);
+        std::vector<__half> h_a(route_capacity_elems);
         for (__half &v : h_a) v = __float2half(dist(rng));
-        CHECK_CUDA(cudaMemcpy(r.d_a, h_a.data(), a_elems * sizeof(__half),
+        CHECK_CUDA(cudaMemcpy(r.d_a, h_a.data(),
+                              route_capacity_elems * sizeof(__half),
                               cudaMemcpyHostToDevice));
 
         shared->core_bytes += offsets.size() * sizeof(int);
-        shared->core_bytes += route_slots.size() * sizeof(int);
-        shared->core_bytes += a_elems * sizeof(__half);
-        shared->core_bytes += (size_t)r.routes * kMid * sizeof(__half);
-        shared->core_bytes += a_elems * sizeof(__half);
+        shared->core_bytes += (size_t)r.route_capacity * sizeof(int);
+        shared->core_bytes += route_capacity_elems * sizeof(__half);
+        shared->core_bytes += (size_t)r.route_capacity * kMid * sizeof(__half);
+        shared->core_bytes += route_capacity_elems * sizeof(__half);
     }
     shared->initialized = true;
     return 0;
@@ -5627,22 +5632,26 @@ int run_layer(const Options &opt,
             build_offsets_for_rank(p, opt.slots, opt.top_k, &offsets, &route_slots, &r.routes,
                                    &r.active_experts, &r.max_routes_per_expert);
 
-            const size_t a_elems = (size_t)r.routes * kHidden;
+            r.route_capacity = opt.slots * opt.top_k;
+            const size_t route_capacity_elems = (size_t)r.route_capacity * kHidden;
             CHECK_CUDA(cudaMalloc(&r.d_offsets, offsets.size() * sizeof(int)));
             CHECK_CUDA(cudaMemcpy(r.d_offsets, offsets.data(), offsets.size() * sizeof(int),
                                   cudaMemcpyHostToDevice));
-            CHECK_CUDA(cudaMalloc(&r.d_route_slots, route_slots.size() * sizeof(int)));
+            CHECK_CUDA(cudaMalloc(&r.d_route_slots,
+                                  (size_t)r.route_capacity * sizeof(int)));
             CHECK_CUDA(cudaMemcpy(r.d_route_slots, route_slots.data(),
                                   route_slots.size() * sizeof(int), cudaMemcpyHostToDevice));
-            CHECK_CUDA(cudaMalloc(&r.d_a, a_elems * sizeof(__half)));
-            CHECK_CUDA(cudaMalloc(&r.d_gated, (size_t)r.routes * kMid * sizeof(__half)));
-            CHECK_CUDA(cudaMalloc(&r.d_down, a_elems * sizeof(__half)));
+            CHECK_CUDA(cudaMalloc(&r.d_a, route_capacity_elems * sizeof(__half)));
+            CHECK_CUDA(cudaMalloc(&r.d_gated,
+                                  (size_t)r.route_capacity * kMid * sizeof(__half)));
+            CHECK_CUDA(cudaMalloc(&r.d_down, route_capacity_elems * sizeof(__half)));
 
             std::mt19937 rng(0xE2350000u + (uint32_t)p * 97u);
             std::uniform_real_distribution<float> dist(-0.003f, 0.003f);
-            std::vector<__half> h_a(a_elems);
+            std::vector<__half> h_a(route_capacity_elems);
             for (__half &v : h_a) v = __float2half(dist(rng));
-            CHECK_CUDA(cudaMemcpy(r.d_a, h_a.data(), a_elems * sizeof(__half),
+            CHECK_CUDA(cudaMemcpy(r.d_a, h_a.data(),
+                                  route_capacity_elems * sizeof(__half),
                                   cudaMemcpyHostToDevice));
         }
         aggregate_routes += r.routes;
@@ -5657,7 +5666,7 @@ int run_layer(const Options &opt,
                 : 0;
         } else {
             std::vector<int> active;
-            for (int e = 0; e < kActiveLocalExperts; ++e) active.push_back(e);
+            for (int e = 0; e < kPackedLocalExperts; ++e) active.push_back(e);
             if (pack_descriptor_set(r.device, bindings.gated, p, active, opt.pack_dir,
                                     &r.gated, &ep_loaded_bytes) != 0 ||
                 pack_descriptor_set(r.device, bindings.down, p, active, opt.pack_dir,
@@ -5723,12 +5732,14 @@ int run_layer(const Options &opt,
         worst_gate_ms = std::max(worst_gate_ms, gate_ms);
         worst_down_ms = std::max(worst_down_ms, down_ms);
         worst_ep_ms = std::max(worst_ep_ms, gate_ms + down_ms);
-        std::printf("rank\t%d\tdevice\t%d\troutes\t%d\tactive_local_experts\t%d\t"
+        std::printf("rank\t%d\tdevice\t%d\troutes\t%d\troute_capacity\t%d\t"
+                    "active_local_experts\t%d\t"
                     "max_routes_per_expert\t%d\tgate_ms\t%.6f\tdown_ms\t%.6f\t"
                     "ep_ms\t%.6f\tdense_rows\t%llu\tcontrol_rows\t%llu\t"
                     "expert_rows\t%llu\tkv_rows\t%llu\tcomp_rows\t%llu\t"
                     "checksum\t%llu\n",
-                    p, ranks[p].device, ranks[p].routes, ranks[p].active_experts,
+                    p, ranks[p].device, ranks[p].routes, ranks[p].route_capacity,
+                    ranks[p].active_experts,
                     ranks[p].max_routes_per_expert, gate_ms, down_ms, gate_ms + down_ms,
                     (unsigned long long)layer_stats.gpu[p].dense_rows,
                     (unsigned long long)layer_stats.gpu[p].control_rows,

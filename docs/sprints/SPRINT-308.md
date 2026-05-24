@@ -1,0 +1,114 @@
+---
+sprint: 308
+title: TP/EP HC Semantic Parity
+status: in_progress
+started: 2026-05-24
+branch: claude-takeover
+---
+
+# Sprint 308 - TP/EP HC Semantic Parity
+
+## Goal
+
+Close the parity gap exposed by Sprint 307 before treating the TP/EP HTTP path
+as production-serving code.
+
+## Initial Finding
+
+The Sprint 307 reference harness failed `short_reasoning_plain`: the official
+selected-token bytes are `3136` (`16`), while the TP/EP HTTP path returned
+`494343` (`ICC`).
+
+The first audit shows this is not an OpenAI API envelope or tokenizer issue.
+The current TP/EP resident layer path still contains diagnostic semantics:
+
+- EP routing is synthetic: `build_offsets_for_rank()` assigns routes from slot
+  and rank arithmetic instead of the model router.
+- Resident expert tables packed only six local experts per GPU, which is
+  incompatible with true router-driven EP over `256` global experts.
+- The attention body is still a bridge around simplified dense paths rather
+  than the full DS4 Q/KV/RoPE/compressed-attention/indexer sequence.
+
+## Work Started
+
+- Removed the six-local-expert diagnostic cap in
+  `tools/ds4-v100-tp-ep-full-layer-smoke.cu`.
+- TP/EP now attempts to resident-pack all `32` local experts per GPU.
+- Route buffers now allocate for worst-case `slots * top_k` routes per rank
+  instead of the synthetic route count. This is required before data-driven
+  routing, because a real router can send more routes to one GPU than the
+  balanced synthetic schedule.
+
+## Validation Plan
+
+1. Build the updated TP/EP binary on the V100 pod. Complete.
+2. Start the TP/EP server with the same 32-slot / 256K launcher settings used
+   in Sprint 307. Complete.
+3. Confirm all-local-expert residency fits in 32GB V100 VRAM. Complete.
+4. Re-run the Sprint 307 reference harness and record whether the result
+   changes. Complete.
+5. Implement router-driven EP routing next. Correctness can start with a
+   host-rebuilt route table per step; device-side routing can follow after the
+   parity signal improves.
+
+## V100 Result
+
+The updated binary builds on `llamacpp-build-8gpu` and the all-local-expert
+resident load fits:
+
+- Expert bindings: `147169738752` bytes aggregate,
+  `18396217344` bytes per GPU.
+- TP runtime memory budget: `7122628608` bytes per GPU for KV/state/scratch.
+- Dense F16 cache: `14451998720` bytes aggregate.
+- Observed first-run loaded GPU memory was about `27.3 GiB` per V100, within
+  the 32GB cards.
+
+The parity result did not change after all-local-expert residency:
+
+```json
+{
+  "case": "short_reasoning_plain",
+  "expected_text": "16",
+  "actual_text": "ICC",
+  "generated_token_sequence": [95933],
+  "wall_tok_s": 193.461777,
+  "decode_tok_s": 306.956969
+}
+```
+
+This localizes the current production blocker: full expert residency is
+necessary but not sufficient. The next implementation step is true
+router-driven EP scheduling; after that, the remaining attention bridge can be
+isolated with layer-stage parity checks.
+
+The follow-up route-capacity build also passed on the V100 pod and preserved
+the same expected failure:
+
+```json
+{
+  "case": "short_reasoning_plain",
+  "expected_text": "16",
+  "actual_text": "ICC",
+  "generated_token_sequence": [95933],
+  "wall_tok_s": 192.892092,
+  "decode_tok_s": 307.145279
+}
+```
+
+## Artifacts
+
+- `logs/from-cluster/sprint308-all-local-experts-parity/cluster/server.out`
+- `logs/from-cluster/sprint308-all-local-experts-parity/cluster/server.err`
+- `logs/from-cluster/sprint308-all-local-experts-parity/cluster/startup.env`
+- `logs/from-cluster/sprint308-all-local-experts-parity/cluster/parity-summary.json`
+- `logs/from-cluster/sprint308-all-local-experts-parity/cluster/parity.stdout`
+- `logs/from-cluster/sprint308-all-local-experts-parity/cluster/parity.stderr`
+- `logs/from-cluster/sprint308-route-capacity-parity/cluster/server.out`
+- `logs/from-cluster/sprint308-route-capacity-parity/cluster/server.err`
+- `logs/from-cluster/sprint308-route-capacity-parity/cluster/parity-summary.json`
+
+## Production Gate
+
+This sprint is complete only when the TP/EP path either matches the fixed
+reference vector set or the remaining mismatch is localized to one concrete
+layer-stage boundary with logs good enough to implement the next fix.

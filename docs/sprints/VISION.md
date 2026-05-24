@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: vision
-revision: 308
+revision: 309
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -163,6 +163,17 @@ not a serial layer-chain.
   `short_reasoning_plain` vector and failed: expected selected text `16`
   (`3136` hex), while TP/EP returned `ICC` (`494343` hex), token ID `95933`.
   This confirms the system is askable but not yet trustworthy as DS4 output.
+- Sprint 308 started semantic-parity closure. The audit found that the current
+  TP/EP layer path still has diagnostic-only semantics: EP routing is synthetic
+  rather than model-router driven, resident expert tables packed only six
+  local experts per GPU, and the attention body is still bridged around
+  simplified dense paths rather than the full DS4 Q/KV/RoPE/compressed
+  attention sequence. The first code change removes the six-expert resident
+  cap so every GPU can pack all `32` local experts, a prerequisite for true
+  router-driven EP. The V100 run confirms full expert residency fits at about
+  `27.3 GiB` observed memory per GPU, with `147.17 GB` aggregate expert
+  bindings, but the parity vector is unchanged (`16` expected, `ICC`
+  returned), so the remaining blocker is true router/layer semantics.
 - Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
   longer exposes PP/layer-split topology modes. Against the real production
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about
@@ -480,7 +491,7 @@ against official selected-token vectors. The first V100 run for
 `short_reasoning_plain` expected `16` and received `ICC`, so semantic parity
 remains the active blocker.
 
-### Sprint 308 - TP/EP HC Semantic Parity [planned]
+### Sprint 308 - TP/EP HC Semantic Parity [in progress]
 
 Goal: Close the semantic gap exposed by Sprint 307 by replacing bridge HC
 shortcuts with reference-faithful DS4 attention/FFN ordering and output-head
@@ -489,6 +500,19 @@ inputs.
 Rationale: Persistent deployment would only make an incorrect model easier to
 call. The next production sprint must identify and fix the source of the
 selected-token mismatch before serving hardening or MTP.
+
+Current finding: the mismatch is not an API-envelope issue. The TP/EP path
+still uses synthetic EP routing and a simplified attention/FFN bridge. Work
+now proceeds in this order: pack all local experts, add a router-driven EP
+schedule, add FFN RMSNorm/router parity checks, then replace the attention
+placeholder with the full DS4 attention sequence.
+
+Progress: all-local-expert residency now builds and runs on the V100 pod. It
+fits within the 32GB cards and keeps the same parity failure, which narrows the
+next implementation target to router-driven EP and then exact attention.
+Route buffers now allocate for worst-case `slots * top_k` per rank so a real
+router can produce imbalanced per-GPU traffic without overrunning the old
+synthetic-route allocation.
 
 ### Sprint 309 - Persistent Appliance Deployment Gate [planned]
 
@@ -1869,6 +1893,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Hard cut to TP/EP-only implementation work. | Sprint 225 showed the frozen PP path is correct but bottlenecked by layer-scheduled pipeline bubbles. User directed zero further PP variant work. | Sprint 226 starts the TP-only planner and topology contract. |
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 | 2026-05-24 | Reframed the vision from "make the API respond" to production readiness. | Sprints 303-306 made the TP/EP path askable through text/chat APIs, but the remaining risk is trustworthiness and service hardening, not another endpoint wrapper. | Sprint 307 starts reference parity before persistent deployment and performance/MTP work. |
+| 2026-05-24 | Sprint 308 identified diagnostic TP/EP semantics as the parity blocker. | Synthetic EP routes, six-local-expert packing, and simplified attention cannot produce reference DS4 tokens. | Remove diagnostic caps, implement router-driven EP, then wire full DS4 attention semantics. |
 
 ## Open Questions
 
