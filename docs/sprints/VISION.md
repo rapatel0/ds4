@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 333
+revision: 334
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -98,6 +98,15 @@ not a serial layer-chain.
   `10.866 GiB/GPU` free. This removes raw VRAM fit as the immediate blocker
   for the target TP/EP KV layout; the remaining work is wiring the production
   typed arena into the runtime and proving layer/reference semantics.
+- Sprint 329 corrected the planner/arena budget to match the physical
+  row-sharded KV layout already used by `ds4_v100_tp_runtime`. The actual F8
+  KV allocation at `32` slots / `256K` is `3707940864` bytes/GPU
+  (`3.453 GiB`), not the ideal aggregate-sharded lower bound of
+  `3646642176` bytes/GPU. The difference is only `58.46 MiB/GPU`, and the
+  corrected target still passes allocation: `25.058 GiB/GPU` no-reserve,
+  `27.058 GiB/GPU` with reserve, `6.366 GiB/GPU` free after allocation on the
+  pod. Admission with physical row-sharded KV is now `62` slots at `256K`,
+  `31` slots at `512K`, and `15` slots at `1M`.
 - The system is not production-ready yet because the bridge HC sequence has
   not been proven equivalent to the DeepSeek V4 reference layer semantics, and
   production serving still needs readiness/overload/cancellation/streaming

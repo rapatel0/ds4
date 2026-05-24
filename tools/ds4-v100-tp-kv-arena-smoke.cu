@@ -48,6 +48,8 @@ typedef struct {
 typedef struct {
     uint64_t weights;
     uint64_t kv;
+    uint64_t kv_ideal;
+    uint64_t kv_row_shard_overhead;
     uint64_t comp_state;
     uint64_t scratch;
     uint64_t collectives;
@@ -180,6 +182,24 @@ static uint64_t layer_indexer_kv_bytes(uint32_t il, uint64_t ctx, kv_dtype kv) {
     return kv_values_bytes(checked_mul(ctx / 4u, DS4_N_INDEXER_HEAD_DIM), kv);
 }
 
+static uint64_t shard_bytes(uint64_t bytes);
+
+static uint64_t layer_attn_kv_physical_bytes_per_gpu(uint32_t il, uint64_t ctx,
+                                                     kv_dtype kv) {
+    const int ratio = layer_ratio(il);
+    const uint64_t rows = (uint64_t)DS4_N_SWA + (ratio ? ctx / (uint64_t)ratio : 0);
+    const uint64_t row_bytes = shard_bytes(kv_values_bytes(DS4_N_HEAD_DIM, kv));
+    return checked_mul(rows, row_bytes);
+}
+
+static uint64_t layer_indexer_kv_physical_bytes_per_gpu(uint32_t il, uint64_t ctx,
+                                                        kv_dtype kv) {
+    if (layer_ratio(il) != 4) return 0;
+    const uint64_t rows = ctx / 4u;
+    const uint64_t row_bytes = shard_bytes(kv_values_bytes(DS4_N_INDEXER_HEAD_DIM, kv));
+    return checked_mul(rows, row_bytes);
+}
+
 static uint64_t layer_comp_state_bytes(uint32_t il, uint64_t ctx) {
     const int ratio = layer_ratio(il);
     if (!ratio) return 0;
@@ -202,6 +222,16 @@ static uint64_t persistent_kv_aggregate_bytes(uint64_t ctx, uint32_t slots, kv_d
     for (uint32_t il = 0; il < DS4_N_LAYER; il++) {
         total += layer_attn_kv_bytes(il, ctx, kv);
         total += layer_indexer_kv_bytes(il, ctx, kv);
+    }
+    return checked_mul(total, slots);
+}
+
+static uint64_t persistent_kv_physical_bytes_per_gpu(uint64_t ctx, uint32_t slots,
+                                                     kv_dtype kv) {
+    uint64_t total = 0;
+    for (uint32_t il = 0; il < DS4_N_LAYER; il++) {
+        total += layer_attn_kv_physical_bytes_per_gpu(il, ctx, kv);
+        total += layer_indexer_kv_physical_bytes_per_gpu(il, ctx, kv);
     }
     return checked_mul(total, slots);
 }
@@ -241,7 +271,9 @@ static uint64_t gpu_total(const gpu_plan *p) {
 static gpu_plan plan_gpu(const options *opt) {
     gpu_plan p = {0};
     p.weights = opt->alloc_weights ? shard_bytes(opt->weight_total_bytes) : 0;
-    p.kv = shard_bytes(persistent_kv_aggregate_bytes(opt->ctx, opt->slots, opt->kv));
+    p.kv_ideal = shard_bytes(persistent_kv_aggregate_bytes(opt->ctx, opt->slots, opt->kv));
+    p.kv = persistent_kv_physical_bytes_per_gpu(opt->ctx, opt->slots, opt->kv);
+    p.kv_row_shard_overhead = p.kv > p.kv_ideal ? p.kv - p.kv_ideal : 0;
     p.comp_state = shard_bytes(comp_state_aggregate_bytes(opt->ctx, opt->slots));
     p.scratch = from_gib(opt->scratch_gib);
     p.collectives = collective_workspace_bytes(opt->slots);
@@ -326,7 +358,10 @@ static void print_plan(const options *opt, const gpu_plan *p) {
     printf("| Component | Bytes | GiB |\n");
     printf("|---|---:|---:|\n");
     printf("| weights | %" PRIu64 " | %.3f |\n", p->weights, as_gib(p->weights));
-    printf("| persistent_kv | %" PRIu64 " | %.3f |\n", p->kv, as_gib(p->kv));
+    printf("| persistent_kv_physical_row_sharded | %" PRIu64 " | %.3f |\n", p->kv, as_gib(p->kv));
+    printf("| persistent_kv_ideal_aggregate_shard | %" PRIu64 " | %.3f |\n", p->kv_ideal, as_gib(p->kv_ideal));
+    printf("| persistent_kv_row_shard_overhead | %" PRIu64 " | %.3f |\n",
+           p->kv_row_shard_overhead, as_gib(p->kv_row_shard_overhead));
     printf("| comp_state | %" PRIu64 " | %.3f |\n", p->comp_state, as_gib(p->comp_state));
     printf("| scratch | %" PRIu64 " | %.3f |\n", p->scratch, as_gib(p->scratch));
     printf("| collectives | %" PRIu64 " | %.3f |\n", p->collectives, as_gib(p->collectives));
