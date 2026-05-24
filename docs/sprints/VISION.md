@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: codex
-revision: 303
+revision: 304
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -135,6 +135,13 @@ not a serial layer-chain.
   `[127885,57114,78026]`, advanced the slot to `100005`, and reported
   `214.100724` wall tok/s / `353.667490` decode tok/s for the generated
   section.
+- Sprint 304 added a diagnostic `/v1/chat/completions` envelope over the same
+  TP/EP resident path. Token-ID clients can now use either text-completion or
+  chat-completion routes. The chat smoke returned
+  `object=chat.completion`, `message.role=assistant`, matching
+  `choices[0].token_ids` and `ds4_v100.generated_token_sequence`, and
+  `210.355981` wall tok/s / `350.653125` decode tok/s for the generated
+  section. Message text remains empty until tokenizer rendering is wired.
 - Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
   longer exposes PP/layer-split topology modes. Against the real production
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about

@@ -12,6 +12,10 @@ output-head/sample/feed, persists resident session state, and returns
 `32` slots / `256K`, `prompt_tokens=[31,32,33]`, `max_tokens=3`, returns
 `[127885,57114,78026]`, advances the resident cursor to `100005`, and reports
 `214.100724` wall tok/s / `353.667490` decode tok/s for the generated section.
+Sprint 304 adds the same token-ID serving contract to `/v1/chat/completions`;
+the V100 smoke returns `object=chat.completion` with matching
+`choices[0].token_ids` and `ds4_v100.generated_token_sequence` of
+`[0,57085,104170]`, at `210.355981` wall tok/s / `350.653125` decode tok/s.
 Tokenizer text I/O, active-slot-only decode, optimized batched prefill, exact
 DS4 HC parity, and MTP remain open.
 

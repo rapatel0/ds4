@@ -265,6 +265,15 @@ the committed resident cursor. The V100 smoke with `session_id=seq`,
 multi-token feedback, session persistence, and token-ID output are now wired;
 tokenizer text I/O, active-slot-only decode, optimized/batched prefill, exact
 DS4 HC parity, and MTP remain.
+Sprint 304 added the matching diagnostic `/v1/chat/completions` route and
+OpenAI-style chat envelope on top of the same TP/EP resident path. The V100
+smoke with `session_id=chatseq`, `prompt_tokens=[41,42,43]`, and
+`max_tokens=3` returns `object=chat.completion`,
+`choices[0].message.role=assistant`, matching `choices[0].token_ids` and
+`ds4_v100.generated_token_sequence` of `[0,57085,104170]`,
+`slot_position=cache_pos_out=100005`, and `210.355981` wall tok/s /
+`350.653125` decode tok/s. The chat route is still diagnostic because
+assistant text remains empty until tokenizer rendering is connected.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

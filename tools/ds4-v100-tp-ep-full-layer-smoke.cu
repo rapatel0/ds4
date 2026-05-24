@@ -6549,6 +6549,7 @@ static bool http_is_generation_post(const HttpParsedRequest &req) {
            (req.path == "/v100/selected-token" ||
             req.path == "/v1/v100/selected-token" ||
             req.path == "/v1/completions" ||
+            req.path == "/v1/chat/completions" ||
             req.path == "/v100/diagnostic-completions");
 }
 
@@ -6556,6 +6557,10 @@ static bool http_is_completion_post(const HttpParsedRequest &req) {
     return req.method == "POST" &&
            (req.path == "/v1/completions" ||
             req.path == "/v100/diagnostic-completions");
+}
+
+static bool http_is_chat_completion_post(const HttpParsedRequest &req) {
+    return req.method == "POST" && req.path == "/v1/chat/completions";
 }
 
 static bool http_wait_for_connection(int listen_fd, int wait_us) {
@@ -7004,6 +7009,8 @@ int run_tp_ep_http_server(const Options &base_opt,
     std::printf("tp_ep_http_serving\thttp://%s:%d/v100/selected-token\tPASS\n",
                 base_opt.host, base_opt.port);
     std::printf("tp_ep_http_completions\thttp://%s:%d/v1/completions\tDIAGNOSTIC\n",
+                base_opt.host, base_opt.port);
+    std::printf("tp_ep_http_chat_completions\thttp://%s:%d/v1/chat/completions\tDIAGNOSTIC\n",
                 base_opt.host, base_opt.port);
     std::fflush(stdout);
 
@@ -7705,16 +7712,18 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   result.aggregate_generated_tok_s_decode,
                                   result.aggregate_continuation_tok_s_decode,
                                   (unsigned long long)result.checksum);
-                    char out[12288];
-                    if (http_is_completion_post(batch[i])) {
+                    char out[16384];
+                    if (http_is_chat_completion_post(batch[i])) {
                         std::snprintf(out, sizeof(out),
-                                      "{\"id\":\"cmpl-ds4-v100-diagnostic-%llu-%zu\","
-                                      "\"object\":\"text_completion\","
+                                      "{\"id\":\"chatcmpl-ds4-v100-diagnostic-%llu-%zu\","
+                                      "\"object\":\"chat.completion\","
                                       "\"created\":%llu,"
                                       "\"model\":\"ds4-v100-tp-ep-diagnostic\","
-                                      "\"choices\":[{\"text\":\"\","
-                                      "\"index\":0,\"logprobs\":null,"
-                                      "\"finish_reason\":\"length\"}],"
+                                      "\"choices\":[{\"index\":0,"
+                                      "\"message\":{\"role\":\"assistant\",\"content\":\"\"},"
+                                      "\"logprobs\":null,"
+                                      "\"finish_reason\":\"length\","
+                                      "\"token_ids\":%s}],"
                                       "\"usage\":{\"prompt_tokens\":%llu,"
                                       "\"completion_tokens\":%llu,"
                                       "\"total_tokens\":%llu},"
@@ -7722,6 +7731,29 @@ int run_tp_ep_http_server(const Options &base_opt,
                                       (unsigned long long)batch_id,
                                       i,
                                       http_epoch_seconds(),
+                                      generated_sequence.c_str(),
+                                      (unsigned long long)request_prompt_tokens,
+                                      (unsigned long long)request_generated,
+                                      (unsigned long long)(request_generated + request_prompt_tokens),
+                                      meta);
+                    } else if (http_is_completion_post(batch[i])) {
+                        std::snprintf(out, sizeof(out),
+                                      "{\"id\":\"cmpl-ds4-v100-diagnostic-%llu-%zu\","
+                                      "\"object\":\"text_completion\","
+                                      "\"created\":%llu,"
+                                      "\"model\":\"ds4-v100-tp-ep-diagnostic\","
+                                      "\"choices\":[{\"text\":\"\","
+                                      "\"index\":0,\"logprobs\":null,"
+                                      "\"finish_reason\":\"length\","
+                                      "\"token_ids\":%s}],"
+                                      "\"usage\":{\"prompt_tokens\":%llu,"
+                                      "\"completion_tokens\":%llu,"
+                                      "\"total_tokens\":%llu},"
+                                      "\"ds4_v100\":{%s}}\n",
+                                      (unsigned long long)batch_id,
+                                      i,
+                                      http_epoch_seconds(),
+                                      generated_sequence.c_str(),
                                       (unsigned long long)request_prompt_tokens,
                                       (unsigned long long)request_generated,
                                       (unsigned long long)(request_generated + request_prompt_tokens),
