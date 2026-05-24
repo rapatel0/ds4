@@ -493,6 +493,7 @@ struct Options {
     bool reference_hc_reduce_gate = false;
     bool reference_hc_state_guard_gate = false;
     bool true_ds4_attention_residency_gate = false;
+    bool true_ds4_attention_projection_gate = false;
 };
 
 void log_tensor_f32_stats(const char *tag, int layer, int rank_id,
@@ -970,6 +971,31 @@ __global__ void gather_current_shard_to_full_kernel(float *full,
     const uint32_t slot = (uint32_t)(i / shard_cols);
     const uint32_t local_h = (uint32_t)(i % shard_cols);
     full[(uint64_t)slot * kHidden + (uint64_t)rank * shard_cols + local_h] = shard[i];
+}
+
+__global__ void gather_dense_shard_to_full_kernel(float *full,
+                                                  const float *shard,
+                                                  int rank,
+                                                  uint32_t shard_cols,
+                                                  uint32_t total_cols,
+                                                  uint32_t slots) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t n = (uint64_t)slots * (uint64_t)shard_cols;
+    if (i >= n) return;
+    const uint32_t slot = (uint32_t)(i / shard_cols);
+    const uint32_t local_col = (uint32_t)(i % shard_cols);
+    full[(uint64_t)slot * total_cols + (uint64_t)rank * shard_cols + local_col] =
+        shard[i];
+}
+
+__global__ void fill_dense_input_half_from_tensor_kernel(__half *dst,
+                                                         const float *src,
+                                                         uint32_t cols,
+                                                         uint32_t slots) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t n = (uint64_t)slots * (uint64_t)cols;
+    if (i >= n) return;
+    dst[i] = f32_to_half_saturate(src[i]);
 }
 
 __global__ void pack_current_full_to_routes_kernel(__half *routes,
@@ -1683,6 +1709,7 @@ void usage(const char *argv0) {
                  "       [--routed-ffn-norm-input-gate]\n"
                  "       [--true-shared-ffn-gate]\n"
                  "       [--true-ds4-attention-residency-gate]\n"
+                 "       [--true-ds4-attention-projection-gate]\n"
                  "       [--reference-hc-reduce-gate]\n"
                  "       [--reference-hc-state-guard-gate]\n"
                  "       [--diagnostic-output-head]\n",
@@ -1864,6 +1891,12 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--true-ds4-attention-projection-gate") == 0) {
+            opt->true_ds4_attention_projection_gate = true;
+            opt->true_ds4_attention_residency_gate = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--reference-hc-reduce-gate") == 0) {
             opt->reference_hc_reduce_gate = true;
             opt->tp_hc_current_input_gate = true;
@@ -1899,6 +1932,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
            (!opt->true_ds4_attention_residency_gate ||
             (opt->share_dense_ops && opt->dense_f16_cache_compose &&
              opt->dense_f16_cublas_compose)) &&
+           (!opt->true_ds4_attention_projection_gate ||
+            opt->true_ds4_attention_residency_gate) &&
            !(opt->dense_compute_tensor &&
              (opt->dense_compute_all_f8 || opt->dense_compute_all_bf16));
 }
@@ -2484,7 +2519,15 @@ struct SharedHcControls {
     float *d_mix = nullptr;
     float *d_split = nullptr;
     float *d_current_full = nullptr;
+    float *d_attn_normed = nullptr;
+    float *d_q_a_full = nullptr;
+    float *d_q_a_normed = nullptr;
+    float *d_kv_full = nullptr;
+    float *d_kv_normed = nullptr;
     float *d_ffn_normed = nullptr;
+    float *d_attn_norm_weight[43] = {};
+    float *d_q_a_norm_weight[43] = {};
+    float *d_kv_a_norm_weight[43] = {};
     float *d_attn_fn[43] = {};
     float *d_attn_base[43] = {};
     float *d_attn_scale[43] = {};
@@ -2595,6 +2638,16 @@ int open_shared_hc_controls(const Options &opt,
     CHECK_CUDA(cudaMalloc(&out->d_split, (size_t)opt.slots * kHcMix * sizeof(float)));
     CHECK_CUDA(cudaMalloc(&out->d_current_full,
                           (size_t)opt.slots * kHidden * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&out->d_attn_normed,
+                          (size_t)opt.slots * kHidden * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&out->d_q_a_full,
+                          (size_t)opt.slots * 1024u * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&out->d_q_a_normed,
+                          (size_t)opt.slots * 1024u * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&out->d_kv_full,
+                          (size_t)opt.slots * kHeadDim * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&out->d_kv_normed,
+                          (size_t)opt.slots * kHeadDim * sizeof(float)));
     CHECK_CUDA(cudaMalloc(&out->d_ffn_normed,
                           (size_t)opt.slots * kHidden * sizeof(float)));
     CHECK_CUDA(cudaMalloc(&out->d_router_logits,
@@ -2620,9 +2673,15 @@ int open_shared_hc_controls(const Options &opt,
         std::vector<float> base;
         std::vector<float> scale;
         std::vector<float> ffn_norm_weight;
+        std::vector<float> attn_norm_weight;
+        std::vector<float> q_a_norm_weight;
+        std::vector<float> kv_a_norm_weight;
         std::vector<float> router_w;
         std::vector<float> router_bias;
         std::vector<int> router_hash;
+        const std::string attn_norm_name = layer_tensor_name(layer, "attn_norm.weight");
+        const std::string q_a_norm_name = layer_tensor_name(layer, "attn_q_a_norm.weight");
+        const std::string kv_a_norm_name = layer_tensor_name(layer, "attn_kv_a_norm.weight");
         const std::string attn_fn_name = layer_tensor_name(layer, "hc_attn_fn");
         const std::string attn_base_name = layer_tensor_name(layer, "hc_attn_base");
         const std::string attn_scale_name = layer_tensor_name(layer, "hc_attn_scale");
@@ -2639,6 +2698,12 @@ int open_shared_hc_controls(const Options &opt,
                              (size_t)kHcRows * (size_t)kHidden * kHcMix, &attn_fn) ||
             load_control_f32(opt, rows, attn_base_name.c_str(), kHcMix, &attn_base) ||
             load_control_f32(opt, rows, attn_scale_name.c_str(), 3, &attn_scale) ||
+            load_control_f32(opt, rows, attn_norm_name.c_str(),
+                             kHidden, &attn_norm_weight) ||
+            load_control_f32(opt, rows, q_a_norm_name.c_str(),
+                             1024, &q_a_norm_weight) ||
+            load_control_f32(opt, rows, kv_a_norm_name.c_str(),
+                             kHeadDim, &kv_a_norm_weight) ||
             load_control_f32(opt, rows, fn_name.c_str(),
                              (size_t)kHcRows * (size_t)kHidden * kHcMix, &fn) ||
             load_control_f32(opt, rows, base_name.c_str(), kHcMix, &base) ||
@@ -2662,6 +2727,12 @@ int open_shared_hc_controls(const Options &opt,
         CHECK_CUDA(cudaMalloc(&out->d_ffn_scale[layer], scale.size() * sizeof(float)));
         CHECK_CUDA(cudaMalloc(&out->d_ffn_norm_weight[layer],
                               ffn_norm_weight.size() * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&out->d_attn_norm_weight[layer],
+                              attn_norm_weight.size() * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&out->d_q_a_norm_weight[layer],
+                              q_a_norm_weight.size() * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&out->d_kv_a_norm_weight[layer],
+                              kv_a_norm_weight.size() * sizeof(float)));
         CHECK_CUDA(cudaMalloc(&out->d_router_w[layer], router_w.size() * sizeof(float)));
         if (have_bias) {
             CHECK_CUDA(cudaMalloc(&out->d_router_bias[layer],
@@ -2687,6 +2758,15 @@ int open_shared_hc_controls(const Options &opt,
         CHECK_CUDA(cudaMemcpy(out->d_ffn_norm_weight[layer], ffn_norm_weight.data(),
                               ffn_norm_weight.size() * sizeof(float),
                               cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(out->d_attn_norm_weight[layer], attn_norm_weight.data(),
+                              attn_norm_weight.size() * sizeof(float),
+                              cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(out->d_q_a_norm_weight[layer], q_a_norm_weight.data(),
+                              q_a_norm_weight.size() * sizeof(float),
+                              cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(out->d_kv_a_norm_weight[layer], kv_a_norm_weight.data(),
+                              kv_a_norm_weight.size() * sizeof(float),
+                              cudaMemcpyHostToDevice));
         CHECK_CUDA(cudaMemcpy(out->d_router_w[layer], router_w.data(),
                               router_w.size() * sizeof(float), cudaMemcpyHostToDevice));
         if (have_bias) {
@@ -2701,6 +2781,8 @@ int open_shared_hc_controls(const Options &opt,
         }
         out->control_bytes +=
             (attn_fn.size() + attn_base.size() + attn_scale.size() +
+             attn_norm_weight.size() + q_a_norm_weight.size() +
+             kv_a_norm_weight.size() +
              fn.size() + base.size() + scale.size() +
              ffn_norm_weight.size() + router_w.size() + router_bias.size()) *
                 sizeof(float) +
@@ -2717,6 +2799,9 @@ void close_shared_hc_controls(const Options &opt, SharedHcControls *out) {
         if (out->d_router_hash[layer]) CHECK_CUDA(cudaFree(out->d_router_hash[layer]));
         if (out->d_router_bias[layer]) CHECK_CUDA(cudaFree(out->d_router_bias[layer]));
         if (out->d_router_w[layer]) CHECK_CUDA(cudaFree(out->d_router_w[layer]));
+        if (out->d_kv_a_norm_weight[layer]) CHECK_CUDA(cudaFree(out->d_kv_a_norm_weight[layer]));
+        if (out->d_q_a_norm_weight[layer]) CHECK_CUDA(cudaFree(out->d_q_a_norm_weight[layer]));
+        if (out->d_attn_norm_weight[layer]) CHECK_CUDA(cudaFree(out->d_attn_norm_weight[layer]));
         if (out->d_ffn_norm_weight[layer]) CHECK_CUDA(cudaFree(out->d_ffn_norm_weight[layer]));
         if (out->d_ffn_scale[layer]) CHECK_CUDA(cudaFree(out->d_ffn_scale[layer]));
         if (out->d_ffn_base[layer]) CHECK_CUDA(cudaFree(out->d_ffn_base[layer]));
@@ -2731,6 +2816,11 @@ void close_shared_hc_controls(const Options &opt, SharedHcControls *out) {
     if (out->d_router_tokens) CHECK_CUDA(cudaFree(out->d_router_tokens));
     if (out->d_router_active) CHECK_CUDA(cudaFree(out->d_router_active));
     if (out->d_ffn_normed) CHECK_CUDA(cudaFree(out->d_ffn_normed));
+    if (out->d_kv_normed) CHECK_CUDA(cudaFree(out->d_kv_normed));
+    if (out->d_kv_full) CHECK_CUDA(cudaFree(out->d_kv_full));
+    if (out->d_q_a_normed) CHECK_CUDA(cudaFree(out->d_q_a_normed));
+    if (out->d_q_a_full) CHECK_CUDA(cudaFree(out->d_q_a_full));
+    if (out->d_attn_normed) CHECK_CUDA(cudaFree(out->d_attn_normed));
     if (out->d_current_full) CHECK_CUDA(cudaFree(out->d_current_full));
     if (out->d_split) CHECK_CUDA(cudaFree(out->d_split));
     if (out->d_mix) CHECK_CUDA(cudaFree(out->d_mix));
@@ -5789,6 +5879,175 @@ int run_next_hidden_compose(const Options &opt,
     return stats->pass ? 0 : 2;
 }
 
+int run_true_ds4_attention_projection_prefix(const Options &opt,
+                                             SharedHcControls *hc,
+                                             const LayerDenseOps *ops,
+                                             RankState ranks[kGpus],
+                                             int layer) {
+    if (!hc || !hc->initialized || !ops || !ops->initialized ||
+        layer < 0 || layer >= 43) {
+        return 1;
+    }
+    if (!hc->d_current_full || !hc->d_attn_normed ||
+        !hc->d_q_a_full || !hc->d_q_a_normed ||
+        !hc->d_kv_full || !hc->d_kv_normed ||
+        !hc->d_attn_norm_weight[layer] ||
+        !hc->d_q_a_norm_weight[layer] ||
+        !hc->d_kv_a_norm_weight[layer]) {
+        return 2;
+    }
+    if (ops->attn_q_a.cols != kHidden || ops->attn_q_a.rows_per_gpu != 1024 / kGpus ||
+        ops->attn_q_b.cols != 1024 || ops->attn_q_b.rows_per_gpu != 32768 / kGpus ||
+        ops->attn_kv_latent.cols != kHidden ||
+        ops->attn_kv_latent.rows_per_gpu != kHeadDim / kGpus) {
+        std::fprintf(stderr,
+                     "tp_ep_true_attention_projection_bad_shape\tlayer\t%d\t"
+                     "q_a_cols\t%d\tq_a_rows_per_gpu\t%d\t"
+                     "q_b_cols\t%d\tq_b_rows_per_gpu\t%d\t"
+                     "kv_cols\t%d\tkv_rows_per_gpu\t%d\n",
+                     layer,
+                     ops->attn_q_a.cols, ops->attn_q_a.rows_per_gpu,
+                     ops->attn_q_b.cols, ops->attn_q_b.rows_per_gpu,
+                     ops->attn_kv_latent.cols, ops->attn_kv_latent.rows_per_gpu);
+        return 3;
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    const int block = 256;
+    const uint64_t hidden_elems = (uint64_t)opt.slots * (uint64_t)kHidden;
+    const uint64_t q_a_elems = (uint64_t)opt.slots * 1024ull;
+    const uint64_t kv_elems = (uint64_t)opt.slots * (uint64_t)kHeadDim;
+
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    rms_norm_weight_rows_stable_kernel<<<(unsigned int)opt.slots, 256>>>(
+        hc->d_attn_normed, hc->d_current_full, hc->d_attn_norm_weight[layer],
+        (uint32_t)kHidden, (uint32_t)opt.slots, 1.0e-6f);
+    CHECK_CUDA(cudaGetLastError());
+    CHECK_CUDA(cudaDeviceSynchronize());
+
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        if (!r.d_current_full ||
+            !ops->attn_q_a.d_x_half[(size_t)rank] ||
+            !ops->attn_kv_latent.d_x_half[(size_t)rank]) {
+            return 4;
+        }
+        if (rank == 0) {
+            CHECK_CUDA(cudaMemcpyAsync(r.d_current_full, hc->d_attn_normed,
+                                       (size_t)hidden_elems * sizeof(float),
+                                       cudaMemcpyDeviceToDevice, r.stream));
+        } else {
+            CHECK_CUDA(cudaMemcpyPeerAsync(r.d_current_full, r.device,
+                                           hc->d_attn_normed, opt.devices[0],
+                                           (size_t)hidden_elems * sizeof(float),
+                                           r.stream));
+        }
+        fill_dense_input_half_from_current_kernel<<<
+            (unsigned int)((hidden_elems + block - 1) / block), block, 0,
+            r.stream>>>(ops->attn_q_a.d_x_half[(size_t)rank],
+                         r.d_current_full, (uint32_t)kHidden,
+                         (uint32_t)opt.slots);
+        fill_dense_input_half_from_current_kernel<<<
+            (unsigned int)((hidden_elems + block - 1) / block), block, 0,
+            r.stream>>>(ops->attn_kv_latent.d_x_half[(size_t)rank],
+                         r.d_current_full, (uint32_t)kHidden,
+                         (uint32_t)opt.slots);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    }
+
+    if (launch_resident_f8_dense(opt, ops->attn_q_a, ranks) != 0 ||
+        launch_resident_f8_dense(opt, ops->attn_kv_latent, ranks) != 0) {
+        return 5;
+    }
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        if (ranks[rank].dense_stream) {
+            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].dense_stream));
+        } else {
+            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        }
+    }
+
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    for (int rank = 0; rank < kGpus; ++rank) {
+        gather_dense_shard_to_full_kernel<<<
+            (unsigned int)(((uint64_t)opt.slots * (1024u / kGpus) + block - 1) / block),
+            block>>>(
+            hc->d_q_a_full, ops->attn_q_a.d_out[(size_t)rank], rank,
+            1024u / kGpus, 1024u, (uint32_t)opt.slots);
+        gather_dense_shard_to_full_kernel<<<
+            (unsigned int)(((uint64_t)opt.slots * (kHeadDim / kGpus) + block - 1) / block),
+            block>>>(
+            hc->d_kv_full, ops->attn_kv_latent.d_out[(size_t)rank], rank,
+            kHeadDim / kGpus, kHeadDim, (uint32_t)opt.slots);
+    }
+    CHECK_CUDA(cudaGetLastError());
+    CHECK_CUDA(cudaDeviceSynchronize());
+
+    rms_norm_weight_rows_stable_kernel<<<(unsigned int)opt.slots, 256>>>(
+        hc->d_q_a_normed, hc->d_q_a_full, hc->d_q_a_norm_weight[layer],
+        1024u, (uint32_t)opt.slots, 1.0e-6f);
+    rms_norm_weight_rows_stable_kernel<<<(unsigned int)opt.slots, 256>>>(
+        hc->d_kv_normed, hc->d_kv_full, hc->d_kv_a_norm_weight[layer],
+        (uint32_t)kHeadDim, (uint32_t)opt.slots, 1.0e-6f);
+    CHECK_CUDA(cudaGetLastError());
+    CHECK_CUDA(cudaDeviceSynchronize());
+
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        if (!ops->attn_q_b.d_x_half[(size_t)rank]) return 6;
+        fill_dense_input_half_from_tensor_kernel<<<
+            (unsigned int)((q_a_elems + block - 1) / block), block, 0,
+            r.stream>>>(ops->attn_q_b.d_x_half[(size_t)rank],
+                         hc->d_q_a_normed, 1024u, (uint32_t)opt.slots);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    }
+
+    if (launch_resident_f8_dense(opt, ops->attn_q_b, ranks) != 0) {
+        return 7;
+    }
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        if (ranks[rank].dense_stream) {
+            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].dense_stream));
+        } else {
+            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        }
+    }
+
+    const auto stop = std::chrono::steady_clock::now();
+    const double ms = std::chrono::duration<double, std::milli>(stop - start).count();
+    if (layer <= 2) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+        log_tensor_f32_stats("true_attn_q_a_full", layer, 0, hc->d_q_a_full,
+                             (size_t)q_a_elems, nullptr);
+        log_tensor_f32_stats("true_attn_kv_normed", layer, 0, hc->d_kv_normed,
+                             (size_t)kv_elems, nullptr);
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            log_tensor_f32_stats("true_attn_q_b_shard", layer, rank,
+                                 ops->attn_q_b.d_out[(size_t)rank],
+                                 (size_t)opt.slots * ops->attn_q_b.rows_per_gpu,
+                                 ranks[rank].dense_stream ? ranks[rank].dense_stream
+                                                          : ranks[rank].stream);
+        }
+    }
+    std::printf("tp_ep_true_attention_projection_prefix\tlayer\t%d\tslots\t%d\t"
+                "q_a_cols\t1024\tkv_cols\t%d\tq_width\t32768\tms\t%.6f\tPASS\n",
+                layer, opt.slots, kHeadDim, ms);
+    return 0;
+}
+
 int run_decode_loop(const Options &opt,
                     const std::vector<ContractRow> &rows,
                     RankState ranks[kGpus],
@@ -5906,6 +6165,16 @@ int run_decode_loop(const Options &opt,
                 std::fprintf(stderr, "tp_hc_current_input_failed\tlayer\t%d\trc\t%d\n",
                              opt.layer, hc_rc);
                 return 9;
+            }
+        }
+        if (opt.true_ds4_attention_projection_gate) {
+            const int attn_rc = run_true_ds4_attention_projection_prefix(
+                opt, shared_hc_controls, shared_dense_ops, ranks, opt.layer);
+            if (attn_rc != 0) {
+                std::fprintf(stderr,
+                             "tp_ep_true_attention_projection_failed\tlayer\t%d\trc\t%d\n",
+                             opt.layer, attn_rc);
+                return 14;
             }
         }
         auto t0 = std::chrono::steady_clock::now();

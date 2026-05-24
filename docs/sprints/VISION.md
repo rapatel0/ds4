@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 316
+revision: 317
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -187,6 +187,21 @@ not a serial layer-chain.
   semantics. The binding trace shows non-null weight/scale pointers and
   expected strides, so the likely root is now the bridge activation
   distribution rather than a missing pointer-table entry.
+- Sprint 309 localized the reference-HC instability and kept the unstable
+  reference path diagnostic-only. A guarded run completes the HTTP parity
+  request without HTTP 500, but still returns the wrong token, so the blocker
+  remains graph semantics rather than API reachability.
+- Sprint 310 started replacing the simplified TP/EP attention bridge by
+  binding the full DS4 attention projection tensor set for all 43 layers:
+  `attn_q_a`, `attn_q_b`, `attn_kv_latent`, `attn_output_a`, and
+  `attn_output_b`.
+- Sprint 311 made the first true-attention projection prefix executable under
+  `DS4_V100_TP_EP_TRUE_DS4_ATTENTION_PROJECTION=1`. The V100 gate passes all
+  43 layers at `32` slots / `256K`, executing `attn_norm -> attn_q_a ->
+  attn_q_a_norm -> attn_q_b` and `attn_kv_latent -> attn_kv_a_norm`. This is
+  still diagnostic; it does not yet feed q-head RoPE, raw/compressed KV,
+  indexer selection, attention softmax/value read, or real attention output
+  into the next hidden state.
 - Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
   longer exposes PP/layer-split topology modes. Against the real production
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about
@@ -1930,6 +1945,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-24 | Sprint 308 gated reference HC reduce as a diagnostic path. | Switching HC reduce to 20 Sinkhorn iterations and removing the diagnostic weighted-sum clamp causes V100 FP16/TurboMind activation overflow at the routed FFN boundary; stable RMS plus saturating f32-to-fp16 prevents route-input infinities but still overflows gate/up. The serving default remains operational and the reference path is opt-in via `DS4_V100_TP_EP_REFERENCE_HC_REDUCE=1`. | Design an explicit activation scaling/quantization contract for reference-HC outputs before promoting the reference HC bridge; continue real attention/prefill semantics separately. |
 | 2026-05-24 | Sprint 309 localized the reference-HC instability. | Route-local activation scaling keeps the normalized routed FFN path finite, but unguarded reference-HC state grows to `1e15+` by layer 30 and first becomes non-finite in `final_hc_shard` at layer 32, after `compose_next_hidden` is still finite. An explicit diagnostic guard, `DS4_V100_TP_EP_REFERENCE_HC_STATE_GUARD=1`, lets the full HTTP parity request complete with a wrong token (`[$` vs `16`) instead of HTTP 500. | Replace the simplified HC/attention bridge with true DS4 HC attention/compressed-KV/indexer semantics; keep the state guard diagnostic-only and do not treat it as model correctness. |
 | 2026-05-24 | Sprint 310 starts replacing the simplified TP/EP attention bridge. | The resident TP/EP runtime can now opt into binding the full DS4 attention projection set (`attn_q_a`, `attn_q_b`, `attn_kv_latent`, `attn_output_a`, and `attn_output_b`) across all 43 layers instead of only the final attention output projection. | Wire those resident tensors into the real q/kv/RoPE/raw-KV/compressed-KV/indexer/attention/output sequence, then rerun the reference parity gate. |
+| 2026-05-24 | Sprint 311 executed the first true-attention projection prefix. | The TP/EP runtime now runs `attn_norm`, `attn_q_a`, `attn_q_a_norm`, `attn_q_b`, `attn_kv_latent`, and `attn_kv_a_norm` for all 43 layers at `32` slots / `256K`; the V100 gate has 43 projection-prefix passes and zero failures. | Continue the attention sequence with q-head norm/RoPE, raw and compressed KV updates, ratio-4 indexer row selection, raw+compressed attention, inverse RoPE, and `attn_output_a -> attn_output_b`. |
 
 ## Open Questions
 
