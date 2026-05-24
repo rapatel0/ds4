@@ -1,7 +1,7 @@
 ---
 sprint: 324
 title: TP/EP Compressed Row Storage and Raw+Compressed Attention Read
-status: planned
+status: executed
 started: 2026-05-24
 branch: claude-takeover
 ---
@@ -93,3 +93,76 @@ topk = 512 rows
   it is enough to prove layer math and row-selection semantics.
 - If parity still does not move, the next diagnostic should compare one layer's
   compressed rows and attention output against the non-TP reference path.
+
+## Outcome
+
+Sprint 324 implemented the bounded TP/EP compressed-row path in
+`tools/ds4-v100-tp-ep-full-layer-smoke.cu`.
+
+Implemented:
+
+- Per-rank resident attention compressor state/cache buffers:
+  `attn_comp_state_kv`, `attn_comp_state_score`, and `attn_comp_rows`.
+- Per-rank resident indexer compressor state/cache buffers:
+  `index_comp_state_kv`, `index_comp_state_score`, `index_comp_rows`,
+  `indexer_scores`, and `indexer_topk`.
+- Shared gathered compressor/indexer projection buffers on GPU0.
+- Decode compressor update sequence:
+  - gather TP compressor projection shards
+  - store the current ratio phase with APE
+  - pool state on emit boundary
+  - RMSNorm emitted rows
+  - RoPE emitted rows
+  - F16 round-trip emitted rows
+  - ratio-4 state shift
+- Raw+compressed attention read for emitted rows.
+- Ratio-4 bounded indexer scoring for the single visible compressed row and
+  top-k selection seeded from that score.
+
+This is intentionally bounded: the first pass stores and reads row `0` on
+emit boundaries. It proves the resident compressed-row lifecycle and attention
+merge path, but it is not yet the full long-history compressed cache.
+
+## Validation
+
+Build on V100 pod:
+
+```text
+make -j80 CUDA_HOME=/usr/local/cuda CUDA_ARCH=sm_70 tools/ds4-v100-tp-ep-full-layer-smoke
+```
+
+Result: PASS.
+
+32-slot / 256K all-layer smoke:
+
+- Shape: `32` slots, `256K`, all `43` layers, position `262143`.
+- Result: PASS.
+- Final scaffold:
+  - `pass_invocations=43`
+  - `sum_decode_ms=1670.069087`
+  - `projected_slot_step_tok_s=19.160884`
+  - `checksum=6655226894`
+- Ratio-128 layers report `visible_compressed_rows=1` and
+  `selected_compressed_rows=1`.
+- Ratio-4 layers report `indexer_topk_count=512`,
+  `visible_compressed_rows=1`, and `selected_compressed_rows=1`.
+
+HTTP `short_reasoning_plain` parity:
+
+- Result: FAIL, request completed.
+- Expected: `16`
+- Actual: `mere`
+- Generated token: `88445`
+- Wall tok/s: `20.366798`
+- Decode tok/s: `21.214211`
+
+The parity result returning to `mere` means the bounded compressed-read path is
+not yet sufficient to improve top-token parity. The path is active during prompt
+positions that hit ratio-4 emit boundaries, so the next sprint should compare
+TP/EP compressed rows and attention outputs directly against the non-TP
+reference for one ratio-4 layer.
+
+## Artifacts
+
+- `logs/from-cluster/sprint324-compressed-row-storage-v2/cluster/all-layer-smoke.log`
+- `logs/from-cluster/sprint324-compressed-row-storage-v2/cluster/http-parity/`
