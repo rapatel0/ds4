@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 340
+revision: 341
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -147,10 +147,17 @@ not a serial layer-chain.
   `43` raw-SWA rows, `41` compressed-attention rows, and `21` indexer rows,
   then ends with `pass_layers=43`, projected `53.556562` slot-step tok/s.
   The compact reference/indexer diagnostic also passes with `21` typed indexer
-  rows and `21` compact-reference summaries. The next integration step is
-  replacing bounded diagnostic compressed-row staging with production typed-row
-  lookup over visible compressed history, then promoting the typed KV path into
-  serving.
+  rows and `21` compact-reference summaries.
+- Sprint 336 added typed compressed-history reload. The full-layer path now
+  records emitted compressed/indexer source positions and reloads visible
+  compressed attention and ratio-4 indexer rows from the production typed TP
+  KV arena before raw+compressed attention reads. A `32` slot / `256K`
+  token-major run from position `262136` for `8` decode steps passes all `344`
+  layer-step invocations, emits `328` typed-history lines, and reaches
+  `visible_attn_rows=2`, `loaded_attn_rows=2`, `loaded_indexer_rows=2` on all
+  `21` ratio-4 layers. The next integration step is promoting the typed KV
+  path from full-layer smoke into tokenizer-enabled HTTP serving with resident
+  session/KV reuse.
 - The system is not production-ready yet because the bridge HC sequence has
   not been proven equivalent to the DeepSeek V4 reference layer semantics, and
   production serving still needs readiness/overload/cancellation/streaming
