@@ -248,6 +248,8 @@ struct ResidentF8Dense {
 struct LayerDenseOps {
     ResidentF8Dense attn;
     ResidentF8Dense shared;
+    ResidentF8Dense shared_gate;
+    ResidentF8Dense shared_up;
     bool initialized = false;
 };
 
@@ -475,6 +477,7 @@ struct Options {
     bool tp_hc_persist_state_gate = false;
     bool model_router_routes = false;
     bool routed_ffn_norm_input_gate = false;
+    bool true_shared_ffn_gate = false;
     bool tp_kv_all_slots_gate = false;
 };
 
@@ -899,6 +902,24 @@ __global__ void pack_current_full_to_routes_kernel(__half *routes,
     const int h = (int)(i % kHidden);
     const int slot = route_slots[route];
     routes[i] = __float2half(current_full[(uint64_t)slot * kHidden + h]);
+}
+
+__global__ void shared_swiglu_shard_to_float_kernel(float *mid,
+                                                    const float *gate,
+                                                    const float *up,
+                                                    uint32_t rank,
+                                                    uint32_t rows_per_gpu,
+                                                    uint32_t slots) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t n = (uint64_t)slots * (uint64_t)rows_per_gpu;
+    if (i >= n) return;
+    const uint32_t slot = (uint32_t)(i / rows_per_gpu);
+    const uint32_t local = (uint32_t)(i % rows_per_gpu);
+    const float g = gate[(uint64_t)slot * rows_per_gpu + local];
+    const float u = up[(uint64_t)slot * rows_per_gpu + local];
+    const float silu = g / (1.0f + expf(-g));
+    mid[(uint64_t)slot * kMid + (uint64_t)rank * rows_per_gpu + local] =
+        silu * u;
 }
 
 __global__ void fill_dense_input_from_current_kernel(float *dst,
@@ -1458,6 +1479,7 @@ void usage(const char *argv0) {
                  "       [--tp-hc-persist-state-gate] [--tp-kv-all-slots-gate]\n"
                  "       [--model-router-routes]\n"
                  "       [--routed-ffn-norm-input-gate]\n"
+                 "       [--true-shared-ffn-gate]\n"
                  "       [--diagnostic-output-head]\n",
                  argv0);
 }
@@ -1624,6 +1646,11 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--routed-ffn-norm-input-gate") == 0) {
             opt->routed_ffn_norm_input_gate = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--true-shared-ffn-gate") == 0) {
+            opt->true_shared_ffn_gate = true;
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
@@ -3988,7 +4015,9 @@ int prepare_resident_f8_dense(const Options &opt,
                               const char *tensor,
                               int seed,
                               const DenseF16Cache *cache,
-                              ResidentF8Dense *op) {
+                              ResidentF8Dense *op,
+                              int expected_rows_per_gpu = kHidden / kGpus,
+                              bool keep_packed_f8 = false) {
     std::vector<ContractRow> selected;
     int cols = 0;
     int total_rows = 0;
@@ -3997,9 +4026,9 @@ int prepare_resident_f8_dense(const Options &opt,
         return 1;
     }
     const int rows_per_gpu = total_rows / kGpus;
-    if (rows_per_gpu != kHidden / kGpus) {
+    if (rows_per_gpu != expected_rows_per_gpu) {
         std::fprintf(stderr, "resident dense tensor %s rows_per_gpu=%d expected=%d\n",
-                     tensor, rows_per_gpu, kHidden / kGpus);
+                     tensor, rows_per_gpu, expected_rows_per_gpu);
         return 2;
     }
     const uint64_t row_bytes = f8_row_bytes(cols);
@@ -4031,20 +4060,18 @@ int prepare_resident_f8_dense(const Options &opt,
                 ? find_dense_f16_cache_entry(*cache, tensor, gpu)
                 : nullptr;
         CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
-        if (!cache_entry) {
+        if (!cache_entry || keep_packed_f8) {
             std::vector<uint8_t> h_w((size_t)shard_bytes);
             const std::string path = path_join(opt.pack_dir, r.source_pack_file);
             if (read_exact_at(path, physical_row_offset(r), h_w.data(), h_w.size()) != 0) {
                 free_resident_f8_dense(*op, opt);
                 return 3;
             }
-            op->loaded_bytes += shard_bytes;
             CHECK_CUDA(cudaMalloc(&op->d_w[(size_t)gpu], (size_t)shard_bytes));
             CHECK_CUDA(cudaMemcpy(op->d_w[(size_t)gpu], h_w.data(), (size_t)shard_bytes,
                                   cudaMemcpyHostToDevice));
-        } else {
-            op->loaded_bytes += cache_entry->source_bytes;
         }
+        op->loaded_bytes += shard_bytes;
         CHECK_CUDA(cudaMalloc(&op->d_x[(size_t)gpu], h_x.size() * sizeof(float)));
         CHECK_CUDA(cudaMalloc(&op->d_out[(size_t)gpu],
                               (size_t)opt.slots * rows_per_gpu * sizeof(float)));
@@ -4094,6 +4121,8 @@ void free_shared_dense_ops(SharedDenseOps *ops, const Options &opt) {
     for (int layer = 0; layer < 43; ++layer) {
         free_resident_f8_dense(ops->layers[layer].attn, opt);
         free_resident_f8_dense(ops->layers[layer].shared, opt);
+        free_resident_f8_dense(ops->layers[layer].shared_gate, opt);
+        free_resident_f8_dense(ops->layers[layer].shared_up, opt);
         ops->layers[layer] = LayerDenseOps{};
     }
     *ops = SharedDenseOps{};
@@ -4118,12 +4147,25 @@ int open_shared_dense_ops(const Options &opt,
         LayerDenseOps &d = ops->layers[layer];
         const std::string attn_tensor = layer_tensor_name(layer, "attn_output_b.weight");
         const std::string shared_tensor = layer_tensor_name(layer, "ffn_down_shexp.weight");
+        const std::string shared_gate_tensor = layer_tensor_name(layer, "ffn_gate_shexp.weight");
+        const std::string shared_up_tensor = layer_tensor_name(layer, "ffn_up_shexp.weight");
         if (prepare_resident_f8_dense(layer_opt, rows, attn_tensor.c_str(), 1, cache,
                                       &d.attn) != 0 ||
             prepare_resident_f8_dense(layer_opt, rows, shared_tensor.c_str(), 2, cache,
-                                      &d.shared) != 0) {
+                                      &d.shared, kHidden / kGpus,
+                                      opt.true_shared_ffn_gate) != 0) {
             free_shared_dense_ops(ops, opt);
             return 3;
+        }
+        if (opt.true_shared_ffn_gate) {
+            if (prepare_resident_f8_dense(layer_opt, rows, shared_gate_tensor.c_str(), 3,
+                                          cache, &d.shared_gate, kMid / kGpus) != 0 ||
+                prepare_resident_f8_dense(layer_opt, rows, shared_up_tensor.c_str(), 4,
+                                          cache, &d.shared_up, kMid / kGpus) != 0) {
+                free_shared_dense_ops(ops, opt);
+                return 4;
+            }
+            ops->loaded_bytes += d.shared_gate.loaded_bytes + d.shared_up.loaded_bytes;
         }
         d.initialized = true;
         ops->loaded_bytes += d.attn.loaded_bytes + d.shared.loaded_bytes;
@@ -4187,6 +4229,127 @@ int launch_resident_f8_dense(const Options &opt,
                 op.rows_per_gpu, op.cols, (uint32_t)op.row_bytes, op.slots);
         }
         CHECK_CUDA(cudaGetLastError());
+    }
+    return 0;
+}
+
+int launch_resident_f8_dense_f32_input(const Options &opt,
+                                       const ResidentF8Dense &op,
+                                       RankState ranks[kGpus]) {
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        if (!op.d_w[(size_t)gpu] || !op.d_x[(size_t)gpu]) return 1;
+        cudaStream_t stream = ranks[gpu].dense_stream ? ranks[gpu].dense_stream
+                                                       : ranks[gpu].stream;
+        const dim3 grid((unsigned int)op.rows_per_gpu, (unsigned int)op.slots, 1);
+        f8_b128_dense_kernel<<<grid, 256, 0, stream>>>(
+            op.d_out[(size_t)gpu], op.d_w[(size_t)gpu], op.d_x[(size_t)gpu],
+            op.rows_per_gpu, op.cols, (uint32_t)op.row_bytes, op.slots);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    return 0;
+}
+
+int fill_shared_ffn_inputs_from_normed(const Options &opt,
+                                       const SharedHcControls *hc,
+                                       const ResidentF8Dense &gate,
+                                       const ResidentF8Dense &up,
+                                       RankState ranks[kGpus]) {
+    if (!hc || !hc->d_ffn_normed) return 1;
+    if (gate.cols != kHidden || up.cols != kHidden ||
+        gate.rows_per_gpu != kMid / kGpus ||
+        up.rows_per_gpu != kMid / kGpus) {
+        return 2;
+    }
+    const uint64_t full_elems = (uint64_t)opt.slots * kHidden;
+    const uint64_t full_bytes = full_elems * sizeof(float);
+    const uint64_t x_elems = (uint64_t)opt.slots * kHidden;
+    const int block = 256;
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        if (!r.d_current_full) return 3;
+        if (rank == 0) {
+            CHECK_CUDA(cudaMemcpyAsync(r.d_current_full, hc->d_ffn_normed,
+                                       (size_t)full_bytes,
+                                       cudaMemcpyDeviceToDevice, r.stream));
+        } else {
+            CHECK_CUDA(cudaMemcpyPeerAsync(r.d_current_full, r.device,
+                                           hc->d_ffn_normed, opt.devices[0],
+                                           (size_t)full_bytes, r.stream));
+        }
+        if (gate.d_x_half[(size_t)rank]) {
+            fill_dense_input_half_from_current_kernel<<<
+                (unsigned int)((x_elems + block - 1) / block), block, 0,
+                r.stream>>>(gate.d_x_half[(size_t)rank], r.d_current_full,
+                             (uint32_t)gate.cols, (uint32_t)opt.slots);
+            CHECK_CUDA(cudaGetLastError());
+        }
+        if (up.d_x_half[(size_t)rank]) {
+            fill_dense_input_half_from_current_kernel<<<
+                (unsigned int)((x_elems + block - 1) / block), block, 0,
+                r.stream>>>(up.d_x_half[(size_t)rank], r.d_current_full,
+                             (uint32_t)up.cols, (uint32_t)opt.slots);
+            CHECK_CUDA(cudaGetLastError());
+        }
+    }
+    return 0;
+}
+
+int materialize_shared_swiglu_down_input(const Options &opt,
+                                         const ResidentF8Dense &gate,
+                                         const ResidentF8Dense &up,
+                                         const ResidentF8Dense &down,
+                                         RankState ranks[kGpus]) {
+    if (gate.rows_per_gpu != kMid / kGpus ||
+        up.rows_per_gpu != kMid / kGpus ||
+        down.cols != kMid) {
+        return 1;
+    }
+    const uint32_t rows = (uint32_t)gate.rows_per_gpu;
+    const int block = 256;
+    const uint64_t shard_elems = (uint64_t)opt.slots * rows;
+    for (int src = 0; src < kGpus; ++src) {
+        CHECK_CUDA(cudaSetDevice(ranks[src].device));
+        if (!down.d_x[(size_t)src] ||
+            !gate.d_out[(size_t)src] ||
+            !up.d_out[(size_t)src]) {
+            return 2;
+        }
+        shared_swiglu_shard_to_float_kernel<<<
+            (unsigned int)((shard_elems + block - 1) / block), block, 0,
+            ranks[src].stream>>>(down.d_x[(size_t)src],
+                                 gate.d_out[(size_t)src],
+                                 up.d_out[(size_t)src],
+                                 (uint32_t)src, rows, (uint32_t)opt.slots);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    for (int src = 0; src < kGpus; ++src) {
+        CHECK_CUDA(cudaSetDevice(ranks[src].device));
+        CHECK_CUDA(cudaStreamSynchronize(ranks[src].stream));
+    }
+    const size_t width = (size_t)rows * sizeof(float);
+    for (int dst = 0; dst < kGpus; ++dst) {
+        CHECK_CUDA(cudaSetDevice(ranks[dst].device));
+        cudaStream_t stream = ranks[dst].copy_stream ? ranks[dst].copy_stream
+                                                     : ranks[dst].stream;
+        for (int src = 0; src < kGpus; ++src) {
+            if (src == dst) continue;
+            for (int slot = 0; slot < opt.slots; ++slot) {
+                float *dst_ptr = down.d_x[(size_t)dst] +
+                                 (size_t)slot * kMid + (size_t)src * rows;
+                const float *src_ptr = down.d_x[(size_t)src] +
+                                       (size_t)slot * kMid + (size_t)src * rows;
+                CHECK_CUDA(cudaMemcpyPeerAsync(dst_ptr, ranks[dst].device,
+                                               src_ptr, ranks[src].device,
+                                               width, stream));
+            }
+        }
+    }
+    for (int dst = 0; dst < kGpus; ++dst) {
+        CHECK_CUDA(cudaSetDevice(ranks[dst].device));
+        if (ranks[dst].copy_stream) CHECK_CUDA(cudaStreamSynchronize(ranks[dst].copy_stream));
+        CHECK_CUDA(cudaStreamSynchronize(ranks[dst].stream));
     }
     return 0;
 }
@@ -4611,6 +4774,30 @@ void log_route_half_stats(const char *tag, int layer, int rank_id,
     }
     std::fprintf(stderr,
                  "tp_ep_route_tensor_stats\ttag\t%s\tlayer\t%d\trank\t%d\telems\t%zu\tfinite_bad\t%d\tfirst_bad\t%zu\tmax_abs\t%.9g\n",
+                 tag, layer, rank_id, elems, finite_bad, first_bad, max_abs);
+}
+
+void log_tensor_f32_stats(const char *tag, int layer, int rank_id,
+                          const float *ptr, size_t elems, cudaStream_t stream) {
+    if (!ptr || elems == 0) return;
+    CHECK_CUDA(cudaStreamSynchronize(stream));
+    std::vector<float> host(elems);
+    CHECK_CUDA(cudaMemcpy(host.data(), ptr, elems * sizeof(float),
+                          cudaMemcpyDeviceToHost));
+    int finite_bad = 0;
+    size_t first_bad = (size_t)-1;
+    float max_abs = 0.0f;
+    for (size_t i = 0; i < elems; ++i) {
+        const float v = host[i];
+        if (!std::isfinite(v)) {
+            if (finite_bad == 0) first_bad = i;
+            ++finite_bad;
+        } else {
+            max_abs = fmaxf(max_abs, fabsf(v));
+        }
+    }
+    std::fprintf(stderr,
+                 "tp_ep_tensor_stats\ttag\t%s\tlayer\t%d\trank\t%d\telems\t%zu\tfinite_bad\t%d\tfirst_bad\t%zu\tmax_abs\t%.9g\n",
                  tag, layer, rank_id, elems, finite_bad, first_bad, max_abs);
 }
 
@@ -5296,13 +5483,21 @@ int run_decode_loop(const Options &opt,
 
     ResidentF8Dense attn;
     ResidentF8Dense shared;
+    ResidentF8Dense shared_gate;
+    ResidentF8Dense shared_up;
     const ResidentF8Dense *attn_op = nullptr;
     const ResidentF8Dense *shared_op = nullptr;
+    const ResidentF8Dense *shared_gate_op = nullptr;
+    const ResidentF8Dense *shared_up_op = nullptr;
     const std::string attn_tensor = layer_tensor_name(opt.layer, "attn_output_b.weight");
     const std::string shared_tensor = layer_tensor_name(opt.layer, "ffn_down_shexp.weight");
     if (shared_dense_ops) {
         attn_op = &shared_dense_ops->attn;
         shared_op = &shared_dense_ops->shared;
+        if (opt.true_shared_ffn_gate) {
+            shared_gate_op = &shared_dense_ops->shared_gate;
+            shared_up_op = &shared_dense_ops->shared_up;
+        }
     } else {
         if (prepare_resident_f8_dense(opt, rows, attn_tensor.c_str(), 1, cache, &attn) != 0 ||
             prepare_resident_f8_dense(opt, rows, shared_tensor.c_str(), 2, cache, &shared) != 0) {
@@ -5314,6 +5509,13 @@ int run_decode_loop(const Options &opt,
         shared_op = &shared;
     }
     stats->dense_loaded_bytes = attn_op->loaded_bytes + shared_op->loaded_bytes;
+    if (opt.true_shared_ffn_gate) {
+        if (!shared_gate_op || !shared_up_op ||
+            !shared_gate_op->d_out.size() || !shared_up_op->d_out.size()) {
+            return 1;
+        }
+        stats->dense_loaded_bytes += shared_gate_op->loaded_bytes + shared_up_op->loaded_bytes;
+    }
 
     const uint64_t shard_elems = (uint64_t)opt.slots * (kHidden / kGpus);
     const uint64_t shard_bytes = shard_elems * sizeof(float);
@@ -5379,6 +5581,20 @@ int run_decode_loop(const Options &opt,
             }
         }
         auto t0 = std::chrono::steady_clock::now();
+        if (opt.true_shared_ffn_gate) {
+            if (!shared_hc_controls || !shared_hc_controls->d_ffn_normed ||
+                !shared_gate_op || !shared_up_op) {
+                return 10;
+            }
+            const int fill_rc = fill_shared_ffn_inputs_from_normed(
+                opt, shared_hc_controls, *shared_gate_op, *shared_up_op, ranks);
+            if (fill_rc != 0) {
+                std::fprintf(stderr,
+                             "tp_ep_true_shared_ffn_input_failed\tlayer\t%d\trc\t%d\n",
+                             opt.layer, fill_rc);
+                return 10;
+            }
+        }
         if (opt.routed_ffn_norm_input_gate && opt.layer <= 2) {
             for (int p = 0; p < kGpus; ++p) {
                 RankState &r = ranks[p];
@@ -5396,18 +5612,129 @@ int run_decode_loop(const Options &opt,
         double ep_stage_ms = 0.0;
         double dense_stage_ms = 0.0;
         if (opt.overlap_ep_dense) {
-            if (launch_resident_f8_dense(opt, *attn_op, ranks) != 0 ||
-                launch_resident_f8_dense(opt, *shared_op, ranks) != 0) {
+            if (launch_resident_f8_dense(opt, *attn_op, ranks) != 0) {
+                return 2;
+            }
+            if (opt.true_shared_ffn_gate) {
+                if (launch_resident_f8_dense(opt, *shared_gate_op, ranks) != 0 ||
+                    launch_resident_f8_dense(opt, *shared_up_op, ranks) != 0) {
+                    return 2;
+                }
+                if (opt.layer <= 4) {
+                    for (int p = 0; p < kGpus; ++p) {
+                        CHECK_CUDA(cudaSetDevice(ranks[p].device));
+                        log_tensor_f32_stats("shared_gate", opt.layer, p,
+                                             shared_gate_op->d_out[(size_t)p],
+                                             (size_t)opt.slots * shared_gate_op->rows_per_gpu,
+                                             ranks[p].dense_stream ? ranks[p].dense_stream
+                                                                   : ranks[p].stream);
+                        log_tensor_f32_stats("shared_up", opt.layer, p,
+                                             shared_up_op->d_out[(size_t)p],
+                                             (size_t)opt.slots * shared_up_op->rows_per_gpu,
+                                             ranks[p].dense_stream ? ranks[p].dense_stream
+                                                                   : ranks[p].stream);
+                    }
+                }
+            } else if (launch_resident_f8_dense(opt, *shared_op, ranks) != 0) {
                 return 2;
             }
             sync_all();
+            if (opt.true_shared_ffn_gate) {
+                const int swiglu_rc = materialize_shared_swiglu_down_input(
+                    opt, *shared_gate_op, *shared_up_op, *shared_op, ranks);
+                if (swiglu_rc != 0) {
+                    std::fprintf(stderr,
+                                 "tp_ep_true_shared_ffn_swiglu_failed\tlayer\t%d\trc\t%d\n",
+                                 opt.layer, swiglu_rc);
+                    return 2;
+                }
+                if (opt.layer <= 4) {
+                    for (int p = 0; p < kGpus; ++p) {
+                        CHECK_CUDA(cudaSetDevice(ranks[p].device));
+                        log_tensor_f32_stats("shared_mid", opt.layer, p,
+                                             shared_op->d_x[(size_t)p],
+                                             (size_t)opt.slots * kMid,
+                                             ranks[p].copy_stream ? ranks[p].copy_stream
+                                                                  : ranks[p].stream);
+                    }
+                }
+                if (launch_resident_f8_dense_f32_input(opt, *shared_op, ranks) != 0) {
+                    return 2;
+                }
+                sync_all();
+                if (opt.layer <= 4) {
+                    for (int p = 0; p < kGpus; ++p) {
+                        CHECK_CUDA(cudaSetDevice(ranks[p].device));
+                        log_tensor_f32_stats("shared_down", opt.layer, p,
+                                             shared_op->d_out[(size_t)p],
+                                             (size_t)opt.slots * shared_op->rows_per_gpu,
+                                             ranks[p].dense_stream ? ranks[p].dense_stream
+                                                                   : ranks[p].stream);
+                    }
+                }
+            }
             auto t2 = std::chrono::steady_clock::now();
             ep_stage_ms = std::chrono::duration<double, std::milli>(t2 - t0).count();
         } else {
             sync_all();
             auto t1 = std::chrono::steady_clock::now();
-            if (launch_resident_f8_dense(opt, *attn_op, ranks) != 0 ||
-                launch_resident_f8_dense(opt, *shared_op, ranks) != 0) {
+            if (launch_resident_f8_dense(opt, *attn_op, ranks) != 0) {
+                return 2;
+            }
+            if (opt.true_shared_ffn_gate) {
+                if (launch_resident_f8_dense(opt, *shared_gate_op, ranks) != 0 ||
+                    launch_resident_f8_dense(opt, *shared_up_op, ranks) != 0) {
+                    return 2;
+                }
+                sync_all();
+                if (opt.layer <= 4) {
+                    for (int p = 0; p < kGpus; ++p) {
+                        CHECK_CUDA(cudaSetDevice(ranks[p].device));
+                        log_tensor_f32_stats("shared_gate", opt.layer, p,
+                                             shared_gate_op->d_out[(size_t)p],
+                                             (size_t)opt.slots * shared_gate_op->rows_per_gpu,
+                                             ranks[p].dense_stream ? ranks[p].dense_stream
+                                                                   : ranks[p].stream);
+                        log_tensor_f32_stats("shared_up", opt.layer, p,
+                                             shared_up_op->d_out[(size_t)p],
+                                             (size_t)opt.slots * shared_up_op->rows_per_gpu,
+                                             ranks[p].dense_stream ? ranks[p].dense_stream
+                                                                   : ranks[p].stream);
+                    }
+                }
+                const int swiglu_rc = materialize_shared_swiglu_down_input(
+                    opt, *shared_gate_op, *shared_up_op, *shared_op, ranks);
+                if (swiglu_rc != 0) {
+                    std::fprintf(stderr,
+                                 "tp_ep_true_shared_ffn_swiglu_failed\tlayer\t%d\trc\t%d\n",
+                                 opt.layer, swiglu_rc);
+                    return 2;
+                }
+                if (opt.layer <= 4) {
+                    for (int p = 0; p < kGpus; ++p) {
+                        CHECK_CUDA(cudaSetDevice(ranks[p].device));
+                        log_tensor_f32_stats("shared_mid", opt.layer, p,
+                                             shared_op->d_x[(size_t)p],
+                                             (size_t)opt.slots * kMid,
+                                             ranks[p].copy_stream ? ranks[p].copy_stream
+                                                                  : ranks[p].stream);
+                    }
+                }
+                if (launch_resident_f8_dense_f32_input(opt, *shared_op, ranks) != 0) {
+                    return 2;
+                }
+                sync_all();
+                if (opt.layer <= 4) {
+                    for (int p = 0; p < kGpus; ++p) {
+                        CHECK_CUDA(cudaSetDevice(ranks[p].device));
+                        log_tensor_f32_stats("shared_down", opt.layer, p,
+                                             shared_op->d_out[(size_t)p],
+                                             (size_t)opt.slots * shared_op->rows_per_gpu,
+                                             ranks[p].dense_stream ? ranks[p].dense_stream
+                                                                   : ranks[p].stream);
+                    }
+                }
+            } else if (launch_resident_f8_dense(opt, *shared_op, ranks) != 0) {
                 return 2;
             }
             sync_all();

@@ -1,0 +1,5 @@
+tp_ep_model_router_route_stats	layer	0	routes	0,2,0,0,0,0,2,2	max_routes_per_expert	0,1,0,0,0,0,1,1
+tp_ep_model_router_route_stats	layer	1	routes	1,0,0,1,2,2,0,0	max_routes_per_expert	1,0,0,1,1,1,0,0
+tp_ep_model_router_route_stats	layer	2	routes	0,2,0,2,2,0,0,0	max_routes_per_expert	0,1,0,1,1,0,0,0
+tp_ep_model_router_route_stats	layer	3	routes	0,0,0,1,3,0,1,1	max_routes_per_expert	0,0,0,1,1,0,1,1
+tp_ep_http_decode_failed	rc	5	batch	1	requested_steps	1	position	100000

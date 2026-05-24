@@ -247,6 +247,73 @@ producing the activation distribution the MXFP4 experts expect. The next
 durable fix is to replace the shared/FFN bridge with the real DS4 FFN
 sequence, then re-enable normalized routed expert input under the same trace.
 
+The true shared-FFN gate added `ffn_gate_shexp`, `ffn_up_shexp`, SwiGLU, and
+`ffn_down_shexp` execution behind `DS4_V100_TP_EP_TRUE_SHARED_FFN=1`.
+The first implementation used FP16 for the SwiGLU midpoint so it could feed
+the existing cuBLAS dense path. That was numerically unsafe: layers `0-2`
+completed, but layer `3` produced non-finite midpoint/down tensors and the
+HTTP request failed with `tp_ep_decode_failed`.
+
+Clamping the FP16 midpoint made the request complete, but it saturated from
+layer `2` onward and returned the wrong token:
+
+```json
+{
+  "case": "short_reasoning_plain",
+  "expected_text": "16",
+  "actual_text": "MMMMMMMMMMMMMMMM",
+  "generated_token_sequence": [36151],
+  "decode_tok_s": 50.988668
+}
+```
+
+The follow-up FP32-midpoint path keeps the shared SwiGLU midpoint in FP32 and
+feeds `ffn_down_shexp` through the packed-FP8 scalar kernel. This removes the
+half overflow and completes one-token serving, but still fails parity:
+
+```json
+{
+  "case": "short_reasoning_plain",
+  "expected_text": "16",
+  "actual_text": " دايره",
+  "generated_token_sequence": [83483],
+  "decode_tok_s": 51.259672
+}
+```
+
+Tensor stats from that run show finite but very large shared-FFN values after
+the early layers:
+
+```text
+layer 2 shared_mid max_abs=1124516 shared_down max_abs=192612.953
+layer 3 shared_mid max_abs=1149645.38 shared_down max_abs=403483.375
+layer 4 shared_mid max_abs=5357139.5 shared_down max_abs=683936
+```
+
+This does not yet prove the shared FFN itself is wrong, because the serving
+harness still carries a partial/proxy hidden-state bridge across layers. It
+does prove that a naive FP16 shared-FFN midpoint is not a valid V100
+implementation. A production HMMA version needs dynamic scaling or a fused
+gate/up/down schedule that does not saturate the midpoint.
+
+Re-enabling `DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT=1` together with the
+FP32-midpoint shared FFN still fails inside the routed executor at layer `0`:
+
+```text
+route_input layer 0 rank 7 finite_bad=0 max_abs=38.53125
+route_gated layer 0 rank 7 finite_bad=1 max_abs=46176
+route_down  layer 0 rank 7 finite_bad=4096 max_abs=1375
+```
+
+So the current split is clear:
+
+- true shared FFN is now wired and numerically stable when routed experts stay
+  on the old raw-HC input bridge;
+- normalized routed expert input remains blocked inside the TurboMind routed
+  executor or its input scaling/layout;
+- full parity still requires replacing the remaining partial hidden/attention
+  bridge with the true DS4 HC attention/FFN sequence.
+
 ## Artifacts
 
 - `logs/from-cluster/sprint308-all-local-experts-parity/cluster/server.out`
@@ -269,6 +336,11 @@ sequence, then re-enable normalized routed expert input under the same trace.
 - `logs/from-cluster/sprint308-routed-ffn-norm-input-stats/20260524-040752/`
 - `logs/from-cluster/sprint308-routed-ffn-norm-route-ids/20260524-041250/`
 - `logs/from-cluster/sprint308-routed-ffn-binding-trace/20260524-041723/`
+- `logs/from-cluster/sprint308-true-shared-ffn-parity/20260524-131638/`
+- `logs/from-cluster/sprint308-true-shared-ffn-stats/20260524-132106/`
+- `logs/from-cluster/sprint308-true-shared-ffn-clamped/20260524-132604/`
+- `logs/from-cluster/sprint308-true-shared-ffn-f32mid/20260524-133149/`
+- `logs/from-cluster/sprint308-true-shared-f32mid-routed-norm/20260524-133530/`
 
 ## Production Gate
 
@@ -282,7 +354,7 @@ Current next fixes:
 - add an isolated TurboMind/route microbench for `ffn_normed` routed expert
   input, starting with the layer-`0` failure reproduced by
   `DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT=1`;
-- implement the true shared-FFN gate/up/SwiGLU/down subpath instead of the
-  current bridge;
+- keep the true shared-FFN path on FP32 midpoint until a scaled/fused HMMA
+  version is validated;
 - replace the remaining attention bridge with the full DS4 attention,
   compressed-KV, indexer, and row-selection sequence.

@@ -1,0 +1,19 @@
+tp_ep_all_layer_dense_f16_cache	rows	4096	source_bytes	8640413696	cache_bytes	14451998720	cache_aligned_bytes	14451998720	max_temp_bytes	132382720	cache_ms	7369.063467	PASS
+tp_ep_all_layer_turbomind_api_shared	devices	8	PASS
+tp_ep_all_layer_rank_buffers_shared	devices	8	core_bytes	31478816	PASS
+tp_ep_all_layer_tp_runtime_shared	devices	8	slots	32	ctx	262144	kv_bytes_per_gpu	3707940864	comp_state_bytes_per_gpu	1803550720	scratch_bytes_per_gpu	1610612736	total_bytes_per_gpu	7122628608	PASS
+tp_ep_all_layer_expert_bindings_shared	layers	43	devices	8	bytes	147169738752	bytes_per_gpu	18396217344	PASS
+tp_ep_all_layer_dense_ops_shared	layers	43	devices	8	loaded_bytes	2544697344	PASS
+tp_ep_resident_serving_loop	layers	43	mode	direct_decode	PASS
+tp_ep_hc_final_expand_shared	layers	43	slots	32	control_bytes	325684296	PASS
+tp_ep_diagnostic_output_head_shared	slots	32	vocab	129280	rows_per_gpu	16160	output_weight_bytes	1059061760	logits_bytes	16547840	proxy_hc	0	PASS
+tp_ep_token_embedding_shared	slots	32	vocab	129280	rows_per_gpu	16160	weight_bytes	1059061760	device	0	PASS
+tp_ep_http_tokenizer	model	/models/DSv4-Flash-256e-fixed.gguf	PASS
+tp_ep_http_serving	http://127.0.0.1:18080/v100/selected-token	PASS
+tp_ep_http_completions	http://127.0.0.1:18080/v1/completions	DIAGNOSTIC
+tp_ep_http_chat_completions	http://127.0.0.1:18080/v1/chat/completions	DIAGNOSTIC
+tp_ep_token_major_item	step	0	layer	0	ratio	0	position	100000	decode_ms_per_step	77.113428	decode_slot_step_tok_s	414.973122	decode_ep_ms_per_step	69.112991	decode_dense_ms_per_step	0.000000	decode_compose_ms_per_step	1.210208	decode_compose_reduce_ms_per_step	0.329388	decode_compose_copy_ms_per_step	0.544216	decode_compose_final_ms_per_step	0.336604	decode_hc_current_input_ms_per_step	6.079918	decode_final_hc_ms_per_step	0.694650	decode_checksum	6523110587	decode_finite_bad	0	rc	0	PASS
+tp_ep_token_major_item	step	0	layer	1	ratio	0	position	100000	decode_ms_per_step	20.936282	decode_slot_step_tok_s	1528.447124	decode_ep_ms_per_step	17.389429	decode_dense_ms_per_step	0.000000	decode_compose_ms_per_step	0.636264	decode_compose_reduce_ms_per_step	0.154950	decode_compose_copy_ms_per_step	0.336519	decode_compose_final_ms_per_step	0.144795	decode_hc_current_input_ms_per_step	2.368475	decode_final_hc_ms_per_step	0.541432	decode_checksum	7821992501	decode_finite_bad	0	rc	0	PASS
+tp_ep_token_major_item	step	0	layer	2	ratio	4	position	100000	decode_ms_per_step	19.242213	decode_slot_step_tok_s	1663.010382	decode_ep_ms_per_step	16.008786	decode_dense_ms_per_step	0.000000	decode_compose_ms_per_step	0.494669	decode_compose_reduce_ms_per_step	0.067676	decode_compose_copy_ms_per_step	0.284518	decode_compose_final_ms_per_step	0.142475	decode_hc_current_input_ms_per_step	2.210660	decode_final_hc_ms_per_step	0.527597	decode_checksum	8422188815	decode_finite_bad	0	rc	0	PASS
+tp_ep_token_major_item	step	0	layer	3	ratio	128	position	100000	decode_ms_per_step	19.898312	decode_slot_step_tok_s	1608.176613	decode_ep_ms_per_step	16.649194	decode_dense_ms_per_step	0.000000	decode_compose_ms_per_step	0.484886	decode_compose_reduce_ms_per_step	0.069946	decode_compose_copy_ms_per_step	0.255600	decode_compose_final_ms_per_step	0.159340	decode_hc_current_input_ms_per_step	2.233803	decode_final_hc_ms_per_step	0.530008	decode_checksum	303271924	decode_finite_bad	524288	rc	5	FAIL
+tp_ep_token_major_scaffold	steps	1	layers	43	pass_invocations	3	failed_step	0	failed_layer	3	slots	32	ctx	262144	wall_ms	160.685459	FAIL
