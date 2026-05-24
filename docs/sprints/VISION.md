@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-24
-last_updated_by: vision
-revision: 314
+last_updated_by: codex
+revision: 315
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -1928,6 +1928,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-24 | Sprint 308 fixed the routed-normalized nonfinite failure. | The reference routed path clamps gate/up at `10` before SwiGLU, while the TurboMind gated-SiLU epilogue is unclamped; the TP/EP path now uses plain gate/up plus a CUDA clamp+SwiGLU when normalized routed input is enabled, and the previous layer-0 HTTP 500 is gone. | Treat parity as a true graph-semantics gap now: replace the proxy hidden/attention/HC bridge with the full DS4 sequence, then optimize the clamped routed path back into a fused executor. |
 | 2026-05-24 | Sprint 308 replaced synthetic compose residuals with current hidden shards and clamped true shared SwiGLU. | The TP/EP path now composes from real `d_current_shard`, and shared FFN midpoint magnitude drops from million-scale to about `100` by matching the reference `10.0` SwiGLU clamp. The one-token parity case still returns the wrong token (`uerak` vs `16`) at about `50` decode tok/s, so the remaining blocker is graph semantics rather than numeric blow-up. | Implement the real DS4 attention/HC bridge and token-state feedback in the TP/EP serving path; defer further FFN kernel fusion until top-token parity is closer. |
 | 2026-05-24 | Sprint 308 gated reference HC reduce as a diagnostic path. | Switching HC reduce to 20 Sinkhorn iterations and removing the diagnostic weighted-sum clamp causes V100 FP16/TurboMind activation overflow at the routed FFN boundary; stable RMS plus saturating f32-to-fp16 prevents route-input infinities but still overflows gate/up. The serving default remains operational and the reference path is opt-in via `DS4_V100_TP_EP_REFERENCE_HC_REDUCE=1`. | Design an explicit activation scaling/quantization contract for reference-HC outputs before promoting the reference HC bridge; continue real attention/prefill semantics separately. |
+| 2026-05-24 | Sprint 309 localized the reference-HC instability. | Route-local activation scaling keeps the normalized routed FFN path finite, but unguarded reference-HC state grows to `1e15+` by layer 30 and first becomes non-finite in `final_hc_shard` at layer 32, after `compose_next_hidden` is still finite. An explicit diagnostic guard, `DS4_V100_TP_EP_REFERENCE_HC_STATE_GUARD=1`, lets the full HTTP parity request complete with a wrong token (`[$` vs `16`) instead of HTTP 500. | Replace the simplified HC/attention bridge with true DS4 HC attention/compressed-KV/indexer semantics; keep the state guard diagnostic-only and do not treat it as model correctness. |
 
 ## Open Questions
 
