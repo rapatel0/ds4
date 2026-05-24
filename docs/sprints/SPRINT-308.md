@@ -314,6 +314,40 @@ So the current split is clear:
 - full parity still requires replacing the remaining partial hidden/attention
   bridge with the true DS4 HC attention/FFN sequence.
 
+The routed-normalized nonfinite was fixed by restoring the reference routed
+SwiGLU clamp. DS4 clamps routed gate/up with `swiglu_clamp_exp=10`; the
+TurboMind gated-SiLU epilogue does not. The TP/EP bridge now uses a clamped
+path when `DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT=1`:
+
+1. plain TurboMind MXFP4 gate/up GEMM into `[gate, up]`;
+2. CUDA clamp+SwiGLU into the midpoint;
+3. existing TurboMind MXFP4 down GEMM.
+
+The previous layer-`0` HTTP 500 is gone. The fixed run completes all layers
+with `decode_finite_bad=0`, but still fails token parity:
+
+```json
+{
+  "case": "short_reasoning_plain",
+  "expected_text": "16",
+  "actual_text": "numara",
+  "generated_token_sequence": [108877],
+  "decode_tok_s": 51.420866
+}
+```
+
+The route stats now show the intended clamp behavior:
+
+```text
+layer 0 rank 7 route_gate_up finite_bad=0 max_abs=413
+layer 0 rank 7 route_gated  finite_bad=0 max_abs=100
+layer 0 rank 7 route_down   finite_bad=0 max_abs=245.5
+```
+
+This closes the immediate routed-executor numeric failure. The next parity
+gap is no longer a route crash; it is the remaining proxy hidden/attention/HC
+bridge in the TP/EP serving graph.
+
 ## Artifacts
 
 - `logs/from-cluster/sprint308-all-local-experts-parity/cluster/server.out`
@@ -341,6 +375,8 @@ So the current split is clear:
 - `logs/from-cluster/sprint308-true-shared-ffn-clamped/20260524-132604/`
 - `logs/from-cluster/sprint308-true-shared-ffn-f32mid/20260524-133149/`
 - `logs/from-cluster/sprint308-true-shared-f32mid-routed-norm/20260524-133530/`
+- `logs/from-cluster/sprint308-routed-norm-clamped-gate/20260524-134337/`
+- `logs/from-cluster/sprint308-routed-norm-clamped-gate-v2/20260524-134718/`
 
 ## Production Gate
 
@@ -351,9 +387,8 @@ next fix.
 
 Current next fixes:
 
-- add an isolated TurboMind/route microbench for `ffn_normed` routed expert
-  input, starting with the layer-`0` failure reproduced by
-  `DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT=1`;
+- keep the routed-normalized clamped path as the correctness path and later
+  replace it with a fused clamped TurboMind/CUTLASS executor;
 - keep the true shared-FFN path on FP32 midpoint until a scaled/fused HMMA
   version is validated;
 - replace the remaining attention bridge with the full DS4 attention,

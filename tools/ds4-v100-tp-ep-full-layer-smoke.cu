@@ -49,6 +49,7 @@ constexpr int kHcRows = 4;
 constexpr int kHcMix = 24;
 constexpr int kModelTopK = 6;
 constexpr float kSyntheticRouteWeight = 0.125f;
+constexpr float kRoutedSwigluClamp = 10.0f;
 
 #define CHECK_CUDA(expr)                                                              \
     do {                                                                              \
@@ -156,6 +157,7 @@ struct RankState {
     int *d_route_slots = nullptr;
     float *d_route_weights = nullptr;
     __half *d_a = nullptr;
+    __half *d_gate_up = nullptr;
     __half *d_gated = nullptr;
     __half *d_down = nullptr;
     float *d_ep_contrib_all = nullptr;
@@ -920,6 +922,26 @@ __global__ void shared_swiglu_shard_to_float_kernel(float *mid,
     const float silu = g / (1.0f + expf(-g));
     mid[(uint64_t)slot * kMid + (uint64_t)rank * rows_per_gpu + local] =
         silu * u;
+}
+
+__global__ void routed_fused_gate_up_swiglu_clamp_kernel(__half *mid,
+                                                         const __half *gate_up,
+                                                         uint64_t routes,
+                                                         float clamp) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t n = routes * (uint64_t)kMid;
+    if (i >= n) return;
+    const uint64_t row = i / kMid;
+    const uint64_t col = i - row * (uint64_t)kMid;
+    const uint64_t base = row * (uint64_t)kFusedN + col;
+    float g = __half2float(gate_up[base]);
+    float u = __half2float(gate_up[base + kMid]);
+    if (clamp > 1.0e-6f) {
+        g = fminf(g, clamp);
+        u = fminf(fmaxf(u, -clamp), clamp);
+    }
+    const float silu = g / (1.0f + expf(-g));
+    mid[i] = __float2half(silu * u);
 }
 
 __global__ void fill_dense_input_from_current_kernel(float *dst,
@@ -4744,6 +4766,24 @@ int run_gate(RankState &rank, const Api &api) {
                     rank.d_gated, rank.stream);
 }
 
+int run_gate_clamped(RankState &rank, const Api &api) {
+    if (rank.routes <= 0) return 0;
+    if (!rank.d_gate_up) return 1;
+    CHECK_CUDA(cudaSetDevice(rank.device));
+    const int rc = api.mmgt(rank.d_a, nullptr, rank.d_offsets, kLocalExperts, rank.routes,
+                            (const void * const *)rank.gated.d_w_table,
+                            (const void * const *)rank.gated.d_s_table,
+                            kDType, kFusedN, kHidden, kGroupSize, rank.gated.k_pack,
+                            rank.d_gate_up, rank.stream);
+    if (rc != 0) return rc;
+    const uint64_t elems = (uint64_t)rank.routes * kMid;
+    routed_fused_gate_up_swiglu_clamp_kernel<<<
+        (unsigned int)((elems + 255) / 256), 256, 0, rank.stream>>>(
+            rank.d_gated, rank.d_gate_up, (uint64_t)rank.routes, kRoutedSwigluClamp);
+    CHECK_CUDA(cudaGetLastError());
+    return 0;
+}
+
 int run_down(RankState &rank, const Api &api) {
     if (rank.routes <= 0) return 0;
     return api.mmgt(rank.d_gated, nullptr, rank.d_offsets, kLocalExperts, rank.routes,
@@ -5105,6 +5145,8 @@ int open_shared_rank_buffers(const Options &opt, SharedRankBuffers *shared) {
         CHECK_CUDA(cudaMemcpy(r.d_route_weights, route_weights.data(),
                               route_weights.size() * sizeof(float), cudaMemcpyHostToDevice));
         CHECK_CUDA(cudaMalloc(&r.d_a, route_capacity_elems * sizeof(__half)));
+        CHECK_CUDA(cudaMalloc(&r.d_gate_up,
+                              (size_t)r.route_capacity * kFusedN * sizeof(__half)));
         CHECK_CUDA(cudaMalloc(&r.d_gated,
                               (size_t)r.route_capacity * kMid * sizeof(__half)));
         CHECK_CUDA(cudaMalloc(&r.d_down, route_capacity_elems * sizeof(__half)));
@@ -5121,6 +5163,7 @@ int open_shared_rank_buffers(const Options &opt, SharedRankBuffers *shared) {
         shared->core_bytes += (size_t)r.route_capacity * sizeof(int);
         shared->core_bytes += (size_t)r.route_capacity * sizeof(float);
         shared->core_bytes += route_capacity_elems * sizeof(__half);
+        shared->core_bytes += (size_t)r.route_capacity * kFusedN * sizeof(__half);
         shared->core_bytes += (size_t)r.route_capacity * kMid * sizeof(__half);
         shared->core_bytes += route_capacity_elems * sizeof(__half);
     }
@@ -5139,6 +5182,7 @@ void close_shared_rank_buffers(SharedRankBuffers *shared) {
         if (r.d_route_slots) CHECK_CUDA(cudaFree(r.d_route_slots));
         if (r.d_route_weights) CHECK_CUDA(cudaFree(r.d_route_weights));
         if (r.d_a) CHECK_CUDA(cudaFree(r.d_a));
+        if (r.d_gate_up) CHECK_CUDA(cudaFree(r.d_gate_up));
         if (r.d_gated) CHECK_CUDA(cudaFree(r.d_gated));
         if (r.d_down) CHECK_CUDA(cudaFree(r.d_down));
         if (r.d_ep_contrib_all) CHECK_CUDA(cudaFree(r.d_ep_contrib_all));
@@ -5607,7 +5651,10 @@ int run_decode_loop(const Options &opt,
             }
         }
         for (int p = 0; p < kGpus; ++p) {
-            if (run_gate(ranks[p], api) != 0 || run_down(ranks[p], api) != 0) return 1;
+            const int gate_rc = opt.routed_ffn_norm_input_gate
+                ? run_gate_clamped(ranks[p], api)
+                : run_gate(ranks[p], api);
+            if (gate_rc != 0 || run_down(ranks[p], api) != 0) return 1;
         }
         double ep_stage_ms = 0.0;
         double dense_stage_ms = 0.0;
@@ -5745,10 +5792,13 @@ int run_decode_loop(const Options &opt,
         if (opt.routed_ffn_norm_input_gate && opt.layer <= 2) {
             for (int p = 0; p < kGpus; ++p) {
                 RankState &r = ranks[p];
-                const size_t gated_elems = (size_t)r.routes * kFusedN;
+                const size_t gate_up_elems = (size_t)r.routes * kFusedN;
+                const size_t gated_elems = (size_t)r.routes * kMid;
                 const size_t down_elems = (size_t)r.routes * kHidden;
-                if (gated_elems > 0) {
+                if (gate_up_elems > 0) {
                     CHECK_CUDA(cudaSetDevice(r.device));
+                    log_route_half_stats("route_gate_up", opt.layer, p,
+                                         r.d_gate_up, gate_up_elems, r.stream);
                     log_route_half_stats("route_gated", opt.layer, p,
                                          r.d_gated, gated_elems, r.stream);
                     log_route_half_stats("route_down", opt.layer, p,
@@ -6499,6 +6549,8 @@ int run_layer(const Options &opt,
                                   route_weights.size() * sizeof(float),
                                   cudaMemcpyHostToDevice));
             CHECK_CUDA(cudaMalloc(&r.d_a, route_capacity_elems * sizeof(__half)));
+            CHECK_CUDA(cudaMalloc(&r.d_gate_up,
+                                  (size_t)r.route_capacity * kFusedN * sizeof(__half)));
             CHECK_CUDA(cudaMalloc(&r.d_gated,
                                   (size_t)r.route_capacity * kMid * sizeof(__half)));
             CHECK_CUDA(cudaMalloc(&r.d_down, route_capacity_elems * sizeof(__half)));
@@ -6539,7 +6591,10 @@ int run_layer(const Options &opt,
     if (!opt.skip_predecode_probes) {
         for (int i = 0; i < opt.warmup; ++i) {
             for (int p = 0; p < kGpus; ++p) {
-                if (run_gate(ranks[p], *api) != 0 || run_down(ranks[p], *api) != 0) {
+                const int gate_rc = opt.routed_ffn_norm_input_gate
+                    ? run_gate_clamped(ranks[p], *api)
+                    : run_gate(ranks[p], *api);
+                if (gate_rc != 0 || run_down(ranks[p], *api) != 0) {
                     close_local_runtime();
                     return 9;
                 }
@@ -6556,7 +6611,10 @@ int run_layer(const Options &opt,
         }
         for (int i = 0; i < opt.iters; ++i) {
             for (int p = 0; p < kGpus; ++p) {
-                if (run_gate(ranks[p], *api) != 0) return 10;
+                const int gate_rc = opt.routed_ffn_norm_input_gate
+                    ? run_gate_clamped(ranks[p], *api)
+                    : run_gate(ranks[p], *api);
+                if (gate_rc != 0) return 10;
             }
         }
         for (int p = 0; p < kGpus; ++p) {
@@ -6902,6 +6960,7 @@ int run_layer(const Options &opt,
             CHECK_CUDA(cudaFree(r.d_route_slots));
             CHECK_CUDA(cudaFree(r.d_route_weights));
             CHECK_CUDA(cudaFree(r.d_a));
+            CHECK_CUDA(cudaFree(r.d_gate_up));
             CHECK_CUDA(cudaFree(r.d_gated));
             CHECK_CUDA(cudaFree(r.d_down));
             if (r.d_ep_contrib_all) CHECK_CUDA(cudaFree(r.d_ep_contrib_all));
