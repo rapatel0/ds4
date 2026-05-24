@@ -38,6 +38,10 @@ The current TP/EP resident layer path still contains diagnostic semantics:
   instead of the synthetic route count. This is required before data-driven
   routing, because a real router can send more routes to one GPU than the
   balanced synthetic schedule.
+- Routed expert contributions now flow through a per-route weight buffer.
+  The synthetic schedule uses `0.125` route weights to preserve current
+  behavior, but compose no longer owns a hardcoded EP scaling factor. Real
+  router weights can now be uploaded with the route plan.
 
 ## Validation Plan
 
@@ -95,6 +99,20 @@ the same expected failure:
 }
 ```
 
+The weighted-route build also passed on the V100 pod and preserved the same
+expected failure:
+
+```json
+{
+  "case": "short_reasoning_plain",
+  "expected_text": "16",
+  "actual_text": "ICC",
+  "generated_token_sequence": [95933],
+  "wall_tok_s": 194.878813,
+  "decode_tok_s": 304.803471
+}
+```
+
 ## Artifacts
 
 - `logs/from-cluster/sprint308-all-local-experts-parity/cluster/server.out`
@@ -106,6 +124,9 @@ the same expected failure:
 - `logs/from-cluster/sprint308-route-capacity-parity/cluster/server.out`
 - `logs/from-cluster/sprint308-route-capacity-parity/cluster/server.err`
 - `logs/from-cluster/sprint308-route-capacity-parity/cluster/parity-summary.json`
+- `logs/from-cluster/sprint308-weighted-route-parity/cluster/server.out`
+- `logs/from-cluster/sprint308-weighted-route-parity/cluster/server.err`
+- `logs/from-cluster/sprint308-weighted-route-parity/cluster/parity-summary.json`
 
 ## Production Gate
 

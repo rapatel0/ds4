@@ -512,7 +512,9 @@ fits within the 32GB cards and keeps the same parity failure, which narrows the
 next implementation target to router-driven EP and then exact attention.
 Route buffers now allocate for worst-case `slots * top_k` per rank so a real
 router can produce imbalanced per-GPU traffic without overrunning the old
-synthetic-route allocation.
+synthetic-route allocation. Routed contributions now carry per-route weights;
+the synthetic path uses `0.125` weights to preserve behavior, while compose no
+longer owns a hardcoded EP scale.
 
 ### Sprint 309 - Persistent Appliance Deployment Gate [planned]
 

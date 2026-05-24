@@ -46,6 +46,7 @@ constexpr int kGroupSize = 32;
 constexpr int kDType = GGML_TM_DTYPE_MXFP4;
 constexpr int kHcRows = 4;
 constexpr int kHcMix = 24;
+constexpr float kSyntheticRouteWeight = 0.125f;
 
 #define CHECK_CUDA(expr)                                                              \
     do {                                                                              \
@@ -151,6 +152,7 @@ struct RankState {
     int *d_route_index_by_slot[kGpus] = {};
     int *d_offsets = nullptr;
     int *d_route_slots = nullptr;
+    float *d_route_weights = nullptr;
     __half *d_a = nullptr;
     __half *d_gated = nullptr;
     __half *d_down = nullptr;
@@ -948,6 +950,7 @@ __global__ void zero_f32_kernel(float *dst, uint64_t n) {
 __global__ void ep_reduce_all_dest_shards_kernel(float *contrib,
                                                  const __half *route_hidden,
                                                  const int *route_slots,
+                                                 const float *route_weights,
                                                  int routes,
                                                  int slots) {
     const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
@@ -957,15 +960,17 @@ __global__ void ep_reduce_all_dest_shards_kernel(float *contrib,
     const int h = (int)(i % kHidden);
     const int slot = route_slots[route];
     if (slot < 0 || slot >= slots) return;
+    const float w = route_weights ? route_weights[route] : kSyntheticRouteWeight;
     const int dest = h / (kHidden / kGpus);
     const int local_h = h % (kHidden / kGpus);
     const uint64_t out_idx =
         ((uint64_t)dest * slots + (uint64_t)slot) * (kHidden / kGpus) + local_h;
-    atomicAdd(contrib + out_idx, __half2float(route_hidden[i]));
+    atomicAdd(contrib + out_idx, __half2float(route_hidden[i]) * w);
 }
 
 __global__ void ep_pack_route_dest_shards_kernel(float *packed,
                                                  const __half *route_hidden,
+                                                 const float *route_weights,
                                                  int routes,
                                                  int slots) {
     const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
@@ -973,11 +978,12 @@ __global__ void ep_pack_route_dest_shards_kernel(float *packed,
     if (i >= total) return;
     const int route = (int)(i / kHidden);
     const int h = (int)(i % kHidden);
+    const float w = route_weights ? route_weights[route] : kSyntheticRouteWeight;
     const int dest = h / (kHidden / kGpus);
     const int local_h = h % (kHidden / kGpus);
     const uint64_t out_idx =
         ((uint64_t)dest * slots + (uint64_t)route) * (kHidden / kGpus) + local_h;
-    packed[out_idx] = __half2float(route_hidden[i]);
+    packed[out_idx] = __half2float(route_hidden[i]) * w;
 }
 
 __global__ void add_f32_kernel(float *dst, const float *src, uint64_t n) {
@@ -1009,7 +1015,7 @@ __global__ void compose_next_hidden_kernel(float *next,
     const float residual =
         ((float)(rank + 1) * 0.01f) + ((float)slot * 0.001f) +
         ((float)local_h * 0.00001f);
-    next[i] = residual + attn[i] + shared[i] + ep_sum[i] * 0.125f;
+    next[i] = residual + attn[i] + shared[i] + ep_sum[i];
 }
 
 __global__ void compose_next_hidden_compact8_kernel(float *next,
@@ -1058,7 +1064,7 @@ __global__ void compose_next_hidden_compact8_kernel(float *next,
     if (i5 >= 0) ep += r5[(uint64_t)i5 * (kHidden / kGpus) + local_h];
     if (i6 >= 0) ep += r6[(uint64_t)i6 * (kHidden / kGpus) + local_h];
     if (i7 >= 0) ep += r7[(uint64_t)i7 * (kHidden / kGpus) + local_h];
-    next[i] = residual + attn[i] + shared[i] + ep * 0.125f;
+    next[i] = residual + attn[i] + shared[i] + ep;
 }
 
 __global__ void compose_next_hidden_sum8_kernel(float *next,
@@ -1084,7 +1090,7 @@ __global__ void compose_next_hidden_sum8_kernel(float *next,
         ((float)local_h * 0.00001f);
     const float ep =
         r0[i] + r1[i] + r2[i] + r3[i] + r4[i] + r5[i] + r6[i] + r7[i];
-    next[i] = residual + attn[i] + shared[i] + ep * 0.125f;
+    next[i] = residual + attn[i] + shared[i] + ep;
 }
 
 __global__ void expand_hidden_to_proxy_hc_shard_kernel(float *hc,
@@ -4329,6 +4335,7 @@ int check_repeat(RankState &rank, const Api &api, double *max_abs, int *bad, int
 void build_offsets_for_rank(int rank, int slots, int top_k,
                             std::vector<int> *offsets,
                             std::vector<int> *route_slots,
+                            std::vector<float> *route_weights,
                             int *routes,
                             int *active_experts,
                             int *max_routes_per_expert) {
@@ -4354,6 +4361,7 @@ void build_offsets_for_rank(int rank, int slots, int top_k,
     (*offsets)[(size_t)kLocalExperts] = running;
     if (route_slots) {
         route_slots->assign((size_t)running, -1);
+        if (route_weights) route_weights->assign((size_t)running, kSyntheticRouteWeight);
         std::vector<int> cursor = *offsets;
         for (int slot = 0; slot < slots; ++slot) {
             for (int k = 0; k < top_k; ++k) {
@@ -4362,6 +4370,7 @@ void build_offsets_for_rank(int rank, int slots, int top_k,
                 const int local = (slot + k * 7 + rank) % kPackedLocalExperts;
                 const int idx = cursor[(size_t)local]++;
                 (*route_slots)[(size_t)idx] = slot;
+                if (route_weights) (*route_weights)[(size_t)idx] = kSyntheticRouteWeight;
             }
         }
     }
@@ -4377,7 +4386,7 @@ void build_route_index_by_slot_for_rank(int rank, int slots, int top_k,
     int routes = 0;
     int active_experts = 0;
     int max_routes_per_expert = 0;
-    build_offsets_for_rank(rank, slots, top_k, &offsets, &route_slots, &routes,
+    build_offsets_for_rank(rank, slots, top_k, &offsets, &route_slots, nullptr, &routes,
                            &active_experts, &max_routes_per_expert);
     route_index_by_slot->assign((size_t)slots, -1);
     for (int route = 0; route < routes; ++route) {
@@ -4420,8 +4429,10 @@ int open_shared_rank_buffers(const Options &opt, SharedRankBuffers *shared) {
 
         std::vector<int> offsets;
         std::vector<int> route_slots;
-        build_offsets_for_rank(p, opt.slots, opt.top_k, &offsets, &route_slots, &r.routes,
-                               &r.active_experts, &r.max_routes_per_expert);
+        std::vector<float> route_weights;
+        build_offsets_for_rank(p, opt.slots, opt.top_k, &offsets, &route_slots,
+                               &route_weights, &r.routes, &r.active_experts,
+                               &r.max_routes_per_expert);
 
         r.route_capacity = opt.slots * opt.top_k;
         const size_t route_capacity_elems = (size_t)r.route_capacity * kHidden;
@@ -4432,6 +4443,10 @@ int open_shared_rank_buffers(const Options &opt, SharedRankBuffers *shared) {
                               (size_t)r.route_capacity * sizeof(int)));
         CHECK_CUDA(cudaMemcpy(r.d_route_slots, route_slots.data(),
                               route_slots.size() * sizeof(int), cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMalloc(&r.d_route_weights,
+                              (size_t)r.route_capacity * sizeof(float)));
+        CHECK_CUDA(cudaMemcpy(r.d_route_weights, route_weights.data(),
+                              route_weights.size() * sizeof(float), cudaMemcpyHostToDevice));
         CHECK_CUDA(cudaMalloc(&r.d_a, route_capacity_elems * sizeof(__half)));
         CHECK_CUDA(cudaMalloc(&r.d_gated,
                               (size_t)r.route_capacity * kMid * sizeof(__half)));
@@ -4447,6 +4462,7 @@ int open_shared_rank_buffers(const Options &opt, SharedRankBuffers *shared) {
 
         shared->core_bytes += offsets.size() * sizeof(int);
         shared->core_bytes += (size_t)r.route_capacity * sizeof(int);
+        shared->core_bytes += (size_t)r.route_capacity * sizeof(float);
         shared->core_bytes += route_capacity_elems * sizeof(__half);
         shared->core_bytes += (size_t)r.route_capacity * kMid * sizeof(__half);
         shared->core_bytes += route_capacity_elems * sizeof(__half);
@@ -4464,6 +4480,7 @@ void close_shared_rank_buffers(SharedRankBuffers *shared) {
         free_packed(r.down);
         if (r.d_offsets) CHECK_CUDA(cudaFree(r.d_offsets));
         if (r.d_route_slots) CHECK_CUDA(cudaFree(r.d_route_slots));
+        if (r.d_route_weights) CHECK_CUDA(cudaFree(r.d_route_weights));
         if (r.d_a) CHECK_CUDA(cudaFree(r.d_a));
         if (r.d_gated) CHECK_CUDA(cudaFree(r.d_gated));
         if (r.d_down) CHECK_CUDA(cudaFree(r.d_down));
@@ -4636,7 +4653,8 @@ int run_next_hidden_compose(const Options &opt,
         const uint64_t route_hidden_elems = (uint64_t)r.routes * kHidden;
         grid = (int)((route_hidden_elems + block - 1) / block);
         ep_reduce_all_dest_shards_kernel<<<grid, block, 0, r.stream>>>(
-            r.d_ep_contrib_all, r.d_down, r.d_route_slots, r.routes, opt.slots);
+            r.d_ep_contrib_all, r.d_down, r.d_route_slots, r.d_route_weights,
+            r.routes, opt.slots);
         CHECK_CUDA(cudaGetLastError());
         if (opt.ep_return_fp16) {
             grid = (int)((all_contrib_elems + block - 1) / block);
@@ -4927,7 +4945,8 @@ int run_decode_loop(const Options &opt,
             int grid = (int)((route_hidden_elems + block - 1) / block);
             if (compact_route) {
                 ep_pack_route_dest_shards_kernel<<<grid, block, 0, r.stream>>>(
-                    r.d_ep_contrib_all, r.d_down, r.routes, opt.slots);
+                    r.d_ep_contrib_all, r.d_down, r.d_route_weights,
+                    r.routes, opt.slots);
             } else {
                 grid = (int)((all_contrib_elems + block - 1) / block);
                 zero_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_contrib_all,
@@ -4935,7 +4954,8 @@ int run_decode_loop(const Options &opt,
                 CHECK_CUDA(cudaGetLastError());
                 grid = (int)((route_hidden_elems + block - 1) / block);
                 ep_reduce_all_dest_shards_kernel<<<grid, block, 0, r.stream>>>(
-                    r.d_ep_contrib_all, r.d_down, r.d_route_slots, r.routes, opt.slots);
+                    r.d_ep_contrib_all, r.d_down, r.d_route_slots,
+                    r.d_route_weights, r.routes, opt.slots);
             }
             CHECK_CUDA(cudaGetLastError());
             if (opt.ep_return_fp16) {
@@ -5629,8 +5649,10 @@ int run_layer(const Options &opt,
 
             std::vector<int> offsets;
             std::vector<int> route_slots;
-            build_offsets_for_rank(p, opt.slots, opt.top_k, &offsets, &route_slots, &r.routes,
-                                   &r.active_experts, &r.max_routes_per_expert);
+            std::vector<float> route_weights;
+            build_offsets_for_rank(p, opt.slots, opt.top_k, &offsets, &route_slots,
+                                   &route_weights, &r.routes, &r.active_experts,
+                                   &r.max_routes_per_expert);
 
             r.route_capacity = opt.slots * opt.top_k;
             const size_t route_capacity_elems = (size_t)r.route_capacity * kHidden;
@@ -5641,6 +5663,11 @@ int run_layer(const Options &opt,
                                   (size_t)r.route_capacity * sizeof(int)));
             CHECK_CUDA(cudaMemcpy(r.d_route_slots, route_slots.data(),
                                   route_slots.size() * sizeof(int), cudaMemcpyHostToDevice));
+            CHECK_CUDA(cudaMalloc(&r.d_route_weights,
+                                  (size_t)r.route_capacity * sizeof(float)));
+            CHECK_CUDA(cudaMemcpy(r.d_route_weights, route_weights.data(),
+                                  route_weights.size() * sizeof(float),
+                                  cudaMemcpyHostToDevice));
             CHECK_CUDA(cudaMalloc(&r.d_a, route_capacity_elems * sizeof(__half)));
             CHECK_CUDA(cudaMalloc(&r.d_gated,
                                   (size_t)r.route_capacity * kMid * sizeof(__half)));
@@ -6043,6 +6070,7 @@ int run_layer(const Options &opt,
         if (!shared_rank_buffers) {
             CHECK_CUDA(cudaFree(r.d_offsets));
             CHECK_CUDA(cudaFree(r.d_route_slots));
+            CHECK_CUDA(cudaFree(r.d_route_weights));
             CHECK_CUDA(cudaFree(r.d_a));
             CHECK_CUDA(cudaFree(r.d_gated));
             CHECK_CUDA(cudaFree(r.d_down));

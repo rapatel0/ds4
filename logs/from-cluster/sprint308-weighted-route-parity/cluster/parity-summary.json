@@ -1,0 +1,27 @@
+{
+  "cases": 1,
+  "passed": 0,
+  "failed": 1,
+  "results": [
+    {
+      "case": "short_reasoning_plain",
+      "ctx": 4096,
+      "steps": 1,
+      "expected_hex": "3136",
+      "actual_hex": "494343",
+      "expected_text": "16",
+      "actual_text": "ICC",
+      "match": false,
+      "tokenizer_ready": 1,
+      "prompt_tokens": 18,
+      "prompt_prefill_tokens": 17,
+      "generated_token_ids": 1,
+      "generated_token_sequence": [
+        95933
+      ],
+      "slot_position": 100018,
+      "wall_tok_s": 194.878813,
+      "decode_tok_s": 304.803471
+    }
+  ]
+}
