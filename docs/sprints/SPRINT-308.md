@@ -398,6 +398,41 @@ routed normalized input, route weights, current residual compose, and endpoint
 wiring are live; the remaining parity blocker is the simplified attention/HC
 bridge and token-state semantics, not another obvious FFN nonfinite.
 
+The next HC experiment replaced the diagnostic HC bridge with closer reference
+semantics: 20 Sinkhorn iterations and no artificial `0.125` scale/clamp in the
+HC weighted sum. That exposed the V100-specific activation boundary immediately.
+Without a dedicated activation scaling strategy, the routed FFN path overflows
+when f32 HC-derived activations are packed into FP16 for TurboMind:
+
+```text
+reference HC reduce only:
+  route_input layer 2 finite_bad=2000 max_abs=65504
+
+stable RMS + saturating f32->fp16:
+  route_input layer 2 finite_bad=0 max_abs=65504
+  route_gate_up layer 2 finite_bad=2998 max_abs=65504
+  route_down layer 2 finite_bad=8192
+  result: HTTP 500
+```
+
+So `DS4_V100_TP_EP_REFERENCE_HC_REDUCE=1` is now an explicit diagnostic gate,
+not the serving default. The restored default clamped HC bridge still completes
+the parity request:
+
+```json
+{
+  "case": "short_reasoning_plain",
+  "expected_text": "16",
+  "actual_text": "antsay",
+  "generated_token_sequence": [57648],
+  "decode_tok_s": 51.298722
+}
+```
+
+Interpretation: full reference HC semantics are blocked on a real V100
+activation quantization/scaling boundary. Simply removing the clamp is not
+enough, because the downstream FP16/TurboMind routed executor then overflows.
+
 ## Artifacts
 
 - `logs/from-cluster/sprint308-all-local-experts-parity/cluster/server.out`
@@ -429,6 +464,10 @@ bridge and token-state semantics, not another obvious FFN nonfinite.
 - `logs/from-cluster/sprint308-routed-norm-clamped-gate-v2/20260524-134718/`
 - `logs/from-cluster/sprint308-current-residual-compose/20260524-135408/`
 - `logs/from-cluster/sprint308-current-residual-shared-clamp/20260524-135928/`
+- `logs/from-cluster/sprint308-hc-reference-split-reduce/20260524-140548/`
+- `logs/from-cluster/sprint308-hc-stable-rms-reference-reduce/20260524-141051/`
+- `logs/from-cluster/sprint308-hc-stable-rms-saturating-half/20260524-141459/`
+- `logs/from-cluster/sprint308-default-after-reference-hc-gate/20260524-142053/`
 
 ## Production Gate
 
@@ -443,5 +482,7 @@ Current next fixes:
   replace it with a fused clamped TurboMind/CUTLASS executor;
 - keep the true shared-FFN path on FP32 midpoint until a scaled/fused HMMA
   version is validated;
+- design an explicit activation scale for the reference-HC to FP16/TurboMind
+  routed boundary before making reference HC reduce default;
 - replace the remaining attention bridge with the full DS4 attention,
   compressed-KV, indexer, and row-selection sequence.

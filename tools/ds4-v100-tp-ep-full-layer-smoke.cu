@@ -50,6 +50,7 @@ constexpr int kHcMix = 24;
 constexpr int kModelTopK = 6;
 constexpr float kSyntheticRouteWeight = 0.125f;
 constexpr float kRoutedSwigluClamp = 10.0f;
+constexpr float kFp16Max = 65504.0f;
 
 #define CHECK_CUDA(expr)                                                              \
     do {                                                                              \
@@ -481,6 +482,7 @@ struct Options {
     bool routed_ffn_norm_input_gate = false;
     bool true_shared_ffn_gate = false;
     bool tp_kv_all_slots_gate = false;
+    bool reference_hc_reduce_gate = false;
 };
 
 __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
@@ -528,6 +530,29 @@ __device__ float block_sum_256_f32(float v) {
     v = threadIdx.x < 8u ? warp_sums[threadIdx.x] : 0.0f;
     if (threadIdx.x < 32u) v = warp_sum_f32(v);
     return v;
+}
+
+__device__ float warp_max_f32(float v) {
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        v = fmaxf(v, __shfl_down_sync(0xffffffffu, v, offset));
+    }
+    return v;
+}
+
+__device__ float block_max_256_f32(float v) {
+    __shared__ float warp_maxes[8];
+    v = warp_max_f32(v);
+    if ((threadIdx.x & 31u) == 0u) warp_maxes[threadIdx.x >> 5] = v;
+    __syncthreads();
+    v = threadIdx.x < 8u ? warp_maxes[threadIdx.x] : 0.0f;
+    if (threadIdx.x < 32u) v = warp_max_f32(v);
+    return v;
+}
+
+__device__ __half f32_to_half_saturate(float v) {
+    if (!isfinite(v)) return __float2half(0.0f);
+    v = fminf(kFp16Max, fmaxf(-kFp16Max, v));
+    return __float2half(v);
 }
 
 __global__ void f8_b128_dense_kernel(float *out,
@@ -804,6 +829,42 @@ __global__ void rms_norm_plain_rows_kernel(float *out,
     }
 }
 
+__global__ void rms_norm_plain_rows_stable_kernel(float *out,
+                                                  const float *in,
+                                                  uint32_t cols,
+                                                  uint32_t rows,
+                                                  float eps) {
+    const uint32_t row = blockIdx.x;
+    if (row >= rows) return;
+    const float *src = in + (uint64_t)row * cols;
+    float *dst = out + (uint64_t)row * cols;
+    float local_max = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        const float v = src[c];
+        if (isfinite(v)) local_max = fmaxf(local_max, fabsf(v));
+    }
+    const float max_abs = block_max_256_f32(local_max);
+    float sum = 0.0f;
+    if (max_abs > 0.0f && isfinite(max_abs)) {
+        for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+            const float v = src[c];
+            if (isfinite(v)) {
+                const float scaled = v / max_abs;
+                sum += scaled * scaled;
+            }
+        }
+    }
+    sum = block_sum_256_f32(sum);
+    float scale = rsqrtf(eps);
+    if (max_abs > 0.0f && isfinite(max_abs)) {
+        scale = rsqrtf(sum / (float)cols + eps / (max_abs * max_abs)) / max_abs;
+    }
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        const float v = src[c];
+        dst[c] = isfinite(v) ? v * scale : 0.0f;
+    }
+}
+
 __global__ void f32_dense_kernel(float *out,
                                  const float *weights,
                                  const float *x,
@@ -859,7 +920,8 @@ __global__ void hc_weighted_sum_rows_kernel(float *out,
 __global__ void hc_weighted_sum_shard_kernel(float *out,
                                              const float *hc,
                                              const float *weights,
-                                             uint32_t slots) {
+                                             uint32_t slots,
+                                             int reference_reduce) {
     const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
     const uint32_t shard_cols = kHidden / kGpus;
     const uint64_t n = (uint64_t)slots * (uint64_t)shard_cols;
@@ -876,7 +938,9 @@ __global__ void hc_weighted_sum_shard_kernel(float *out,
               hc[base + 2ull * (uint64_t)shard_cols + local_h] * w2 +
               hc[base + 3ull * (uint64_t)shard_cols + local_h] * w3;
     if (!isfinite(v)) v = 0.0f;
-    v = fminf(1.0f, fmaxf(-1.0f, v * 0.125f));
+    if (!reference_reduce) {
+        v = fminf(1.0f, fmaxf(-1.0f, v * 0.125f));
+    }
     out[i] = v;
 }
 
@@ -903,7 +967,7 @@ __global__ void pack_current_full_to_routes_kernel(__half *routes,
     const int route = (int)(i / kHidden);
     const int h = (int)(i % kHidden);
     const int slot = route_slots[route];
-    routes[i] = __float2half(current_full[(uint64_t)slot * kHidden + h]);
+    routes[i] = f32_to_half_saturate(current_full[(uint64_t)slot * kHidden + h]);
 }
 
 __global__ void shared_swiglu_shard_to_float_kernel(float *mid,
@@ -970,8 +1034,8 @@ __global__ void fill_dense_input_half_from_current_kernel(__half *dst,
     if (i >= n) return;
     const uint32_t slot = (uint32_t)(i / cols);
     const uint32_t col = (uint32_t)(i % cols);
-    dst[i] = __float2half(current_full[(uint64_t)slot * kHidden +
-                                       (uint32_t)(col % kHidden)]);
+    dst[i] = f32_to_half_saturate(current_full[(uint64_t)slot * kHidden +
+                                               (uint32_t)(col % kHidden)]);
 }
 
 __global__ void rms_norm_weight_rows_kernel(float *out,
@@ -993,6 +1057,44 @@ __global__ void rms_norm_weight_rows_kernel(float *out,
     const float scale = rsqrtf(sum / (float)cols + eps);
     for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
         dst[c] = src[c] * scale * weight[c];
+    }
+}
+
+__global__ void rms_norm_weight_rows_stable_kernel(float *out,
+                                                   const float *in,
+                                                   const float *weight,
+                                                   uint32_t cols,
+                                                   uint32_t rows,
+                                                   float eps) {
+    const uint32_t row = blockIdx.x;
+    if (row >= rows) return;
+    const float *src = in + (uint64_t)row * cols;
+    float *dst = out + (uint64_t)row * cols;
+    float local_max = 0.0f;
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        const float v = src[c];
+        if (isfinite(v)) local_max = fmaxf(local_max, fabsf(v));
+    }
+    const float max_abs = block_max_256_f32(local_max);
+    float sum = 0.0f;
+    if (max_abs > 0.0f && isfinite(max_abs)) {
+        for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+            const float v = src[c];
+            if (isfinite(v)) {
+                const float scaled = v / max_abs;
+                sum += scaled * scaled;
+            }
+        }
+    }
+    sum = block_sum_256_f32(sum);
+    float scale = rsqrtf(eps);
+    if (max_abs > 0.0f && isfinite(max_abs)) {
+        scale = rsqrtf(sum / (float)cols + eps / (max_abs * max_abs)) / max_abs;
+    }
+    for (uint32_t c = threadIdx.x; c < cols; c += blockDim.x) {
+        const float v = src[c];
+        const float y = isfinite(v) ? v * scale * weight[c] : 0.0f;
+        dst[c] = isfinite(y) ? y : 0.0f;
     }
 }
 
@@ -1047,7 +1149,7 @@ __global__ void add_f32_kernel(float *dst, const float *src, uint64_t n) {
 
 __global__ void cast_f32_to_half_kernel(__half *dst, const float *src, uint64_t n) {
     const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) dst[i] = __float2half(src[i]);
+    if (i < n) dst[i] = f32_to_half_saturate(src[i]);
 }
 
 __global__ void add_half_to_f32_kernel(float *dst, const __half *src, uint64_t n) {
@@ -1261,12 +1363,13 @@ __global__ void hc_split_rows_kernel(float *split,
                                      const float *mix,
                                      const float *scale,
                                      const float *base,
-                                     uint32_t slots) {
+                                     uint32_t slots,
+                                     uint32_t sinkhorn_iters) {
     const uint32_t slot = blockIdx.x * blockDim.x + threadIdx.x;
     if (slot >= slots) return;
     hc4_split_one_dev(split + (uint64_t)slot * kHcMix,
                       mix + (uint64_t)slot * kHcMix,
-                      scale, base, 4u, 1.0e-6f);
+                      scale, base, sinkhorn_iters, 1.0e-6f);
 }
 
 __global__ void router_select_topk_rows_kernel(int *selected,
@@ -1513,6 +1616,7 @@ void usage(const char *argv0) {
                  "       [--model-router-routes]\n"
                  "       [--routed-ffn-norm-input-gate]\n"
                  "       [--true-shared-ffn-gate]\n"
+                 "       [--reference-hc-reduce-gate]\n"
                  "       [--diagnostic-output-head]\n",
                  argv0);
 }
@@ -1684,6 +1788,11 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--true-shared-ffn-gate") == 0) {
             opt->true_shared_ffn_gate = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--reference-hc-reduce-gate") == 0) {
+            opt->reference_hc_reduce_gate = true;
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
@@ -2573,7 +2682,7 @@ int run_shared_hc_final_expand(const Options &opt,
     CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaDeviceSynchronize());
 
-    rms_norm_plain_rows_kernel<<<(unsigned int)opt.slots, 256>>>(
+    rms_norm_plain_rows_stable_kernel<<<(unsigned int)opt.slots, 256>>>(
         hc->d_hc_norm, hc->d_hc, kHcRows * (uint32_t)kHidden,
         (uint32_t)opt.slots, 1.0e-6f);
     const dim3 mix_grid((unsigned int)kHcMix, (unsigned int)opt.slots, 1u);
@@ -2582,7 +2691,7 @@ int run_shared_hc_final_expand(const Options &opt,
         (uint32_t)kHcMix, kHcRows * (uint32_t)kHidden, (uint32_t)opt.slots);
     hc_split_rows_kernel<<<(unsigned int)(((uint64_t)opt.slots + 255) / 256), 256>>>(
         hc->d_split, hc->d_mix, hc->d_ffn_scale[layer], hc->d_ffn_base[layer],
-        (uint32_t)opt.slots);
+        (uint32_t)opt.slots, opt.reference_hc_reduce_gate ? 20u : 4u);
     CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaDeviceSynchronize());
 
@@ -2663,7 +2772,7 @@ int run_shared_hc_current_input(const Options &opt,
     CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaDeviceSynchronize());
 
-    rms_norm_plain_rows_kernel<<<(unsigned int)opt.slots, 256>>>(
+    rms_norm_plain_rows_stable_kernel<<<(unsigned int)opt.slots, 256>>>(
         hc->d_hc_norm, hc->d_hc, kHcRows * (uint32_t)kHidden,
         (uint32_t)opt.slots, 1.0e-6f);
     const dim3 mix_grid((unsigned int)kHcMix, (unsigned int)opt.slots, 1u);
@@ -2672,7 +2781,7 @@ int run_shared_hc_current_input(const Options &opt,
         (uint32_t)kHcMix, kHcRows * (uint32_t)kHidden, (uint32_t)opt.slots);
     hc_split_rows_kernel<<<(unsigned int)(((uint64_t)opt.slots + 255) / 256), 256>>>(
         hc->d_split, hc->d_mix, hc->d_attn_scale[layer], hc->d_attn_base[layer],
-        (uint32_t)opt.slots);
+        (uint32_t)opt.slots, opt.reference_hc_reduce_gate ? 20u : 4u);
     CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaDeviceSynchronize());
 
@@ -2692,7 +2801,8 @@ int run_shared_hc_current_input(const Options &opt,
         hc_weighted_sum_shard_kernel<<<
             (unsigned int)((shard_elems + block - 1) / block), block,
             0, r.stream>>>(r.d_current_shard, r.d_final_hc_shard,
-                           r.d_hc_split, (uint32_t)opt.slots);
+                           r.d_hc_split, (uint32_t)opt.slots,
+                           opt.reference_hc_reduce_gate ? 1 : 0);
         CHECK_CUDA(cudaGetLastError());
     }
     for (int rank = 0; rank < kGpus; ++rank) {
@@ -2711,7 +2821,7 @@ int run_shared_hc_current_input(const Options &opt,
     CHECK_CUDA(cudaDeviceSynchronize());
 
     if (!hc->d_ffn_normed || !hc->d_ffn_norm_weight[layer]) return 4;
-    rms_norm_weight_rows_kernel<<<(unsigned int)opt.slots, 256>>>(
+    rms_norm_weight_rows_stable_kernel<<<(unsigned int)opt.slots, 256>>>(
         hc->d_ffn_normed, hc->d_current_full, hc->d_ffn_norm_weight[layer],
         (uint32_t)kHidden, (uint32_t)opt.slots, 1.0e-6f);
     CHECK_CUDA(cudaGetLastError());
@@ -3068,7 +3178,7 @@ int run_output_head_gate(const Options &opt,
     CHECK_CUDA(cudaMemcpy(d_output_norm, output_norm.data(), output_norm.size() * sizeof(float),
                           cudaMemcpyHostToDevice));
     synthetic_hc_kernel<<<(unsigned int)((hc_elems + 255) / 256), 256>>>(d_hc, opt.slots);
-    rms_norm_plain_rows_kernel<<<(unsigned int)opt.slots, 256>>>(
+    rms_norm_plain_rows_stable_kernel<<<(unsigned int)opt.slots, 256>>>(
         d_hc_norm, d_hc, 4u * (uint32_t)kHidden, (uint32_t)opt.slots, 1.0e-6f);
     const dim3 head_grid(4u, (unsigned int)opt.slots, 1u);
     f32_dense_kernel<<<head_grid, 256>>>(d_head_pre, d_head_fn, d_hc_norm,
@@ -3078,7 +3188,7 @@ int run_output_head_gate(const Options &opt,
         d_head_weights, d_head_pre, d_head_scale, d_head_base, (uint32_t)opt.slots);
     hc_weighted_sum_rows_kernel<<<(unsigned int)((embd_elems + 255) / 256), 256>>>(
         d_embd, d_hc, d_head_weights, (uint32_t)opt.slots);
-    rms_norm_weight_rows_kernel<<<(unsigned int)opt.slots, 256>>>(
+    rms_norm_weight_rows_stable_kernel<<<(unsigned int)opt.slots, 256>>>(
         d_embd_norm, d_embd, d_output_norm, (uint32_t)kHidden, (uint32_t)opt.slots, 1.0e-6f);
     CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaDeviceSynchronize());
@@ -3406,7 +3516,7 @@ int run_output_head_resident_gate(const Options &opt,
         const auto prep_start = std::chrono::steady_clock::now();
         CHECK_CUDA(cudaSetDevice(opt.devices[0]));
         synthetic_hc_kernel<<<(unsigned int)((hc_elems + 255) / 256), 256>>>(d_hc, opt.slots);
-        rms_norm_plain_rows_kernel<<<(unsigned int)opt.slots, 256>>>(
+        rms_norm_plain_rows_stable_kernel<<<(unsigned int)opt.slots, 256>>>(
             d_hc_norm, d_hc, 4u * (uint32_t)kHidden, (uint32_t)opt.slots, 1.0e-6f);
         const dim3 head_grid(4u, (unsigned int)opt.slots, 1u);
         f32_dense_kernel<<<head_grid, 256>>>(d_head_pre, d_head_fn, d_hc_norm,
@@ -3416,7 +3526,7 @@ int run_output_head_resident_gate(const Options &opt,
             d_head_weights, d_head_pre, d_head_scale, d_head_base, (uint32_t)opt.slots);
         hc_weighted_sum_rows_kernel<<<(unsigned int)((embd_elems + 255) / 256), 256>>>(
             d_embd, d_hc, d_head_weights, (uint32_t)opt.slots);
-        rms_norm_weight_rows_kernel<<<(unsigned int)opt.slots, 256>>>(
+        rms_norm_weight_rows_stable_kernel<<<(unsigned int)opt.slots, 256>>>(
             d_embd_norm, d_embd, d_output_norm, (uint32_t)kHidden,
             (uint32_t)opt.slots, 1.0e-6f);
         CHECK_CUDA(cudaGetLastError());
@@ -3750,7 +3860,7 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
     const auto gather_stop = std::chrono::steady_clock::now();
 
     const auto prep_start = std::chrono::steady_clock::now();
-    rms_norm_plain_rows_kernel<<<(unsigned int)opt.slots, 256>>>(
+    rms_norm_plain_rows_stable_kernel<<<(unsigned int)opt.slots, 256>>>(
         head->d_hc_norm, head->d_hc, 4u * (uint32_t)kHidden,
         (uint32_t)opt.slots, 1.0e-6f);
     const dim3 head_grid(4u, (unsigned int)opt.slots, 1u);
@@ -3763,7 +3873,7 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
         head->d_head_base, (uint32_t)opt.slots);
     hc_weighted_sum_rows_kernel<<<(unsigned int)((embd_elems + 255) / 256), 256>>>(
         head->d_embd, head->d_hc, head->d_head_weights, (uint32_t)opt.slots);
-    rms_norm_weight_rows_kernel<<<(unsigned int)opt.slots, 256>>>(
+    rms_norm_weight_rows_stable_kernel<<<(unsigned int)opt.slots, 256>>>(
         head->d_embd_norm, head->d_embd, head->d_output_norm,
         (uint32_t)kHidden, (uint32_t)opt.slots, 1.0e-6f);
     CHECK_CUDA(cudaGetLastError());
