@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 317
+revision: 318
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -202,6 +202,14 @@ not a serial layer-chain.
   still diagnostic; it does not yet feed q-head RoPE, raw/compressed KV,
   indexer selection, attention softmax/value read, or real attention output
   into the next hidden state.
+- Sprint 312 added `DS4_V100_TP_EP_TRUE_DS4_ATTENTION_STATE=1`, which runs
+  local q-head RMSNorm over the TP8 `attn_q_b` shards and writes a diagnostic
+  raw SWA KV row for all 43 layers at `32` slots / `256K`. The V100 gate has
+  43 state-update passes and zero failures. The key caveat is numeric:
+  q-head shards are finite, but raw SWA KV reaches FP16 saturation
+  (`max_abs=65504`) in early layers, so the next work must isolate whether
+  the saturation is caused by the still-simplified upstream HC/current-hidden
+  bridge, missing RoPE/reference scaling, or the KV quantize/round contract.
 - Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
   longer exposes PP/layer-split topology modes. Against the real production
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about
@@ -1946,6 +1954,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-24 | Sprint 309 localized the reference-HC instability. | Route-local activation scaling keeps the normalized routed FFN path finite, but unguarded reference-HC state grows to `1e15+` by layer 30 and first becomes non-finite in `final_hc_shard` at layer 32, after `compose_next_hidden` is still finite. An explicit diagnostic guard, `DS4_V100_TP_EP_REFERENCE_HC_STATE_GUARD=1`, lets the full HTTP parity request complete with a wrong token (`[$` vs `16`) instead of HTTP 500. | Replace the simplified HC/attention bridge with true DS4 HC attention/compressed-KV/indexer semantics; keep the state guard diagnostic-only and do not treat it as model correctness. |
 | 2026-05-24 | Sprint 310 starts replacing the simplified TP/EP attention bridge. | The resident TP/EP runtime can now opt into binding the full DS4 attention projection set (`attn_q_a`, `attn_q_b`, `attn_kv_latent`, `attn_output_a`, and `attn_output_b`) across all 43 layers instead of only the final attention output projection. | Wire those resident tensors into the real q/kv/RoPE/raw-KV/compressed-KV/indexer/attention/output sequence, then rerun the reference parity gate. |
 | 2026-05-24 | Sprint 311 executed the first true-attention projection prefix. | The TP/EP runtime now runs `attn_norm`, `attn_q_a`, `attn_q_a_norm`, `attn_q_b`, `attn_kv_latent`, and `attn_kv_a_norm` for all 43 layers at `32` slots / `256K`; the V100 gate has 43 projection-prefix passes and zero failures. | Continue the attention sequence with q-head norm/RoPE, raw and compressed KV updates, ratio-4 indexer row selection, raw+compressed attention, inverse RoPE, and `attn_output_a -> attn_output_b`. |
+| 2026-05-24 | Sprint 312 added the first true-attention state-update gate. | The TP/EP runtime now normalizes local q-head shards and writes diagnostic raw SWA KV rows for all 43 layers at `32` slots / `256K`; the state gate passes, but raw KV saturates to `65504` in early layers. | Isolate raw-KV saturation, then add q-head RoPE, attn_sinks, raw-SWA attention read, and `attn_output_a -> attn_output_b` before feeding attention output into hidden state. |
 
 ## Open Questions
 
