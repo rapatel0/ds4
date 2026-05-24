@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 327
+revision: 328
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -278,6 +278,16 @@ not a serial layer-chain.
   projection reaches live serving. The next blocker is likely ordering:
   FFN norm/router/shared/routed FFN still need to consume the post-attention
   residual/current hidden rather than the pre-attention bridge.
+- Sprint 322 added
+  `--true-ds4-post-attention-ffn-input-gate`, which materializes
+  `post_attn = current + attn_output_b`, recomputes FFN norm/router routes,
+  repacks routed expert inputs, and fills shared-FFN gate/up inputs from that
+  post-attention tensor. The `32` slot / `256K` V100 gate passed all 43 layers
+  with 43 post-attention rows and zero finite failures. The HTTP parity vector
+  still fails: expected `16`, received `mere`, token `88445`, at `21.484145`
+  wall tok/s and `22.443315` decode tok/s. The changed token proves the
+  post-attention FFN input path reaches serving; the next semantic blocker is
+  true compressed-KV/indexer attention rather than FFN input ordering.
 - Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
   longer exposes PP/layer-split topology modes. Against the real production
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about
@@ -2032,6 +2042,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-24 | Sprint 319 reran the TP/EP HTTP reference parity gate after the reduction fix. | The official `short_reasoning_plain` vector still fails, but the live output changed from `ICC` / token `95933` to `)Skip` / token `83480`, proving the reduction fix reaches the askable serving path. | Implement the remaining true DS4 attention semantics: compressed KV/indexer row selection, raw+compressed attention merge, `attn_output_a -> attn_output_b`, and hidden-state promotion. |
 | 2026-05-24 | Sprint 320 added a TP/EP true-attention output projection gate. | The real `attn_output_a -> attn_output_b` sequence now runs over rank-local 4096-wide attention heads and gathers the 8192-wide intermediate before producing per-rank hidden shards; the `32` slot / `256K` / `4` step V100 gate passes structurally with 172 layer-step invocations and zero failures. | Promote `attn_output_b` shards into the attention residual/current-hidden path, then rerun the reference parity vector. |
 | 2026-05-24 | Sprint 321 reran HTTP reference parity with true-attention output enabled. | The official vector still fails, but output changed from `)Skip` / token `83480` to `urf` / token `64906`, proving the new attention output path is active in serving. | Reorder the layer path so FFN norm/router/shared/routed FFN consume post-attention residual/current hidden, then rerun parity. |
+| 2026-05-24 | Sprint 322 promoted post-attention hidden into FFN inputs. | The TP/EP runtime now materializes `current + attn_output_b`, recomputes FFN norm/router/shared/routed inputs from that tensor, and passes the `32` slot / `256K` all-layer gate; HTTP parity still fails but changes to `mere` / token `88445`. | Implement true compressed-KV/indexer attention and raw+compressed attention merge, then rerun reference parity. |
 
 ## Open Questions
 
