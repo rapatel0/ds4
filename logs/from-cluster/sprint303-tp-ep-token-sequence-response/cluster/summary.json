@@ -1,0 +1,17 @@
+{
+  "status": 200,
+  "generated_token_sequence": [
+    127885,
+    57114,
+    78026
+  ],
+  "generated_token_ids": 3,
+  "slot_generated_token_ids": 3,
+  "prompt_prefill_tokens": 2,
+  "slot_position": 100005,
+  "cache_pos_out": 100005,
+  "generated_tokens_per_second": 214.100724,
+  "generated_tokens_per_second_decode": 353.66749,
+  "content": "",
+  "diagnostic_note": "tokenized prompt prefill and per-step feedback are wired; tokenizer text is not fully wired yet"
+}

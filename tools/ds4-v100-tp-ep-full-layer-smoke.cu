@@ -6507,6 +6507,16 @@ static std::string http_json_escape(const std::string &s) {
     return out;
 }
 
+static std::string http_json_uint_array(const std::vector<uint32_t> &values) {
+    std::string out = "[";
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i) out += ",";
+        out += std::to_string((unsigned long long)values[i]);
+    }
+    out += "]";
+    return out;
+}
+
 static bool http_read_request(int fd, HttpParsedRequest *out) {
     char req[8192];
     size_t used = 0;
@@ -7561,7 +7571,9 @@ int run_tp_ep_http_server(const Options &base_opt,
                         : UINT32_MAX;
                     const std::string escaped_key = http_json_escape(batch[i].cache_key);
                     const std::string escaped_evicted = http_json_escape(batch[i].evicted_key);
-                    char meta[6144];
+                    const std::string generated_sequence =
+                        http_json_uint_array(batch[i].generated_token_ids);
+                    char meta[8192];
                     std::snprintf(meta, sizeof(meta),
                                   "\"backend\":\"tp_ep_resident\","
                                   "\"diagnostic\":true,"
@@ -7572,6 +7584,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   "\"decode_input_token\":%u,"
                                   "\"prompt_prefill_tokens\":%llu,"
                                   "\"generated_token_ids\":%zu,"
+                                  "\"generated_token_sequence\":%s,"
                                   "\"selected_token\":%u,"
                                   "\"selected_logit\":%.9f,"
                                   "\"output_head_ms\":%.6f,"
@@ -7591,6 +7604,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   "\"cache_slot\":%d,"
                                   "\"cache_pos_in\":%llu,"
                                   "\"cache_pos_out\":%llu,"
+                                  "\"slot_position\":%llu,"
                                   "\"cache_evicted\":%d,"
                                   "\"cache_evicted_key\":\"%s\","
                                   "\"request_prompt_token_ids\":%zu,"
@@ -7631,6 +7645,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   batch[i].decode_input_token,
                                   (unsigned long long)batch[i].prompt_prefill_tokens,
                                   batch[i].generated_token_ids.size(),
+                                  generated_sequence.c_str(),
                                   selected_token,
                                   selected_logit,
                                   result.output_head_ms,
@@ -7649,6 +7664,8 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   (unsigned long long)batch[i].prompt_fingerprint,
                                   batch[i].cache_slot,
                                   (unsigned long long)assignments[i].pos_in,
+                                  (unsigned long long)(assignments[i].pos_in +
+                                      batch[i].prompt_prefill_tokens + request_generated),
                                   (unsigned long long)(assignments[i].pos_in +
                                       batch[i].prompt_prefill_tokens + request_generated),
                                   batch[i].cache_evicted ? 1 : 0,

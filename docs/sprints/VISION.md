@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: codex
-revision: 302
+revision: 303
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -126,6 +126,15 @@ not a serial layer-chain.
   selection, then generation starts from the final prompt token. This gives the
   endpoint the minimal prompt/prefix semantics needed before text I/O and
   performance optimization. Fast batched prefill is still a later optimization.
+- Sprint 303 exposed generated token IDs as an explicit response array. The
+  diagnostic `/v1/completions` endpoint now returns
+  `ds4_v100.generated_token_sequence` plus `slot_position`, so downstream
+  clients can consume token IDs and verify resident cursor advancement before
+  tokenizer text rendering is wired. A 32-slot / 256K V100 smoke with
+  `prompt_tokens=[31,32,33]` and `max_tokens=3` returned
+  `[127885,57114,78026]`, advanced the slot to `100005`, and reported
+  `214.100724` wall tok/s / `353.667490` decode tok/s for the generated
+  section.
 - Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
   longer exposes PP/layer-split topology modes. Against the real production
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about

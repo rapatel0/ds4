@@ -4,6 +4,17 @@ Last updated: 2026-05-23
 
 ## Topline
 
+Current active implementation track is TP8/EP8 only. By Sprint 303 the
+diagnostic `/v1/completions` path accepts tokenized prompts, performs
+correctness-oriented prompt prefill, runs multi-token autoregressive
+output-head/sample/feed, persists resident session state, and returns
+`generated_token_sequence` plus `slot_position`. The latest V100 smoke at
+`32` slots / `256K`, `prompt_tokens=[31,32,33]`, `max_tokens=3`, returns
+`[127885,57114,78026]`, advances the resident cursor to `100005`, and reports
+`214.100724` wall tok/s / `353.667490` decode tok/s for the generated section.
+Tokenizer text I/O, active-slot-only decode, optimized batched prefill, exact
+DS4 HC parity, and MTP remain open.
+
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s
 and `66.825545` continuation tok/s with `16/16` token match. Sprint 201 adds a

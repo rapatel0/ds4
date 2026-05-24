@@ -253,6 +253,18 @@ from the final prompt token. The V100 smoke with `session_id=prefill`,
 `100000 -> 100004`, and `next_position=100004`. The generated section reports
 `212.692685` wall tok/s / `351.116767` decode tok/s. This is correctness
 prefill, not optimized batched prefill.
+Sprint 303 exposed the generated token sequence in the TP/EP diagnostic
+completion response. `/v1/completions` now returns
+`ds4_v100.generated_token_sequence` and an explicit `slot_position` alias for
+the committed resident cursor. The V100 smoke with `session_id=seq`,
+`prompt_tokens=[31,32,33]`, and `max_tokens=3` returns
+`generated_token_sequence=[127885,57114,78026]`, `generated_token_ids=3`,
+`slot_generated_token_ids=3`, `prompt_prefill_tokens=2`,
+`slot_position=cache_pos_out=100005`, and `214.100724` wall tok/s /
+`353.667490` decode tok/s for the generated section. Tokenized prompt prefill,
+multi-token feedback, session persistence, and token-ID output are now wired;
+tokenizer text I/O, active-slot-only decode, optimized/batched prefill, exact
+DS4 HC parity, and MTP remain.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s
