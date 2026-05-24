@@ -182,6 +182,8 @@ struct RankState {
     float *d_hc_split = nullptr;
     float *d_attn_kv_full = nullptr;
     float *d_attn_raw_swa = nullptr;
+    float *d_attn_sinks = nullptr;
+    float *d_attn_heads = nullptr;
     bool hc_initialized = false;
     PackedExperts gated;
     PackedExperts down;
@@ -501,6 +503,7 @@ struct Options {
     bool true_ds4_attention_residency_gate = false;
     bool true_ds4_attention_projection_gate = false;
     bool true_ds4_attention_state_gate = false;
+    bool true_ds4_attention_raw_read_gate = false;
 };
 
 void log_tensor_f32_stats(const char *tag, int layer, int rank_id,
@@ -1084,6 +1087,45 @@ __global__ void kv_fp8_round_store_raw_swa_kernel(float *raw_swa,
     }
     v = __half2float(f32_to_half_saturate(v));
     raw_swa[((uint64_t)slot * raw_rows + raw_row) * head_dim + col] = v;
+}
+
+__global__ void attention_raw_swa_one_row_kernel(float *out_heads,
+                                                 const float *q_heads,
+                                                 const float *raw_swa,
+                                                 const float *sinks,
+                                                 uint32_t slots,
+                                                 uint32_t local_heads,
+                                                 uint32_t head_dim,
+                                                 uint32_t raw_rows,
+                                                 uint32_t raw_row) {
+    const uint32_t row = blockIdx.x;
+    if (row >= slots * local_heads) return;
+    const uint32_t slot = row / local_heads;
+    const uint32_t local_head = row % local_heads;
+    const float *q = q_heads + (uint64_t)row * head_dim;
+    const float *kv =
+        raw_swa + ((uint64_t)slot * raw_rows + raw_row) * (uint64_t)head_dim;
+    float dot = 0.0f;
+    for (uint32_t d = threadIdx.x; d < head_dim; d += blockDim.x) {
+        dot += q[d] * kv[d];
+    }
+    __shared__ float partial[256];
+    partial[threadIdx.x] = dot;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) partial[threadIdx.x] += partial[threadIdx.x + stride];
+        __syncthreads();
+    }
+    const float score = partial[0] * rsqrtf((float)head_dim);
+    const float sink = sinks[local_head];
+    const float max_s = fmaxf(score, sink);
+    const float row_w = expf(score - max_s);
+    const float denom = row_w + expf(sink - max_s);
+    const float scale = row_w / denom;
+    float *out = out_heads + (uint64_t)row * head_dim;
+    for (uint32_t d = threadIdx.x; d < head_dim; d += blockDim.x) {
+        out[d] = kv[d] * scale;
+    }
 }
 
 __global__ void pack_current_full_to_routes_kernel(__half *routes,
@@ -1799,6 +1841,7 @@ void usage(const char *argv0) {
                  "       [--true-ds4-attention-residency-gate]\n"
                  "       [--true-ds4-attention-projection-gate]\n"
                  "       [--true-ds4-attention-state-gate]\n"
+                 "       [--true-ds4-attention-raw-read-gate]\n"
                  "       [--reference-hc-reduce-gate]\n"
                  "       [--reference-hc-state-guard-gate]\n"
                  "       [--diagnostic-output-head]\n",
@@ -1993,6 +2036,14 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--true-ds4-attention-raw-read-gate") == 0) {
+            opt->true_ds4_attention_raw_read_gate = true;
+            opt->true_ds4_attention_state_gate = true;
+            opt->true_ds4_attention_projection_gate = true;
+            opt->true_ds4_attention_residency_gate = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--reference-hc-reduce-gate") == 0) {
             opt->reference_hc_reduce_gate = true;
             opt->tp_hc_current_input_gate = true;
@@ -2032,6 +2083,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->true_ds4_attention_residency_gate) &&
            (!opt->true_ds4_attention_state_gate ||
             opt->true_ds4_attention_projection_gate) &&
+           (!opt->true_ds4_attention_raw_read_gate ||
+            opt->true_ds4_attention_state_gate) &&
            !(opt->dense_compute_tensor &&
              (opt->dense_compute_all_f8 || opt->dense_compute_all_bf16));
 }
@@ -2626,6 +2679,7 @@ struct SharedHcControls {
     float *d_attn_norm_weight[43] = {};
     float *d_q_a_norm_weight[43] = {};
     float *d_kv_a_norm_weight[43] = {};
+    float *d_attn_sinks[43] = {};
     float *d_attn_fn[43] = {};
     float *d_attn_base[43] = {};
     float *d_attn_scale[43] = {};
@@ -2774,12 +2828,14 @@ int open_shared_hc_controls(const Options &opt,
         std::vector<float> attn_norm_weight;
         std::vector<float> q_a_norm_weight;
         std::vector<float> kv_a_norm_weight;
+        std::vector<float> attn_sinks;
         std::vector<float> router_w;
         std::vector<float> router_bias;
         std::vector<int> router_hash;
         const std::string attn_norm_name = layer_tensor_name(layer, "attn_norm.weight");
         const std::string q_a_norm_name = layer_tensor_name(layer, "attn_q_a_norm.weight");
         const std::string kv_a_norm_name = layer_tensor_name(layer, "attn_kv_a_norm.weight");
+        const std::string attn_sinks_name = layer_tensor_name(layer, "attn_sinks");
         const std::string attn_fn_name = layer_tensor_name(layer, "hc_attn_fn");
         const std::string attn_base_name = layer_tensor_name(layer, "hc_attn_base");
         const std::string attn_scale_name = layer_tensor_name(layer, "hc_attn_scale");
@@ -2802,6 +2858,8 @@ int open_shared_hc_controls(const Options &opt,
                              1024, &q_a_norm_weight) ||
             load_control_f32(opt, rows, kv_a_norm_name.c_str(),
                              kHeadDim, &kv_a_norm_weight) ||
+            load_control_f32(opt, rows, attn_sinks_name.c_str(),
+                             kHeadCount, &attn_sinks) ||
             load_control_f32(opt, rows, fn_name.c_str(),
                              (size_t)kHcRows * (size_t)kHidden * kHcMix, &fn) ||
             load_control_f32(opt, rows, base_name.c_str(), kHcMix, &base) ||
@@ -2831,6 +2889,8 @@ int open_shared_hc_controls(const Options &opt,
                               q_a_norm_weight.size() * sizeof(float)));
         CHECK_CUDA(cudaMalloc(&out->d_kv_a_norm_weight[layer],
                               kv_a_norm_weight.size() * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&out->d_attn_sinks[layer],
+                              attn_sinks.size() * sizeof(float)));
         CHECK_CUDA(cudaMalloc(&out->d_router_w[layer], router_w.size() * sizeof(float)));
         if (have_bias) {
             CHECK_CUDA(cudaMalloc(&out->d_router_bias[layer],
@@ -2865,6 +2925,9 @@ int open_shared_hc_controls(const Options &opt,
         CHECK_CUDA(cudaMemcpy(out->d_kv_a_norm_weight[layer], kv_a_norm_weight.data(),
                               kv_a_norm_weight.size() * sizeof(float),
                               cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(out->d_attn_sinks[layer], attn_sinks.data(),
+                              attn_sinks.size() * sizeof(float),
+                              cudaMemcpyHostToDevice));
         CHECK_CUDA(cudaMemcpy(out->d_router_w[layer], router_w.data(),
                               router_w.size() * sizeof(float), cudaMemcpyHostToDevice));
         if (have_bias) {
@@ -2880,7 +2943,7 @@ int open_shared_hc_controls(const Options &opt,
         out->control_bytes +=
             (attn_fn.size() + attn_base.size() + attn_scale.size() +
              attn_norm_weight.size() + q_a_norm_weight.size() +
-             kv_a_norm_weight.size() +
+             kv_a_norm_weight.size() + attn_sinks.size() +
              fn.size() + base.size() + scale.size() +
              ffn_norm_weight.size() + router_w.size() + router_bias.size()) *
                 sizeof(float) +
@@ -2897,6 +2960,7 @@ void close_shared_hc_controls(const Options &opt, SharedHcControls *out) {
         if (out->d_router_hash[layer]) CHECK_CUDA(cudaFree(out->d_router_hash[layer]));
         if (out->d_router_bias[layer]) CHECK_CUDA(cudaFree(out->d_router_bias[layer]));
         if (out->d_router_w[layer]) CHECK_CUDA(cudaFree(out->d_router_w[layer]));
+        if (out->d_attn_sinks[layer]) CHECK_CUDA(cudaFree(out->d_attn_sinks[layer]));
         if (out->d_kv_a_norm_weight[layer]) CHECK_CUDA(cudaFree(out->d_kv_a_norm_weight[layer]));
         if (out->d_q_a_norm_weight[layer]) CHECK_CUDA(cudaFree(out->d_q_a_norm_weight[layer]));
         if (out->d_attn_norm_weight[layer]) CHECK_CUDA(cudaFree(out->d_attn_norm_weight[layer]));
@@ -5671,6 +5735,8 @@ void close_shared_rank_buffers(SharedRankBuffers *shared) {
         if (r.d_hc_split) CHECK_CUDA(cudaFree(r.d_hc_split));
         if (r.d_attn_raw_swa) CHECK_CUDA(cudaFree(r.d_attn_raw_swa));
         if (r.d_attn_kv_full) CHECK_CUDA(cudaFree(r.d_attn_kv_full));
+        if (r.d_attn_heads) CHECK_CUDA(cudaFree(r.d_attn_heads));
+        if (r.d_attn_sinks) CHECK_CUDA(cudaFree(r.d_attn_sinks));
         if (r.start) CHECK_CUDA(cudaEventDestroy(r.start));
         if (r.mid) CHECK_CUDA(cudaEventDestroy(r.mid));
         if (r.stop) CHECK_CUDA(cudaEventDestroy(r.stop));
@@ -5762,6 +5828,15 @@ int ensure_compose_buffers(const Options &opt, RankState ranks[kGpus]) {
                                        (size_t)opt.slots * kRawSwaRows *
                                            (size_t)kHeadDim * sizeof(float),
                                        r.stream));
+        }
+        if (opt.true_ds4_attention_raw_read_gate && !r.d_attn_sinks) {
+            CHECK_CUDA(cudaMalloc(&r.d_attn_sinks,
+                                  (size_t)kLocalHeads * sizeof(float)));
+        }
+        if (opt.true_ds4_attention_raw_read_gate && !r.d_attn_heads) {
+            CHECK_CUDA(cudaMalloc(&r.d_attn_heads,
+                                  (size_t)opt.slots * kLocalHeads *
+                                      (size_t)kHeadDim * sizeof(float)));
         }
         for (int src = 0; src < kGpus; ++src) {
             if (!r.d_ep_remote[src]) CHECK_CUDA(cudaMalloc(&r.d_ep_remote[src],
@@ -6242,6 +6317,71 @@ int run_true_ds4_attention_state_update(const Options &opt,
     return 0;
 }
 
+int run_true_ds4_attention_raw_read(const Options &opt,
+                                    SharedHcControls *hc,
+                                    const LayerDenseOps *ops,
+                                    RankState ranks[kGpus],
+                                    int layer) {
+    if (!hc || !hc->initialized || !ops || !ops->initialized ||
+        layer < 0 || layer >= 43) {
+        return 1;
+    }
+    if (!hc->d_attn_sinks[layer] ||
+        ops->attn_q_b.rows_per_gpu != kLocalHeads * kHeadDim) {
+        return 2;
+    }
+    const auto start = std::chrono::steady_clock::now();
+    const uint32_t raw_row = (uint32_t)(opt.position % kRawSwaRows);
+    const uint64_t heads_elems =
+        (uint64_t)opt.slots * (uint64_t)kLocalHeads * (uint64_t)kHeadDim;
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        if (!r.d_attn_raw_swa || !r.d_attn_sinks || !r.d_attn_heads ||
+            !ops->attn_q_b.d_out[(size_t)rank]) {
+            return 3;
+        }
+        const size_t sinks_offset = (size_t)rank * (size_t)kLocalHeads;
+        if (rank == 0) {
+            CHECK_CUDA(cudaMemcpyAsync(r.d_attn_sinks,
+                                       hc->d_attn_sinks[layer] + sinks_offset,
+                                       (size_t)kLocalHeads * sizeof(float),
+                                       cudaMemcpyDeviceToDevice, r.stream));
+        } else {
+            CHECK_CUDA(cudaMemcpyPeerAsync(r.d_attn_sinks, r.device,
+                                           hc->d_attn_sinks[layer] + sinks_offset,
+                                           opt.devices[0],
+                                           (size_t)kLocalHeads * sizeof(float),
+                                           r.stream));
+        }
+        attention_raw_swa_one_row_kernel<<<
+            (unsigned int)(opt.slots * kLocalHeads), 256, 0, r.stream>>>(
+            r.d_attn_heads, ops->attn_q_b.d_out[(size_t)rank], r.d_attn_raw_swa,
+            r.d_attn_sinks, (uint32_t)opt.slots, (uint32_t)kLocalHeads,
+            (uint32_t)kHeadDim, (uint32_t)kRawSwaRows, raw_row);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    }
+    const auto stop = std::chrono::steady_clock::now();
+    const double ms = std::chrono::duration<double, std::milli>(stop - start).count();
+    if (layer <= 2) {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            log_tensor_f32_stats("true_attn_raw_read_heads", layer, rank,
+                                 ranks[rank].d_attn_heads, (size_t)heads_elems,
+                                 ranks[rank].stream);
+        }
+    }
+    std::printf("tp_ep_true_attention_raw_read\tlayer\t%d\tslots\t%d\t"
+                "local_heads\t%d\thead_dim\t%d\traw_rows\t%d\traw_row\t%u\t"
+                "ms\t%.6f\tPASS\n",
+                layer, opt.slots, kLocalHeads, kHeadDim, kRawSwaRows, raw_row, ms);
+    return 0;
+}
+
 int run_decode_loop(const Options &opt,
                     const std::vector<ContractRow> &rows,
                     RankState ranks[kGpus],
@@ -6379,6 +6519,16 @@ int run_decode_loop(const Options &opt,
                              "tp_ep_true_attention_state_failed\tlayer\t%d\trc\t%d\n",
                              opt.layer, state_rc);
                 return 15;
+            }
+        }
+        if (opt.true_ds4_attention_raw_read_gate) {
+            const int raw_read_rc = run_true_ds4_attention_raw_read(
+                opt, shared_hc_controls, shared_dense_ops, ranks, opt.layer);
+            if (raw_read_rc != 0) {
+                std::fprintf(stderr,
+                             "tp_ep_true_attention_raw_read_failed\tlayer\t%d\trc\t%d\n",
+                             opt.layer, raw_read_rc);
+                return 16;
             }
         }
         auto t0 = std::chrono::steady_clock::now();
@@ -7761,6 +7911,8 @@ int run_layer(const Options &opt,
             if (r.d_hc_split) CHECK_CUDA(cudaFree(r.d_hc_split));
             if (r.d_attn_raw_swa) CHECK_CUDA(cudaFree(r.d_attn_raw_swa));
             if (r.d_attn_kv_full) CHECK_CUDA(cudaFree(r.d_attn_kv_full));
+            if (r.d_attn_heads) CHECK_CUDA(cudaFree(r.d_attn_heads));
+            if (r.d_attn_sinks) CHECK_CUDA(cudaFree(r.d_attn_sinks));
             CHECK_CUDA(cudaEventDestroy(r.start));
             CHECK_CUDA(cudaEventDestroy(r.mid));
             CHECK_CUDA(cudaEventDestroy(r.stop));
