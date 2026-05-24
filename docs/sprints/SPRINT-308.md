@@ -42,6 +42,20 @@ The current TP/EP resident layer path still contains diagnostic semantics:
   The synthetic schedule uses `0.125` route weights to preserve current
   behavior, but compose no longer owns a hardcoded EP scaling factor. Real
   router weights can now be uploaded with the route plan.
+- Added opt-in model-router route selection for the TP/EP HTTP path:
+  `DS4_V100_TP_EP_MODEL_ROUTER_ROUTES=1` enables loading
+  `ffn_gate_inp.weight`, optional `exp_probs_b`, and optional
+  `ffn_gate_tid2eid` hash metadata, computes router logits from the
+  FFN-normalized HC current vector, and uploads selected expert IDs plus
+  per-route weights into the EP route plan.
+- Added explicit active-slot masking for model-router routes. Token ID `0` is
+  no longer treated as inactive; the HTTP scheduler now passes a separate
+  active-slot vector for prefill and decode. This matters for production
+  serving because token IDs and cache-slot occupancy are different concepts.
+- Added launcher support for the model-router route mode. The launcher forces
+  HC-current input and final-HC expansion, requires `top_k=6`, and rejects
+  compact route compose because true model routing can produce multiple
+  selected experts on the same rank for one slot.
 
 ## Validation Plan
 
@@ -113,6 +127,69 @@ expected failure:
 }
 ```
 
+The first model-router top-k run was stable but still failed parity:
+
+```json
+{
+  "case": "short_reasoning_plain",
+  "expected_text": "16",
+  "actual_text": "尷",
+  "generated_token_sequence": [117465],
+  "wall_tok_s": 158.650000,
+  "decode_tok_s": 231.800000
+}
+```
+
+Adding hash-router metadata changed the wrong token but did not close parity:
+
+```json
+{
+  "case": "short_reasoning_plain",
+  "expected_text": "16",
+  "actual_text": "{Doxy",
+  "generated_token_sequence": [85766],
+  "wall_tok_s": 161.740000,
+  "decode_tok_s": 231.760000
+}
+```
+
+Feeding the routed expert path from `ffn_normed` exposed a real numeric
+stability blocker: layer `5` produced non-finite decode output in the served
+shape. The route plan at that point was small enough that route overload is
+not the likely cause. Until this is isolated with a microbench, the current
+stable mode uses FFN-normalized HC for router logits while keeping routed
+expert input on the raw HC-current bridge.
+
+The active-slot-mask rerun confirms that real active HTTP slots now produce
+nonzero model-router routes:
+
+```text
+layer 0 routes 0,2,0,0,0,0,2,2
+layer 1 routes 1,0,0,1,2,2,0,0
+layer 2 routes 0,2,0,2,2,0,0,0
+layer 3 routes 0,1,0,2,3,0,0,0
+layer 4 routes 1,1,0,1,1,1,1,0
+layer 5 routes 1,1,1,1,1,0,1,0
+```
+
+The same reference vector still fails:
+
+```json
+{
+  "case": "short_reasoning_plain",
+  "expected_text": "16",
+  "actual_text": " ICC",
+  "generated_token_sequence": [61317],
+  "wall_tok_s": 164.721272,
+  "decode_tok_s": 237.349475
+}
+```
+
+This is progress but not production correctness. The route path is no longer
+synthetic/no-op for active slots; the remaining mismatch is now in the layer
+semantics still being bridged: full shared FFN, normalized routed-expert input,
+and full DS4 attention/compressed-KV/indexer math.
+
 ## Artifacts
 
 - `logs/from-cluster/sprint308-all-local-experts-parity/cluster/server.out`
@@ -127,9 +204,23 @@ expected failure:
 - `logs/from-cluster/sprint308-weighted-route-parity/cluster/server.out`
 - `logs/from-cluster/sprint308-weighted-route-parity/cluster/server.err`
 - `logs/from-cluster/sprint308-weighted-route-parity/cluster/parity-summary.json`
+- `logs/from-cluster/sprint308-model-router-routes-parity/20260524-024936/`
+- `logs/from-cluster/sprint308-model-router-ffn-norm-parity/20260524-030019/`
+- `logs/from-cluster/sprint308-model-router-norm-router-raw-expert-rerun/20260524-034449/`
+- `logs/from-cluster/sprint308-model-router-active-mask-parity/20260524-035442/`
 
 ## Production Gate
 
-This sprint is complete only when the TP/EP path either matches the fixed
-reference vector set or the remaining mismatch is localized to one concrete
-layer-stage boundary with logs good enough to implement the next fix.
+This sprint remains open. It is complete only when the TP/EP path either
+matches the fixed reference vector set or the remaining mismatch is localized
+to one concrete layer-stage boundary with logs good enough to implement the
+next fix.
+
+Current next fixes:
+
+- add an isolated TurboMind/route microbench for `ffn_normed` routed expert
+  input on layer `5`;
+- implement the true shared-FFN gate/up/SwiGLU/down subpath instead of the
+  current bridge;
+- replace the remaining attention bridge with the full DS4 attention,
+  compressed-KV, indexer, and row-selection sequence.

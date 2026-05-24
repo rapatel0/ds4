@@ -42,10 +42,12 @@ constexpr int kFusedN = 2 * kMid;
 constexpr int kGlobalExperts = 256;
 constexpr int kLocalExperts = kGlobalExperts / kGpus;
 constexpr int kPackedLocalExperts = kLocalExperts;
+constexpr int kRouterHashRows = 129280;
 constexpr int kGroupSize = 32;
 constexpr int kDType = GGML_TM_DTYPE_MXFP4;
 constexpr int kHcRows = 4;
 constexpr int kHcMix = 24;
+constexpr int kModelTopK = 6;
 constexpr float kSyntheticRouteWeight = 0.125f;
 
 #define CHECK_CUDA(expr)                                                              \
@@ -317,6 +319,8 @@ struct LayerRunSummary {
     double decode_hc_current_input_ms_per_step = 0.0;
     double decode_final_hc_ms_per_step = 0.0;
     uint64_t decode_checksum = 0;
+    int decode_finite_bad = 0;
+    int rc = 0;
 };
 
 struct ServingBenchResult {
@@ -469,6 +473,7 @@ struct Options {
     bool tp_hc_final_expand_gate = false;
     bool tp_hc_current_input_gate = false;
     bool tp_hc_persist_state_gate = false;
+    bool model_router_routes = false;
     bool tp_kv_all_slots_gate = false;
 };
 
@@ -1209,6 +1214,85 @@ __global__ void hc_split_rows_kernel(float *split,
                       scale, base, 4u, 1.0e-6f);
 }
 
+__global__ void router_select_topk_rows_kernel(int *selected,
+                                               float *weights,
+                                               const float *logits,
+                                               const float *bias,
+                                               const int *hash,
+                                               const uint32_t *tokens,
+                                               const unsigned char *active,
+                                               uint32_t hash_rows,
+                                               uint32_t slots) {
+    const uint32_t slot = blockIdx.x;
+    if (slot >= slots || threadIdx.x != 0u) return;
+    const float *row = logits + (uint64_t)slot * kGlobalExperts;
+    if (active && active[slot] == 0u) {
+        for (int k = 0; k < kModelTopK; ++k) {
+            selected[(uint64_t)slot * kModelTopK + (uint64_t)k] = -1;
+            weights[(uint64_t)slot * kModelTopK + (uint64_t)k] = 0.0f;
+        }
+        return;
+    }
+    float prob[kGlobalExperts];
+    for (int e = 0; e < kGlobalExperts; ++e) {
+        const float z = row[e];
+        const float softplus = z > 20.0f ? z : (z < -20.0f ? expf(z) : log1pf(expf(z)));
+        prob[e] = sqrtf(fmaxf(softplus, 0.0f));
+    }
+    if (hash && tokens && hash_rows > 0u) {
+        uint32_t tok = tokens[slot];
+        if (tok >= hash_rows) tok = 0u;
+        const int *hrow = hash + (uint64_t)tok * kModelTopK;
+        float sum = 0.0f;
+        for (int k = 0; k < kModelTopK; ++k) {
+            const int e = hrow[k];
+            selected[(uint64_t)slot * kModelTopK + (uint64_t)k] = e;
+            const float w = (e >= 0 && e < kGlobalExperts) ? prob[e] : 0.0f;
+            weights[(uint64_t)slot * kModelTopK + (uint64_t)k] = w;
+            sum += w;
+        }
+        if (sum < 6.103515625e-5f) sum = 6.103515625e-5f;
+        for (int k = 0; k < kModelTopK; ++k) {
+            weights[(uint64_t)slot * kModelTopK + (uint64_t)k] =
+                weights[(uint64_t)slot * kModelTopK + (uint64_t)k] / sum * 1.5f;
+        }
+        return;
+    }
+    int best[kModelTopK];
+    float best_score[kModelTopK];
+    float best_prob[kModelTopK];
+    for (int i = 0; i < kModelTopK; ++i) {
+        best[i] = -1;
+        best_score[i] = -INFINITY;
+        best_prob[i] = 0.0f;
+    }
+    for (int e = 0; e < kGlobalExperts; ++e) {
+        const float p = prob[e];
+        const float score = p + (bias ? bias[e] : 0.0f);
+        for (int k = 0; k < kModelTopK; ++k) {
+            if (score > best_score[k]) {
+                for (int m = kModelTopK - 1; m > k; --m) {
+                    best[m] = best[m - 1];
+                    best_score[m] = best_score[m - 1];
+                    best_prob[m] = best_prob[m - 1];
+                }
+                best[k] = e;
+                best_score[k] = score;
+                best_prob[k] = p;
+                break;
+            }
+        }
+    }
+    float sum = 0.0f;
+    for (int k = 0; k < kModelTopK; ++k) sum += best_prob[k];
+    if (sum < 6.103515625e-5f) sum = 6.103515625e-5f;
+    for (int k = 0; k < kModelTopK; ++k) {
+        selected[(uint64_t)slot * kModelTopK + (uint64_t)k] = best[k];
+        weights[(uint64_t)slot * kModelTopK + (uint64_t)k] =
+            best_prob[k] / sum * 1.5f;
+    }
+}
+
 __global__ void hc_expand_shard_kernel(float *out_hc,
                                        const float *block_out,
                                        const float *residual_hc,
@@ -1371,6 +1455,7 @@ void usage(const char *argv0) {
                  "       [--final-hc-carry-gate] [--tp-hc-final-expand-gate]\n"
                  "       [--tp-hc-current-input-gate]\n"
                  "       [--tp-hc-persist-state-gate] [--tp-kv-all-slots-gate]\n"
+                 "       [--model-router-routes]\n"
                  "       [--diagnostic-output-head]\n",
                  argv0);
 }
@@ -1530,6 +1615,11 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--model-router-routes") == 0) {
+            opt->model_router_routes = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--tp-hc-persist-state-gate") == 0) {
             opt->tp_hc_persist_state_gate = true;
             opt->final_hc_carry_gate = true;
@@ -1547,6 +1637,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
     }
     return opt->pack_dir && opt->contract_path && opt->tm_index_path &&
            opt->top_k <= kPackedLocalExperts && opt->layer >= 0 &&
+           (!opt->model_router_routes || opt->top_k == kModelTopK) &&
+           !(opt->model_router_routes && opt->compact_route_compose) &&
            !(opt->dense_hmma_compose && opt->dense_f16_cublas_compose) &&
            (!opt->dense_f16_cache_compose || opt->dense_f16_cublas_compose) &&
            !(opt->dense_compute_tensor &&
@@ -2134,12 +2226,23 @@ struct SharedHcControls {
     float *d_mix = nullptr;
     float *d_split = nullptr;
     float *d_current_full = nullptr;
+    float *d_ffn_normed = nullptr;
     float *d_attn_fn[43] = {};
     float *d_attn_base[43] = {};
     float *d_attn_scale[43] = {};
     float *d_ffn_fn[43] = {};
     float *d_ffn_base[43] = {};
     float *d_ffn_scale[43] = {};
+    float *d_ffn_norm_weight[43] = {};
+    float *d_router_w[43] = {};
+    float *d_router_bias[43] = {};
+    int *d_router_hash[43] = {};
+    uint32_t router_hash_rows[43] = {};
+    float *d_router_logits = nullptr;
+    int *d_router_selected = nullptr;
+    float *d_router_weights = nullptr;
+    uint32_t *d_router_tokens = nullptr;
+    unsigned char *d_router_active = nullptr;
     uint64_t control_bytes = 0;
 };
 
@@ -2179,6 +2282,49 @@ int load_control_f32(const Options &opt,
     return 0;
 }
 
+int load_optional_control_f32(const Options &opt,
+                              const std::vector<ContractRow> &rows,
+                              const char *tensor,
+                              size_t elems,
+                              std::vector<float> *out,
+                              bool *found) {
+    ContractRow r;
+    if (!find_replicated_control_row(rows, tensor, &r)) {
+        out->clear();
+        if (found) *found = false;
+        return 0;
+    }
+    if (found) *found = true;
+    return load_control_f32(opt, rows, tensor, elems, out);
+}
+
+int load_optional_control_i32(const Options &opt,
+                              const std::vector<ContractRow> &rows,
+                              const char *tensor,
+                              size_t elems,
+                              std::vector<int> *out,
+                              bool *found) {
+    ContractRow r;
+    if (!find_replicated_control_row(rows, tensor, &r)) {
+        out->clear();
+        if (found) *found = false;
+        return 0;
+    }
+    if (found) *found = true;
+    if (r.source_dtype != "i32" || r.bytes_estimate != elems * sizeof(int)) {
+        std::fprintf(stderr, "bad replicated control tensor %s dtype=%s bytes=%llu expected=%zu\n",
+                     tensor, r.source_dtype.c_str(),
+                     (unsigned long long)r.bytes_estimate, elems * sizeof(int));
+        return 2;
+    }
+    out->resize(elems);
+    const std::string path = path_join(opt.pack_dir, r.source_pack_file);
+    if (read_exact_at(path, physical_row_offset(r), out->data(), elems * sizeof(int)) != 0) {
+        return 3;
+    }
+    return 0;
+}
+
 int open_shared_hc_controls(const Options &opt,
                             const std::vector<ContractRow> &rows,
                             SharedHcControls *out) {
@@ -2191,6 +2337,22 @@ int open_shared_hc_controls(const Options &opt,
     CHECK_CUDA(cudaMalloc(&out->d_split, (size_t)opt.slots * kHcMix * sizeof(float)));
     CHECK_CUDA(cudaMalloc(&out->d_current_full,
                           (size_t)opt.slots * kHidden * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&out->d_ffn_normed,
+                          (size_t)opt.slots * kHidden * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&out->d_router_logits,
+                          (size_t)opt.slots * kGlobalExperts * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&out->d_router_selected,
+                          (size_t)opt.slots * kModelTopK * sizeof(int)));
+    CHECK_CUDA(cudaMalloc(&out->d_router_weights,
+                          (size_t)opt.slots * kModelTopK * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&out->d_router_tokens,
+                          (size_t)opt.slots * sizeof(uint32_t)));
+    CHECK_CUDA(cudaMalloc(&out->d_router_active,
+                          (size_t)opt.slots * sizeof(unsigned char)));
+    CHECK_CUDA(cudaMemset(out->d_router_tokens, 0,
+                          (size_t)opt.slots * sizeof(uint32_t)));
+    CHECK_CUDA(cudaMemset(out->d_router_active, 1,
+                          (size_t)opt.slots * sizeof(unsigned char)));
 
     for (int layer = 0; layer < 43; ++layer) {
         std::vector<float> attn_fn;
@@ -2199,12 +2361,22 @@ int open_shared_hc_controls(const Options &opt,
         std::vector<float> fn;
         std::vector<float> base;
         std::vector<float> scale;
+        std::vector<float> ffn_norm_weight;
+        std::vector<float> router_w;
+        std::vector<float> router_bias;
+        std::vector<int> router_hash;
         const std::string attn_fn_name = layer_tensor_name(layer, "hc_attn_fn");
         const std::string attn_base_name = layer_tensor_name(layer, "hc_attn_base");
         const std::string attn_scale_name = layer_tensor_name(layer, "hc_attn_scale");
         const std::string fn_name = layer_tensor_name(layer, "hc_ffn_fn");
         const std::string base_name = layer_tensor_name(layer, "hc_ffn_base");
         const std::string scale_name = layer_tensor_name(layer, "hc_ffn_scale");
+        const std::string ffn_norm_name = layer_tensor_name(layer, "ffn_norm.weight");
+        const std::string router_name = layer_tensor_name(layer, "ffn_gate_inp.weight");
+        const std::string bias_name = layer_tensor_name(layer, "exp_probs_b");
+        const std::string hash_name = layer_tensor_name(layer, "ffn_gate_tid2eid");
+        bool have_bias = false;
+        bool have_hash = false;
         if (load_control_f32(opt, rows, attn_fn_name.c_str(),
                              (size_t)kHcRows * (size_t)kHidden * kHcMix, &attn_fn) ||
             load_control_f32(opt, rows, attn_base_name.c_str(), kHcMix, &attn_base) ||
@@ -2212,7 +2384,16 @@ int open_shared_hc_controls(const Options &opt,
             load_control_f32(opt, rows, fn_name.c_str(),
                              (size_t)kHcRows * (size_t)kHidden * kHcMix, &fn) ||
             load_control_f32(opt, rows, base_name.c_str(), kHcMix, &base) ||
-            load_control_f32(opt, rows, scale_name.c_str(), 3, &scale)) {
+            load_control_f32(opt, rows, scale_name.c_str(), 3, &scale) ||
+            load_control_f32(opt, rows, ffn_norm_name.c_str(),
+                             kHidden, &ffn_norm_weight) ||
+            load_control_f32(opt, rows, router_name.c_str(),
+                             (size_t)kHidden * kGlobalExperts, &router_w) ||
+            load_optional_control_f32(opt, rows, bias_name.c_str(),
+                                      kGlobalExperts, &router_bias, &have_bias) ||
+            load_optional_control_i32(opt, rows, hash_name.c_str(),
+                                      (size_t)kRouterHashRows * kModelTopK,
+                                      &router_hash, &have_hash)) {
             return 1;
         }
         CHECK_CUDA(cudaMalloc(&out->d_attn_fn[layer], attn_fn.size() * sizeof(float)));
@@ -2221,6 +2402,18 @@ int open_shared_hc_controls(const Options &opt,
         CHECK_CUDA(cudaMalloc(&out->d_ffn_fn[layer], fn.size() * sizeof(float)));
         CHECK_CUDA(cudaMalloc(&out->d_ffn_base[layer], base.size() * sizeof(float)));
         CHECK_CUDA(cudaMalloc(&out->d_ffn_scale[layer], scale.size() * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&out->d_ffn_norm_weight[layer],
+                              ffn_norm_weight.size() * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&out->d_router_w[layer], router_w.size() * sizeof(float)));
+        if (have_bias) {
+            CHECK_CUDA(cudaMalloc(&out->d_router_bias[layer],
+                                  router_bias.size() * sizeof(float)));
+        }
+        if (have_hash) {
+            CHECK_CUDA(cudaMalloc(&out->d_router_hash[layer],
+                                  router_hash.size() * sizeof(int)));
+            out->router_hash_rows[layer] = kRouterHashRows;
+        }
         CHECK_CUDA(cudaMemcpy(out->d_attn_fn[layer], attn_fn.data(),
                               attn_fn.size() * sizeof(float), cudaMemcpyHostToDevice));
         CHECK_CUDA(cudaMemcpy(out->d_attn_base[layer], attn_base.data(),
@@ -2233,9 +2426,27 @@ int open_shared_hc_controls(const Options &opt,
                               base.size() * sizeof(float), cudaMemcpyHostToDevice));
         CHECK_CUDA(cudaMemcpy(out->d_ffn_scale[layer], scale.data(),
                               scale.size() * sizeof(float), cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(out->d_ffn_norm_weight[layer], ffn_norm_weight.data(),
+                              ffn_norm_weight.size() * sizeof(float),
+                              cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(out->d_router_w[layer], router_w.data(),
+                              router_w.size() * sizeof(float), cudaMemcpyHostToDevice));
+        if (have_bias) {
+            CHECK_CUDA(cudaMemcpy(out->d_router_bias[layer], router_bias.data(),
+                                  router_bias.size() * sizeof(float),
+                                  cudaMemcpyHostToDevice));
+        }
+        if (have_hash) {
+            CHECK_CUDA(cudaMemcpy(out->d_router_hash[layer], router_hash.data(),
+                                  router_hash.size() * sizeof(int),
+                                  cudaMemcpyHostToDevice));
+        }
         out->control_bytes +=
             (attn_fn.size() + attn_base.size() + attn_scale.size() +
-             fn.size() + base.size() + scale.size()) * sizeof(float);
+             fn.size() + base.size() + scale.size() +
+             ffn_norm_weight.size() + router_w.size() + router_bias.size()) *
+                sizeof(float) +
+            router_hash.size() * sizeof(int);
     }
     out->initialized = true;
     return 0;
@@ -2245,6 +2456,10 @@ void close_shared_hc_controls(const Options &opt, SharedHcControls *out) {
     if (!out || !out->initialized) return;
     CHECK_CUDA(cudaSetDevice(opt.devices[0]));
     for (int layer = 0; layer < 43; ++layer) {
+        if (out->d_router_hash[layer]) CHECK_CUDA(cudaFree(out->d_router_hash[layer]));
+        if (out->d_router_bias[layer]) CHECK_CUDA(cudaFree(out->d_router_bias[layer]));
+        if (out->d_router_w[layer]) CHECK_CUDA(cudaFree(out->d_router_w[layer]));
+        if (out->d_ffn_norm_weight[layer]) CHECK_CUDA(cudaFree(out->d_ffn_norm_weight[layer]));
         if (out->d_ffn_scale[layer]) CHECK_CUDA(cudaFree(out->d_ffn_scale[layer]));
         if (out->d_ffn_base[layer]) CHECK_CUDA(cudaFree(out->d_ffn_base[layer]));
         if (out->d_ffn_fn[layer]) CHECK_CUDA(cudaFree(out->d_ffn_fn[layer]));
@@ -2252,6 +2467,12 @@ void close_shared_hc_controls(const Options &opt, SharedHcControls *out) {
         if (out->d_attn_base[layer]) CHECK_CUDA(cudaFree(out->d_attn_base[layer]));
         if (out->d_attn_fn[layer]) CHECK_CUDA(cudaFree(out->d_attn_fn[layer]));
     }
+    if (out->d_router_weights) CHECK_CUDA(cudaFree(out->d_router_weights));
+    if (out->d_router_selected) CHECK_CUDA(cudaFree(out->d_router_selected));
+    if (out->d_router_logits) CHECK_CUDA(cudaFree(out->d_router_logits));
+    if (out->d_router_tokens) CHECK_CUDA(cudaFree(out->d_router_tokens));
+    if (out->d_router_active) CHECK_CUDA(cudaFree(out->d_router_active));
+    if (out->d_ffn_normed) CHECK_CUDA(cudaFree(out->d_ffn_normed));
     if (out->d_current_full) CHECK_CUDA(cudaFree(out->d_current_full));
     if (out->d_split) CHECK_CUDA(cudaFree(out->d_split));
     if (out->d_mix) CHECK_CUDA(cudaFree(out->d_mix));
@@ -2259,6 +2480,11 @@ void close_shared_hc_controls(const Options &opt, SharedHcControls *out) {
     if (out->d_hc) CHECK_CUDA(cudaFree(out->d_hc));
     *out = SharedHcControls{};
 }
+
+int upload_model_router_route_plan(const Options &opt,
+                                   RankState ranks[kGpus],
+                                   const std::vector<int> &selected,
+                                   const std::vector<float> &weights);
 
 int run_shared_hc_final_expand(const Options &opt,
                                SharedHcControls *hc,
@@ -2417,6 +2643,49 @@ int run_shared_hc_current_input(const Options &opt,
     CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaDeviceSynchronize());
 
+    if (!hc->d_ffn_normed || !hc->d_ffn_norm_weight[layer]) return 4;
+    rms_norm_weight_rows_kernel<<<(unsigned int)opt.slots, 256>>>(
+        hc->d_ffn_normed, hc->d_current_full, hc->d_ffn_norm_weight[layer],
+        (uint32_t)kHidden, (uint32_t)opt.slots, 1.0e-6f);
+    CHECK_CUDA(cudaGetLastError());
+    CHECK_CUDA(cudaDeviceSynchronize());
+
+    if (opt.model_router_routes) {
+        if (!hc->d_router_w[layer] || !hc->d_router_logits ||
+            !hc->d_router_selected || !hc->d_router_weights) {
+            return 4;
+        }
+        const dim3 router_grid((unsigned int)kGlobalExperts,
+                               (unsigned int)opt.slots, 1u);
+        f32_dense_colmajor_kernel<<<router_grid, 256>>>(
+            hc->d_router_logits, hc->d_router_w[layer], hc->d_ffn_normed,
+            (uint32_t)kGlobalExperts, (uint32_t)kHidden, (uint32_t)opt.slots);
+        router_select_topk_rows_kernel<<<(unsigned int)opt.slots, 1>>>(
+            hc->d_router_selected, hc->d_router_weights, hc->d_router_logits,
+            hc->d_router_bias[layer], hc->d_router_hash[layer],
+            hc->d_router_tokens, hc->d_router_active,
+            hc->router_hash_rows[layer],
+            (uint32_t)opt.slots);
+        CHECK_CUDA(cudaGetLastError());
+        CHECK_CUDA(cudaDeviceSynchronize());
+        std::vector<int> selected((size_t)opt.slots * (size_t)opt.top_k);
+        std::vector<float> weights((size_t)opt.slots * (size_t)opt.top_k);
+        CHECK_CUDA(cudaMemcpy(selected.data(), hc->d_router_selected,
+                              selected.size() * sizeof(int),
+                              cudaMemcpyDeviceToHost));
+        CHECK_CUDA(cudaMemcpy(weights.data(), hc->d_router_weights,
+                              weights.size() * sizeof(float),
+                              cudaMemcpyDeviceToHost));
+        const int route_rc = upload_model_router_route_plan(opt, ranks,
+                                                            selected, weights);
+        if (route_rc != 0) {
+            std::fprintf(stderr,
+                         "tp_ep_model_router_route_plan_failed\tlayer\t%d\trc\t%d\n",
+                         layer, route_rc);
+            return 5;
+        }
+    }
+
     for (int rank = 0; rank < kGpus; ++rank) {
         RankState &r = ranks[rank];
         CHECK_CUDA(cudaSetDevice(r.device));
@@ -2457,10 +2726,12 @@ int run_shared_hc_current_input(const Options &opt,
                                (uint32_t)opt.slots);
         }
         const uint64_t route_elems = (uint64_t)r.routes * kHidden;
-        pack_current_full_to_routes_kernel<<<
-            (unsigned int)((route_elems + block - 1) / block), block,
-            0, r.stream>>>(r.d_a, r.d_current_full, r.d_route_slots, r.routes);
-        CHECK_CUDA(cudaGetLastError());
+        if (route_elems > 0) {
+            pack_current_full_to_routes_kernel<<<
+                (unsigned int)((route_elems + block - 1) / block), block,
+                0, r.stream>>>(r.d_a, r.d_current_full, r.d_route_slots, r.routes);
+            CHECK_CUDA(cudaGetLastError());
+        }
     }
     for (int rank = 0; rank < kGpus; ++rank) {
         CHECK_CUDA(cudaSetDevice(ranks[rank].device));
@@ -4284,6 +4555,7 @@ void close_shared_expert_bindings(SharedExpertBindings *shared) {
 }
 
 int run_gate(RankState &rank, const Api &api) {
+    if (rank.routes <= 0) return 0;
     return api.mmgs(rank.d_a, nullptr, rank.d_offsets, kLocalExperts, rank.routes,
                     (const void * const *)rank.gated.d_w_table,
                     (const void * const *)rank.gated.d_s_table,
@@ -4292,6 +4564,7 @@ int run_gate(RankState &rank, const Api &api) {
 }
 
 int run_down(RankState &rank, const Api &api) {
+    if (rank.routes <= 0) return 0;
     return api.mmgt(rank.d_gated, nullptr, rank.d_offsets, kLocalExperts, rank.routes,
                     (const void * const *)rank.down.d_w_table,
                     (const void * const *)rank.down.d_s_table,
@@ -4395,6 +4668,118 @@ void build_route_index_by_slot_for_rank(int rank, int slots, int top_k,
             (*route_index_by_slot)[(size_t)slot] = route;
         }
     }
+}
+
+int upload_model_router_route_plan(const Options &opt,
+                                   RankState ranks[kGpus],
+                                   const std::vector<int> &selected,
+                                   const std::vector<float> &weights) {
+    if ((int)selected.size() < opt.slots * opt.top_k ||
+        (int)weights.size() < opt.slots * opt.top_k) {
+        return 1;
+    }
+    std::vector<int> offsets[kGpus];
+    std::vector<int> route_slots[kGpus];
+    std::vector<float> route_weights[kGpus];
+    std::vector<int> route_index_by_slot[kGpus];
+    std::vector<int> counts[kGpus];
+    for (int rank = 0; rank < kGpus; ++rank) {
+        counts[rank].assign((size_t)kLocalExperts, 0);
+        route_index_by_slot[rank].assign((size_t)opt.slots, -1);
+    }
+    bool compact_duplicate = false;
+    for (int slot = 0; slot < opt.slots; ++slot) {
+        bool seen_rank[kGpus] = {};
+        for (int k = 0; k < opt.top_k; ++k) {
+            const int expert = selected[(size_t)slot * opt.top_k + (size_t)k];
+            if (expert < 0) continue;
+            if (expert < 0 || expert >= kGlobalExperts) return 2;
+            const int rank = expert / kLocalExperts;
+            const int local = expert % kLocalExperts;
+            counts[rank][(size_t)local]++;
+            if (seen_rank[rank]) compact_duplicate = true;
+            seen_rank[rank] = true;
+        }
+    }
+    if (opt.compact_route_compose && compact_duplicate) return 3;
+
+    for (int rank = 0; rank < kGpus; ++rank) {
+        offsets[rank].assign((size_t)kLocalExperts + 1, 0);
+        int running = 0;
+        int active = 0;
+        int max_routes = 0;
+        for (int e = 0; e < kLocalExperts; ++e) {
+            offsets[rank][(size_t)e] = running;
+            running += counts[rank][(size_t)e];
+            if (counts[rank][(size_t)e] > 0) ++active;
+            max_routes = std::max(max_routes, counts[rank][(size_t)e]);
+        }
+        offsets[rank][(size_t)kLocalExperts] = running;
+        if (running > ranks[rank].route_capacity) return 4;
+        route_slots[rank].assign((size_t)running, -1);
+        route_weights[rank].assign((size_t)running, 0.0f);
+        std::vector<int> cursor = offsets[rank];
+        for (int slot = 0; slot < opt.slots; ++slot) {
+            for (int k = 0; k < opt.top_k; ++k) {
+                const int expert = selected[(size_t)slot * opt.top_k + (size_t)k];
+                if (expert < 0) continue;
+                const int dst_rank = expert / kLocalExperts;
+                if (dst_rank != rank) continue;
+                const int local = expert % kLocalExperts;
+                const int idx = cursor[(size_t)local]++;
+                route_slots[rank][(size_t)idx] = slot;
+                const float w = weights[(size_t)slot * opt.top_k + (size_t)k];
+                if (!std::isfinite(w)) {
+                    std::fprintf(stderr,
+                                 "tp_ep_model_router_nonfinite_weight\trank\t%d\tslot\t%d\texpert\t%d\tk\t%d\n",
+                                 rank, slot, expert, k);
+                    return 5;
+                }
+                route_weights[rank][(size_t)idx] = w;
+                if (route_index_by_slot[rank][(size_t)slot] < 0) {
+                    route_index_by_slot[rank][(size_t)slot] = idx;
+                }
+            }
+        }
+        RankState &r = ranks[rank];
+        r.routes = running;
+        r.active_experts = active;
+        r.max_routes_per_expert = max_routes;
+        CHECK_CUDA(cudaSetDevice(r.device));
+        CHECK_CUDA(cudaMemcpy(r.d_offsets, offsets[rank].data(),
+                              offsets[rank].size() * sizeof(int),
+                              cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(r.d_route_slots, route_slots[rank].data(),
+                              route_slots[rank].size() * sizeof(int),
+                              cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(r.d_route_weights, route_weights[rank].data(),
+                              route_weights[rank].size() * sizeof(float),
+                              cudaMemcpyHostToDevice));
+    }
+    static bool route_stats_emitted[43] = {};
+    if (opt.model_router_routes && opt.layer >= 0 && opt.layer <= 5 &&
+        !route_stats_emitted[opt.layer]) {
+        route_stats_emitted[opt.layer] = true;
+        std::fprintf(stderr,
+                     "tp_ep_model_router_route_stats\tlayer\t%d\troutes\t%d,%d,%d,%d,%d,%d,%d,%d\tmax_routes_per_expert\t%d,%d,%d,%d,%d,%d,%d,%d\n",
+                     opt.layer,
+                     ranks[0].routes, ranks[1].routes, ranks[2].routes, ranks[3].routes,
+                     ranks[4].routes, ranks[5].routes, ranks[6].routes, ranks[7].routes,
+                     ranks[0].max_routes_per_expert, ranks[1].max_routes_per_expert,
+                     ranks[2].max_routes_per_expert, ranks[3].max_routes_per_expert,
+                     ranks[4].max_routes_per_expert, ranks[5].max_routes_per_expert,
+                     ranks[6].max_routes_per_expert, ranks[7].max_routes_per_expert);
+    }
+    for (int dst = 0; dst < kGpus; ++dst) {
+        CHECK_CUDA(cudaSetDevice(ranks[dst].device));
+        for (int src = 0; src < kGpus; ++src) {
+            CHECK_CUDA(cudaMemcpy(ranks[dst].d_route_index_by_slot[src],
+                                  route_index_by_slot[src].data(),
+                                  route_index_by_slot[src].size() * sizeof(int),
+                                  cudaMemcpyHostToDevice));
+        }
+    }
+    return 0;
 }
 
 int open_shared_rank_buffers(const Options &opt, SharedRankBuffers *shared) {
@@ -4652,10 +5037,12 @@ int run_next_hidden_compose(const Options &opt,
         CHECK_CUDA(cudaGetLastError());
         const uint64_t route_hidden_elems = (uint64_t)r.routes * kHidden;
         grid = (int)((route_hidden_elems + block - 1) / block);
-        ep_reduce_all_dest_shards_kernel<<<grid, block, 0, r.stream>>>(
-            r.d_ep_contrib_all, r.d_down, r.d_route_slots, r.d_route_weights,
-            r.routes, opt.slots);
-        CHECK_CUDA(cudaGetLastError());
+        if (route_hidden_elems > 0) {
+            ep_reduce_all_dest_shards_kernel<<<grid, block, 0, r.stream>>>(
+                r.d_ep_contrib_all, r.d_down, r.d_route_slots, r.d_route_weights,
+                r.routes, opt.slots);
+            CHECK_CUDA(cudaGetLastError());
+        }
         if (opt.ep_return_fp16) {
             grid = (int)((all_contrib_elems + block - 1) / block);
             cast_f32_to_half_kernel<<<grid, block, 0, r.stream>>>(
@@ -4944,18 +5331,22 @@ int run_decode_loop(const Options &opt,
             const uint64_t route_hidden_elems = (uint64_t)r.routes * kHidden;
             int grid = (int)((route_hidden_elems + block - 1) / block);
             if (compact_route) {
-                ep_pack_route_dest_shards_kernel<<<grid, block, 0, r.stream>>>(
-                    r.d_ep_contrib_all, r.d_down, r.d_route_weights,
-                    r.routes, opt.slots);
+                if (route_hidden_elems > 0) {
+                    ep_pack_route_dest_shards_kernel<<<grid, block, 0, r.stream>>>(
+                        r.d_ep_contrib_all, r.d_down, r.d_route_weights,
+                        r.routes, opt.slots);
+                }
             } else {
                 grid = (int)((all_contrib_elems + block - 1) / block);
                 zero_f32_kernel<<<grid, block, 0, r.stream>>>(r.d_ep_contrib_all,
                                                               all_contrib_elems);
                 CHECK_CUDA(cudaGetLastError());
                 grid = (int)((route_hidden_elems + block - 1) / block);
-                ep_reduce_all_dest_shards_kernel<<<grid, block, 0, r.stream>>>(
-                    r.d_ep_contrib_all, r.d_down, r.d_route_slots,
-                    r.d_route_weights, r.routes, opt.slots);
+                if (route_hidden_elems > 0) {
+                    ep_reduce_all_dest_shards_kernel<<<grid, block, 0, r.stream>>>(
+                        r.d_ep_contrib_all, r.d_down, r.d_route_slots,
+                        r.d_route_weights, r.routes, opt.slots);
+                }
             }
             CHECK_CUDA(cudaGetLastError());
             if (opt.ep_return_fp16) {
@@ -5404,6 +5795,8 @@ int run_resident_layer_decode(const Options &opt,
             decode_loop.hc_current_input_ms_per_step;
         summary->decode_final_hc_ms_per_step = decode_loop.final_hc_ms_per_step;
         summary->decode_checksum = decode_loop.checksum;
+        summary->decode_finite_bad = decode_loop.finite_bad;
+        summary->rc = rc;
     }
     return rc;
 }
@@ -6120,6 +6513,7 @@ int run_token_major_serving_loop(const Options &opt,
                                  SharedHcControls *shared_hc_controls,
                                  SharedTokenEmbedding *shared_token_embedding,
                                  const std::vector<uint32_t> *decode_input_tokens,
+                                 const std::vector<unsigned char> *decode_active_slots,
                                  std::vector<ContractRow> resident_rows[43],
                                  LayerStats resident_stats[43],
                                  bool resident_serving_loop,
@@ -6164,6 +6558,24 @@ int run_token_major_serving_loop(const Options &opt,
                              seed_rc);
                 return 15;
             }
+        }
+        if (shared_hc_controls && shared_hc_controls->initialized &&
+            shared_hc_controls->d_router_tokens &&
+            decode_input_tokens && decode_input_tokens->size() >= (size_t)opt.slots) {
+            CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+            CHECK_CUDA(cudaMemcpy(shared_hc_controls->d_router_tokens,
+                                  decode_input_tokens->data(),
+                                  (size_t)opt.slots * sizeof(uint32_t),
+                                  cudaMemcpyHostToDevice));
+        }
+        if (shared_hc_controls && shared_hc_controls->initialized &&
+            shared_hc_controls->d_router_active &&
+            decode_active_slots && decode_active_slots->size() >= (size_t)opt.slots) {
+            CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+            CHECK_CUDA(cudaMemcpy(shared_hc_controls->d_router_active,
+                                  decode_active_slots->data(),
+                                  (size_t)opt.slots * sizeof(unsigned char),
+                                  cudaMemcpyHostToDevice));
         }
         for (int layer = 0; layer < 43; ++layer) {
             Options layer_opt = opt;
@@ -6220,7 +6632,7 @@ int run_token_major_serving_loop(const Options &opt,
                         "decode_compose_final_ms_per_step\t%.6f\t"
                         "decode_hc_current_input_ms_per_step\t%.6f\t"
                         "decode_final_hc_ms_per_step\t%.6f\t"
-                        "decode_checksum\t%llu\t%s\n",
+                        "decode_checksum\t%llu\tdecode_finite_bad\t%d\trc\t%d\t%s\n",
                         step, s.layer, s.ratio,
                         (unsigned long long)layer_opt.position,
                         s.decode_ms_per_step,
@@ -6234,6 +6646,8 @@ int run_token_major_serving_loop(const Options &opt,
                         s.decode_hc_current_input_ms_per_step,
                         s.decode_final_hc_ms_per_step,
                         (unsigned long long)s.decode_checksum,
+                        s.decode_finite_bad,
+                        rc,
                         (rc == 0 && s.pass) ? "PASS" : "FAIL");
             if (rc == 0 && s.pass) {
                 pass_invocations++;
@@ -6259,6 +6673,7 @@ int run_token_major_serving_loop(const Options &opt,
                             "slots\t%d\tctx\t262144\twall_ms\t%.6f\tFAIL\n",
                             opt.decode_steps, pass_invocations, step, layer,
                             opt.slots, wall_ms);
+                std::fflush(stdout);
                 return rc == 0 ? 1 : rc;
             }
         }
@@ -7481,6 +7896,7 @@ int run_tp_ep_http_server(const Options &base_opt,
             req_opt.position = first_req.cache_position;
             req_opt.serving_bench = false;
             std::vector<uint32_t> decode_input_tokens((size_t)req_opt.slots, 0u);
+            std::vector<unsigned char> decode_active_slots((size_t)req_opt.slots, 0u);
             for (size_t i = 0; i < batch.size(); ++i) {
                 uint32_t input_token = 0;
                 if (assignments[i].slot >= 0 &&
@@ -7502,6 +7918,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                 if (batch[i].cache_slot >= 0 &&
                     batch[i].cache_slot < req_opt.slots) {
                     decode_input_tokens[(size_t)batch[i].cache_slot] = input_token;
+                    decode_active_slots[(size_t)batch[i].cache_slot] = 1u;
                 }
             }
             int max_prompt_prefill_steps = 0;
@@ -7528,6 +7945,13 @@ int run_tp_ep_http_server(const Options &base_opt,
                 if (!any_prefill) continue;
                 Options prefill_opt = req_opt;
                 prefill_opt.position = first_req.cache_position + (uint64_t)prefill_step;
+                std::vector<unsigned char> prefill_active_slots((size_t)req_opt.slots, 0u);
+                for (size_t i = 0; i < batch.size(); ++i) {
+                    const int slot = batch[i].cache_slot;
+                    if (assignments[i].hit || slot < 0 || slot >= req_opt.slots) continue;
+                    if ((size_t)prefill_step + 1u >= batch[i].prompt_token_ids.size()) continue;
+                    prefill_active_slots[(size_t)slot] = 1u;
+                }
                 ServingBenchResult prefill_result;
                 rc = run_token_major_serving_loop(prefill_opt,
                                                   shared_dense_f16_cache,
@@ -7540,6 +7964,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                                   shared_hc_controls,
                                                   shared_token_embedding,
                                                   &prefill_input_tokens,
+                                                  &prefill_active_slots,
                                                   resident_rows,
                                                   resident_stats,
                                                   true,
@@ -7572,6 +7997,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                                   shared_hc_controls,
                                                   shared_token_embedding,
                                                   &decode_input_tokens,
+                                                  &decode_active_slots,
                                                   resident_rows,
                                                   resident_stats,
                                                   true,
@@ -7649,6 +8075,11 @@ int run_tp_ep_http_server(const Options &base_opt,
             }
             req_opt.decode_steps = requested_decode_steps;
             if (rc != 0) {
+                std::fprintf(stderr,
+                             "tp_ep_http_decode_failed\trc\t%d\tbatch\t%zu\trequested_steps\t%d\tposition\t%llu\n",
+                             rc, batch.size(), requested_decode_steps,
+                             (unsigned long long)first_req.cache_position);
+                std::fflush(stderr);
                 rejected += (uint64_t)batch.size();
                 for (HttpParsedRequest &queued : batch) {
                     http_write_json(queued.fd, 500, "{\"error\":\"tp_ep_decode_failed\"}\n");
@@ -8266,6 +8697,7 @@ int main(int argc, char **argv) {
                                                     shared_hc_controls_arg,
                                                     nullptr,
                                                     nullptr,
+                                                    nullptr,
                                                     resident_rows,
                                                     resident_stats,
                                                     resident_serving_loop,
@@ -8317,7 +8749,7 @@ int main(int argc, char **argv) {
                     "decode_compose_copy_ms_per_step\t%.6f\t"
                     "decode_compose_final_ms_per_step\t%.6f\t"
                     "decode_hc_current_input_ms_per_step\t%.6f\t"
-                    "decode_checksum\t%llu\t%s\n",
+                    "decode_checksum\t%llu\tdecode_finite_bad\t%d\trc\t%d\t%s\n",
                     s.layer, s.ratio,
                     (unsigned long long)s.total_rows,
                     (unsigned long long)s.dense_rows,
@@ -8335,6 +8767,8 @@ int main(int argc, char **argv) {
                     s.decode_compose_final_ms_per_step,
                     s.decode_hc_current_input_ms_per_step,
                     (unsigned long long)s.decode_checksum,
+                    s.decode_finite_bad,
+                    rc,
                     (rc == 0 && s.pass) ? "PASS" : "FAIL");
         if (rc == 0 && s.pass) {
             pass_layers++;
