@@ -1,0 +1,326 @@
+tp_ep_model_router_route_id	layer	0	slot	0	k	0	expert	254	rank	7	local	30	weight	0.203745037	gated_w	0x7f6a17800000	gated_ws	131072	gated_s	0x7f6a23c00000	gated_ss	4096	down_w	0x7f6a0c400000	down_ws	65536	down_s	0x7f6a11e80000	down_ss	4096
+tp_ep_model_router_route_id	layer	0	slot	0	k	1	expert	222	rank	6	local	30	weight	0.242957085	gated_w	0x7f6a31800000	gated_ws	131072	gated_s	0x7f6a3dc00000	gated_ss	4096	down_w	0x7f6a26400000	down_ws	65536	down_s	0x7f6a2be80000	down_ss	4096
+tp_ep_model_router_route_id	layer	0	slot	0	k	2	expert	245	rank	7	local	21	weight	0.292368621	gated_w	0x7f6a1b000000	gated_ws	131072	gated_s	0x7f6a21d80000	gated_ss	4096	down_w	0x7f6a0e000000	down_ws	65536	down_s	0x7f6a11c40000	down_ss	4096
+tp_ep_model_router_route_id	layer	0	slot	0	k	3	expert	200	rank	6	local	8	weight	0.296549052	gated_w	0x7f6a3a000000	gated_ws	131072	gated_s	0x7f6a3d100000	gated_ss	4096	down_w	0x7f6a2c400000	down_ws	65536	down_s	0x7f6a2fd00000	down_ss	4096
+tp_ep_model_router_route_id	layer	0	slot	0	k	4	expert	53	rank	1	local	21	weight	0.21251592	gated_w	0x7f7917000000	gated_ws	131072	gated_s	0x7f7a31b80000	gated_ss	4096	down_w	0x7f7882000000	down_ws	65536	down_s	0x7f7a35e40000	down_ss	4096
+tp_ep_model_router_route_id	layer	0	slot	0	k	5	expert	35	rank	1	local	3	weight	0.251864105	gated_w	0x7f79a4000000	gated_ws	131072	gated_s	0x7f79a7880000	gated_ss	4096	down_w	0x7f7889400000	down_ws	65536	down_s	0x7f7a33fc0000	down_ss	4096
+tp_ep_model_router_route_stats	layer	0	routes	0,2,0,0,0,0,2,2	max_routes_per_expert	0,1,0,0,0,0,1,1
+tp_ep_tensor_stats	tag	true_attn_q_a_full	layer	0	rank	0	elems	32768	finite_bad	0	first_bad	18446744073709551615	max_abs	0.221705362
+tp_ep_tensor_stats	tag	true_attn_kv_normed	layer	0	rank	0	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	4.34364033
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	0	rank	0	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.388993263
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	0	rank	1	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.548253298
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	0	rank	2	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.172012836
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	0	rank	3	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.717421114
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	0	rank	4	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.159261376
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	0	rank	5	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.488450855
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	0	rank	6	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.208499119
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	0	rank	7	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.291844696
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	0	rank	0	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	9.78168392
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	0	rank	1	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	8.7255125
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	0	rank	2	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	6.09546471
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	0	rank	3	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	14.9229193
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	0	rank	4	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	6.7980094
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	0	rank	5	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	11.353569
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	0	rank	6	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	7.17404127
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	0	rank	7	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	7.0121789
+tp_ep_tensor_stats	tag	true_attn_raw_swa_rank0	layer	0	rank	0	elems	2097152	finite_bad	0	first_bad	18446744073709551615	max_abs	4.265625
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	0	rank	0	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	4.19294071
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	0	rank	1	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	4.20285749
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	0	rank	2	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	3.43292952
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	0	rank	3	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	4.17551517
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	0	rank	4	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	3.81502318
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	0	rank	5	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	4.25755453
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	0	rank	6	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	4.24805784
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	0	rank	7	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	4.21677732
+tp_ep_model_router_route_id	layer	0	slot	0	k	0	expert	254	rank	7	local	30	weight	0.241458938	gated_w	0x7f6a17800000	gated_ws	131072	gated_s	0x7f6a23c00000	gated_ss	4096	down_w	0x7f6a0c400000	down_ws	65536	down_s	0x7f6a11e80000	down_ss	4096
+tp_ep_model_router_route_id	layer	0	slot	0	k	1	expert	222	rank	6	local	30	weight	0.235139117	gated_w	0x7f6a31800000	gated_ws	131072	gated_s	0x7f6a3dc00000	gated_ss	4096	down_w	0x7f6a26400000	down_ws	65536	down_s	0x7f6a2be80000	down_ss	4096
+tp_ep_model_router_route_id	layer	0	slot	0	k	2	expert	245	rank	7	local	21	weight	0.305344939	gated_w	0x7f6a1b000000	gated_ws	131072	gated_s	0x7f6a21d80000	gated_ss	4096	down_w	0x7f6a0e000000	down_ws	65536	down_s	0x7f6a11c40000	down_ss	4096
+tp_ep_model_router_route_id	layer	0	slot	0	k	3	expert	200	rank	6	local	8	weight	0.287811965	gated_w	0x7f6a3a000000	gated_ws	131072	gated_s	0x7f6a3d100000	gated_ss	4096	down_w	0x7f6a2c400000	down_ws	65536	down_s	0x7f6a2fd00000	down_ss	4096
+tp_ep_model_router_route_id	layer	0	slot	0	k	4	expert	53	rank	1	local	21	weight	0.226949841	gated_w	0x7f7917000000	gated_ws	131072	gated_s	0x7f7a31b80000	gated_ss	4096	down_w	0x7f7882000000	down_ws	65536	down_s	0x7f7a35e40000	down_ss	4096
+tp_ep_model_router_route_id	layer	0	slot	0	k	5	expert	35	rank	1	local	3	weight	0.20329529	gated_w	0x7f79a4000000	gated_ws	131072	gated_s	0x7f79a7880000	gated_ss	4096	down_w	0x7f7889400000	down_ws	65536	down_s	0x7f7a33fc0000	down_ss	4096
+tp_ep_route_tensor_stats	tag	route_input	layer	0	rank	1	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.53515625
+tp_ep_route_tensor_stats	tag	route_input	layer	0	rank	6	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.53515625
+tp_ep_route_tensor_stats	tag	route_input	layer	0	rank	7	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.53515625
+tp_ep_tensor_stats	tag	shared_gate	layer	0	rank	0	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	3.38118577
+tp_ep_tensor_stats	tag	shared_up	layer	0	rank	0	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.30937505
+tp_ep_tensor_stats	tag	shared_gate	layer	0	rank	1	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.67144358
+tp_ep_tensor_stats	tag	shared_up	layer	0	rank	1	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.23181987
+tp_ep_tensor_stats	tag	shared_gate	layer	0	rank	2	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.2449317
+tp_ep_tensor_stats	tag	shared_up	layer	0	rank	2	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.65954137
+tp_ep_tensor_stats	tag	shared_gate	layer	0	rank	3	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.41976035
+tp_ep_tensor_stats	tag	shared_up	layer	0	rank	3	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.10288513
+tp_ep_tensor_stats	tag	shared_gate	layer	0	rank	4	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.43644524
+tp_ep_tensor_stats	tag	shared_up	layer	0	rank	4	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.20299757
+tp_ep_tensor_stats	tag	shared_gate	layer	0	rank	5	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.34524882
+tp_ep_tensor_stats	tag	shared_up	layer	0	rank	5	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.66976309
+tp_ep_tensor_stats	tag	shared_gate	layer	0	rank	6	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	3.79829597
+tp_ep_tensor_stats	tag	shared_up	layer	0	rank	6	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	3.33001232
+tp_ep_tensor_stats	tag	shared_gate	layer	0	rank	7	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.32336855
+tp_ep_tensor_stats	tag	shared_up	layer	0	rank	7	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.86075008
+tp_ep_tensor_stats	tag	shared_mid	layer	0	rank	0	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	10.2990046
+tp_ep_tensor_stats	tag	shared_mid	layer	0	rank	1	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	10.2990046
+tp_ep_tensor_stats	tag	shared_mid	layer	0	rank	2	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	10.2990046
+tp_ep_tensor_stats	tag	shared_mid	layer	0	rank	3	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	10.2990046
+tp_ep_tensor_stats	tag	shared_mid	layer	0	rank	4	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	10.2990046
+tp_ep_tensor_stats	tag	shared_mid	layer	0	rank	5	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	10.2990046
+tp_ep_tensor_stats	tag	shared_mid	layer	0	rank	6	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	10.2990046
+tp_ep_tensor_stats	tag	shared_mid	layer	0	rank	7	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	10.2990046
+tp_ep_tensor_stats	tag	shared_down	layer	0	rank	0	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.983616889
+tp_ep_tensor_stats	tag	shared_down	layer	0	rank	1	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	1.39931417
+tp_ep_tensor_stats	tag	shared_down	layer	0	rank	2	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.895529866
+tp_ep_tensor_stats	tag	shared_down	layer	0	rank	3	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.887088537
+tp_ep_tensor_stats	tag	shared_down	layer	0	rank	4	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	1.01254451
+tp_ep_tensor_stats	tag	shared_down	layer	0	rank	5	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	1.10739279
+tp_ep_tensor_stats	tag	shared_down	layer	0	rank	6	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	1.44367623
+tp_ep_tensor_stats	tag	shared_down	layer	0	rank	7	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	1.56772125
+tp_ep_route_tensor_stats	tag	route_gate_up	layer	0	rank	1	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.39257812
+tp_ep_route_tensor_stats	tag	route_gated	layer	0	rank	1	elems	4096	finite_bad	0	first_bad	18446744073709551615	max_abs	0.896484375
+tp_ep_route_tensor_stats	tag	route_down	layer	0	rank	1	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	0.496582031
+tp_ep_route_tensor_stats	tag	route_gate_up	layer	0	rank	6	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.58789062
+tp_ep_route_tensor_stats	tag	route_gated	layer	0	rank	6	elems	4096	finite_bad	0	first_bad	18446744073709551615	max_abs	1.17773438
+tp_ep_route_tensor_stats	tag	route_down	layer	0	rank	6	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	0.54296875
+tp_ep_route_tensor_stats	tag	route_gate_up	layer	0	rank	7	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.59375
+tp_ep_route_tensor_stats	tag	route_gated	layer	0	rank	7	elems	4096	finite_bad	0	first_bad	18446744073709551615	max_abs	1.15527344
+tp_ep_route_tensor_stats	tag	route_down	layer	0	rank	7	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	0.600585938
+tp_ep_model_router_route_id	layer	1	slot	0	k	0	expert	163	rank	5	local	3	weight	0.279911429	gated_w	0x7f6988a00000	gated_ws	131072	gated_s	0x7f6988880000	gated_ss	4096	down_w	0x7f6979400000	down_ws	65536	down_s	0x7f6987dc0000	down_ss	4096
+tp_ep_model_router_route_id	layer	1	slot	0	k	1	expert	137	rank	4	local	9	weight	0.257142007	gated_w	0x7f699e800000	gated_ws	131072	gated_s	0x7f69a1180000	gated_ss	4096	down_w	0x7f6990800000	down_ws	65536	down_s	0x7f6993d40000	down_ss	4096
+tp_ep_model_router_route_id	layer	1	slot	0	k	2	expert	158	rank	4	local	30	weight	0.325934052	gated_w	0x7f6995800000	gated_ws	131072	gated_s	0x7f69a1c00000	gated_ss	4096	down_w	0x7f698a400000	down_ws	65536	down_s	0x7f698fe80000	down_ss	4096
+tp_ep_model_router_route_id	layer	1	slot	0	k	3	expert	97	rank	3	local	1	weight	0.232724056	gated_w	0x7f69bf400000	gated_ws	131072	gated_s	0x7f6a79f80000	gated_ss	4096	down_w	0x7f69acc00000	down_ws	65536	down_s	0x7f69bbd40000	down_ss	4096
+tp_ep_model_router_route_id	layer	1	slot	0	k	4	expert	184	rank	5	local	24	weight	0.165998489	gated_w	0x7f697c800000	gated_ws	131072	gated_s	0x7f6985f00000	gated_ss	4096	down_w	0x7f6972c00000	down_ws	65536	down_s	0x7f6975d00000	down_ss	4096
+tp_ep_model_router_route_id	layer	1	slot	0	k	5	expert	8	rank	0	local	8	weight	0.238289997	gated_w	0x7f6a06000000	gated_ws	131072	gated_s	0x7f6a09100000	gated_ss	4096	down_w	0x7f69f8400000	down_ws	65536	down_s	0x7f69fbd00000	down_ss	4096
+tp_ep_model_router_route_stats	layer	1	routes	1,0,0,1,2,2,0,0	max_routes_per_expert	1,0,0,1,1,1,0,0
+tp_ep_tensor_stats	tag	true_attn_q_a_full	layer	1	rank	0	elems	32768	finite_bad	0	first_bad	18446744073709551615	max_abs	0.33250764
+tp_ep_tensor_stats	tag	true_attn_kv_normed	layer	1	rank	0	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	9.9609375
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	1	rank	0	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.374479324
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	1	rank	1	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.324616581
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	1	rank	2	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.360268146
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	1	rank	3	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.428224206
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	1	rank	4	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.473863512
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	1	rank	5	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.459784478
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	1	rank	6	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.860593617
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	1	rank	7	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.346671045
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	1	rank	0	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	10.0529375
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	1	rank	1	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	10.2634611
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	1	rank	2	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	10.879777
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	1	rank	3	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	10.0420666
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	1	rank	4	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	12.5380049
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	1	rank	5	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	10.7857924
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	1	rank	6	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	13.378562
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	1	rank	7	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	9.28211117
+tp_ep_tensor_stats	tag	true_attn_raw_swa_rank0	layer	1	rank	0	elems	2097152	finite_bad	0	first_bad	18446744073709551615	max_abs	8.9140625
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	1	rank	0	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	6.46660995
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	1	rank	1	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	5.07438374
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	1	rank	2	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	8.54063988
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	1	rank	3	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	8.52271557
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	1	rank	4	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	8.75190067
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	1	rank	5	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	8.77455044
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	1	rank	6	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	8.45795727
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	1	rank	7	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	8.64690781
+tp_ep_model_router_route_id	layer	1	slot	0	k	0	expert	163	rank	5	local	3	weight	0.267740309	gated_w	0x7f6988a00000	gated_ws	131072	gated_s	0x7f6988880000	gated_ss	4096	down_w	0x7f6979400000	down_ws	65536	down_s	0x7f6987dc0000	down_ss	4096
+tp_ep_model_router_route_id	layer	1	slot	0	k	1	expert	137	rank	4	local	9	weight	0.230220646	gated_w	0x7f699e800000	gated_ws	131072	gated_s	0x7f69a1180000	gated_ss	4096	down_w	0x7f6990800000	down_ws	65536	down_s	0x7f6993d40000	down_ss	4096
+tp_ep_model_router_route_id	layer	1	slot	0	k	2	expert	158	rank	4	local	30	weight	0.241645306	gated_w	0x7f6995800000	gated_ws	131072	gated_s	0x7f69a1c00000	gated_ss	4096	down_w	0x7f698a400000	down_ws	65536	down_s	0x7f698fe80000	down_ss	4096
+tp_ep_model_router_route_id	layer	1	slot	0	k	3	expert	97	rank	3	local	1	weight	0.247658238	gated_w	0x7f69bf400000	gated_ws	131072	gated_s	0x7f6a79f80000	gated_ss	4096	down_w	0x7f69acc00000	down_ws	65536	down_s	0x7f69bbd40000	down_ss	4096
+tp_ep_model_router_route_id	layer	1	slot	0	k	4	expert	184	rank	5	local	24	weight	0.301755458	gated_w	0x7f697c800000	gated_ws	131072	gated_s	0x7f6985f00000	gated_ss	4096	down_w	0x7f6972c00000	down_ws	65536	down_s	0x7f6975d00000	down_ss	4096
+tp_ep_model_router_route_id	layer	1	slot	0	k	5	expert	8	rank	0	local	8	weight	0.210980013	gated_w	0x7f6a06000000	gated_ws	131072	gated_s	0x7f6a09100000	gated_ss	4096	down_w	0x7f69f8400000	down_ws	65536	down_s	0x7f69fbd00000	down_ss	4096
+tp_ep_route_tensor_stats	tag	route_input	layer	1	rank	0	elems	4096	finite_bad	0	first_bad	18446744073709551615	max_abs	0.970214844
+tp_ep_route_tensor_stats	tag	route_input	layer	1	rank	3	elems	4096	finite_bad	0	first_bad	18446744073709551615	max_abs	0.970214844
+tp_ep_route_tensor_stats	tag	route_input	layer	1	rank	4	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	0.970214844
+tp_ep_route_tensor_stats	tag	route_input	layer	1	rank	5	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	0.970214844
+tp_ep_tensor_stats	tag	shared_gate	layer	1	rank	0	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.07899714
+tp_ep_tensor_stats	tag	shared_up	layer	1	rank	0	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.47972488
+tp_ep_tensor_stats	tag	shared_gate	layer	1	rank	1	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.61357045
+tp_ep_tensor_stats	tag	shared_up	layer	1	rank	1	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	3.23393154
+tp_ep_tensor_stats	tag	shared_gate	layer	1	rank	2	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.56942987
+tp_ep_tensor_stats	tag	shared_up	layer	1	rank	2	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.01431704
+tp_ep_tensor_stats	tag	shared_gate	layer	1	rank	3	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.03263426
+tp_ep_tensor_stats	tag	shared_up	layer	1	rank	3	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.06144905
+tp_ep_tensor_stats	tag	shared_gate	layer	1	rank	4	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.8805691
+tp_ep_tensor_stats	tag	shared_up	layer	1	rank	4	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.65036511
+tp_ep_tensor_stats	tag	shared_gate	layer	1	rank	5	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	3.61639667
+tp_ep_tensor_stats	tag	shared_up	layer	1	rank	5	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	3.43557835
+tp_ep_tensor_stats	tag	shared_gate	layer	1	rank	6	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.30032134
+tp_ep_tensor_stats	tag	shared_up	layer	1	rank	6	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	3.19882011
+tp_ep_tensor_stats	tag	shared_gate	layer	1	rank	7	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.7131443
+tp_ep_tensor_stats	tag	shared_up	layer	1	rank	7	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.95053494
+tp_ep_tensor_stats	tag	shared_mid	layer	1	rank	0	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.82611263
+tp_ep_tensor_stats	tag	shared_mid	layer	1	rank	1	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.82611263
+tp_ep_tensor_stats	tag	shared_mid	layer	1	rank	2	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.82611263
+tp_ep_tensor_stats	tag	shared_mid	layer	1	rank	3	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.82611263
+tp_ep_tensor_stats	tag	shared_mid	layer	1	rank	4	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.82611263
+tp_ep_tensor_stats	tag	shared_mid	layer	1	rank	5	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.82611263
+tp_ep_tensor_stats	tag	shared_mid	layer	1	rank	6	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.82611263
+tp_ep_tensor_stats	tag	shared_mid	layer	1	rank	7	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.82611263
+tp_ep_tensor_stats	tag	shared_down	layer	1	rank	0	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.492059827
+tp_ep_tensor_stats	tag	shared_down	layer	1	rank	1	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.389267802
+tp_ep_tensor_stats	tag	shared_down	layer	1	rank	2	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.510348976
+tp_ep_tensor_stats	tag	shared_down	layer	1	rank	3	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.370753407
+tp_ep_tensor_stats	tag	shared_down	layer	1	rank	4	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.383766413
+tp_ep_tensor_stats	tag	shared_down	layer	1	rank	5	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.353494883
+tp_ep_tensor_stats	tag	shared_down	layer	1	rank	6	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.409170866
+tp_ep_tensor_stats	tag	shared_down	layer	1	rank	7	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.429019719
+tp_ep_route_tensor_stats	tag	route_gate_up	layer	1	rank	0	elems	4096	finite_bad	0	first_bad	18446744073709551615	max_abs	1.54296875
+tp_ep_route_tensor_stats	tag	route_gated	layer	1	rank	0	elems	2048	finite_bad	0	first_bad	18446744073709551615	max_abs	1.11230469
+tp_ep_route_tensor_stats	tag	route_down	layer	1	rank	0	elems	4096	finite_bad	0	first_bad	18446744073709551615	max_abs	0.42578125
+tp_ep_route_tensor_stats	tag	route_gate_up	layer	1	rank	3	elems	4096	finite_bad	0	first_bad	18446744073709551615	max_abs	1.64453125
+tp_ep_route_tensor_stats	tag	route_gated	layer	1	rank	3	elems	2048	finite_bad	0	first_bad	18446744073709551615	max_abs	0.589355469
+tp_ep_route_tensor_stats	tag	route_down	layer	1	rank	3	elems	4096	finite_bad	0	first_bad	18446744073709551615	max_abs	0.349121094
+tp_ep_route_tensor_stats	tag	route_gate_up	layer	1	rank	4	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.48046875
+tp_ep_route_tensor_stats	tag	route_gated	layer	1	rank	4	elems	4096	finite_bad	0	first_bad	18446744073709551615	max_abs	0.885742188
+tp_ep_route_tensor_stats	tag	route_down	layer	1	rank	4	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	0.434814453
+tp_ep_route_tensor_stats	tag	route_gate_up	layer	1	rank	5	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.54882812
+tp_ep_route_tensor_stats	tag	route_gated	layer	1	rank	5	elems	4096	finite_bad	0	first_bad	18446744073709551615	max_abs	0.792480469
+tp_ep_route_tensor_stats	tag	route_down	layer	1	rank	5	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	0.396484375
+tp_ep_model_router_route_id	layer	2	slot	0	k	0	expert	108	rank	3	local	12	weight	0.278588951	gated_w	0x7f68e6800000	gated_ws	131072	gated_s	0x7f68e9900000	gated_ss	4096	down_w	0x7f68db400000	down_ws	65536	down_s	0x7f68db800000	down_ss	4096
+tp_ep_model_router_route_id	layer	2	slot	0	k	1	expert	115	rank	3	local	19	weight	0.212727308	gated_w	0x7f68e2000000	gated_ws	131072	gated_s	0x7f68e9c80000	gated_ss	4096	down_w	0x7f68d9400000	down_ws	65536	down_s	0x7f68db9c0000	down_ss	4096
+tp_ep_model_router_route_id	layer	2	slot	0	k	2	expert	43	rank	1	local	11	weight	0.213488281	gated_w	0x7f691a000000	gated_ws	131072	gated_s	0x7f691d880000	gated_ss	4096	down_w	0x7f690f000000	down_ws	65536	down_s	0x7f6911dc0000	down_ss	4096
+tp_ep_model_router_route_id	layer	2	slot	0	k	3	expert	53	rank	1	local	21	weight	0.36583823	gated_w	0x7f6917000000	gated_ws	131072	gated_s	0x7f691dd80000	gated_ss	4096	down_w	0x7f690a000000	down_ws	65536	down_s	0x7f690dc40000	down_ss	4096
+tp_ep_model_router_route_id	layer	2	slot	0	k	4	expert	132	rank	4	local	4	weight	0.23984313	gated_w	0x7f68d3200000	gated_ws	131072	gated_s	0x7f68d2900000	gated_ss	4096	down_w	0x7f68c3800000	down_ws	65536	down_s	0x7f68c3c00000	down_ss	4096
+tp_ep_model_router_route_id	layer	2	slot	0	k	5	expert	143	rank	4	local	15	weight	0.189514115	gated_w	0x7f68ca000000	gated_ws	131072	gated_s	0x7f68cfa80000	gated_ss	4096	down_w	0x7f68be400000	down_ws	65536	down_s	0x7f68c18c0000	down_ss	4096
+tp_ep_model_router_route_stats	layer	2	routes	0,2,0,2,2,0,0,0	max_routes_per_expert	0,1,0,1,1,0,0,0
+tp_ep_tensor_stats	tag	true_attn_q_a_full	layer	2	rank	0	elems	32768	finite_bad	0	first_bad	18446744073709551615	max_abs	0.369065613
+tp_ep_tensor_stats	tag	true_attn_kv_normed	layer	2	rank	0	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	1.72427213
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	2	rank	0	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.152726129
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	2	rank	1	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.102396667
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	2	rank	2	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.21619758
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	2	rank	3	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.179985061
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	2	rank	4	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.160078779
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	2	rank	5	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.431258023
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	2	rank	6	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.177016243
+tp_ep_tensor_stats	tag	true_attn_q_b_shard	layer	2	rank	7	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	0.225467205
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	2	rank	0	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	5.48330832
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	2	rank	1	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	3.98991537
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	2	rank	2	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	6.78745794
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	2	rank	3	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	5.17279005
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	2	rank	4	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	5.17467642
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	2	rank	5	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	12.7581749
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	2	rank	6	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	6.09886742
+tp_ep_tensor_stats	tag	true_attn_q_heads_normed_shard	layer	2	rank	7	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	7.96870995
+tp_ep_tensor_stats	tag	true_attn_raw_swa_rank0	layer	2	rank	0	elems	2097152	finite_bad	0	first_bad	18446744073709551615	max_abs	1.75
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	2	rank	0	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	1.49791598
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	2	rank	1	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	1.62533557
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	2	rank	2	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	1.60782099
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	2	rank	3	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	1.46521151
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	2	rank	4	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	1.63659132
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	2	rank	5	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	1.68722713
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	2	rank	6	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	1.74714434
+tp_ep_tensor_stats	tag	true_attn_raw_window_heads	layer	2	rank	7	elems	131072	finite_bad	0	first_bad	18446744073709551615	max_abs	1.57751858
+tp_ep_model_router_route_id	layer	2	slot	0	k	0	expert	108	rank	3	local	12	weight	0.287988007	gated_w	0x7f68e6800000	gated_ws	131072	gated_s	0x7f68e9900000	gated_ss	4096	down_w	0x7f68db400000	down_ws	65536	down_s	0x7f68db800000	down_ss	4096
+tp_ep_model_router_route_id	layer	2	slot	0	k	1	expert	115	rank	3	local	19	weight	0.181560665	gated_w	0x7f68e2000000	gated_ws	131072	gated_s	0x7f68e9c80000	gated_ss	4096	down_w	0x7f68d9400000	down_ws	65536	down_s	0x7f68db9c0000	down_ss	4096
+tp_ep_model_router_route_id	layer	2	slot	0	k	2	expert	43	rank	1	local	11	weight	0.259476006	gated_w	0x7f691a000000	gated_ws	131072	gated_s	0x7f691d880000	gated_ss	4096	down_w	0x7f690f000000	down_ws	65536	down_s	0x7f6911dc0000	down_ss	4096
+tp_ep_model_router_route_id	layer	2	slot	0	k	3	expert	53	rank	1	local	21	weight	0.269273072	gated_w	0x7f6917000000	gated_ws	131072	gated_s	0x7f691dd80000	gated_ss	4096	down_w	0x7f690a000000	down_ws	65536	down_s	0x7f690dc40000	down_ss	4096
+tp_ep_model_router_route_id	layer	2	slot	0	k	4	expert	132	rank	4	local	4	weight	0.313670218	gated_w	0x7f68d3200000	gated_ws	131072	gated_s	0x7f68d2900000	gated_ss	4096	down_w	0x7f68c3800000	down_ws	65536	down_s	0x7f68c3c00000	down_ss	4096
+tp_ep_model_router_route_id	layer	2	slot	0	k	5	expert	143	rank	4	local	15	weight	0.18803215	gated_w	0x7f68ca000000	gated_ws	131072	gated_s	0x7f68cfa80000	gated_ss	4096	down_w	0x7f68be400000	down_ws	65536	down_s	0x7f68c18c0000	down_ss	4096
+tp_ep_route_tensor_stats	tag	route_input	layer	2	rank	1	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.15039062
+tp_ep_route_tensor_stats	tag	route_input	layer	2	rank	3	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.15039062
+tp_ep_route_tensor_stats	tag	route_input	layer	2	rank	4	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.15039062
+tp_ep_tensor_stats	tag	shared_gate	layer	2	rank	0	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.15635252
+tp_ep_tensor_stats	tag	shared_up	layer	2	rank	0	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.44521952
+tp_ep_tensor_stats	tag	shared_gate	layer	2	rank	1	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.05415201
+tp_ep_tensor_stats	tag	shared_up	layer	2	rank	1	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.03733921
+tp_ep_tensor_stats	tag	shared_gate	layer	2	rank	2	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.09195733
+tp_ep_tensor_stats	tag	shared_up	layer	2	rank	2	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.35287619
+tp_ep_tensor_stats	tag	shared_gate	layer	2	rank	3	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.82417703
+tp_ep_tensor_stats	tag	shared_up	layer	2	rank	3	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.661129
+tp_ep_tensor_stats	tag	shared_gate	layer	2	rank	4	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	3.05489349
+tp_ep_tensor_stats	tag	shared_up	layer	2	rank	4	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.86540043
+tp_ep_tensor_stats	tag	shared_gate	layer	2	rank	5	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.24398994
+tp_ep_tensor_stats	tag	shared_up	layer	2	rank	5	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.27652836
+tp_ep_tensor_stats	tag	shared_gate	layer	2	rank	6	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.57962108
+tp_ep_tensor_stats	tag	shared_up	layer	2	rank	6	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.7678262
+tp_ep_tensor_stats	tag	shared_gate	layer	2	rank	7	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.5273304
+tp_ep_tensor_stats	tag	shared_up	layer	2	rank	7	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.55791664
+tp_ep_tensor_stats	tag	shared_mid	layer	2	rank	0	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.97908604
+tp_ep_tensor_stats	tag	shared_mid	layer	2	rank	1	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.97908604
+tp_ep_tensor_stats	tag	shared_mid	layer	2	rank	2	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.97908604
+tp_ep_tensor_stats	tag	shared_mid	layer	2	rank	3	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.97908604
+tp_ep_tensor_stats	tag	shared_mid	layer	2	rank	4	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.97908604
+tp_ep_tensor_stats	tag	shared_mid	layer	2	rank	5	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.97908604
+tp_ep_tensor_stats	tag	shared_mid	layer	2	rank	6	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.97908604
+tp_ep_tensor_stats	tag	shared_mid	layer	2	rank	7	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.97908604
+tp_ep_tensor_stats	tag	shared_down	layer	2	rank	0	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.571002424
+tp_ep_tensor_stats	tag	shared_down	layer	2	rank	1	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.443652272
+tp_ep_tensor_stats	tag	shared_down	layer	2	rank	2	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.43664825
+tp_ep_tensor_stats	tag	shared_down	layer	2	rank	3	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.577415824
+tp_ep_tensor_stats	tag	shared_down	layer	2	rank	4	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.417170107
+tp_ep_tensor_stats	tag	shared_down	layer	2	rank	5	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.444209456
+tp_ep_tensor_stats	tag	shared_down	layer	2	rank	6	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.377011865
+tp_ep_tensor_stats	tag	shared_down	layer	2	rank	7	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.462445676
+tp_ep_route_tensor_stats	tag	route_gate_up	layer	2	rank	1	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.51171875
+tp_ep_route_tensor_stats	tag	route_gated	layer	2	rank	1	elems	4096	finite_bad	0	first_bad	18446744073709551615	max_abs	1.19824219
+tp_ep_route_tensor_stats	tag	route_down	layer	2	rank	1	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	0.591796875
+tp_ep_route_tensor_stats	tag	route_gate_up	layer	2	rank	3	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.13867188
+tp_ep_route_tensor_stats	tag	route_gated	layer	2	rank	3	elems	4096	finite_bad	0	first_bad	18446744073709551615	max_abs	1.50585938
+tp_ep_route_tensor_stats	tag	route_down	layer	2	rank	3	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	0.603027344
+tp_ep_route_tensor_stats	tag	route_gate_up	layer	2	rank	4	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.88378906
+tp_ep_route_tensor_stats	tag	route_gated	layer	2	rank	4	elems	4096	finite_bad	0	first_bad	18446744073709551615	max_abs	1.55175781
+tp_ep_route_tensor_stats	tag	route_down	layer	2	rank	4	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	0.607910156
+tp_ep_model_router_route_stats	layer	3	routes	0,1,2,0,0,0,0,3	max_routes_per_expert	0,1,1,0,0,0,0,1
+tp_ep_tensor_stats	tag	shared_gate	layer	3	rank	0	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.4791131
+tp_ep_tensor_stats	tag	shared_up	layer	3	rank	0	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.40404248
+tp_ep_tensor_stats	tag	shared_gate	layer	3	rank	1	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.14052773
+tp_ep_tensor_stats	tag	shared_up	layer	3	rank	1	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.23133242
+tp_ep_tensor_stats	tag	shared_gate	layer	3	rank	2	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.3753041
+tp_ep_tensor_stats	tag	shared_up	layer	3	rank	2	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.0471375
+tp_ep_tensor_stats	tag	shared_gate	layer	3	rank	3	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	0.904235482
+tp_ep_tensor_stats	tag	shared_up	layer	3	rank	3	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.07775557
+tp_ep_tensor_stats	tag	shared_gate	layer	3	rank	4	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	0.983271241
+tp_ep_tensor_stats	tag	shared_up	layer	3	rank	4	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.12489867
+tp_ep_tensor_stats	tag	shared_gate	layer	3	rank	5	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.52634621
+tp_ep_tensor_stats	tag	shared_up	layer	3	rank	5	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.1825918
+tp_ep_tensor_stats	tag	shared_gate	layer	3	rank	6	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.55770802
+tp_ep_tensor_stats	tag	shared_up	layer	3	rank	6	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.16851974
+tp_ep_tensor_stats	tag	shared_gate	layer	3	rank	7	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.58723044
+tp_ep_tensor_stats	tag	shared_up	layer	3	rank	7	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.02463734
+tp_ep_tensor_stats	tag	shared_mid	layer	3	rank	0	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	0.73797369
+tp_ep_tensor_stats	tag	shared_mid	layer	3	rank	1	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	0.73797369
+tp_ep_tensor_stats	tag	shared_mid	layer	3	rank	2	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	0.73797369
+tp_ep_tensor_stats	tag	shared_mid	layer	3	rank	3	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	0.73797369
+tp_ep_tensor_stats	tag	shared_mid	layer	3	rank	4	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	0.73797369
+tp_ep_tensor_stats	tag	shared_mid	layer	3	rank	5	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	0.73797369
+tp_ep_tensor_stats	tag	shared_mid	layer	3	rank	6	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	0.73797369
+tp_ep_tensor_stats	tag	shared_mid	layer	3	rank	7	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	0.73797369
+tp_ep_tensor_stats	tag	shared_down	layer	3	rank	0	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.247554392
+tp_ep_tensor_stats	tag	shared_down	layer	3	rank	1	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.253881276
+tp_ep_tensor_stats	tag	shared_down	layer	3	rank	2	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.232377887
+tp_ep_tensor_stats	tag	shared_down	layer	3	rank	3	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.27908659
+tp_ep_tensor_stats	tag	shared_down	layer	3	rank	4	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.238682777
+tp_ep_tensor_stats	tag	shared_down	layer	3	rank	5	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.240637809
+tp_ep_tensor_stats	tag	shared_down	layer	3	rank	6	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.224986225
+tp_ep_tensor_stats	tag	shared_down	layer	3	rank	7	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.214236885
+tp_ep_model_router_route_stats	layer	4	routes	2,0,2,0,0,0,0,2	max_routes_per_expert	1,0,1,0,0,0,0,1
+tp_ep_tensor_stats	tag	shared_gate	layer	4	rank	0	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.49639857
+tp_ep_tensor_stats	tag	shared_up	layer	4	rank	0	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.94365537
+tp_ep_tensor_stats	tag	shared_gate	layer	4	rank	1	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.74927032
+tp_ep_tensor_stats	tag	shared_up	layer	4	rank	1	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.49139225
+tp_ep_tensor_stats	tag	shared_gate	layer	4	rank	2	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	3.10063887
+tp_ep_tensor_stats	tag	shared_up	layer	4	rank	2	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.32598972
+tp_ep_tensor_stats	tag	shared_gate	layer	4	rank	3	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.23803842
+tp_ep_tensor_stats	tag	shared_up	layer	4	rank	3	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	3.27997613
+tp_ep_tensor_stats	tag	shared_gate	layer	4	rank	4	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.06974578
+tp_ep_tensor_stats	tag	shared_up	layer	4	rank	4	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.49266124
+tp_ep_tensor_stats	tag	shared_gate	layer	4	rank	5	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.19115651
+tp_ep_tensor_stats	tag	shared_up	layer	4	rank	5	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.80163968
+tp_ep_tensor_stats	tag	shared_gate	layer	4	rank	6	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	2.43292785
+tp_ep_tensor_stats	tag	shared_up	layer	4	rank	6	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.44093239
+tp_ep_tensor_stats	tag	shared_gate	layer	4	rank	7	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.84351516
+tp_ep_tensor_stats	tag	shared_up	layer	4	rank	7	elems	8192	finite_bad	0	first_bad	18446744073709551615	max_abs	1.686795
+tp_ep_tensor_stats	tag	shared_mid	layer	4	rank	0	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.70429194
+tp_ep_tensor_stats	tag	shared_mid	layer	4	rank	1	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.70429194
+tp_ep_tensor_stats	tag	shared_mid	layer	4	rank	2	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.70429194
+tp_ep_tensor_stats	tag	shared_mid	layer	4	rank	3	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.70429194
+tp_ep_tensor_stats	tag	shared_mid	layer	4	rank	4	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.70429194
+tp_ep_tensor_stats	tag	shared_mid	layer	4	rank	5	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.70429194
+tp_ep_tensor_stats	tag	shared_mid	layer	4	rank	6	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.70429194
+tp_ep_tensor_stats	tag	shared_mid	layer	4	rank	7	elems	65536	finite_bad	0	first_bad	18446744073709551615	max_abs	1.70429194
+tp_ep_tensor_stats	tag	shared_down	layer	4	rank	0	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.34165743
+tp_ep_tensor_stats	tag	shared_down	layer	4	rank	1	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.47088927
+tp_ep_tensor_stats	tag	shared_down	layer	4	rank	2	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.350203633
+tp_ep_tensor_stats	tag	shared_down	layer	4	rank	3	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.297028959
+tp_ep_tensor_stats	tag	shared_down	layer	4	rank	4	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.349687338
+tp_ep_tensor_stats	tag	shared_down	layer	4	rank	5	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.294872284
+tp_ep_tensor_stats	tag	shared_down	layer	4	rank	6	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.309528321
+tp_ep_tensor_stats	tag	shared_down	layer	4	rank	7	elems	16384	finite_bad	0	first_bad	18446744073709551615	max_abs	0.278685629
+tp_ep_model_router_route_stats	layer	5	routes	1,1,0,0,2,1,1,0	max_routes_per_expert	1,1,0,0,1,1,1,0
+tp_runtime_dense_kv_slice_failed	slot	7	position is outside configured context
+tp_ep_http_decode_failed	rc	3	batch	1	requested_steps	1	position	262143
+Terminated

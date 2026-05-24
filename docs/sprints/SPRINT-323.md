@@ -1,7 +1,7 @@
 ---
 sprint: 323
 title: TP/EP Compressed-KV and Indexer Attention Gate
-status: planned
+status: partial
 started: 2026-05-24
 branch: claude-takeover
 ---
@@ -143,3 +143,58 @@ HTTP short_reasoning_plain parity
 - If the indexer path selects rows but parity does not move, the next audit
   should compare logits/heads against the existing `ds4_v100_layer_execute.c`
   reference path at a single layer and token.
+
+## Execution Result
+
+Sprint 323 implemented and validated the first TP/EP compressed-KV/indexer
+slice:
+
+- Added `--true-ds4-compressed-kv-gate`.
+- Added `--true-ds4-indexer-attention-gate`.
+- Generalized resident dense binding so BF16 dense tensors can use the same
+  FP16-cache/cuBLAS path as FP8 tensors.
+- Bound and executed the compressor/indexer projection tensors:
+  - `attn_compress_kv.weight`
+  - `attn_compress_gate.weight`
+  - `indexer.attn_q_b.weight`
+  - `indexer.proj.weight`
+  - `indexer.compress_kv.weight`
+  - `indexer.compress_gate.weight`
+- Freed unused resident float dense input buffers in the cuBLAS/FP16-cache path,
+  while retaining the one shared-FFN down buffer that still materializes
+  SiLU(gate) * up in FP32.
+- Changed TP/EP HTTP token embedding seeding from a full GPU0-resident
+  embedding table to host-resident full weights plus tiny per-rank slot-row
+  device uploads.
+
+Validation:
+
+- V100 CUDA build passed.
+- 32-slot / 256K all-layer smoke passed with the new indexer gate.
+- The smoke logged 43 `tp_ep_compressed_kv_projection` rows:
+  - 2 SWA-only layers
+  - 21 ratio-4 layers
+  - 20 ratio-128 layers
+- Final smoke scaffold:
+  - `pass_invocations=43`
+  - `sum_decode_ms=1630.105625`
+  - `projected_slot_step_tok_s=19.630630`
+  - `PASS`
+- HTTP parity now runs end-to-end with the expanded gate and no OOM.
+  It still fails the official vector:
+  - expected text: `16`
+  - actual text: `MARK`
+  - generated token: `110609`
+  - wall tok/s: `20.99589`
+  - decode tok/s: `21.8601`
+
+The sprint is partial because this slice does not yet store real compressed
+rows, run indexer scores/top-k over stored compressed rows, or merge raw plus
+compressed attention rows in the attention softmax/value read. Those are the
+next correctness tasks.
+
+Artifacts:
+
+- `logs/from-cluster/sprint323-compressed-kv-indexer/cluster/all-layer-smoke-input-free-v2.log`
+- `logs/from-cluster/sprint323-compressed-kv-indexer/cluster/http-parity-v3/`
+- `logs/from-cluster/sprint323-compressed-kv-indexer/cluster/http-parity-v4/`

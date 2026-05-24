@@ -45,6 +45,9 @@ constexpr int kAttentionOutputAInput = kLocalHeads * kHeadDim;
 constexpr int kAttentionOutputAFull = 8192;
 constexpr int kRawSwaRows = 128;
 constexpr int kRotaryDim = 64;
+constexpr int kIndexerHeadDim = 128;
+constexpr int kIndexerHead = 64;
+constexpr int kIndexerTopK = 512;
 constexpr uint32_t kRopeOrigCtx = 65536;
 constexpr float kRopeFreqBase = 10000.0f;
 constexpr float kCompressRopeFreqBase = 160000.0f;
@@ -275,6 +278,12 @@ struct LayerDenseOps {
     ResidentF8Dense attn_q_b;
     ResidentF8Dense attn_kv_latent;
     ResidentF8Dense attn_output_a;
+    ResidentF8Dense attn_compress_kv;
+    ResidentF8Dense attn_compress_gate;
+    ResidentF8Dense indexer_attn_q_b;
+    ResidentF8Dense indexer_proj;
+    ResidentF8Dense indexer_compress_kv;
+    ResidentF8Dense indexer_compress_gate;
     ResidentF8Dense attn;
     ResidentF8Dense shared;
     ResidentF8Dense shared_gate;
@@ -520,6 +529,8 @@ struct Options {
     bool true_ds4_attention_raw_window_gate = false;
     bool true_ds4_attention_output_gate = false;
     bool true_ds4_post_attention_ffn_input_gate = false;
+    bool true_ds4_compressed_kv_gate = false;
+    bool true_ds4_indexer_attention_gate = false;
     uint32_t true_ds4_attention_raw_valid_rows = 1;
 };
 
@@ -852,10 +863,8 @@ __global__ void gather_hc_shard_to_full_kernel(float *full_hc,
 }
 
 __global__ void seed_hc_shard_from_token_embedding_kernel(float *shard_hc,
-                                                          const uint16_t *embedding,
-                                                          const uint32_t *tokens,
+                                                          const uint16_t *slot_rows,
                                                           uint32_t slots,
-                                                          uint32_t vocab,
                                                           int rank) {
     const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
     const uint32_t shard_cols = kHidden / kGpus;
@@ -863,10 +872,8 @@ __global__ void seed_hc_shard_from_token_embedding_kernel(float *shard_hc,
     if (i >= elems) return;
     const uint32_t local_h = (uint32_t)(i % shard_cols);
     const uint32_t slot = (uint32_t)(i / (4ull * shard_cols));
-    uint32_t token = tokens[slot];
-    if (token >= vocab) token = 0;
     const uint32_t hidden_col = (uint32_t)rank * shard_cols + local_h;
-    shard_hc[i] = bf16_to_f32_dev(embedding[(uint64_t)token * kHidden + hidden_col]);
+    shard_hc[i] = bf16_to_f32_dev(slot_rows[(uint64_t)slot * kHidden + hidden_col]);
 }
 
 __global__ void synthetic_hc_kernel(float *hc, uint32_t slots) {
@@ -2028,6 +2035,8 @@ void usage(const char *argv0) {
                  "       [--true-ds4-attention-raw-window-gate]\n"
                  "       [--true-ds4-attention-output-gate]\n"
                  "       [--true-ds4-post-attention-ffn-input-gate]\n"
+                 "       [--true-ds4-compressed-kv-gate]\n"
+                 "       [--true-ds4-indexer-attention-gate]\n"
                  "       [--reference-hc-reduce-gate]\n"
                  "       [--reference-hc-state-guard-gate]\n"
                  "       [--diagnostic-output-head]\n",
@@ -2290,6 +2299,21 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--true-ds4-compressed-kv-gate") == 0) {
+            opt->true_ds4_compressed_kv_gate = true;
+            opt->true_ds4_attention_projection_gate = true;
+            opt->true_ds4_attention_residency_gate = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--true-ds4-indexer-attention-gate") == 0) {
+            opt->true_ds4_indexer_attention_gate = true;
+            opt->true_ds4_compressed_kv_gate = true;
+            opt->true_ds4_attention_projection_gate = true;
+            opt->true_ds4_attention_residency_gate = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--reference-hc-reduce-gate") == 0) {
             opt->reference_hc_reduce_gate = true;
             opt->tp_hc_current_input_gate = true;
@@ -2344,6 +2368,10 @@ bool parse_args(int argc, char **argv, Options *opt) {
            (!opt->true_ds4_post_attention_ffn_input_gate ||
             (opt->true_ds4_attention_output_gate && opt->true_shared_ffn_gate &&
              opt->model_router_routes && opt->routed_ffn_norm_input_gate)) &&
+           (!opt->true_ds4_compressed_kv_gate ||
+            opt->true_ds4_attention_projection_gate) &&
+           (!opt->true_ds4_indexer_attention_gate ||
+            opt->true_ds4_compressed_kv_gate) &&
            !(opt->dense_compute_tensor &&
              (opt->dense_compute_all_f8 || opt->dense_compute_all_bf16));
 }
@@ -3643,8 +3671,8 @@ struct SharedTokenEmbedding {
     int slots = 0;
     int vocab = 0;
     int rows_per_gpu = 0;
-    uint16_t *d_w_full = nullptr;
-    uint32_t *d_tokens = nullptr;
+    std::vector<uint16_t> h_w_full;
+    uint16_t *d_slot_rows[kGpus] = {};
     uint64_t weight_bytes = 0;
 };
 
@@ -3668,11 +3696,14 @@ int open_shared_token_embedding(const Options &opt,
     out->rows_per_gpu = vocab / kGpus;
     const uint64_t shard_elems = (uint64_t)out->rows_per_gpu * (uint64_t)kHidden;
     const uint64_t shard_bytes = shard_elems * sizeof(uint16_t);
-    const uint64_t full_bytes = shard_bytes * kGpus;
+    const uint64_t full_elems = shard_elems * kGpus;
 
-    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
-    CHECK_CUDA(cudaMalloc(&out->d_w_full, (size_t)full_bytes));
-    CHECK_CUDA(cudaMalloc(&out->d_tokens, (size_t)opt.slots * sizeof(uint32_t)));
+    out->h_w_full.assign((size_t)full_elems, 0);
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[rank]));
+        CHECK_CUDA(cudaMalloc(&out->d_slot_rows[(size_t)rank],
+                              (size_t)opt.slots * kHidden * sizeof(uint16_t)));
+    }
 
     std::vector<uint16_t> host((size_t)shard_elems);
     for (int shard = 0; shard < kGpus; ++shard) {
@@ -3683,9 +3714,8 @@ int open_shared_token_embedding(const Options &opt,
                           (size_t)shard_bytes) != 0) {
             return 3;
         }
-        CHECK_CUDA(cudaMemcpy(out->d_w_full + (uint64_t)shard_index * shard_elems,
-                              host.data(), (size_t)shard_bytes,
-                              cudaMemcpyHostToDevice));
+        std::memcpy(out->h_w_full.data() + (uint64_t)shard_index * shard_elems,
+                    host.data(), (size_t)shard_bytes);
         out->weight_bytes += shard_bytes;
     }
     out->initialized = true;
@@ -3694,9 +3724,12 @@ int open_shared_token_embedding(const Options &opt,
 
 void close_shared_token_embedding(const Options &opt, SharedTokenEmbedding *out) {
     if (!out || !out->initialized) return;
-    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
-    if (out->d_tokens) CHECK_CUDA(cudaFree(out->d_tokens));
-    if (out->d_w_full) CHECK_CUDA(cudaFree(out->d_w_full));
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[rank]));
+        if (out->d_slot_rows[(size_t)rank]) {
+            CHECK_CUDA(cudaFree(out->d_slot_rows[(size_t)rank]));
+        }
+    }
     *out = SharedTokenEmbedding{};
 }
 
@@ -3705,27 +3738,33 @@ int seed_rank_hc_from_input_tokens(const Options &opt,
                                    RankState ranks[kGpus],
                                    const std::vector<uint32_t> &tokens) {
     if (!embedding || !embedding->initialized ||
-        (int)tokens.size() < opt.slots || !embedding->d_w_full ||
-        !embedding->d_tokens) {
+        (int)tokens.size() < opt.slots ||
+        embedding->h_w_full.empty()) {
         return 1;
     }
     const uint64_t shard_elems =
         (uint64_t)opt.slots * 4ull * (uint64_t)(kHidden / kGpus);
-    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
-    CHECK_CUDA(cudaMemcpy(embedding->d_tokens, tokens.data(),
-                          (size_t)opt.slots * sizeof(uint32_t),
-                          cudaMemcpyHostToDevice));
+    std::vector<uint16_t> slot_rows((size_t)opt.slots * kHidden);
+    for (int slot = 0; slot < opt.slots; ++slot) {
+        uint32_t token = tokens[(size_t)slot];
+        if (token >= (uint32_t)embedding->vocab) token = 0;
+        std::memcpy(slot_rows.data() + (size_t)slot * kHidden,
+                    embedding->h_w_full.data() + (uint64_t)token * kHidden,
+                    (size_t)kHidden * sizeof(uint16_t));
+    }
     for (int rank = 0; rank < kGpus; ++rank) {
         RankState &r = ranks[rank];
-        if (!r.d_final_hc_shard) return 2;
+        if (!r.d_final_hc_shard || !embedding->d_slot_rows[(size_t)rank]) return 2;
         CHECK_CUDA(cudaSetDevice(r.device));
+        CHECK_CUDA(cudaMemcpyAsync(embedding->d_slot_rows[(size_t)rank],
+                                   slot_rows.data(),
+                                   slot_rows.size() * sizeof(uint16_t),
+                                   cudaMemcpyHostToDevice, r.stream));
         seed_hc_shard_from_token_embedding_kernel<<<
             (unsigned int)((shard_elems + 255) / 256), 256, 0, r.stream>>>(
             r.d_final_hc_shard,
-            embedding->d_w_full,
-            embedding->d_tokens,
+            embedding->d_slot_rows[(size_t)rank],
             (uint32_t)opt.slots,
-            (uint32_t)embedding->vocab,
             rank);
         CHECK_CUDA(cudaGetLastError());
         r.hc_initialized = true;
@@ -4788,12 +4827,23 @@ int prepare_resident_f8_dense(const Options &opt,
                               const DenseF16Cache *cache,
                               ResidentF8Dense *op,
                               int expected_rows_per_gpu = kHidden / kGpus,
-                              bool keep_packed_f8 = false) {
+                              bool keep_packed_f8 = false,
+                              bool keep_float_input = false) {
     std::vector<ContractRow> selected;
     int cols = 0;
     int total_rows = 0;
-    if (!select_dense_rows(rows, tensor, &selected, &cols, &total_rows)) {
+    bool source_is_f8 = select_dense_rows(rows, tensor, &selected, &cols, &total_rows);
+    bool source_is_bf16 = false;
+    if (!source_is_f8) {
+        source_is_bf16 = select_bf16_dense_rows(rows, tensor, &selected, &cols, &total_rows);
+    }
+    if (!source_is_f8 && !source_is_bf16) {
         std::fprintf(stderr, "resident dense tensor validation failed for %s\n", tensor);
+        return 1;
+    }
+    if (source_is_bf16 && keep_packed_f8) {
+        std::fprintf(stderr, "resident dense tensor %s requested packed f8 retention for bf16 source\n",
+                     tensor);
         return 1;
     }
     const int rows_per_gpu = total_rows / kGpus;
@@ -4802,7 +4852,8 @@ int prepare_resident_f8_dense(const Options &opt,
                      tensor, rows_per_gpu, expected_rows_per_gpu);
         return 2;
     }
-    const uint64_t row_bytes = f8_row_bytes(cols);
+    const uint64_t row_bytes =
+        source_is_f8 ? f8_row_bytes(cols) : (uint64_t)cols * sizeof(uint16_t);
     const uint64_t shard_bytes = row_bytes * (uint64_t)rows_per_gpu;
     op->d_w.assign((size_t)kGpus, nullptr);
     op->d_x.assign((size_t)kGpus, nullptr);
@@ -4830,6 +4881,13 @@ int prepare_resident_f8_dense(const Options &opt,
             opt.dense_f16_cache_compose && opt.dense_f16_cublas_compose && cache
                 ? find_dense_f16_cache_entry(*cache, tensor, gpu)
                 : nullptr;
+        if (source_is_bf16 && !cache_entry) {
+            std::fprintf(stderr,
+                         "resident bf16 dense tensor %s requires dense f16 cache on gpu %d\n",
+                         tensor, gpu);
+            free_resident_f8_dense(*op, opt);
+            return 3;
+        }
         CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
         if (!cache_entry || keep_packed_f8) {
             std::vector<uint8_t> h_w((size_t)shard_bytes);
@@ -4863,6 +4921,10 @@ int prepare_resident_f8_dense(const Options &opt,
                                       (size_t)rows_per_gpu * cols * sizeof(__half)));
                 op->owns_w_half[(size_t)gpu] = true;
                 const uint64_t w_elems = (uint64_t)rows_per_gpu * cols;
+                if (!source_is_f8) {
+                    free_resident_f8_dense(*op, opt);
+                    return 5;
+                }
                 f8_b128_to_half_kernel<<<(unsigned int)((w_elems + 255) / 256), 256>>>(
                     op->d_w_half[(size_t)gpu], op->d_w[(size_t)gpu],
                     rows_per_gpu, cols, (uint32_t)row_bytes);
@@ -4875,6 +4937,10 @@ int prepare_resident_f8_dense(const Options &opt,
                 op->d_x_half[(size_t)gpu], op->d_x[(size_t)gpu], x_elems);
             CHECK_CUDA(cudaGetLastError());
             CHECK_CUDA(cudaDeviceSynchronize());
+            if (!keep_float_input) {
+                CHECK_CUDA(cudaFree(op->d_x[(size_t)gpu]));
+                op->d_x[(size_t)gpu] = nullptr;
+            }
             cublasStatus_t st = cublasCreate(&op->cublas[(size_t)gpu]);
             if (st != CUBLAS_STATUS_SUCCESS) {
                 std::fprintf(stderr, "cublasCreate failed on gpu %d: %d\n", gpu, (int)st);
@@ -4894,6 +4960,12 @@ void free_shared_dense_ops(SharedDenseOps *ops, const Options &opt) {
         free_resident_f8_dense(ops->layers[layer].attn_q_b, opt);
         free_resident_f8_dense(ops->layers[layer].attn_kv_latent, opt);
         free_resident_f8_dense(ops->layers[layer].attn_output_a, opt);
+        free_resident_f8_dense(ops->layers[layer].attn_compress_kv, opt);
+        free_resident_f8_dense(ops->layers[layer].attn_compress_gate, opt);
+        free_resident_f8_dense(ops->layers[layer].indexer_attn_q_b, opt);
+        free_resident_f8_dense(ops->layers[layer].indexer_proj, opt);
+        free_resident_f8_dense(ops->layers[layer].indexer_compress_kv, opt);
+        free_resident_f8_dense(ops->layers[layer].indexer_compress_gate, opt);
         free_resident_f8_dense(ops->layers[layer].attn, opt);
         free_resident_f8_dense(ops->layers[layer].shared, opt);
         free_resident_f8_dense(ops->layers[layer].shared_gate, opt);
@@ -4924,6 +4996,12 @@ int open_shared_dense_ops(const Options &opt,
         const std::string attn_q_b_tensor = layer_tensor_name(layer, "attn_q_b.weight");
         const std::string attn_kv_tensor = layer_tensor_name(layer, "attn_kv_latent.weight");
         const std::string attn_output_a_tensor = layer_tensor_name(layer, "attn_output_a.weight");
+        const std::string attn_compress_kv_tensor = layer_tensor_name(layer, "attn_compress_kv.weight");
+        const std::string attn_compress_gate_tensor = layer_tensor_name(layer, "attn_compress_gate.weight");
+        const std::string indexer_attn_q_b_tensor = layer_tensor_name(layer, "indexer.attn_q_b.weight");
+        const std::string indexer_proj_tensor = layer_tensor_name(layer, "indexer.proj.weight");
+        const std::string indexer_compress_kv_tensor = layer_tensor_name(layer, "indexer.compress_kv.weight");
+        const std::string indexer_compress_gate_tensor = layer_tensor_name(layer, "indexer.compress_gate.weight");
         const std::string attn_tensor = layer_tensor_name(layer, "attn_output_b.weight");
         const std::string shared_tensor = layer_tensor_name(layer, "ffn_down_shexp.weight");
         const std::string shared_gate_tensor = layer_tensor_name(layer, "ffn_gate_shexp.weight");
@@ -4944,10 +5022,49 @@ int open_shared_dense_ops(const Options &opt,
                                  d.attn_kv_latent.loaded_bytes +
                                  d.attn_output_a.loaded_bytes;
         }
+        if (opt.true_ds4_compressed_kv_gate) {
+            const int ratio = ds4_layer_ratio(layer);
+            if (ratio != 0) {
+                const int comp_width = ratio == 4 ? 2 * kHeadDim : kHeadDim;
+                if (prepare_resident_f8_dense(layer_opt, rows, attn_compress_kv_tensor.c_str(),
+                                              15, cache, &d.attn_compress_kv,
+                                              comp_width / kGpus) != 0 ||
+                    prepare_resident_f8_dense(layer_opt, rows, attn_compress_gate_tensor.c_str(),
+                                              16, cache, &d.attn_compress_gate,
+                                              comp_width / kGpus) != 0) {
+                    free_shared_dense_ops(ops, opt);
+                    return 6;
+                }
+                ops->loaded_bytes += d.attn_compress_kv.loaded_bytes +
+                                     d.attn_compress_gate.loaded_bytes;
+            }
+            if (opt.true_ds4_indexer_attention_gate && ratio == 4) {
+                if (prepare_resident_f8_dense(layer_opt, rows, indexer_attn_q_b_tensor.c_str(),
+                                              17, cache, &d.indexer_attn_q_b,
+                                              (kIndexerHead * kIndexerHeadDim) / kGpus) != 0 ||
+                    prepare_resident_f8_dense(layer_opt, rows, indexer_proj_tensor.c_str(),
+                                              18, cache, &d.indexer_proj,
+                                              kIndexerHead / kGpus) != 0 ||
+                    prepare_resident_f8_dense(layer_opt, rows, indexer_compress_kv_tensor.c_str(),
+                                              19, cache, &d.indexer_compress_kv,
+                                              (2 * kIndexerHeadDim) / kGpus) != 0 ||
+                    prepare_resident_f8_dense(layer_opt, rows, indexer_compress_gate_tensor.c_str(),
+                                              20, cache, &d.indexer_compress_gate,
+                                              (2 * kIndexerHeadDim) / kGpus) != 0) {
+                    free_shared_dense_ops(ops, opt);
+                    return 7;
+                }
+                ops->loaded_bytes += d.indexer_attn_q_b.loaded_bytes +
+                                     d.indexer_proj.loaded_bytes +
+                                     d.indexer_compress_kv.loaded_bytes +
+                                     d.indexer_compress_gate.loaded_bytes;
+            }
+        }
         if (prepare_resident_f8_dense(layer_opt, rows, attn_tensor.c_str(), 1, cache,
                                       &d.attn) != 0 ||
             prepare_resident_f8_dense(layer_opt, rows, shared_tensor.c_str(), 2, cache,
                                       &d.shared, kHidden / kGpus,
+                                      opt.true_shared_ffn_gate,
                                       opt.true_shared_ffn_gate) != 0) {
             free_shared_dense_ops(ops, opt);
             return 3;
@@ -6654,6 +6771,218 @@ int run_true_ds4_attention_projection_prefix(const Options &opt,
     return 0;
 }
 
+int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
+                                               SharedHcControls *hc,
+                                               const LayerDenseOps *ops,
+                                               RankState ranks[kGpus],
+                                               int layer) {
+    if (!opt.true_ds4_compressed_kv_gate) return 0;
+    if (!hc || !hc->initialized || !ops || !ops->initialized ||
+        layer < 0 || layer >= 43 || !hc->d_attn_normed || !hc->d_q_a_normed) {
+        return 1;
+    }
+    const int ratio = ds4_layer_ratio(layer);
+    const uint32_t emitted =
+        ratio != 0 && (((opt.position + 1ull) % (uint64_t)ratio) == 0ull) ? 1u : 0u;
+    const uint32_t visible = emitted;
+    const uint32_t indexer_topk =
+        opt.true_ds4_indexer_attention_gate && ratio == 4 ? kIndexerTopK : 0u;
+    if (ratio == 0) {
+        std::printf("tp_ep_compressed_kv_projection\tlayer\t%d\tslots\t%d\t"
+                    "ratio\t0\temitted_compressed_rows\t0\t"
+                    "visible_compressed_rows\t0\tindexer_topk_count\t0\tPASS\n",
+                    layer, opt.slots);
+        return 0;
+    }
+
+    const int comp_width = ratio == 4 ? 2 * kHeadDim : kHeadDim;
+    if (ops->attn_compress_kv.cols != kHidden ||
+        ops->attn_compress_gate.cols != kHidden ||
+        ops->attn_compress_kv.rows_per_gpu != comp_width / kGpus ||
+        ops->attn_compress_gate.rows_per_gpu != comp_width / kGpus) {
+        std::fprintf(stderr,
+                     "tp_ep_compressed_kv_bad_shape\tlayer\t%d\t"
+                     "ratio\t%d\tkv_cols\t%d\tkv_rows_per_gpu\t%d\t"
+                     "gate_cols\t%d\tgate_rows_per_gpu\t%d\n",
+                     layer, ratio, ops->attn_compress_kv.cols,
+                     ops->attn_compress_kv.rows_per_gpu,
+                     ops->attn_compress_gate.cols,
+                     ops->attn_compress_gate.rows_per_gpu);
+        return 2;
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    const int block = 256;
+    const uint64_t hidden_elems = (uint64_t)opt.slots * (uint64_t)kHidden;
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        if (!r.d_current_full ||
+            !ops->attn_compress_kv.d_x_half[(size_t)rank] ||
+            !ops->attn_compress_gate.d_x_half[(size_t)rank]) {
+            return 3;
+        }
+        if (rank == 0) {
+            CHECK_CUDA(cudaMemcpyAsync(r.d_current_full, hc->d_attn_normed,
+                                       (size_t)hidden_elems * sizeof(float),
+                                       cudaMemcpyDeviceToDevice, r.stream));
+        } else {
+            CHECK_CUDA(cudaMemcpyPeerAsync(r.d_current_full, r.device,
+                                           hc->d_attn_normed, opt.devices[0],
+                                           (size_t)hidden_elems * sizeof(float),
+                                           r.stream));
+        }
+        fill_dense_input_half_from_current_kernel<<<
+            (unsigned int)((hidden_elems + block - 1) / block), block, 0,
+            r.stream>>>(ops->attn_compress_kv.d_x_half[(size_t)rank],
+                         r.d_current_full, (uint32_t)kHidden,
+                         (uint32_t)opt.slots);
+        fill_dense_input_half_from_current_kernel<<<
+            (unsigned int)((hidden_elems + block - 1) / block), block, 0,
+            r.stream>>>(ops->attn_compress_gate.d_x_half[(size_t)rank],
+                         r.d_current_full, (uint32_t)kHidden,
+                         (uint32_t)opt.slots);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    }
+    if (launch_resident_f8_dense(opt, ops->attn_compress_kv, ranks) != 0 ||
+        launch_resident_f8_dense(opt, ops->attn_compress_gate, ranks) != 0) {
+        return 4;
+    }
+
+    TensorF32Stats attn_kv_stats;
+    TensorF32Stats attn_gate_stats;
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        cudaStream_t stream = ranks[rank].dense_stream ? ranks[rank].dense_stream
+                                                       : ranks[rank].stream;
+        CHECK_CUDA(cudaStreamSynchronize(stream));
+        const size_t comp_elems =
+            (size_t)opt.slots * (size_t)ops->attn_compress_kv.rows_per_gpu;
+        merge_tensor_stats(&attn_kv_stats,
+                           collect_tensor_f32_stats(
+                               ops->attn_compress_kv.d_out[(size_t)rank],
+                               comp_elems, stream));
+        merge_tensor_stats(&attn_gate_stats,
+                           collect_tensor_f32_stats(
+                               ops->attn_compress_gate.d_out[(size_t)rank],
+                               comp_elems, stream));
+    }
+
+    TensorF32Stats index_q_stats;
+    TensorF32Stats index_w_stats;
+    TensorF32Stats index_kv_stats;
+    TensorF32Stats index_gate_stats;
+    if (opt.true_ds4_indexer_attention_gate && ratio == 4) {
+        if (ops->indexer_attn_q_b.cols != 1024 ||
+            ops->indexer_attn_q_b.rows_per_gpu != (kIndexerHead * kIndexerHeadDim) / kGpus ||
+            ops->indexer_proj.cols != kHidden ||
+            ops->indexer_proj.rows_per_gpu != kIndexerHead / kGpus ||
+            ops->indexer_compress_kv.cols != kHidden ||
+            ops->indexer_compress_kv.rows_per_gpu != (2 * kIndexerHeadDim) / kGpus ||
+            ops->indexer_compress_gate.cols != kHidden ||
+            ops->indexer_compress_gate.rows_per_gpu != (2 * kIndexerHeadDim) / kGpus) {
+            return 5;
+        }
+        const uint64_t q_a_elems = (uint64_t)opt.slots * 1024ull;
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            CHECK_CUDA(cudaSetDevice(r.device));
+            if (!ops->indexer_attn_q_b.d_x_half[(size_t)rank] ||
+                !ops->indexer_proj.d_x_half[(size_t)rank] ||
+                !ops->indexer_compress_kv.d_x_half[(size_t)rank] ||
+                !ops->indexer_compress_gate.d_x_half[(size_t)rank]) {
+                return 6;
+            }
+            fill_dense_input_half_from_tensor_kernel<<<
+                (unsigned int)((q_a_elems + block - 1) / block), block, 0,
+                r.stream>>>(ops->indexer_attn_q_b.d_x_half[(size_t)rank],
+                             hc->d_q_a_normed, 1024u, (uint32_t)opt.slots);
+            fill_dense_input_half_from_current_kernel<<<
+                (unsigned int)((hidden_elems + block - 1) / block), block, 0,
+                r.stream>>>(ops->indexer_proj.d_x_half[(size_t)rank],
+                             r.d_current_full, (uint32_t)kHidden,
+                             (uint32_t)opt.slots);
+            fill_dense_input_half_from_current_kernel<<<
+                (unsigned int)((hidden_elems + block - 1) / block), block, 0,
+                r.stream>>>(ops->indexer_compress_kv.d_x_half[(size_t)rank],
+                             r.d_current_full, (uint32_t)kHidden,
+                             (uint32_t)opt.slots);
+            fill_dense_input_half_from_current_kernel<<<
+                (unsigned int)((hidden_elems + block - 1) / block), block, 0,
+                r.stream>>>(ops->indexer_compress_gate.d_x_half[(size_t)rank],
+                             r.d_current_full, (uint32_t)kHidden,
+                             (uint32_t)opt.slots);
+            CHECK_CUDA(cudaGetLastError());
+        }
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        }
+        if (launch_resident_f8_dense(opt, ops->indexer_attn_q_b, ranks) != 0 ||
+            launch_resident_f8_dense(opt, ops->indexer_proj, ranks) != 0 ||
+            launch_resident_f8_dense(opt, ops->indexer_compress_kv, ranks) != 0 ||
+            launch_resident_f8_dense(opt, ops->indexer_compress_gate, ranks) != 0) {
+            return 7;
+        }
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            cudaStream_t stream = ranks[rank].dense_stream ? ranks[rank].dense_stream
+                                                           : ranks[rank].stream;
+            CHECK_CUDA(cudaStreamSynchronize(stream));
+            merge_tensor_stats(&index_q_stats,
+                               collect_tensor_f32_stats(
+                                   ops->indexer_attn_q_b.d_out[(size_t)rank],
+                                   (size_t)opt.slots *
+                                       (size_t)ops->indexer_attn_q_b.rows_per_gpu,
+                                   stream));
+            merge_tensor_stats(&index_w_stats,
+                               collect_tensor_f32_stats(
+                                   ops->indexer_proj.d_out[(size_t)rank],
+                                   (size_t)opt.slots *
+                                       (size_t)ops->indexer_proj.rows_per_gpu,
+                                   stream));
+            merge_tensor_stats(&index_kv_stats,
+                               collect_tensor_f32_stats(
+                                   ops->indexer_compress_kv.d_out[(size_t)rank],
+                                   (size_t)opt.slots *
+                                       (size_t)ops->indexer_compress_kv.rows_per_gpu,
+                                   stream));
+            merge_tensor_stats(&index_gate_stats,
+                               collect_tensor_f32_stats(
+                                   ops->indexer_compress_gate.d_out[(size_t)rank],
+                                   (size_t)opt.slots *
+                                       (size_t)ops->indexer_compress_gate.rows_per_gpu,
+                                   stream));
+        }
+    }
+
+    const auto stop = std::chrono::steady_clock::now();
+    const double ms = std::chrono::duration<double, std::milli>(stop - start).count();
+    std::printf("tp_ep_compressed_kv_projection\tlayer\t%d\tslots\t%d\t"
+                "ratio\t%d\temitted_compressed_rows\t%u\t"
+                "visible_compressed_rows\t%u\tindexer_topk_count\t%u\t"
+                "attn_comp_width\t%d\tattn_kv_max\t%.9g\tattn_kv_bad\t%d\t"
+                "attn_gate_max\t%.9g\tattn_gate_bad\t%d\t"
+                "index_q_max\t%.9g\tindex_q_bad\t%d\t"
+                "index_w_max\t%.9g\tindex_w_bad\t%d\t"
+                "index_kv_max\t%.9g\tindex_kv_bad\t%d\t"
+                "index_gate_max\t%.9g\tindex_gate_bad\t%d\tms\t%.6f\tPASS\n",
+                layer, opt.slots, ratio, emitted, visible, indexer_topk,
+                comp_width, attn_kv_stats.max_abs, attn_kv_stats.finite_bad,
+                attn_gate_stats.max_abs, attn_gate_stats.finite_bad,
+                index_q_stats.max_abs, index_q_stats.finite_bad,
+                index_w_stats.max_abs, index_w_stats.finite_bad,
+                index_kv_stats.max_abs, index_kv_stats.finite_bad,
+                index_gate_stats.max_abs, index_gate_stats.finite_bad, ms);
+    return (attn_kv_stats.finite_bad || attn_gate_stats.finite_bad ||
+            index_q_stats.finite_bad || index_w_stats.finite_bad ||
+            index_kv_stats.finite_bad || index_gate_stats.finite_bad) ? 8 : 0;
+}
+
 int run_true_ds4_attention_state_update(const Options &opt,
                                         SharedHcControls *hc,
                                         const LayerDenseOps *ops,
@@ -7400,6 +7729,16 @@ int run_decode_loop(const Options &opt,
                              "tp_ep_true_attention_projection_failed\tlayer\t%d\trc\t%d\n",
                              opt.layer, attn_rc);
                 return 14;
+            }
+        }
+        if (opt.true_ds4_compressed_kv_gate) {
+            const int comp_rc = run_true_ds4_compressed_kv_projection_gate(
+                opt, shared_hc_controls, shared_dense_ops, ranks, opt.layer);
+            if (comp_rc != 0) {
+                std::fprintf(stderr,
+                             "tp_ep_compressed_kv_projection_failed\tlayer\t%d\trc\t%d\n",
+                             opt.layer, comp_rc);
+                return 19;
             }
         }
         if (opt.true_ds4_attention_state_gate) {
