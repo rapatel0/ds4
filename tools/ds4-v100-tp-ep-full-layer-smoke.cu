@@ -563,6 +563,7 @@ struct Options {
     bool true_ds4_attention_typed_kv_compressed_gate = false;
     bool true_ds4_attention_typed_kv_indexer_gate = false;
     bool true_ds4_attention_typed_kv_history_gate = false;
+    bool true_ds4_attention_typed_kv_skip_current_load_gate = false;
     bool true_ds4_attention_output_gate = false;
     bool true_ds4_post_attention_ffn_input_gate = false;
     bool true_ds4_compressed_kv_gate = false;
@@ -2515,6 +2516,7 @@ void usage(const char *argv0) {
                  "       [--true-ds4-attention-typed-kv-compressed-gate]\n"
                  "       [--true-ds4-attention-typed-kv-indexer-gate]\n"
                  "       [--true-ds4-attention-typed-kv-history-gate]\n"
+                 "       [--true-ds4-attention-typed-kv-skip-current-load-gate]\n"
                  "       [--true-ds4-attention-output-gate]\n"
                  "       [--true-ds4-post-attention-ffn-input-gate]\n"
                  "       [--true-ds4-compressed-kv-gate]\n"
@@ -2791,6 +2793,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--true-ds4-attention-typed-kv-skip-current-load-gate") == 0) {
+            opt->true_ds4_attention_typed_kv_skip_current_load_gate = true;
         } else if (std::strcmp(arg, "--true-ds4-attention-output-gate") == 0) {
             opt->true_ds4_attention_output_gate = true;
             opt->true_ds4_attention_raw_window_gate = true;
@@ -2898,6 +2902,10 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->true_ds4_indexer_attention_gate) &&
            (!opt->true_ds4_attention_typed_kv_history_gate ||
             opt->true_ds4_compressed_kv_gate) &&
+           (!opt->true_ds4_attention_typed_kv_skip_current_load_gate ||
+            (opt->true_ds4_attention_typed_kv_raw_gate ||
+             opt->true_ds4_attention_typed_kv_compressed_gate ||
+             opt->true_ds4_attention_typed_kv_indexer_gate)) &&
            (!opt->true_ds4_attention_output_gate ||
             opt->true_ds4_attention_raw_window_gate) &&
            (!opt->true_ds4_post_attention_ffn_input_gate ||
@@ -8023,42 +8031,49 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             CHECK_CUDA(cudaSetDevice(ranks[rank].device));
             CHECK_CUDA(cudaDeviceSynchronize());
         }
-        for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
-            void *dst[kGpus] = {};
-            const size_t row_offset =
-                ((size_t)slot * (size_t)kBoundedCompRows +
-                 (size_t)emitted_comp_row) *
-                (size_t)kHeadDim;
-            for (int rank = 0; rank < kGpus; ++rank) {
-                dst[rank] = ranks[rank].d_attn_comp_rows + row_offset;
+        int current_load = 0;
+        if (!opt.true_ds4_attention_typed_kv_skip_current_load_gate) {
+            for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
+                void *dst[kGpus] = {};
+                const size_t row_offset =
+                    ((size_t)slot * (size_t)kBoundedCompRows +
+                     (size_t)emitted_comp_row) *
+                    (size_t)kHeadDim;
+                for (int rank = 0; rank < kGpus; ++rank) {
+                    dst[rank] = ranks[rank].d_attn_comp_rows + row_offset;
+                }
+                if (ds4_v100_tp_runtime_kv_row_load_f32_device(
+                        rt, layer, slot, opt.position, DS4_V100_TP_KV_ROW_ATTN, dst,
+                        err, sizeof(err)) != 0) {
+                    std::fprintf(stderr,
+                                 "tp_ep_true_attention_typed_kv_compressed_load_failed\t"
+                                 "layer\t%d\tslot\t%u\t%s\n",
+                                 layer, slot, err);
+                    return 17;
+                }
             }
-            if (ds4_v100_tp_runtime_kv_row_load_f32_device(
-                    rt, layer, slot, opt.position, DS4_V100_TP_KV_ROW_ATTN, dst,
-                    err, sizeof(err)) != 0) {
-                std::fprintf(stderr,
-                             "tp_ep_true_attention_typed_kv_compressed_load_failed\t"
-                             "layer\t%d\tslot\t%u\t%s\n",
-                             layer, slot, err);
-                return 17;
-            }
+            current_load = 1;
         }
         for (int rank = 0; rank < kGpus; ++rank) {
             CHECK_CUDA(cudaSetDevice(ranks[rank].device));
             CHECK_CUDA(cudaDeviceSynchronize());
         }
-        for (int rank = 0; rank < kGpus; ++rank) {
-            ranks[rank].attn_comp_row_loaded_layers[layer][emitted_comp_row] = true;
-            ranks[rank].attn_comp_row_loaded_position_layers[layer][emitted_comp_row] =
-                opt.position;
+        if (!opt.true_ds4_attention_typed_kv_skip_current_load_gate) {
+            for (int rank = 0; rank < kGpus; ++rank) {
+                ranks[rank].attn_comp_row_loaded_layers[layer][emitted_comp_row] = true;
+                ranks[rank].attn_comp_row_loaded_position_layers[layer][emitted_comp_row] =
+                    opt.position;
+            }
         }
         std::printf("tp_ep_true_attention_typed_kv_compressed\tlayer\t%d\t"
                     "slots\t%d\tratio\t%d\tposition\t%llu\t"
                     "bounded_row\t%u\tphysical_row\t%llu\tlogical_cols\t%u\t"
-                    "logical_row_bytes\t%llu\trow_bytes_per_gpu\t%llu\tPASS\n",
+                    "logical_row_bytes\t%llu\trow_bytes_per_gpu\t%llu\t"
+                    "current_load\t%d\tPASS\n",
                     layer, opt.slots, ratio, (unsigned long long)opt.position,
                     emitted_comp_row, (unsigned long long)view.physical_row,
                     view.logical_cols, (unsigned long long)view.logical_row_bytes,
-                    (unsigned long long)view.row_bytes[0]);
+                    (unsigned long long)view.row_bytes[0], current_load);
     }
 
     TensorF32Stats index_q_stats;
@@ -8360,33 +8375,40 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 CHECK_CUDA(cudaSetDevice(ranks[rank].device));
                 CHECK_CUDA(cudaDeviceSynchronize());
             }
-            for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
-                void *dst[kGpus] = {};
-                const size_t row_offset =
-                    ((size_t)slot * (size_t)kBoundedCompRows +
-                     (size_t)bounded_row) *
-                    (size_t)kIndexerHeadDim;
-                for (int rank = 0; rank < kGpus; ++rank) {
-                    dst[rank] = ranks[rank].d_index_comp_rows + row_offset;
+            int current_load = 0;
+            if (!opt.true_ds4_attention_typed_kv_skip_current_load_gate) {
+                for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
+                    void *dst[kGpus] = {};
+                    const size_t row_offset =
+                        ((size_t)slot * (size_t)kBoundedCompRows +
+                         (size_t)bounded_row) *
+                        (size_t)kIndexerHeadDim;
+                    for (int rank = 0; rank < kGpus; ++rank) {
+                        dst[rank] = ranks[rank].d_index_comp_rows + row_offset;
+                    }
+                    if (ds4_v100_tp_runtime_kv_row_load_f32_device(
+                            rt, layer, slot, opt.position,
+                            DS4_V100_TP_KV_ROW_INDEXER, dst, err,
+                            sizeof(err)) != 0) {
+                        std::fprintf(stderr,
+                                     "tp_ep_true_attention_typed_kv_indexer_load_failed\t"
+                                     "layer\t%d\tslot\t%u\t%s\n",
+                                     layer, slot, err);
+                        return 21;
+                    }
                 }
-                if (ds4_v100_tp_runtime_kv_row_load_f32_device(
-                        rt, layer, slot, opt.position, DS4_V100_TP_KV_ROW_INDEXER,
-                        dst, err, sizeof(err)) != 0) {
-                    std::fprintf(stderr,
-                                 "tp_ep_true_attention_typed_kv_indexer_load_failed\t"
-                                 "layer\t%d\tslot\t%u\t%s\n",
-                                 layer, slot, err);
-                    return 21;
-                }
+                current_load = 1;
             }
             for (int rank = 0; rank < kGpus; ++rank) {
                 CHECK_CUDA(cudaSetDevice(ranks[rank].device));
                 CHECK_CUDA(cudaDeviceSynchronize());
             }
-            for (int rank = 0; rank < kGpus; ++rank) {
-                ranks[rank].index_comp_row_loaded_layers[layer][bounded_row] = true;
-                ranks[rank].index_comp_row_loaded_position_layers[layer][bounded_row] =
-                    opt.position;
+            if (!opt.true_ds4_attention_typed_kv_skip_current_load_gate) {
+                for (int rank = 0; rank < kGpus; ++rank) {
+                    ranks[rank].index_comp_row_loaded_layers[layer][bounded_row] = true;
+                    ranks[rank].index_comp_row_loaded_position_layers[layer][bounded_row] =
+                        opt.position;
+                }
             }
             CHECK_CUDA(cudaSetDevice(ranks[0].device));
             indexer_score_bounded_rows_slots_kernel<<<
@@ -8413,13 +8435,13 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                         "slots\t%d\tratio\t%d\tposition\t%llu\t"
                         "bounded_row\t%u\tvisible_rows\t%u\tphysical_row\t%llu\t"
                         "logical_cols\t%u\tlogical_row_bytes\t%llu\t"
-                        "row_bytes_per_gpu\t%llu\tPASS\n",
+                        "row_bytes_per_gpu\t%llu\tcurrent_load\t%d\tPASS\n",
                         layer, opt.slots, ratio,
                         (unsigned long long)opt.position, bounded_row,
                         visible_after, (unsigned long long)view.physical_row,
                         view.logical_cols,
                         (unsigned long long)view.logical_row_bytes,
-                        (unsigned long long)view.row_bytes[0]);
+                        (unsigned long long)view.row_bytes[0], current_load);
         }
         if (emitted && ranks[0].d_indexer_topk) {
             const size_t topk_bytes =
@@ -8578,7 +8600,8 @@ int run_true_ds4_attention_state_update(const Options &opt,
                 kRopeYarnBetaSlow);
             CHECK_CUDA(cudaGetLastError());
         }
-        if (!opt.true_ds4_attention_typed_kv_raw_gate) {
+        if (!opt.true_ds4_attention_typed_kv_raw_gate ||
+            opt.true_ds4_attention_typed_kv_skip_current_load_gate) {
             kv_fp8_round_store_raw_swa_kernel<<<
                 (unsigned int)((kv_elems + block - 1) / block), block, 0,
                 r.stream>>>(
@@ -8633,23 +8656,27 @@ int run_true_ds4_attention_state_update(const Options &opt,
             CHECK_CUDA(cudaSetDevice(ranks[rank].device));
             CHECK_CUDA(cudaDeviceSynchronize());
         }
-        for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
-            void *dst[kGpus] = {};
-            const size_t row_offset =
-                ((size_t)slot * (size_t)kRawSwaRows + (size_t)raw_row) *
-                (size_t)kHeadDim;
-            for (int rank = 0; rank < kGpus; ++rank) {
-                dst[rank] = ranks[rank].d_attn_raw_swa + row_offset;
+        int current_load = 0;
+        if (!opt.true_ds4_attention_typed_kv_skip_current_load_gate) {
+            for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
+                void *dst[kGpus] = {};
+                const size_t row_offset =
+                    ((size_t)slot * (size_t)kRawSwaRows + (size_t)raw_row) *
+                    (size_t)kHeadDim;
+                for (int rank = 0; rank < kGpus; ++rank) {
+                    dst[rank] = ranks[rank].d_attn_raw_swa + row_offset;
+                }
+                if (ds4_v100_tp_runtime_kv_row_load_f32_device(
+                        rt, layer, slot, opt.position, DS4_V100_TP_KV_ROW_ATTN_RAW,
+                        dst, err, sizeof(err)) != 0) {
+                    std::fprintf(stderr,
+                                 "tp_ep_true_attention_typed_kv_raw_load_failed\t"
+                                 "layer\t%d\tslot\t%u\t%s\n",
+                                 layer, slot, err);
+                    return 7;
+                }
             }
-            if (ds4_v100_tp_runtime_kv_row_load_f32_device(
-                    rt, layer, slot, opt.position, DS4_V100_TP_KV_ROW_ATTN_RAW,
-                    dst, err, sizeof(err)) != 0) {
-                std::fprintf(stderr,
-                             "tp_ep_true_attention_typed_kv_raw_load_failed\t"
-                             "layer\t%d\tslot\t%u\t%s\n",
-                             layer, slot, err);
-                return 7;
-            }
+            current_load = 1;
         }
         for (int rank = 0; rank < kGpus; ++rank) {
             CHECK_CUDA(cudaSetDevice(ranks[rank].device));
@@ -8657,11 +8684,12 @@ int run_true_ds4_attention_state_update(const Options &opt,
         }
         std::printf("tp_ep_true_attention_typed_kv_raw\tlayer\t%d\tslots\t%d\t"
                     "position\t%llu\tphysical_row\t%llu\traw_row\t%u\tlogical_cols\t%u\t"
-                    "logical_row_bytes\t%llu\trow_bytes_per_gpu\t%llu\tPASS\n",
+                    "logical_row_bytes\t%llu\trow_bytes_per_gpu\t%llu\t"
+                    "current_load\t%d\tPASS\n",
                     layer, opt.slots, (unsigned long long)opt.position,
                     (unsigned long long)view.physical_row, raw_row,
                     view.logical_cols, (unsigned long long)view.logical_row_bytes,
-                    (unsigned long long)view.row_bytes[0]);
+                    (unsigned long long)view.row_bytes[0], current_load);
     }
     const auto stop = std::chrono::steady_clock::now();
     const double ms = std::chrono::duration<double, std::milli>(stop - start).count();
@@ -8749,6 +8777,11 @@ int run_true_ds4_attention_typed_kv_history_load(const Options &opt,
     int reloaded_attn = 0;
     for (uint32_t row = 0; row < visible_attn; ++row) {
         const uint64_t pos = ranks[0].attn_comp_row_position_layers[layer][row];
+        if (opt.true_ds4_attention_typed_kv_skip_current_load_gate &&
+            pos == opt.position) {
+            loaded_attn++;
+            continue;
+        }
         if (ranks[0].attn_comp_row_loaded_layers[layer][row] &&
             ranks[0].attn_comp_row_loaded_position_layers[layer][row] == pos) {
             loaded_attn++;
@@ -8797,6 +8830,11 @@ int run_true_ds4_attention_typed_kv_history_load(const Options &opt,
                      (uint32_t)kBoundedCompRows);
         for (uint32_t row = 0; row < visible_index; ++row) {
             const uint64_t pos = ranks[0].index_comp_row_position_layers[layer][row];
+            if (opt.true_ds4_attention_typed_kv_skip_current_load_gate &&
+                pos == opt.position) {
+                loaded_indexer++;
+                continue;
+            }
             if (ranks[0].index_comp_row_loaded_layers[layer][row] &&
                 ranks[0].index_comp_row_loaded_position_layers[layer][row] == pos) {
                 loaded_indexer++;
@@ -12137,6 +12175,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "\"true_ds4_attention_typed_kv_compressed_gate\":%d,"
                           "\"true_ds4_attention_typed_kv_indexer_gate\":%d,"
                           "\"true_ds4_attention_typed_kv_history_gate\":%d,"
+                          "\"true_ds4_attention_typed_kv_skip_current_load_gate\":%d,"
                           "\"cache_slots_total\":%zu,"
                           "\"cache_slots_used\":%d,"
                           "\"cache_hits\":%llu,"
@@ -12176,6 +12215,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           base_opt.true_ds4_attention_typed_kv_compressed_gate ? 1 : 0,
                           base_opt.true_ds4_attention_typed_kv_indexer_gate ? 1 : 0,
                           base_opt.true_ds4_attention_typed_kv_history_gate ? 1 : 0,
+                          base_opt.true_ds4_attention_typed_kv_skip_current_load_gate ? 1 : 0,
                           sessions.slots.size(),
                           sessions.used(),
                           (unsigned long long)sessions.hits,
@@ -12235,6 +12275,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "ds4_v100_tp_ep_true_ds4_attention_typed_kv_compressed_gate %d\n"
                           "ds4_v100_tp_ep_true_ds4_attention_typed_kv_indexer_gate %d\n"
                           "ds4_v100_tp_ep_true_ds4_attention_typed_kv_history_gate %d\n"
+                          "ds4_v100_tp_ep_true_ds4_attention_typed_kv_skip_current_load_gate %d\n"
                           "ds4_v100_tp_ep_cache_slots_total %zu\n"
                           "ds4_v100_tp_ep_cache_slots_used %d\n"
                           "ds4_v100_tp_ep_cache_hits %llu\n"
@@ -12273,6 +12314,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           base_opt.true_ds4_attention_typed_kv_compressed_gate ? 1 : 0,
                           base_opt.true_ds4_attention_typed_kv_indexer_gate ? 1 : 0,
                           base_opt.true_ds4_attention_typed_kv_history_gate ? 1 : 0,
+                          base_opt.true_ds4_attention_typed_kv_skip_current_load_gate ? 1 : 0,
                           sessions.slots.size(),
                           sessions.used(),
                           (unsigned long long)sessions.hits,
@@ -12749,6 +12791,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   "\"true_ds4_attention_typed_kv_compressed_gate\":%d,"
                                   "\"true_ds4_attention_typed_kv_indexer_gate\":%d,"
                                   "\"true_ds4_attention_typed_kv_history_gate\":%d,"
+                                  "\"true_ds4_attention_typed_kv_skip_current_load_gate\":%d,"
                                   "\"decode_slots\":%d,"
                                   "\"prompt_tokens\":%llu,"
                                   "\"generated_tokens\":%llu,"
@@ -12818,6 +12861,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   req_opt.true_ds4_attention_typed_kv_compressed_gate ? 1 : 0,
                                   req_opt.true_ds4_attention_typed_kv_indexer_gate ? 1 : 0,
                                   req_opt.true_ds4_attention_typed_kv_history_gate ? 1 : 0,
+                                  req_opt.true_ds4_attention_typed_kv_skip_current_load_gate ? 1 : 0,
                                   req_opt.slots,
                                   (unsigned long long)request_prompt_tokens,
                                   (unsigned long long)request_generated,

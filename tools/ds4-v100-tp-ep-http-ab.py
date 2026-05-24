@@ -55,6 +55,8 @@ def run_case(args, name, port, typed):
             "DS4_V100_RESERVE_MIB": "0",
             "DS4_V100_PORT": str(port),
             "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_HISTORY": "1" if typed else "0",
+            "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_SKIP_CURRENT_LOAD":
+                "1" if typed and args.typed_skip_current_load else "0",
         }
     )
 
@@ -161,6 +163,9 @@ def run_case(args, name, port, typed):
             "cache_hits": status_json.get("cache_hits"),
             "cache_misses": status_json.get("cache_misses"),
             "typed_gate_meta": first.get("true_ds4_attention_typed_kv_history_gate"),
+            "typed_skip_current_load_meta": first.get(
+                "true_ds4_attention_typed_kv_skip_current_load_gate"
+            ),
             "typed_raw_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_raw", server_text)),
             "typed_compressed_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_compressed", server_text)),
             "typed_indexer_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_indexer", server_text)),
@@ -169,6 +174,8 @@ def run_case(args, name, port, typed):
             "history_loaded_indexer_rows_2": len(re.findall(r"loaded_indexer_rows\t2", server_text)),
             "history_reloaded_attn_rows_nonzero": len(re.findall(r"reloaded_attn_rows\t[1-9]", server_text)),
             "history_reloaded_indexer_rows_nonzero": len(re.findall(r"reloaded_indexer_rows\t[1-9]", server_text)),
+            "typed_current_load_0": len(re.findall(r"current_load\t0", server_text)),
+            "typed_current_load_1": len(re.findall(r"current_load\t1", server_text)),
         }
         (case_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
         print(json.dumps(summary, sort_keys=True), flush=True)
@@ -203,6 +210,7 @@ def main():
     parser.add_argument("--tokens", type=int, default=8)
     parser.add_argument("--requests", type=int, default=32)
     parser.add_argument("--max-requests", type=int, default=80)
+    parser.add_argument("--typed-skip-current-load", action="store_true")
     parser.add_argument("--control-port", type=int, default=18338)
     parser.add_argument("--typed-port", type=int, default=18339)
     parser.add_argument("--readiness-seconds", type=int, default=240)
@@ -230,6 +238,7 @@ def main():
         "cache_hits",
         "cache_misses",
         "typed_gate_meta",
+        "typed_skip_current_load_meta",
         "typed_raw_lines",
         "typed_compressed_lines",
         "typed_indexer_lines",
@@ -238,6 +247,8 @@ def main():
         "history_loaded_indexer_rows_2",
         "history_reloaded_attn_rows_nonzero",
         "history_reloaded_indexer_rows_nonzero",
+        "typed_current_load_0",
+        "typed_current_load_1",
     ]
     with open(args.artifact_dir / "summary.tsv", "w") as out:
         out.write("\t".join(keys) + "\n")

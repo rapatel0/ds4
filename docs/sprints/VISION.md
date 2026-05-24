@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 344
+revision: 345
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -191,6 +191,20 @@ not a serial layer-chain.
   raw/compressed/indexer rows. The next step is to store production typed rows
   while reusing the already-computed f32 staging row for immediate attention,
   instead of loading the same row back from typed KV in the hot layer step.
+- Sprint 340 implemented that current-row skip as an explicit performance
+  gate:
+  `DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_SKIP_CURRENT_LOAD=1`.
+  The typed candidate still stores production typed raw-SWA,
+  compressed-attention, and ratio-4 indexer rows, but avoids immediately
+  loading those current rows back through typed KV in the same layer step. In
+  the same `32` concurrent / `32` slot / `256K` / `8` token HTTP A/B, control
+  measured `316.297621` server wall tok/s and `735.600737` decode tok/s; the
+  typed skip-current-load candidate measured `74.383163` wall tok/s and
+  `86.322558` decode tok/s, with `typed_current_load_0=1152` and
+  `typed_current_load_1=0`. This improves typed-history serving but remains
+  far below control, so the next bottleneck is likely typed KV store overhead
+  itself. The next step is to measure store-only cost by row family and then
+  batch row stores or fuse stores into producer kernels.
 - The system is not production-ready yet because the bridge HC sequence has
   not been proven equivalent to the DeepSeek V4 reference layer semantics, and
   production serving still needs readiness/overload/cancellation/streaming
