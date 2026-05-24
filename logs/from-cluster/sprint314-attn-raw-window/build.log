@@ -1,0 +1,10 @@
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math  -Xcompiler -march=native -Xcompiler -pthread --std=c++17 -I. -o tools/ds4-v100-tp-ep-full-layer-smoke tools/ds4-v100-tp-ep-full-layer-smoke.cu ds4_v100_tp_runtime.cu ds4_cpu.o ds4_pack.o ds4_source_formats.o -lm -Xcompiler -pthread -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/local/cuda/lib64 -lcudart -lcublas -ldl
+tools/ds4-v100-tp-ep-full-layer-smoke.cu(839): warning #177-D: function "<unnamed>::rms_norm_plain_rows_kernel" was declared but never referenced
+  __attribute__((global)) void rms_norm_plain_rows_kernel(float *out,
+                               ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+tools/ds4-v100-tp-ep-full-layer-smoke.cu(1318): warning #177-D: function "<unnamed>::rms_norm_weight_rows_kernel" was declared but never referenced
+  __attribute__((global)) void rms_norm_weight_rows_kernel(float *out,
+                               ^

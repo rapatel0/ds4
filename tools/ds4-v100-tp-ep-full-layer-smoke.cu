@@ -504,6 +504,8 @@ struct Options {
     bool true_ds4_attention_projection_gate = false;
     bool true_ds4_attention_state_gate = false;
     bool true_ds4_attention_raw_read_gate = false;
+    bool true_ds4_attention_raw_window_gate = false;
+    uint32_t true_ds4_attention_raw_valid_rows = 1;
 };
 
 void log_tensor_f32_stats(const char *tag, int layer, int rank_id,
@@ -1125,6 +1127,67 @@ __global__ void attention_raw_swa_one_row_kernel(float *out_heads,
     float *out = out_heads + (uint64_t)row * head_dim;
     for (uint32_t d = threadIdx.x; d < head_dim; d += blockDim.x) {
         out[d] = kv[d] * scale;
+    }
+}
+
+__global__ void attention_raw_swa_window_kernel(float *out_heads,
+                                                const float *q_heads,
+                                                const float *raw_swa,
+                                                const float *sinks,
+                                                uint32_t slots,
+                                                uint32_t local_heads,
+                                                uint32_t head_dim,
+                                                uint32_t raw_rows,
+                                                uint32_t raw_row,
+                                                uint32_t valid_rows) {
+    const uint32_t row = blockIdx.x;
+    if (row >= slots * local_heads || valid_rows == 0 || valid_rows > raw_rows) return;
+    const uint32_t slot = row / local_heads;
+    const uint32_t local_head = row % local_heads;
+    const float *q = q_heads + (uint64_t)row * head_dim;
+    __shared__ float partial[256];
+    __shared__ float scores[128];
+
+    float max_s = sinks[local_head];
+    for (uint32_t i = 0; i < valid_rows; ++i) {
+        const uint32_t history_offset = valid_rows - 1u - i;
+        const uint32_t rr = (raw_row + raw_rows - history_offset) % raw_rows;
+        const float *kv =
+            raw_swa + ((uint64_t)slot * raw_rows + rr) * (uint64_t)head_dim;
+        float dot = 0.0f;
+        for (uint32_t d = threadIdx.x; d < head_dim; d += blockDim.x) {
+            dot += q[d] * kv[d];
+        }
+        partial[threadIdx.x] = dot;
+        __syncthreads();
+        for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+            if (threadIdx.x < stride) partial[threadIdx.x] += partial[threadIdx.x + stride];
+            __syncthreads();
+        }
+        const float score = partial[0] * rsqrtf((float)head_dim);
+        if (threadIdx.x == 0) {
+            scores[i] = score;
+        }
+        max_s = fmaxf(max_s, score);
+        __syncthreads();
+    }
+
+    float denom = expf(sinks[local_head] - max_s);
+    for (uint32_t i = 0; i < valid_rows; ++i) {
+        denom += expf(scores[i] - max_s);
+    }
+    float *out = out_heads + (uint64_t)row * head_dim;
+    for (uint32_t d = threadIdx.x; d < head_dim; d += blockDim.x) {
+        float acc = 0.0f;
+        for (uint32_t i = 0; i < valid_rows; ++i) {
+            const uint32_t history_offset = valid_rows - 1u - i;
+            const uint32_t rr = (raw_row + raw_rows - history_offset) % raw_rows;
+            const float *kv =
+                raw_swa + ((uint64_t)slot * raw_rows + rr) * (uint64_t)head_dim;
+            const float w = expf(scores[i] - max_s) / denom;
+            acc += kv[d] * w;
+        }
+        out[d] = acc;
     }
 }
 
@@ -1842,6 +1905,7 @@ void usage(const char *argv0) {
                  "       [--true-ds4-attention-projection-gate]\n"
                  "       [--true-ds4-attention-state-gate]\n"
                  "       [--true-ds4-attention-raw-read-gate]\n"
+                 "       [--true-ds4-attention-raw-window-gate]\n"
                  "       [--reference-hc-reduce-gate]\n"
                  "       [--reference-hc-state-guard-gate]\n"
                  "       [--diagnostic-output-head]\n",
@@ -2044,6 +2108,15 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--true-ds4-attention-raw-window-gate") == 0) {
+            opt->true_ds4_attention_raw_window_gate = true;
+            opt->true_ds4_attention_raw_read_gate = true;
+            opt->true_ds4_attention_state_gate = true;
+            opt->true_ds4_attention_projection_gate = true;
+            opt->true_ds4_attention_residency_gate = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--reference-hc-reduce-gate") == 0) {
             opt->reference_hc_reduce_gate = true;
             opt->tp_hc_current_input_gate = true;
@@ -2085,6 +2158,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->true_ds4_attention_projection_gate) &&
            (!opt->true_ds4_attention_raw_read_gate ||
             opt->true_ds4_attention_state_gate) &&
+           (!opt->true_ds4_attention_raw_window_gate ||
+            opt->true_ds4_attention_raw_read_gate) &&
            !(opt->dense_compute_tensor &&
              (opt->dense_compute_all_f8 || opt->dense_compute_all_bf16));
 }
@@ -6382,6 +6457,75 @@ int run_true_ds4_attention_raw_read(const Options &opt,
     return 0;
 }
 
+int run_true_ds4_attention_raw_window(const Options &opt,
+                                      SharedHcControls *hc,
+                                      const LayerDenseOps *ops,
+                                      RankState ranks[kGpus],
+                                      int layer) {
+    if (!hc || !hc->initialized || !ops || !ops->initialized ||
+        layer < 0 || layer >= 43) {
+        return 1;
+    }
+    if (!hc->d_attn_sinks[layer] ||
+        ops->attn_q_b.rows_per_gpu != kLocalHeads * kHeadDim) {
+        return 2;
+    }
+    const uint32_t valid_rows =
+        std::max(1u, std::min(opt.true_ds4_attention_raw_valid_rows,
+                              (uint32_t)kRawSwaRows));
+    const auto start = std::chrono::steady_clock::now();
+    const uint32_t raw_row = (uint32_t)(opt.position % kRawSwaRows);
+    const uint64_t heads_elems =
+        (uint64_t)opt.slots * (uint64_t)kLocalHeads * (uint64_t)kHeadDim;
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        if (!r.d_attn_raw_swa || !r.d_attn_sinks || !r.d_attn_heads ||
+            !ops->attn_q_b.d_out[(size_t)rank]) {
+            return 3;
+        }
+        const size_t sinks_offset = (size_t)rank * (size_t)kLocalHeads;
+        if (rank == 0) {
+            CHECK_CUDA(cudaMemcpyAsync(r.d_attn_sinks,
+                                       hc->d_attn_sinks[layer] + sinks_offset,
+                                       (size_t)kLocalHeads * sizeof(float),
+                                       cudaMemcpyDeviceToDevice, r.stream));
+        } else {
+            CHECK_CUDA(cudaMemcpyPeerAsync(r.d_attn_sinks, r.device,
+                                           hc->d_attn_sinks[layer] + sinks_offset,
+                                           opt.devices[0],
+                                           (size_t)kLocalHeads * sizeof(float),
+                                           r.stream));
+        }
+        attention_raw_swa_window_kernel<<<
+            (unsigned int)(opt.slots * kLocalHeads), 256, 0, r.stream>>>(
+            r.d_attn_heads, ops->attn_q_b.d_out[(size_t)rank], r.d_attn_raw_swa,
+            r.d_attn_sinks, (uint32_t)opt.slots, (uint32_t)kLocalHeads,
+            (uint32_t)kHeadDim, (uint32_t)kRawSwaRows, raw_row, valid_rows);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    }
+    const auto stop = std::chrono::steady_clock::now();
+    const double ms = std::chrono::duration<double, std::milli>(stop - start).count();
+    if (layer <= 2) {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            log_tensor_f32_stats("true_attn_raw_window_heads", layer, rank,
+                                 ranks[rank].d_attn_heads, (size_t)heads_elems,
+                                 ranks[rank].stream);
+        }
+    }
+    std::printf("tp_ep_true_attention_raw_window\tlayer\t%d\tslots\t%d\t"
+                "local_heads\t%d\thead_dim\t%d\traw_rows\t%d\traw_row\t%u\t"
+                "valid_rows\t%u\tms\t%.6f\tPASS\n",
+                layer, opt.slots, kLocalHeads, kHeadDim, kRawSwaRows, raw_row,
+                valid_rows, ms);
+    return 0;
+}
+
 int run_decode_loop(const Options &opt,
                     const std::vector<ContractRow> &rows,
                     RankState ranks[kGpus],
@@ -6522,8 +6666,11 @@ int run_decode_loop(const Options &opt,
             }
         }
         if (opt.true_ds4_attention_raw_read_gate) {
-            const int raw_read_rc = run_true_ds4_attention_raw_read(
-                opt, shared_hc_controls, shared_dense_ops, ranks, opt.layer);
+            const int raw_read_rc = opt.true_ds4_attention_raw_window_gate
+                ? run_true_ds4_attention_raw_window(
+                      opt, shared_hc_controls, shared_dense_ops, ranks, opt.layer)
+                : run_true_ds4_attention_raw_read(
+                      opt, shared_hc_controls, shared_dense_ops, ranks, opt.layer);
             if (raw_read_rc != 0) {
                 std::fprintf(stderr,
                              "tp_ep_true_attention_raw_read_failed\tlayer\t%d\trc\t%d\n",
@@ -8017,6 +8164,8 @@ int run_token_major_serving_loop(const Options &opt,
             layer_opt.layer = layer;
             layer_opt.position = opt.position + (uint64_t)step;
             layer_opt.decode_steps = 1;
+            layer_opt.true_ds4_attention_raw_valid_rows =
+                std::max(1u, std::min((uint32_t)(step + 1), (uint32_t)kRawSwaRows));
             layer_opt.warmup = 0;
             LayerRunSummary s;
             SharedTpRuntime *tp_runtime_arg =
