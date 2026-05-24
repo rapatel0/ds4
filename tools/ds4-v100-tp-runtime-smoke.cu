@@ -12,7 +12,7 @@ static void usage(const char *argv0) {
     std::fprintf(stderr,
                  "usage: %s [--ctx N] [--slots N] [--scratch-mib N] "
                  "[--kv-dtype f16|f8|q8_0] [--dense-kv-slice] "
-                 "[--typed-kv-row] [--device-kv-row] [--kind attn|indexer] "
+                 "[--typed-kv-row] [--device-kv-row] [--kind attn|attn_raw|indexer] "
                  "[--layer N] [--slot N] [--position N] [--indexer on|off]\n",
                  argv0);
 }
@@ -66,6 +66,10 @@ int main(int argc, char **argv) {
         } else if (std::strcmp(arg, "--kind") == 0 && val) {
             if (std::strcmp(val, "attn") == 0 || std::strcmp(val, "attention") == 0) {
                 row_kind = DS4_V100_TP_KV_ROW_ATTN;
+            } else if (std::strcmp(val, "attn_raw") == 0 ||
+                       std::strcmp(val, "attention_raw") == 0 ||
+                       std::strcmp(val, "raw") == 0) {
+                row_kind = DS4_V100_TP_KV_ROW_ATTN_RAW;
             } else if (std::strcmp(val, "indexer") == 0) {
                 row_kind = DS4_V100_TP_KV_ROW_INDEXER;
             } else {
@@ -150,7 +154,10 @@ int main(int argc, char **argv) {
             return 1;
         }
         const char *kind_name =
-            result.view.kind == DS4_V100_TP_KV_ROW_INDEXER ? "indexer" : "attn";
+            result.view.kind == DS4_V100_TP_KV_ROW_INDEXER
+                ? "indexer"
+                : (result.view.kind == DS4_V100_TP_KV_ROW_ATTN_RAW ? "attn_raw"
+                                                                    : "attn");
         std::printf("tp_typed_kv_row\tctx=%llu\tslots=%u\thidden=%u\t"
                     "layer=%d\tratio=%d\tslot=%u\tposition=%llu\tkind=%s\t"
                     "physical_row=%llu\tlogical_cols=%u\tlogical_row_bytes=%llu\t"
@@ -188,7 +195,10 @@ int main(int argc, char **argv) {
             return 1;
         }
         const char *kind_name =
-            result.view.kind == DS4_V100_TP_KV_ROW_INDEXER ? "indexer" : "attn";
+            result.view.kind == DS4_V100_TP_KV_ROW_INDEXER
+                ? "indexer"
+                : (result.view.kind == DS4_V100_TP_KV_ROW_ATTN_RAW ? "attn_raw"
+                                                                    : "attn");
         std::printf("tp_device_kv_row\tctx=%llu\tslots=%u\thidden=%u\t"
                     "layer=%d\tratio=%d\tslot=%u\tposition=%llu\tkind=%s\t"
                     "physical_row=%llu\tlogical_cols=%u\tlogical_row_bytes=%llu\t"

@@ -8368,8 +8368,8 @@ int run_true_ds4_attention_state_update(const Options &opt,
         char err[512] = {0};
         ds4_v100_tp_kv_row_view view;
         if (ds4_v100_tp_runtime_kv_row_view(
-                rt, layer, 0, opt.position, DS4_V100_TP_KV_ROW_ATTN, &view, err,
-                sizeof(err)) != 0) {
+                rt, layer, 0, opt.position, DS4_V100_TP_KV_ROW_ATTN_RAW, &view,
+                err, sizeof(err)) != 0) {
             std::fprintf(stderr,
                          "tp_ep_true_attention_typed_kv_raw_view_failed\tlayer\t%d\t%s\n",
                          layer, err);
@@ -8382,8 +8382,8 @@ int run_true_ds4_attention_state_update(const Options &opt,
                             (size_t)slot * (size_t)kHeadDim;
             }
             if (ds4_v100_tp_runtime_kv_row_store_f32_device(
-                    rt, layer, slot, opt.position, DS4_V100_TP_KV_ROW_ATTN, src,
-                    err, sizeof(err)) != 0) {
+                    rt, layer, slot, opt.position, DS4_V100_TP_KV_ROW_ATTN_RAW,
+                    src, err, sizeof(err)) != 0) {
                 std::fprintf(stderr,
                              "tp_ep_true_attention_typed_kv_raw_store_failed\t"
                              "layer\t%d\tslot\t%u\t%s\n",
@@ -8404,8 +8404,8 @@ int run_true_ds4_attention_state_update(const Options &opt,
                 dst[rank] = ranks[rank].d_attn_raw_swa + row_offset;
             }
             if (ds4_v100_tp_runtime_kv_row_load_f32_device(
-                    rt, layer, slot, opt.position, DS4_V100_TP_KV_ROW_ATTN, dst,
-                    err, sizeof(err)) != 0) {
+                    rt, layer, slot, opt.position, DS4_V100_TP_KV_ROW_ATTN_RAW,
+                    dst, err, sizeof(err)) != 0) {
                 std::fprintf(stderr,
                              "tp_ep_true_attention_typed_kv_raw_load_failed\t"
                              "layer\t%d\tslot\t%u\t%s\n",
@@ -8418,9 +8418,10 @@ int run_true_ds4_attention_state_update(const Options &opt,
             CHECK_CUDA(cudaDeviceSynchronize());
         }
         std::printf("tp_ep_true_attention_typed_kv_raw\tlayer\t%d\tslots\t%d\t"
-                    "position\t%llu\traw_row\t%u\tlogical_cols\t%u\t"
+                    "position\t%llu\tphysical_row\t%llu\traw_row\t%u\tlogical_cols\t%u\t"
                     "logical_row_bytes\t%llu\trow_bytes_per_gpu\t%llu\tPASS\n",
-                    layer, opt.slots, (unsigned long long)opt.position, raw_row,
+                    layer, opt.slots, (unsigned long long)opt.position,
+                    (unsigned long long)view.physical_row, raw_row,
                     view.logical_cols, (unsigned long long)view.logical_row_bytes,
                     (unsigned long long)view.row_bytes[0]);
     }

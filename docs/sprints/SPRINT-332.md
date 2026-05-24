@@ -60,6 +60,12 @@ The f32 raw-SWA buffer remains as a read staging surface for this sprint. The
 source of the row is now the production typed arena, not the old direct f32
 diagnostic writer.
 
+Correction: Sprint 333 found that this sprint used
+`DS4_V100_TP_KV_ROW_ATTN`, which maps to the compressed long-attention row on
+ratio layers. Sprint 332 therefore proved full-layer typed store/load plumbing,
+but Sprint 333 is the sprint that made raw-SWA physical addressing correct by
+adding and using `DS4_V100_TP_KV_ROW_ATTN_RAW`.
+
 ## Validation
 
 Build on `llm/llamacpp-build-8gpu`:

@@ -19,6 +19,7 @@ typedef enum {
 typedef enum {
     DS4_V100_TP_KV_ROW_ATTN = 0,
     DS4_V100_TP_KV_ROW_INDEXER = 1,
+    DS4_V100_TP_KV_ROW_ATTN_RAW = 2,
 } ds4_v100_tp_kv_row_kind;
 
 typedef struct {

@@ -11,6 +11,11 @@ Raw-SWA rows can now be stored through the production F8 E4M3 block-128
 physical KV shards and loaded back into the attention read buffer in the
 full-layer TP/EP smoke.
 
+Correction: Sprint 333 found that Sprint 332 used the generic `ATTN` row kind,
+which addresses the compressed long-attention row on ratio layers. Sprint 332
+proved the store/load plumbing; Sprint 333 corrected raw-SWA physical row
+addressing with `DS4_V100_TP_KV_ROW_ATTN_RAW`.
+
 ## What Changed
 
 Updated:

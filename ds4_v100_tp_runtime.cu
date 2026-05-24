@@ -860,6 +860,13 @@ extern "C" int ds4_v100_tp_runtime_kv_row_view(ds4_v100_tp_runtime *rt,
         base = layout->attn_base;
         rows = layout->attn_rows;
         row_bytes = layout->attn_row_bytes;
+    } else if (kind == DS4_V100_TP_KV_ROW_ATTN_RAW) {
+        view->logical_cols = kHeadDim;
+        view->logical_row_bytes = kv_values_bytes(kHeadDim, rt->cfg.kv_dtype);
+        view->physical_row = position % (uint64_t)kSwa;
+        base = layout->attn_base;
+        rows = layout->attn_rows;
+        row_bytes = layout->attn_row_bytes;
     } else if (kind == DS4_V100_TP_KV_ROW_INDEXER) {
         if (layout->ratio != 4) {
             set_err(err, err_len, "indexer KV is only present on ratio-4 layers");
