@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 339
+revision: 340
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -140,7 +140,17 @@ not a serial layer-chain.
   raw-SWA typed rows and `41` compressed-attention typed rows, then ends with
   `pass_layers=43`, projected `51.386758` slot-step tok/s. Representative
   compressed physical rows are layer `2` ratio-4 row `65663` and layer `3`
-  ratio-128 row `2175`. The next integration step is ratio-4 indexer rows.
+  ratio-128 row `2175`.
+- Sprint 335 completed the emitted-row typed KV set by adding ratio-4 indexer
+  rows. With typed raw-SWA, typed compressed-attention, and typed indexer gates
+  enabled at `32` slots / `256K`, position `262143`, the full-layer gate emits
+  `43` raw-SWA rows, `41` compressed-attention rows, and `21` indexer rows,
+  then ends with `pass_layers=43`, projected `53.556562` slot-step tok/s.
+  The compact reference/indexer diagnostic also passes with `21` typed indexer
+  rows and `21` compact-reference summaries. The next integration step is
+  replacing bounded diagnostic compressed-row staging with production typed-row
+  lookup over visible compressed history, then promoting the typed KV path into
+  serving.
 - The system is not production-ready yet because the bridge HC sequence has
   not been proven equivalent to the DeepSeek V4 reference layer semantics, and
   production serving still needs readiness/overload/cancellation/streaming

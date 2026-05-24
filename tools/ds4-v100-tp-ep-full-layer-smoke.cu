@@ -555,6 +555,7 @@ struct Options {
     bool true_ds4_attention_raw_window_gate = false;
     bool true_ds4_attention_typed_kv_raw_gate = false;
     bool true_ds4_attention_typed_kv_compressed_gate = false;
+    bool true_ds4_attention_typed_kv_indexer_gate = false;
     bool true_ds4_attention_output_gate = false;
     bool true_ds4_post_attention_ffn_input_gate = false;
     bool true_ds4_compressed_kv_gate = false;
@@ -2505,6 +2506,7 @@ void usage(const char *argv0) {
                  "       [--true-ds4-attention-raw-window-gate]\n"
                  "       [--true-ds4-attention-typed-kv-raw-gate]\n"
                  "       [--true-ds4-attention-typed-kv-compressed-gate]\n"
+                 "       [--true-ds4-attention-typed-kv-indexer-gate]\n"
                  "       [--true-ds4-attention-output-gate]\n"
                  "       [--true-ds4-post-attention-ffn-input-gate]\n"
                  "       [--true-ds4-compressed-kv-gate]\n"
@@ -2763,6 +2765,15 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--true-ds4-attention-typed-kv-indexer-gate") == 0) {
+            opt->true_ds4_attention_typed_kv_indexer_gate = true;
+            opt->true_ds4_indexer_attention_gate = true;
+            opt->true_ds4_compressed_kv_gate = true;
+            opt->true_ds4_attention_projection_gate = true;
+            opt->true_ds4_attention_residency_gate = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--true-ds4-attention-output-gate") == 0) {
             opt->true_ds4_attention_output_gate = true;
             opt->true_ds4_attention_raw_window_gate = true;
@@ -2866,6 +2877,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->true_ds4_attention_state_gate) &&
            (!opt->true_ds4_attention_typed_kv_compressed_gate ||
             opt->true_ds4_compressed_kv_gate) &&
+           (!opt->true_ds4_attention_typed_kv_indexer_gate ||
+            opt->true_ds4_indexer_attention_gate) &&
            (!opt->true_ds4_attention_output_gate ||
             opt->true_ds4_attention_raw_window_gate) &&
            (!opt->true_ds4_post_attention_ffn_input_gate ||
@@ -8247,7 +8260,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                     r.d_index_comp_rows, (uint32_t)opt.slots,
                     (uint32_t)kIndexerHeadDim, comp_row,
                     (uint32_t)kBoundedCompRows);
-                if (rank == 0) {
+                if (rank == 0 && !opt.true_ds4_attention_typed_kv_indexer_gate) {
                     indexer_score_bounded_rows_slots_kernel<<<
                         (unsigned int)opt.slots, 256, 0, r.stream>>>(
                         r.d_indexer_scores, r.d_indexer_topk,
@@ -8256,7 +8269,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                         visible_after, (uint32_t)kBoundedCompRows,
                         (uint32_t)kIndexerTopK,
                         1.0f / sqrtf((float)(kIndexerHead * kIndexerHeadDim)));
-                } else {
+                } else if (!opt.true_ds4_attention_typed_kv_indexer_gate) {
                     seed_single_topk_kernel<<<(unsigned int)opt.slots, 256, 0,
                                                r.stream>>>(
                         r.d_indexer_scores, r.d_indexer_topk,
@@ -8269,6 +8282,111 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
         for (int rank = 0; rank < kGpus; ++rank) {
             CHECK_CUDA(cudaSetDevice(ranks[rank].device));
             CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        }
+        if (opt.true_ds4_attention_typed_kv_indexer_gate && emitted) {
+            if (!rt) {
+                std::fprintf(stderr,
+                             "tp_ep_true_attention_typed_kv_indexer_failed\t"
+                             "layer\t%d\treason\tmissing_tp_runtime\n",
+                             layer);
+                return 18;
+            }
+            char err[512] = {0};
+            ds4_v100_tp_kv_row_view view;
+            if (ds4_v100_tp_runtime_kv_row_view(
+                    rt, layer, 0, opt.position, DS4_V100_TP_KV_ROW_INDEXER,
+                    &view, err, sizeof(err)) != 0) {
+                std::fprintf(stderr,
+                             "tp_ep_true_attention_typed_kv_indexer_view_failed\t"
+                             "layer\t%d\t%s\n",
+                             layer, err);
+                return 19;
+            }
+            const uint32_t bounded_row =
+                (ranks[0].index_comp_rows_written_layers[layer] +
+                 (uint32_t)kBoundedCompRows - 1u) %
+                (uint32_t)kBoundedCompRows;
+            const uint32_t visible_after =
+                std::min(ranks[0].index_comp_rows_written_layers[layer],
+                         (uint32_t)kBoundedCompRows);
+            for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
+                const void *src[kGpus] = {};
+                const size_t row_offset =
+                    ((size_t)slot * (size_t)kBoundedCompRows +
+                     (size_t)bounded_row) *
+                    (size_t)kIndexerHeadDim;
+                for (int rank = 0; rank < kGpus; ++rank) {
+                    src[rank] = ranks[rank].d_index_comp_rows + row_offset;
+                }
+                if (ds4_v100_tp_runtime_kv_row_store_f32_device(
+                        rt, layer, slot, opt.position, DS4_V100_TP_KV_ROW_INDEXER,
+                        src, err, sizeof(err)) != 0) {
+                    std::fprintf(stderr,
+                                 "tp_ep_true_attention_typed_kv_indexer_store_failed\t"
+                                 "layer\t%d\tslot\t%u\t%s\n",
+                                 layer, slot, err);
+                    return 20;
+                }
+            }
+            for (int rank = 0; rank < kGpus; ++rank) {
+                CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+                CHECK_CUDA(cudaDeviceSynchronize());
+            }
+            for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
+                void *dst[kGpus] = {};
+                const size_t row_offset =
+                    ((size_t)slot * (size_t)kBoundedCompRows +
+                     (size_t)bounded_row) *
+                    (size_t)kIndexerHeadDim;
+                for (int rank = 0; rank < kGpus; ++rank) {
+                    dst[rank] = ranks[rank].d_index_comp_rows + row_offset;
+                }
+                if (ds4_v100_tp_runtime_kv_row_load_f32_device(
+                        rt, layer, slot, opt.position, DS4_V100_TP_KV_ROW_INDEXER,
+                        dst, err, sizeof(err)) != 0) {
+                    std::fprintf(stderr,
+                                 "tp_ep_true_attention_typed_kv_indexer_load_failed\t"
+                                 "layer\t%d\tslot\t%u\t%s\n",
+                                 layer, slot, err);
+                    return 21;
+                }
+            }
+            for (int rank = 0; rank < kGpus; ++rank) {
+                CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+                CHECK_CUDA(cudaDeviceSynchronize());
+            }
+            CHECK_CUDA(cudaSetDevice(ranks[0].device));
+            indexer_score_bounded_rows_slots_kernel<<<
+                (unsigned int)opt.slots, 256, 0, ranks[0].stream>>>(
+                ranks[0].d_indexer_scores, ranks[0].d_indexer_topk,
+                hc->d_indexer_q_full, hc->d_indexer_w_full,
+                ranks[0].d_index_comp_rows, (uint32_t)opt.slots, visible_after,
+                (uint32_t)kBoundedCompRows, (uint32_t)kIndexerTopK,
+                1.0f / sqrtf((float)(kIndexerHead * kIndexerHeadDim)));
+            CHECK_CUDA(cudaGetLastError());
+            for (int rank = 1; rank < kGpus; ++rank) {
+                CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+                seed_single_topk_kernel<<<(unsigned int)opt.slots, 256, 0,
+                                           ranks[rank].stream>>>(
+                    ranks[rank].d_indexer_scores, ranks[rank].d_indexer_topk,
+                    (uint32_t)opt.slots, (uint32_t)kIndexerTopK);
+                CHECK_CUDA(cudaGetLastError());
+            }
+            for (int rank = 0; rank < kGpus; ++rank) {
+                CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+                CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+            }
+            std::printf("tp_ep_true_attention_typed_kv_indexer\tlayer\t%d\t"
+                        "slots\t%d\tratio\t%d\tposition\t%llu\t"
+                        "bounded_row\t%u\tvisible_rows\t%u\tphysical_row\t%llu\t"
+                        "logical_cols\t%u\tlogical_row_bytes\t%llu\t"
+                        "row_bytes_per_gpu\t%llu\tPASS\n",
+                        layer, opt.slots, ratio,
+                        (unsigned long long)opt.position, bounded_row,
+                        visible_after, (unsigned long long)view.physical_row,
+                        view.logical_cols,
+                        (unsigned long long)view.logical_row_bytes,
+                        (unsigned long long)view.row_bytes[0]);
         }
         if (emitted && ranks[0].d_indexer_topk) {
             const size_t topk_bytes =
