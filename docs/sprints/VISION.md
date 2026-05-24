@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 338
+revision: 339
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -133,8 +133,14 @@ not a serial layer-chain.
   `124` while `attn` maps to compressed row `65663`; both device roundtrips
   pass. The corrected all-layer shared-state gate emits typed raw-SWA PASS
   lines with `physical_row=124` for all `43` layers and ends with
-  `pass_layers=43`, projected `72.313683` slot-step tok/s. The next
-  integration step is typed compressed attention rows and ratio-4 indexer rows.
+  `pass_layers=43`, projected `72.313683` slot-step tok/s.
+- Sprint 334 extended the typed KV integration to emitted compressed attention
+  rows. With both typed raw-SWA and typed compressed-attention gates enabled
+  at `32` slots / `256K`, position `262143`, the full-layer gate emits `43`
+  raw-SWA typed rows and `41` compressed-attention typed rows, then ends with
+  `pass_layers=43`, projected `51.386758` slot-step tok/s. Representative
+  compressed physical rows are layer `2` ratio-4 row `65663` and layer `3`
+  ratio-128 row `2175`. The next integration step is ratio-4 indexer rows.
 - The system is not production-ready yet because the bridge HC sequence has
   not been proven equivalent to the DeepSeek V4 reference layer semantics, and
   production serving still needs readiness/overload/cancellation/streaming

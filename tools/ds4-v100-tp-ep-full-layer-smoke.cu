@@ -554,6 +554,7 @@ struct Options {
     bool true_ds4_attention_raw_read_gate = false;
     bool true_ds4_attention_raw_window_gate = false;
     bool true_ds4_attention_typed_kv_raw_gate = false;
+    bool true_ds4_attention_typed_kv_compressed_gate = false;
     bool true_ds4_attention_output_gate = false;
     bool true_ds4_post_attention_ffn_input_gate = false;
     bool true_ds4_compressed_kv_gate = false;
@@ -2503,6 +2504,7 @@ void usage(const char *argv0) {
                  "       [--true-ds4-attention-raw-read-gate]\n"
                  "       [--true-ds4-attention-raw-window-gate]\n"
                  "       [--true-ds4-attention-typed-kv-raw-gate]\n"
+                 "       [--true-ds4-attention-typed-kv-compressed-gate]\n"
                  "       [--true-ds4-attention-output-gate]\n"
                  "       [--true-ds4-post-attention-ffn-input-gate]\n"
                  "       [--true-ds4-compressed-kv-gate]\n"
@@ -2753,6 +2755,14 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--true-ds4-attention-typed-kv-compressed-gate") == 0) {
+            opt->true_ds4_attention_typed_kv_compressed_gate = true;
+            opt->true_ds4_compressed_kv_gate = true;
+            opt->true_ds4_attention_projection_gate = true;
+            opt->true_ds4_attention_residency_gate = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--true-ds4-attention-output-gate") == 0) {
             opt->true_ds4_attention_output_gate = true;
             opt->true_ds4_attention_raw_window_gate = true;
@@ -2854,6 +2864,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->true_ds4_attention_raw_read_gate) &&
            (!opt->true_ds4_attention_typed_kv_raw_gate ||
             opt->true_ds4_attention_state_gate) &&
+           (!opt->true_ds4_attention_typed_kv_compressed_gate ||
+            opt->true_ds4_compressed_kv_gate) &&
            (!opt->true_ds4_attention_output_gate ||
             opt->true_ds4_attention_raw_window_gate) &&
            (!opt->true_ds4_post_attention_ffn_input_gate ||
@@ -7723,6 +7735,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                                                SharedHcControls *hc,
                                                const LayerDenseOps *ops,
                                                RankState ranks[kGpus],
+                                               ds4_v100_tp_runtime *rt,
                                                int layer) {
     if (!opt.true_ds4_compressed_kv_gate) return 0;
     if (!hc || !hc->initialized || !ops || !ops->initialized ||
@@ -7933,6 +7946,80 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
     for (int rank = 0; rank < kGpus; ++rank) {
         CHECK_CUDA(cudaSetDevice(ranks[rank].device));
         CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    }
+    if (opt.true_ds4_attention_typed_kv_compressed_gate && emitted) {
+        if (!rt) {
+            std::fprintf(stderr,
+                         "tp_ep_true_attention_typed_kv_compressed_failed\t"
+                         "layer\t%d\treason\tmissing_tp_runtime\n",
+                         layer);
+            return 14;
+        }
+        char err[512] = {0};
+        ds4_v100_tp_kv_row_view view;
+        if (ds4_v100_tp_runtime_kv_row_view(
+                rt, layer, 0, opt.position, DS4_V100_TP_KV_ROW_ATTN, &view, err,
+                sizeof(err)) != 0) {
+            std::fprintf(stderr,
+                         "tp_ep_true_attention_typed_kv_compressed_view_failed\t"
+                         "layer\t%d\t%s\n",
+                         layer, err);
+            return 15;
+        }
+        for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
+            const void *src[kGpus] = {};
+            const size_t row_offset =
+                ((size_t)slot * (size_t)kBoundedCompRows +
+                 (size_t)emitted_comp_row) *
+                (size_t)kHeadDim;
+            for (int rank = 0; rank < kGpus; ++rank) {
+                src[rank] = ranks[rank].d_attn_comp_rows + row_offset;
+            }
+            if (ds4_v100_tp_runtime_kv_row_store_f32_device(
+                    rt, layer, slot, opt.position, DS4_V100_TP_KV_ROW_ATTN, src,
+                    err, sizeof(err)) != 0) {
+                std::fprintf(stderr,
+                             "tp_ep_true_attention_typed_kv_compressed_store_failed\t"
+                             "layer\t%d\tslot\t%u\t%s\n",
+                             layer, slot, err);
+                return 16;
+            }
+        }
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            CHECK_CUDA(cudaDeviceSynchronize());
+        }
+        for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
+            void *dst[kGpus] = {};
+            const size_t row_offset =
+                ((size_t)slot * (size_t)kBoundedCompRows +
+                 (size_t)emitted_comp_row) *
+                (size_t)kHeadDim;
+            for (int rank = 0; rank < kGpus; ++rank) {
+                dst[rank] = ranks[rank].d_attn_comp_rows + row_offset;
+            }
+            if (ds4_v100_tp_runtime_kv_row_load_f32_device(
+                    rt, layer, slot, opt.position, DS4_V100_TP_KV_ROW_ATTN, dst,
+                    err, sizeof(err)) != 0) {
+                std::fprintf(stderr,
+                             "tp_ep_true_attention_typed_kv_compressed_load_failed\t"
+                             "layer\t%d\tslot\t%u\t%s\n",
+                             layer, slot, err);
+                return 17;
+            }
+        }
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            CHECK_CUDA(cudaDeviceSynchronize());
+        }
+        std::printf("tp_ep_true_attention_typed_kv_compressed\tlayer\t%d\t"
+                    "slots\t%d\tratio\t%d\tposition\t%llu\t"
+                    "bounded_row\t%u\tphysical_row\t%llu\tlogical_cols\t%u\t"
+                    "logical_row_bytes\t%llu\trow_bytes_per_gpu\t%llu\tPASS\n",
+                    layer, opt.slots, ratio, (unsigned long long)opt.position,
+                    emitted_comp_row, (unsigned long long)view.physical_row,
+                    view.logical_cols, (unsigned long long)view.logical_row_bytes,
+                    (unsigned long long)view.row_bytes[0]);
     }
 
     TensorF32Stats index_q_stats;
@@ -9126,7 +9213,7 @@ int run_decode_loop(const Options &opt,
         }
         if (opt.true_ds4_compressed_kv_gate) {
             const int comp_rc = run_true_ds4_compressed_kv_projection_gate(
-                opt, shared_hc_controls, shared_dense_ops, ranks, opt.layer);
+                opt, shared_hc_controls, shared_dense_ops, ranks, rt, opt.layer);
             if (comp_rc != 0) {
                 std::fprintf(stderr,
                              "tp_ep_compressed_kv_projection_failed\tlayer\t%d\trc\t%d\n",
