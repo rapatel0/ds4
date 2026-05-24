@@ -1,0 +1,3 @@
+case	typed_history	http_200	requests	elapsed_s	client_generated_tok_s	server_generated_tok_s	server_generated_tok_s_decode	server_continuation_tok_s	server_continuation_tok_s_decode	coalesced_batch_size	generated_tokens_meta	cache_hits	cache_misses	typed_gate_meta	typed_raw_lines	typed_compressed_lines	typed_indexer_lines	typed_history_lines	history_loaded_attn_rows_2	history_loaded_indexer_rows_2
+control	False	32	32	2.9717371463775635	86.1449002352225	260.529425	698.278847	260.977482	696.62763	32	256	0	32	0	0	0	0	0	0	0
+typed-history	True	32	32			56.495098	63.381174	55.835127	62.538741	32	256	0	32	1	942	105	105	898	84	84

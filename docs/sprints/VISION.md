@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 342
+revision: 343
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -169,6 +169,17 @@ not a serial layer-chain.
   `loaded_attn_rows=2` and `loaded_indexer_rows=2`. The next integration step
   is a longer typed-KV HTTP run and an A/B against the no-typed-KV serving
   baseline so the cost of the production typed KV path is quantified.
+- Sprint 338 quantified that cost. In a same-shape `32` concurrent
+  `/v1/chat/completions` A/B at `32` slots / `256K` / `8` generated tokens per
+  request, the no-typed-KV control returned `32/32` HTTP 200 with
+  `260.529425` server wall tok/s and `698.278847` decode tok/s. The
+  typed-history candidate also returned `32/32` HTTP 200 and emitted typed KV
+  history evidence (`942` raw, `105` compressed, `105` indexer, `898` history
+  lines, with `84` `loaded_attn_rows=2` and `84` `loaded_indexer_rows=2`
+  lines), but throughput fell to `56.495098` wall tok/s and `63.381174`
+  decode tok/s. Typed KV is therefore operational as the correctness-facing
+  path, but remains opt-in until the staging overhead is reduced through direct
+  typed-row attention reads or a narrower reload cache.
 - The system is not production-ready yet because the bridge HC sequence has
   not been proven equivalent to the DeepSeek V4 reference layer semantics, and
   production serving still needs readiness/overload/cancellation/streaming
