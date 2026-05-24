@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 330
+revision: 331
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -74,6 +74,15 @@ not a serial layer-chain.
   ratio-4 compressed-row/indexer-score diffs through layer `42`; the `32` slot
   diagnostic reports `39.258626` projected slot-step tok/s. This is still a
   bounded one-row diagnostic, not production long-history compressed KV.
+- Sprint 326 removed that one-row diagnostic limitation. The TP/EP smoke path
+  now keeps `8` bounded compressed rows per layer, tracks visible row counts,
+  scores all bounded visible ratio-4 indexer rows, replicates selected indices
+  across TP ranks, and reads multiple selected compressed rows in raw+compressed
+  attention. The `32` slot / `256K` / `8` step all-layer attention gate passes
+  with `344` layer-step invocations, `visible_compressed_rows=2`,
+  `selected_compressed_rows=2`, no compact diff failures, and `20.780883`
+  projected slot-step tok/s. This is still a bounded diagnostic cache, not the
+  final production compressed-KV allocator.
 - The system is not production-ready yet because the bridge HC sequence has
   not been proven equivalent to the DeepSeek V4 reference layer semantics, and
   production serving still needs readiness/overload/cancellation/streaming
@@ -2054,6 +2063,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-24 | Sprint 323 added the first TP/EP compressed-KV/indexer projection gate. | The TP/EP runtime now binds BF16 compressor/indexer dense tensors through the FP16-cache/cuBLAS resident path and executes compressor plus ratio-4 indexer projections for all 43 layers at `32` slots / `256K`. The all-layer gate passes with 43 compressed-projection rows and `19.630630` projected slot-step tok/s. HTTP parity now runs without OOM after freeing unused dense float staging buffers and moving token embeddings to host-backed per-slot row uploads; parity still fails but changes to `MARK` / token `110609`. | Implement real compressed-row storage, indexer scores/top-k over stored rows, and raw+compressed attention softmax/value merge. |
 | 2026-05-24 | Sprint 324 added bounded TP/EP compressed-row storage and raw+compressed attention read. | The TP/EP runtime now gathers compressor/indexer TP shards, stores compressor state with APE, emits pooled/RMSNorm/RoPE/F16-rounded compressed rows, shifts ratio-4 state, computes a bounded one-row indexer score/top-k, and merges a visible compressed row into the attention read. The `32` slot / `256K` all-layer smoke passes with `pass_invocations=43` and `19.160884` projected slot-step tok/s. HTTP parity still fails and returns `mere` / token `88445`, so this structural path is active but not yet reference-equivalent. | Compare TP/EP layer-2 ratio-4 emitted compressed rows, indexer scores, selected rows, and raw+compressed attention output against the non-TP reference path. |
 | 2026-05-24 | Sprint 325 added a compact compressed-reference diff gate and fixed layer-local attention state. | The first all-layer diagnostic found layer `4` diverging at `attn_comp_row0_compact_reference` because raw-SWA, attention-compressed, and indexer-compressed buffers were reused across layers in the smoke path. The buffers are now layer-local; `slots=1` / `position=100003` and `slots=32` / `position=262143` both pass all 43 layers, and ratio-4 compact compressed-row/indexer-score diffs pass through layer `42`. The `32` slot diagnostic reports `39.258626` projected slot-step tok/s. | Replace the compact one-row diagnostic with full production compressed-row cache/history selection and raw+compressed attention output parity against the reference layer path, then rerun HTTP parity. |
+| 2026-05-24 | Sprint 326 added bounded multi-row compressed attention history. | The TP/EP path now stores up to `8` bounded compressed rows per layer, tracks visible row counts, scores all bounded visible ratio-4 indexer rows, replicates selected row indices to all TP ranks, and includes multiple compressed rows in the raw+compressed attention softmax/read. The `32` slot / `256K` / `8` step attention gate passes all `344` layer-step invocations with `visible_compressed_rows=2`, `selected_compressed_rows=2`, no compact diff failures, and `20.780883` projected slot-step tok/s. | Replace bounded diagnostic rows with production compressed-KV allocation/ownership, validate ratio-128 history, and compare raw+compressed attention output against the full reference layer path before rerunning HTTP parity. |
 
 ## Open Questions
 
