@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 332
+revision: 333
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -89,6 +89,15 @@ not a serial layer-chain.
   persistent typed KV is `3.40 GiB/GPU`. The same configuration would require
   `107.84 GiB/GPU` if KV were replicated f32, so production serving must use a
   typed TP-sharded KV arena. `1` slot at `1M` also fits at `22.56 GiB/GPU`.
+- Sprint 328 proved that contract as actual V100 CUDA allocations. The new
+  `tools/ds4-v100-tp-kv-arena-smoke.cu` allocates and touches the per-GPU
+  resident arenas for weights, typed KV, compression state, scratch,
+  collectives, and global shards. With the real pack footprint, `32` slots at
+  `256K` allocated `25.001 GiB/GPU` and left `6.424 GiB/GPU` free, above the
+  `2 GiB` reserve. `1` slot at `1M` allocated `20.558 GiB/GPU` and left
+  `10.866 GiB/GPU` free. This removes raw VRAM fit as the immediate blocker
+  for the target TP/EP KV layout; the remaining work is wiring the production
+  typed arena into the runtime and proving layer/reference semantics.
 - The system is not production-ready yet because the bridge HC sequence has
   not been proven equivalent to the DeepSeek V4 reference layer semantics, and
   production serving still needs readiness/overload/cancellation/streaming

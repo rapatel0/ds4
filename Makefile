@@ -244,6 +244,9 @@ tools/ds4-v100-tp4-turbomind-layer-smoke:
 tools/ds4-v100-routed-ffn-tile-workbench:
 	@echo "tools/ds4-v100-routed-ffn-tile-workbench requires a CUDA build"
 	@exit 2
+tools/ds4-v100-tp-kv-arena-smoke:
+	@echo "tools/ds4-v100-tp-kv-arena-smoke requires a CUDA build"
+	@exit 2
 else
 tools/ds4-v100-turbomind-pack.o: tools/ds4-v100-turbomind-pack.cu ds4_pack.h ds4_source_formats.h kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h
 	$(NVCC) $(NVCCFLAGS) $(TURBOMIND_ADAPTER_CUDAFLAGS) -I. -c -o $@ tools/ds4-v100-turbomind-pack.cu
@@ -300,6 +303,9 @@ tools/ds4-v100-tp4-turbomind-layer-smoke: tools/ds4-v100-tp4-turbomind-layer-smo
 	$(NVCC) $(NVCCFLAGS) --std=c++17 -I. -o $@ $< $(CUDA_LDLIBS)
 
 tools/ds4-v100-routed-ffn-tile-workbench: tools/ds4-v100-routed-ffn-tile-workbench.cu kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h
+	$(NVCC) $(NVCCFLAGS) --std=c++17 -I. -o $@ $< $(CUDA_LDLIBS)
+
+tools/ds4-v100-tp-kv-arena-smoke: tools/ds4-v100-tp-kv-arena-smoke.cu
 	$(NVCC) $(NVCCFLAGS) --std=c++17 -I. -o $@ $< $(CUDA_LDLIBS)
 endif
 

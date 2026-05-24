@@ -1,0 +1,31 @@
+DS4 V100 TP/EP KV arena allocation smoke
+topology: PP=1 TP=8 EP=8 requested_gpus=8
+configured: slots=1 ctx=1048576 kv=f8_e4m3_b128 reserve=2.00 GiB scratch=1.50 GiB touch=on weights=allocated
+weights_total=145.42 GiB weight_per_gpu=18.18 GiB (from --pack-dir)
+
+## Per-GPU budget
+| Component | Bytes | GiB |
+|---|---:|---:|
+| weights | 19517862027 | 18.177 |
+| persistent_kv | 454765248 | 0.424 |
+| comp_state | 225443840 | 0.210 |
+| scratch | 1610612736 | 1.500 |
+| collectives | 16384 | 0.000 |
+| globals | 265043988 | 0.247 |
+| no_reserve_total | 22073744223 | 20.558 |
+| reserve_required | 2147483648 | 2.000 |
+| total_budget | 24221227871 | 22.558 |
+
+## Allocation result
+| GPU | Total | Free before | Planned alloc | Free after | Reserve required | Status |
+|---:|---:|---:|---:|---:|---:|---|
+| gpu0 | 31.733 GiB | 31.428 GiB | 20.558 GiB | 10.866 GiB | 2.000 GiB | PASS |
+| gpu1 | 31.733 GiB | 31.428 GiB | 20.558 GiB | 10.866 GiB | 2.000 GiB | PASS |
+| gpu2 | 31.733 GiB | 31.428 GiB | 20.558 GiB | 10.866 GiB | 2.000 GiB | PASS |
+| gpu3 | 31.733 GiB | 31.428 GiB | 20.558 GiB | 10.866 GiB | 2.000 GiB | PASS |
+| gpu4 | 31.733 GiB | 31.428 GiB | 20.558 GiB | 10.866 GiB | 2.000 GiB | PASS |
+| gpu5 | 31.733 GiB | 31.428 GiB | 20.558 GiB | 10.866 GiB | 2.000 GiB | PASS |
+| gpu6 | 31.733 GiB | 31.428 GiB | 20.558 GiB | 10.866 GiB | 2.000 GiB | PASS |
+| gpu7 | 31.733 GiB | 31.428 GiB | 20.558 GiB | 10.866 GiB | 2.000 GiB | PASS |
+
+verdict: PASS
