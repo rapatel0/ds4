@@ -232,6 +232,21 @@ Rank `6` local experts `30` and `8` include the largest route weight but
 produce zero gate/down output. This points at expert binding/table/scale
 handling or a route layout mismatch, not bad router logits.
 
+The binding trace then showed non-null gated/down weight and scale pointers
+with expected strides for all selected experts:
+
+```text
+gated weight stride 131072, gated scale stride 4096
+down weight stride 65536, down scale stride 4096
+```
+
+That reduces the likelihood of a missing pointer-table entry. The diagnostic
+bridge's `ffn_normed` route input reaches `max_abs=38.53125`, so the current
+highest-probability explanation is that the bridge HC-current path is not yet
+producing the activation distribution the MXFP4 experts expect. The next
+durable fix is to replace the shared/FFN bridge with the real DS4 FFN
+sequence, then re-enable normalized routed expert input under the same trace.
+
 ## Artifacts
 
 - `logs/from-cluster/sprint308-all-local-experts-parity/cluster/server.out`
@@ -253,6 +268,7 @@ handling or a route layout mismatch, not bad router logits.
 - `logs/from-cluster/sprint308-routed-ffn-norm-input-parity/20260524-040200/`
 - `logs/from-cluster/sprint308-routed-ffn-norm-input-stats/20260524-040752/`
 - `logs/from-cluster/sprint308-routed-ffn-norm-route-ids/20260524-041250/`
+- `logs/from-cluster/sprint308-routed-ffn-binding-trace/20260524-041723/`
 
 ## Production Gate
 

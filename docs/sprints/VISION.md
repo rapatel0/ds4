@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: vision
-revision: 313
+revision: 314
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -184,7 +184,9 @@ not a serial layer-chain.
   `21`; rank-6 locals `30` and `8` include the largest route weight but return
   zero output. That makes rank-local expert binding or MXFP4 scale/table
   handling the next narrow correctness target before promoting true FFN input
-  semantics.
+  semantics. The binding trace shows non-null weight/scale pointers and
+  expected strides, so the likely root is now the bridge activation
+  distribution rather than a missing pointer-table entry.
 - Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
   longer exposes PP/layer-split topology modes. Against the real production
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about
@@ -538,8 +540,8 @@ but non-finite rank-7 TurboMind output and zero rank-1/rank-6 output. The
 stable bridge currently uses FFN-normalized router logits with raw HC-current
 routed expert input. The next parity work is to inspect selected expert IDs
 and rank-local TurboMind pointer/scale bindings for layer-0 rank-7 locals
-`30`/`21` and rank-6 locals `30`/`8`, then the true shared-FFN path, then full
-DS4 attention semantics.
+`30`/`21` and rank-6 locals `30`/`8`, then implement the true shared-FFN path,
+then full DS4 attention semantics.
 
 ### Sprint 309 - Persistent Appliance Deployment Gate [planned]
 

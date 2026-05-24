@@ -4752,9 +4752,38 @@ int upload_model_router_route_plan(const Options &opt,
                 const int rank = expert / kLocalExperts;
                 const int local = expert % kLocalExperts;
                 const float w = weights[(size_t)slot * opt.top_k + (size_t)k];
+                StridedPtrH gw = {};
+                StridedPtrH gs = {};
+                StridedPtrH dw = {};
+                StridedPtrH ds = {};
+                if (rank >= 0 && rank < kGpus) {
+                    CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+                    if (ranks[rank].gated.d_w_table) {
+                        CHECK_CUDA(cudaMemcpy(&gw,
+                                              (const StridedPtrH *)ranks[rank].gated.d_w_table + local,
+                                              sizeof(gw), cudaMemcpyDeviceToHost));
+                    }
+                    if (ranks[rank].gated.d_s_table) {
+                        CHECK_CUDA(cudaMemcpy(&gs,
+                                              (const StridedPtrH *)ranks[rank].gated.d_s_table + local,
+                                              sizeof(gs), cudaMemcpyDeviceToHost));
+                    }
+                    if (ranks[rank].down.d_w_table) {
+                        CHECK_CUDA(cudaMemcpy(&dw,
+                                              (const StridedPtrH *)ranks[rank].down.d_w_table + local,
+                                              sizeof(dw), cudaMemcpyDeviceToHost));
+                    }
+                    if (ranks[rank].down.d_s_table) {
+                        CHECK_CUDA(cudaMemcpy(&ds,
+                                              (const StridedPtrH *)ranks[rank].down.d_s_table + local,
+                                              sizeof(ds), cudaMemcpyDeviceToHost));
+                    }
+                }
                 std::fprintf(stderr,
-                             "tp_ep_model_router_route_id\tlayer\t%d\tslot\t%d\tk\t%d\texpert\t%d\trank\t%d\tlocal\t%d\tweight\t%.9g\n",
-                             opt.layer, slot, k, expert, rank, local, w);
+                             "tp_ep_model_router_route_id\tlayer\t%d\tslot\t%d\tk\t%d\texpert\t%d\trank\t%d\tlocal\t%d\tweight\t%.9g\tgated_w\t%p\tgated_ws\t%d\tgated_s\t%p\tgated_ss\t%d\tdown_w\t%p\tdown_ws\t%d\tdown_s\t%p\tdown_ss\t%d\n",
+                             opt.layer, slot, k, expert, rank, local, w,
+                             gw.p, gw.stride, gs.p, gs.stride,
+                             dw.p, dw.stride, ds.p, ds.stride);
             }
         }
     }
