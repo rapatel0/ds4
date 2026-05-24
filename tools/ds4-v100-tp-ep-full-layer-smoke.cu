@@ -38,6 +38,7 @@ namespace {
 constexpr int kGpus = 8;
 constexpr int kHidden = 4096;
 constexpr int kMid = 2048;
+constexpr int kHeadDim = 512;
 constexpr int kFusedN = 2 * kMid;
 constexpr int kGlobalExperts = 256;
 constexpr int kLocalExperts = kGlobalExperts / kGpus;
@@ -252,6 +253,10 @@ struct ResidentF8Dense {
 };
 
 struct LayerDenseOps {
+    ResidentF8Dense attn_q_a;
+    ResidentF8Dense attn_q_b;
+    ResidentF8Dense attn_kv_latent;
+    ResidentF8Dense attn_output_a;
     ResidentF8Dense attn;
     ResidentF8Dense shared;
     ResidentF8Dense shared_gate;
@@ -487,6 +492,7 @@ struct Options {
     bool tp_kv_all_slots_gate = false;
     bool reference_hc_reduce_gate = false;
     bool reference_hc_state_guard_gate = false;
+    bool true_ds4_attention_residency_gate = false;
 };
 
 void log_tensor_f32_stats(const char *tag, int layer, int rank_id,
@@ -1676,6 +1682,7 @@ void usage(const char *argv0) {
                  "       [--model-router-routes]\n"
                  "       [--routed-ffn-norm-input-gate]\n"
                  "       [--true-shared-ffn-gate]\n"
+                 "       [--true-ds4-attention-residency-gate]\n"
                  "       [--reference-hc-reduce-gate]\n"
                  "       [--reference-hc-state-guard-gate]\n"
                  "       [--diagnostic-output-head]\n",
@@ -1852,6 +1859,11 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--true-ds4-attention-residency-gate") == 0) {
+            opt->true_ds4_attention_residency_gate = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--reference-hc-reduce-gate") == 0) {
             opt->reference_hc_reduce_gate = true;
             opt->tp_hc_current_input_gate = true;
@@ -1884,6 +1896,9 @@ bool parse_args(int argc, char **argv, Options *opt) {
            !(opt->model_router_routes && opt->compact_route_compose) &&
            !(opt->dense_hmma_compose && opt->dense_f16_cublas_compose) &&
            (!opt->dense_f16_cache_compose || opt->dense_f16_cublas_compose) &&
+           (!opt->true_ds4_attention_residency_gate ||
+            (opt->share_dense_ops && opt->dense_f16_cache_compose &&
+             opt->dense_f16_cublas_compose)) &&
            !(opt->dense_compute_tensor &&
              (opt->dense_compute_all_f8 || opt->dense_compute_all_bf16));
 }
@@ -4364,6 +4379,10 @@ int prepare_resident_f8_dense(const Options &opt,
 void free_shared_dense_ops(SharedDenseOps *ops, const Options &opt) {
     if (!ops) return;
     for (int layer = 0; layer < 43; ++layer) {
+        free_resident_f8_dense(ops->layers[layer].attn_q_a, opt);
+        free_resident_f8_dense(ops->layers[layer].attn_q_b, opt);
+        free_resident_f8_dense(ops->layers[layer].attn_kv_latent, opt);
+        free_resident_f8_dense(ops->layers[layer].attn_output_a, opt);
         free_resident_f8_dense(ops->layers[layer].attn, opt);
         free_resident_f8_dense(ops->layers[layer].shared, opt);
         free_resident_f8_dense(ops->layers[layer].shared_gate, opt);
@@ -4390,10 +4409,30 @@ int open_shared_dense_ops(const Options &opt,
         Options layer_opt = opt;
         layer_opt.layer = layer;
         LayerDenseOps &d = ops->layers[layer];
+        const std::string attn_q_a_tensor = layer_tensor_name(layer, "attn_q_a.weight");
+        const std::string attn_q_b_tensor = layer_tensor_name(layer, "attn_q_b.weight");
+        const std::string attn_kv_tensor = layer_tensor_name(layer, "attn_kv_latent.weight");
+        const std::string attn_output_a_tensor = layer_tensor_name(layer, "attn_output_a.weight");
         const std::string attn_tensor = layer_tensor_name(layer, "attn_output_b.weight");
         const std::string shared_tensor = layer_tensor_name(layer, "ffn_down_shexp.weight");
         const std::string shared_gate_tensor = layer_tensor_name(layer, "ffn_gate_shexp.weight");
         const std::string shared_up_tensor = layer_tensor_name(layer, "ffn_up_shexp.weight");
+        if (opt.true_ds4_attention_residency_gate) {
+            if (prepare_resident_f8_dense(layer_opt, rows, attn_q_a_tensor.c_str(), 11,
+                                          cache, &d.attn_q_a, 1024 / kGpus) != 0 ||
+                prepare_resident_f8_dense(layer_opt, rows, attn_q_b_tensor.c_str(), 12,
+                                          cache, &d.attn_q_b, 32768 / kGpus) != 0 ||
+                prepare_resident_f8_dense(layer_opt, rows, attn_kv_tensor.c_str(), 13,
+                                          cache, &d.attn_kv_latent, kHeadDim / kGpus) != 0 ||
+                prepare_resident_f8_dense(layer_opt, rows, attn_output_a_tensor.c_str(), 14,
+                                          cache, &d.attn_output_a, 8192 / kGpus) != 0) {
+                free_shared_dense_ops(ops, opt);
+                return 5;
+            }
+            ops->loaded_bytes += d.attn_q_a.loaded_bytes + d.attn_q_b.loaded_bytes +
+                                 d.attn_kv_latent.loaded_bytes +
+                                 d.attn_output_a.loaded_bytes;
+        }
         if (prepare_resident_f8_dense(layer_opt, rows, attn_tensor.c_str(), 1, cache,
                                       &d.attn) != 0 ||
             prepare_resident_f8_dense(layer_opt, rows, shared_tensor.c_str(), 2, cache,

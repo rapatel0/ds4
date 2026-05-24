@@ -153,6 +153,7 @@ fi
 : "${DS4_V100_TP_EP_MODEL_ROUTER_ROUTES:=0}"
 : "${DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT:=0}"
 : "${DS4_V100_TP_EP_TRUE_SHARED_FFN:=0}"
+: "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_RESIDENCY:=0}"
 : "${DS4_V100_TP_EP_REFERENCE_HC_REDUCE:=0}"
 : "${DS4_V100_TP_EP_REFERENCE_HC_STATE_GUARD:=0}"
 : "${DS4_V100_TP_EP_KV_ALL_SLOTS:=0}"
@@ -751,6 +752,15 @@ if [ "$DS4_V100_TP_EP_TRUE_SHARED_FFN" -eq 1 ]; then
     DS4_V100_TP_EP_HC_CURRENT_INPUT=1
     DS4_V100_TP_EP_HC_FINAL_EXPAND=1
 fi
+case "$DS4_V100_TP_EP_TRUE_DS4_ATTENTION_RESIDENCY" in
+    0|false|off) DS4_V100_TP_EP_TRUE_DS4_ATTENTION_RESIDENCY=0 ;;
+    1|true|on) DS4_V100_TP_EP_TRUE_DS4_ATTENTION_RESIDENCY=1 ;;
+    *) fail "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_RESIDENCY must be 0 or 1" ;;
+esac
+if [ "$DS4_V100_TP_EP_TRUE_DS4_ATTENTION_RESIDENCY" -eq 1 ]; then
+    DS4_V100_TP_EP_HC_CURRENT_INPUT=1
+    DS4_V100_TP_EP_HC_FINAL_EXPAND=1
+fi
 case "$DS4_V100_TP_EP_REFERENCE_HC_REDUCE" in
     0|false|off) DS4_V100_TP_EP_REFERENCE_HC_REDUCE=0 ;;
     1|true|on) DS4_V100_TP_EP_REFERENCE_HC_REDUCE=1 ;;
@@ -921,6 +931,9 @@ if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
     fi
     if [ "$DS4_V100_TP_EP_TRUE_SHARED_FFN" -eq 1 ]; then
         cmd+=(--true-shared-ffn-gate)
+    fi
+    if [ "$DS4_V100_TP_EP_TRUE_DS4_ATTENTION_RESIDENCY" -eq 1 ]; then
+        cmd+=(--true-ds4-attention-residency-gate)
     fi
     if [ "$DS4_V100_TP_EP_REFERENCE_HC_REDUCE" -eq 1 ]; then
         cmd+=(--reference-hc-reduce-gate)
