@@ -510,11 +510,25 @@ struct Options {
     bool true_ds4_attention_projection_gate = false;
     bool true_ds4_attention_state_gate = false;
     bool true_ds4_attention_rope_gate = false;
+    bool true_ds4_attention_saturation_audit_gate = false;
     bool true_ds4_attention_raw_read_gate = false;
     bool true_ds4_attention_raw_window_gate = false;
     uint32_t true_ds4_attention_raw_valid_rows = 1;
 };
 
+struct TensorF32Stats {
+    int finite_bad = 0;
+    size_t first_bad = (size_t)-1;
+    float max_abs = 0.0f;
+};
+
+TensorF32Stats collect_tensor_f32_stats(const float *ptr, size_t elems,
+                                        cudaStream_t stream);
+TensorF32Stats collect_raw_swa_row_stats(const float *ptr, uint32_t slots,
+                                         uint32_t raw_rows, uint32_t raw_row,
+                                         uint32_t head_dim,
+                                         cudaStream_t stream);
+void merge_tensor_stats(TensorF32Stats *dst, const TensorF32Stats &src);
 void log_tensor_f32_stats(const char *tag, int layer, int rank_id,
                           const float *ptr, size_t elems, cudaStream_t stream);
 bool should_log_routed_semantic_stats(const Options &opt);
@@ -1972,6 +1986,7 @@ void usage(const char *argv0) {
                  "       [--true-ds4-attention-projection-gate]\n"
                  "       [--true-ds4-attention-state-gate]\n"
                  "       [--true-ds4-attention-rope-gate]\n"
+                 "       [--true-ds4-attention-saturation-audit-gate]\n"
                  "       [--true-ds4-attention-raw-read-gate]\n"
                  "       [--true-ds4-attention-raw-window-gate]\n"
                  "       [--reference-hc-reduce-gate]\n"
@@ -2176,6 +2191,15 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--true-ds4-attention-saturation-audit-gate") == 0) {
+            opt->true_ds4_attention_saturation_audit_gate = true;
+            opt->true_ds4_attention_rope_gate = true;
+            opt->true_ds4_attention_state_gate = true;
+            opt->true_ds4_attention_projection_gate = true;
+            opt->true_ds4_attention_residency_gate = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--true-ds4-attention-raw-read-gate") == 0) {
             opt->true_ds4_attention_raw_read_gate = true;
             opt->true_ds4_attention_state_gate = true;
@@ -2235,6 +2259,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->true_ds4_attention_projection_gate) &&
            (!opt->true_ds4_attention_rope_gate ||
             opt->true_ds4_attention_state_gate) &&
+           (!opt->true_ds4_attention_saturation_audit_gate ||
+            opt->true_ds4_attention_rope_gate) &&
            (!opt->true_ds4_attention_raw_read_gate ||
             opt->true_ds4_attention_state_gate) &&
            (!opt->true_ds4_attention_raw_window_gate ||
@@ -5488,28 +5514,71 @@ void log_route_half_stats(const char *tag, int layer, int rank_id,
                  tag, layer, rank_id, elems, finite_bad, first_bad, max_abs);
 }
 
-void log_tensor_f32_stats(const char *tag, int layer, int rank_id,
-                          const float *ptr, size_t elems, cudaStream_t stream) {
-    if (!ptr || elems == 0) return;
+void merge_tensor_stats(TensorF32Stats *dst, const TensorF32Stats &src) {
+    if (!dst) return;
+    if (src.finite_bad != 0 && dst->finite_bad == 0) {
+        dst->first_bad = src.first_bad;
+    }
+    dst->finite_bad += src.finite_bad;
+    dst->max_abs = fmaxf(dst->max_abs, src.max_abs);
+}
+
+TensorF32Stats collect_tensor_f32_stats(const float *ptr, size_t elems,
+                                        cudaStream_t stream) {
+    TensorF32Stats stats;
+    if (!ptr || elems == 0) return stats;
     CHECK_CUDA(cudaStreamSynchronize(stream));
     std::vector<float> host(elems);
     CHECK_CUDA(cudaMemcpy(host.data(), ptr, elems * sizeof(float),
                           cudaMemcpyDeviceToHost));
-    int finite_bad = 0;
-    size_t first_bad = (size_t)-1;
-    float max_abs = 0.0f;
     for (size_t i = 0; i < elems; ++i) {
         const float v = host[i];
         if (!std::isfinite(v)) {
-            if (finite_bad == 0) first_bad = i;
-            ++finite_bad;
+            if (stats.finite_bad == 0) stats.first_bad = i;
+            ++stats.finite_bad;
         } else {
-            max_abs = fmaxf(max_abs, fabsf(v));
+            stats.max_abs = fmaxf(stats.max_abs, fabsf(v));
         }
     }
+    return stats;
+}
+
+TensorF32Stats collect_raw_swa_row_stats(const float *ptr, uint32_t slots,
+                                         uint32_t raw_rows, uint32_t raw_row,
+                                         uint32_t head_dim,
+                                         cudaStream_t stream) {
+    TensorF32Stats stats;
+    if (!ptr || slots == 0 || raw_rows == 0 || raw_row >= raw_rows ||
+        head_dim == 0) {
+        return stats;
+    }
+    CHECK_CUDA(cudaStreamSynchronize(stream));
+    std::vector<float> host((size_t)slots * (size_t)head_dim);
+    const float *src = ptr + (uint64_t)raw_row * (uint64_t)head_dim;
+    CHECK_CUDA(cudaMemcpy2D(host.data(), (size_t)head_dim * sizeof(float),
+                            src,
+                            (size_t)raw_rows * (size_t)head_dim * sizeof(float),
+                            (size_t)head_dim * sizeof(float), (size_t)slots,
+                            cudaMemcpyDeviceToHost));
+    for (size_t i = 0; i < host.size(); ++i) {
+        const float v = host[i];
+        if (!std::isfinite(v)) {
+            if (stats.finite_bad == 0) stats.first_bad = i;
+            ++stats.finite_bad;
+        } else {
+            stats.max_abs = fmaxf(stats.max_abs, fabsf(v));
+        }
+    }
+    return stats;
+}
+
+void log_tensor_f32_stats(const char *tag, int layer, int rank_id,
+                          const float *ptr, size_t elems, cudaStream_t stream) {
+    const TensorF32Stats stats = collect_tensor_f32_stats(ptr, elems, stream);
     std::fprintf(stderr,
                  "tp_ep_tensor_stats\ttag\t%s\tlayer\t%d\trank\t%d\telems\t%zu\tfinite_bad\t%d\tfirst_bad\t%zu\tmax_abs\t%.9g\n",
-                 tag, layer, rank_id, elems, finite_bad, first_bad, max_abs);
+                 tag, layer, rank_id, elems, stats.finite_bad, stats.first_bad,
+                 stats.max_abs);
 }
 
 bool should_log_routed_semantic_stats(const Options &opt) {
@@ -6384,6 +6453,50 @@ int run_true_ds4_attention_projection_prefix(const Options &opt,
                                                           : ranks[rank].stream);
         }
     }
+    if (opt.true_ds4_attention_saturation_audit_gate) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+        const TensorF32Stats current =
+            collect_tensor_f32_stats(hc->d_current_full, (size_t)hidden_elems,
+                                     nullptr);
+        const TensorF32Stats attn_normed =
+            collect_tensor_f32_stats(hc->d_attn_normed, (size_t)hidden_elems,
+                                     nullptr);
+        const TensorF32Stats q_a =
+            collect_tensor_f32_stats(hc->d_q_a_full, (size_t)q_a_elems,
+                                     nullptr);
+        const TensorF32Stats q_a_normed =
+            collect_tensor_f32_stats(hc->d_q_a_normed, (size_t)q_a_elems,
+                                     nullptr);
+        const TensorF32Stats kv =
+            collect_tensor_f32_stats(hc->d_kv_full, (size_t)kv_elems,
+                                     nullptr);
+        const TensorF32Stats kv_normed =
+            collect_tensor_f32_stats(hc->d_kv_normed, (size_t)kv_elems,
+                                     nullptr);
+        TensorF32Stats q_b;
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            const TensorF32Stats shard = collect_tensor_f32_stats(
+                ops->attn_q_b.d_out[(size_t)rank],
+                (size_t)opt.slots * ops->attn_q_b.rows_per_gpu,
+                ranks[rank].dense_stream ? ranks[rank].dense_stream
+                                         : ranks[rank].stream);
+            merge_tensor_stats(&q_b, shard);
+        }
+        std::printf("tp_ep_true_attention_saturation_projection\tlayer\t%d\t"
+                    "slots\t%d\tcurrent_max\t%.9g\tcurrent_bad\t%d\t"
+                    "attn_normed_max\t%.9g\tattn_normed_bad\t%d\t"
+                    "q_a_max\t%.9g\tq_a_bad\t%d\t"
+                    "q_a_normed_max\t%.9g\tq_a_normed_bad\t%d\t"
+                    "kv_max\t%.9g\tkv_bad\t%d\t"
+                    "kv_normed_max\t%.9g\tkv_normed_bad\t%d\t"
+                    "q_b_pre_head_max\t%.9g\tq_b_pre_head_bad\t%d\tPASS\n",
+                    layer, opt.slots, current.max_abs, current.finite_bad,
+                    attn_normed.max_abs, attn_normed.finite_bad, q_a.max_abs,
+                    q_a.finite_bad, q_a_normed.max_abs, q_a_normed.finite_bad,
+                    kv.max_abs, kv.finite_bad, kv_normed.max_abs,
+                    kv_normed.finite_bad, q_b.max_abs, q_b.finite_bad);
+    }
     std::printf("tp_ep_true_attention_projection_prefix\tlayer\t%d\tslots\t%d\t"
                 "q_a_cols\t1024\tkv_cols\t%d\tq_width\t32768\tms\t%.6f\tPASS\n",
                 layer, opt.slots, kHeadDim, ms);
@@ -6497,6 +6610,43 @@ int run_true_ds4_attention_state_update(const Options &opt,
         log_tensor_f32_stats("true_attn_raw_swa_rank0", layer, 0,
                              ranks[0].d_attn_raw_swa, (size_t)raw_elems,
                              ranks[0].stream);
+    }
+    if (opt.true_ds4_attention_saturation_audit_gate) {
+        TensorF32Stats q_heads;
+        TensorF32Stats kv_rope;
+        TensorF32Stats raw_row_stats;
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            const cudaStream_t q_stream =
+                ranks[rank].dense_stream ? ranks[rank].dense_stream
+                                         : ranks[rank].stream;
+            merge_tensor_stats(
+                &q_heads,
+                collect_tensor_f32_stats(
+                    ops->attn_q_b.d_out[(size_t)rank],
+                    (size_t)opt.slots * ops->attn_q_b.rows_per_gpu,
+                    q_stream));
+            merge_tensor_stats(
+                &kv_rope,
+                collect_tensor_f32_stats(ranks[rank].d_attn_kv_full,
+                                         (size_t)kv_elems,
+                                         ranks[rank].stream));
+            merge_tensor_stats(
+                &raw_row_stats,
+                collect_raw_swa_row_stats(ranks[rank].d_attn_raw_swa,
+                                          (uint32_t)opt.slots,
+                                          (uint32_t)kRawSwaRows, raw_row,
+                                          (uint32_t)kHeadDim,
+                                          ranks[rank].stream));
+        }
+        std::printf("tp_ep_true_attention_saturation_state\tlayer\t%d\t"
+                    "slots\t%d\traw_row\t%u\tq_heads_post_rope_max\t%.9g\t"
+                    "q_heads_post_rope_bad\t%d\tkv_post_rope_max\t%.9g\t"
+                    "kv_post_rope_bad\t%d\traw_swa_row_max\t%.9g\t"
+                    "raw_swa_row_bad\t%d\tPASS\n",
+                    layer, opt.slots, raw_row, q_heads.max_abs,
+                    q_heads.finite_bad, kv_rope.max_abs, kv_rope.finite_bad,
+                    raw_row_stats.max_abs, raw_row_stats.finite_bad);
     }
     if (opt.true_ds4_attention_rope_gate) {
         std::printf("tp_ep_true_attention_rope\tlayer\t%d\tslots\t%d\t"
