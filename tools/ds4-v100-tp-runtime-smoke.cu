@@ -12,7 +12,7 @@ static void usage(const char *argv0) {
     std::fprintf(stderr,
                  "usage: %s [--ctx N] [--slots N] [--scratch-mib N] "
                  "[--kv-dtype f16|f8|q8_0] [--dense-kv-slice] "
-                 "[--typed-kv-row] [--kind attn|indexer] "
+                 "[--typed-kv-row] [--device-kv-row] [--kind attn|indexer] "
                  "[--layer N] [--slot N] [--position N] [--indexer on|off]\n",
                  argv0);
 }
@@ -32,6 +32,7 @@ int main(int argc, char **argv) {
     ds4_v100_tp_runtime_default_config(&cfg);
     bool dense_kv_slice = false;
     bool typed_kv_row = false;
+    bool device_kv_row = false;
     ds4_v100_tp_kv_row_kind row_kind = DS4_V100_TP_KV_ROW_ATTN;
     int layer = 2;
     uint32_t slot = 0;
@@ -60,6 +61,8 @@ int main(int argc, char **argv) {
             dense_kv_slice = true;
         } else if (std::strcmp(arg, "--typed-kv-row") == 0) {
             typed_kv_row = true;
+        } else if (std::strcmp(arg, "--device-kv-row") == 0) {
+            device_kv_row = true;
         } else if (std::strcmp(arg, "--kind") == 0 && val) {
             if (std::strcmp(val, "attn") == 0 || std::strcmp(val, "attention") == 0) {
                 row_kind = DS4_V100_TP_KV_ROW_ATTN;
@@ -165,6 +168,40 @@ int main(int argc, char **argv) {
                     (unsigned int)result.first_bad_got,
                     (unsigned int)result.first_bad_expected,
                     result.max_abs, result.mean_abs,
+                    (unsigned long long)result.checksum);
+        for (int gpu = 0; gpu < DS4_V100_TP_MAX_GPUS; ++gpu) {
+            std::printf("gpu\t%d\toffset\t%llu\trow_bytes\t%llu\n",
+                        gpu,
+                        (unsigned long long)result.view.offset[gpu],
+                        (unsigned long long)result.view.row_bytes[gpu]);
+        }
+        ds4_v100_tp_runtime_close(rt);
+        return result.bad_values == 0 && result.max_abs == 0.0 ? 0 : 1;
+    }
+
+    if (device_kv_row) {
+        ds4_v100_tp_kv_device_roundtrip_result result;
+        if (ds4_v100_tp_runtime_kv_row_device_roundtrip_f32(
+                rt, layer, slot, position, row_kind, &result, err, sizeof(err)) != 0) {
+            std::fprintf(stderr, "tp_runtime_device_kv_row_failed\t%s\n", err);
+            ds4_v100_tp_runtime_close(rt);
+            return 1;
+        }
+        const char *kind_name =
+            result.view.kind == DS4_V100_TP_KV_ROW_INDEXER ? "indexer" : "attn";
+        std::printf("tp_device_kv_row\tctx=%llu\tslots=%u\thidden=%u\t"
+                    "layer=%d\tratio=%d\tslot=%u\tposition=%llu\tkind=%s\t"
+                    "physical_row=%llu\tlogical_cols=%u\tlogical_row_bytes=%llu\t"
+                    "row_bytes_per_gpu=%llu\tbad_values=%u\tmax_abs=%.9f\t"
+                    "mean_abs=%.9f\tchecksum=%llu\n",
+                    (unsigned long long)cfg.ctx, cfg.slots, cfg.hidden,
+                    result.view.layer, result.view.ratio, result.view.slot,
+                    (unsigned long long)result.view.position, kind_name,
+                    (unsigned long long)result.view.physical_row,
+                    result.view.logical_cols,
+                    (unsigned long long)result.view.logical_row_bytes,
+                    (unsigned long long)result.view.row_bytes[0],
+                    result.bad_values, result.max_abs, result.mean_abs,
                     (unsigned long long)result.checksum);
         for (int gpu = 0; gpu < DS4_V100_TP_MAX_GPUS; ++gpu) {
             std::printf("gpu\t%d\toffset\t%llu\trow_bytes\t%llu\n",

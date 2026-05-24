@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 335
+revision: 336
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -115,6 +115,14 @@ not a serial layer-chain.
   `bad decoded values=0` and `max_abs=0.000000000`. This is not yet wired into
   the full-layer attention path, but it gives that path the production typed
   row storage primitive needed to replace f32 diagnostic KV buffers.
+- Sprint 331 promoted that primitive to device-to-device store/load APIs.
+  `ds4_v100_tp_runtime_kv_row_store_f32_device` accepts one f32 device row per
+  GPU and writes the physical F8 shard; `ds4_v100_tp_runtime_kv_row_load_f32_device`
+  decodes the distributed row back to device f32 buffers using peer reads. At
+  `32` slots / `256K`, layer `2`, slot `31`, position `262140`, both attention
+  and indexer device roundtrips pass with `bad values=0` and
+  `max_abs=0.000000000`. The next integration step is to call these APIs from
+  the full-layer TP/EP smoke for raw-SWA, then compressed attention/indexer rows.
 - The system is not production-ready yet because the bridge HC sequence has
   not been proven equivalent to the DeepSeek V4 reference layer semantics, and
   production serving still needs readiness/overload/cancellation/streaming
