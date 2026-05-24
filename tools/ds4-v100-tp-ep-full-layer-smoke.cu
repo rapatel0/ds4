@@ -2,6 +2,9 @@
 
 #include "ds4_v100_tp_runtime.h"
 #include "kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h"
+extern "C" {
+#include "ds4.h"
+}
 
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
@@ -415,6 +418,7 @@ struct Options {
     const char *pack_dir = nullptr;
     const char *contract_path = nullptr;
     const char *tm_index_path = nullptr;
+    const char *tokenizer_model_path = nullptr;
     int devices[kGpus] = {0, 1, 2, 3, 4, 5, 6, 7};
     int slots = 32;
     int top_k = 6;
@@ -1332,7 +1336,8 @@ bool parse_devices(const char *text, int devices[kGpus]) {
 void usage(const char *argv0) {
     std::fprintf(stderr,
                  "usage: %s --pack-dir DIR --contract FILE --tm-index FILE [options]\n"
-                 "       [--lib PATH] [--devices 0,1,2,3,4,5,6,7]\n"
+                 "       [--lib PATH] [--tokenizer-model PATH]\n"
+                 "       [--devices 0,1,2,3,4,5,6,7]\n"
                  "       [--slots N] [--top-k N] [--layer N] [--kv-slot N]\n"
                  "       [--position N] [--warmup N] [--iters N]\n"
                  "       [--dense-compute-tensor NAME] [--dense-compute-all-f8]\n"
@@ -1382,6 +1387,10 @@ bool parse_args(int argc, char **argv, Options *opt) {
         } else if (std::strcmp(arg, "--tm-index") == 0) {
             if (!val) return false;
             opt->tm_index_path = val;
+            ++i;
+        } else if (std::strcmp(arg, "--tokenizer-model") == 0) {
+            if (!val) return false;
+            opt->tokenizer_model_path = val;
             ++i;
         } else if (std::strcmp(arg, "--devices") == 0) {
             if (!val || !parse_devices(val, opt->devices)) return false;
@@ -6517,6 +6526,84 @@ static std::string http_json_uint_array(const std::vector<uint32_t> &values) {
     return out;
 }
 
+static bool http_is_chat_completion_post(const HttpParsedRequest &req);
+
+struct TokenizerRuntime {
+    ds4_engine *engine = nullptr;
+    bool initialized = false;
+};
+
+static bool open_tokenizer_runtime(const char *model_path, TokenizerRuntime *out) {
+    if (!model_path || !model_path[0] || !out) return false;
+    ds4_engine_options opt;
+    std::memset(&opt, 0, sizeof(opt));
+    opt.model_path = model_path;
+    opt.backend = DS4_BACKEND_CPU;
+    opt.inspect_only = true;
+    opt.n_threads = 1;
+    if (ds4_engine_open(&out->engine, &opt) != 0 || !out->engine) {
+        out->engine = nullptr;
+        out->initialized = false;
+        return false;
+    }
+    out->initialized = true;
+    return true;
+}
+
+static void close_tokenizer_runtime(TokenizerRuntime *rt) {
+    if (!rt) return;
+    if (rt->engine) ds4_engine_close(rt->engine);
+    rt->engine = nullptr;
+    rt->initialized = false;
+}
+
+static std::string decode_token_text(ds4_engine *engine,
+                                     const std::vector<uint32_t> &tokens) {
+    if (!engine) return "";
+    std::string out;
+    for (uint32_t token : tokens) {
+        size_t len = 0;
+        char *piece = ds4_token_text(engine, (int)token, &len);
+        if (piece && len > 0) out.append(piece, len);
+        std::free(piece);
+    }
+    return out;
+}
+
+static bool materialize_prompt_tokens(ds4_engine *engine,
+                                      HttpParsedRequest *req,
+                                      std::string *err) {
+    if (!req || !req->prompt_token_ids.empty()) return true;
+
+    const std::string prompt = json_find_string(req->body.c_str(), "\"prompt\"");
+    const std::string content = json_find_string(req->body.c_str(), "\"content\"");
+    const bool has_text = !prompt.empty() || !content.empty();
+    if (!has_text) return true;
+    if (!engine) {
+        if (err) *err = "text_prompt_requires_tokenizer";
+        return false;
+    }
+
+    ds4_tokens toks;
+    std::memset(&toks, 0, sizeof(toks));
+    if (!content.empty() && http_is_chat_completion_post(*req)) {
+        ds4_encode_chat_prompt(engine, "", content.c_str(), DS4_THINK_NONE, &toks);
+    } else {
+        ds4_tokenize_text(engine, prompt.c_str(), &toks);
+    }
+    req->prompt_token_ids.clear();
+    req->prompt_token_ids.reserve((size_t)toks.len);
+    for (int i = 0; i < toks.len; ++i) {
+        if (toks.v[i] >= 0) req->prompt_token_ids.push_back((uint32_t)toks.v[i]);
+    }
+    ds4_tokens_free(&toks);
+    if (req->prompt_token_ids.empty()) {
+        if (err) *err = "tokenizer_produced_no_tokens";
+        return false;
+    }
+    return true;
+}
+
 static bool http_read_request(int fd, HttpParsedRequest *out) {
     char req[8192];
     size_t used = 0;
@@ -6655,6 +6742,11 @@ static uint64_t fnv1a64_u32(const std::vector<uint32_t> &tokens) {
 }
 
 static void http_request_prompt_fingerprint(HttpParsedRequest *req) {
+    if (!req->prompt_token_ids.empty()) {
+        req->prompt_fingerprint_present = true;
+        req->prompt_fingerprint = fnv1a64_u32(req->prompt_token_ids);
+        return;
+    }
     if (json_find_uint_array(req->body.c_str(), "\"prompt_tokens\"",
                              &req->prompt_token_ids, 262144) ||
         json_find_uint_array(req->body.c_str(), "\"prompt\"",
@@ -7006,6 +7098,17 @@ int run_tp_ep_http_server(const Options &base_opt,
     double total_compose_copy_ms = 0.0;
     double total_compose_final_ms = 0.0;
     ServingBenchResult last = {};
+    TokenizerRuntime tokenizer;
+    if (base_opt.tokenizer_model_path && base_opt.tokenizer_model_path[0]) {
+        if (!open_tokenizer_runtime(base_opt.tokenizer_model_path, &tokenizer)) {
+            std::fprintf(stderr, "tp_ep_http tokenizer open failed: %s\n",
+                         base_opt.tokenizer_model_path);
+            close(listen_fd);
+            return 31;
+        }
+        std::printf("tp_ep_http_tokenizer\tmodel\t%s\tPASS\n",
+                    base_opt.tokenizer_model_path);
+    }
     std::printf("tp_ep_http_serving\thttp://%s:%d/v100/selected-token\tPASS\n",
                 base_opt.host, base_opt.port);
     std::printf("tp_ep_http_completions\thttp://%s:%d/v1/completions\tDIAGNOSTIC\n",
@@ -7213,6 +7316,14 @@ int run_tp_ep_http_server(const Options &base_opt,
                           total_compose_final_ms);
             http_write_text(fd, out);
         } else if (http_is_generation_post(first_req)) {
+            std::string prompt_error;
+            if (!materialize_prompt_tokens(tokenizer.engine, &first_req, &prompt_error)) {
+                std::string body = "{\"error\":\"" + http_json_escape(prompt_error) + "\"}\n";
+                http_write_json(first_req.fd, 400, body.c_str());
+                close(first_req.fd);
+                rejected++;
+                continue;
+            }
             first_req.requested_tokens = http_requested_tokens(first_req, base_opt.decode_steps);
             first_req.cache_key = http_request_cache_key(first_req,
                                                          served + pending_generation.size(),
@@ -7248,6 +7359,14 @@ int run_tp_ep_http_server(const Options &base_opt,
                     rejected++;
                     http_write_json(extra_fd, 404, "{\"error\":\"not_found_during_coalesce\"}\n");
                     close(extra_fd);
+                    continue;
+                }
+                std::string extra_prompt_error;
+                if (!materialize_prompt_tokens(tokenizer.engine, &extra_req, &extra_prompt_error)) {
+                    std::string body = "{\"error\":\"" + http_json_escape(extra_prompt_error) + "\"}\n";
+                    http_write_json(extra_fd, 400, body.c_str());
+                    close(extra_fd);
+                    rejected++;
                     continue;
                 }
                 extra_req.requested_tokens = http_requested_tokens(extra_req, first_req.requested_tokens);
@@ -7580,6 +7699,10 @@ int run_tp_ep_http_server(const Options &base_opt,
                     const std::string escaped_evicted = http_json_escape(batch[i].evicted_key);
                     const std::string generated_sequence =
                         http_json_uint_array(batch[i].generated_token_ids);
+                    const std::string generated_text =
+                        decode_token_text(tokenizer.engine, batch[i].generated_token_ids);
+                    const std::string escaped_generated_text =
+                        http_json_escape(generated_text);
                     char meta[8192];
                     std::snprintf(meta, sizeof(meta),
                                   "\"backend\":\"tp_ep_resident\","
@@ -7588,6 +7711,8 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   "\"diagnostic_output_head\":%d,"
                                   "\"diagnostic_output_head_proxy_hc\":%d,"
                                   "\"token_input_seed\":%d,"
+                                  "\"tokenizer_ready\":%d,"
+                                  "\"generated_text\":\"%s\","
                                   "\"decode_input_token\":%u,"
                                   "\"prompt_prefill_tokens\":%llu,"
                                   "\"generated_token_ids\":%zu,"
@@ -7649,6 +7774,8 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   have_output_head ? 1 : 0,
                                   result.diagnostic_output_head_proxy_hc ? 1 : 0,
                                   result.token_input_seed ? 1 : 0,
+                                  tokenizer.initialized ? 1 : 0,
+                                  escaped_generated_text.c_str(),
                                   batch[i].decode_input_token,
                                   (unsigned long long)batch[i].prompt_prefill_tokens,
                                   batch[i].generated_token_ids.size(),
@@ -7720,7 +7847,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                       "\"created\":%llu,"
                                       "\"model\":\"ds4-v100-tp-ep-diagnostic\","
                                       "\"choices\":[{\"index\":0,"
-                                      "\"message\":{\"role\":\"assistant\",\"content\":\"\"},"
+                                      "\"message\":{\"role\":\"assistant\",\"content\":\"%s\"},"
                                       "\"logprobs\":null,"
                                       "\"finish_reason\":\"length\","
                                       "\"token_ids\":%s}],"
@@ -7731,6 +7858,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                       (unsigned long long)batch_id,
                                       i,
                                       http_epoch_seconds(),
+                                      escaped_generated_text.c_str(),
                                       generated_sequence.c_str(),
                                       (unsigned long long)request_prompt_tokens,
                                       (unsigned long long)request_generated,
@@ -7742,7 +7870,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                       "\"object\":\"text_completion\","
                                       "\"created\":%llu,"
                                       "\"model\":\"ds4-v100-tp-ep-diagnostic\","
-                                      "\"choices\":[{\"text\":\"\","
+                                      "\"choices\":[{\"text\":\"%s\","
                                       "\"index\":0,\"logprobs\":null,"
                                       "\"finish_reason\":\"length\","
                                       "\"token_ids\":%s}],"
@@ -7753,6 +7881,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                       (unsigned long long)batch_id,
                                       i,
                                       http_epoch_seconds(),
+                                      escaped_generated_text.c_str(),
                                       generated_sequence.c_str(),
                                       (unsigned long long)request_prompt_tokens,
                                       (unsigned long long)request_generated,
@@ -7771,6 +7900,7 @@ int run_tp_ep_http_server(const Options &base_opt,
         }
     }
     close(listen_fd);
+    close_tokenizer_runtime(&tokenizer);
     return 0;
 }
 

@@ -16,8 +16,12 @@ Sprint 304 adds the same token-ID serving contract to `/v1/chat/completions`;
 the V100 smoke returns `object=chat.completion` with matching
 `choices[0].token_ids` and `ds4_v100.generated_token_sequence` of
 `[0,57085,104170]`, at `210.355981` wall tok/s / `350.653125` decode tok/s.
-Tokenizer text I/O, active-slot-only decode, optimized batched prefill, exact
-DS4 HC parity, and MTP remain open.
+Sprint 305 wires the DS4 tokenizer into TP/EP serving: a text chat request
+with content `"Hello"` tokenizes to `5` prompt tokens, prefills `4`, generates
+`[95933,89868]`, decodes response text `ICCungtod`, and reports `213.595353`
+wall tok/s / `350.755948` decode tok/s. Full role-aware chat parsing,
+streaming, active-slot-only decode, optimized batched prefill, exact DS4 HC
+parity, and MTP remain open.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

@@ -155,6 +155,7 @@ fi
 : "${DS4_V100_TP_EP_BIN:=./tools/ds4-v100-tp-ep-full-layer-smoke}"
 : "${DS4_V100_TP_EP_CONTRACT:=/workspace/logs/sprint245-tp-ep-dense-f16-cache-contract/contract/tp-ep-pack-contract.tsv}"
 : "${DS4_V100_TP_EP_TM_INDEX:=}"
+: "${DS4_V100_TP_EP_TOKENIZER_MODEL:=$DS4_V100_MODEL}"
 : "${DS4_V100_TP_EP_TOP_K:=6}"
 : "${DS4_V100_TP_EP_KV_SLOT:=7}"
 : "${DS4_V100_TP_EP_POSITION:=100000}"
@@ -802,6 +803,9 @@ if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
     require_file "TP/EP contract" "$DS4_V100_TP_EP_CONTRACT"
     require_file "TP/EP TurboMind index" "$DS4_V100_TP_EP_TM_INDEX"
     require_file "TurboMind library" "$DS4_V100_TURBOMIND_LIB"
+    if [ -n "$DS4_V100_TP_EP_TOKENIZER_MODEL" ]; then
+        require_file "TP/EP tokenizer model" "$DS4_V100_TP_EP_TOKENIZER_MODEL"
+    fi
 fi
 check_gpu_reserve
 
@@ -837,6 +841,9 @@ if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
         --port "$DS4_V100_PORT"
         --microbatch-wait-us "$microbatch_wait_us"
     )
+    if [ -n "$DS4_V100_TP_EP_TOKENIZER_MODEL" ]; then
+        cmd+=(--tokenizer-model "$DS4_V100_TP_EP_TOKENIZER_MODEL")
+    fi
     if [ "$DS4_V100_TP_EP_COPY_EVENT_COMPOSE" -eq 1 ]; then
         cmd+=(--copy-event-compose)
     fi

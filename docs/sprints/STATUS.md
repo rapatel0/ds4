@@ -274,6 +274,18 @@ smoke with `session_id=chatseq`, `prompt_tokens=[41,42,43]`, and
 `slot_position=cache_pos_out=100005`, and `210.355981` wall tok/s /
 `350.653125` decode tok/s. The chat route is still diagnostic because
 assistant text remains empty until tokenizer rendering is connected.
+Sprint 305 wired tokenizer text I/O into that TP/EP path by linking the
+existing `ds4.c` CPU tokenizer in inspect-only mode and adding
+`--tokenizer-model` / `DS4_V100_TP_EP_TOKENIZER_MODEL`. Text prompts now
+materialize prompt tokens before cache fingerprinting and prefill, and
+generated token IDs are decoded into both OpenAI response content and
+`ds4_v100.generated_text`. The V100 chat smoke with message content `"Hello"`
+reports `tokenizer_ready=1`, `request_prompt_token_ids=5`,
+`prompt_prefill_tokens=4`, generated token IDs `[95933,89868]`, decoded text
+`ICCungtod`, `slot_position=cache_pos_out=100006`, and `213.595353` wall
+tok/s / `350.755948` decode tok/s. The remaining API gaps are full role-aware
+chat parsing, streaming, active-slot-only decode, optimized/batched prefill,
+exact DS4 HC parity, and MTP.
 
 Current promoted serving baseline is Sprint 199's graph-backed
 `fused6_reduce` production pack at 16-slot/256K: `67.886268` generated tok/s

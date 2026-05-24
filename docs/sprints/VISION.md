@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-23
 last_updated_by: codex
-revision: 304
+revision: 305
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -142,6 +142,15 @@ not a serial layer-chain.
   `choices[0].token_ids` and `ds4_v100.generated_token_sequence`, and
   `210.355981` wall tok/s / `350.653125` decode tok/s for the generated
   section. Message text remains empty until tokenizer rendering is wired.
+- Sprint 305 wired the existing DS4 tokenizer into the TP/EP binary in
+  inspect-only mode. The launcher now passes
+  `DS4_V100_TP_EP_TOKENIZER_MODEL`, text prompts are tokenized before prefill,
+  and generated token IDs are decoded into `choices[0].text`,
+  `choices[0].message.content`, and `ds4_v100.generated_text`. A text chat
+  smoke with message content `"Hello"` produced `5` prompt tokens, `4` prefill
+  steps, generated token IDs `[95933,89868]`, decoded text `ICCungtod`, and
+  `213.595353` wall tok/s / `350.755948` decode tok/s for the generated
+  section.
 - Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
   longer exposes PP/layer-split topology modes. Against the real production
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about

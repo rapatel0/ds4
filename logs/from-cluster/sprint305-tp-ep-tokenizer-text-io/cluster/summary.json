@@ -1,0 +1,23 @@
+{
+  "status": 200,
+  "object": "chat.completion",
+  "message_role": "assistant",
+  "message_content": "ICCungtod",
+  "choice_token_ids": [
+    95933,
+    89868
+  ],
+  "generated_token_sequence": [
+    95933,
+    89868
+  ],
+  "generated_text": "ICCungtod",
+  "tokenizer_ready": 1,
+  "request_prompt_token_ids": 5,
+  "prompt_prefill_tokens": 4,
+  "generated_token_ids": 2,
+  "slot_position": 100006,
+  "cache_pos_out": 100006,
+  "generated_tokens_per_second": 213.595353,
+  "generated_tokens_per_second_decode": 350.755948
+}
