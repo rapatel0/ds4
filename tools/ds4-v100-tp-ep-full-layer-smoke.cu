@@ -474,6 +474,7 @@ struct Options {
     bool tp_hc_current_input_gate = false;
     bool tp_hc_persist_state_gate = false;
     bool model_router_routes = false;
+    bool routed_ffn_norm_input_gate = false;
     bool tp_kv_all_slots_gate = false;
 };
 
@@ -1456,6 +1457,7 @@ void usage(const char *argv0) {
                  "       [--tp-hc-current-input-gate]\n"
                  "       [--tp-hc-persist-state-gate] [--tp-kv-all-slots-gate]\n"
                  "       [--model-router-routes]\n"
+                 "       [--routed-ffn-norm-input-gate]\n"
                  "       [--diagnostic-output-head]\n",
                  argv0);
 }
@@ -1617,6 +1619,11 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--model-router-routes") == 0) {
             opt->model_router_routes = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--routed-ffn-norm-input-gate") == 0) {
+            opt->routed_ffn_norm_input_gate = true;
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
@@ -2726,6 +2733,17 @@ int run_shared_hc_current_input(const Options &opt,
                                (uint32_t)opt.slots);
         }
         const uint64_t route_elems = (uint64_t)r.routes * kHidden;
+        if (opt.routed_ffn_norm_input_gate && route_elems > 0) {
+            if (rank == 0) {
+                CHECK_CUDA(cudaMemcpyAsync(r.d_current_full, hc->d_ffn_normed,
+                                           full_bytes, cudaMemcpyDeviceToDevice,
+                                           r.stream));
+            } else {
+                CHECK_CUDA(cudaMemcpyPeerAsync(r.d_current_full, r.device,
+                                               hc->d_ffn_normed, opt.devices[0],
+                                               full_bytes, r.stream));
+            }
+        }
         if (route_elems > 0) {
             pack_current_full_to_routes_kernel<<<
                 (unsigned int)((route_elems + block - 1) / block), block,

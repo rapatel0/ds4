@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: vision
-revision: 310
+revision: 311
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -175,7 +175,10 @@ not a serial layer-chain.
   `237.349475` decode tok/s on the `short_reasoning_plain` reference, but it
   still returns `ICC` instead of `16`. The remaining blocker is true layer
   semantics: normalized routed-expert input, full shared FFN, and full DS4
-  attention/compressed-KV/indexer math.
+  attention/compressed-KV/indexer math. The normalized routed-input diagnostic
+  is now separately gated and fails at layer `0` with
+  `decode_finite_bad=16384`, which makes it the next narrow correctness
+  target before promoting true FFN input semantics.
 - Sprint 226 converted the TP planner into a TP8/EP8-only contract. It no
   longer exposes PP/layer-split topology modes. Against the real production
   pack bytes, the target `32` slots / `256K` / F8-KV shape fits at about
@@ -522,10 +525,12 @@ active-mask run shows nonzero routes across early layers for an actual HTTP
 reference request, but the top-token parity vector still fails:
 `16` expected, ` ICC` returned, token `[61317]`, `164.721272` wall tok/s /
 `237.349475` decode tok/s. A direct attempt to feed routed experts from
-`ffn_normed` exposed non-finite output by layer `5`, so the stable bridge
-currently uses FFN-normalized router logits with raw HC-current routed expert
-input. The next parity work is a targeted layer-5 routed-expert microbench,
-then the true shared-FFN path, then full DS4 attention semantics.
+`ffn_normed` now has a separate diagnostic gate,
+`DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT=1`, and fails immediately at layer `0`
+with `decode_finite_bad=16384` / `rc=5`. The stable bridge currently uses
+FFN-normalized router logits with raw HC-current routed expert input. The next
+parity work is a targeted routed-expert input microbench, then the true
+shared-FFN path, then full DS4 attention semantics.
 
 ### Sprint 309 - Persistent Appliance Deployment Gate [planned]
 
@@ -1907,7 +1912,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-23 | Deferred MTP until after TP/EP serving. | MTP can be useful only after the serving runtime has the right topology and multi-slot decode behavior. | Revisit after TP/EP serving exists and has multi-slot throughput evidence. |
 | 2026-05-24 | Reframed the vision from "make the API respond" to production readiness. | Sprints 303-306 made the TP/EP path askable through text/chat APIs, but the remaining risk is trustworthiness and service hardening, not another endpoint wrapper. | Sprint 307 starts reference parity before persistent deployment and performance/MTP work. |
 | 2026-05-24 | Sprint 308 identified diagnostic TP/EP semantics as the parity blocker. | Synthetic EP routes, six-local-expert packing, and simplified attention cannot produce reference DS4 tokens. | Remove diagnostic caps, implement router-driven EP, then wire full DS4 attention semantics. |
-| 2026-05-24 | Sprint 308 moved TP/EP from synthetic routes to active-slot model-router routes. | Full expert residency fits, model-router routes are nonzero for active HTTP slots, and per-route weights are wired, but parity still fails (`16` expected, ` ICC` returned). | Isolate the `ffn_normed` routed-input layer-5 non-finite failure, implement full shared FFN, then replace the attention bridge. |
+| 2026-05-24 | Sprint 308 moved TP/EP from synthetic routes to active-slot model-router routes. | Full expert residency fits, model-router routes are nonzero for active HTTP slots, and per-route weights are wired, but parity still fails (`16` expected, ` ICC` returned). | Isolate the `ffn_normed` routed-input non-finite failure, implement full shared FFN, then replace the attention bridge. |
 
 ## Open Questions
 

@@ -154,11 +154,16 @@ Adding hash-router metadata changed the wrong token but did not close parity:
 ```
 
 Feeding the routed expert path from `ffn_normed` exposed a real numeric
-stability blocker: layer `5` produced non-finite decode output in the served
-shape. The route plan at that point was small enough that route overload is
-not the likely cause. Until this is isolated with a microbench, the current
-stable mode uses FFN-normalized HC for router logits while keeping routed
-expert input on the raw HC-current bridge.
+stability blocker. An explicit opt-in gate,
+`DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT=1`, now switches only the routed expert
+pack source to `ffn_normed` while leaving attention/shared bridge inputs on
+the stable raw HC-current path. On the V100 pod this fails immediately at
+layer `0` with `decode_finite_bad=16384`, `rc=5`, and EP time jumping to
+about `50.6 ms`. That localizes the next bug to the normalized routed expert
+input/TurboMind interaction rather than later attention.
+
+Until this is fixed, the current stable mode uses FFN-normalized HC for
+router logits while keeping routed expert input on the raw HC-current bridge.
 
 The active-slot-mask rerun confirms that real active HTTP slots now produce
 nonzero model-router routes:
@@ -208,6 +213,7 @@ and full DS4 attention/compressed-KV/indexer math.
 - `logs/from-cluster/sprint308-model-router-ffn-norm-parity/20260524-030019/`
 - `logs/from-cluster/sprint308-model-router-norm-router-raw-expert-rerun/20260524-034449/`
 - `logs/from-cluster/sprint308-model-router-active-mask-parity/20260524-035442/`
+- `logs/from-cluster/sprint308-routed-ffn-norm-input-parity/20260524-040200/`
 
 ## Production Gate
 
@@ -219,7 +225,8 @@ next fix.
 Current next fixes:
 
 - add an isolated TurboMind/route microbench for `ffn_normed` routed expert
-  input on layer `5`;
+  input, starting with the layer-`0` failure reproduced by
+  `DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT=1`;
 - implement the true shared-FFN gate/up/SwiGLU/down subpath instead of the
   current bridge;
 - replace the remaining attention bridge with the full DS4 attention,
