@@ -21,6 +21,11 @@ enum {
     DS4_N_EXPERT           = 256,
     DS4_N_EXPERT_USED      = 6,
     DS4_N_SWA              = 128,
+    DS4_N_BOUNDED_COMP_ROWS = 8,
+    DS4_N_COMP_STATE_ROWS_MAX = 128,
+    DS4_N_COMP_WIDTH_MAX   = 1024,
+    DS4_N_INDEX_COMP_STATE_ROWS = 8,
+    DS4_N_INDEX_COMP_WIDTH = 256,
     DS4_N_GPU              = 8,
     DS4_N_TP               = 8,
     DS4_N_EP               = 8,
@@ -60,6 +65,18 @@ typedef struct {
     uint64_t indexer_kv;
     uint64_t comp_state;
 } kv_plan;
+
+typedef struct {
+    uint64_t raw_swa_rows;
+    uint64_t ratio4_attn_rows;
+    uint64_t ratio128_attn_rows;
+    uint64_t indexer_rows;
+    uint64_t persistent_values;
+    uint64_t persistent_bytes;
+    uint64_t persistent_bytes_per_gpu;
+    uint64_t replicated_f32_bytes_per_gpu;
+    uint64_t bounded_diag_f32_bytes_per_gpu;
+} compressed_kv_contract;
 
 static void die(const char *msg) {
     fprintf(stderr, "ds4-v100-plan-tp: %s\n", msg);
@@ -149,6 +166,8 @@ static uint64_t kv_values_bytes(uint64_t values, kv_dtype kv) {
     }
 }
 
+static uint64_t shard_bytes(uint64_t bytes);
+
 static uint64_t layer_attn_kv_bytes(uint32_t il, uint64_t ctx, kv_dtype kv) {
     const int ratio = layer_ratio(il);
     const uint64_t rows = (uint64_t)DS4_N_SWA + (ratio ? ctx / (uint64_t)ratio : 0);
@@ -190,6 +209,93 @@ static kv_plan aggregate_kv(uint64_t ctx, uint32_t slots, kv_dtype kv) {
     p.indexer_kv = checked_mul(p.indexer_kv, slots);
     p.comp_state = checked_mul(p.comp_state, slots);
     return p;
+}
+
+static uint64_t layer_comp_rows(uint32_t il, uint64_t ctx) {
+    const int ratio = layer_ratio(il);
+    return ratio ? ctx / (uint64_t)ratio : 0;
+}
+
+static compressed_kv_contract compressed_contract(uint64_t ctx, uint32_t slots,
+                                                  kv_dtype kv) {
+    compressed_kv_contract c = {0};
+    for (uint32_t il = 0; il < DS4_N_LAYER; il++) {
+        const int ratio = layer_ratio(il);
+        c.raw_swa_rows += DS4_N_SWA;
+        if (ratio == 4) {
+            c.ratio4_attn_rows += layer_comp_rows(il, ctx);
+            c.indexer_rows += ctx / 4u;
+        } else if (ratio == 128) {
+            c.ratio128_attn_rows += layer_comp_rows(il, ctx);
+        }
+    }
+
+    const uint64_t raw_values =
+        checked_mul(checked_mul(c.raw_swa_rows, DS4_N_HEAD_DIM), slots);
+    const uint64_t attn_comp_values =
+        checked_mul(checked_mul(c.ratio4_attn_rows + c.ratio128_attn_rows,
+                                DS4_N_HEAD_DIM), slots);
+    const uint64_t index_values =
+        checked_mul(checked_mul(c.indexer_rows, DS4_N_INDEXER_HEAD_DIM), slots);
+    c.persistent_values = raw_values + attn_comp_values + index_values;
+
+    const uint64_t raw_bytes =
+        kv_values_bytes(checked_mul(c.raw_swa_rows, DS4_N_HEAD_DIM), kv);
+    const uint64_t attn_comp_bytes =
+        kv_values_bytes(checked_mul(c.ratio4_attn_rows + c.ratio128_attn_rows,
+                                    DS4_N_HEAD_DIM), kv);
+    const uint64_t index_bytes =
+        kv_values_bytes(checked_mul(c.indexer_rows, DS4_N_INDEXER_HEAD_DIM), kv);
+    c.persistent_bytes = checked_mul(raw_bytes + attn_comp_bytes + index_bytes,
+                                     slots);
+    c.persistent_bytes_per_gpu = shard_bytes(c.persistent_bytes);
+    c.replicated_f32_bytes_per_gpu = bytes_f32(c.persistent_values);
+
+    const uint64_t bounded_raw =
+        checked_mul(checked_mul((uint64_t)DS4_N_LAYER * DS4_N_SWA,
+                                DS4_N_HEAD_DIM), slots);
+    const uint64_t bounded_attn_rows =
+        checked_mul(41ull * DS4_N_BOUNDED_COMP_ROWS, DS4_N_HEAD_DIM);
+    const uint64_t bounded_index_rows =
+        checked_mul(21ull * DS4_N_BOUNDED_COMP_ROWS, DS4_N_INDEXER_HEAD_DIM);
+    const uint64_t attn_state =
+        checked_mul(41ull,
+                    checked_mul(checked_mul((uint64_t)slots,
+                                            DS4_N_COMP_STATE_ROWS_MAX),
+                                DS4_N_COMP_WIDTH_MAX * 2ull));
+    const uint64_t index_state =
+        checked_mul(21ull,
+                    checked_mul(checked_mul((uint64_t)slots,
+                                            DS4_N_INDEX_COMP_STATE_ROWS),
+                                DS4_N_INDEX_COMP_WIDTH * 2ull));
+    c.bounded_diag_f32_bytes_per_gpu =
+        bytes_f32(bounded_raw +
+                  checked_mul(bounded_attn_rows + bounded_index_rows, slots) +
+                  attn_state + index_state);
+    return c;
+}
+
+static void print_layer_kv_contract(uint64_t ctx, uint32_t slots, kv_dtype kv) {
+    printf("\n## Per-layer compressed-KV row contract\n");
+    printf("| Layer | Ratio | Raw SWA rows | Attn comp rows | Indexer rows | Persistent per GPU | Replicated f32 |\n");
+    printf("|---:|---:|---:|---:|---:|---:|---:|\n");
+    for (uint32_t il = 0; il < DS4_N_LAYER; il++) {
+        const int ratio = layer_ratio(il);
+        const uint64_t comp_rows = layer_comp_rows(il, ctx);
+        const uint64_t index_rows = ratio == 4 ? ctx / 4u : 0;
+        const uint64_t values =
+            checked_mul(DS4_N_SWA + comp_rows, DS4_N_HEAD_DIM) +
+            checked_mul(index_rows, DS4_N_INDEXER_HEAD_DIM);
+        const uint64_t persistent =
+            kv_values_bytes(checked_mul(DS4_N_SWA + comp_rows,
+                                        DS4_N_HEAD_DIM), kv) +
+            kv_values_bytes(checked_mul(index_rows,
+                                        DS4_N_INDEXER_HEAD_DIM), kv);
+        printf("| %u | %d | %u | %" PRIu64 " | %" PRIu64 " | %.3f MiB | %.3f MiB |\n",
+               il, ratio, DS4_N_SWA, comp_rows, index_rows,
+               as_mib(shard_bytes(checked_mul(persistent, slots))),
+               as_mib(bytes_f32(checked_mul(values, slots))));
+    }
 }
 
 static bool is_gpu_weight_file(const char *name) {
@@ -325,6 +431,8 @@ static double routes_per_expert(uint32_t slots) {
 static void print_json(const options *opt) {
     static const uint64_t contexts[] = {131072ULL, 262144ULL, 524288ULL, 1048576ULL};
     const kv_plan kv = aggregate_kv(opt->ctx, opt->slots, opt->kv);
+    const compressed_kv_contract cc =
+        compressed_contract(opt->ctx, opt->slots, opt->kv);
     const gpu_plan gpu = plan_gpu(opt);
     const uint64_t total = gpu_total(&gpu);
     const uint64_t no_reserve = gpu_no_reserve(&gpu);
@@ -340,6 +448,20 @@ static void print_json(const options *opt) {
     printf("  \"weight_total_bytes\":%" PRIu64 ",\n", opt->weight_total_bytes);
     printf("  \"kv_aggregate_bytes\":%" PRIu64 ",\n", kv.attn_kv + kv.indexer_kv);
     printf("  \"comp_state_aggregate_bytes\":%" PRIu64 ",\n", kv.comp_state);
+    printf("  \"compressed_kv_contract\":{\n");
+    printf("    \"raw_swa_rows\":%" PRIu64 ",\n", cc.raw_swa_rows);
+    printf("    \"ratio4_attn_rows\":%" PRIu64 ",\n", cc.ratio4_attn_rows);
+    printf("    \"ratio128_attn_rows\":%" PRIu64 ",\n", cc.ratio128_attn_rows);
+    printf("    \"indexer_rows\":%" PRIu64 ",\n", cc.indexer_rows);
+    printf("    \"persistent_values\":%" PRIu64 ",\n", cc.persistent_values);
+    printf("    \"persistent_bytes\":%" PRIu64 ",\n", cc.persistent_bytes);
+    printf("    \"persistent_bytes_per_gpu\":%" PRIu64 ",\n",
+           cc.persistent_bytes_per_gpu);
+    printf("    \"replicated_f32_bytes_per_gpu\":%" PRIu64 ",\n",
+           cc.replicated_f32_bytes_per_gpu);
+    printf("    \"bounded_diag_f32_bytes_per_gpu\":%" PRIu64 "\n",
+           cc.bounded_diag_f32_bytes_per_gpu);
+    printf("  },\n");
     printf("  \"hidden_collective_wire_per_step_bytes\":%" PRIu64 ",\n",
            hidden_collective_wire_per_step(opt->slots));
     printf("  \"ep_dispatch_return_wire_per_step_bytes\":%" PRIu64 ",\n",
@@ -374,6 +496,8 @@ static void print_json(const options *opt) {
 static void print_human(const options *opt) {
     static const uint64_t contexts[] = {131072ULL, 262144ULL, 524288ULL, 1048576ULL};
     const kv_plan kv = aggregate_kv(opt->ctx, opt->slots, opt->kv);
+    const compressed_kv_contract cc =
+        compressed_contract(opt->ctx, opt->slots, opt->kv);
     const gpu_plan p = plan_gpu(opt);
     const uint64_t total = gpu_total(&p);
     const uint64_t no_reserve = gpu_no_reserve(&p);
@@ -396,6 +520,25 @@ static void print_human(const options *opt) {
     printf("| attn_kv | %.2f GiB | %.2f GiB |\n", as_gib(kv.attn_kv), as_gib(shard_bytes(kv.attn_kv)));
     printf("| indexer_kv | %.2f GiB | %.2f GiB |\n", as_gib(kv.indexer_kv), as_gib(shard_bytes(kv.indexer_kv)));
     printf("| comp_state envelope | %.2f GiB | %.2f GiB |\n", as_gib(kv.comp_state), as_gib(shard_bytes(kv.comp_state)));
+
+    printf("\n## Production compressed-KV contract\n");
+    printf("| Item | Value |\n");
+    printf("|---|---:|\n");
+    printf("| raw SWA rows, all layers | %" PRIu64 " |\n", cc.raw_swa_rows);
+    printf("| ratio-4 attention compressed rows | %" PRIu64 " |\n", cc.ratio4_attn_rows);
+    printf("| ratio-128 attention compressed rows | %" PRIu64 " |\n", cc.ratio128_attn_rows);
+    printf("| ratio-4 indexer compressed rows | %" PRIu64 " |\n", cc.indexer_rows);
+    printf("| persistent KV values, all slots | %" PRIu64 " |\n", cc.persistent_values);
+    printf("| persistent KV bytes, aggregate %s | %.2f GiB |\n",
+           kv_name(opt->kv), as_gib(cc.persistent_bytes));
+    printf("| persistent KV bytes, per TP rank | %.2f GiB |\n",
+           as_gib(cc.persistent_bytes_per_gpu));
+    printf("| if replicated f32 per GPU | %.2f GiB |\n",
+           as_gib(cc.replicated_f32_bytes_per_gpu));
+    printf("| current bounded diagnostic f32 per GPU | %.2f GiB |\n",
+           as_gib(cc.bounded_diag_f32_bytes_per_gpu));
+
+    print_layer_kv_contract(opt->ctx, opt->slots, opt->kv);
 
     printf("\n## Per-GPU resident budget\n");
     printf("| GPU | Weights | KV | Comp | Scratch | Collectives | Globals | Reserve | Total | Headroom |\n");
