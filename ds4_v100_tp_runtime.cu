@@ -188,6 +188,110 @@ __device__ unsigned char expected_kv_byte(int gpu, int layer, uint32_t slot,
     return (unsigned char)(v & 0xffu);
 }
 
+__device__ uint8_t e8m0_encode_pow2_scale(float scale) {
+    if (!isfinite(scale) || scale <= 0.0f) return 0;
+    int exp = (int)ceilf(log2f(scale)) + 127;
+    if (exp < 1) exp = 1;
+    if (exp > 254) exp = 254;
+    return (uint8_t)exp;
+}
+
+__device__ float e8m0_to_f32_dev(uint8_t e) {
+    return __uint_as_float(e == 0 ? 0x00400000u : ((uint32_t)e << 23));
+}
+
+__device__ float e4m3fn_to_f32_dev(uint8_t x) {
+    const uint32_t sign = ((uint32_t)x & 0x80u) << 24;
+    const uint32_t ax = (uint32_t)x & 0x7fu;
+    if (ax == 0) return __uint_as_float(sign ? 0x80000000u : 0u);
+    if (ax == 0x7f) return __uint_as_float(0x7fc00000u);
+    const uint32_t exp = ax >> 3;
+    const uint32_t man = ax & 0x07u;
+    if (exp != 0) {
+        return __uint_as_float(sign | ((exp + 120u) << 23) | (man << 20));
+    }
+    const uint32_t hi = man >= 4u ? 2u : (man >= 2u ? 1u : 0u);
+    const uint32_t mant = (man << (23u - hi)) & 0x007fffffu;
+    return __uint_as_float(sign | ((118u + hi) << 23) | mant);
+}
+
+__device__ uint8_t e4m3fn_quant_byte_dev(float x) {
+    const uint8_t sign = x < 0.0f ? 0x80u : 0u;
+    const float ax = fminf(fabsf(x), 448.0f);
+    int lo = 0;
+    int hi = 126;
+    while (lo < hi) {
+        const int mid = (lo + hi + 1) >> 1;
+        if (e4m3fn_to_f32_dev((uint8_t)mid) <= ax) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    int best = lo;
+    if (best < 126) {
+        const float best_diff = fabsf(ax - e4m3fn_to_f32_dev((uint8_t)best));
+        const float next_diff = fabsf(ax - e4m3fn_to_f32_dev((uint8_t)(best + 1)));
+        if (next_diff < best_diff ||
+            (next_diff == best_diff && (((best + 1) & 1) == 0) && ((best & 1) != 0))) {
+            best++;
+        }
+    }
+    return (uint8_t)(sign | (uint8_t)best);
+}
+
+__device__ float typed_row_source_value(int layer, uint32_t slot, uint64_t position,
+                                        uint32_t col, int indexer) {
+    const float base =
+        (float)((layer + 1) * 0.125f) +
+        (float)((int)(slot % 17u) - 8) * 0.03125f +
+        (float)((int)(position % 257u) - 128) * 0.0009765625f +
+        (float)((int)(col % 97u) - 48) * 0.0078125f;
+    return indexer ? base * 0.75f - 0.125f : base;
+}
+
+__global__ void typed_kv_store_f8_row_kernel(unsigned char *kv,
+                                             uint64_t offset,
+                                             uint64_t shard_row_bytes,
+                                             int gpu,
+                                             int layer,
+                                             uint32_t slot,
+                                             uint64_t position,
+                                             uint32_t logical_cols,
+                                             uint64_t logical_row_bytes,
+                                             int indexer) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= shard_row_bytes) return;
+    const uint64_t global_byte = (uint64_t)gpu * shard_row_bytes + i;
+    if (global_byte >= logical_row_bytes) return;
+    const uint32_t block = (uint32_t)(global_byte / 129ull);
+    const uint32_t in_block = (uint32_t)(global_byte - (uint64_t)block * 129ull);
+    const uint32_t col0 = block * 128u;
+    if (col0 >= logical_cols) return;
+
+    float amax = 0.0f;
+    for (uint32_t c = 0; c < 128u && col0 + c < logical_cols; ++c) {
+        amax = fmaxf(amax, fabsf(typed_row_source_value(layer, slot, position,
+                                                        col0 + c, indexer)));
+    }
+    if (amax < 1.0e-8f) amax = 1.0e-8f;
+    const float scale = exp2f(ceilf(log2f(amax / 448.0f)));
+    const uint8_t scale_byte = e8m0_encode_pow2_scale(scale);
+    const float decoded_scale = e8m0_to_f32_dev(scale_byte);
+
+    if (in_block == 0u) {
+        kv[offset + i] = scale_byte;
+        return;
+    }
+    const uint32_t col = col0 + in_block - 1u;
+    if (col >= logical_cols) {
+        kv[offset + i] = 0;
+        return;
+    }
+    const float v = typed_row_source_value(layer, slot, position, col, indexer);
+    kv[offset + i] = e4m3fn_quant_byte_dev(v / decoded_scale);
+}
+
 __global__ void dense_kv_slice_kernel(half *hidden, unsigned char *kv,
                                       uint64_t hidden_elems,
                                       uint64_t attn_offset,
@@ -224,6 +328,105 @@ static unsigned char expected_kv_byte_host(int gpu, int layer, uint32_t slot,
                                           (unsigned int)byte_index + h +
                                           (indexer ? 113u : 0u));
     return (unsigned char)(v & 0xffu);
+}
+
+static float f32_from_bits_host(uint32_t bits) {
+    float value;
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+static float e8m0_to_f32_host(uint8_t e) {
+    return f32_from_bits_host(e == 0 ? 0x00400000u : ((uint32_t)e << 23));
+}
+
+static uint8_t e8m0_encode_pow2_scale_host(float scale) {
+    if (!std::isfinite(scale) || scale <= 0.0f) return 0;
+    int exp = (int)std::ceil(std::log2(scale)) + 127;
+    if (exp < 1) exp = 1;
+    if (exp > 254) exp = 254;
+    return (uint8_t)exp;
+}
+
+static float e4m3fn_to_f32_host(uint8_t x) {
+    const uint8_t ax = x & 0x7f;
+    const bool sign = (x & 0x80) != 0;
+    if (ax == 0) return f32_from_bits_host(sign ? 0x80000000u : 0u);
+    if (ax == 0x7f) return f32_from_bits_host(0x7fc00000u);
+    const int exp = (ax >> 3) & 0x0f;
+    const int man = ax & 0x07;
+    const float value = exp == 0 ? std::ldexp((float)man, -9)
+                                 : std::ldexp(1.0f + (float)man / 8.0f, exp - 7);
+    return sign ? -value : value;
+}
+
+static uint8_t e4m3fn_quant_byte_host(float x) {
+    const uint8_t sign = x < 0.0f ? 0x80u : 0u;
+    const float ax = std::fmin(std::fabs(x), 448.0f);
+    int lo = 0;
+    int hi = 126;
+    while (lo < hi) {
+        const int mid = (lo + hi + 1) >> 1;
+        if (e4m3fn_to_f32_host((uint8_t)mid) <= ax) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    int best = lo;
+    if (best < 126) {
+        const float best_diff = std::fabs(ax - e4m3fn_to_f32_host((uint8_t)best));
+        const float next_diff = std::fabs(ax - e4m3fn_to_f32_host((uint8_t)(best + 1)));
+        if (next_diff < best_diff ||
+            (next_diff == best_diff && (((best + 1) & 1) == 0) && ((best & 1) != 0))) {
+            best++;
+        }
+    }
+    return (uint8_t)(sign | (uint8_t)best);
+}
+
+static float typed_row_source_value_host(int layer, uint32_t slot, uint64_t position,
+                                         uint32_t col, int indexer) {
+    const float base =
+        (float)((layer + 1) * 0.125f) +
+        (float)((int)(slot % 17u) - 8) * 0.03125f +
+        (float)((int)(position % 257u) - 128) * 0.0009765625f +
+        (float)((int)(col % 97u) - 48) * 0.0078125f;
+    return indexer ? base * 0.75f - 0.125f : base;
+}
+
+static void fill_expected_f8_row(std::vector<unsigned char> *packed,
+                                 std::vector<float> *decoded,
+                                 int layer,
+                                 uint32_t slot,
+                                 uint64_t position,
+                                 uint32_t logical_cols,
+                                 int indexer) {
+    const uint64_t row_bytes = kv_values_bytes(logical_cols, DS4_V100_TP_KV_F8_E4M3_B128);
+    packed->assign((size_t)row_bytes, 0);
+    decoded->assign((size_t)logical_cols, 0.0f);
+    const uint32_t blocks = logical_cols / 128u;
+    for (uint32_t b = 0; b < blocks; ++b) {
+        const uint32_t col0 = b * 128u;
+        float amax = 0.0f;
+        for (uint32_t c = 0; c < 128u; ++c) {
+            amax = std::fmax(amax, std::fabs(typed_row_source_value_host(
+                                            layer, slot, position, col0 + c, indexer)));
+        }
+        if (amax < 1.0e-8f) amax = 1.0e-8f;
+        const float scale = std::exp2(std::ceil(std::log2(amax / 448.0f)));
+        const uint8_t scale_byte = e8m0_encode_pow2_scale_host(scale);
+        const float decoded_scale = e8m0_to_f32_host(scale_byte);
+        const uint64_t block_off = (uint64_t)b * 129ull;
+        (*packed)[(size_t)block_off] = scale_byte;
+        for (uint32_t c = 0; c < 128u; ++c) {
+            const float v = typed_row_source_value_host(layer, slot, position,
+                                                        col0 + c, indexer);
+            const uint8_t q = e4m3fn_quant_byte_host(v / decoded_scale);
+            (*packed)[(size_t)(block_off + 1u + c)] = q;
+            (*decoded)[(size_t)(col0 + c)] = e4m3fn_to_f32_host(q) * decoded_scale;
+        }
+    }
 }
 
 } // namespace
@@ -514,6 +717,196 @@ extern "C" int ds4_v100_tp_runtime_dense_kv_slice(ds4_v100_tp_runtime *rt,
     }
 
     result->max_abs = worst;
+    return 0;
+}
+
+extern "C" int ds4_v100_tp_runtime_kv_row_view(ds4_v100_tp_runtime *rt,
+                                                int layer,
+                                                uint32_t slot,
+                                                uint64_t position,
+                                                ds4_v100_tp_kv_row_kind kind,
+                                                ds4_v100_tp_kv_row_view *view,
+                                                char *err,
+                                                size_t err_len) {
+    if (!rt || !view) {
+        set_err(err, err_len, "invalid argument");
+        return -1;
+    }
+    if (layer < 0 || layer >= kLayers) {
+        set_err(err, err_len, "layer is outside DS4 range");
+        return -1;
+    }
+    if (slot >= rt->cfg.slots) {
+        set_err(err, err_len, "slot is outside configured slot count");
+        return -1;
+    }
+    if (position >= rt->cfg.ctx) {
+        set_err(err, err_len, "position is outside configured context");
+        return -1;
+    }
+
+    const layer_kv_layout *layout = &rt->kv_layout[layer];
+    std::memset(view, 0, sizeof(*view));
+    view->layer = layer;
+    view->ratio = layout->ratio;
+    view->slot = slot;
+    view->position = position;
+    view->kind = kind;
+
+    uint64_t base = 0;
+    uint64_t rows = 0;
+    uint64_t row_bytes = 0;
+    if (kind == DS4_V100_TP_KV_ROW_ATTN) {
+        view->logical_cols = kHeadDim;
+        view->logical_row_bytes = kv_values_bytes(kHeadDim, rt->cfg.kv_dtype);
+        view->physical_row = layout->ratio == 0
+            ? position % (uint64_t)kSwa
+            : (uint64_t)kSwa + position / (uint64_t)layout->ratio;
+        base = layout->attn_base;
+        rows = layout->attn_rows;
+        row_bytes = layout->attn_row_bytes;
+    } else if (kind == DS4_V100_TP_KV_ROW_INDEXER) {
+        if (layout->ratio != 4) {
+            set_err(err, err_len, "indexer KV is only present on ratio-4 layers");
+            return -1;
+        }
+        view->logical_cols = kIndexerHeadDim;
+        view->logical_row_bytes = kv_values_bytes(kIndexerHeadDim, rt->cfg.kv_dtype);
+        view->physical_row = position / 4u;
+        base = layout->indexer_base;
+        rows = layout->indexer_rows;
+        row_bytes = layout->indexer_row_bytes;
+    } else {
+        set_err(err, err_len, "unknown KV row kind");
+        return -1;
+    }
+
+    if (view->physical_row >= rows) {
+        set_err(err, err_len, "computed KV row is outside layout");
+        return -1;
+    }
+
+    const uint64_t slot_base = checked_mul((uint64_t)slot, rt->kv_slot_stride);
+    for (int i = 0; i < kGpus; ++i) {
+        view->offset[i] = slot_base + base + checked_mul(view->physical_row, row_bytes);
+        view->row_bytes[i] = row_bytes;
+    }
+    return 0;
+}
+
+extern "C" int ds4_v100_tp_runtime_kv_row_roundtrip_f32(
+    ds4_v100_tp_runtime *rt,
+    int layer,
+    uint32_t slot,
+    uint64_t position,
+    ds4_v100_tp_kv_row_kind kind,
+    ds4_v100_tp_kv_row_roundtrip_result *result,
+    char *err,
+    size_t err_len) {
+    if (!rt || !result) {
+        set_err(err, err_len, "invalid argument");
+        return -1;
+    }
+    if (rt->cfg.kv_dtype != DS4_V100_TP_KV_F8_E4M3_B128) {
+        set_err(err, err_len, "typed row roundtrip currently supports F8 KV only");
+        return -1;
+    }
+
+    ds4_v100_tp_kv_row_view view;
+    if (ds4_v100_tp_runtime_kv_row_view(rt, layer, slot, position, kind, &view,
+                                        err, err_len) != 0) {
+        return -1;
+    }
+
+    const int indexer = kind == DS4_V100_TP_KV_ROW_INDEXER ? 1 : 0;
+    const int block = 256;
+    for (int i = 0; i < kGpus; ++i) {
+        gpu_state *g = &rt->gpu[i];
+        cudaError_t rc = cudaSetDevice(g->device);
+        if (rc != cudaSuccess) return fail_cuda(err, err_len, "cudaSetDevice", rc);
+        const int grid = (int)((view.row_bytes[i] + block - 1) / block);
+        typed_kv_store_f8_row_kernel<<<grid, block>>>(
+            (unsigned char *)g->kv, view.offset[i], view.row_bytes[i], i, layer,
+            slot, position, view.logical_cols, view.logical_row_bytes, indexer);
+        rc = cudaGetLastError();
+        if (rc != cudaSuccess) return fail_cuda(err, err_len, "typed_kv_store_f8_row_kernel", rc);
+    }
+    for (int i = 0; i < kGpus; ++i) {
+        gpu_state *g = &rt->gpu[i];
+        cudaError_t rc = cudaSetDevice(g->device);
+        if (rc != cudaSuccess) return fail_cuda(err, err_len, "cudaSetDevice", rc);
+        rc = cudaDeviceSynchronize();
+        if (rc != cudaSuccess) return fail_cuda(err, err_len, "cudaDeviceSynchronize", rc);
+    }
+
+    std::vector<unsigned char> packed((size_t)view.logical_row_bytes, 0);
+    for (int i = 0; i < kGpus; ++i) {
+        const uint64_t dst = (uint64_t)i * view.row_bytes[i];
+        if (dst >= view.logical_row_bytes) continue;
+        const uint64_t copy_bytes =
+            std::min(view.row_bytes[i], view.logical_row_bytes - dst);
+        gpu_state *g = &rt->gpu[i];
+        cudaError_t rc = cudaSetDevice(g->device);
+        if (rc != cudaSuccess) return fail_cuda(err, err_len, "cudaSetDevice", rc);
+        rc = cudaMemcpy(packed.data() + dst, (unsigned char *)g->kv + view.offset[i],
+                        (size_t)copy_bytes, cudaMemcpyDeviceToHost);
+        if (rc != cudaSuccess) return fail_cuda(err, err_len, "cudaMemcpy KV row shard", rc);
+    }
+
+    std::vector<unsigned char> expected_packed;
+    std::vector<float> expected_decoded;
+    fill_expected_f8_row(&expected_packed, &expected_decoded, layer, slot, position,
+                         view.logical_cols, indexer);
+
+    std::vector<float> decoded((size_t)view.logical_cols, 0.0f);
+    uint32_t byte_bad = 0;
+    uint32_t first_bad_index = 0;
+    uint8_t first_bad_got = 0;
+    uint8_t first_bad_expected = 0;
+    uint64_t checksum = 1469598103934665603ull;
+    for (size_t i = 0; i < packed.size(); ++i) {
+        checksum ^= (uint64_t)packed[i];
+        checksum *= 1099511628211ull;
+        if (packed[i] != expected_packed[i]) {
+            if (byte_bad == 0) {
+                first_bad_index = (uint32_t)i;
+                first_bad_got = packed[i];
+                first_bad_expected = expected_packed[i];
+            }
+            byte_bad++;
+        }
+    }
+
+    const uint32_t blocks = view.logical_cols / 128u;
+    for (uint32_t b = 0; b < blocks; ++b) {
+        const uint64_t block_off = (uint64_t)b * 129ull;
+        const float scale = e8m0_to_f32_host(packed[(size_t)block_off]);
+        for (uint32_t c = 0; c < 128u; ++c) {
+            const uint8_t q = packed[(size_t)(block_off + 1u + c)];
+            decoded[(size_t)(b * 128u + c)] = e4m3fn_to_f32_host(q) * scale;
+        }
+    }
+
+    double max_abs = 0.0;
+    double sum_abs = 0.0;
+    uint32_t decoded_bad = 0;
+    for (uint32_t i = 0; i < view.logical_cols; ++i) {
+        const double diff = std::fabs((double)decoded[i] - (double)expected_decoded[i]);
+        max_abs = std::max(max_abs, diff);
+        sum_abs += diff;
+        if (diff != 0.0) decoded_bad++;
+    }
+
+    std::memset(result, 0, sizeof(*result));
+    result->view = view;
+    result->max_abs = max_abs;
+    result->mean_abs = sum_abs / (double)view.logical_cols;
+    result->bad_values = decoded_bad;
+    result->byte_mismatches = byte_bad;
+    result->first_bad_index = first_bad_index;
+    result->first_bad_got = first_bad_got;
+    result->first_bad_expected = first_bad_expected;
+    result->checksum = checksum;
     return 0;
 }
 

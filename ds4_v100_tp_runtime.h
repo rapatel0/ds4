@@ -16,6 +16,11 @@ typedef enum {
     DS4_V100_TP_KV_Q8_0 = 2,
 } ds4_v100_tp_kv_dtype;
 
+typedef enum {
+    DS4_V100_TP_KV_ROW_ATTN = 0,
+    DS4_V100_TP_KV_ROW_INDEXER = 1,
+} ds4_v100_tp_kv_row_kind;
+
 typedef struct {
     int devices[DS4_V100_TP_MAX_GPUS];
     uint32_t slots;
@@ -38,6 +43,31 @@ typedef struct {
 } ds4_v100_tp_runtime_report;
 
 typedef struct ds4_v100_tp_runtime ds4_v100_tp_runtime;
+
+typedef struct {
+    int layer;
+    int ratio;
+    uint32_t slot;
+    uint64_t position;
+    ds4_v100_tp_kv_row_kind kind;
+    uint32_t logical_cols;
+    uint64_t logical_row_bytes;
+    uint64_t physical_row;
+    uint64_t offset[DS4_V100_TP_MAX_GPUS];
+    uint64_t row_bytes[DS4_V100_TP_MAX_GPUS];
+} ds4_v100_tp_kv_row_view;
+
+typedef struct {
+    ds4_v100_tp_kv_row_view view;
+    double max_abs;
+    double mean_abs;
+    uint32_t bad_values;
+    uint32_t byte_mismatches;
+    uint32_t first_bad_index;
+    uint8_t first_bad_got;
+    uint8_t first_bad_expected;
+    uint64_t checksum;
+} ds4_v100_tp_kv_row_roundtrip_result;
 
 typedef struct {
     int layer;
@@ -73,6 +103,24 @@ int ds4_v100_tp_runtime_dense_kv_slice(ds4_v100_tp_runtime *rt,
                                        ds4_v100_tp_dense_kv_result *result,
                                        char *err,
                                        size_t err_len);
+
+int ds4_v100_tp_runtime_kv_row_view(ds4_v100_tp_runtime *rt,
+                                    int layer,
+                                    uint32_t slot,
+                                    uint64_t position,
+                                    ds4_v100_tp_kv_row_kind kind,
+                                    ds4_v100_tp_kv_row_view *view,
+                                    char *err,
+                                    size_t err_len);
+
+int ds4_v100_tp_runtime_kv_row_roundtrip_f32(ds4_v100_tp_runtime *rt,
+                                             int layer,
+                                             uint32_t slot,
+                                             uint64_t position,
+                                             ds4_v100_tp_kv_row_kind kind,
+                                             ds4_v100_tp_kv_row_roundtrip_result *result,
+                                             char *err,
+                                             size_t err_len);
 
 void ds4_v100_tp_runtime_get_report(const ds4_v100_tp_runtime *rt,
                                     ds4_v100_tp_runtime_report *report);

@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 334
+revision: 335
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -107,6 +107,14 @@ not a serial layer-chain.
   `27.058 GiB/GPU` with reserve, `6.366 GiB/GPU` free after allocation on the
   pod. Admission with physical row-sharded KV is now `62` slots at `256K`,
   `31` slots at `512K`, and `15` slots at `1M`.
+- Sprint 330 added the first execution primitive for that production KV arena.
+  `ds4_v100_tp_runtime` now exposes row views for attention and ratio-4
+  indexer rows and can write/gather/decode F8 E4M3 block-128 rows from the
+  physical TP shards. At `32` slots / `256K`, layer `2`, slot `31`, position
+  `262140`, both attention and indexer row roundtrips pass with
+  `bad decoded values=0` and `max_abs=0.000000000`. This is not yet wired into
+  the full-layer attention path, but it gives that path the production typed
+  row storage primitive needed to replace f32 diagnostic KV buffers.
 - The system is not production-ready yet because the bridge HC sequence has
   not been proven equivalent to the DeepSeek V4 reference layer semantics, and
   production serving still needs readiness/overload/cancellation/streaming
