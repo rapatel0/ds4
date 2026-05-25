@@ -233,6 +233,7 @@ struct RankState {
     bool hc_initialized = false;
     PackedExperts gated;
     PackedExperts down;
+    cudaEvent_t dense_wait = nullptr;
     cudaEvent_t start = nullptr;
     cudaEvent_t mid = nullptr;
     cudaEvent_t stop = nullptr;
@@ -626,6 +627,7 @@ struct Options {
     bool true_ds4_compressed_kv_gate = false;
     bool true_ds4_indexer_attention_gate = false;
     bool true_ds4_compressed_kv_direct_input_fill_gate = false;
+    bool true_ds4_compressed_kv_dense_event_wait_gate = false;
     bool true_ds4_compressed_kv_fused_attn_input_fill_gate = false;
     bool true_ds4_compressed_kv_fused_input_fill_gate = false;
     bool true_ds4_compressed_kv_fused_rope_round_gate = false;
@@ -2985,6 +2987,7 @@ void usage(const char *argv0) {
                  "       [--true-ds4-post-attention-ffn-input-gate]\n"
                  "       [--true-ds4-compressed-kv-gate]\n"
                  "       [--true-ds4-indexer-attention-gate]\n"
+                 "       [--true-ds4-compressed-kv-dense-event-wait-gate]\n"
                  "       [--true-ds4-compressed-kv-fused-input-fill-gate]\n"
                  "       [--true-ds4-compressed-kv-fused-rope-round-gate]\n"
                  "       [--true-ds4-compressed-kv-fused-pool-norm-gate]\n"
@@ -3334,6 +3337,14 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--true-ds4-compressed-kv-dense-event-wait-gate") == 0) {
+            opt->true_ds4_compressed_kv_dense_event_wait_gate = true;
+            opt->true_ds4_compressed_kv_gate = true;
+            opt->true_ds4_attention_projection_gate = true;
+            opt->true_ds4_attention_residency_gate = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--true-ds4-compressed-kv-fused-attn-input-fill-gate") == 0) {
             opt->true_ds4_compressed_kv_fused_attn_input_fill_gate = true;
             opt->true_ds4_compressed_kv_gate = true;
@@ -3483,6 +3494,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
            (!opt->true_ds4_indexer_attention_gate ||
             opt->true_ds4_compressed_kv_gate) &&
            (!opt->true_ds4_compressed_kv_direct_input_fill_gate ||
+            opt->true_ds4_compressed_kv_gate) &&
+           (!opt->true_ds4_compressed_kv_dense_event_wait_gate ||
             opt->true_ds4_compressed_kv_gate) &&
            (!opt->true_ds4_compressed_kv_fused_attn_input_fill_gate ||
             opt->true_ds4_compressed_kv_gate) &&
@@ -6457,6 +6470,18 @@ int launch_resident_f8_dense_f32_input(const Options &opt,
     return 0;
 }
 
+int enqueue_dense_wait_after_rank_stream(RankState ranks[kGpus]) {
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        RankState &r = ranks[gpu];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        if (!r.dense_stream || r.dense_stream == r.stream) continue;
+        if (!r.dense_wait) return 1;
+        CHECK_CUDA(cudaEventRecord(r.dense_wait, r.stream));
+        CHECK_CUDA(cudaStreamWaitEvent(r.dense_stream, r.dense_wait, 0));
+    }
+    return 0;
+}
+
 int fill_shared_ffn_inputs_from_normed(const Options &opt,
                                        const SharedHcControls *hc,
                                        const ResidentF8Dense &gate,
@@ -7420,6 +7445,7 @@ int open_shared_rank_buffers(const Options &opt, SharedRankBuffers *shared) {
             CHECK_CUDA(cudaStreamCreate(&r.copy_streams[q]));
             CHECK_CUDA(cudaEventCreateWithFlags(&r.copy_done[q], cudaEventDisableTiming));
         }
+        CHECK_CUDA(cudaEventCreateWithFlags(&r.dense_wait, cudaEventDisableTiming));
         CHECK_CUDA(cudaEventCreate(&r.start));
         CHECK_CUDA(cudaEventCreate(&r.mid));
         CHECK_CUDA(cudaEventCreate(&r.stop));
@@ -7556,6 +7582,7 @@ void close_shared_rank_buffers(SharedRankBuffers *shared) {
         }
         if (r.d_attn_comp_score_cur) CHECK_CUDA(cudaFree(r.d_attn_comp_score_cur));
         if (r.d_attn_comp_kv_cur) CHECK_CUDA(cudaFree(r.d_attn_comp_kv_cur));
+        if (r.dense_wait) CHECK_CUDA(cudaEventDestroy(r.dense_wait));
         if (r.start) CHECK_CUDA(cudaEventDestroy(r.start));
         if (r.mid) CHECK_CUDA(cudaEventDestroy(r.mid));
         if (r.stop) CHECK_CUDA(cudaEventDestroy(r.stop));
@@ -8487,6 +8514,8 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
     const uint64_t hidden_elems = (uint64_t)opt.slots * (uint64_t)kHidden;
     const bool direct_current_input_fill =
         opt.true_ds4_compressed_kv_direct_input_fill_gate;
+    const bool dense_event_wait =
+        opt.true_ds4_compressed_kv_dense_event_wait_gate;
     const bool fused_attn_current_fill =
         opt.true_ds4_compressed_kv_fused_attn_input_fill_gate;
     const bool fused_ratio4_current_fill =
@@ -8557,9 +8586,13 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
         }
         CHECK_CUDA(cudaGetLastError());
     }
-    for (int rank = 0; rank < kGpus; ++rank) {
-        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-        CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    if (dense_event_wait) {
+        if (enqueue_dense_wait_after_rank_stream(ranks) != 0) return 22;
+    } else {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        }
     }
     {
         const auto now = std::chrono::steady_clock::now();
@@ -8946,9 +8979,13 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             }
             CHECK_CUDA(cudaGetLastError());
         }
-        for (int rank = 0; rank < kGpus; ++rank) {
-            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        if (dense_event_wait) {
+            if (enqueue_dense_wait_after_rank_stream(ranks) != 0) return 23;
+        } else {
+            for (int rank = 0; rank < kGpus; ++rank) {
+                CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+                CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+            }
         }
         {
             const auto now = std::chrono::steady_clock::now();
@@ -9459,7 +9496,8 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 "indexer_dense_ms\t%.6f\tindexer_gather_rope_ms\t%.6f\t"
                 "indexer_state_emit_ms\t%.6f\tindexer_typed_score_ms\t%.6f\t"
                 "reference_diff_ms\t%.6f\tratio_shift_ms\t%.6f\t"
-                "direct_input_fill\t%d\tfused_attn_input_fill\t%d\t"
+                "direct_input_fill\t%d\tdense_event_wait\t%d\t"
+                "fused_attn_input_fill\t%d\t"
                 "fused_input_fill\t%d\tfused_rope_round\t%d\t"
                 "fused_pool_norm\t%d\tfused_pool_norm_rope_round\t%d\t"
                 "ms\t%.6f\tPASS\n",
@@ -9476,6 +9514,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 indexer_state_emit_ms, indexer_typed_score_ms,
                 reference_diff_ms, ratio_shift_ms,
                 direct_current_input_fill ? 1 : 0,
+                dense_event_wait ? 1 : 0,
                 fused_attn_current_fill ? 1 : 0,
                 fused_ratio4_current_fill ? 1 : 0,
                 fused_rope_round ? 1 : 0,
@@ -11671,6 +11710,7 @@ int run_layer(const Options &opt,
                 CHECK_CUDA(cudaStreamCreate(&r.copy_streams[q]));
                 CHECK_CUDA(cudaEventCreateWithFlags(&r.copy_done[q], cudaEventDisableTiming));
             }
+            CHECK_CUDA(cudaEventCreateWithFlags(&r.dense_wait, cudaEventDisableTiming));
             CHECK_CUDA(cudaEventCreate(&r.start));
             CHECK_CUDA(cudaEventCreate(&r.mid));
             CHECK_CUDA(cudaEventCreate(&r.stop));
@@ -12211,9 +12251,10 @@ int run_layer(const Options &opt,
             }
             if (r.d_attn_comp_score_cur) CHECK_CUDA(cudaFree(r.d_attn_comp_score_cur));
             if (r.d_attn_comp_kv_cur) CHECK_CUDA(cudaFree(r.d_attn_comp_kv_cur));
-            CHECK_CUDA(cudaEventDestroy(r.start));
-            CHECK_CUDA(cudaEventDestroy(r.mid));
-            CHECK_CUDA(cudaEventDestroy(r.stop));
+            if (r.dense_wait) CHECK_CUDA(cudaEventDestroy(r.dense_wait));
+            if (r.start) CHECK_CUDA(cudaEventDestroy(r.start));
+            if (r.mid) CHECK_CUDA(cudaEventDestroy(r.mid));
+            if (r.stop) CHECK_CUDA(cudaEventDestroy(r.stop));
             for (int src = 0; src < kGpus; ++src) {
                 if (r.d_route_index_by_slot[src]) CHECK_CUDA(cudaFree(r.d_route_index_by_slot[src]));
             }

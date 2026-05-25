@@ -249,6 +249,19 @@ from `72.886325` to `70.674037` and compressed-KV sum from `3493.666516` to
 TP/EP lever should be a larger compressed/indexer dense projection or
 attention projection/state boundary.
 
+Sprint 366 promoted compressed dense event waits as the next TP/EP serving
+default. Instead of synchronizing rank streams on the host after compressed
+attention/indexer input fill, the gate records per-rank CUDA events and makes
+the dense stream wait on them. Direct 32-step A/B at `32` slots / `256K` /
+`position=262112` preserved token `98751` and improved generated decode
+throughput from `96.214306` to `99.093248` tok/s, wall throughput from
+`75.215206` to `76.897975` tok/s, and compressed-KV sum from `3431.137744` to
+`3127.236790` ms. Selected-token HTTP preserved token `109328`, returned
+`32/32` HTTP 200, and improved client throughput from `71.833757` to
+`74.432464` tok/s while reducing compressed-KV sum from `3437.636456` to
+`3137.755187` ms. `DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_DENSE_EVENT_WAIT`
+is now default-on and can be disabled for control runs.
+
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
 TP runtime, sharded KV, rank buffers, TurboMind API handles, active MXFP4
