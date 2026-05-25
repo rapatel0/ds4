@@ -96,3 +96,31 @@ logs/from-cluster/sprint376-decode-cudagraph/event-barrier-audit/none-direct-dec
 | Blocker | `host_stream_synchronization` | `helper_host_synchronization` |
 
 Interpretation: the ordering substitution preserved token/checksum parity and removed the audited top-level host stream waits, but it is not a performance win before graph replay. The remaining graph blockers are inside helper stages such as HC-current input, attention projection/state, compressed KV, typed history/raw read, and final HC expansion. The next useful work is to convert the hottest helper-level host waits to stream/event dependencies, starting with `run_shared_hc_current_input` and final HC expansion.
+
+## HC-Current Event-Ordering Pass
+
+Converted the main `run_shared_hc_current_input` host waits to stream/event ordering under `--decode-cudagraph-gate`. This keeps the default path unchanged.
+
+Artifact path:
+
+```text
+logs/from-cluster/sprint376-decode-cudagraph/hc-current-event-audit/none-direct-decode-cudagraph
+```
+
+| Metric | Event barrier | HC-current event pass |
+|---|---:|---:|
+| Generated decode tok/s | `44.247981` | `49.429146` |
+| Output first token | `54639` | `54639` |
+| Output checksum | `24071637347` | `24071637347` |
+| Scaffold checksum | `3401922407` | `3401922407` |
+| `sync_all_calls` | `0` | `0` |
+| `event_barrier_calls` | `172` | `172` |
+| `rank_stream_sync_count` | `0` | `0` |
+| `dense_stream_sync_count` | `0` | `0` |
+| `helper_host_sync_blocker_classes` | `7` | `6` |
+| `capture_eligible` | `0` | `0` |
+| Blocker | `helper_host_synchronization` | `helper_host_synchronization` |
+
+HC-current timing improved materially inside the graph-gated path: `sum_pre_ep_hc_current_ms` moved from `47.654108` ms to `18.389539` ms and HC-current gather/fill subtimings dropped. Total decode is still slower than the initial host-sync control because the graph-gated path still pays broad event-barrier enqueue overhead and remains blocked by six helper classes.
+
+Next helper target: final HC expansion and attention projection/state helpers. Capture should still not be attempted until helper blocker classes reach zero or the remaining blockers are explicitly accepted as non-capturable.

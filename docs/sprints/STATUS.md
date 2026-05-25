@@ -36,7 +36,10 @@ event-barrier pass preserved first token/checksum and reduced the audited
 top-level wait counts to zero (`sync_all_calls=0`,
 `rank_stream_sync_count=0`, `dense_stream_sync_count=0`), but pre-graph decode
 regressed to `44.247981` tok/s and `capture_eligible` remains `0` because
-helper-level host synchronizations are still present.
+helper-level host synchronizations are still present. The HC-current helper
+pass also preserves token/checksum parity, improves graph-gated decode to
+`49.429146` tok/s, and drops helper blocker classes from `7` to `6`; graph
+capture is still not eligible.
 
 Latest TP/EP format status: Sprint 374 built and ran the V100 workbench for
 the Sprint 373 INT8 candidate shapes. The copied tc-grid INT8 kernels are

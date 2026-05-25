@@ -4557,6 +4557,7 @@ int upload_model_router_route_plan(const Options &opt,
                                    RankState ranks[kGpus],
                                    const std::vector<int> &selected,
                                    const std::vector<float> &weights);
+int enqueue_dense_wait_after_rank_stream(RankState ranks[kGpus]);
 
 int run_shared_hc_final_expand(const Options &opt,
                                SharedHcControls *hc,
@@ -4645,9 +4646,40 @@ int run_shared_hc_current_input(const Options &opt,
     const uint64_t full_elems = (uint64_t)opt.slots * kHidden;
     const int block = 256;
     const auto t_start = std::chrono::steady_clock::now();
+    const bool graph_event_order = opt.decode_cudagraph_gate;
     cudaStream_t control_stream =
-        opt.tp_hc_current_input_stream_sync_gate ? ranks[0].stream : (cudaStream_t)0;
+        (opt.tp_hc_current_input_stream_sync_gate || graph_event_order)
+            ? ranks[0].stream
+            : (cudaStream_t)0;
+    auto control_wait_on_rank_streams = [&]() -> int {
+        if (!graph_event_order) return 0;
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            CHECK_CUDA(cudaSetDevice(r.device));
+            if (!r.stream_done) return 1;
+            CHECK_CUDA(cudaEventRecord(r.stream_done, r.stream));
+        }
+        CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaStreamWaitEvent(control_stream,
+                                           ranks[rank].stream_done, 0));
+        }
+        return 0;
+    };
+    auto rank_streams_wait_on_control = [&]() -> int {
+        if (!graph_event_order) return 0;
+        CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+        if (!ranks[0].stream_done) return 1;
+        CHECK_CUDA(cudaEventRecord(ranks[0].stream_done, control_stream));
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            CHECK_CUDA(cudaSetDevice(r.device));
+            CHECK_CUDA(cudaStreamWaitEvent(r.stream, ranks[0].stream_done, 0));
+        }
+        return 0;
+    };
     auto sync_control_device = [&]() {
+        if (graph_event_order) return;
         CHECK_CUDA(cudaSetDevice(opt.devices[0]));
         if (opt.tp_hc_current_input_stream_sync_gate) {
             CHECK_CUDA(cudaStreamSynchronize(control_stream));
@@ -4671,9 +4703,13 @@ int run_shared_hc_current_input(const Options &opt,
             r.hc_initialized = true;
         }
     }
-    for (int rank = 0; rank < kGpus; ++rank) {
-        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-        CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    if (graph_event_order) {
+        if (control_wait_on_rank_streams() != 0) return 6;
+    } else {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        }
     }
     auto t_seed_done = std::chrono::steady_clock::now();
     if (should_log_reference_hc_window(opt)) {
@@ -4709,6 +4745,9 @@ int run_shared_hc_current_input(const Options &opt,
         (uint32_t)opt.slots, opt.reference_hc_reduce_gate ? 20u : 4u);
     CHECK_CUDA(cudaGetLastError());
     sync_control_device();
+    if (graph_event_order) {
+        if (rank_streams_wait_on_control() != 0) return 7;
+    }
 
     for (int rank = 0; rank < kGpus; ++rank) {
         RankState &r = ranks[rank];
@@ -4731,9 +4770,13 @@ int run_shared_hc_current_input(const Options &opt,
         CHECK_CUDA(cudaGetLastError());
     }
     auto t_split_done = std::chrono::steady_clock::now();
-    for (int rank = 0; rank < kGpus; ++rank) {
-        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-        CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    if (graph_event_order) {
+        if (control_wait_on_rank_streams() != 0) return 8;
+    } else {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        }
     }
     auto t_weighted_done = std::chrono::steady_clock::now();
 
@@ -4758,9 +4801,13 @@ int run_shared_hc_current_input(const Options &opt,
                                (uint32_t)opt.slots);
             CHECK_CUDA(cudaGetLastError());
         }
-        for (int rank = 0; rank < kGpus; ++rank) {
-            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        if (graph_event_order) {
+            if (control_wait_on_rank_streams() != 0) return 9;
+        } else {
+            for (int rank = 0; rank < kGpus; ++rank) {
+                CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+                CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+            }
         }
         control_current_full = ranks[0].d_current_full;
     } else {
@@ -4788,6 +4835,9 @@ int run_shared_hc_current_input(const Options &opt,
         (uint32_t)kHidden, (uint32_t)opt.slots, 1.0e-6f);
     CHECK_CUDA(cudaGetLastError());
     sync_control_device();
+    if (graph_event_order) {
+        if (rank_streams_wait_on_control() != 0) return 10;
+    }
     if (should_log_reference_hc_window(opt)) {
         CHECK_CUDA(cudaSetDevice(opt.devices[0]));
         log_tensor_f32_stats("hc_ffn_normed", layer, 0, hc->d_ffn_normed,
@@ -4903,9 +4953,13 @@ int run_shared_hc_current_input(const Options &opt,
                                  r.stream);
         }
     }
-    for (int rank = 0; rank < kGpus; ++rank) {
-        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-        CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    if (graph_event_order) {
+        if (enqueue_dense_wait_after_rank_stream(ranks) != 0) return 11;
+    } else {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        }
     }
     auto t_fill_done = std::chrono::steady_clock::now();
     if (breakdown) {
@@ -13076,7 +13130,7 @@ int run_token_major_serving_loop(const Options &opt,
             output_head_outside_step && serving_result &&
             serving_result->diagnostic_output_head;
         const int helper_host_sync_blocker_classes =
-            (opt.tp_hc_current_input_gate ? 1 : 0) +
+            (opt.tp_hc_current_input_gate && !opt.decode_cudagraph_gate ? 1 : 0) +
             (opt.true_ds4_attention_projection_gate ? 1 : 0) +
             (opt.true_ds4_compressed_kv_gate ? 1 : 0) +
             (opt.true_ds4_attention_state_gate ? 1 : 0) +

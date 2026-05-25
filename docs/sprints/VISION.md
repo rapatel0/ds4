@@ -1149,9 +1149,11 @@ rank-stream waits, and `1376` dense-stream waits in one 43-layer decode step.
 The first stream/event substitution pass preserved token/checksum parity and
 moved those top-level wait counts to zero, but it remains slower before graph
 capture and `capture_eligible` is still `0` because helper-level host
-synchronizations remain. The next concrete task is to remove those helper
-waits, starting with HC-current input and final HC expansion, then rerun the
-same audit before any graph replay attempt.
+synchronizations remain. The HC-current helper pass removed one blocker class
+and improved the graph-gated diagnostic from `44.247981` to `49.429146`
+decode tok/s while preserving parity. The next concrete task is final HC
+expansion and attention projection/state helper waits, followed by the same
+audit before any graph replay attempt.
 
 ### Sprint 377 - Batched Paged Attention Gate [tentative]
 
@@ -2607,6 +2609,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Tightened the vision around `TEMP_THROUGHPUT_PROMPT.md`. | The next performance work should not blur multiple ideas together; each gate needs a same-binary V100 A/B and a promote/reject decision. | Finish Sprint 376's graph audit, then choose graph replay, paged attention, compact MoE, TP-expert A/B, FP8 KV, or MTP from measured evidence. |
 | 2026-05-25 | Sprint 376 initial graph audit ran on V100. | The decode step is not yet capturable: it has `172` broad host synchronization points across the 43-layer step. | Replace those syncs with stream/event dependencies where possible, then rerun the audit before graph replay. |
 | 2026-05-25 | Sprint 376 event-barrier audit ran on V100. | Top-level `sync_all` host waits can be replaced with CUDA event ordering while preserving token/checksum parity, but the pre-graph path slows down and helper synchronizations still block capture. | Convert helper-level waits next; do not promote the event-barrier path as a performance optimization by itself. |
+| 2026-05-25 | Sprint 376 HC-current helper event pass ran on V100. | HC-current stream/control waits can be event-ordered under the graph gate; parity holds and helper blocker classes drop from `7` to `6`. | Continue helper-level event ordering, starting with final HC expansion and attention helpers. |
 
 ## Open Questions
 

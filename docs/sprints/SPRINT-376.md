@@ -253,3 +253,36 @@ be converted to stream ordering, but it is not itself a speed win before graph
 capture. The remaining blocker has moved into helper-level synchronizations.
 Next target: convert the hottest helper waits, starting with HC-current input
 and final HC expansion, then rerun the audit.
+
+### HC-Current Event-Ordering Pass
+
+Converted the main `run_shared_hc_current_input` host waits to stream/event
+ordering under `--decode-cudagraph-gate`. The default path is unchanged.
+
+Result:
+
+| Field | Event-barrier audit | HC-current event pass |
+|---|---:|---:|
+| Generated decode tok/s | `44.247981` | `49.429146` |
+| Output first token | `54639` | `54639` |
+| Output checksum | `24071637347` | `24071637347` |
+| Scaffold checksum | `3401922407` | `3401922407` |
+| `sync_all_calls` | `0` | `0` |
+| `event_barrier_calls` | `172` | `172` |
+| `rank_stream_sync_count` | `0` | `0` |
+| `dense_stream_sync_count` | `0` | `0` |
+| `helper_host_sync_blocker_classes` | `7` | `6` |
+| `capture_eligible` | `0` | `0` |
+| Blocker | `helper_host_synchronization` | `helper_host_synchronization` |
+
+Artifacts:
+
+```text
+logs/from-cluster/sprint376-decode-cudagraph/hc-current-event-audit/none-direct-decode-cudagraph
+```
+
+Interpretation: HC-current event ordering preserves parity and removes one
+helper blocker class. It also reduces the graph-gated HC-current stage
+(`sum_pre_ep_hc_current_ms` from `47.654108` to `18.389539` ms), but graph
+replay remains blocked and the graph-gated path is still slower than the
+original host-sync path before capture.
