@@ -545,6 +545,7 @@ struct Options {
     bool diagnostic_output_head = false;
     bool tp_hc_final_expand_gate = false;
     bool tp_hc_current_input_gate = false;
+    bool tp_hc_current_input_peer_gather_gate = false;
     bool tp_hc_persist_state_gate = false;
     bool model_router_routes = false;
     bool routed_ffn_norm_input_gate = false;
@@ -1128,6 +1129,36 @@ __global__ void gather_current_shard_to_full_kernel(float *full,
     const uint32_t slot = (uint32_t)(i / shard_cols);
     const uint32_t local_h = (uint32_t)(i % shard_cols);
     full[(uint64_t)slot * kHidden + (uint64_t)rank * shard_cols + local_h] = shard[i];
+}
+
+__global__ void gather_current_shards_to_full8_kernel(float *full,
+                                                      const float *shard0,
+                                                      const float *shard1,
+                                                      const float *shard2,
+                                                      const float *shard3,
+                                                      const float *shard4,
+                                                      const float *shard5,
+                                                      const float *shard6,
+                                                      const float *shard7,
+                                                      uint32_t slots) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t n = (uint64_t)slots * (uint64_t)kHidden;
+    if (i >= n) return;
+    const uint32_t slot = (uint32_t)(i / kHidden);
+    const uint32_t col = (uint32_t)(i % kHidden);
+    const uint32_t shard_cols = kHidden / kGpus;
+    const uint32_t rank = col / shard_cols;
+    const uint32_t local_h = col - rank * shard_cols;
+    const uint64_t src_i = (uint64_t)slot * shard_cols + local_h;
+    const float *src = shard0;
+    if (rank == 1u) src = shard1;
+    else if (rank == 2u) src = shard2;
+    else if (rank == 3u) src = shard3;
+    else if (rank == 4u) src = shard4;
+    else if (rank == 5u) src = shard5;
+    else if (rank == 6u) src = shard6;
+    else if (rank == 7u) src = shard7;
+    full[i] = src[src_i];
 }
 
 __global__ void gather_dense_shard_to_full_kernel(float *full,
@@ -2556,6 +2587,7 @@ void usage(const char *argv0) {
                  "       [--output-head-gate] [--output-head-resident-gate]\n"
                  "       [--final-hc-carry-gate] [--tp-hc-final-expand-gate]\n"
                  "       [--tp-hc-current-input-gate]\n"
+                 "       [--tp-hc-current-input-peer-gather-gate]\n"
                  "       [--tp-hc-persist-state-gate] [--tp-kv-all-slots-gate]\n"
                  "       [--model-router-routes]\n"
                  "       [--routed-ffn-norm-input-gate]\n"
@@ -2743,6 +2775,11 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--tp-hc-current-input-gate") == 0) {
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--tp-hc-current-input-peer-gather-gate") == 0) {
+            opt->tp_hc_current_input_peer_gather_gate = true;
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
@@ -4190,24 +4227,52 @@ int run_shared_hc_current_input(const Options &opt,
         CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
     }
 
-    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
-    for (int rank = 0; rank < kGpus; ++rank) {
-        gather_current_shard_to_full_kernel<<<
-            (unsigned int)((shard_elems + block - 1) / block), block>>>(
-            hc->d_current_full, ranks[rank].d_current_shard, rank,
-            (uint32_t)opt.slots);
+    float *control_current_full = hc->d_current_full;
+    const bool peer_gather_current = opt.tp_hc_current_input_peer_gather_gate;
+    if (peer_gather_current) {
+        const uint64_t full_grid_elems = full_elems;
+        for (int dst = 0; dst < kGpus; ++dst) {
+            RankState &r = ranks[dst];
+            CHECK_CUDA(cudaSetDevice(r.device));
+            gather_current_shards_to_full8_kernel<<<
+                (unsigned int)((full_grid_elems + block - 1) / block), block,
+                0, r.stream>>>(r.d_current_full,
+                               ranks[0].d_current_shard,
+                               ranks[1].d_current_shard,
+                               ranks[2].d_current_shard,
+                               ranks[3].d_current_shard,
+                               ranks[4].d_current_shard,
+                               ranks[5].d_current_shard,
+                               ranks[6].d_current_shard,
+                               ranks[7].d_current_shard,
+                               (uint32_t)opt.slots);
+            CHECK_CUDA(cudaGetLastError());
+        }
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        }
+        control_current_full = ranks[0].d_current_full;
+    } else {
+        CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+        for (int rank = 0; rank < kGpus; ++rank) {
+            gather_current_shard_to_full_kernel<<<
+                (unsigned int)((shard_elems + block - 1) / block), block>>>(
+                hc->d_current_full, ranks[rank].d_current_shard, rank,
+                (uint32_t)opt.slots);
+        }
+        CHECK_CUDA(cudaGetLastError());
+        CHECK_CUDA(cudaDeviceSynchronize());
     }
-    CHECK_CUDA(cudaGetLastError());
-    CHECK_CUDA(cudaDeviceSynchronize());
     if (should_log_reference_hc_window(opt)) {
         CHECK_CUDA(cudaSetDevice(opt.devices[0]));
-        log_tensor_f32_stats("hc_current_full", layer, 0, hc->d_current_full,
+        log_tensor_f32_stats("hc_current_full", layer, 0, control_current_full,
                              (size_t)full_elems, nullptr);
     }
 
     if (!hc->d_ffn_normed || !hc->d_ffn_norm_weight[layer]) return 4;
     rms_norm_weight_rows_stable_kernel<<<(unsigned int)opt.slots, 256>>>(
-        hc->d_ffn_normed, hc->d_current_full, hc->d_ffn_norm_weight[layer],
+        hc->d_ffn_normed, control_current_full, hc->d_ffn_norm_weight[layer],
         (uint32_t)kHidden, (uint32_t)opt.slots, 1.0e-6f);
     CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaDeviceSynchronize());
@@ -4257,13 +4322,15 @@ int run_shared_hc_current_input(const Options &opt,
         RankState &r = ranks[rank];
         CHECK_CUDA(cudaSetDevice(r.device));
         const size_t full_bytes = (size_t)full_elems * sizeof(float);
-        if (rank == 0) {
-            CHECK_CUDA(cudaMemcpyAsync(r.d_current_full, hc->d_current_full,
-                                       full_bytes, cudaMemcpyDeviceToDevice, r.stream));
-        } else {
-            CHECK_CUDA(cudaMemcpyPeerAsync(r.d_current_full, r.device,
-                                           hc->d_current_full, opt.devices[0],
-                                           full_bytes, r.stream));
+        if (!peer_gather_current) {
+            if (rank == 0) {
+                CHECK_CUDA(cudaMemcpyAsync(r.d_current_full, hc->d_current_full,
+                                           full_bytes, cudaMemcpyDeviceToDevice, r.stream));
+            } else {
+                CHECK_CUDA(cudaMemcpyPeerAsync(r.d_current_full, r.device,
+                                               hc->d_current_full, opt.devices[0],
+                                               full_bytes, r.stream));
+            }
         }
         const uint64_t attn_elems = (uint64_t)opt.slots * (uint64_t)attn_op.cols;
         const uint64_t shared_elems = (uint64_t)opt.slots * (uint64_t)shared_op.cols;
@@ -11000,7 +11067,9 @@ int run_layer(const Options &opt,
                     "compose_reduce_ms_per_step\t%.6f\t"
                     "compose_copy_ms_per_step\t%.6f\t"
                     "compose_final_ms_per_step\t%.6f\t"
-                    "hc_current_input_gate\t%d\thc_current_input_ms_per_step\t%.6f\t"
+                    "hc_current_input_gate\t%d\t"
+                    "hc_current_input_peer_gather\t%d\t"
+                    "hc_current_input_ms_per_step\t%.6f\t"
                     "final_hc_carry_gate\t%d\tfinal_hc_ms_per_step\t%.6f\t"
                     "dense_loaded_bytes\t%llu\t"
                     "ep_contribution_bytes\t%llu\tep_return_dtype\t%s\t"
@@ -11026,6 +11095,7 @@ int run_layer(const Options &opt,
                     decode_loop.compose_copy_ms_per_step,
                     decode_loop.compose_final_ms_per_step,
                     opt.tp_hc_current_input_gate ? 1 : 0,
+                    opt.tp_hc_current_input_peer_gather_gate ? 1 : 0,
                     decode_loop.hc_current_input_ms_per_step,
                     opt.final_hc_carry_gate ? 1 : 0,
                     decode_loop.final_hc_ms_per_step,
@@ -11525,7 +11595,9 @@ int run_token_major_serving_loop(const Options &opt,
                 "sum_ep_ms\t%.6f\tsum_dense_ms\t%.6f\tsum_compose_ms\t%.6f\t"
                 "sum_compose_reduce_ms\t%.6f\tsum_compose_copy_ms\t%.6f\t"
                 "sum_compose_final_ms\t%.6f\t"
-                "tp_hc_current_input_gate\t%d\tsum_hc_current_input_ms\t%.6f\t"
+                "tp_hc_current_input_gate\t%d\t"
+                "tp_hc_current_input_peer_gather\t%d\t"
+                "sum_hc_current_input_ms\t%.6f\t"
                 "final_hc_carry_gate\t%d\tsum_final_hc_ms\t%.6f\t"
                 "wall_ms\t%.6f\tchecksum\t%llu\tPASS\n",
                 opt.decode_steps, pass_invocations, opt.slots,
@@ -11544,7 +11616,9 @@ int run_token_major_serving_loop(const Options &opt,
                 sum_ep_ms, sum_dense_ms, sum_compose_ms,
                 sum_compose_reduce_ms, sum_compose_copy_ms,
                 sum_compose_final_ms,
-                opt.tp_hc_current_input_gate ? 1 : 0, sum_hc_current_input_ms,
+                opt.tp_hc_current_input_gate ? 1 : 0,
+                opt.tp_hc_current_input_peer_gather_gate ? 1 : 0,
+                sum_hc_current_input_ms,
                 opt.final_hc_carry_gate ? 1 : 0, sum_final_hc_ms,
                 wall_ms, (unsigned long long)checksum);
     if (opt.serving_bench || serving_result) {
@@ -13716,7 +13790,9 @@ int main(int argc, char **argv) {
                 "sum_ep_ms\t%.6f\tsum_dense_ms\t%.6f\tsum_compose_ms\t%.6f\t"
                 "sum_compose_reduce_ms\t%.6f\tsum_compose_copy_ms\t%.6f\t"
                 "sum_compose_final_ms\t%.6f\t"
-                "tp_hc_current_input_gate\t%d\tsum_hc_current_input_ms\t%.6f\t"
+                "tp_hc_current_input_gate\t%d\t"
+                "tp_hc_current_input_peer_gather\t%d\t"
+                "sum_hc_current_input_ms\t%.6f\t"
                 "wall_ms\t%.6f\tchecksum\t%llu\tPASS\n",
                 pass_layers, opt.slots, opt.decode_steps,
                 opt.skip_descriptor_checks ? 0 : 1,
@@ -13734,7 +13810,9 @@ int main(int argc, char **argv) {
                 sum_decode_ms, slot_step_tok_s, sum_ep_ms, sum_dense_ms,
                 sum_compose_ms, sum_compose_reduce_ms, sum_compose_copy_ms,
                 sum_compose_final_ms,
-                opt.tp_hc_current_input_gate ? 1 : 0, sum_hc_current_input_ms,
+                opt.tp_hc_current_input_gate ? 1 : 0,
+                opt.tp_hc_current_input_peer_gather_gate ? 1 : 0,
+                sum_hc_current_input_ms,
                 wall_ms, (unsigned long long)checksum);
     close_shared_hc_controls(opt, &shared_hc_controls);
     free_shared_dense_ops(&shared_dense_ops, opt);

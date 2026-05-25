@@ -26,6 +26,19 @@ it is current-HC/input staging and transform fragmentation:
 direct no-profiler run. Next work should fuse or bypass this staging path, then
 rerun direct profiler plus HTTP serving A/B.
 
+Sprint 348 tested the first bypass attempt for that staging path:
+`--tp-hc-current-input-peer-gather-gate` /
+`DS4_V100_TP_EP_HC_CURRENT_INPUT_PEER_GATHER=1`. The gate lets every TP rank
+build its own full current vector from all eight current shards and skips the
+old GPU0 full-current broadcast. It is correct but rejected for performance.
+On the V100 direct 32-slot / 256K / 2-step A/B, control measured
+`87.263615` generated tok/s decode, `100.446187` continuation tok/s decode,
+`733.409911` sum decode ms, and `596.248809` HC-current ms. Peer gather
+measured `67.495350`, `80.223389`, `948.213473`, and `801.525057`
+respectively, with finite output head in both cases. The next optimization
+should therefore target HC control computation/synchronization or fuse the
+split/norm/fill chain, not naive all-rank peer gathering.
+
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
 TP runtime, sharded KV, rank buffers, TurboMind API handles, active MXFP4

@@ -173,6 +173,7 @@ def build_env(args, port):
             "DS4_V100_TOKENS": str(args.tokens),
             "DS4_V100_MAX_REQUESTS": str(max(args.max_requests, args.requests)),
             "DS4_V100_TP_EP_HC_PERSIST_STATE": "1",
+            "DS4_V100_TP_EP_HC_CURRENT_INPUT_PEER_GATHER": "1" if args.hc_current_peer_gather else "0",
             "DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD": "1",
             "DS4_V100_RESERVE_MIB": "0",
             "DS4_V100_PORT": str(port),
@@ -185,6 +186,13 @@ def build_env(args, port):
         }
     )
     return env
+
+
+def variant_suffix(args):
+    suffix = ""
+    if args.hc_current_peer_gather:
+        suffix += "-hc-peer-gather"
+    return suffix
 
 
 def direct_command(args):
@@ -238,6 +246,8 @@ def direct_command(args):
     ]
     if "window" in args.tool:
         cmd.append("--cuda-profiler-window")
+    if args.hc_current_peer_gather:
+        cmd.append("--tp-hc-current-input-peer-gather-gate")
     return cmd
 
 
@@ -296,6 +306,7 @@ def summarize_direct(case_dir, tool, rc, elapsed_s):
                 "sum_dense_ms",
                 "sum_compose_ms",
                 "sum_hc_current_input_ms",
+                "tp_hc_current_input_peer_gather",
                 "sum_final_hc_ms",
                 "wall_ms",
             ]:
@@ -307,7 +318,7 @@ def summarize_direct(case_dir, tool, rc, elapsed_s):
 
 
 def run_direct_case(args):
-    case_name = f"{args.tool}-direct"
+    case_name = f"{args.tool}-direct{variant_suffix(args)}"
     case_dir = args.artifact_dir / case_name
     case_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
@@ -443,6 +454,7 @@ def main():
     parser.add_argument("--tokens", type=int, default=2)
     parser.add_argument("--requests", type=int, default=32)
     parser.add_argument("--max-requests", type=int, default=80)
+    parser.add_argument("--hc-current-peer-gather", action="store_true")
     parser.add_argument("--port", type=int, default=18357)
     parser.add_argument("--readiness-seconds", type=int, default=600)
     parser.add_argument("--request-timeout-seconds", type=int, default=1200)
@@ -481,7 +493,7 @@ def main():
     if args.run_mode == "direct-token-major":
         raise SystemExit(run_direct_case(args))
 
-    case_dir = args.artifact_dir / args.tool
+    case_dir = args.artifact_dir / f"{args.tool}{variant_suffix(args)}"
     case_dir.mkdir(parents=True, exist_ok=True)
     env = build_env(args, args.port)
     base = f"http://127.0.0.1:{args.port}"
