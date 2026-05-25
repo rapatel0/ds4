@@ -183,6 +183,18 @@ so `DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_POOL_NORM` is now promoted as
 the TP/EP launcher default. Fused input-fill and fused RoPE+round remain
 default-off diagnostics.
 
+Sprint 360 validated that promotion through the actual TP/EP launcher path.
+`tools/ds4-v100-run-appliance.sh --print-command` includes
+`--true-ds4-compressed-kv-fused-pool-norm-gate` by default when
+`DS4_V100_SERVE_MODE=tp-ep`, without setting the pool-norm env var. A
+launcher-started selected-token HTTP run with the required true-attention typed
+KV gates returned `32/32` HTTP 200 responses at `32` slots / `256K` /
+`position=262112` / `32` tokens/request, measured `73.289956` client generated
+tok/s, and logged `187` fused pool-norm compressed rows with `0` fused
+input-fill rows. The first selected token was `109328`. The initial bare
+launcher attempt returned HTTP 500 because it omitted the full TP/EP
+true-attention gate set; this does not affect the default-promotion result.
+
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
 TP runtime, sharded KV, rank buffers, TurboMind API handles, active MXFP4

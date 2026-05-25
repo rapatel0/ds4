@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-25
 last_updated_by: codex
-revision: 363
+revision: 364
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -106,6 +106,13 @@ not a serial layer-chain.
   `76.140370`, and compressed-KV sum from `3521.094409` to `3458.469603` ms
   with the same first token. Fused compressed pool+norm is now the TP/EP
   serving default; fused input-fill and RoPE+round remain diagnostics.
+- Sprint 360 validated that default through the launcher path. A
+  `tools/ds4-v100-run-appliance.sh --print-command` proof includes
+  `--true-ds4-compressed-kv-fused-pool-norm-gate` without an explicit
+  pool-norm env override, and a launcher-started selected-token HTTP run
+  returned `32/32` HTTP 200 at `32` slots / `256K` / `position=262112` /
+  `32` tokens/request with `73.289956` client generated tok/s and `187`
+  fused pool-norm rows.
 - Sprint 327 made the production compressed-KV memory contract executable in
   `tools/ds4-v100-plan-tp.c`. With the real TP pack and F8 KV, `32` slots at
   `256K` fits at `27.00 GiB/GPU` with `5.00 GiB` headroom after reserve;
@@ -2276,6 +2283,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 357 added emitted-row selected-token HTTP profiling. | `--http-endpoint selected-token` avoids prompt-prefill ambiguity, returns `32/32` HTTP 200 responses at `position=262143`, and shows fused input-fill + pool-norm reducing parsed compressed-KV sum from `127.697384` to `123.651985` ms while one-token client tok/s remains flat. | Keep fusions opt-in. Run longer amortized serving A/B or continue reducing compressed state/emit fragmentation before default promotion. |
 | 2026-05-25 | Sprint 358 ran the longer selected-token HTTP A/B. | `position=262112` leaves room for a 32-token run while still reaching the emitted-row boundary. Combined input-fill + pool-norm is not promotable; pool-norm only improves client tok/s and compressed-KV sum but regresses the scaffold decode proxy. | Keep all compressed fusions default-off. Confirm pool-norm with repeated/direct multi-step A/B or move to deeper compressed state/emit fusion. |
 | 2026-05-25 | Sprint 359 promoted fused compressed pool+norm. | Direct 32-step non-HTTP A/B resolves the Sprint 358 metric conflict: pool+norm improves decode tok/s by `+1.84%`, wall tok/s by `+1.77%`, and compressed-KV sum by `62.624806 ms` with the same first token. | Keep pool+norm default-on for TP/EP serving. Continue deeper compressed state/emit fusion or rerun full HTTP chat topline with the promoted default. |
+| 2026-05-25 | Sprint 360 validated the pool+norm default through the launcher. | The TP/EP launcher emits the pool+norm gate by default, and a launcher-started selected-token HTTP run returns `32/32` HTTP 200 with `187` fused pool-norm rows and `73.289956` client generated tok/s. | Use the launcher default for future TP/EP serving tests; next rerun chat/topline or continue compressed state/emit fusion. |
 
 ## Open Questions
 

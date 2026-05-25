@@ -1,0 +1,11 @@
+{
+  "client_generated_tok_s": 73.2899556332164,
+  "compressed_lines": 1375,
+  "elapsed_s": 13.971900939941406,
+  "first_token": 109328,
+  "fused_input_fill_lines": 0,
+  "fused_pool_norm_lines": 187,
+  "http_200": 32,
+  "requests": 32,
+  "scaffold_lines": 31
+}
