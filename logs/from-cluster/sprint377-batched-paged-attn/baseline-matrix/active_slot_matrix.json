@@ -1,0 +1,30 @@
+{
+  "cases": [
+    {
+      "artifact_dir": "/workspace/logs/sprint377-batched-paged-attn/baseline-matrix/requests-032/none",
+      "client_generated_tok_s": 40.157539704678925,
+      "coalesced_batch_size": 32,
+      "compressed_kv_sum_ms": 5436.764268999988,
+      "generated_tokens_meta": 1024,
+      "gpu_mem_used_max_mib": 32398.0,
+      "gpu_sample_count": 360,
+      "gpu_util_avg": 7.972222222222222,
+      "gpu_util_max": 38.0,
+      "http_200": 32,
+      "requests": 32,
+      "scaffold_projected_slot_step_tok_s": 56.990488,
+      "server_continuation_tok_s_decode": 88.329223,
+      "server_generated_tok_s": 74.89542,
+      "server_generated_tok_s_decode": 88.37235,
+      "tokens": 32
+    }
+  ],
+  "ctx": 262144,
+  "gpu_sample_interval_ms": 250,
+  "http_endpoint": "chat",
+  "position": 262080,
+  "schema": "ds4_v100_tp_ep_active_slot_matrix.v1",
+  "slots": 32,
+  "tokens": 32,
+  "tool": "none"
+}

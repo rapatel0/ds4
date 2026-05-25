@@ -222,3 +222,44 @@ cache risk.
 - `--fused-gated-silu-gate`
 - TP-sharded expert A/B
 - P2P kernel transport plan if CUDA graphs are revisited
+
+## Progress
+
+### Baseline Metrology
+
+Ran the required read-only V100 baseline before candidate implementation.
+
+Command shape:
+
+```text
+32 active chat requests
+32 configured slots
+256K context
+position 262080
+32 generated tokens/request
+GPU sampling interval 250 ms
+```
+
+Artifact path:
+
+```text
+logs/from-cluster/sprint377-batched-paged-attn/baseline-matrix
+```
+
+| Metric | Value |
+|---|---:|
+| HTTP 200 | `32/32` |
+| Coalesced batch size | `32` |
+| First token | `89340` |
+| Client generated tok/s | `40.157540` |
+| Server generated tok/s | `74.895420` |
+| Server generated tok/s decode | `88.372350` |
+| Server continuation tok/s decode | `88.329223` |
+| Scaffold projected slot-step tok/s | `56.990488` |
+| Avg GPU util | `7.972222%` |
+| Max GPU util | `38%` |
+| Max GPU memory used | `32398 MiB` |
+| Compressed-KV sum | `5436.764269 ms` |
+
+Next implementation step: add default-off gate plumbing and the first
+fixed-size row-family plan.

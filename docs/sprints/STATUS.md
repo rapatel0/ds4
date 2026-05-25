@@ -33,7 +33,10 @@ that does not depend on graph capture: `--batched-paged-attn-gate`.
 Sprint 377 is planned as that next gate. It will add
 `--batched-paged-attn-gate`, keep the current default path unchanged, and A/B a
 batched typed-KV attention row plan against the current `32` slot / `256K`
-serving baseline.
+serving baseline. The read-only baseline has been captured:
+`32/32` HTTP 200, first token `89340`, client `40.157540` tok/s, server decode
+`88.372350` tok/s, average GPU utilization `7.972222%`, max GPU utilization
+`38%`, and compressed-KV sum `5436.764269` ms.
 
 Latest TP/EP format status: Sprint 374 built and ran the V100 workbench for
 the Sprint 373 INT8 candidate shapes. The copied tc-grid INT8 kernels are

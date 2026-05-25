@@ -1,0 +1,2 @@
+requests	http_200	tokens	generated_tokens_meta	coalesced_batch_size	client_generated_tok_s	server_generated_tok_s	server_generated_tok_s_decode	server_continuation_tok_s_decode	scaffold_projected_slot_step_tok_s	compressed_kv_sum_ms	gpu_sample_count	gpu_util_avg	gpu_util_max	gpu_mem_used_max_mib	artifact_dir
+32	32	32	1024	32	40.157539704678925	74.89542	88.37235	88.329223	56.990488	5436.764268999988	360	7.972222222222222	38.0	32398.0	/workspace/logs/sprint377-batched-paged-attn/baseline-matrix/requests-032/none
