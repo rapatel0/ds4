@@ -1,0 +1,7 @@
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread --std=c++17 --expt-relaxed-constexpr --expt-extended-lambda -Ikernels/tc-grid/include -Ikernels/tc-grid/kernels -I. -o tools/ds4-v100-tp-ep-int8-compressor-workbench tools/ds4-v100-tp-ep-int8-compressor-workbench.cu -lm -Xcompiler -pthread -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/local/cuda/lib64 -lcudart -lcublas -ldl
+kernels/tc-grid/kernels/v13_kernels.cuh(1379): warning #177-D: variable "ATOM_K" was declared but never referenced
+      constexpr int ATOM_M = 8, ATOM_N = 32, ATOM_K = 8;
+                                             ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+

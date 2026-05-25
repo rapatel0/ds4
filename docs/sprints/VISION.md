@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-25
 last_updated_by: codex
-revision: 377
+revision: 378
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -222,6 +222,17 @@ not a serial layer-chain.
   workbench target is BF16 attention compressor GEMMs at `M=32`, `K=4096`,
   and `N=128/64`; F8 `indexer.attn_q_b` is not a memory win because INT8+scale
   is larger than F8 block-128 (`169.312 MiB` to `178.500 MiB`).
+- Sprint 374 tested that candidate with a focused V100 workbench. The copied
+  tc-grid INT8 kernels are numerically acceptable on the synthetic compressor
+  problem, but slower than the FP16 tensor-op baseline at the actual target
+  shapes: `M=32,N=128,K=4096` measured `0.009250 ms` for cuBLAS FP16 versus
+  `0.042721 ms` for best tc-grid INT8, and `M=32,N=64,K=4096` measured
+  `0.008803 ms` versus `0.036673 ms`. Do not wire tc-grid INT8 into the
+  attention compressor production path. The next kernel direction should
+  either adapt the vLLM/TurboMind SM70 small-M GEMM registry for this exact
+  compressor shape or fuse the compressor dense boundary with adjacent
+  state/emit work so we remove staging/launch traffic rather than only changing
+  dtype.
 - Sprint 327 made the production compressed-KV memory contract executable in
   `tools/ds4-v100-plan-tp.c`. With the real TP pack and F8 KV, `32` slots at
   `256K` fits at `27.00 GiB/GPU` with `5.00 GiB` headroom after reserve;

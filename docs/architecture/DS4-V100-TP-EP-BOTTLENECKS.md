@@ -35,12 +35,13 @@ The strongest current evidence:
 | Sprint 352 compressed-KV internals | indexer dense `36.616 ms`, attention dense `24.659 ms`, attention state/emit `24.363 ms` at emitted-row boundary | compressed/indexer dense and state/emit are the local hot path |
 | Sprint 372 skip dense host stats | direct scaffold `100.740 -> 117.464 tok/s`, compressed-KV sum `3141.768 -> 1789.795 ms` | host stats/sync were real overhead; remaining path is still dense/staging heavy |
 | Sprint 373 INT8 audit | BF16 attention compressor shapes are `M=32, N=128/64, K=4096` and save `232.5 MiB` if packed INT8+scale | best next kernel-format workbench target |
+| Sprint 374 INT8 workbench | best copied tc-grid INT8 is `4.2-4.6x` slower than cuBLAS FP16 for `M=32,N=128/64,K=4096` | do not wire tc-grid INT8; use TurboMind small-M or fuse the boundary |
 
 ## Bottleneck Ranking
 
 | Rank | Bottleneck | Where It Appears | Current Status |
 |---:|---|---|---|
-| 1 | Compressed/indexer dense projection | ratio-4 layers and ratio-128 compressed layers | primary measured hot path; INT8 workbench next |
+| 1 | Compressed/indexer dense projection | ratio-4 layers and ratio-128 compressed layers | primary measured hot path; tc-grid INT8 rejected; TurboMind small-M or fusion next |
 | 2 | Compressed-KV state/emit boundaries | ratio-4 and ratio-128 layers when compressed rows emit | some fusions tried; pool+norm promoted, others rejected |
 | 3 | Attention projection/state | all layers, with extra cost on compressed layers | measured significant prefix cost; not yet deeply optimized |
 | 4 | GPU0-heavy orchestration/output-head/harness work | serving harness and selected-token/output path | visible as GPU0 higher util than peers; not final production balance |
@@ -68,7 +69,7 @@ set is mostly BF16 in the current pack, not FP8.
 
 | Tensor Family | Source DType | TP Serving Shape | INT8+Scale Decision |
 |---|---|---|---|
-| `attn_compress_{kv,gate}.weight` | BF16 | `M=32, N=128/64, K=4096` | primary INT8 workbench target |
+| `attn_compress_{kv,gate}.weight` | BF16 | `M=32, N=128/64, K=4096` | tc-grid INT8 rejected; TurboMind small-M or fusion target |
 | `indexer.compress_{kv,gate}.weight` | BF16 | `M=32, N=32, K=4096` | possible fused-indexer target |
 | `indexer.proj.weight` | BF16 | `M=32, N=8, K=4096` | too small for standalone GEMM |
 | `indexer.attn_q_b.weight` | F8 E4M3 B128 | `M=32, N=1024, K=1024` | compute-only candidate; INT8+scale is larger |
@@ -90,47 +91,47 @@ The table below describes the expected hot path at the current `32` slot /
 |---:|---|---:|---|---|---|
 | 0 | SWA-only | none | no | attention projection/state, routed FFN, GPU0/control overhead | FP8/F16 attention dense tuning; routed expert path already uses TurboMind-style work |
 | 1 | SWA-only | none | no | attention projection/state, routed FFN | FP8/F16 attention dense tuning |
-| 2 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | INT8 workbench for `N=128,K=4096`; fused indexer state later |
-| 3 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | INT8 workbench for `N=64,K=4096`; state/emit fusion |
-| 4 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | INT8 workbench for `N=128,K=4096`; fused indexer state later |
-| 5 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | INT8 workbench for `N=64,K=4096`; state/emit fusion |
-| 6 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | INT8 workbench for `N=128,K=4096`; fused indexer state later |
-| 7 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | INT8 workbench for `N=64,K=4096`; state/emit fusion |
-| 8 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | INT8 workbench for `N=128,K=4096`; fused indexer state later |
-| 9 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | INT8 workbench for `N=64,K=4096`; state/emit fusion |
-| 10 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | INT8 workbench for `N=128,K=4096`; fused indexer state later |
-| 11 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | INT8 workbench for `N=64,K=4096`; state/emit fusion |
-| 12 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | INT8 workbench for `N=128,K=4096`; fused indexer state later |
-| 13 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | INT8 workbench for `N=64,K=4096`; state/emit fusion |
-| 14 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | INT8 workbench for `N=128,K=4096`; fused indexer state later |
-| 15 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | INT8 workbench for `N=64,K=4096`; state/emit fusion |
-| 16 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | INT8 workbench for `N=128,K=4096`; fused indexer state later |
-| 17 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | INT8 workbench for `N=64,K=4096`; state/emit fusion |
-| 18 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | INT8 workbench for `N=128,K=4096`; fused indexer state later |
-| 19 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | INT8 workbench for `N=64,K=4096`; state/emit fusion |
-| 20 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | INT8 workbench for `N=128,K=4096`; fused indexer state later |
-| 21 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | INT8 workbench for `N=64,K=4096`; state/emit fusion |
-| 22 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | INT8 workbench for `N=128,K=4096`; fused indexer state later |
-| 23 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | INT8 workbench for `N=64,K=4096`; state/emit fusion |
-| 24 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | INT8 workbench for `N=128,K=4096`; fused indexer state later |
-| 25 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | INT8 workbench for `N=64,K=4096`; state/emit fusion |
-| 26 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | INT8 workbench for `N=128,K=4096`; fused indexer state later |
-| 27 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | INT8 workbench for `N=64,K=4096`; state/emit fusion |
-| 28 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | INT8 workbench for `N=128,K=4096`; fused indexer state later |
-| 29 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | INT8 workbench for `N=64,K=4096`; state/emit fusion |
-| 30 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | INT8 workbench for `N=128,K=4096`; fused indexer state later |
-| 31 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | INT8 workbench for `N=64,K=4096`; state/emit fusion |
-| 32 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | INT8 workbench for `N=128,K=4096`; fused indexer state later |
-| 33 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | INT8 workbench for `N=64,K=4096`; state/emit fusion |
-| 34 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | INT8 workbench for `N=128,K=4096`; fused indexer state later |
-| 35 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | INT8 workbench for `N=64,K=4096`; state/emit fusion |
-| 36 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | INT8 workbench for `N=128,K=4096`; fused indexer state later |
-| 37 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | INT8 workbench for `N=64,K=4096`; state/emit fusion |
-| 38 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | INT8 workbench for `N=128,K=4096`; fused indexer state later |
-| 39 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | INT8 workbench for `N=64,K=4096`; state/emit fusion |
-| 40 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | INT8 workbench for `N=128,K=4096`; fused indexer state later |
-| 41 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | INT8 workbench for `N=64,K=4096`; state/emit fusion |
-| 42 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit, output-head interaction after final layer | INT8 workbench for `N=128,K=4096`; output-head rank-balance later |
+| 2 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 3 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 4 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 5 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 6 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 7 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 8 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 9 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 10 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 11 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 12 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 13 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 14 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 15 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 16 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 17 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 18 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 19 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 20 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 21 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 22 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 23 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 24 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 25 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 26 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 27 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 28 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 29 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 30 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 31 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 32 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 33 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 34 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 35 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 36 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 37 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 38 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 39 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 40 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 41 | ratio-128 | 128 | no | attention compressor BF16 dense, compressed state/emit | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion |
+| 42 | ratio-4 | 4 | yes | attention compressor BF16 dense, indexer dense/state, compressed-row emit, output-head interaction after final layer | tc-grid INT8 rejected; TurboMind small-M or compressor-state fusion; output-head rank-balance later |
 
 ## What We Have Tried
 
@@ -163,13 +164,14 @@ The table below describes the expected hot path at the current `32` slot /
 | 371 | Full active-slot matrix | Server decode/util flat from `1` to `32` active requests | full-occupancy kernel/state work is next |
 | 372 | Skip compressed dense host stats | Direct decode `100.740 -> 117.464 tok/s`; chat server decode `99.748 -> 117.341`; selected-token semantic parity clean | production candidate, still default-off pending deterministic chat parity |
 | 373 | INT8 candidate audit | Scoped INT8+scale candidate set saves `280.6 MB`; BF16 attention compressor is best target | next workbench target |
+| 374 | INT8 compressor workbench | cuBLAS FP16 `0.009250/0.008803 ms` beats best tc-grid INT8 `0.042721/0.036673 ms` for `N=128/64` | reject copied tc-grid INT8 for compressor path |
 
 ## What Has Not Been Proven Yet
 
 | Item | Status |
 |---|---|
 | Full production-quality chat parity with skip-stats default-on | not proven; selected-token parity is clean |
-| INT8 compressor kernel performance at `M=32,N=128/64,K=4096` | not measured yet |
+| INT8 compressor kernel performance at `M=32,N=128/64,K=4096` | measured in Sprint 374; copied tc-grid INT8 is slower than FP16 baseline |
 | Production offline INT8 pack conversion | not implemented yet |
 | Fully balanced output-head/rank-0 serving path | not implemented yet |
 | MTP decode uplift | deferred until TP/EP serving path is stable and benchmarkable |
@@ -177,23 +179,17 @@ The table below describes the expected hot path at the current `32` slot /
 
 ## Current Recommendation
 
-The next implementation step should be a V100 INT8 workbench for the BF16
-attention compressor family:
+The Sprint 374 workbench rejected the copied tc-grid INT8 path for the BF16
+attention compressor family. The next implementation step should change the
+execution boundary instead of only changing dtype:
 
-```text
-M = 32
-N = 128 and 64
-K = 4096
-source = BF16
-candidate = INT8 weights + FP16 scales, qk=32
-output contract = FP32 or existing downstream-compatible dense output
-```
+1. Adapt the vLLM/TurboMind SM70 small-M GEMM registry for the exact compressor
+   shape and compare it against the same cuBLAS FP16 baseline.
+2. Or fuse compressor dense output with adjacent compressed state/emit work so
+   the runtime removes launches, staging, and format traffic.
 
-If this workbench is materially faster than the current BF16/F16 path, then
-add an offline pack variant and a runtime gate for just
-`attn_compress_{kv,gate}.weight`. If it is flat or slower, the next best
-target is GPU0/output-head/rank-balance and compressed state/emit fusion, not
-whole-model INT8 conversion.
+Do not add an offline INT8 pack variant for `attn_compress_{kv,gate}.weight`
+until a kernel path beats the current FP16 tensor-op baseline on V100.
 
 ## Reference Artifacts
 
@@ -201,6 +197,8 @@ whole-model INT8 conversion.
 - [SPRINT-371.md](../sprints/SPRINT-371.md)
 - [SPRINT-372.md](../sprints/SPRINT-372.md)
 - [SPRINT-373.md](../sprints/SPRINT-373.md)
+- [SPRINT-374.md](../sprints/SPRINT-374.md)
 - [TEMP_STATUS_REPORT_084.md](../../TEMP_STATUS_REPORT_084.md)
 - [TEMP_STATUS_REPORT_085.md](../../TEMP_STATUS_REPORT_085.md)
 - [INT8_CANDIDATE_AUDIT.md](../../logs/from-cluster/sprint373-int8-candidate-audit/INT8_CANDIDATE_AUDIT.md)
+- [INT8_COMPRESSOR_WORKBENCH.md](../../logs/from-cluster/sprint374-int8-compressor-workbench/INT8_COMPRESSOR_WORKBENCH.md)

@@ -9,17 +9,19 @@ Current bottleneck reference:
 summarizes the measured bottlenecks, layer-by-layer hot paths, and experiments
 already tried.
 
-Latest TP/EP format status: Sprint 373 added
-`tools/ds4-v100-tp-ep-int8-candidates`, a contract audit tool for scoped
-offline INT8+scale conversion. Running it on the real V100 TP/EP contract
-shows the compressed/indexer dense candidate set is `1328` TP rows and is
-mostly BF16, not FP8. With tc-grid style `int8 weights + fp16 scales` at
-`qk=32`, the scoped set moves from `796721152` source bytes (`0.742 GiB`) to
-`516112384` bytes (`0.481 GiB`), saving `280608768` bytes aggregate and
-`33.451 MiB/GPU`. The primary target is BF16 attention compressor GEMMs at
-`M=32`, `N=128/64`, `K=4096`. F8 `indexer.attn_q_b` is not a memory win:
-`169.312 MiB` source becomes `178.500 MiB` INT8+scale, so it should only be
-tested as a compute-only candidate.
+Latest TP/EP format status: Sprint 374 built and ran the V100 workbench for
+the Sprint 373 INT8 candidate shapes. The copied tc-grid INT8 kernels are
+numerically acceptable but not performance candidates for the BF16 attention
+compressor GEMMs at `M=32,K=4096`: for `N=128`, cuBLAS FP16 measured
+`0.009250 ms` while best tc-grid INT8 (`v12s_ks8+zero`) measured
+`0.042721 ms`; for `N=64`, cuBLAS measured `0.008803 ms` while best tc-grid
+INT8 measured `0.036673 ms`. Do not wire tc-grid INT8 into
+`attn_compress_{kv,gate}.weight`. The next format/kernel path should either
+adapt the vLLM/TurboMind SM70 small-M GEMM registry for this exact shape or
+fuse the compressor dense boundary with adjacent state/emit work. Sprint 373
+remains useful as the memory audit: scoped INT8+scale would save
+`280608768` bytes aggregate, but the measured tc-grid compute path is slower
+than the FP16 tensor-op baseline.
 
 Latest TP/EP optimization status: Sprint 372 added an opt-in gate to skip
 host-side dense-output statistics in the compressed-KV projection path:

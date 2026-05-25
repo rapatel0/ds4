@@ -1,0 +1,7 @@
+device=0 name=Tesla V100-SXM2-32GB sm=70 warmup=30 iters=300
+shape=32x128x4096 label=cublas-f16-tensorop ms=0.009250 tflops=3.627 gbps=143.469 max_abs=0.000109196 p99_abs=8.84533e-05 ok=1
+shape=32x128x4096 label=tc-grid-v12s-ks8+zero ms=0.042721 tflops=0.785 gbps=25.695 max_abs=0.0152217 p99_abs=0.0125701 ok=1
+shape=32x128x4096 label=tc-grid-v13-rf-v6 ms=0.282150 tflops=0.119 gbps=3.891 max_abs=0.0134012 p99_abs=0.011393 ok=1
+shape=32x64x4096 label=cublas-f16-tensorop ms=0.008803 tflops=1.906 gbps=90.268 max_abs=0.000109196 p99_abs=8.92878e-05 ok=1
+shape=32x64x4096 label=tc-grid-v12s-ks8+zero ms=0.036673 tflops=0.457 gbps=22.115 max_abs=0.0152217 p99_abs=0.0125701 ok=1
+shape=32x64x4096 label=tc-grid-v13-rf-v6 ms=0.260751 tflops=0.064 gbps=3.110 max_abs=0.0134012 p99_abs=0.011393 ok=1
