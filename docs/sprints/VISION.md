@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-25
 last_updated_by: codex
-revision: 374
+revision: 375
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -183,6 +183,16 @@ not a serial layer-chain.
   stayed effectively flat (`101.842964` to `101.159316` tok/s) while average
   GPU utilization stayed near `8.3%`. This is not the full matrix, but it
   validates the tool needed to characterize 1/4/8/16/32 active-slot behavior.
+- Sprint 371 ran that full active-slot matrix at the target long-context chat
+  shape: `32` configured slots, `256K` context, `position=262080`, and
+  `32` generated tokens/request. Cases `1,4,8,16,32` all passed and coalesced
+  correctly. Client aggregate tok/s scaled from `1.584552` to `50.694229`
+  because the same fixed batch cost was amortized over more active responses,
+  but server wall tok/s stayed `81.6-83.9`, server decode tok/s stayed
+  `97.4-100.0`, and average GPU utilization stayed `9.8-10.3%`. The decision
+  is: active-slot compaction helps low/moderate occupancy cost, but the 32-slot
+  topline needs full-occupancy kernel/state work, especially compressed/indexer
+  dense projection, attention projection/state, and GPU0-heavy staging.
 - Sprint 327 made the production compressed-KV memory contract executable in
   `tools/ds4-v100-plan-tp.c`. With the real TP pack and F8 KV, `32` slots at
   `256K` fits at `27.00 GiB/GPU` with `5.00 GiB` headroom after reserve;
@@ -2364,6 +2374,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 368 added TP/EP chat context admission. | Over-context chat now returns HTTP 400 with `context_window_exceeded` before GPU decode; valid 32-request/32-token chat at `position=262080` still passes. | Extend admission toward active-slot/variable-length serving and continue dense/state optimization. |
 | 2026-05-25 | Sprint 369 added opt-in GPU utilization sampling to the TP/EP profile harness. | `--gpu-sample-interval-ms` writes `gpu_util.csv` and summary utilization fields without overhead when disabled. A 4-request / 32-slot chat smoke passed and showed `8.412879%` average GPU util with GPU0 much busier than peers. | Use sampled active-slot matrices before changing scheduling; then optimize active-slot compaction, dense projection/state fragmentation, or EP balance with utilization evidence attached. |
 | 2026-05-25 | Sprint 370 added the active-slot matrix driver. | The smoke matrix for active requests `1,4` passed and wrote aggregate TSV/JSON plus per-case profile artifacts; decode stayed flat around `101` tok/s and average GPU util stayed around `8.3%`. | Run the full `1,4,8,16,32` longer-decode matrix, then choose active-slot compaction versus deeper dense/state kernel work from the evidence. |
+| 2026-05-25 | Sprint 371 ran the full active-slot matrix. | At `32` slots / `256K` / `32` tokens/request, all cases `1,4,8,16,32` passed. Client aggregate tok/s scaled with active responses, but server decode stayed `97.4-100.0` tok/s and average GPU util stayed `9.8-10.3%`. | Use active-slot compaction for low-occupancy efficiency later; next optimize the full 32-slot bottleneck in compressed/indexer dense projection, attention projection/state, and GPU0-heavy staging. |
 
 ## Open Questions
 

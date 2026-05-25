@@ -29,6 +29,25 @@ matrix harness and strengthens the next question: whether the full 1/4/8/16/32
 matrix shows any active-slot scaling before we invest in active-slot compaction
 or deeper dense/state kernel fusion.
 
+Sprint 371 ran that full matrix at the target long-context chat shape:
+`32` configured slots, `256K` context, `position=262080`, and `32`
+tokens/request. All cases passed and coalesced correctly:
+
+| Active requests | HTTP 200 | Client tok/s | Server decode tok/s | Avg GPU util |
+|---:|---:|---:|---:|---:|
+| 1 | 1/1 | 1.584552 | 98.230713 | 10.264286% |
+| 4 | 4/4 | 6.430512 | 99.991505 | 10.200000% |
+| 8 | 8/8 | 12.450978 | 97.865480 | 9.958333% |
+| 16 | 16/16 | 24.557272 | 97.446076 | 9.840278% |
+| 32 | 32/32 | 50.694229 | 98.768134 | 10.317857% |
+
+Interpretation: client aggregate tok/s scales because the fixed batch cost is
+amortized over more active responses, but the underlying server decode rate and
+GPU utilization are flat. Active-slot compaction is still useful for low
+occupancy, but it will not fix the full 32-slot topline. The next optimization
+target should be full-occupancy kernel/state work: compressed/indexer dense
+projection, attention projection/state, and GPU0-heavy staging/imbalance.
+
 Latest TP/EP typed-KV serving status: Sprint 347 added a direct non-server
 profile mode to the permanent profiler harness:
 `tools/ds4-v100-tp-ep-profile.py --run-mode direct-token-major`. It invokes

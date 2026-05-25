@@ -1,0 +1,6 @@
+requests	http_200	tokens	generated_tokens_meta	coalesced_batch_size	client_generated_tok_s	server_generated_tok_s	server_generated_tok_s_decode	server_continuation_tok_s_decode	scaffold_projected_slot_step_tok_s	compressed_kv_sum_ms	gpu_sample_count	gpu_util_avg	gpu_util_max	gpu_mem_used_max_mib	artifact_dir
+1	1	32	32	1	1.5845517589985132	82.049572	98.230713	98.152233	100.626889	4823.022147000005	280	10.264285714285714	40.0	32398.0	/workspace/logs/sprint371-active-slot-matrix-full/requests-001/none-hc-stream-sync
+4	4	32	128	4	6.430512055318096	83.852456	99.991505	99.972335	101.227168	4751.168231000001	280	10.2	40.0	32398.0	/workspace/logs/sprint371-active-slot-matrix-full/requests-004/none-hc-stream-sync
+8	8	32	256	8	12.450978272839787	81.926628	97.86548	97.803085	100.654557	4867.921193999994	288	9.958333333333334	40.0	32398.0	/workspace/logs/sprint371-active-slot-matrix-full/requests-008/none-hc-stream-sync
+16	16	32	512	16	24.557271876387574	81.63076	97.446076	97.432113	100.212892	4945.392901999991	288	9.840277777777779	39.0	32398.0	/workspace/logs/sprint371-active-slot-matrix-full/requests-016/none-hc-stream-sync
+32	32	32	1024	32	50.69422936642401	82.530166	98.768134	98.730385	100.940815	4826.1514880000095	280	10.317857142857143	41.0	32398.0	/workspace/logs/sprint371-active-slot-matrix-full/requests-032/none-hc-stream-sync

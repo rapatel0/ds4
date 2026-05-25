@@ -1,0 +1,1 @@
+./tools/ds4-v100-tp-ep-profile.py --run-mode http --http-endpoint chat --tool none --artifact-dir /workspace/logs/sprint371-active-slot-matrix-full/requests-016 --tokens 32 --ctx 262144 --slots 32 --position 262080 --requests 16 --max-requests 120 --port 18403 --gpu-sample-interval-ms 500 --request-timeout-seconds 1800 --readiness-seconds 600 --hc-current-stream-sync
