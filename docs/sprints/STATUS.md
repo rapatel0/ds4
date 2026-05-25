@@ -129,6 +129,21 @@ compressed-KV time, and `127.736989` ms compressed-KV sum. This is a real
 stage-level win but only `+0.61%` topline in one run, so it remains opt-in
 pending repeat/combination testing with fused input fill.
 
+Sprint 356 made the compressed-fusion gates reachable from the TP/EP serving
+launcher and profile harness. New default-off env vars are
+`DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_INPUT_FILL`,
+`DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_ROPE_ROUND`, and
+`DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_POOL_NORM`; the deploy env
+example documents them. The launcher `--print-command` proof includes both
+fused input-fill and fused pool-norm flags. V100 direct combined A/B at `32`
+slots / `256K` / emitted-row `position=262143` passed with identical output
+token `54639`: control measured `80.511365` generated decode tok/s,
+`130.812593` ms pre-EP compressed-KV time, and `130.329162` ms compressed-KV
+sum; input-fill + pool-norm measured `81.311102` tok/s, `128.988052` ms
+pre-EP compressed-KV time, and `128.467170` ms compressed-KV sum. Keep the
+gates opt-in pending either repeated direct A/B or an emitted-row HTTP profile
+mode that avoids prompt-prefill position ambiguity.
+
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
 TP runtime, sharded KV, rank buffers, TurboMind API handles, active MXFP4

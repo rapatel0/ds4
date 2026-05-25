@@ -171,6 +171,7 @@ def build_env(args, port):
             "DS4_V100_TURBOMIND_LIB": args.turbomind_lib,
             "DS4_V100_TP_EP_TOKENIZER_MODEL": args.tokenizer_model,
             "DS4_V100_TOKENS": str(args.tokens),
+            "DS4_V100_TP_EP_POSITION": str(args.position),
             "DS4_V100_MAX_REQUESTS": str(max(args.max_requests, args.requests)),
             "DS4_V100_TP_EP_HC_PERSIST_STATE": "1",
             "DS4_V100_TP_EP_HC_CURRENT_INPUT_PEER_GATHER": "1" if args.hc_current_peer_gather else "0",
@@ -183,6 +184,15 @@ def build_env(args, port):
             "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_QUIET": "1",
             "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_BATCH_ROWS": "1",
             "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_STREAM_SYNC": "1",
+            "DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_INPUT_FILL": "1"
+            if args.fused_compressed_input_fill
+            else "0",
+            "DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_ROPE_ROUND": "1"
+            if args.fused_compressed_rope_round
+            else "0",
+            "DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_POOL_NORM": "1"
+            if args.fused_compressed_pool_norm
+            else "0",
             "DS4_V100_CUDA_PROFILER_WINDOW": "1" if "window" in args.tool else "0",
         }
     )
