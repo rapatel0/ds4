@@ -405,6 +405,10 @@ struct LayerRunSummary {
     double decode_hc_current_split_ms_per_step = 0.0;
     double decode_hc_current_gather_ms_per_step = 0.0;
     double decode_hc_current_ffn_router_ms_per_step = 0.0;
+    double decode_hc_current_ffn_norm_ms_per_step = 0.0;
+    double decode_hc_current_router_select_ms_per_step = 0.0;
+    double decode_hc_current_router_d2h_ms_per_step = 0.0;
+    double decode_hc_current_route_upload_ms_per_step = 0.0;
     double decode_hc_current_fill_pack_ms_per_step = 0.0;
     double decode_pre_ep_hc_current_ms_per_step = 0.0;
     double decode_pre_ep_attention_projection_ms_per_step = 0.0;
@@ -521,6 +525,10 @@ struct DecodeLoopStats {
     double hc_current_split_ms_per_step = 0.0;
     double hc_current_gather_ms_per_step = 0.0;
     double hc_current_ffn_router_ms_per_step = 0.0;
+    double hc_current_ffn_norm_ms_per_step = 0.0;
+    double hc_current_router_select_ms_per_step = 0.0;
+    double hc_current_router_d2h_ms_per_step = 0.0;
+    double hc_current_route_upload_ms_per_step = 0.0;
     double hc_current_fill_pack_ms_per_step = 0.0;
     double pre_ep_hc_current_ms_per_step = 0.0;
     double pre_ep_attention_projection_ms_per_step = 0.0;
@@ -555,6 +563,10 @@ struct HcCurrentInputBreakdown {
     double split_ms = 0.0;
     double gather_ms = 0.0;
     double ffn_router_ms = 0.0;
+    double ffn_norm_ms = 0.0;
+    double router_select_ms = 0.0;
+    double router_d2h_ms = 0.0;
+    double route_upload_ms = 0.0;
     double fill_pack_ms = 0.0;
 };
 
@@ -5218,6 +5230,7 @@ int run_shared_hc_current_input(const Options &opt,
         (uint32_t)kHidden, (uint32_t)opt.slots, 1.0e-6f);
     CHECK_CUDA(cudaGetLastError());
     sync_control_device();
+    auto t_norm_done = std::chrono::steady_clock::now();
     if (graph_event_order) {
         if (rank_streams_wait_on_control() != 0) return 10;
     }
@@ -5227,6 +5240,9 @@ int run_shared_hc_current_input(const Options &opt,
                              (size_t)full_elems, nullptr);
     }
 
+    auto t_router_select_done = t_norm_done;
+    auto t_router_d2h_done = t_norm_done;
+    auto t_route_upload_done = t_norm_done;
     if (opt.model_router_routes) {
         if (!hc->d_router_w[layer] || !hc->d_router_logits ||
             !hc->d_router_selected || !hc->d_router_weights) {
@@ -5245,6 +5261,7 @@ int run_shared_hc_current_input(const Options &opt,
             (uint32_t)opt.slots);
         CHECK_CUDA(cudaGetLastError());
         sync_control_device();
+        t_router_select_done = std::chrono::steady_clock::now();
         std::vector<int> selected((size_t)opt.slots * (size_t)opt.top_k);
         std::vector<float> weights((size_t)opt.slots * (size_t)opt.top_k);
         CHECK_CUDA(cudaMemcpy(selected.data(), hc->d_router_selected,
@@ -5253,6 +5270,7 @@ int run_shared_hc_current_input(const Options &opt,
         CHECK_CUDA(cudaMemcpy(weights.data(), hc->d_router_weights,
                               weights.size() * sizeof(float),
                               cudaMemcpyDeviceToHost));
+        t_router_d2h_done = std::chrono::steady_clock::now();
         const int route_rc = upload_model_router_route_plan(opt, ranks,
                                                             selected, weights);
         if (route_rc != 0) {
@@ -5261,8 +5279,13 @@ int run_shared_hc_current_input(const Options &opt,
                          layer, route_rc);
             return 5;
         }
+        t_route_upload_done = std::chrono::steady_clock::now();
+    } else {
+        t_router_select_done = t_norm_done;
+        t_router_d2h_done = t_norm_done;
+        t_route_upload_done = t_norm_done;
     }
-    auto t_router_done = std::chrono::steady_clock::now();
+    auto t_router_done = t_route_upload_done;
 
     for (int rank = 0; rank < kGpus; ++rank) {
         RankState &r = ranks[rank];
@@ -5368,6 +5391,14 @@ int run_shared_hc_current_input(const Options &opt,
             std::chrono::duration<double, std::milli>(t_gather_done - t_weighted_done).count();
         breakdown->ffn_router_ms +=
             std::chrono::duration<double, std::milli>(t_router_done - t_gather_done).count();
+        breakdown->ffn_norm_ms +=
+            std::chrono::duration<double, std::milli>(t_norm_done - t_gather_done).count();
+        breakdown->router_select_ms +=
+            std::chrono::duration<double, std::milli>(t_router_select_done - t_norm_done).count();
+        breakdown->router_d2h_ms +=
+            std::chrono::duration<double, std::milli>(t_router_d2h_done - t_router_select_done).count();
+        breakdown->route_upload_ms +=
+            std::chrono::duration<double, std::milli>(t_route_upload_done - t_router_d2h_done).count();
         breakdown->fill_pack_ms +=
             std::chrono::duration<double, std::milli>(t_fill_done - t_router_done).count();
     }
@@ -8131,9 +8162,12 @@ int upload_model_router_route_plan(const Options &opt,
     std::vector<int> route_indices_by_slot[kGpus];
     std::vector<int> route_count_by_slot[kGpus];
     std::vector<int> counts[kGpus];
+    const bool needs_single_route_index = !opt.compact_moe_decode_gate;
     for (int rank = 0; rank < kGpus; ++rank) {
         counts[rank].assign((size_t)kLocalExperts, 0);
-        route_index_by_slot[rank].assign((size_t)opt.slots, -1);
+        if (needs_single_route_index) {
+            route_index_by_slot[rank].assign((size_t)opt.slots, -1);
+        }
         route_indices_by_slot[rank].assign((size_t)opt.slots * (size_t)opt.top_k,
                                            -1);
         route_count_by_slot[rank].assign((size_t)opt.slots, 0);
@@ -8233,7 +8267,8 @@ int upload_model_router_route_plan(const Options &opt,
                     return 5;
                 }
                 route_weights[rank][(size_t)idx] = w;
-                if (route_index_by_slot[rank][(size_t)slot] < 0) {
+                if (needs_single_route_index &&
+                    route_index_by_slot[rank][(size_t)slot] < 0) {
                     route_index_by_slot[rank][(size_t)slot] = idx;
                 }
                 int &route_count = route_count_by_slot[rank][(size_t)slot];
@@ -8320,10 +8355,12 @@ int upload_model_router_route_plan(const Options &opt,
     for (int dst = 0; dst < kGpus; ++dst) {
         CHECK_CUDA(cudaSetDevice(ranks[dst].device));
         for (int src = 0; src < kGpus; ++src) {
-            CHECK_CUDA(cudaMemcpy(ranks[dst].d_route_index_by_slot[src],
-                                  route_index_by_slot[src].data(),
-                                  route_index_by_slot[src].size() * sizeof(int),
-                                  cudaMemcpyHostToDevice));
+            if (needs_single_route_index) {
+                CHECK_CUDA(cudaMemcpy(ranks[dst].d_route_index_by_slot[src],
+                                      route_index_by_slot[src].data(),
+                                      route_index_by_slot[src].size() * sizeof(int),
+                                      cudaMemcpyHostToDevice));
+            }
             CHECK_CUDA(cudaMemcpy(ranks[dst].d_route_indices_by_slot[src],
                                   route_indices_by_slot[src].data(),
                                   route_indices_by_slot[src].size() * sizeof(int),
@@ -12584,6 +12621,14 @@ int run_decode_loop(const Options &opt,
         hc_current_breakdown.gather_ms / (double)opt.decode_steps;
     stats->hc_current_ffn_router_ms_per_step =
         hc_current_breakdown.ffn_router_ms / (double)opt.decode_steps;
+    stats->hc_current_ffn_norm_ms_per_step =
+        hc_current_breakdown.ffn_norm_ms / (double)opt.decode_steps;
+    stats->hc_current_router_select_ms_per_step =
+        hc_current_breakdown.router_select_ms / (double)opt.decode_steps;
+    stats->hc_current_router_d2h_ms_per_step =
+        hc_current_breakdown.router_d2h_ms / (double)opt.decode_steps;
+    stats->hc_current_route_upload_ms_per_step =
+        hc_current_breakdown.route_upload_ms / (double)opt.decode_steps;
     stats->hc_current_fill_pack_ms_per_step =
         hc_current_breakdown.fill_pack_ms / (double)opt.decode_steps;
     stats->pre_ep_hc_current_ms_per_step =
@@ -12765,6 +12810,14 @@ int run_resident_layer_decode(const Options &opt,
             decode_loop.hc_current_gather_ms_per_step;
         summary->decode_hc_current_ffn_router_ms_per_step =
             decode_loop.hc_current_ffn_router_ms_per_step;
+        summary->decode_hc_current_ffn_norm_ms_per_step =
+            decode_loop.hc_current_ffn_norm_ms_per_step;
+        summary->decode_hc_current_router_select_ms_per_step =
+            decode_loop.hc_current_router_select_ms_per_step;
+        summary->decode_hc_current_router_d2h_ms_per_step =
+            decode_loop.hc_current_router_d2h_ms_per_step;
+        summary->decode_hc_current_route_upload_ms_per_step =
+            decode_loop.hc_current_route_upload_ms_per_step;
         summary->decode_hc_current_fill_pack_ms_per_step =
             decode_loop.hc_current_fill_pack_ms_per_step;
         summary->decode_pre_ep_hc_current_ms_per_step =
@@ -13485,6 +13538,14 @@ int run_layer(const Options &opt,
             decode_loop.hc_current_gather_ms_per_step;
         summary->decode_hc_current_ffn_router_ms_per_step =
             decode_loop.hc_current_ffn_router_ms_per_step;
+        summary->decode_hc_current_ffn_norm_ms_per_step =
+            decode_loop.hc_current_ffn_norm_ms_per_step;
+        summary->decode_hc_current_router_select_ms_per_step =
+            decode_loop.hc_current_router_select_ms_per_step;
+        summary->decode_hc_current_router_d2h_ms_per_step =
+            decode_loop.hc_current_router_d2h_ms_per_step;
+        summary->decode_hc_current_route_upload_ms_per_step =
+            decode_loop.hc_current_route_upload_ms_per_step;
         summary->decode_hc_current_fill_pack_ms_per_step =
             decode_loop.hc_current_fill_pack_ms_per_step;
         summary->decode_pre_ep_hc_current_ms_per_step =
@@ -13631,6 +13692,10 @@ int run_token_major_serving_loop(const Options &opt,
     double sum_hc_current_split_ms = 0.0;
     double sum_hc_current_gather_ms = 0.0;
     double sum_hc_current_ffn_router_ms = 0.0;
+    double sum_hc_current_ffn_norm_ms = 0.0;
+    double sum_hc_current_router_select_ms = 0.0;
+    double sum_hc_current_router_d2h_ms = 0.0;
+    double sum_hc_current_route_upload_ms = 0.0;
     double sum_hc_current_fill_pack_ms = 0.0;
     double sum_pre_ep_hc_current_ms = 0.0;
     double sum_pre_ep_attention_projection_ms = 0.0;
@@ -13761,6 +13826,10 @@ int run_token_major_serving_loop(const Options &opt,
                         "decode_hc_current_split_ms_per_step\t%.6f\t"
                         "decode_hc_current_gather_ms_per_step\t%.6f\t"
                         "decode_hc_current_ffn_router_ms_per_step\t%.6f\t"
+                        "decode_hc_current_ffn_norm_ms_per_step\t%.6f\t"
+                        "decode_hc_current_router_select_ms_per_step\t%.6f\t"
+                        "decode_hc_current_router_d2h_ms_per_step\t%.6f\t"
+                        "decode_hc_current_route_upload_ms_per_step\t%.6f\t"
                         "decode_hc_current_fill_pack_ms_per_step\t%.6f\t"
                         "decode_pre_ep_hc_current_ms_per_step\t%.6f\t"
                         "decode_pre_ep_attention_projection_ms_per_step\t%.6f\t"
@@ -13788,6 +13857,10 @@ int run_token_major_serving_loop(const Options &opt,
                         s.decode_hc_current_split_ms_per_step,
                         s.decode_hc_current_gather_ms_per_step,
                         s.decode_hc_current_ffn_router_ms_per_step,
+                        s.decode_hc_current_ffn_norm_ms_per_step,
+                        s.decode_hc_current_router_select_ms_per_step,
+                        s.decode_hc_current_router_d2h_ms_per_step,
+                        s.decode_hc_current_route_upload_ms_per_step,
                         s.decode_hc_current_fill_pack_ms_per_step,
                         s.decode_pre_ep_hc_current_ms_per_step,
                         s.decode_pre_ep_attention_projection_ms_per_step,
@@ -13818,6 +13891,13 @@ int run_token_major_serving_loop(const Options &opt,
                 sum_hc_current_split_ms += s.decode_hc_current_split_ms_per_step;
                 sum_hc_current_gather_ms += s.decode_hc_current_gather_ms_per_step;
                 sum_hc_current_ffn_router_ms += s.decode_hc_current_ffn_router_ms_per_step;
+                sum_hc_current_ffn_norm_ms += s.decode_hc_current_ffn_norm_ms_per_step;
+                sum_hc_current_router_select_ms +=
+                    s.decode_hc_current_router_select_ms_per_step;
+                sum_hc_current_router_d2h_ms +=
+                    s.decode_hc_current_router_d2h_ms_per_step;
+                sum_hc_current_route_upload_ms +=
+                    s.decode_hc_current_route_upload_ms_per_step;
                 sum_hc_current_fill_pack_ms += s.decode_hc_current_fill_pack_ms_per_step;
                 sum_pre_ep_hc_current_ms += s.decode_pre_ep_hc_current_ms_per_step;
                 sum_pre_ep_attention_projection_ms +=
@@ -13917,6 +13997,10 @@ int run_token_major_serving_loop(const Options &opt,
                 "sum_hc_current_split_ms\t%.6f\t"
                 "sum_hc_current_gather_ms\t%.6f\t"
                 "sum_hc_current_ffn_router_ms\t%.6f\t"
+                "sum_hc_current_ffn_norm_ms\t%.6f\t"
+                "sum_hc_current_router_select_ms\t%.6f\t"
+                "sum_hc_current_router_d2h_ms\t%.6f\t"
+                "sum_hc_current_route_upload_ms\t%.6f\t"
                 "sum_hc_current_fill_pack_ms\t%.6f\t"
                 "sum_pre_ep_hc_current_ms\t%.6f\t"
                 "sum_pre_ep_attention_projection_ms\t%.6f\t"
@@ -13959,6 +14043,10 @@ int run_token_major_serving_loop(const Options &opt,
                 sum_hc_current_split_ms,
                 sum_hc_current_gather_ms,
                 sum_hc_current_ffn_router_ms,
+                sum_hc_current_ffn_norm_ms,
+                sum_hc_current_router_select_ms,
+                sum_hc_current_router_d2h_ms,
+                sum_hc_current_route_upload_ms,
                 sum_hc_current_fill_pack_ms,
                 sum_pre_ep_hc_current_ms,
                 sum_pre_ep_attention_projection_ms,
