@@ -1154,9 +1154,10 @@ and improved the graph-gated diagnostic from `44.247981` to `49.429146`
 decode tok/s while preserving parity. The final-HC pass removed another
 blocker class and reduced final-HC stage time, leaving five helper blocker
 classes. The attention-projection pass removed one more blocker class, leaving
-four. The next concrete task is attention state/raw-read/output and
-compressed-KV helper waits, followed by the same audit before any graph replay
-attempt.
+four. The raw-read/window pass removed another blocker class and improved the
+graph-gated diagnostic to `54.144225` decode tok/s, leaving three blockers.
+The next concrete task is attention state/output and compressed-KV helper
+waits, followed by the same audit before any graph replay attempt.
 
 ### Sprint 377 - Batched Paged Attention Gate [tentative]
 
@@ -2615,6 +2616,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 376 HC-current helper event pass ran on V100. | HC-current stream/control waits can be event-ordered under the graph gate; parity holds and helper blocker classes drop from `7` to `6`. | Continue helper-level event ordering, starting with final HC expansion and attention helpers. |
 | 2026-05-25 | Sprint 376 final-HC helper event pass ran on V100. | Final-HC host waits can be event-ordered under the graph gate; parity holds and helper blocker classes drop from `6` to `5`. | Continue with attention projection/state/output and compressed-KV helper waits. |
 | 2026-05-25 | Sprint 376 attention-projection helper event pass ran on V100. | Attention projection host waits can be event-ordered under the graph gate; parity holds and helper blocker classes drop from `5` to `4`. | Continue with attention state/raw-read/output and compressed-KV helper waits. |
+| 2026-05-25 | Sprint 376 raw-read helper event pass ran on V100. | Raw attention read/window host waits can be skipped under the graph gate; parity holds and helper blocker classes drop from `4` to `3`. | Continue with attention state/output and compressed-KV helper waits. |
 
 ## Open Questions
 

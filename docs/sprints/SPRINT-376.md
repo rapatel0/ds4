@@ -352,3 +352,34 @@ logs/from-cluster/sprint376-decode-cudagraph/attention-projection-event-audit/no
 Interpretation: this removes one more graph blocker class while preserving
 token/checksum parity. It remains diagnostic-only; the graph-gated path is
 not faster before graph replay.
+
+### Raw-Read Event-Ordering Pass
+
+Removed host stream waits and layer-`<=2` tensor-stat synchronization from
+`run_true_ds4_attention_raw_read` / `run_true_ds4_attention_raw_window` under
+`--decode-cudagraph-gate`. The default path is unchanged.
+
+Result:
+
+| Field | Attention-projection event pass | Raw-read event pass |
+|---|---:|---:|
+| Generated decode tok/s | `45.864458` | `54.144225` |
+| Output first token | `54639` | `54639` |
+| Output checksum | `24071637347` | `24071637347` |
+| Scaffold checksum | `3401922407` | `3401922407` |
+| `sync_all_calls` | `0` | `0` |
+| `event_barrier_calls` | `172` | `172` |
+| `helper_host_sync_blocker_classes` | `4` | `3` |
+| `capture_eligible` | `0` | `0` |
+| Blocker | `helper_host_synchronization` | `helper_host_synchronization` |
+
+Artifacts:
+
+```text
+logs/from-cluster/sprint376-decode-cudagraph/raw-read-event-audit/none-direct-decode-cudagraph
+```
+
+Interpretation: raw-read/window event ordering preserves parity and removes
+another helper blocker class. The raw-read stage improves from `19.437900` to
+`4.487099` ms in the graph-gated diagnostic. Remaining helper blockers:
+attention state, attention output, and compressed-KV.

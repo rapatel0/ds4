@@ -10514,13 +10514,15 @@ int run_true_ds4_attention_raw_read(const Options &opt,
             (uint32_t)kHeadDim, (uint32_t)kRawSwaRows, raw_row);
         CHECK_CUDA(cudaGetLastError());
     }
-    for (int rank = 0; rank < kGpus; ++rank) {
-        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-        CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    if (!opt.decode_cudagraph_gate) {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        }
     }
     const auto stop = std::chrono::steady_clock::now();
     const double ms = std::chrono::duration<double, std::milli>(stop - start).count();
-    if (layer <= 2) {
+    if (!opt.decode_cudagraph_gate && layer <= 2) {
         for (int rank = 0; rank < kGpus; ++rank) {
             CHECK_CUDA(cudaSetDevice(ranks[rank].device));
             log_tensor_f32_stats("true_attn_raw_read_heads", layer, rank,
@@ -10614,13 +10616,15 @@ int run_true_ds4_attention_raw_window(const Options &opt,
         }
         CHECK_CUDA(cudaGetLastError());
     }
-    for (int rank = 0; rank < kGpus; ++rank) {
-        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-        CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    if (!opt.decode_cudagraph_gate) {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        }
     }
     const auto stop = std::chrono::steady_clock::now();
     const double ms = std::chrono::duration<double, std::milli>(stop - start).count();
-    if (layer <= 2) {
+    if (!opt.decode_cudagraph_gate && layer <= 2) {
         for (int rank = 0; rank < kGpus; ++rank) {
             CHECK_CUDA(cudaSetDevice(ranks[rank].device));
             log_tensor_f32_stats("true_attn_raw_window_heads", layer, rank,
@@ -13268,7 +13272,8 @@ int run_token_major_serving_loop(const Options &opt,
             (opt.true_ds4_compressed_kv_gate ? 1 : 0) +
             (opt.true_ds4_attention_state_gate ? 1 : 0) +
             (opt.true_ds4_attention_typed_kv_history_gate ? 1 : 0) +
-            (opt.true_ds4_attention_raw_read_gate ? 1 : 0) +
+            (opt.true_ds4_attention_raw_read_gate &&
+             !opt.decode_cudagraph_gate ? 1 : 0) +
             (opt.true_ds4_attention_output_gate ? 1 : 0) +
             (opt.true_ds4_post_attention_ffn_input_gate ? 1 : 0) +
             (opt.final_hc_carry_gate && opt.tp_hc_final_expand_gate &&
