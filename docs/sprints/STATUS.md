@@ -17,6 +17,18 @@ averages showed GPU0 at `27.090909%` while peers were mostly `3-12%`, giving
 the next active-slot/scheduling work concrete imbalance evidence in the normal
 profile artifact.
 
+Sprint 370 added `tools/ds4-v100-tp-ep-active-slot-matrix.py`, a reusable
+driver that runs the TP/EP profile harness over active-request cases and writes
+aggregate `active_slot_matrix.tsv` / `active_slot_matrix.json`. The V100 smoke
+matrix used `32` configured slots, `256K` context, `position=100000`,
+`2` tokens/request, and active request cases `1,4`. It passed both cases:
+`1/1` and `4/4` HTTP 200, with coalesced batch sizes `1` and `4`. Server
+decode stayed flat (`101.842964` to `101.159316` tok/s) and average GPU
+utilization stayed flat (`8.341667%` to `8.333333%`). This validates the
+matrix harness and strengthens the next question: whether the full 1/4/8/16/32
+matrix shows any active-slot scaling before we invest in active-slot compaction
+or deeper dense/state kernel fusion.
+
 Latest TP/EP typed-KV serving status: Sprint 347 added a direct non-server
 profile mode to the permanent profiler harness:
 `tools/ds4-v100-tp-ep-profile.py --run-mode direct-token-major`. It invokes

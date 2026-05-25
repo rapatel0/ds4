@@ -1,0 +1,3 @@
+requests	http_200	tokens	generated_tokens_meta	coalesced_batch_size	client_generated_tok_s	server_generated_tok_s	server_generated_tok_s_decode	server_continuation_tok_s_decode	scaffold_projected_slot_step_tok_s	compressed_kv_sum_ms	gpu_sample_count	gpu_util_avg	gpu_util_max	gpu_mem_used_max_mib	artifact_dir
+1	1	2	2	1	0.24182420712027847	84.783694	101.842964	102.670995		1791.836016	240	8.341666666666667	41.0	32398.0	/workspace/logs/sprint370-active-slot-matrix-smoke/requests-001/none-hc-stream-sync
+4	4	2	8	4	0.9545878473376675	84.08631	101.159316	102.693727		1798.0261120000027	240	8.333333333333334	39.0	32398.0	/workspace/logs/sprint370-active-slot-matrix-smoke/requests-004/none-hc-stream-sync

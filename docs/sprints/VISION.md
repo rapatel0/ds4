@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-25
 last_updated_by: codex
-revision: 373
+revision: 374
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -175,6 +175,14 @@ not a serial layer-chain.
   max GPU utilization `39%`. This confirms the low-occupancy imbalance is now
   measurable in the main artifact path before the next scheduling/kernel
   optimization.
+- Sprint 370 added a reusable active-slot matrix driver around that profile
+  harness. The V100 smoke matrix at `32` configured slots, `256K` context,
+  `position=100000`, `2` tokens/request, and active request cases `1,4`
+  produced aggregate TSV/JSON plus per-case profile artifacts. Both cases
+  passed (`1/1` and `4/4` HTTP 200) and coalescing worked, but server decode
+  stayed effectively flat (`101.842964` to `101.159316` tok/s) while average
+  GPU utilization stayed near `8.3%`. This is not the full matrix, but it
+  validates the tool needed to characterize 1/4/8/16/32 active-slot behavior.
 - Sprint 327 made the production compressed-KV memory contract executable in
   `tools/ds4-v100-plan-tp.c`. With the real TP pack and F8 KV, `32` slots at
   `256K` fits at `27.00 GiB/GPU` with `5.00 GiB` headroom after reserve;
@@ -2355,6 +2363,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 367 confirmed the event-wait default through chat. | Valid long-context chat at `position=262080`, `32` slots, `32` requests, and `32` generated tokens/request improved client tok/s from `50.648397` to `52.022782` and server decode tok/s from `96.116667` to `99.521680`. | Keep using chat-valid start positions that reserve prompt-prefill room; next optimize the remaining dense/state costs or admission/context accounting. |
 | 2026-05-25 | Sprint 368 added TP/EP chat context admission. | Over-context chat now returns HTTP 400 with `context_window_exceeded` before GPU decode; valid 32-request/32-token chat at `position=262080` still passes. | Extend admission toward active-slot/variable-length serving and continue dense/state optimization. |
 | 2026-05-25 | Sprint 369 added opt-in GPU utilization sampling to the TP/EP profile harness. | `--gpu-sample-interval-ms` writes `gpu_util.csv` and summary utilization fields without overhead when disabled. A 4-request / 32-slot chat smoke passed and showed `8.412879%` average GPU util with GPU0 much busier than peers. | Use sampled active-slot matrices before changing scheduling; then optimize active-slot compaction, dense projection/state fragmentation, or EP balance with utilization evidence attached. |
+| 2026-05-25 | Sprint 370 added the active-slot matrix driver. | The smoke matrix for active requests `1,4` passed and wrote aggregate TSV/JSON plus per-case profile artifacts; decode stayed flat around `101` tok/s and average GPU util stayed around `8.3%`. | Run the full `1,4,8,16,32` longer-decode matrix, then choose active-slot compaction versus deeper dense/state kernel work from the evidence. |
 
 ## Open Questions
 

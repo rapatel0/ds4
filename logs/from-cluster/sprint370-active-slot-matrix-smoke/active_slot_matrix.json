@@ -1,0 +1,48 @@
+{
+  "cases": [
+    {
+      "artifact_dir": "/workspace/logs/sprint370-active-slot-matrix-smoke/requests-001/none-hc-stream-sync",
+      "client_generated_tok_s": 0.24182420712027847,
+      "coalesced_batch_size": 1,
+      "compressed_kv_sum_ms": 1791.836016,
+      "generated_tokens_meta": 2,
+      "gpu_mem_used_max_mib": 32398.0,
+      "gpu_sample_count": 240,
+      "gpu_util_avg": 8.341666666666667,
+      "gpu_util_max": 41.0,
+      "http_200": 1,
+      "requests": 1,
+      "scaffold_projected_slot_step_tok_s": null,
+      "server_continuation_tok_s_decode": 102.670995,
+      "server_generated_tok_s": 84.783694,
+      "server_generated_tok_s_decode": 101.842964,
+      "tokens": 2
+    },
+    {
+      "artifact_dir": "/workspace/logs/sprint370-active-slot-matrix-smoke/requests-004/none-hc-stream-sync",
+      "client_generated_tok_s": 0.9545878473376675,
+      "coalesced_batch_size": 4,
+      "compressed_kv_sum_ms": 1798.0261120000027,
+      "generated_tokens_meta": 8,
+      "gpu_mem_used_max_mib": 32398.0,
+      "gpu_sample_count": 240,
+      "gpu_util_avg": 8.333333333333334,
+      "gpu_util_max": 39.0,
+      "http_200": 4,
+      "requests": 4,
+      "scaffold_projected_slot_step_tok_s": null,
+      "server_continuation_tok_s_decode": 102.693727,
+      "server_generated_tok_s": 84.08631,
+      "server_generated_tok_s_decode": 101.159316,
+      "tokens": 2
+    }
+  ],
+  "ctx": 262144,
+  "gpu_sample_interval_ms": 200,
+  "http_endpoint": "chat",
+  "position": 100000,
+  "schema": "ds4_v100_tp_ep_active_slot_matrix.v1",
+  "slots": 32,
+  "tokens": 2,
+  "tool": "none"
+}
