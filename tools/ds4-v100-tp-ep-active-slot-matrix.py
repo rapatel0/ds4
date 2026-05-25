@@ -5,6 +5,7 @@ import json
 import pathlib
 import subprocess
 import sys
+import time
 
 
 def parse_csv_ints(text, name):
@@ -56,6 +57,7 @@ def main():
     parser.add_argument("--gpu-sample-interval-ms", type=int, default=0)
     parser.add_argument("--request-timeout-seconds", type=int, default=1200)
     parser.add_argument("--readiness-seconds", type=int, default=600)
+    parser.add_argument("--case-cooldown-seconds", type=int, default=0)
     parser.add_argument("--hc-current-stream-sync", action="store_true")
     parser.add_argument("--extra-profile-arg", action="append", default=[])
     args = parser.parse_args()
@@ -133,8 +135,14 @@ def main():
             "gpu_util_avg": summary.get("gpu_util_avg", 0.0),
             "gpu_util_max": summary.get("gpu_util_max", 0.0),
             "gpu_mem_used_max_mib": summary.get("gpu_mem_used_max_mib", 0.0),
+            "vram_min_free_mib": summary.get("vram_min_free_mib", 0.0),
+            "vram_max_used_mib": summary.get("vram_max_used_mib", 0.0),
+            "vram_threshold_mib": summary.get("vram_threshold_mib", 0.0),
+            "vram_failures": summary.get("vram_failures", 0),
         }
         rows.append(row)
+        if args.case_cooldown_seconds > 0 and i + 1 < len(request_cases):
+            time.sleep(args.case_cooldown_seconds)
 
     json_path = args.artifact_dir / "active_slot_matrix.json"
     tsv_path = args.artifact_dir / "active_slot_matrix.tsv"
@@ -149,6 +157,7 @@ def main():
                 "http_endpoint": args.http_endpoint,
                 "tool": args.tool,
                 "gpu_sample_interval_ms": args.gpu_sample_interval_ms,
+                "case_cooldown_seconds": args.case_cooldown_seconds,
                 "cases": rows,
             },
             out,
@@ -173,6 +182,10 @@ def main():
             "gpu_util_avg",
             "gpu_util_max",
             "gpu_mem_used_max_mib",
+            "vram_min_free_mib",
+            "vram_max_used_mib",
+            "vram_threshold_mib",
+            "vram_failures",
             "artifact_dir",
         ]
         writer = csv.DictWriter(out, fieldnames=fieldnames, delimiter="\t")

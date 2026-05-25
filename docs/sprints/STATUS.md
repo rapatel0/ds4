@@ -24,6 +24,21 @@ build succeeded, launcher `--print-command` showed
 negative check with `--vram-min-free-mib 40000` failed cleanly at startup with
 `rc=14` and `failures=8`.
 
+Latest baseline status: Sprint 383 made the active-slot matrix VRAM-aware and
+reran the target `32` slot / `256K` chat shape with GPU sampling and
+`--vram-min-free-mib 64`. The combined V100 matrix is in
+`/workspace/logs/sprint383-vram-aware-matrix-combined/`. Active requests
+`1,4,8,16,32` all completed after adding inter-case cooldown, with
+`vram_failures=0`, `vram_min_free_mib=1754`, and max sampled memory
+`32398 MiB`. Client tok/s scaled from `1.321769` to `43.853691`, but server
+decode stayed flat at `97.749438`, `97.092452`, `96.330654`, `92.690622`,
+and `97.076706` tok/s; average GPU utilization stayed `8.24-9.29%`. The first
+no-cooldown matrix failed on the second resident startup with CUDA OOM at
+`cudaSetDevice`, and the first retry did the same on the next case, so the
+matrix runner now has `--case-cooldown-seconds` for repeated server startups.
+This confirms the next bottleneck is steady-state launch/synchronization and
+GPU0-heavy orchestration, not active-slot admission or VRAM capacity.
+
 Latest throughput direction before memory hardening: Sprint 381 implemented
 `--fp8-e5m2-kv-gate` as a default-off typed-KV format diagnostic. The row
 layout stays block-128 with one E8M0 scale byte plus 128 FP8 payload bytes, so
