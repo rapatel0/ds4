@@ -280,6 +280,7 @@ def build_env(args, port):
             "DS4_V100_TP_EP_HC_CURRENT_INPUT_STREAM_SYNC": "1" if args.hc_current_stream_sync else "0",
             "DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD": "1",
             "DS4_V100_TP_EP_ASYNC_OUTPUT": "1" if args.async_output else "0",
+            "DS4_V100_TP_EP_DECODE_CUDAGRAPH": "1" if args.decode_cudagraph else "0",
             "DS4_V100_RESERVE_MIB": "0",
             "DS4_V100_PORT": str(port),
             "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_HISTORY": "1",
@@ -351,6 +352,8 @@ def variant_suffix(args):
         suffix += "-fused-compressed-attn-input-fill"
     if getattr(args, "async_output", False):
         suffix += "-async-output"
+    if getattr(args, "decode_cudagraph", False):
+        suffix += "-decode-cudagraph"
     return suffix
 
 
@@ -405,6 +408,8 @@ def direct_command(args):
     ]
     if args.async_output:
         cmd.append("--async-output-gate")
+    if args.decode_cudagraph:
+        cmd.append("--decode-cudagraph-gate")
     if "window" in args.tool:
         cmd.append("--cuda-profiler-window")
     if args.hc_current_peer_gather:
@@ -748,6 +753,7 @@ def main():
     parser.add_argument("--fused-compressed-attn-input-fill", action="store_true")
     parser.add_argument("--disable-fused-compressed-pool-norm", action="store_true")
     parser.add_argument("--async-output", action="store_true")
+    parser.add_argument("--decode-cudagraph", action="store_true")
     parser.add_argument("--port", type=int, default=18357)
     parser.add_argument("--readiness-seconds", type=int, default=600)
     parser.add_argument("--request-timeout-seconds", type=int, default=1200)

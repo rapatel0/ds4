@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-25
 last_updated_by: vision
-revision: 382
+revision: 383
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -239,6 +239,13 @@ not a serial layer-chain.
   `32` slot / `256K` HTTP A/B regressed server decode throughput from
   `99.476540` to `93.764276` tok/s and left average GPU utilization flat.
   Keep it opt-in for graph-capture investigation only.
+- `TEMP_THROUGHPUT_PROMPT.md` is now the active performance steering
+  document. Its core read is that the TP/EP decode path is launch/sync
+  fragmented at the real serving shape: the full active-slot matrix stayed
+  around `97.4-100.0` server decode tok/s and `9.8-10.3%` average GPU
+  utilization from `1` to `32` active requests. The immediate work queue is
+  therefore isolated gate experiments that either remove launch/sync overhead
+  or prove that this thesis is wrong before more dtype or micro-kernel swaps.
 - Sprint 327 made the production compressed-KV memory contract executable in
   `tools/ds4-v100-plan-tp.c`. With the real TP pack and F8 KV, `32` slots at
   `256K` fits at `27.00 GiB/GPU` with `5.00 GiB` headroom after reserve;
@@ -919,6 +926,10 @@ not a serial layer-chain.
   dtype swaps, sidecar probes, or isolated single-layer kernels are secondary
   until the async-output and decode-CUDA-graph gates are measured at the full
   `32` slot / `256K` serving shape.
+- The current CUDA-graph work is audit-first. A fake graph flag that still
+  leaves host synchronizations, allocations, or host-read launch dependencies
+  inside the steady decode step is not useful. Sprint 376 must emit the
+  blocker list before attempting graph replay.
 
 ## Throughput Optimization Pivot
 
@@ -957,19 +968,24 @@ The next performance sequence is ordered to test that thesis directly:
 | 7 | `--fp8-e5m2-kv-gate` | Test smaller KV storage/load traffic for long-context serving | no NaNs, bounded drift, parity token stable |
 | 8 | `--mtp-decode-gate` | Add MTP only after base decode graphing and metrology are stable | accepted tokens/step and effective decode tok/s improve |
 
-Start with S-B then S-A and stop for review. If S-A does not materially move
-GPU utilization, the entire performance roadmap should be reassessed before
-building the later gates.
+S-B is complete and rejected as a default. The active next step is S-A:
+`--decode-cudagraph-gate`. It starts with a capture audit, then attempts
+per-rank graph replay only if the steady 32-wide decode region is capturable
+without hiding blockers. If S-A does not materially move GPU utilization, the
+roadmap pivots to S-C/S-D/S-F based on the graph audit and profiler evidence
+rather than assuming more launch amortization will help.
 
 ## Production Readiness Sequence
 
 The remaining work is ordered by what blocks practical use on the V100 box,
 not by benchmark curiosity.
 
-1. **Performance capture gate.** Remove steady-state host synchronization
-   (`--async-output-gate`) and then attempt per-rank CUDA graph replay of the
-   32-wide decode step (`--decode-cudagraph-gate`). This is the immediate
-   critical path because the current serving path is askable but low-utilization.
+1. **Performance capture gate.** Keep `--async-output-gate` opt-in only, then
+   finish Sprint 376's audit-first `--decode-cudagraph-gate`. This is the
+   immediate critical path because the current serving path is askable but
+   low-utilization. The output of this gate is either a promoted graph replay,
+   an opt-in diagnostic graph path, or a concrete blocker list that determines
+   the next kernel sprint.
 2. **Reference parity gate.** Keep first-token/checksum parity attached to
    every performance gate, then broaden it into fixed prompt suites and
    long-context cache-reuse checks at `128K` and `256K`.
@@ -1125,6 +1141,14 @@ not a serving-speed win, and selected-token D2H still forces a CPU consumption
 point outside `run_one_step`. The first deliverable is therefore an explicit
 blocker/audit line for remaining graph blockers inside the token-major decode
 step; replay follows only if the audit proves the region is capturable enough.
+
+Current execution note: Sprint 376 audit plumbing now builds and runs on the
+V100 pod. The first direct `32` slot / `256K` audit reports
+`capture_eligible=0` with `172` broad in-step `sync_all` calls, `1376`
+rank-stream waits, and `1376` dense-stream waits in one 43-layer decode step.
+The next concrete task is an in-step synchronization-elimination pass using
+stream/event dependencies, followed by the same audit again before any graph
+replay attempt.
 
 ### Sprint 377 - Batched Paged Attention Gate [tentative]
 
@@ -2577,6 +2601,8 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 371 ran the full active-slot matrix. | At `32` slots / `256K` / `32` tokens/request, all cases `1,4,8,16,32` passed. Client aggregate tok/s scaled with active responses, but server decode stayed `97.4-100.0` tok/s and average GPU util stayed `9.8-10.3%`. | Use active-slot compaction for low-occupancy efficiency later; next optimize the full 32-slot bottleneck in compressed/indexer dense projection, attention projection/state, and GPU0-heavy staging. |
 | 2026-05-25 | Reprioritized performance work around `TEMP_THROUGHPUT_PROMPT.md`. | The full active-slot matrix plus INT8-compressor rejection makes another narrow dtype swap less compelling than testing launch/sync elimination. | Sprint 375 tested async-output synchronization removal; Sprint 376 is the CUDA graph make-or-break gate before paged attention, compact MoE, TP-expert A/B, FP8 KV, or MTP. |
 | 2026-05-25 | Sprint 375 rejected async output as a default. | The gate preserved tokens and reduced output-head device syncs, but the real HTTP A/B regressed server decode tok/s and did not improve utilization. | Keep `--async-output-gate` opt-in; Sprint 376 should audit and test CUDA graph capture without assuming output-head event sequencing is a serving win. |
+| 2026-05-25 | Tightened the vision around `TEMP_THROUGHPUT_PROMPT.md`. | The next performance work should not blur multiple ideas together; each gate needs a same-binary V100 A/B and a promote/reject decision. | Finish Sprint 376's graph audit, then choose graph replay, paged attention, compact MoE, TP-expert A/B, FP8 KV, or MTP from measured evidence. |
+| 2026-05-25 | Sprint 376 initial graph audit ran on V100. | The decode step is not yet capturable: it has `172` broad host synchronization points across the 43-layer step. | Replace those syncs with stream/event dependencies where possible, then rerun the audit before graph replay. |
 
 ## Open Questions
 

@@ -406,6 +406,10 @@ struct LayerRunSummary {
     double decode_pre_ep_attention_output_ms_per_step = 0.0;
     double decode_pre_ep_post_attention_ffn_input_ms_per_step = 0.0;
     double decode_final_hc_ms_per_step = 0.0;
+    int decode_cudagraph_sync_all_calls = 0;
+    int decode_cudagraph_rank_stream_syncs = 0;
+    int decode_cudagraph_dense_stream_syncs = 0;
+    int decode_cudagraph_copy_stream_syncs = 0;
     uint64_t decode_checksum = 0;
     int decode_finite_bad = 0;
     int rc = 0;
@@ -513,6 +517,10 @@ struct DecodeLoopStats {
     double pre_ep_attention_output_ms_per_step = 0.0;
     double pre_ep_post_attention_ffn_input_ms_per_step = 0.0;
     double final_hc_ms_per_step = 0.0;
+    int cudagraph_sync_all_calls = 0;
+    int cudagraph_rank_stream_syncs = 0;
+    int cudagraph_dense_stream_syncs = 0;
+    int cudagraph_copy_stream_syncs = 0;
     int finite_bad = 0;
     uint64_t checksum = 0;
     bool ep_return_fp16 = false;
@@ -591,6 +599,7 @@ struct Options {
     bool output_head_gate = false;
     bool output_head_resident_gate = false;
     bool async_output_gate = false;
+    bool decode_cudagraph_gate = false;
     bool final_hc_carry_gate = false;
     bool diagnostic_output_head = false;
     bool tp_hc_final_expand_gate = false;
@@ -2998,6 +3007,7 @@ void usage(const char *argv0) {
                  "       [--reference-hc-state-guard-gate]\n"
                  "       [--cuda-profiler-window]\n"
                  "       [--async-output-gate]\n"
+                 "       [--decode-cudagraph-gate]\n"
                  "       [--diagnostic-output-head]\n",
                  argv0);
 }
@@ -3152,6 +3162,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->async_output_gate = true;
             opt->diagnostic_output_head = true;
             opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--decode-cudagraph-gate") == 0) {
+            opt->decode_cudagraph_gate = true;
         } else if (std::strcmp(arg, "--final-hc-carry-gate") == 0) {
             opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--tp-hc-final-expand-gate") == 0) {
@@ -10813,12 +10825,19 @@ int run_decode_loop(const Options &opt,
         return 2;
     }
 
+    int cudagraph_audit_sync_all_calls = 0;
+    int cudagraph_audit_stream_syncs = 0;
+    int cudagraph_audit_dense_stream_syncs = 0;
+    int cudagraph_audit_copy_stream_syncs = 0;
     auto sync_all = [&]() {
+        cudagraph_audit_sync_all_calls++;
         for (int p = 0; p < kGpus; ++p) {
             CHECK_CUDA(cudaSetDevice(ranks[p].device));
             CHECK_CUDA(cudaStreamSynchronize(ranks[p].stream));
+            cudagraph_audit_stream_syncs++;
             if (ranks[p].dense_stream) {
                 CHECK_CUDA(cudaStreamSynchronize(ranks[p].dense_stream));
+                cudagraph_audit_dense_stream_syncs++;
             }
         }
     };
@@ -11244,11 +11263,13 @@ int run_decode_loop(const Options &opt,
                             for (int dst = 0; dst < kGpus; ++dst) {
                                 if (skip_self_copy && src == dst) continue;
                                 CHECK_CUDA(cudaStreamSynchronize(ranks[src].copy_streams[dst]));
+                                cudagraph_audit_copy_stream_syncs++;
                             }
                         } else {
                             CHECK_CUDA(cudaStreamSynchronize(ranks[src].copy_stream ?
                                                             ranks[src].copy_stream :
                                                             ranks[src].stream));
+                            cudagraph_audit_copy_stream_syncs++;
                         }
                     }
                 }
@@ -11547,6 +11568,10 @@ int run_decode_loop(const Options &opt,
     stats->pre_ep_post_attention_ffn_input_ms_per_step =
         pre_ep_breakdown.post_attention_ffn_input_ms / (double)opt.decode_steps;
     stats->final_hc_ms_per_step = final_hc_ms / (double)opt.decode_steps;
+    stats->cudagraph_sync_all_calls = cudagraph_audit_sync_all_calls;
+    stats->cudagraph_rank_stream_syncs = cudagraph_audit_stream_syncs;
+    stats->cudagraph_dense_stream_syncs = cudagraph_audit_dense_stream_syncs;
+    stats->cudagraph_copy_stream_syncs = cudagraph_audit_copy_stream_syncs;
 
     if (opt.skip_decode_checksum) {
         stats->checksum = 0xD54D0000ull ^
@@ -11711,6 +11736,14 @@ int run_resident_layer_decode(const Options &opt,
         summary->decode_pre_ep_post_attention_ffn_input_ms_per_step =
             decode_loop.pre_ep_post_attention_ffn_input_ms_per_step;
         summary->decode_final_hc_ms_per_step = decode_loop.final_hc_ms_per_step;
+        summary->decode_cudagraph_sync_all_calls =
+            decode_loop.cudagraph_sync_all_calls;
+        summary->decode_cudagraph_rank_stream_syncs =
+            decode_loop.cudagraph_rank_stream_syncs;
+        summary->decode_cudagraph_dense_stream_syncs =
+            decode_loop.cudagraph_dense_stream_syncs;
+        summary->decode_cudagraph_copy_stream_syncs =
+            decode_loop.cudagraph_copy_stream_syncs;
         summary->decode_checksum = decode_loop.checksum;
         summary->decode_finite_bad = decode_loop.finite_bad;
         summary->rc = rc;
@@ -12548,6 +12581,10 @@ int run_token_major_serving_loop(const Options &opt,
     double sum_pre_ep_attention_output_ms = 0.0;
     double sum_pre_ep_post_attention_ffn_input_ms = 0.0;
     double sum_final_hc_ms = 0.0;
+    int sum_cudagraph_sync_all_calls = 0;
+    int sum_cudagraph_rank_stream_syncs = 0;
+    int sum_cudagraph_dense_stream_syncs = 0;
+    int sum_cudagraph_copy_stream_syncs = 0;
     double first_token_decode_ms = 0.0;
     double continuation_decode_ms = 0.0;
     double first_token_wall_ms = 0.0;
@@ -12730,6 +12767,14 @@ int run_token_major_serving_loop(const Options &opt,
                 sum_pre_ep_post_attention_ffn_input_ms +=
                     s.decode_pre_ep_post_attention_ffn_input_ms_per_step;
                 sum_final_hc_ms += s.decode_final_hc_ms_per_step;
+                sum_cudagraph_sync_all_calls +=
+                    s.decode_cudagraph_sync_all_calls;
+                sum_cudagraph_rank_stream_syncs +=
+                    s.decode_cudagraph_rank_stream_syncs;
+                sum_cudagraph_dense_stream_syncs +=
+                    s.decode_cudagraph_dense_stream_syncs;
+                sum_cudagraph_copy_stream_syncs +=
+                    s.decode_cudagraph_copy_stream_syncs;
                 checksum ^= s.decode_checksum +
                             (uint64_t)(step + 1) * 1000003ull +
                             (uint64_t)(layer + 1) * 104729ull;
@@ -12953,6 +12998,36 @@ int run_token_major_serving_loop(const Options &opt,
                         continuation_tok_s_decode, continuation_tok_s_wall,
                         (unsigned long long)checksum);
         }
+    }
+    if (opt.decode_cudagraph_gate) {
+        const int graph_audit_steps = opt.warmup + opt.decode_steps;
+        const int total_stream_syncs = sum_cudagraph_rank_stream_syncs +
+                                      sum_cudagraph_dense_stream_syncs +
+                                      sum_cudagraph_copy_stream_syncs;
+        const bool output_head_outside_step =
+            shared_output_head && shared_output_head->initialized &&
+            shared_rank_buffers && shared_rank_buffers->initialized;
+        const bool host_token_dependency =
+            output_head_outside_step && serving_result &&
+            serving_result->diagnostic_output_head;
+        const bool capture_eligible =
+            total_stream_syncs == 0 && sum_cudagraph_sync_all_calls == 0;
+        std::printf("tp_ep_decode_cudagraph_audit\tsteps\t%d\t"
+                    "sync_all_calls\t%d\tstream_sync_count\t%d\t"
+                    "rank_stream_sync_count\t%d\tdense_stream_sync_count\t%d\t"
+                    "copy_stream_sync_count\t%d\toutput_head_outside_step\t%d\t"
+                    "host_selected_token_dependency\t%d\tcapture_attempted\t0\t"
+                    "capture_eligible\t%d\tblocker\t%s\n",
+                    graph_audit_steps,
+                    sum_cudagraph_sync_all_calls,
+                    total_stream_syncs,
+                    sum_cudagraph_rank_stream_syncs,
+                    sum_cudagraph_dense_stream_syncs,
+                    sum_cudagraph_copy_stream_syncs,
+                    output_head_outside_step ? 1 : 0,
+                    host_token_dependency ? 1 : 0,
+                    capture_eligible ? 1 : 0,
+                    capture_eligible ? "none" : "host_stream_synchronization");
     }
     return 0;
 }

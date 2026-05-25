@@ -158,3 +158,62 @@ Reject if capture changes tokens/checksum, fails under normal serving shape, or
 adds enough overhead to regress HTTP serving. If capture is blocked before
 replay, close the sprint with the blocker list and use that list to choose the
 next sprint rather than silently continuing into unrelated kernel work.
+
+## Progress
+
+### Initial Capture Audit
+
+Implemented the default-off CLI/env/profile plumbing and a first
+`tp_ep_decode_cudagraph_audit` line. V100 build passed:
+
+```text
+make -j80 CUDA_HOME=/usr/local/cuda CUDA_ARCH=sm_70 tools/ds4-v100-tp-ep-full-layer-smoke
+```
+
+Direct target-shape audit:
+
+```text
+tools/ds4-v100-tp-ep-profile.py \
+  --run-mode direct-token-major \
+  --tool none \
+  --artifact-dir /workspace/logs/sprint376-decode-cudagraph/direct-audit \
+  --tokens 1 \
+  --position 262080 \
+  --slots 32 \
+  --decode-cudagraph
+```
+
+Result:
+
+| Field | Value |
+|---|---:|
+| Return code | `0` |
+| Slots/context | `32` / `256K` |
+| Generated decode tok/s | `82.384054` |
+| Output first token | `54639` |
+| Output checksum | `24071637347` |
+| Scaffold checksum | `3401922407` |
+| `sync_all_calls` | `172` |
+| `rank_stream_sync_count` | `1376` |
+| `dense_stream_sync_count` | `1376` |
+| `copy_stream_sync_count` | `0` |
+| `capture_eligible` | `0` |
+| Blocker | `host_stream_synchronization` |
+
+Artifacts:
+
+```text
+logs/from-cluster/sprint376-decode-cudagraph/direct-audit/none-direct-decode-cudagraph
+```
+
+Interpretation: graph replay is not honestly attemptable yet. The counted
+`sync_all` calls are in the steady token-major decode step, not only around
+the output head. At the current target path this is `4` broad synchronization
+points per layer for `43` layers, and each point waits rank streams plus dense
+streams across all `8` GPUs.
+
+Next implementation step: replace the in-step broad host synchronizations with
+stream/event dependencies where semantics allow it, then rerun this audit. If
+the remaining blockers move into non-capturable library calls or required
+host-read dependencies, close Sprint 376 with that explicit blocker list and
+move to the next throughput-prompt gate.

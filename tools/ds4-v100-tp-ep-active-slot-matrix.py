@@ -32,6 +32,8 @@ def profile_case_dir(tool, hc_stream_sync, extra_profile_args=None):
     for arg in extra_profile_args or []:
         if arg == "--async-output":
             suffix += "-async-output"
+        if arg == "--decode-cudagraph":
+            suffix += "-decode-cudagraph"
     return f"{tool}{suffix}"
 
 

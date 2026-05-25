@@ -20,10 +20,18 @@ Sprint 376 graph-capture investigation; do not promote it. Sprint 376 remains
 the make-or-break test of whether CUDA graph replay can raise the current
 low-utilization TP/EP serving path.
 
-Current active sprint: Sprint 376, `--decode-cudagraph-gate`. The sprint is
-planned to begin with a graph-capture audit of the token-major `run_one_step`
-region, then attempt per-rank graph replay only if the audit shows the normal
-`32` slot / `256K` decode step is capturable enough to test honestly.
+Current active steering source: `TEMP_THROUGHPUT_PROMPT.md`. The near-term
+performance queue is isolated default-off gates, same-binary V100 A/B, and a
+strict promote/reject decision per gate. Sprint 375 completed the first gate
+and rejected async output as a default. Current active sprint: Sprint 376,
+`--decode-cudagraph-gate`. It begins with a graph-capture audit of the
+token-major `run_one_step` region, then attempts per-rank graph replay only if
+the audit shows the normal `32` slot / `256K` decode step is capturable enough
+to test honestly. The first direct audit now builds and runs on the V100 pod,
+but reports `capture_eligible=0`: `172` broad `sync_all` calls, `1376`
+rank-stream waits, and `1376` dense-stream waits inside one 43-layer decode
+step. Next work is to replace those in-step host waits with stream/event
+dependencies where possible before attempting CUDA graph replay.
 
 Latest TP/EP format status: Sprint 374 built and ran the V100 workbench for
 the Sprint 373 INT8 candidate shapes. The copied tc-grid INT8 kernels are
