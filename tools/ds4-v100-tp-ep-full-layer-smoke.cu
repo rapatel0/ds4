@@ -8046,7 +8046,14 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
     if (ratio == 0) {
         std::printf("tp_ep_compressed_kv_projection\tlayer\t%d\tslots\t%d\t"
                     "ratio\t0\temitted_compressed_rows\t0\t"
-                    "visible_compressed_rows\t0\tindexer_topk_count\t0\tPASS\n",
+                    "visible_compressed_rows\t0\tindexer_topk_count\t0\t"
+                    "attn_input_fill_ms\t0.000000\tattn_dense_ms\t0.000000\t"
+                    "attn_gather_ms\t0.000000\tattn_state_emit_ms\t0.000000\t"
+                    "attn_typed_ms\t0.000000\tindexer_input_fill_ms\t0.000000\t"
+                    "indexer_dense_ms\t0.000000\tindexer_gather_rope_ms\t0.000000\t"
+                    "indexer_state_emit_ms\t0.000000\tindexer_typed_score_ms\t0.000000\t"
+                    "reference_diff_ms\t0.000000\tratio_shift_ms\t0.000000\t"
+                    "ms\t0.000000\tPASS\n",
                     layer, opt.slots);
         return 0;
     }
@@ -8068,6 +8075,23 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
     }
 
     const auto start = std::chrono::steady_clock::now();
+    auto t_stage = start;
+    auto elapsed_ms = [](std::chrono::steady_clock::time_point a,
+                         std::chrono::steady_clock::time_point b) {
+        return std::chrono::duration<double, std::milli>(b - a).count();
+    };
+    double attn_input_fill_ms = 0.0;
+    double attn_dense_ms = 0.0;
+    double attn_gather_ms = 0.0;
+    double attn_state_emit_ms = 0.0;
+    double attn_typed_ms = 0.0;
+    double indexer_input_fill_ms = 0.0;
+    double indexer_dense_ms = 0.0;
+    double indexer_gather_rope_ms = 0.0;
+    double indexer_state_emit_ms = 0.0;
+    double indexer_typed_score_ms = 0.0;
+    double reference_diff_ms = 0.0;
+    double ratio_shift_ms = 0.0;
     const int block = 256;
     const uint64_t hidden_elems = (uint64_t)opt.slots * (uint64_t)kHidden;
     for (int rank = 0; rank < kGpus; ++rank) {
@@ -8104,6 +8128,11 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
         CHECK_CUDA(cudaSetDevice(ranks[rank].device));
         CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
     }
+    {
+        const auto now = std::chrono::steady_clock::now();
+        attn_input_fill_ms = elapsed_ms(t_stage, now);
+        t_stage = now;
+    }
     if (launch_resident_f8_dense(opt, ops->attn_compress_kv, ranks) != 0 ||
         launch_resident_f8_dense(opt, ops->attn_compress_gate, ranks) != 0) {
         return 4;
@@ -8126,6 +8155,11 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                            collect_tensor_f32_stats(
                                ops->attn_compress_gate.d_out[(size_t)rank],
                                comp_elems, stream));
+    }
+    {
+        const auto now = std::chrono::steady_clock::now();
+        attn_dense_ms = elapsed_ms(t_stage, now);
+        t_stage = now;
     }
 
     if (!hc->d_attn_comp_kv_full || !hc->d_attn_comp_score_full ||
@@ -8157,6 +8191,11 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
     }
     CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaDeviceSynchronize());
+    {
+        const auto now = std::chrono::steady_clock::now();
+        attn_gather_ms = elapsed_ms(t_stage, now);
+        t_stage = now;
+    }
 
     const float comp_freq_scale = 1.0f / kRopeScaleFactor;
     const float comp_ext_factor = 1.0f;
@@ -8244,6 +8283,11 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
     for (int rank = 0; rank < kGpus; ++rank) {
         CHECK_CUDA(cudaSetDevice(ranks[rank].device));
         CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    }
+    {
+        const auto now = std::chrono::steady_clock::now();
+        attn_state_emit_ms = elapsed_ms(t_stage, now);
+        t_stage = now;
     }
     if (opt.true_ds4_attention_typed_kv_compressed_gate && emitted) {
         if (!rt) {
@@ -8374,12 +8418,18 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                         current_load);
         }
     }
+    {
+        const auto now = std::chrono::steady_clock::now();
+        attn_typed_ms = elapsed_ms(t_stage, now);
+        t_stage = now;
+    }
 
     TensorF32Stats index_q_stats;
     TensorF32Stats index_w_stats;
     TensorF32Stats index_kv_stats;
     TensorF32Stats index_gate_stats;
     if (opt.true_ds4_indexer_attention_gate && ratio == 4) {
+        t_stage = std::chrono::steady_clock::now();
         if (ops->indexer_attn_q_b.cols != 1024 ||
             ops->indexer_attn_q_b.rows_per_gpu != (kIndexerHead * kIndexerHeadDim) / kGpus ||
             ops->indexer_proj.cols != kHidden ||
@@ -8425,6 +8475,11 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             CHECK_CUDA(cudaSetDevice(ranks[rank].device));
             CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
         }
+        {
+            const auto now = std::chrono::steady_clock::now();
+            indexer_input_fill_ms = elapsed_ms(t_stage, now);
+            t_stage = now;
+        }
         if (launch_resident_f8_dense(opt, ops->indexer_attn_q_b, ranks) != 0 ||
             launch_resident_f8_dense(opt, ops->indexer_proj, ranks) != 0 ||
             launch_resident_f8_dense(opt, ops->indexer_compress_kv, ranks) != 0 ||
@@ -8460,6 +8515,11 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                                    (size_t)opt.slots *
                                        (size_t)ops->indexer_compress_gate.rows_per_gpu,
                                    stream));
+        }
+        {
+            const auto now = std::chrono::steady_clock::now();
+            indexer_dense_ms = elapsed_ms(t_stage, now);
+            t_stage = now;
         }
         if (!hc->d_indexer_q_full || !hc->d_indexer_w_full) return 13;
         if (!hc->d_index_comp_kv_full || !hc->d_index_comp_score_full ||
@@ -8519,6 +8579,11 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 kRopeYarnBetaFast, kRopeYarnBetaSlow);
             CHECK_CUDA(cudaGetLastError());
             CHECK_CUDA(cudaDeviceSynchronize());
+        }
+        {
+            const auto now = std::chrono::steady_clock::now();
+            indexer_gather_rope_ms = elapsed_ms(t_stage, now);
+            t_stage = now;
         }
         for (int rank = 0; rank < kGpus; ++rank) {
             RankState &r = ranks[rank];
@@ -8624,6 +8689,11 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
         for (int rank = 0; rank < kGpus; ++rank) {
             CHECK_CUDA(cudaSetDevice(ranks[rank].device));
             CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        }
+        {
+            const auto now = std::chrono::steady_clock::now();
+            indexer_state_emit_ms = elapsed_ms(t_stage, now);
+            t_stage = now;
         }
         if (opt.true_ds4_attention_typed_kv_indexer_gate && emitted) {
             if (!rt) {
@@ -8803,12 +8873,21 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
             }
         }
+        {
+            const auto now = std::chrono::steady_clock::now();
+            indexer_typed_score_ms = elapsed_ms(t_stage, now);
+            t_stage = now;
+        }
     }
 
+    const auto diff_start = std::chrono::steady_clock::now();
     const int diff_rc = run_true_ds4_compressed_reference_diff_gate(
         opt, hc, ranks, layer, ratio, comp_width, emitted, emitted_comp_row,
         visible);
     if (diff_rc != 0) return diff_rc;
+    reference_diff_ms =
+        elapsed_ms(diff_start, std::chrono::steady_clock::now());
+    const auto shift_start = std::chrono::steady_clock::now();
     if (emitted && ratio == 4) {
         for (int rank = 0; rank < kGpus; ++rank) {
             RankState &r = ranks[rank];
@@ -8842,6 +8921,8 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
         }
     }
+    ratio_shift_ms =
+        elapsed_ms(shift_start, std::chrono::steady_clock::now());
 
     const auto stop = std::chrono::steady_clock::now();
     const double ms = std::chrono::duration<double, std::milli>(stop - start).count();
@@ -8853,14 +8934,26 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 "index_q_max\t%.9g\tindex_q_bad\t%d\t"
                 "index_w_max\t%.9g\tindex_w_bad\t%d\t"
                 "index_kv_max\t%.9g\tindex_kv_bad\t%d\t"
-                "index_gate_max\t%.9g\tindex_gate_bad\t%d\tms\t%.6f\tPASS\n",
+                "index_gate_max\t%.9g\tindex_gate_bad\t%d\t"
+                "attn_input_fill_ms\t%.6f\tattn_dense_ms\t%.6f\t"
+                "attn_gather_ms\t%.6f\tattn_state_emit_ms\t%.6f\t"
+                "attn_typed_ms\t%.6f\tindexer_input_fill_ms\t%.6f\t"
+                "indexer_dense_ms\t%.6f\tindexer_gather_rope_ms\t%.6f\t"
+                "indexer_state_emit_ms\t%.6f\tindexer_typed_score_ms\t%.6f\t"
+                "reference_diff_ms\t%.6f\tratio_shift_ms\t%.6f\t"
+                "ms\t%.6f\tPASS\n",
                 layer, opt.slots, ratio, emitted, visible, indexer_topk,
                 comp_width, attn_kv_stats.max_abs, attn_kv_stats.finite_bad,
                 attn_gate_stats.max_abs, attn_gate_stats.finite_bad,
                 index_q_stats.max_abs, index_q_stats.finite_bad,
                 index_w_stats.max_abs, index_w_stats.finite_bad,
                 index_kv_stats.max_abs, index_kv_stats.finite_bad,
-                index_gate_stats.max_abs, index_gate_stats.finite_bad, ms);
+                index_gate_stats.max_abs, index_gate_stats.finite_bad,
+                attn_input_fill_ms, attn_dense_ms, attn_gather_ms,
+                attn_state_emit_ms, attn_typed_ms, indexer_input_fill_ms,
+                indexer_dense_ms, indexer_gather_rope_ms,
+                indexer_state_emit_ms, indexer_typed_score_ms,
+                reference_diff_ms, ratio_shift_ms, ms);
     return (attn_kv_stats.finite_bad || attn_gate_stats.finite_bad ||
             index_q_stats.finite_bad || index_w_stats.finite_bad ||
             index_kv_stats.finite_bad || index_gate_stats.finite_bad) ? 8 : 0;

@@ -195,6 +195,10 @@ def variant_suffix(args):
         suffix += "-hc-peer-gather"
     if args.hc_current_stream_sync:
         suffix += "-hc-stream-sync"
+    if getattr(args, "skip_compressed_store", False):
+        suffix += "-skip-compressed-store"
+    if getattr(args, "skip_indexer_store", False):
+        suffix += "-skip-indexer-store"
     return suffix
 
 
@@ -208,7 +212,7 @@ def direct_command(args):
         "--slots", str(args.slots),
         "--top-k", "6",
         "--kv-slot", "7",
-        "--position", "100000",
+        "--position", str(args.position),
         "--warmup", "0",
         "--iters", "1",
         "--decode-steps", str(args.tokens),
@@ -253,6 +257,10 @@ def direct_command(args):
         cmd.append("--tp-hc-current-input-peer-gather-gate")
     if args.hc_current_stream_sync:
         cmd.append("--tp-hc-current-input-stream-sync-gate")
+    if args.skip_compressed_store:
+        cmd.append("--true-ds4-attention-typed-kv-skip-compressed-store-gate")
+    if args.skip_indexer_store:
+        cmd.append("--true-ds4-attention-typed-kv-skip-indexer-store-gate")
     return cmd
 
 
@@ -286,6 +294,27 @@ def summarize_direct(case_dir, tool, rc, elapsed_s):
         "returncode": rc,
         "elapsed_s": elapsed_s,
         "profiler_marker_lines": len(re.findall(r"tp_ep_cuda_profiler_window", stderr)),
+    }
+    compressed_sum_keys = [
+        "attn_input_fill_ms",
+        "attn_dense_ms",
+        "attn_gather_ms",
+        "attn_state_emit_ms",
+        "attn_typed_ms",
+        "indexer_input_fill_ms",
+        "indexer_dense_ms",
+        "indexer_gather_rope_ms",
+        "indexer_state_emit_ms",
+        "indexer_typed_score_ms",
+        "reference_diff_ms",
+        "ratio_shift_ms",
+        "ms",
+    ]
+    compressed_counts = {
+        "layers": 0,
+        "emitted_layers": 0,
+        "ratio4_layers": 0,
+        "ratio128_layers": 0,
     }
     for line in stdout.splitlines():
         tag, fields = parse_tab_line(line)
@@ -331,9 +360,26 @@ def summarize_direct(case_dir, tool, rc, elapsed_s):
                 "wall_ms",
             ]:
                 summary[f"scaffold_{key}"] = maybe_number(fields.get(key))
+        elif tag == "tp_ep_compressed_kv_projection":
+            compressed_counts["layers"] += 1
+            if maybe_number(fields.get("emitted_compressed_rows")):
+                compressed_counts["emitted_layers"] += 1
+            ratio = maybe_number(fields.get("ratio"))
+            if ratio == 4:
+                compressed_counts["ratio4_layers"] += 1
+            elif ratio == 128:
+                compressed_counts["ratio128_layers"] += 1
+            for key in compressed_sum_keys:
+                value = maybe_number(fields.get(key))
+                if isinstance(value, (int, float)):
+                    summary[f"compressed_kv_sum_{key}"] = (
+                        summary.get(f"compressed_kv_sum_{key}", 0.0) + float(value)
+                    )
         elif tag == "tp_ep_diagnostic_output_head":
             for key in ["total_ms", "projection_ms", "top1_ms", "first_token", "finite_bad"]:
                 summary[f"output_head_{key}"] = maybe_number(fields.get(key))
+    for key, value in compressed_counts.items():
+        summary[f"compressed_kv_{key}"] = value
     return summary
 
 
@@ -472,10 +518,13 @@ def main():
     parser.add_argument("--ctx", type=int, default=262144)
     parser.add_argument("--slots", type=int, default=32)
     parser.add_argument("--tokens", type=int, default=2)
+    parser.add_argument("--position", type=int, default=100000)
     parser.add_argument("--requests", type=int, default=32)
     parser.add_argument("--max-requests", type=int, default=80)
     parser.add_argument("--hc-current-peer-gather", action="store_true")
     parser.add_argument("--hc-current-stream-sync", action="store_true")
+    parser.add_argument("--skip-compressed-store", action="store_true")
+    parser.add_argument("--skip-indexer-store", action="store_true")
     parser.add_argument("--port", type=int, default=18357)
     parser.add_argument("--readiness-seconds", type=int, default=600)
     parser.add_argument("--request-timeout-seconds", type=int, default=1200)

@@ -76,6 +76,19 @@ stages now account for `626.787298` ms of it: compressed KV projection/store
 history load `1.271677`. The next optimization target is therefore compressed
 KV projection/store fragmentation first, then attention projection/state.
 
+Sprint 352 split compressed-KV internals and corrected the emitted-row test
+shape. The old direct default `position=100000` emits zero compressed rows, so
+the store path must be tested at an emitting position. A one-token boundary
+run at `position=262143` passed with `41` emitted compressed layers,
+`81.647302` generated tok/s decode, `391.929670` sum decode ms, and
+`129.990107` ms in the pre-EP compressed-KV stage. The internal dominant
+costs were indexer dense `36.615896` ms, attention dense `24.659453` ms,
+attention state/emit `24.362932` ms, combined input fill `16.776362` ms, and
+indexer state/emit `9.007686` ms. Suppressing both compressed and indexer
+typed stores was flat: `81.733945` generated tok/s decode and `128.338783`
+ms compressed-KV. Typed stores are therefore not the next lever; target
+shared/fused compressor-indexer input fill and compressor state/emit work.
+
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
 TP runtime, sharded KV, rank buffers, TurboMind API handles, active MXFP4
