@@ -176,3 +176,19 @@ Practical consequence: a narrow S-C kernel that only replaces typed-history
 row loads is unlikely to move topline throughput. The next useful S-C work must
 either fuse more of raw+compressed attention itself or Sprint 377 should close
 with this evidence and move to `--compact-moe-decode-gate`.
+
+## Final Decision
+
+Decision: **REJECT narrow S-C typed-history load replacement; keep the row
+planner opt-in.**
+
+This is a measured redirect, not a failed build:
+
+- `--batched-paged-attn-gate` builds and defaults off.
+- Launcher/profile plumbing exists and defaults off.
+- The row-family plan emits active row counters on V100.
+- Direct V100 runs preserve first token and finite output.
+- The measured row plan shows pending typed-history reloads are already `0` in
+  the relevant compressed/indexer samples.
+
+Next sprint: `--compact-moe-decode-gate`.

@@ -50,6 +50,11 @@ narrow S-C load-only kernel is therefore unlikely to move topline throughput;
 the remaining S-C choice is a broader raw+compressed attention fusion or close
 the gate and move to compact MoE.
 
+Sprint 377 is now closed as a measured redirect: keep
+`--batched-paged-attn-gate` as an opt-in row-plan diagnostic, do not promote it
+as a serving default, and move the next sprint to
+`--compact-moe-decode-gate`.
+
 Latest TP/EP format status: Sprint 374 built and ran the V100 workbench for
 the Sprint 373 INT8 candidate shapes. The copied tc-grid INT8 kernels are
 numerically acceptable but not performance candidates for the BF16 attention

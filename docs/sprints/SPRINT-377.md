@@ -348,3 +348,29 @@ compressed/indexer samples because the current skip-load/cache path already
 avoids the reload storm. The first real S-C kernel should therefore fuse more
 of the raw+compressed attention computation, or this sprint should close with
 the evidence and move to compact MoE.
+
+## Decision
+
+Decision: **REJECT narrow S-C typed-history load replacement as the next
+implementation target; keep the row planner diagnostic-only.**
+
+Reason:
+
+- The `--batched-paged-attn-gate` plumbing and row-family planner are correct
+  and validated on V100.
+- The observed row-family plan does not show the assumed per-slot typed-history
+  load storm at the target serving shape.
+- In the 8-token direct run, typed-history is `30.807917 ms` of
+  `2651.391081 ms` summed decode, while compressed-KV, attention projection,
+  attention state, EP, and compose are materially larger.
+- Building a load-only batched row kernel would likely optimize a cold path and
+  would not satisfy the Vision requirement to move practical serving
+  throughput.
+
+Outcome:
+
+- Keep `--batched-paged-attn-gate` and its row-plan audit as opt-in diagnostic
+  infrastructure.
+- Do not promote the gate as a serving default.
+- Move the next sprint to `--compact-moe-decode-gate`, the next item in
+  `docs/sprints/VISION.md`.

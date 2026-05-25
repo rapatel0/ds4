@@ -58,8 +58,8 @@ The performance program is intentionally isolated:
 |---:|---|---|---|
 | 1 | `--async-output-gate` | Complete | Rejected as default; preserved parity but regressed server decode |
 | 2 | `--decode-cudagraph-gate` | Complete | Rejected; stream capture is blocked by pervasive `cudaMemcpyPeerAsync` transport |
-| 3 | `--batched-paged-attn-gate` | Active Sprint 377 | Collapse per-slot/per-family attention/KV launches in the typed long-context path |
-| 4 | `--compact-moe-decode-gate` | Next | Reduce idle expert work and small grouped-GEMM fragmentation |
+| 3 | `--batched-paged-attn-gate` | Complete | Rejected as narrow load target; row planner remains diagnostic-only |
+| 4 | `--compact-moe-decode-gate` | Active next | Reduce idle expert work and small grouped-GEMM fragmentation |
 | 5 | `--fused-gated-silu-gate` | Follow-on | Remove routed-FFN clamp/SwiGLU launch and intermediate |
 | 6 | `--tp-experts-ab-gate` | Topology measurement | Compare TP-sharded experts against EP8 all-to-all with real serving metrics |
 | 7 | `--fp8-e5m2-kv-gate` | Long-context bandwidth work | Test KV footprint/bandwidth reduction after launch-count reducers are measured |
@@ -333,8 +333,8 @@ The near-term implementation focus is therefore:
   typed-history reloads are `0` in the observed compressed/indexer samples:
   skip-current-load and the bounded reload cache already avoid the narrow
   reload storm. A load-only S-C kernel is therefore unlikely to move topline
-  throughput; Sprint 377 should either broaden to raw+compressed attention
-  fusion or close with this evidence and move to compact MoE.
+  throughput. Decision: keep the row planner diagnostic-only, do not promote
+  S-C as a serving default, and move the next sprint to compact MoE.
 - Sprint 327 made the production compressed-KV memory contract executable in
   `tools/ds4-v100-plan-tp.c`. With the real TP pack and F8 KV, `32` slots at
   `256K` fits at `27.00 GiB/GPU` with `5.00 GiB` headroom after reserve;
