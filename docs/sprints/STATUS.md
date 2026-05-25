@@ -262,6 +262,18 @@ throughput from `96.214306` to `99.093248` tok/s, wall throughput from
 `3137.755187` ms. `DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_DENSE_EVENT_WAIT`
 is now default-on and can be disabled for control runs.
 
+Sprint 367 validated that promoted default through the real chat endpoint at
+a decode-heavy long-context shape. The selected-token start position
+`262112` is invalid for chat because prompt prefill plus `32` generated tokens
+reaches `position=262144`, so the valid run used `position=262080`. At `32`
+slots / `256K`, `32` concurrent `/v1/chat/completions` requests, and `32`
+generated tokens/request, both variants returned `32/32` HTTP 200, coalesced
+batch `32`, generated `1024` tokens, and preserved first token `89340`.
+Disabling event waits measured `50.648397` client tok/s, `81.426024` server
+wall tok/s, and `96.116667` server decode tok/s. The default event-wait path
+measured `52.022782`, `83.891024`, and `99.521680` respectively, with
+compressed-KV sum reduced from `5100.469710` to `4681.992882` ms.
+
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
 TP runtime, sharded KV, rank buffers, TurboMind API handles, active MXFP4
