@@ -191,6 +191,8 @@ fi
 : "${DS4_V100_TP_EP_REFERENCE_HC_REDUCE:=0}"
 : "${DS4_V100_TP_EP_REFERENCE_HC_STATE_GUARD:=0}"
 : "${DS4_V100_TP_EP_KV_ALL_SLOTS:=0}"
+: "${DS4_V100_TP_EP_VRAM_REPORT:=0}"
+: "${DS4_V100_TP_EP_VRAM_MIN_FREE_MIB:=64}"
 : "${DS4_V100_TP_EP_VERBOSE:=0}"
 : "${DS4_V100_TP_EP_BIN:=./tools/ds4-v100-tp-ep-full-layer-smoke}"
 : "${DS4_V100_TP_EP_CONTRACT:=/workspace/logs/sprint245-tp-ep-dense-f16-cache-contract/contract/tp-ep-pack-contract.tsv}"
@@ -1156,6 +1158,12 @@ case "$DS4_V100_TP_EP_KV_ALL_SLOTS" in
     1|true|on) DS4_V100_TP_EP_KV_ALL_SLOTS=1 ;;
     *) fail "DS4_V100_TP_EP_KV_ALL_SLOTS must be 0 or 1" ;;
 esac
+case "$DS4_V100_TP_EP_VRAM_REPORT" in
+    0|false|off) DS4_V100_TP_EP_VRAM_REPORT=0 ;;
+    1|true|on) DS4_V100_TP_EP_VRAM_REPORT=1 ;;
+    *) fail "DS4_V100_TP_EP_VRAM_REPORT must be 0 or 1" ;;
+esac
+is_uint "$DS4_V100_TP_EP_VRAM_MIN_FREE_MIB" || fail "DS4_V100_TP_EP_VRAM_MIN_FREE_MIB must be an integer"
 case "$DS4_V100_TP_EP_VERBOSE" in
     0|false|off) DS4_V100_TP_EP_VERBOSE=0 ;;
     1|true|on) DS4_V100_TP_EP_VERBOSE=1 ;;
@@ -1373,6 +1381,12 @@ if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
     fi
     if [ "$DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_STREAM_SYNC" -eq 1 ]; then
         cmd+=(--true-ds4-attention-typed-kv-stream-sync-gate)
+    fi
+    if [ "$DS4_V100_TP_EP_VRAM_REPORT" -eq 1 ]; then
+        cmd+=(--vram-report)
+    fi
+    if [ "$DS4_V100_TP_EP_VRAM_MIN_FREE_MIB" -gt 0 ]; then
+        cmd+=(--vram-min-free-mib "$DS4_V100_TP_EP_VRAM_MIN_FREE_MIB")
     fi
     if [ "$DS4_V100_TP_EP_FP8_E5M2_KV" -eq 1 ]; then
         cmd+=(--fp8-e5m2-kv-gate)
@@ -1594,6 +1608,8 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_TP_EP_REFERENCE_HC_STATE_GUARD=$DS4_V100_TP_EP_REFERENCE_HC_STATE_GUARD"
     echo "DS4_V100_TP_EP_KV_ALL_SLOTS=$DS4_V100_TP_EP_KV_ALL_SLOTS"
     echo "DS4_V100_TP_EP_FP8_E5M2_KV=$DS4_V100_TP_EP_FP8_E5M2_KV"
+    echo "DS4_V100_TP_EP_VRAM_REPORT=$DS4_V100_TP_EP_VRAM_REPORT"
+    echo "DS4_V100_TP_EP_VRAM_MIN_FREE_MIB=$DS4_V100_TP_EP_VRAM_MIN_FREE_MIB"
     echo "DS4_V100_TP_EP_VERBOSE=$DS4_V100_TP_EP_VERBOSE"
     echo "DS4_V100_TP_EP_BIN=$DS4_V100_TP_EP_BIN"
     echo "DS4_V100_TP_EP_CONTRACT=$DS4_V100_TP_EP_CONTRACT"
@@ -1677,6 +1693,8 @@ export DS4_V100_TP_EP_REFERENCE_HC_REDUCE
 export DS4_V100_TP_EP_REFERENCE_HC_STATE_GUARD
 export DS4_V100_TP_EP_KV_ALL_SLOTS
 export DS4_V100_TP_EP_FP8_E5M2_KV
+export DS4_V100_TP_EP_VRAM_REPORT
+export DS4_V100_TP_EP_VRAM_MIN_FREE_MIB
 export DS4_V100_TP_EP_VERBOSE
 export DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE
 export DS4_CUDA_F8_PAIR_SWIGLU_SINGLE_ROWS2="$DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE_ROWS2"

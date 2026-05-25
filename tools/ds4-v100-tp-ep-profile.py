@@ -290,6 +290,8 @@ def build_env(args, port):
             "DS4_V100_TP_EP_FUSED_GATED_SILU": "1" if args.fused_gated_silu else "0",
             "DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT": "1" if args.routed_ffn_norm_input else "0",
             "DS4_V100_TP_EP_FP8_E5M2_KV": "1" if args.fp8_e5m2_kv else "0",
+            "DS4_V100_TP_EP_VRAM_REPORT": "1" if args.vram_report else "0",
+            "DS4_V100_TP_EP_VRAM_MIN_FREE_MIB": str(args.vram_min_free_mib),
             "DS4_V100_RESERVE_MIB": "0",
             "DS4_V100_PORT": str(port),
             "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_HISTORY": "1",
@@ -444,6 +446,10 @@ def direct_command(args):
         cmd.append("--fused-gated-silu-gate")
     if args.routed_ffn_norm_input:
         cmd.append("--routed-ffn-norm-input-gate")
+    if args.vram_report:
+        cmd.append("--vram-report")
+    if args.vram_min_free_mib > 0:
+        cmd.extend(["--vram-min-free-mib", str(args.vram_min_free_mib)])
     if args.fp8_e5m2_kv:
         cmd.append("--fp8-e5m2-kv-gate")
     if "window" in args.tool:
@@ -581,6 +587,26 @@ def add_tp_ep_line_summaries(summary, stdout):
                 "wall_ms",
             ]:
                 summary[f"scaffold_{key}"] = maybe_number(fields.get(key))
+        elif tag == "tp_ep_vram_summary":
+            label = fields.get("label", "unknown")
+            min_free = maybe_number(fields.get("min_free_mib"))
+            max_used = maybe_number(fields.get("max_used_mib"))
+            threshold = maybe_number(fields.get("threshold_mib"))
+            failures = maybe_number(fields.get("failures"))
+            summary[f"vram_{label}_min_free_mib"] = min_free
+            summary[f"vram_{label}_max_used_mib"] = max_used
+            summary[f"vram_{label}_threshold_mib"] = threshold
+            summary[f"vram_{label}_failures"] = failures
+            if isinstance(min_free, (int, float)):
+                previous = summary.get("vram_min_free_mib")
+                summary["vram_min_free_mib"] = min_free if previous is None else min(previous, min_free)
+            if isinstance(max_used, (int, float)):
+                previous = summary.get("vram_max_used_mib")
+                summary["vram_max_used_mib"] = max_used if previous is None else max(previous, max_used)
+            if isinstance(threshold, (int, float)):
+                summary["vram_threshold_mib"] = threshold
+            if isinstance(failures, int):
+                summary["vram_failures"] = summary.get("vram_failures", 0) + failures
         elif tag == "tp_ep_compressed_kv_projection":
             compressed_counts["layers"] += 1
             if maybe_number(fields.get("emitted_compressed_rows")):
@@ -811,6 +837,8 @@ def main():
     parser.add_argument("--fused-gated-silu", action="store_true")
     parser.add_argument("--routed-ffn-norm-input", action="store_true")
     parser.add_argument("--fp8-e5m2-kv", action="store_true")
+    parser.add_argument("--vram-report", action="store_true")
+    parser.add_argument("--vram-min-free-mib", type=int, default=64)
     parser.add_argument("--port", type=int, default=18357)
     parser.add_argument("--readiness-seconds", type=int, default=600)
     parser.add_argument("--request-timeout-seconds", type=int, default=1200)

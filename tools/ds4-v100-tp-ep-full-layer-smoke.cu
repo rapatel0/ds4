@@ -353,6 +353,8 @@ struct DenseF16Cache {
     std::vector<uint8_t *> arena;
     std::vector<uint8_t *> temp;
     std::vector<DenseF16CacheEntry> entries;
+    uint64_t gpu_cache_aligned_bytes[kGpus] = {};
+    uint64_t gpu_temp_bytes[kGpus] = {};
     uint64_t rows = 0;
     uint64_t source_bytes = 0;
     uint64_t cache_bytes = 0;
@@ -668,6 +670,8 @@ struct Options {
     bool true_ds4_compressed_reference_diff_gate = false;
     bool cuda_profiler_window = false;
     uint32_t true_ds4_attention_raw_valid_rows = 1;
+    uint64_t vram_min_free_mib = 0;
+    bool vram_report = false;
 };
 
 bool tp_ep_profiler_start_if_requested(const Options &opt) {
@@ -3167,6 +3171,78 @@ bool parse_devices(const char *text, int devices[kGpus]) {
     return true;
 }
 
+constexpr uint64_t kMiB = 1024ull * 1024ull;
+
+bool should_report_vram(const Options &opt) {
+    return opt.vram_report || opt.vram_min_free_mib > 0;
+}
+
+int report_vram_checkpoint(const Options &opt, const char *label) {
+    if (!should_report_vram(opt)) return 0;
+    const uint64_t min_free_bytes = opt.vram_min_free_mib * kMiB;
+    uint64_t min_free_mib = UINT64_MAX;
+    uint64_t max_used_mib = 0;
+    int failures = 0;
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        size_t free_b = 0;
+        size_t total_b = 0;
+        CHECK_CUDA(cudaMemGetInfo(&free_b, &total_b));
+        const uint64_t used_b = (uint64_t)total_b - (uint64_t)free_b;
+        const uint64_t free_mib = (uint64_t)free_b / kMiB;
+        const uint64_t used_mib = used_b / kMiB;
+        const uint64_t total_mib = (uint64_t)total_b / kMiB;
+        min_free_mib = std::min(min_free_mib, free_mib);
+        max_used_mib = std::max(max_used_mib, used_mib);
+        const bool pass = opt.vram_min_free_mib == 0 || (uint64_t)free_b >= min_free_bytes;
+        if (!pass) failures++;
+        std::printf("tp_ep_vram\tlabel\t%s\tgpu\t%d\tfree_mib\t%llu\t"
+                    "used_mib\t%llu\ttotal_mib\t%llu\tmin_free_mib\t%llu\t%s\n",
+                    label, gpu,
+                    (unsigned long long)free_mib,
+                    (unsigned long long)used_mib,
+                    (unsigned long long)total_mib,
+                    (unsigned long long)opt.vram_min_free_mib,
+                    pass ? "PASS" : "FAIL");
+    }
+    if (min_free_mib == UINT64_MAX) min_free_mib = 0;
+    std::printf("tp_ep_vram_summary\tlabel\t%s\tmin_free_mib\t%llu\t"
+                "max_used_mib\t%llu\tthreshold_mib\t%llu\tfailures\t%d\t%s\n",
+                label,
+                (unsigned long long)min_free_mib,
+                (unsigned long long)max_used_mib,
+                (unsigned long long)opt.vram_min_free_mib,
+                failures,
+                failures == 0 ? "PASS" : "FAIL");
+    return failures == 0 ? 0 : 1;
+}
+
+int check_planned_vram_allocation(const Options &opt,
+                                  const char *label,
+                                  const uint64_t planned_bytes[kGpus]) {
+    if (!should_report_vram(opt)) return 0;
+    const uint64_t min_free_bytes = opt.vram_min_free_mib * kMiB;
+    int failures = 0;
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        size_t free_b = 0;
+        size_t total_b = 0;
+        CHECK_CUDA(cudaMemGetInfo(&free_b, &total_b));
+        const uint64_t required_b = planned_bytes[gpu] + min_free_bytes;
+        const bool pass = (uint64_t)free_b >= required_b;
+        if (!pass) failures++;
+        std::printf("tp_ep_vram_plan\tlabel\t%s\tgpu\t%d\tfree_mib\t%llu\t"
+                    "planned_mib\t%llu\tthreshold_mib\t%llu\ttotal_mib\t%llu\t%s\n",
+                    label, gpu,
+                    (unsigned long long)((uint64_t)free_b / kMiB),
+                    (unsigned long long)(planned_bytes[gpu] / kMiB),
+                    (unsigned long long)opt.vram_min_free_mib,
+                    (unsigned long long)((uint64_t)total_b / kMiB),
+                    pass ? "PASS" : "FAIL");
+    }
+    return failures == 0 ? 0 : 1;
+}
+
 void usage(const char *argv0) {
     std::fprintf(stderr,
                  "usage: %s --pack-dir DIR --contract FILE --tm-index FILE [options]\n"
@@ -3196,6 +3272,7 @@ void usage(const char *argv0) {
                  "       [--skip-decode-checksum]\n"
                  "       [--serve-http] [--host ADDR] [--port N] [--max-requests N]\n"
                  "       [--microbatch-wait-us N]\n"
+                 "       [--vram-report] [--vram-min-free-mib N]\n"
                  "       [--output-head-gate] [--output-head-resident-gate]\n"
                  "       [--final-hc-carry-gate] [--tp-hc-final-expand-gate]\n"
                  "       [--tp-hc-current-input-gate]\n"
@@ -3389,6 +3466,11 @@ bool parse_args(int argc, char **argv, Options *opt) {
         } else if (std::strcmp(arg, "--microbatch-wait-us") == 0) {
             if (!val || !parse_int(val, &opt->microbatch_wait_us) ||
                 opt->microbatch_wait_us < 0 || opt->microbatch_wait_us > 1000000) return false;
+            ++i;
+        } else if (std::strcmp(arg, "--vram-report") == 0) {
+            opt->vram_report = true;
+        } else if (std::strcmp(arg, "--vram-min-free-mib") == 0) {
+            if (!val || !parse_u64(val, &opt->vram_min_free_mib)) return false;
             ++i;
         } else if (std::strcmp(arg, "--output-head-gate") == 0) {
             opt->output_head_gate = true;
@@ -6682,6 +6764,18 @@ int prepare_dense_f16_cache(const Options &opt,
     }
 
     if (cache->entries.empty()) return 1;
+    uint64_t planned_bytes[kGpus] = {};
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        cache->gpu_cache_aligned_bytes[gpu] = gpu_offsets[gpu];
+        cache->gpu_temp_bytes[gpu] = gpu_temp[gpu];
+        planned_bytes[gpu] = gpu_offsets[gpu] + gpu_temp[gpu];
+    }
+    if (check_planned_vram_allocation(opt, "dense_f16_cache_prealloc", planned_bytes) != 0) {
+        std::fprintf(stderr,
+                     "dense_f16_cache_vram_admission_failed min_free_mib=%llu\n",
+                     (unsigned long long)opt.vram_min_free_mib);
+        return 3;
+    }
     for (int gpu = 0; gpu < kGpus; ++gpu) {
         CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
         if (gpu_offsets[gpu]) CHECK_CUDA(cudaMalloc(&cache->arena[(size_t)gpu],
@@ -15788,6 +15882,9 @@ int main(int argc, char **argv) {
     if (opt.token_major_all_layers && opt.all_layers && !opt.tp_runtime_explicit) {
         opt.share_tp_runtime = true;
     }
+    if (report_vram_checkpoint(opt, "startup") != 0) {
+        return 14;
+    }
 
     if (opt.output_head_gate) {
         std::vector<ContractRow> all_rows;
@@ -15849,6 +15946,10 @@ int main(int argc, char **argv) {
                     (unsigned long long)all_layer_dense_f16_cache.cache_aligned_bytes,
                     (unsigned long long)all_layer_dense_f16_cache.max_temp_bytes,
                     cache_ms);
+        if (report_vram_checkpoint(opt, "after_dense_f16_cache") != 0) {
+            free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+            return 14;
+        }
     }
 
     SharedApi shared_api;
@@ -15870,6 +15971,14 @@ int main(int argc, char **argv) {
     }
     std::printf("tp_ep_all_layer_rank_buffers_shared\tdevices\t%d\tcore_bytes\t%llu\tPASS\n",
                 kGpus, (unsigned long long)shared_rank_buffers.core_bytes);
+    if (report_vram_checkpoint(opt, "after_rank_buffers") != 0) {
+        close_shared_rank_buffers(&shared_rank_buffers);
+        close_shared_api(&shared_api);
+        if (shared_dense_f16_cache) {
+            free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+        }
+        return 14;
+    }
 
     SharedTpRuntime shared_tp_runtime;
     if (opt.share_tp_runtime && open_shared_tp_runtime(opt, &shared_tp_runtime) != 0) {
@@ -15892,6 +16001,15 @@ int main(int argc, char **argv) {
     } else {
         std::printf("tp_ep_all_layer_tp_runtime_shared\tdevices\t%d\tslots\t%d\tctx\t262144\t"
                     "mode\tlocal_per_layer\tPASS\n", kGpus, opt.slots);
+    }
+    if (report_vram_checkpoint(opt, "after_tp_runtime") != 0) {
+        close_shared_tp_runtime(&shared_tp_runtime);
+        close_shared_rank_buffers(&shared_rank_buffers);
+        close_shared_api(&shared_api);
+        if (shared_dense_f16_cache) {
+            free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+        }
+        return 14;
     }
 
     SharedExpertBindings shared_expert_bindings;
@@ -15935,6 +16053,17 @@ int main(int argc, char **argv) {
     } else {
         std::printf("tp_ep_all_layer_dense_ops_shared\tlayers\t43\tdevices\t%d\t"
                     "mode\tlocal_per_layer\tPASS\n", kGpus);
+    }
+    if (report_vram_checkpoint(opt, "after_dense_ops") != 0) {
+        free_shared_dense_ops(&shared_dense_ops, opt);
+        close_shared_expert_bindings(&shared_expert_bindings);
+        close_shared_tp_runtime(&shared_tp_runtime);
+        close_shared_rank_buffers(&shared_rank_buffers);
+        close_shared_api(&shared_api);
+        if (shared_dense_f16_cache) {
+            free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+        }
+        return 14;
     }
 
     std::vector<ContractRow> resident_rows[43];
@@ -15986,6 +16115,18 @@ int main(int argc, char **argv) {
         std::printf("tp_ep_hc_final_expand_shared\tlayers\t43\tslots\t%d\t"
                     "control_bytes\t%llu\tPASS\n",
                     opt.slots, (unsigned long long)shared_hc_controls.control_bytes);
+        if (report_vram_checkpoint(opt, "after_hc_controls") != 0) {
+            close_shared_hc_controls(opt, &shared_hc_controls);
+            free_shared_dense_ops(&shared_dense_ops, opt);
+            close_shared_expert_bindings(&shared_expert_bindings);
+            close_shared_tp_runtime(&shared_tp_runtime);
+            close_shared_rank_buffers(&shared_rank_buffers);
+            close_shared_api(&shared_api);
+            if (shared_dense_f16_cache) {
+                free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+            }
+            return 14;
+        }
     }
     SharedHcControls *shared_hc_controls_arg =
         shared_hc_controls.initialized ? &shared_hc_controls : nullptr;
@@ -16018,6 +16159,19 @@ int main(int argc, char **argv) {
                     (unsigned long long)shared_output_head.output_weight_bytes,
                     (unsigned long long)shared_output_head.logits_bytes,
                     opt.tp_hc_final_expand_gate ? 0 : 1);
+        if (report_vram_checkpoint(opt, "after_output_head") != 0) {
+            close_shared_output_head(opt, &shared_output_head);
+            close_shared_hc_controls(opt, &shared_hc_controls);
+            free_shared_dense_ops(&shared_dense_ops, opt);
+            close_shared_expert_bindings(&shared_expert_bindings);
+            close_shared_tp_runtime(&shared_tp_runtime);
+            close_shared_rank_buffers(&shared_rank_buffers);
+            close_shared_api(&shared_api);
+            if (shared_dense_f16_cache) {
+                free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+            }
+            return 14;
+        }
     }
     SharedOutputHead *shared_output_head_arg =
         shared_output_head.initialized ? &shared_output_head : nullptr;
@@ -16049,6 +16203,20 @@ int main(int argc, char **argv) {
                     shared_token_embedding.rows_per_gpu,
                     (unsigned long long)shared_token_embedding.weight_bytes,
                     opt.devices[0]);
+        if (report_vram_checkpoint(opt, "after_token_embedding") != 0) {
+            close_shared_token_embedding(opt, &shared_token_embedding);
+            close_shared_output_head(opt, &shared_output_head);
+            close_shared_hc_controls(opt, &shared_hc_controls);
+            free_shared_dense_ops(&shared_dense_ops, opt);
+            close_shared_expert_bindings(&shared_expert_bindings);
+            close_shared_tp_runtime(&shared_tp_runtime);
+            close_shared_rank_buffers(&shared_rank_buffers);
+            close_shared_api(&shared_api);
+            if (shared_dense_f16_cache) {
+                free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+            }
+            return 14;
+        }
     }
     SharedTokenEmbedding *shared_token_embedding_arg =
         shared_token_embedding.initialized ? &shared_token_embedding : nullptr;

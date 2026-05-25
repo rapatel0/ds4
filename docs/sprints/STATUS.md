@@ -9,7 +9,22 @@ Current bottleneck reference:
 summarizes the measured bottlenecks, layer-by-layer hot paths, and experiments
 already tried.
 
-Latest throughput direction: Sprint 381 implemented
+Latest serving hardening status: Sprint 382 added permanent TP/EP VRAM
+admission telemetry for the target `32` slot / `256K` appliance shape. The
+launcher now has `DS4_V100_TP_EP_VRAM_REPORT` and
+`DS4_V100_TP_EP_VRAM_MIN_FREE_MIB`, defaulting to a `64 MiB` free-memory
+reserve. The full-layer smoke emits `tp_ep_vram_plan`, `tp_ep_vram`, and
+`tp_ep_vram_summary` rows during resident startup, and the profile harness
+captures aggregate VRAM fields in `summary.json`. V100 validation passed:
+build succeeded, launcher `--print-command` showed
+`--vram-report --vram-min-free-mib 64`, direct `32` slot / `256K` /
+`position=262080` validation returned `returncode=0`, first token `54639`,
+`66.136824` generated decode tok/s, `vram_failures=0`,
+`vram_min_free_mib=1754`, and `vram_max_used_mib=30739`. A high-threshold
+negative check with `--vram-min-free-mib 40000` failed cleanly at startup with
+`rc=14` and `failures=8`.
+
+Latest throughput direction before memory hardening: Sprint 381 implemented
 `--fp8-e5m2-kv-gate` as a default-off typed-KV format diagnostic. The row
 layout stays block-128 with one E8M0 scale byte plus 128 FP8 payload bytes, so
 E5M2 is not a capacity win over E4M3; it tests FP8 exponent/mantissa semantics

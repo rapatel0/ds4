@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-25
-last_updated_by: sprint-381
-revision: 394
+last_updated_by: sprint-382
+revision: 395
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -79,7 +79,16 @@ throughput sprint.
 
 The near-term implementation focus is therefore:
 
-1. Close the S-E follow-up with a narrow parity/precheck fix if we want to
+1. Keep the 32-slot / 256K serving shape memory-admitted before optimizing it.
+   Sprint 382 added startup VRAM admission/telemetry with
+   `--vram-report`, `--vram-min-free-mib`, and launcher defaults
+   `DS4_V100_TP_EP_VRAM_REPORT` /
+   `DS4_V100_TP_EP_VRAM_MIN_FREE_MIB=64`. The V100 direct proof at
+   `32` slots / `256K` recorded `vram_failures=0`, `vram_min_free_mib=1754`,
+   and `vram_max_used_mib=30739`; a synthetic unsafe threshold fails cleanly
+   before serving readiness. Future throughput sprints should keep this guard
+   enabled so regressions show up as admission failures, not late CUDA OOMs.
+2. Close the S-E follow-up with a narrow parity/precheck fix if we want to
    revisit fused gated-SiLU. Sprint 379 showed the current serving-shaped
    branch already has no standalone routed SwiGLU launch, the generic
    TurboMind gated-SiLU epilogue is not DS4-equivalent, and the new
@@ -88,21 +97,21 @@ The near-term implementation focus is therefore:
    serving promotion candidate until the resident dense-KV precheck failure
    under `routed-normalized + fused-gated-silu` is diagnosed or a deterministic
    fused-gate parity harness proves the ABI.
-2. Keep TP-sharded experts out of serving for now. Sprint 380 measured TP8 and
+3. Keep TP-sharded experts out of serving for now. Sprint 380 measured TP8 and
    TP4: TP8 is still numerically invalid, and TP4 is correct but only
    `1.055x/0.891x/0.927x` total speedup at `96/192/384` routes because
    reduction dominates. Revisit TP experts only as a focused fused TP4
    reduction/compose sprint.
-3. Treat S-G E5M2 KV as a positive diagnostic, not a default yet. Sprint 381
+4. Treat S-G E5M2 KV as a positive diagnostic, not a default yet. Sprint 381
    added `DS4_V100_TP_KV_F8_E5M2_B128` and `--fp8-e5m2-kv-gate`; V100 row
    tests passed with zero byte mismatches, direct 4-token checksum matched
    while decode improved from `70.710875` to `75.787866` tok/s, and HTTP
    selected-token client tok/s improved from `17.212677` to `22.389190`.
-   However, E5M2 gives up mantissa precision, only short selected-token parity
-   is proven, and one immediate HTTP candidate run failed with CUDA OOM before
-   readiness. Keep E4M3 as the default until a longer parity/soak sprint and a
-   VRAM admission-margin fix are complete.
-4. Add S-H MTP only after base TP/EP decode has stable metrology and a settled
+   However, E5M2 gives up mantissa precision and only short selected-token
+   parity is proven. Sprint 382 put VRAM admission in place after one
+   candidate startup OOM, but E4M3 remains the default until a longer
+   parity/soak sprint proves E5M2 across continuation-heavy serving.
+5. Add S-H MTP only after base TP/EP decode has stable metrology and a settled
    launch strategy. MTP remains the decode multiplier, but it should not hide
    kernel scheduling or topology bottlenecks.
 
