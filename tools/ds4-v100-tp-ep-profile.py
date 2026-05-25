@@ -199,6 +199,8 @@ def variant_suffix(args):
         suffix += "-skip-compressed-store"
     if getattr(args, "skip_indexer_store", False):
         suffix += "-skip-indexer-store"
+    if getattr(args, "fused_compressed_input_fill", False):
+        suffix += "-fused-compressed-input-fill"
     return suffix
 
 
@@ -261,6 +263,8 @@ def direct_command(args):
         cmd.append("--true-ds4-attention-typed-kv-skip-compressed-store-gate")
     if args.skip_indexer_store:
         cmd.append("--true-ds4-attention-typed-kv-skip-indexer-store-gate")
+    if args.fused_compressed_input_fill:
+        cmd.append("--true-ds4-compressed-kv-fused-input-fill-gate")
     return cmd
 
 
@@ -308,6 +312,7 @@ def summarize_direct(case_dir, tool, rc, elapsed_s):
         "indexer_typed_score_ms",
         "reference_diff_ms",
         "ratio_shift_ms",
+        "fused_input_fill",
         "ms",
     ]
     compressed_counts = {
@@ -315,6 +320,7 @@ def summarize_direct(case_dir, tool, rc, elapsed_s):
         "emitted_layers": 0,
         "ratio4_layers": 0,
         "ratio128_layers": 0,
+        "fused_input_fill_layers": 0,
     }
     for line in stdout.splitlines():
         tag, fields = parse_tab_line(line)
@@ -369,6 +375,8 @@ def summarize_direct(case_dir, tool, rc, elapsed_s):
                 compressed_counts["ratio4_layers"] += 1
             elif ratio == 128:
                 compressed_counts["ratio128_layers"] += 1
+            if maybe_number(fields.get("fused_input_fill")):
+                compressed_counts["fused_input_fill_layers"] += 1
             for key in compressed_sum_keys:
                 value = maybe_number(fields.get(key))
                 if isinstance(value, (int, float)):
@@ -525,6 +533,7 @@ def main():
     parser.add_argument("--hc-current-stream-sync", action="store_true")
     parser.add_argument("--skip-compressed-store", action="store_true")
     parser.add_argument("--skip-indexer-store", action="store_true")
+    parser.add_argument("--fused-compressed-input-fill", action="store_true")
     parser.add_argument("--port", type=int, default=18357)
     parser.add_argument("--readiness-seconds", type=int, default=600)
     parser.add_argument("--request-timeout-seconds", type=int, default=1200)

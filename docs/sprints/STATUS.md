@@ -89,6 +89,19 @@ typed stores was flat: `81.733945` generated tok/s decode and `128.338783`
 ms compressed-KV. Typed stores are therefore not the next lever; target
 shared/fused compressor-indexer input fill and compressor state/emit work.
 
+Sprint 353 implemented that shared-fill experiment as an opt-in TP/EP gate:
+`--true-ds4-compressed-kv-fused-input-fill-gate` /
+`--fused-compressed-input-fill`. The fused path reads each ratio-4 rank's
+current vector once and writes the five current-derived compressor/indexer
+half-input buffers in one kernel. V100 same-binary emitted-row A/B at `32`
+slots / `256K` passed with identical output token `54639` and finite output
+head. Control measured `79.011931` generated decode tok/s and `130.391665`
+ms pre-EP compressed-KV time; fused-fill measured `80.534845` tok/s and
+`129.781758` ms. The fused path was selected on all `21` ratio-4 layers, but
+the stage reduction was under `1 ms`, so this remains opt-in and is not
+promoted as a default. The next lever should be compressor/indexer state/emit
+fusion rather than more fill-only work.
+
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
 TP runtime, sharded KV, rank buffers, TurboMind API handles, active MXFP4
