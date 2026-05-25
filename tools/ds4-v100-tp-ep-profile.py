@@ -282,6 +282,11 @@ def build_env(args, port):
             "DS4_V100_TP_EP_ASYNC_OUTPUT": "1" if args.async_output else "0",
             "DS4_V100_TP_EP_DECODE_CUDAGRAPH": "1" if args.decode_cudagraph else "0",
             "DS4_V100_TP_EP_BATCHED_PAGED_ATTN": "1" if args.batched_paged_attn else "0",
+            "DS4_V100_TP_EP_COMPACT_ROUTE_COMPOSE": "0"
+            if args.disable_compact_route_compose
+            else "1",
+            "DS4_V100_TP_EP_MODEL_ROUTER_ROUTES": "1" if args.model_router_routes else "0",
+            "DS4_V100_TP_EP_COMPACT_MOE_DECODE": "1" if args.compact_moe_decode else "0",
             "DS4_V100_RESERVE_MIB": "0",
             "DS4_V100_PORT": str(port),
             "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_HISTORY": "1",
@@ -357,6 +362,12 @@ def variant_suffix(args):
         suffix += "-decode-cudagraph"
     if getattr(args, "batched_paged_attn", False):
         suffix += "-batched-paged-attn"
+    if getattr(args, "model_router_routes", False):
+        suffix += "-model-router"
+    if getattr(args, "disable_compact_route_compose", False):
+        suffix += "-no-compact-route"
+    if getattr(args, "compact_moe_decode", False):
+        suffix += "-compact-moe"
     return suffix
 
 
@@ -389,7 +400,6 @@ def direct_command(args):
         "--all-layers",
         "--serving-bench",
         "--copy-event-compose",
-        "--compact-route-compose",
         "--tp-hc-final-expand-gate",
         "--tp-hc-current-input-gate",
         "--tp-hc-persist-state-gate",
@@ -415,6 +425,12 @@ def direct_command(args):
         cmd.append("--decode-cudagraph-gate")
     if args.batched_paged_attn:
         cmd.append("--batched-paged-attn-gate")
+    if not args.disable_compact_route_compose:
+        cmd.append("--compact-route-compose")
+    if args.model_router_routes:
+        cmd.append("--model-router-routes")
+    if args.compact_moe_decode:
+        cmd.append("--compact-moe-decode-gate")
     if "window" in args.tool:
         cmd.append("--cuda-profiler-window")
     if args.hc_current_peer_gather:
@@ -542,6 +558,7 @@ def add_tp_ep_line_summaries(summary, stdout):
                 "sum_pre_ep_post_attention_ffn_input_ms",
                 "tp_hc_current_input_peer_gather",
                 "tp_hc_current_input_stream_sync",
+                "compact_moe_decode_gate",
                 "sum_final_hc_ms",
                 "wall_ms",
             ]:
@@ -580,6 +597,16 @@ def add_tp_ep_line_summaries(summary, stdout):
         elif tag == "tp_ep_diagnostic_output_head":
             for key in ["total_ms", "projection_ms", "top1_ms", "first_token", "finite_bad"]:
                 summary[f"output_head_{key}"] = maybe_number(fields.get(key))
+        elif tag == "tp_ep_compact_moe_route_stats":
+            for key in [
+                "layer",
+                "routes",
+                "duplicate_slots",
+                "max_same_rank_routes",
+                "all_dest_bytes",
+                "compact_bytes",
+            ]:
+                summary[f"compact_moe_{key}"] = maybe_number(fields.get(key))
     for key, value in compressed_counts.items():
         summary[f"compressed_kv_{key}"] = value
     return summary
@@ -760,6 +787,9 @@ def main():
     parser.add_argument("--async-output", action="store_true")
     parser.add_argument("--decode-cudagraph", action="store_true")
     parser.add_argument("--batched-paged-attn", action="store_true")
+    parser.add_argument("--model-router-routes", action="store_true")
+    parser.add_argument("--disable-compact-route-compose", action="store_true")
+    parser.add_argument("--compact-moe-decode", action="store_true")
     parser.add_argument("--port", type=int, default=18357)
     parser.add_argument("--readiness-seconds", type=int, default=600)
     parser.add_argument("--request-timeout-seconds", type=int, default=1200)

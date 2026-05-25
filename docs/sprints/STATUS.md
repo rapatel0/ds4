@@ -9,51 +9,29 @@ Current bottleneck reference:
 summarizes the measured bottlenecks, layer-by-layer hot paths, and experiments
 already tried.
 
-Latest throughput direction: Sprint 376 tested `--decode-cudagraph-gate` and
-rejected graph replay as a promotion path. The audit work removed broad
-in-step host waits and all tracked helper host waits under the graph gate while
-preserving first token `54639`, output checksum `24071637347`, and scaffold
-checksum `3401922407`. Real capture then failed on the V100 stack: independent
-stream captures conflict with cross-stream event waits, root capture needs
-explicit stream joining, and after joining, CUDA rejects `cudaMemcpyPeerAsync`
-inside stream capture. Replacing HC-current peer copies with graph-gated device
-copy kernels moved the failure to the next peer copy in attention projection,
-so the blocker is pervasive P2P copy transport rather than one call site.
-Sprint 376 is therefore rejected for promotion; the next performance sprint is
-`--batched-paged-attn-gate`.
+Latest throughput direction: Sprint 378 implemented and promoted
+`--compact-moe-decode-gate` for the real model-router compact-compose path.
+The gate makes true DS4 model-router top-k routes compatible with compact EP
+return composition by replacing the old one-route-per-source-rank/slot index
+with bounded per-source-rank, per-slot route lists. V100 HTTP serving A/B at
+`32` requests / `32` slots / `256K` / `position=262080` /
+`32` generated tokens/request preserved the response token stream and improved
+client throughput from `37.394075` to `39.034685` tok/s, server decode from
+`80.812914` to `81.313535` tok/s, average GPU utilization from `8.385417%` to
+`8.559783%`, and compose time from `19.167728` to `14.703119` ms. The
+candidate route audit saw `64` duplicate same-rank slots, `max_same_rank_routes=2`,
+and compact return bytes of `3145728` versus `4194304` for the all-destination
+path.
 
 Current active steering source: `TEMP_THROUGHPUT_PROMPT.md`. The near-term
-performance queue is isolated default-off gates, same-binary V100 A/B, and a
-strict promote/reject decision per gate. Sprint 375 rejected async output as a
-default. Sprint 376 rejected CUDA graph replay because the current TP/EP decode
-step relies on stream-capture-incompatible `cudaMemcpyPeerAsync` transport.
-Per the vision, the next sprint should start the first launch-count reducer
-that does not depend on graph capture: `--batched-paged-attn-gate`.
-
-Sprint 377 is planned as that next gate. It will add
-`--batched-paged-attn-gate`, keep the current default path unchanged, and A/B a
-batched typed-KV attention row plan against the current `32` slot / `256K`
-serving baseline. The read-only baseline has been captured:
-`32/32` HTTP 200, first token `89340`, client `40.157540` tok/s, server decode
-`88.372350` tok/s, average GPU utilization `7.972222%`, max GPU utilization
-`38%`, and compressed-KV sum `5436.764269` ms.
-
-Sprint 377 row-family planning is now implemented and validated on the V100
-pod. The 8-token direct smoke emitted `127` plan rows, preserved finite output
-with first token `98751`, and showed ratio-4 layers reaching
-`visible_attn_rows=2` and `visible_indexer_rows=2`. The important finding is
-that pending typed-history reloads are `0` in those samples; the current
-skip-current/cache path already avoids the narrow reload storm. Typed-history
-is only `30.807917` ms of `2651.391081` ms summed decode in that run, while
-compressed-KV, attention projection, and attention state are much larger. A
-narrow S-C load-only kernel is therefore unlikely to move topline throughput;
-the remaining S-C choice is a broader raw+compressed attention fusion or close
-the gate and move to compact MoE.
-
-Sprint 377 is now closed as a measured redirect: keep
-`--batched-paged-attn-gate` as an opt-in row-plan diagnostic, do not promote it
-as a serving default, and move the next sprint to
-`--compact-moe-decode-gate`.
+performance queue remains isolated default-off gates, same-binary V100 A/B,
+and a strict promote/reject decision per gate. S-B async output and S-A CUDA
+graph replay were rejected. S-C batched paged attention row planning was
+closed as a diagnostic-only redirect because pending typed-history reloads were
+already `0` in the observed compressed/indexer samples. S-D compact MoE is now
+promoted for model-router compact compose. The next sprint should execute S-E
+`--fused-gated-silu-gate`, removing the routed-FFN clamp/SwiGLU launch and
+intermediate while preserving the same model-router serving parity checks.
 
 Latest TP/EP format status: Sprint 374 built and ran the V100 workbench for
 the Sprint 373 INT8 candidate shapes. The copied tc-grid INT8 kernels are
