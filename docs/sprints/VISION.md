@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-25
 last_updated_by: sprint-380
-revision: 392
+revision: 393
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -61,7 +61,7 @@ The performance program is intentionally isolated:
 | 3 | `--batched-paged-attn-gate` | Complete | Rejected as narrow load target; row planner remains diagnostic-only |
 | 4 | `--compact-moe-decode-gate` | Complete | Promoted for real model-router compact compose; response tokens matched and HTTP serving improved |
 | 5 | `--fused-gated-silu-gate` | Complete | Not promoted; generic epilogue changes token, DS4-clamped ABI is fast in EP-only isolation but resident serving A/B fails before the gate |
-| 6 | `--tp-experts-ab-gate` | Active topology measurement | Driver added; TP8 still fails correctness and total speedup, TP4 rerun remains |
+| 6 | `--tp-experts-ab-gate` | Complete measurement | Do not integrate yet; TP8 fails correctness, TP4 is correct but reduction erases the win |
 | 7 | `--fp8-e5m2-kv-gate` | Long-context bandwidth work | Test KV footprint/bandwidth reduction after launch-count reducers are measured |
 | 8 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
 
@@ -88,15 +88,13 @@ The near-term implementation focus is therefore:
    serving promotion candidate until the resident dense-KV precheck failure
    under `routed-normalized + fused-gated-silu` is diagnosed or a deterministic
    fused-gate parity harness proves the ABI.
-2. Continue S-F `--tp-experts-ab-gate` as the active topology measurement, not
-   a rewrite. Sprint 380's first driver pass reconfirmed TP8 is not viable
-   with the current `mid_shard=256` MXFP4 path, so the remaining question is
-   whether TP4 can be rerun and still beat the current EP8 serving path enough
-   to justify integration.
-   It should compare TP-sharded experts against the current EP8 all-to-all path
-   with the same serving harness, reporting compose/all-to-all ms, server decode
-   tok/s, GPU utilization, first token, and checksum.
-3. Delay S-G FP8 KV until launch-count and MoE/EP fragmentation are understood.
+2. Keep TP-sharded experts out of serving for now. Sprint 380 measured TP8 and
+   TP4: TP8 is still numerically invalid, and TP4 is correct but only
+   `1.055x/0.891x/0.927x` total speedup at `96/192/384` routes because
+   reduction dominates. Revisit TP experts only as a focused fused TP4
+   reduction/compose sprint.
+3. Move to S-G FP8 KV or the next launch-count reducer unless the next sprint
+   explicitly targets that TP4 reduction boundary.
    KV bandwidth matters at `256K`, but the current evidence says the immediate
    bottleneck is still low utilization from many small launches and uneven work.
 4. Add S-H MTP only after base TP/EP decode has stable metrology and a settled
@@ -1079,7 +1077,7 @@ The next performance sequence is ordered to test that thesis directly:
 | 1 | `--batched-paged-attn-gate` | Collapse per-slot/per-family typed-KV row store/load into block-table-indexed attention kernels | Closed diagnostic-only; row planner showed pending typed-history reloads already `0` |
 | 2 | `--compact-moe-decode-gate` | Make real model-router top-k routes compatible with compact EP compose | Promoted for model-router compact compose |
 | 3 | `--fused-gated-silu-gate` | Remove standalone clamp/SwiGLU launch by baking the DS4 clamp into the grouped-GEMM epilogue | Complete diagnostic; not promoted |
-| 4 | `--tp-experts-ab-gate` | Measure TP-sharded expert execution against current EP8 all-to-all, without committing topology | Active; TP8 matrix rerun fails correctness |
+| 4 | `--tp-experts-ab-gate` | Measure TP-sharded expert execution against current EP8 all-to-all, without committing topology | Complete; no serving integration yet |
 | 5 | `--fp8-e5m2-kv-gate` | Test smaller KV storage/load traffic for long-context serving | Planned after launch/MoE gates |
 | 6 | `--mtp-decode-gate` | Add MTP only after base TP/EP decode metrology and launch strategy are stable | Deferred multiplier |
 
@@ -1335,7 +1333,7 @@ ABI was implemented and is fast in a layer-0 EP-only V100 run
 serving-shaped direct A/B fails before the routed gate executes because the
 dense-KV precheck returns rc `4`. Keep the flag diagnostic-only.
 
-### Sprint 380 - TP-Sharded Expert A/B [active]
+### Sprint 380 - TP-Sharded Expert A/B [complete]
 
 Goal: Implement `--tp-experts-ab-gate` as a measurement of TP-sharded experts
 against the current EP8 all-to-all path.
@@ -1345,15 +1343,15 @@ parallel all-to-all remains a structural bottleneck after launch-count work.
 It is a measurement gate, not a commitment to rewrite the serving topology
 before paged attention and compact MoE have been tested.
 
-Progress: Added `tools/ds4-v100-tp-experts-ab.py`, a permanent measurement
-driver that writes EP8 direct serving and TP8 TurboMind workbench summaries.
-The first V100 smoke at `32` slots / `256K` / `position=262080` recorded EP8
-direct decode `66.569095` tok/s, first token `54639`, EP `18.220610` ms, and
-compose `22.522762` ms. A full TP8 matrix rerun with current kernels still
-fails correctness at `96`, `192`, and `384` routes, with `378153`, `756305`,
-and `1512469` NaNs respectively; total speedup remains below `1.0x` because
-reduction dominates. Continue by exposing/rerunning TP4, the historically
-correct branch from Sprint 211.
+Outcome: Do not integrate TP-sharded experts into serving yet. Added
+`tools/ds4-v100-tp-experts-ab.py`, a permanent measurement driver that writes
+EP8 direct serving plus TP4/TP8 TurboMind workbench summaries. The V100 control
+at `32` slots / `256K` / `position=262080` recorded EP8 direct decode
+`66.569095` tok/s, first token `54639`, EP `18.220610` ms, and compose
+`22.522762` ms. TP8 still fails correctness at `96`, `192`, and `384` routes.
+TP4 is correct at all three route tiers but total speedup is only
+`1.055x`, `0.891x`, and `0.927x`, so simple output reduction/compose erases
+the compute win. Revisit only with a fused TP4 reduction/compose boundary.
 
 ### Sprint 381 - FP8 E5M2 KV Gate [tentative]
 
@@ -2787,6 +2785,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 379 phase 1 tested the generic fused gated-SiLU epilogue. | The current production-shaped branch already has `routed_gate_standalone_swiglu=0`; explicit fused mode preserved first token `54639` but was effectively a no-op. The routed-normalized branch has the standalone clamped launch; generic fused mode removed it and improved direct proxy from `45.368432` to `57.367413` tok/s, but changed first token from `41432` to `54639`. | Do not promote the generic epilogue. Continue S-E only through a true DS4-clamped TurboMind epilogue ABI, or close S-E with that concrete blocker. |
 | 2026-05-25 | Sprint 379 implemented the true DS4-clamped TurboMind epilogue ABI. | The ABI exports and the clamped fused gate is fast in layer-0 EP-only isolation (`4.102144` ms two-step gate versus `0.622592` ms fused gate), but resident direct serving A/B with `routed-normalized + fused-gated-silu` fails at layer 0 before the routed gate executes due to the dense-KV precheck returning rc `4`. | Keep S-E default-off and diagnostic-only. Move to S-F TP-sharded expert A/B unless we first add a deterministic fused-gate parity harness or diagnose the resident dense-KV precheck interaction. |
 | 2026-05-25 | Sprint 380 started TP-sharded expert A/B measurement. | Added the permanent driver and reran TP8 TurboMind MXFP4 route tiers. TP8 still fails correctness for `96/192/384` routes and total speedup is `0.523x/0.353x/0.335x`; EP8 direct control at the target shape is `66.569095` tok/s with first token `54639`. | Do not integrate TP8 experts. Continue Sprint 380 by exposing/rerunning TP4, which was the historically correct branch. |
+| 2026-05-25 | Sprint 380 reran TP4 and TP8 under one driver. | TP4 is correct at `96/192/384` routes with total speedup `1.055x/0.891x/0.927x`; TP8 remains incorrect with large NaN counts. The simple TP output reduction dominates at larger route tiers. | Do not integrate TP-sharded experts into serving yet. Revisit only with a fused TP4 reduction/compose boundary, otherwise move to the next Vision gate. |
 
 ## Open Questions
 

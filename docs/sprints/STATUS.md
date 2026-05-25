@@ -28,16 +28,17 @@ default-off and diagnostic-only; the next work is either a deterministic
 fused-gate parity harness or diagnosis of that resident dense-KV precheck
 interaction.
 
-Current active steering source: `TEMP_THROUGHPUT_PROMPT.md`. Sprint 380 has
-started S-F `--tp-experts-ab-gate` with a permanent measurement driver,
-`tools/ds4-v100-tp-experts-ab.py`. The first V100 smoke produced an EP8 direct
-serving control at `66.569095` direct decode tok/s (`54639` first token,
-`18.220610` ms EP, `22.522762` ms compose) and reconfirmed TP8 MXFP4 expert
-failure at the route tiers: `96/192/384` routes all fail correctness with
-`378153/756305/1512469` NaNs, and TP8 total speedup remains below 1.0x because
-simple reduction dominates. Continue Sprint 380 by exposing or rerunning the
-historically correct TP4 branch before deciding whether TP-sharded experts
-deserve serving integration.
+Current active steering source: `TEMP_THROUGHPUT_PROMPT.md`. Sprint 380
+implemented S-F `--tp-experts-ab-gate` as a permanent measurement driver,
+`tools/ds4-v100-tp-experts-ab.py`, and closed the immediate topology decision:
+do not integrate TP-sharded experts into serving yet. The EP8 direct serving
+control at the target shape measured `66.569095` direct decode tok/s (`54639`
+first token, `18.220610` ms EP, `22.522762` ms compose). TP8 MXFP4 still fails
+correctness at `96/192/384` routes with `378153/756305/1512469` NaNs. TP4 is
+correct at all three tiers and has compute speedup, but total speedup is only
+`1.055x/0.891x/0.927x`; simple output reduction/compose erases the win at the
+larger route tiers. A future TP expert sprint must prototype a better fused
+TP4 reduction/compose boundary before serving integration.
 
 The near-term
 performance queue remains isolated default-off gates, same-binary V100 A/B,

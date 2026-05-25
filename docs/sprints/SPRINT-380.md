@@ -82,9 +82,9 @@ tools/ds4-v100-tp8-turbomind-ffn-smoke \
   --iters 50
 ```
 
-The workbench currently includes TP8 and historical TP4 evidence. Sprint 380
-should either expose TP4 as a first-class workbench mode or explicitly record
-that TP4 data is historical and rerun TP8 only.
+The repo already contains separate TP4 and TP8 TurboMind workbenches. Sprint
+380 wires both into the permanent driver instead of relying on historical TP4
+logs.
 
 ## Implementation Plan
 
@@ -107,11 +107,9 @@ that TP4 data is historical and rerun TP8 only.
 
 ### Phase 2: TP4 Visibility
 
-- Inspect `tools/ds4-v100-tp8-turbomind-ffn-smoke.cu`.
-- If low-risk, add `--tp 4|8` so the same workbench can rerun the known-good
-  TP4 path with current kernels.
-- If that is too invasive, record TP4 as historical and keep Sprint 380 focused
-  on the driver plus TP8 rerun.
+- Inspect the existing TP4 workbench:
+  `tools/ds4-v100-tp4-turbomind-layer-smoke.cu`.
+- Add driver support for rerunning TP4 and TP8 with shared summary parsing.
 
 ### Phase 3: V100 Measurement
 
@@ -176,13 +174,19 @@ must contain timings, route counts, and correctness metrics only.
 
 ## Progress
 
-Phase 1 is implemented.
+Phase 1 and Phase 2 are implemented.
 
 Added:
 
 ```text
 tools/ds4-v100-tp-experts-ab.py
 ```
+
+The driver now runs:
+
+- EP8 direct serving control;
+- TP4 TurboMind MXFP4 workbench;
+- TP8 TurboMind MXFP4 workbench.
 
 Local validation passed:
 
@@ -195,6 +199,7 @@ V100 build validation passed:
 
 ```text
 make -j80 CUDA_HOME=/usr/local/cuda CUDA_ARCH=sm_70 \
+  tools/ds4-v100-tp4-turbomind-layer-smoke \
   tools/ds4-v100-tp8-turbomind-ffn-smoke \
   tools/ds4-v100-tp-ep-full-layer-smoke
 ```
@@ -210,19 +215,30 @@ First V100 driver smoke artifact:
 | EP8 direct serving | 0 | first token `54639`, direct decode `66.569095` tok/s, EP `18.220610` ms, compose `22.522762` ms |
 | TP8 workbench, tokens/active 16 | 1 | correctness `FAIL`, routes `96`, NaNs `378153`, TP8 compute `0.087654` ms, TP8 total `0.581414` ms |
 
-Full TP8 matrix artifact:
+Full TP4/TP8 matrix artifact:
 
 ```text
-/workspace/logs/sprint380-tp-experts-ab/tp8-matrix
+/workspace/logs/sprint380-tp-experts-ab/tp4-tp8-matrix-parsed
 ```
 
-| Tokens/active | Routes | Correctness | NaNs | Full ms | TP8 compute ms | TP8 reduce ms | TP8 total ms | Total speedup |
-|---:|---:|---|---:|---:|---:|---:|---:|---:|
-| 16 | 96 | FAIL | 378153 | 0.293499 | 0.071660 | 0.489438 | 0.561097 | 0.523x |
-| 32 | 192 | FAIL | 756305 | 0.347197 | 0.080814 | 0.903803 | 0.984617 | 0.353x |
-| 64 | 384 | FAIL | 1512469 | 0.606597 | 0.141926 | 1.668078 | 1.810004 | 0.335x |
+| Path | Tokens/active | Routes | Correctness | NaNs | Full ms | TP compute ms | TP reduce ms | TP total ms | Total speedup |
+|---|---:|---:|---|---:|---:|---:|---:|---:|---:|
+| TP4 | 16 | 96 | PASS | 0 | 0.292434 | 0.123945 | 0.153265 | 0.277210 | 1.055x |
+| TP4 | 32 | 192 | PASS | 0 | 0.331469 | 0.132833 | 0.239310 | 0.372143 | 0.891x |
+| TP4 | 64 | 384 | PASS | 0 | 0.575406 | 0.161587 | 0.459294 | 0.620881 | 0.927x |
+| TP8 | 16 | 96 | FAIL | 378153 | 0.250614 | 0.071660 | 0.482224 | 0.553884 | 0.452x |
+| TP8 | 32 | 192 | FAIL | 756305 | 0.295444 | 0.080056 | 0.888402 | 0.968458 | 0.305x |
+| TP8 | 64 | 384 | FAIL | 1512469 | 0.604365 | 0.141844 | 1.664169 | 1.806014 | 0.335x |
 
-Current decision checkpoint: TP8 remains non-viable with the current
-TurboMind `mid_shard=256` MXFP4 path. Continue Sprint 380 by exposing/rerunning
-TP4 in the same driver, because Sprint 211's TP4 control was correct and is
-the only plausible TP-sharded expert branch left.
+## Outcome
+
+Decision: do not integrate TP-sharded experts into serving yet.
+
+TP8 remains rejected: the current TurboMind `mid_shard=256` MXFP4 path is
+numerically invalid and total speedup is below `1.0x`.
+
+TP4 is numerically valid and has real compute speedup, but the simple output
+reduction/compose boundary erases the win at the larger route tiers. It only
+beats the full reference at the smallest `96` route tier. A serving integration
+sprint would be premature unless it first prototypes a better fused TP4
+reduction/compose boundary.

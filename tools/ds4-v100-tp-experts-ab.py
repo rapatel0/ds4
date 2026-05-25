@@ -9,23 +9,23 @@ import time
 
 LATENCY_RE = re.compile(
     r"latency_ms\s+full=(?P<full>[0-9.]+)\s+"
-    r"tp8_compute=(?P<compute>[0-9.]+)\s+"
-    r"tp8_reduce=(?P<reduce>[0-9.]+)\s+"
-    r"tp8_total=(?P<total>[0-9.]+)\s+"
+    r"(?P<label>tp[48])_compute=(?P<compute>[0-9.]+)\s+"
+    r"(?P=label)_reduce=(?P<reduce>[0-9.]+)\s+"
+    r"(?P=label)_total=(?P<total>[0-9.]+)\s+"
     r"compute_speedup=(?P<compute_speedup>[0-9.]+)\s+"
     r"total_speedup=(?P<total_speedup>[0-9.]+)\s+"
     r"input_mib=(?P<input_mib>[0-9.]+)\s+"
     r"output_mib=(?P<output_mib>[0-9.]+)"
 )
 CORRECTNESS_RE = re.compile(
-    r"correctness\s+routes=(?P<routes>[0-9]+)\s+"
+    r"correctness(?:_host_sum)?\s+routes=(?P<routes>[0-9]+)\s+"
     r"values=(?P<values>[0-9]+)\s+"
     r"max_abs=(?P<max_abs>[0-9.eE+-]+)\s+"
     r"rel=(?P<rel>[0-9.eE+-]+)\s+"
     r"bad=(?P<bad>[0-9]+)\s+"
     r"(?:bad_frac=[0-9.eE+-]+\s+)?"
     r"nan=(?P<nan>[0-9]+)\s+"
-    r"(?P<result>PASS|FAIL)"
+    r"(?P<result>PASS|FAIL|ok)"
 )
 
 
@@ -77,7 +77,7 @@ def parse_workbench(stdout):
                     "rel": float(m.group("rel")),
                     "bad": int(m.group("bad")),
                     "nan": int(m.group("nan")),
-                    "correctness": m.group("result"),
+                    "correctness": "PASS" if m.group("result") == "ok" else m.group("result"),
                 }
             )
         m = LATENCY_RE.search(line)
@@ -85,9 +85,10 @@ def parse_workbench(stdout):
             out.update(
                 {
                     "full_ms": float(m.group("full")),
-                    "tp8_compute_ms": float(m.group("compute")),
-                    "tp8_reduce_ms": float(m.group("reduce")),
-                    "tp8_total_ms": float(m.group("total")),
+                    "tp_label": m.group("label"),
+                    "tp_compute_ms": float(m.group("compute")),
+                    "tp_reduce_ms": float(m.group("reduce")),
+                    "tp_total_ms": float(m.group("total")),
                     "compute_speedup": float(m.group("compute_speedup")),
                     "total_speedup": float(m.group("total_speedup")),
                     "input_mib": float(m.group("input_mib")),
@@ -173,6 +174,32 @@ def run_tp8_case(args, tokens_per_active):
     return parsed
 
 
+def run_tp4_case(args, tokens_per_active):
+    out_dir = args.artifact_dir / "tp4-turbomind" / f"tokens-per-active-{tokens_per_active}"
+    cmd = [
+        "tools/ds4-v100-tp4-turbomind-layer-smoke",
+        "--lib",
+        str(args.turbomind_lib),
+        "--tokens-per-active",
+        str(tokens_per_active),
+        "--warmup",
+        str(args.warmup),
+        "--iters",
+        str(args.iters),
+    ]
+    result = run_command(cmd, args.repo_dir, out_dir, args.timeout_seconds)
+    parsed = parse_workbench(result["stdout"])
+    parsed.update(
+        {
+            "kind": "tp4-turbomind-workbench",
+            "returncode": result["returncode"],
+            "elapsed_s": result["elapsed_s"],
+            "tokens_per_active": tokens_per_active,
+        }
+    )
+    return parsed
+
+
 def write_outputs(args, rows):
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
     summary = {
@@ -184,8 +211,8 @@ def write_outputs(args, rows):
         "rows": rows,
         "notes": [
             "EP8 direct serving includes attention, dense/control, EP, compose, and output head.",
-            "TP8 TurboMind workbench is expert-only synthetic MXFP4 timing.",
-            "Do not compare EP8 tok/s and TP8 expert-only ms as an apples-to-apples serving result.",
+            "TP4/TP8 TurboMind workbenches are expert-only synthetic MXFP4 timing.",
+            "Do not compare EP8 tok/s and TP expert-only ms as an apples-to-apples serving result.",
         ],
     }
     (args.artifact_dir / "summary.json").write_text(
@@ -201,9 +228,10 @@ def write_outputs(args, rows):
         "bad",
         "nan",
         "full_ms",
-        "tp8_compute_ms",
-        "tp8_reduce_ms",
-        "tp8_total_ms",
+        "tp_label",
+        "tp_compute_ms",
+        "tp_reduce_ms",
+        "tp_total_ms",
         "compute_speedup",
         "total_speedup",
         "direct_generated_tok_s",
@@ -256,6 +284,7 @@ def main():
     parser.add_argument("--iters", type=int, default=50)
     parser.add_argument("--timeout-seconds", type=int, default=1800)
     parser.add_argument("--skip-ep8", action="store_true")
+    parser.add_argument("--skip-tp4", action="store_true")
     parser.add_argument("--skip-tp8", action="store_true")
     args = parser.parse_args()
 
@@ -263,6 +292,9 @@ def main():
     rows = []
     if not args.skip_ep8:
         rows.append(run_ep8(args))
+    if not args.skip_tp4:
+        for tier in args.tokens_per_active:
+            rows.append(run_tp4_case(args, tier))
     if not args.skip_tp8:
         for tier in args.tokens_per_active:
             rows.append(run_tp8_case(args, tier))

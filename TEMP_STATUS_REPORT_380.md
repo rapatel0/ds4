@@ -79,7 +79,7 @@ Result:
 | EP8 direct serving | 0 | first token `54639`, direct decode `66.569095` tok/s, EP `18.220610` ms, compose `22.522762` ms |
 | TP8 workbench | 1 | correctness `FAIL`, routes `96`, NaNs `378153`, TP8 compute `0.087654` ms, TP8 total `0.581414` ms |
 
-### TP8 Matrix
+### TP4/TP8 Matrix
 
 Command shape:
 
@@ -87,24 +87,45 @@ Command shape:
 skip EP8
 tokens_per_active=16,32,64
 warmup=5
+tokens_per_active=16,32,64
+warmup=5
 iters=50
 ```
 
-| Tokens/active | Routes | Correctness | NaNs | Full ms | TP8 compute ms | TP8 reduce ms | TP8 total ms | Total speedup |
-|---:|---:|---|---:|---:|---:|---:|---:|---:|
-| 16 | 96 | FAIL | 378153 | 0.293499 | 0.071660 | 0.489438 | 0.561097 | 0.523x |
-| 32 | 192 | FAIL | 756305 | 0.347197 | 0.080814 | 0.903803 | 0.984617 | 0.353x |
-| 64 | 384 | FAIL | 1512469 | 0.606597 | 0.141926 | 1.668078 | 1.810004 | 0.335x |
+Artifact:
 
-This reconfirms the old TP8 conclusion with current kernels: TP8 MXFP4 compute
-is fast, but `mid_shard=256` remains numerically invalid and simple output
-reduction erases total speedup.
+```text
+/workspace/logs/sprint380-tp-experts-ab/tp4-tp8-matrix-parsed
+```
+
+| Path | Tokens/active | Routes | Correctness | NaNs | Full ms | TP compute ms | TP reduce ms | TP total ms | Total speedup |
+|---|---:|---:|---|---:|---:|---:|---:|---:|---:|
+| TP4 | 16 | 96 | PASS | 0 | 0.292434 | 0.123945 | 0.153265 | 0.277210 | 1.055x |
+| TP4 | 32 | 192 | PASS | 0 | 0.331469 | 0.132833 | 0.239310 | 0.372143 | 0.891x |
+| TP4 | 64 | 384 | PASS | 0 | 0.575406 | 0.161587 | 0.459294 | 0.620881 | 0.927x |
+| TP8 | 16 | 96 | FAIL | 378153 | 0.250614 | 0.071660 | 0.482224 | 0.553884 | 0.452x |
+| TP8 | 32 | 192 | FAIL | 756305 | 0.295444 | 0.080056 | 0.888402 | 0.968458 | 0.305x |
+| TP8 | 64 | 384 | FAIL | 1512469 | 0.604365 | 0.141844 | 1.664169 | 1.806014 | 0.335x |
+
+This reconfirms and sharpens the Sprint 211 conclusion with current kernels:
+
+- TP8 MXFP4 compute is fast, but `mid_shard=256` remains numerically invalid
+  and total speedup is below `1.0x`.
+- TP4 MXFP4 is numerically valid and has real compute speedup, but the simple
+  output reduction erases most of the win. It only beats the full reference at
+  the smallest `96` route tier, not at `192` or `384` routes.
 
 ## Current Interpretation
 
 TP8 expert integration should not proceed with the current TurboMind shard
 shape.
 
-Sprint 380 is not complete yet because TP4 remains the plausible branch from
-Sprint 211. The next work is to expose/rerun TP4 in the same driver or record
-why TP4 cannot be rerun with current tools.
+Do not integrate TP8.
+
+Do not integrate TP4 into serving with the current reduction boundary. TP4 is
+the only viable TP expert branch numerically, but it needs a better
+reduce/compose boundary before it can plausibly improve the EP8 serving path.
+
+Sprint 380 can close as a topology measurement. If TP experts are revisited,
+the next sprint should not be another workbench rerun; it should prototype a
+fused TP4 reduction/compose boundary and compare against EP8 direct serving.
