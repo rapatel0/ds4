@@ -172,6 +172,17 @@ sum, but conflicting with the scaffold decode proxy. Keep all compressed
 fusions default-off; next work should be a repeated/direct multi-step A/B for
 pool-norm or a deeper state/emit fusion.
 
+Sprint 359 resolved the Sprint 358 client-vs-scaffold disagreement with a
+direct non-HTTP multi-step A/B at the same valid long-context window:
+`32` slots / `256K` / `position=262112` / `32` decode steps. Control measured
+`95.851552` generated decode tok/s, `74.814127` generated wall tok/s,
+`3521.094409` ms compressed-KV sum, and first token `98751`. Fused pool-norm
+measured `97.619138`, `76.140370`, `3458.469603` ms, and the same first token
+with finite output head. This is a clean `+1.84%` decode / `+1.77%` wall win,
+so `DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_POOL_NORM` is now promoted as
+the TP/EP launcher default. Fused input-fill and fused RoPE+round remain
+default-off diagnostics.
+
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
 TP runtime, sharded KV, rank buffers, TurboMind API handles, active MXFP4
