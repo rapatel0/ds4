@@ -144,6 +144,20 @@ pre-EP compressed-KV time, and `128.467170` ms compressed-KV sum. Keep the
 gates opt-in pending either repeated direct A/B or an emitted-row HTTP profile
 mode that avoids prompt-prefill position ambiguity.
 
+Sprint 357 added that emitted-row HTTP profile mode:
+`tools/ds4-v100-tp-ep-profile.py --run-mode http --http-endpoint selected-token`.
+The harness now targets `POST /v100/selected-token` without prompt prefill,
+passes `DS4_V100_TP_EP_POSITION`, and parses TP/EP compressed-KV timing lines
+from server output. V100 selected-token HTTP A/B at `32` slots / `256K` /
+`position=262143` returned `32/32` HTTP 200 responses for both variants and
+exercised all `41` emitted compressed layers. Control measured
+`127.697384` ms compressed-KV sum; fused input-fill + pool-norm measured
+`123.651985` ms. Client one-token tok/s was flat (`19.739916` vs
+`19.719484`) because this diagnostic endpoint is dominated by HTTP
+orchestration. Keep compressed fusions opt-in; the next useful gate should
+amortize request overhead with a longer serving A/B or reduce the remaining
+state/emit fragmentation in direct decode.
+
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
 TP runtime, sharded KV, rank buffers, TurboMind API handles, active MXFP4

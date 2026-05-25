@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-25
 last_updated_by: codex
-revision: 360
+revision: 361
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -83,6 +83,15 @@ not a serial layer-chain.
   `selected_compressed_rows=2`, no compact diff failures, and `20.780883`
   projected slot-step tok/s. This is still a bounded diagnostic cache, not the
   final production compressed-KV allocator.
+- Latest TP/EP compressed-KV performance work through Sprint 357 has moved
+  compressed fusions from direct-only experiments into serving-visible gates.
+  The selected-token HTTP profiler can now force emitted compressed rows at
+  `position=262143`, returns `32/32` HTTP 200 responses at `32` slots /
+  `256K`, and parses compressed-KV stage timing from server output. Fused
+  input-fill + pool-norm reduces parsed compressed-KV sum from `127.697384`
+  to `123.651985` ms in that HTTP run, but one-token client throughput is
+  flat because request overhead dominates. Keep the gates opt-in until a
+  longer amortized serving A/B proves a topline win.
 - Sprint 327 made the production compressed-KV memory contract executable in
   `tools/ds4-v100-plan-tp.c`. With the real TP pack and F8 KV, `32` slots at
   `256K` fits at `27.00 GiB/GPU` with `5.00 GiB` headroom after reserve;
@@ -2250,6 +2259,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 354 rejected narrow compressed RoPE+round fusion as a material lever. | The opt-in fused kernel selected `41` emitted compressed layers and preserved token `54639`, but decode moved from `79.810167` to `79.344207` tok/s while compressed-KV stayed effectively flat. | Keep the gate diagnostic-only. Target larger state/emit boundaries such as pooling+normalization or store+pooling. |
 | 2026-05-25 | Sprint 355 found a real but small win from fused compressed pool+norm. | The opt-in fused pool+norm kernel selected `41` emitted layers, preserved token `54639`, reduced compressed-KV sum from `130.510967` to `127.736989` ms, and improved decode from `81.189757` to `81.687107` tok/s. | Keep opt-in pending repeat/combination testing with fused input fill before promotion. |
 | 2026-05-25 | Sprint 356 wired compressed fusion gates into the serving launcher and tested the combined direct path. | New default-off env vars expose fused input-fill, fused RoPE+round, and fused pool+norm to TP/EP serving. Direct emitted-row input-fill + pool-norm preserved token `54639` and improved decode from `80.511365` to `81.311102` tok/s. | Keep opt-in. Add an emitted-row HTTP/profile mode or repeat direct A/B before promoting defaults. |
+| 2026-05-25 | Sprint 357 added emitted-row selected-token HTTP profiling. | `--http-endpoint selected-token` avoids prompt-prefill ambiguity, returns `32/32` HTTP 200 responses at `position=262143`, and shows fused input-fill + pool-norm reducing parsed compressed-KV sum from `127.697384` to `123.651985` ms while one-token client tok/s remains flat. | Keep fusions opt-in. Run longer amortized serving A/B or continue reducing compressed state/emit fragmentation before default promotion. |
 
 ## Open Questions
 

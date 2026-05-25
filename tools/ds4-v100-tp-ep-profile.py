@@ -307,16 +307,7 @@ def maybe_number(value):
         return value
 
 
-def summarize_direct(case_dir, tool, rc, elapsed_s):
-    stdout = (case_dir / "stdout.txt").read_text(errors="replace")
-    stderr = (case_dir / "stderr.txt").read_text(errors="replace")
-    summary = {
-        "tool": tool,
-        "run_mode": "direct-token-major",
-        "returncode": rc,
-        "elapsed_s": elapsed_s,
-        "profiler_marker_lines": len(re.findall(r"tp_ep_cuda_profiler_window", stderr)),
-    }
+def add_tp_ep_line_summaries(summary, stdout):
     compressed_sum_keys = [
         "attn_input_fill_ms",
         "attn_dense_ms",
@@ -415,6 +406,19 @@ def summarize_direct(case_dir, tool, rc, elapsed_s):
     for key, value in compressed_counts.items():
         summary[f"compressed_kv_{key}"] = value
     return summary
+
+
+def summarize_direct(case_dir, tool, rc, elapsed_s):
+    stdout = (case_dir / "stdout.txt").read_text(errors="replace")
+    stderr = (case_dir / "stderr.txt").read_text(errors="replace")
+    summary = {
+        "tool": tool,
+        "run_mode": "direct-token-major",
+        "returncode": rc,
+        "elapsed_s": elapsed_s,
+        "profiler_marker_lines": len(re.findall(r"tp_ep_cuda_profiler_window", stderr)),
+    }
+    return add_tp_ep_line_summaries(summary, stdout)
 
 
 def run_direct_case(args):
@@ -555,6 +559,11 @@ def main():
     parser.add_argument("--position", type=int, default=100000)
     parser.add_argument("--requests", type=int, default=32)
     parser.add_argument("--max-requests", type=int, default=80)
+    parser.add_argument(
+        "--http-endpoint",
+        choices=["chat", "selected-token"],
+        default="chat",
+    )
     parser.add_argument("--hc-current-peer-gather", action="store_true")
     parser.add_argument("--hc-current-stream-sync", action="store_true")
     parser.add_argument("--skip-compressed-store", action="store_true")
@@ -642,20 +651,31 @@ def main():
         else:
             raise RuntimeError("readiness timeout")
 
-        payloads = [
-            {
-                "model": "ds4-v100-tp-ep-diagnostic",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": f"Say one short sentence about TP Nsight profile {i}.",
-                    }
-                ],
-                "max_tokens": args.tokens,
-                "session_id": f"s345-profile-{args.tool}-{i:02d}",
-            }
-            for i in range(args.requests)
-        ]
+        if args.http_endpoint == "selected-token":
+            post_path = "/v100/selected-token"
+            payloads = [
+                {
+                    "max_tokens": args.tokens,
+                    "session_id": f"s357-selected-{args.tool}-{i:02d}",
+                }
+                for i in range(args.requests)
+            ]
+        else:
+            post_path = "/v1/chat/completions"
+            payloads = [
+                {
+                    "model": "ds4-v100-tp-ep-diagnostic",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": f"Say one short sentence about TP Nsight profile {i}.",
+                        }
+                    ],
+                    "max_tokens": args.tokens,
+                    "session_id": f"s345-profile-{args.tool}-{i:02d}",
+                }
+                for i in range(args.requests)
+            ]
 
         started = time.time()
         results = []
@@ -664,7 +684,7 @@ def main():
             i, payload = item
             status, body = http_post(
                 base,
-                "/v1/chat/completions",
+                post_path,
                 payload,
                 timeout=args.request_timeout_seconds,
             )
@@ -695,6 +715,7 @@ def main():
         server_text = (case_dir / "server.out").read_text(errors="replace")
         summary = {
             "tool": args.tool,
+            "http_endpoint": args.http_endpoint,
             "http_200": ok,
             "requests": len(results),
             "tokens": args.tokens,
@@ -713,6 +734,7 @@ def main():
             "typed_indexer_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_indexer", server_text)),
             "typed_history_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_history", server_text)),
         }
+        add_tp_ep_line_summaries(summary, server_text)
         (case_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
         print(json.dumps(summary, sort_keys=True), flush=True)
     finally:
