@@ -652,6 +652,7 @@ struct Options {
     bool true_ds4_attention_typed_kv_quiet_gate = false;
     bool true_ds4_attention_typed_kv_batch_rows_gate = false;
     bool true_ds4_attention_typed_kv_stream_sync_gate = false;
+    bool fp8_e5m2_kv_gate = false;
     bool true_ds4_attention_output_gate = false;
     bool true_ds4_post_attention_ffn_input_gate = false;
     bool true_ds4_compressed_kv_gate = false;
@@ -3188,6 +3189,7 @@ void usage(const char *argv0) {
                  "       [--copy-event-compose]\n"
                  "       [--compact-route-compose] [--compact-moe-decode-gate]\n"
                  "       [--fused-gated-silu-gate]\n"
+                 "       [--fp8-e5m2-kv-gate]\n"
                  "       [--token-major-all-layers] [--shared-dense-ops]\n"
                  "       [--skip-self-compose-copy] [--copy-self-compose]\n"
                  "       [--multi-copy-streams] [--serving-bench]\n"
@@ -3544,6 +3546,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->true_ds4_attention_typed_kv_batch_rows_gate = true;
         } else if (std::strcmp(arg, "--true-ds4-attention-typed-kv-stream-sync-gate") == 0) {
             opt->true_ds4_attention_typed_kv_stream_sync_gate = true;
+        } else if (std::strcmp(arg, "--fp8-e5m2-kv-gate") == 0) {
+            opt->fp8_e5m2_kv_gate = true;
         } else if (std::strcmp(arg, "--true-ds4-attention-output-gate") == 0) {
             opt->true_ds4_attention_output_gate = true;
             opt->true_ds4_attention_raw_window_gate = true;
@@ -8436,7 +8440,9 @@ void fill_tp_runtime_config(const Options &opt, ds4_v100_tp_runtime_config *cfg)
     ds4_v100_tp_runtime_default_config(cfg);
     cfg->slots = (uint32_t)opt.slots;
     cfg->ctx = 262144;
-    cfg->kv_dtype = DS4_V100_TP_KV_F8_E4M3_B128;
+    cfg->kv_dtype = opt.fp8_e5m2_kv_gate
+        ? DS4_V100_TP_KV_F8_E5M2_B128
+        : DS4_V100_TP_KV_F8_E4M3_B128;
     cfg->scratch_bytes = 1536ull * 1024ull * 1024ull;
     for (int i = 0; i < kGpus; ++i) cfg->devices[i] = opt.devices[i];
 }
@@ -14910,6 +14916,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "\"true_ds4_attention_typed_kv_quiet_gate\":%d,"
                           "\"true_ds4_attention_typed_kv_batch_rows_gate\":%d,"
                           "\"true_ds4_attention_typed_kv_stream_sync_gate\":%d,"
+                          "\"fp8_e5m2_kv_gate\":%d,"
                           "\"cache_slots_total\":%zu,"
                           "\"cache_slots_used\":%d,"
                           "\"cache_hits\":%llu,"
@@ -14956,6 +14963,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           base_opt.true_ds4_attention_typed_kv_quiet_gate ? 1 : 0,
                           base_opt.true_ds4_attention_typed_kv_batch_rows_gate ? 1 : 0,
                           base_opt.true_ds4_attention_typed_kv_stream_sync_gate ? 1 : 0,
+                          base_opt.fp8_e5m2_kv_gate ? 1 : 0,
                           sessions.slots.size(),
                           sessions.used(),
                           (unsigned long long)sessions.hits,
@@ -15022,6 +15030,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "ds4_v100_tp_ep_true_ds4_attention_typed_kv_quiet_gate %d\n"
                           "ds4_v100_tp_ep_true_ds4_attention_typed_kv_batch_rows_gate %d\n"
                           "ds4_v100_tp_ep_true_ds4_attention_typed_kv_stream_sync_gate %d\n"
+                          "ds4_v100_tp_ep_fp8_e5m2_kv_gate %d\n"
                           "ds4_v100_tp_ep_cache_slots_total %zu\n"
                           "ds4_v100_tp_ep_cache_slots_used %d\n"
                           "ds4_v100_tp_ep_cache_hits %llu\n"
@@ -15067,6 +15076,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           base_opt.true_ds4_attention_typed_kv_quiet_gate ? 1 : 0,
                           base_opt.true_ds4_attention_typed_kv_batch_rows_gate ? 1 : 0,
                           base_opt.true_ds4_attention_typed_kv_stream_sync_gate ? 1 : 0,
+                          base_opt.fp8_e5m2_kv_gate ? 1 : 0,
                           sessions.slots.size(),
                           sessions.used(),
                           (unsigned long long)sessions.hits,
@@ -15596,6 +15606,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   "\"true_ds4_attention_typed_kv_quiet_gate\":%d,"
                                   "\"true_ds4_attention_typed_kv_batch_rows_gate\":%d,"
                                   "\"true_ds4_attention_typed_kv_stream_sync_gate\":%d,"
+                                  "\"fp8_e5m2_kv_gate\":%d,"
                                   "\"decode_slots\":%d,"
                                   "\"prompt_tokens\":%llu,"
                                   "\"generated_tokens\":%llu,"
@@ -15672,6 +15683,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   req_opt.true_ds4_attention_typed_kv_quiet_gate ? 1 : 0,
                                   req_opt.true_ds4_attention_typed_kv_batch_rows_gate ? 1 : 0,
                                   req_opt.true_ds4_attention_typed_kv_stream_sync_gate ? 1 : 0,
+                                  req_opt.fp8_e5m2_kv_gate ? 1 : 0,
                                   req_opt.slots,
                                   (unsigned long long)request_prompt_tokens,
                                   (unsigned long long)request_generated,

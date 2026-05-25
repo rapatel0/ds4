@@ -14,6 +14,7 @@ typedef enum {
     DS4_V100_TP_KV_F16 = 0,
     DS4_V100_TP_KV_F8_E4M3_B128 = 1,
     DS4_V100_TP_KV_Q8_0 = 2,
+    DS4_V100_TP_KV_F8_E5M2_B128 = 3,
 } ds4_v100_tp_kv_dtype;
 
 typedef enum {

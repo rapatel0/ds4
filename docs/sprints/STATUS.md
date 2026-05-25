@@ -9,24 +9,22 @@ Current bottleneck reference:
 summarizes the measured bottlenecks, layer-by-layer hot paths, and experiments
 already tried.
 
-Latest throughput direction: Sprint 379 implemented
-`--fused-gated-silu-gate` plus a narrow DS4-clamped TurboMind ABI,
-`ggml_turbomind_mul_mat_grouped_gated_silu_clamped_total_tokens`, and closed
-the sprint as non-promoted. The current production-shaped model-router
-compact-MoE branch already reports `routed_gate_standalone_swiglu=0`, so the
-fused flag is parity-clean but effectively a no-op there (`54639` first token,
-`68.824485` direct generated tok/s after the ABI rebuild). The routed-normalized
-branch does contain the standalone clamped SwiGLU launch; the generic TurboMind
-fused epilogue removes it and improves direct proxy throughput from
-`45.368432` to `57.367413` tok/s, but changes the first token from `41432` to
-`54639`, so it is rejected for correctness. The DS4-clamped ABI launches and is
-fast in a layer-0 EP-only V100 run (`4.102144` ms two-step gate versus
-`0.622592` ms fused gate), but resident serving-shaped direct A/B with
-`routed-normalized + fused-gated-silu` fails at layer 0 before the routed gate
-executes because the resident dense-KV precheck returns rc `4`. Keep the flag
-default-off and diagnostic-only; the next work is either a deterministic
-fused-gate parity harness or diagnosis of that resident dense-KV precheck
-interaction.
+Latest throughput direction: Sprint 381 implemented
+`--fp8-e5m2-kv-gate` as a default-off typed-KV format diagnostic. The row
+layout stays block-128 with one E8M0 scale byte plus 128 FP8 payload bytes, so
+E5M2 is not a capacity win over E4M3; it tests FP8 exponent/mantissa semantics
+inside the existing TP/EP sharded KV path. V100 row validation passed for
+`attn`, `attn_raw`, and `indexer` with `bad_values=0` and
+`byte_mismatches=0`; E4M3 row regression also passed after the shared scale-byte
+cleanup. Direct `32` slot / `256K` / 4-token A/B preserved checksum
+`13373834059`, first token `98751`, and improved decode from `70.710875` to
+`75.787866` tok/s. HTTP selected-token 4-token A/B returned `32/32` HTTP 200
+for both control and candidate, preserved first token `45178`, improved client
+tok/s from `17.212677` to `22.389190`, and reduced parsed compressed-KV sum
+from `491.310011` to `442.415827` ms. The gate is still not promoted because
+E5M2 has lower mantissa precision, validation is short, and one immediate HTTP
+candidate run after control failed with CUDA OOM before readiness. The default
+remains E4M3 until longer parity/soak and VRAM-margin work are done.
 
 Current active steering source: `TEMP_THROUGHPUT_PROMPT.md`. Sprint 380
 implemented S-F `--tp-experts-ab-gate` as a permanent measurement driver,
@@ -49,7 +47,10 @@ already `0` in the observed compressed/indexer samples. S-D compact MoE is now
 promoted for model-router compact compose. S-E fused gated-SiLU is closed
 diagnostic-only: the generic epilogue changes tokens, and the new DS4-clamped
 ABI needs a resident serving precheck fix or a narrower parity harness before
-promotion can be considered. S-F is now active.
+promotion can be considered. S-F TP-sharded experts is closed measurement-only:
+TP8 is still numerically invalid, and TP4 reduction/compose erases the compute
+win. S-G E5M2 KV is closed diagnostic-only pending longer parity and VRAM
+admission work.
 
 Latest TP/EP format status: Sprint 374 built and ran the V100 workbench for
 the Sprint 373 INT8 candidate shapes. The copied tc-grid INT8 kernels are

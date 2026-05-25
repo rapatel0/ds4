@@ -289,6 +289,7 @@ def build_env(args, port):
             "DS4_V100_TP_EP_COMPACT_MOE_DECODE": "1" if args.compact_moe_decode else "0",
             "DS4_V100_TP_EP_FUSED_GATED_SILU": "1" if args.fused_gated_silu else "0",
             "DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT": "1" if args.routed_ffn_norm_input else "0",
+            "DS4_V100_TP_EP_FP8_E5M2_KV": "1" if args.fp8_e5m2_kv else "0",
             "DS4_V100_RESERVE_MIB": "0",
             "DS4_V100_PORT": str(port),
             "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_HISTORY": "1",
@@ -374,6 +375,8 @@ def variant_suffix(args):
         suffix += "-fused-gated-silu"
     if getattr(args, "routed_ffn_norm_input", False):
         suffix += "-routed-norm"
+    if getattr(args, "fp8_e5m2_kv", False):
+        suffix += "-fp8-e5m2-kv"
     return suffix
 
 
@@ -441,6 +444,8 @@ def direct_command(args):
         cmd.append("--fused-gated-silu-gate")
     if args.routed_ffn_norm_input:
         cmd.append("--routed-ffn-norm-input-gate")
+    if args.fp8_e5m2_kv:
+        cmd.append("--fp8-e5m2-kv-gate")
     if "window" in args.tool:
         cmd.append("--cuda-profiler-window")
     if args.hc_current_peer_gather:
@@ -805,6 +810,7 @@ def main():
     parser.add_argument("--compact-moe-decode", action="store_true")
     parser.add_argument("--fused-gated-silu", action="store_true")
     parser.add_argument("--routed-ffn-norm-input", action="store_true")
+    parser.add_argument("--fp8-e5m2-kv", action="store_true")
     parser.add_argument("--port", type=int, default=18357)
     parser.add_argument("--readiness-seconds", type=int, default=600)
     parser.add_argument("--request-timeout-seconds", type=int, default=1200)
@@ -974,6 +980,8 @@ def main():
             "cache_misses": status_json.get("cache_misses"),
             "coalesced_batch_size": first.get("coalesced_batch_size"),
             "generated_tokens_meta": first.get("batch_generated_tokens"),
+            "fp8_e5m2_kv_meta": first.get("fp8_e5m2_kv_gate"),
+            "status_fp8_e5m2_kv": status_json.get("fp8_e5m2_kv_gate"),
             "typed_raw_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_raw", server_text)),
             "typed_compressed_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_compressed", server_text)),
             "typed_indexer_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_indexer", server_text)),

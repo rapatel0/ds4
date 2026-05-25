@@ -84,11 +84,17 @@ static uint64_t kv_values_bytes(uint64_t values, ds4_v100_tp_kv_dtype kv) {
     case DS4_V100_TP_KV_F16:
         return checked_mul(values, 2);
     case DS4_V100_TP_KV_F8_E4M3_B128:
+    case DS4_V100_TP_KV_F8_E5M2_B128:
         return bytes_blocks(values, 128, 129);
     case DS4_V100_TP_KV_Q8_0:
         return bytes_blocks(values, 32, 34);
     }
     return checked_mul(values, 2);
+}
+
+static bool is_f8_kv(ds4_v100_tp_kv_dtype kv) {
+    return kv == DS4_V100_TP_KV_F8_E4M3_B128 ||
+           kv == DS4_V100_TP_KV_F8_E5M2_B128;
 }
 
 static int layer_ratio(int layer) {
@@ -240,6 +246,65 @@ __device__ uint8_t e4m3fn_quant_byte_dev(float x) {
     return (uint8_t)(sign | (uint8_t)best);
 }
 
+__device__ float e5m2_to_f32_dev(uint8_t x) {
+    const uint32_t sign = ((uint32_t)x & 0x80u) << 24;
+    const uint32_t ax = (uint32_t)x & 0x7fu;
+    if (ax == 0) return __uint_as_float(sign ? 0x80000000u : 0u);
+    const uint32_t exp = ax >> 2;
+    const uint32_t man = ax & 0x03u;
+    if (exp == 31u) {
+        return man == 0u ? __uint_as_float(sign | 0x7f800000u)
+                         : __uint_as_float(0x7fc00000u);
+    }
+    if (exp != 0u) {
+        return __uint_as_float(sign | ((exp + 112u) << 23) | (man << 21));
+    }
+    const uint32_t hi = man >= 2u ? 1u : 0u;
+    const uint32_t mant = (man << (23u - hi)) & 0x007fffffu;
+    return __uint_as_float(sign | ((113u + hi) << 23) | mant);
+}
+
+__device__ uint8_t e5m2_quant_byte_dev(float x) {
+    const uint8_t sign = x < 0.0f ? 0x80u : 0u;
+    const float ax = fminf(fabsf(x), 57344.0f);
+    int lo = 0;
+    int hi = 123;
+    while (lo < hi) {
+        const int mid = (lo + hi + 1) >> 1;
+        if (e5m2_to_f32_dev((uint8_t)mid) <= ax) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    int best = lo;
+    if (best < 123) {
+        const float best_diff = fabsf(ax - e5m2_to_f32_dev((uint8_t)best));
+        const float next_diff = fabsf(ax - e5m2_to_f32_dev((uint8_t)(best + 1)));
+        if (next_diff < best_diff ||
+            (next_diff == best_diff && (((best + 1) & 1) == 0) && ((best & 1) != 0))) {
+            best++;
+        }
+    }
+    return (uint8_t)(sign | (uint8_t)best);
+}
+
+__device__ float f8_kv_max_dev(int kv_dtype) {
+    return kv_dtype == DS4_V100_TP_KV_F8_E5M2_B128 ? 57344.0f : 448.0f;
+}
+
+__device__ uint8_t f8_kv_quant_byte_dev(float x, int kv_dtype) {
+    return kv_dtype == DS4_V100_TP_KV_F8_E5M2_B128
+        ? e5m2_quant_byte_dev(x)
+        : e4m3fn_quant_byte_dev(x);
+}
+
+__device__ float f8_kv_to_f32_dev(uint8_t x, int kv_dtype) {
+    return kv_dtype == DS4_V100_TP_KV_F8_E5M2_B128
+        ? e5m2_to_f32_dev(x)
+        : e4m3fn_to_f32_dev(x);
+}
+
 __device__ float typed_row_source_value(int layer, uint32_t slot, uint64_t position,
                                         uint32_t col, int indexer) {
     const float base =
@@ -259,7 +324,8 @@ __global__ void typed_kv_store_f8_row_kernel(unsigned char *kv,
                                              uint64_t position,
                                              uint32_t logical_cols,
                                              uint64_t logical_row_bytes,
-                                             int indexer) {
+                                             int indexer,
+                                             int kv_dtype) {
     const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= shard_row_bytes) return;
     const uint64_t global_byte = (uint64_t)gpu * shard_row_bytes + i;
@@ -275,8 +341,7 @@ __global__ void typed_kv_store_f8_row_kernel(unsigned char *kv,
                                                         col0 + c, indexer)));
     }
     if (amax < 1.0e-8f) amax = 1.0e-8f;
-    const float scale = exp2f(ceilf(log2f(amax / 448.0f)));
-    const uint8_t scale_byte = e8m0_encode_pow2_scale(scale);
+    const uint8_t scale_byte = e8m0_encode_pow2_scale(amax / f8_kv_max_dev(kv_dtype));
     const float decoded_scale = e8m0_to_f32_dev(scale_byte);
 
     if (in_block == 0u) {
@@ -289,7 +354,7 @@ __global__ void typed_kv_store_f8_row_kernel(unsigned char *kv,
         return;
     }
     const float v = typed_row_source_value(layer, slot, position, col, indexer);
-    kv[offset + i] = e4m3fn_quant_byte_dev(v / decoded_scale);
+    kv[offset + i] = f8_kv_quant_byte_dev(v / decoded_scale, kv_dtype);
 }
 
 __global__ void fill_typed_row_source_kernel(float *dst,
@@ -309,7 +374,8 @@ __global__ void store_f32_device_to_f8_kv_row_kernel(unsigned char *kv,
                                                      int gpu,
                                                      const float *src,
                                                      uint32_t logical_cols,
-                                                     uint64_t logical_row_bytes) {
+                                                     uint64_t logical_row_bytes,
+                                                     int kv_dtype) {
     const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= shard_row_bytes) return;
     const uint64_t global_byte = (uint64_t)gpu * shard_row_bytes + i;
@@ -324,8 +390,7 @@ __global__ void store_f32_device_to_f8_kv_row_kernel(unsigned char *kv,
         amax = fmaxf(amax, fabsf(src[col0 + c]));
     }
     if (amax < 1.0e-8f) amax = 1.0e-8f;
-    const float scale = exp2f(ceilf(log2f(amax / 448.0f)));
-    const uint8_t scale_byte = e8m0_encode_pow2_scale(scale);
+    const uint8_t scale_byte = e8m0_encode_pow2_scale(amax / f8_kv_max_dev(kv_dtype));
     const float decoded_scale = e8m0_to_f32_dev(scale_byte);
 
     if (in_block == 0u) {
@@ -337,7 +402,7 @@ __global__ void store_f32_device_to_f8_kv_row_kernel(unsigned char *kv,
         kv[offset + i] = 0;
         return;
     }
-    kv[offset + i] = e4m3fn_quant_byte_dev(src[col] / decoded_scale);
+    kv[offset + i] = f8_kv_quant_byte_dev(src[col] / decoded_scale, kv_dtype);
 }
 
 __global__ void store_f32_device_to_f8_kv_rows_kernel(unsigned char *kv,
@@ -349,7 +414,8 @@ __global__ void store_f32_device_to_f8_kv_rows_kernel(unsigned char *kv,
                                                       uint64_t src_stride_floats,
                                                       uint32_t logical_cols,
                                                       uint64_t logical_row_bytes,
-                                                      uint32_t slot_count) {
+                                                      uint32_t slot_count,
+                                                      int kv_dtype) {
     const uint64_t idx = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
     const uint64_t total = (uint64_t)slot_count * shard_row_bytes;
     if (idx >= total) return;
@@ -368,8 +434,7 @@ __global__ void store_f32_device_to_f8_kv_rows_kernel(unsigned char *kv,
         amax = fmaxf(amax, fabsf(slot_src[col0 + c]));
     }
     if (amax < 1.0e-8f) amax = 1.0e-8f;
-    const float scale = exp2f(ceilf(log2f(amax / 448.0f)));
-    const uint8_t scale_byte = e8m0_encode_pow2_scale(scale);
+    const uint8_t scale_byte = e8m0_encode_pow2_scale(amax / f8_kv_max_dev(kv_dtype));
     const float decoded_scale = e8m0_to_f32_dev(scale_byte);
 
     const uint64_t out = first_offset + (uint64_t)slot * kv_slot_stride + i;
@@ -382,7 +447,7 @@ __global__ void store_f32_device_to_f8_kv_rows_kernel(unsigned char *kv,
         kv[out] = 0;
         return;
     }
-    kv[out] = e4m3fn_quant_byte_dev(slot_src[col] / decoded_scale);
+    kv[out] = f8_kv_quant_byte_dev(slot_src[col] / decoded_scale, kv_dtype);
 }
 
 __device__ uint8_t get_sharded_row_byte(uint64_t global_byte,
@@ -419,7 +484,8 @@ __global__ void load_f8_kv_row_to_f32_device_kernel(float *dst,
                                                     const unsigned char *p4,
                                                     const unsigned char *p5,
                                                     const unsigned char *p6,
-                                                    const unsigned char *p7) {
+                                                    const unsigned char *p7,
+                                                    int kv_dtype) {
     const uint32_t col = blockIdx.x * blockDim.x + threadIdx.x;
     if (col >= logical_cols) return;
     const uint64_t block = (uint64_t)(col / 128u);
@@ -429,7 +495,7 @@ __global__ void load_f8_kv_row_to_f32_device_kernel(float *dst,
         get_sharded_row_byte(block_off, row_bytes, p0, p1, p2, p3, p4, p5, p6, p7);
     const uint8_t q =
         get_sharded_row_byte(q_off, row_bytes, p0, p1, p2, p3, p4, p5, p6, p7);
-    dst[col] = e4m3fn_to_f32_dev(q) * e8m0_to_f32_dev(scale_byte);
+    dst[col] = f8_kv_to_f32_dev(q, kv_dtype) * e8m0_to_f32_dev(scale_byte);
 }
 
 __global__ void load_f8_kv_rows_to_f32_device_kernel(float *dst,
@@ -445,7 +511,8 @@ __global__ void load_f8_kv_rows_to_f32_device_kernel(float *dst,
                                                      const unsigned char *p4,
                                                      const unsigned char *p5,
                                                      const unsigned char *p6,
-                                                     const unsigned char *p7) {
+                                                     const unsigned char *p7,
+                                                     int kv_dtype) {
     const uint64_t idx = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
     const uint64_t total = (uint64_t)slot_count * (uint64_t)logical_cols;
     if (idx >= total) return;
@@ -467,7 +534,7 @@ __global__ void load_f8_kv_rows_to_f32_device_kernel(float *dst,
     const uint8_t q =
         get_sharded_row_byte(q_off, row_bytes, s0, s1, s2, s3, s4, s5, s6, s7);
     dst[(uint64_t)slot * dst_stride_floats + col] =
-        e4m3fn_to_f32_dev(q) * e8m0_to_f32_dev(scale_byte);
+        f8_kv_to_f32_dev(q, kv_dtype) * e8m0_to_f32_dev(scale_byte);
 }
 
 __global__ void dense_kv_slice_kernel(half *hidden, unsigned char *kv,
@@ -563,6 +630,65 @@ static uint8_t e4m3fn_quant_byte_host(float x) {
     return (uint8_t)(sign | (uint8_t)best);
 }
 
+static float e5m2_to_f32_host(uint8_t x) {
+    const uint8_t ax = x & 0x7f;
+    const bool sign = (x & 0x80) != 0;
+    if (ax == 0) return f32_from_bits_host(sign ? 0x80000000u : 0u);
+    const int exp = (ax >> 2) & 0x1f;
+    const int man = ax & 0x03;
+    float value;
+    if (exp == 31) {
+        value = man == 0 ? std::numeric_limits<float>::infinity()
+                         : std::numeric_limits<float>::quiet_NaN();
+    } else if (exp == 0) {
+        value = std::ldexp((float)man, -16);
+    } else {
+        value = std::ldexp(1.0f + (float)man / 4.0f, exp - 15);
+    }
+    return sign ? -value : value;
+}
+
+static uint8_t e5m2_quant_byte_host(float x) {
+    const uint8_t sign = x < 0.0f ? 0x80u : 0u;
+    const float ax = std::fmin(std::fabs(x), 57344.0f);
+    int lo = 0;
+    int hi = 123;
+    while (lo < hi) {
+        const int mid = (lo + hi + 1) >> 1;
+        if (e5m2_to_f32_host((uint8_t)mid) <= ax) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    int best = lo;
+    if (best < 123) {
+        const float best_diff = std::fabs(ax - e5m2_to_f32_host((uint8_t)best));
+        const float next_diff = std::fabs(ax - e5m2_to_f32_host((uint8_t)(best + 1)));
+        if (next_diff < best_diff ||
+            (next_diff == best_diff && (((best + 1) & 1) == 0) && ((best & 1) != 0))) {
+            best++;
+        }
+    }
+    return (uint8_t)(sign | (uint8_t)best);
+}
+
+static float f8_kv_max_host(ds4_v100_tp_kv_dtype kv_dtype) {
+    return kv_dtype == DS4_V100_TP_KV_F8_E5M2_B128 ? 57344.0f : 448.0f;
+}
+
+static uint8_t f8_kv_quant_byte_host(float x, ds4_v100_tp_kv_dtype kv_dtype) {
+    return kv_dtype == DS4_V100_TP_KV_F8_E5M2_B128
+        ? e5m2_quant_byte_host(x)
+        : e4m3fn_quant_byte_host(x);
+}
+
+static float f8_kv_to_f32_host(uint8_t x, ds4_v100_tp_kv_dtype kv_dtype) {
+    return kv_dtype == DS4_V100_TP_KV_F8_E5M2_B128
+        ? e5m2_to_f32_host(x)
+        : e4m3fn_to_f32_host(x);
+}
+
 static float typed_row_source_value_host(int layer, uint32_t slot, uint64_t position,
                                          uint32_t col, int indexer) {
     const float base =
@@ -579,8 +705,9 @@ static void fill_expected_f8_row(std::vector<unsigned char> *packed,
                                  uint32_t slot,
                                  uint64_t position,
                                  uint32_t logical_cols,
-                                 int indexer) {
-    const uint64_t row_bytes = kv_values_bytes(logical_cols, DS4_V100_TP_KV_F8_E4M3_B128);
+                                 int indexer,
+                                 ds4_v100_tp_kv_dtype kv_dtype) {
+    const uint64_t row_bytes = kv_values_bytes(logical_cols, kv_dtype);
     packed->assign((size_t)row_bytes, 0);
     decoded->assign((size_t)logical_cols, 0.0f);
     const uint32_t blocks = logical_cols / 128u;
@@ -592,17 +719,16 @@ static void fill_expected_f8_row(std::vector<unsigned char> *packed,
                                             layer, slot, position, col0 + c, indexer)));
         }
         if (amax < 1.0e-8f) amax = 1.0e-8f;
-        const float scale = std::exp2(std::ceil(std::log2(amax / 448.0f)));
-        const uint8_t scale_byte = e8m0_encode_pow2_scale_host(scale);
+        const uint8_t scale_byte = e8m0_encode_pow2_scale_host(amax / f8_kv_max_host(kv_dtype));
         const float decoded_scale = e8m0_to_f32_host(scale_byte);
         const uint64_t block_off = (uint64_t)b * 129ull;
         (*packed)[(size_t)block_off] = scale_byte;
         for (uint32_t c = 0; c < 128u; ++c) {
             const float v = typed_row_source_value_host(layer, slot, position,
                                                         col0 + c, indexer);
-            const uint8_t q = e4m3fn_quant_byte_host(v / decoded_scale);
+            const uint8_t q = f8_kv_quant_byte_host(v / decoded_scale, kv_dtype);
             (*packed)[(size_t)(block_off + 1u + c)] = q;
-            (*decoded)[(size_t)(col0 + c)] = e4m3fn_to_f32_host(q) * decoded_scale;
+            (*decoded)[(size_t)(col0 + c)] = f8_kv_to_f32_host(q, kv_dtype) * decoded_scale;
         }
     }
 }
@@ -992,7 +1118,7 @@ extern "C" int ds4_v100_tp_runtime_kv_row_roundtrip_f32(
         set_err(err, err_len, "invalid argument");
         return -1;
     }
-    if (rt->cfg.kv_dtype != DS4_V100_TP_KV_F8_E4M3_B128) {
+    if (!is_f8_kv(rt->cfg.kv_dtype)) {
         set_err(err, err_len, "typed row roundtrip currently supports F8 KV only");
         return -1;
     }
@@ -1012,7 +1138,8 @@ extern "C" int ds4_v100_tp_runtime_kv_row_roundtrip_f32(
         const int grid = (int)((view.row_bytes[i] + block - 1) / block);
         typed_kv_store_f8_row_kernel<<<grid, block>>>(
             (unsigned char *)g->kv, view.offset[i], view.row_bytes[i], i, layer,
-            slot, position, view.logical_cols, view.logical_row_bytes, indexer);
+            slot, position, view.logical_cols, view.logical_row_bytes, indexer,
+            (int)rt->cfg.kv_dtype);
         rc = cudaGetLastError();
         if (rc != cudaSuccess) return fail_cuda(err, err_len, "typed_kv_store_f8_row_kernel", rc);
     }
@@ -1041,7 +1168,7 @@ extern "C" int ds4_v100_tp_runtime_kv_row_roundtrip_f32(
     std::vector<unsigned char> expected_packed;
     std::vector<float> expected_decoded;
     fill_expected_f8_row(&expected_packed, &expected_decoded, layer, slot, position,
-                         view.logical_cols, indexer);
+                         view.logical_cols, indexer, rt->cfg.kv_dtype);
 
     std::vector<float> decoded((size_t)view.logical_cols, 0.0f);
     uint32_t byte_bad = 0;
@@ -1068,7 +1195,8 @@ extern "C" int ds4_v100_tp_runtime_kv_row_roundtrip_f32(
         const float scale = e8m0_to_f32_host(packed[(size_t)block_off]);
         for (uint32_t c = 0; c < 128u; ++c) {
             const uint8_t q = packed[(size_t)(block_off + 1u + c)];
-            decoded[(size_t)(b * 128u + c)] = e4m3fn_to_f32_host(q) * scale;
+            decoded[(size_t)(b * 128u + c)] =
+                f8_kv_to_f32_host(q, rt->cfg.kv_dtype) * scale;
         }
     }
 
@@ -1108,7 +1236,7 @@ extern "C" int ds4_v100_tp_runtime_kv_row_store_f32_device(
         set_err(err, err_len, "invalid argument");
         return -1;
     }
-    if (rt->cfg.kv_dtype != DS4_V100_TP_KV_F8_E4M3_B128) {
+    if (!is_f8_kv(rt->cfg.kv_dtype)) {
         set_err(err, err_len, "device KV store currently supports F8 KV only");
         return -1;
     }
@@ -1131,7 +1259,8 @@ extern "C" int ds4_v100_tp_runtime_kv_row_store_f32_device(
         const int grid = (int)((view.row_bytes[i] + block - 1) / block);
         store_f32_device_to_f8_kv_row_kernel<<<grid, block>>>(
             (unsigned char *)g->kv, view.offset[i], view.row_bytes[i], i,
-            (const float *)src_by_gpu[i], view.logical_cols, view.logical_row_bytes);
+            (const float *)src_by_gpu[i], view.logical_cols, view.logical_row_bytes,
+            (int)rt->cfg.kv_dtype);
         rc = cudaGetLastError();
         if (rc != cudaSuccess) {
             return fail_cuda(err, err_len, "store_f32_device_to_f8_kv_row_kernel", rc);
@@ -1153,7 +1282,7 @@ extern "C" int ds4_v100_tp_runtime_kv_row_load_f32_device(
         set_err(err, err_len, "invalid argument");
         return -1;
     }
-    if (rt->cfg.kv_dtype != DS4_V100_TP_KV_F8_E4M3_B128) {
+    if (!is_f8_kv(rt->cfg.kv_dtype)) {
         set_err(err, err_len, "device KV load currently supports F8 KV only");
         return -1;
     }
@@ -1181,7 +1310,8 @@ extern "C" int ds4_v100_tp_runtime_kv_row_load_f32_device(
         if (rc != cudaSuccess) return fail_cuda(err, err_len, "cudaSetDevice", rc);
         load_f8_kv_row_to_f32_device_kernel<<<grid, block>>>(
             (float *)dst_by_gpu[i], view.logical_cols, view.row_bytes[0],
-            p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
+            p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7],
+            (int)rt->cfg.kv_dtype);
         rc = cudaGetLastError();
         if (rc != cudaSuccess) {
             return fail_cuda(err, err_len, "load_f8_kv_row_to_f32_device_kernel", rc);
@@ -1209,7 +1339,7 @@ extern "C" int ds4_v100_tp_runtime_kv_rows_store_f32_device(
         set_err(err, err_len, "slot range is outside configured slot count");
         return -1;
     }
-    if (rt->cfg.kv_dtype != DS4_V100_TP_KV_F8_E4M3_B128) {
+    if (!is_f8_kv(rt->cfg.kv_dtype)) {
         set_err(err, err_len, "device KV rows store currently supports F8 KV only");
         return -1;
     }
@@ -1235,7 +1365,7 @@ extern "C" int ds4_v100_tp_runtime_kv_rows_store_f32_device(
             (unsigned char *)g->kv, view.offset[i], rt->kv_slot_stride,
             view.row_bytes[i], i, (const float *)src_by_gpu[i],
             src_stride_floats, view.logical_cols, view.logical_row_bytes,
-            slot_count);
+            slot_count, (int)rt->cfg.kv_dtype);
         rc = cudaGetLastError();
         if (rc != cudaSuccess) {
             return fail_cuda(err, err_len, "store_f32_device_to_f8_kv_rows_kernel", rc);
@@ -1263,7 +1393,7 @@ extern "C" int ds4_v100_tp_runtime_kv_rows_load_f32_device(
         set_err(err, err_len, "slot range is outside configured slot count");
         return -1;
     }
-    if (rt->cfg.kv_dtype != DS4_V100_TP_KV_F8_E4M3_B128) {
+    if (!is_f8_kv(rt->cfg.kv_dtype)) {
         set_err(err, err_len, "device KV rows load currently supports F8 KV only");
         return -1;
     }
@@ -1293,7 +1423,8 @@ extern "C" int ds4_v100_tp_runtime_kv_rows_load_f32_device(
         load_f8_kv_rows_to_f32_device_kernel<<<grid, block>>>(
             (float *)dst_by_gpu[i], dst_stride_floats, view.logical_cols,
             view.row_bytes[0], rt->kv_slot_stride, slot_count,
-            p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
+            p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7],
+            (int)rt->cfg.kv_dtype);
         rc = cudaGetLastError();
         if (rc != cudaSuccess) {
             return fail_cuda(err, err_len, "load_f8_kv_rows_to_f32_device_kernel", rc);
@@ -1321,7 +1452,7 @@ extern "C" int ds4_v100_tp_runtime_kv_row_device_roundtrip_f32(
                                         err, err_len) != 0) {
         return -1;
     }
-    if (rt->cfg.kv_dtype != DS4_V100_TP_KV_F8_E4M3_B128) {
+    if (!is_f8_kv(rt->cfg.kv_dtype)) {
         set_err(err, err_len, "device row roundtrip currently supports F8 KV only");
         return -1;
     }
@@ -1375,7 +1506,7 @@ extern "C" int ds4_v100_tp_runtime_kv_row_device_roundtrip_f32(
         std::vector<unsigned char> expected_packed;
         std::vector<float> expected_decoded;
         fill_expected_f8_row(&expected_packed, &expected_decoded, layer, slot, position,
-                             view.logical_cols, indexer);
+                             view.logical_cols, indexer, rt->cfg.kv_dtype);
         double max_abs = 0.0;
         double sum_abs = 0.0;
         uint32_t bad = 0;

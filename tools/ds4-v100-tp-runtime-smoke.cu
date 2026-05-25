@@ -11,7 +11,7 @@ static unsigned long long parse_u64(const char *s) {
 static void usage(const char *argv0) {
     std::fprintf(stderr,
                  "usage: %s [--ctx N] [--slots N] [--scratch-mib N] "
-                 "[--kv-dtype f16|f8|q8_0] [--dense-kv-slice] "
+                 "[--kv-dtype f16|f8|f8_e4m3_b128|f8_e5m2_b128|q8_0] [--dense-kv-slice] "
                  "[--typed-kv-row] [--device-kv-row] [--kind attn|attn_raw|indexer] "
                  "[--layer N] [--slot N] [--position N] [--indexer on|off]\n",
                  argv0);
@@ -21,6 +21,8 @@ static bool parse_kv(const char *s, ds4_v100_tp_kv_dtype *out) {
     if (std::strcmp(s, "f16") == 0) *out = DS4_V100_TP_KV_F16;
     else if (std::strcmp(s, "f8") == 0 || std::strcmp(s, "f8_e4m3_b128") == 0)
         *out = DS4_V100_TP_KV_F8_E4M3_B128;
+    else if (std::strcmp(s, "f8_e5m2_b128") == 0 || std::strcmp(s, "e5m2") == 0)
+        *out = DS4_V100_TP_KV_F8_E5M2_B128;
     else if (std::strcmp(s, "q8") == 0 || std::strcmp(s, "q8_0") == 0)
         *out = DS4_V100_TP_KV_Q8_0;
     else return false;

@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-25
-last_updated_by: sprint-380
-revision: 393
+last_updated_by: sprint-381
+revision: 394
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -62,7 +62,7 @@ The performance program is intentionally isolated:
 | 4 | `--compact-moe-decode-gate` | Complete | Promoted for real model-router compact compose; response tokens matched and HTTP serving improved |
 | 5 | `--fused-gated-silu-gate` | Complete | Not promoted; generic epilogue changes token, DS4-clamped ABI is fast in EP-only isolation but resident serving A/B fails before the gate |
 | 6 | `--tp-experts-ab-gate` | Complete measurement | Do not integrate yet; TP8 fails correctness, TP4 is correct but reduction erases the win |
-| 7 | `--fp8-e5m2-kv-gate` | Long-context bandwidth work | Test KV footprint/bandwidth reduction after launch-count reducers are measured |
+| 7 | `--fp8-e5m2-kv-gate` | Complete diagnostic | Correct and promising in short A/B, but not promoted pending longer parity and VRAM margin |
 | 8 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
 
 Promotion requires a same-binary V100 A/B at the real serving shape, unchanged
@@ -93,10 +93,15 @@ The near-term implementation focus is therefore:
    `1.055x/0.891x/0.927x` total speedup at `96/192/384` routes because
    reduction dominates. Revisit TP experts only as a focused fused TP4
    reduction/compose sprint.
-3. Move to S-G FP8 KV or the next launch-count reducer unless the next sprint
-   explicitly targets that TP4 reduction boundary.
-   KV bandwidth matters at `256K`, but the current evidence says the immediate
-   bottleneck is still low utilization from many small launches and uneven work.
+3. Treat S-G E5M2 KV as a positive diagnostic, not a default yet. Sprint 381
+   added `DS4_V100_TP_KV_F8_E5M2_B128` and `--fp8-e5m2-kv-gate`; V100 row
+   tests passed with zero byte mismatches, direct 4-token checksum matched
+   while decode improved from `70.710875` to `75.787866` tok/s, and HTTP
+   selected-token client tok/s improved from `17.212677` to `22.389190`.
+   However, E5M2 gives up mantissa precision, only short selected-token parity
+   is proven, and one immediate HTTP candidate run failed with CUDA OOM before
+   readiness. Keep E4M3 as the default until a longer parity/soak sprint and a
+   VRAM admission-margin fix are complete.
 4. Add S-H MTP only after base TP/EP decode has stable metrology and a settled
    launch strategy. MTP remains the decode multiplier, but it should not hide
    kernel scheduling or topology bottlenecks.
@@ -1078,7 +1083,7 @@ The next performance sequence is ordered to test that thesis directly:
 | 2 | `--compact-moe-decode-gate` | Make real model-router top-k routes compatible with compact EP compose | Promoted for model-router compact compose |
 | 3 | `--fused-gated-silu-gate` | Remove standalone clamp/SwiGLU launch by baking the DS4 clamp into the grouped-GEMM epilogue | Complete diagnostic; not promoted |
 | 4 | `--tp-experts-ab-gate` | Measure TP-sharded expert execution against current EP8 all-to-all, without committing topology | Complete; no serving integration yet |
-| 5 | `--fp8-e5m2-kv-gate` | Test smaller KV storage/load traffic for long-context serving | Planned after launch/MoE gates |
+| 5 | `--fp8-e5m2-kv-gate` | Test alternate FP8 KV storage/load semantics for long-context serving | Complete diagnostic; promising short A/B, not promoted |
 | 6 | `--mtp-decode-gate` | Add MTP only after base TP/EP decode metrology and launch strategy are stable | Deferred multiplier |
 
 S-B is complete and rejected as a default. S-A is complete and rejected as a
@@ -1353,13 +1358,24 @@ TP4 is correct at all three route tiers but total speedup is only
 `1.055x`, `0.891x`, and `0.927x`, so simple output reduction/compose erases
 the compute win. Revisit only with a fused TP4 reduction/compose boundary.
 
-### Sprint 381 - FP8 E5M2 KV Gate [tentative]
+### Sprint 381 - FP8 E5M2 KV Gate [complete]
 
 Goal: Implement `--fp8-e5m2-kv-gate` for compressed/raw KV storage and loads.
 
 Rationale: The typed KV memory plan already fits `32` slots / `256K`, so this
-is a bandwidth and long-context optimization, not the current operational
-blocker.
+is a format and long-context optimization, not the current operational blocker.
+
+Outcome: Implemented as a default-off diagnostic. E5M2 keeps the same
+block-128 row layout as E4M3, with one E8M0 scale byte plus 128 FP8 payload
+bytes. Typed-row and device-row V100 smokes passed for `attn`, `attn_raw`, and
+`indexer`; E4M3 regression also passed after shared scale-byte cleanup.
+Direct 4-token A/B at `32` slots / `256K` preserved checksum `13373834059`
+and improved generated decode from `70.710875` to `75.787866` tok/s. HTTP
+selected-token 4-token A/B returned `32/32` HTTP 200, preserved first token
+`45178`, improved client tok/s from `17.212677` to `22.389190`, and reduced
+compressed-KV sum from `491.310011` to `442.415827` ms. Keep E4M3 as the
+default until longer parity/soak is complete because E5M2 has lower mantissa
+precision and one immediate HTTP candidate run hit CUDA OOM before readiness.
 
 ### Sprint 382 - MTP Decode Gate [tentative]
 
@@ -2786,6 +2802,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 379 implemented the true DS4-clamped TurboMind epilogue ABI. | The ABI exports and the clamped fused gate is fast in layer-0 EP-only isolation (`4.102144` ms two-step gate versus `0.622592` ms fused gate), but resident direct serving A/B with `routed-normalized + fused-gated-silu` fails at layer 0 before the routed gate executes due to the dense-KV precheck returning rc `4`. | Keep S-E default-off and diagnostic-only. Move to S-F TP-sharded expert A/B unless we first add a deterministic fused-gate parity harness or diagnose the resident dense-KV precheck interaction. |
 | 2026-05-25 | Sprint 380 started TP-sharded expert A/B measurement. | Added the permanent driver and reran TP8 TurboMind MXFP4 route tiers. TP8 still fails correctness for `96/192/384` routes and total speedup is `0.523x/0.353x/0.335x`; EP8 direct control at the target shape is `66.569095` tok/s with first token `54639`. | Do not integrate TP8 experts. Continue Sprint 380 by exposing/rerunning TP4, which was the historically correct branch. |
 | 2026-05-25 | Sprint 380 reran TP4 and TP8 under one driver. | TP4 is correct at `96/192/384` routes with total speedup `1.055x/0.891x/0.927x`; TP8 remains incorrect with large NaN counts. The simple TP output reduction dominates at larger route tiers. | Do not integrate TP-sharded experts into serving yet. Revisit only with a fused TP4 reduction/compose boundary, otherwise move to the next Vision gate. |
+| 2026-05-25 | Sprint 381 implemented the FP8 E5M2 KV gate. | E5M2 row/device smokes passed for `attn`, `attn_raw`, and `indexer`; direct 4-token checksum matched while decode improved `70.710875 -> 75.787866` tok/s; HTTP selected-token 4-token client throughput improved `17.212677 -> 22.389190` tok/s with first-token parity. | Keep E5M2 default-off. It is promising, but needs longer parity/soak and VRAM margin work before replacing E4M3. |
 
 ## Open Questions
 
