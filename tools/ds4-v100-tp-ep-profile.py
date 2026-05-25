@@ -190,12 +190,13 @@ def build_env(args, port):
             "DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_ROPE_ROUND": "1"
             if args.fused_compressed_rope_round
             else "0",
-            "DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_POOL_NORM": "1"
-            if args.fused_compressed_pool_norm
-            else "0",
             "DS4_V100_CUDA_PROFILER_WINDOW": "1" if "window" in args.tool else "0",
         }
     )
+    if args.fused_compressed_pool_norm:
+        env["DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_POOL_NORM"] = "1"
+    elif getattr(args, "disable_fused_compressed_pool_norm", False):
+        env["DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_POOL_NORM"] = "0"
     return env
 
 
@@ -215,6 +216,8 @@ def variant_suffix(args):
         suffix += "-fused-compressed-rope-round"
     if getattr(args, "fused_compressed_pool_norm", False):
         suffix += "-fused-compressed-pool-norm"
+    if getattr(args, "disable_fused_compressed_pool_norm", False):
+        suffix += "-no-fused-compressed-pool-norm"
     return suffix
 
 
@@ -571,6 +574,7 @@ def main():
     parser.add_argument("--fused-compressed-input-fill", action="store_true")
     parser.add_argument("--fused-compressed-rope-round", action="store_true")
     parser.add_argument("--fused-compressed-pool-norm", action="store_true")
+    parser.add_argument("--disable-fused-compressed-pool-norm", action="store_true")
     parser.add_argument("--port", type=int, default=18357)
     parser.add_argument("--readiness-seconds", type=int, default=600)
     parser.add_argument("--request-timeout-seconds", type=int, default=1200)
@@ -604,6 +608,8 @@ def main():
         default="nvprof-gpu-trace",
     )
     args = parser.parse_args()
+    if args.fused_compressed_pool_norm and args.disable_fused_compressed_pool_norm:
+        parser.error("--fused-compressed-pool-norm and --disable-fused-compressed-pool-norm are mutually exclusive")
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
 
     if args.run_mode == "direct-token-major":

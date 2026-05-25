@@ -205,6 +205,16 @@ pool rows. This proves the promoted default is active and stable through the
 full chat endpoint, but does not show a short-chat topline gain; the result is
 `-0.66%` at a shape where tokenization/prefill/HTTP overhead dominate.
 
+Sprint 362 aligned the permanent profile harness with that launcher default.
+`tools/ds4-v100-tp-ep-profile.py` now omits
+`DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_POOL_NORM` by default in HTTP
+mode, so `tools/ds4-v100-run-appliance.sh` supplies the production default.
+New `--disable-fused-compressed-pool-norm` forces the control behavior for
+A/B runs, and it is mutually exclusive with `--fused-compressed-pool-norm`.
+V100 selected-token proof returned `1/1` HTTP 200 in both modes: default
+command had the pool-norm gate and logged `40` fused pool layers; disabled
+command omitted the gate and logged `0` fused pool layers.
+
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
 TP runtime, sharded KV, rank buffers, TurboMind API handles, active MXFP4

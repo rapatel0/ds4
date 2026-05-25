@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-25
 last_updated_by: codex
-revision: 365
+revision: 366
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -119,6 +119,10 @@ not a serial layer-chain.
   flat/slightly slower (`24.118711` vs `24.280060` client generated tok/s).
   Treat pool+norm as a decode-path win, not yet a proven short-chat topline
   win.
+- Sprint 362 aligned the permanent TP/EP profile harness with launcher
+  defaults. HTTP profile runs now inherit the pool+norm default unless
+  `--disable-fused-compressed-pool-norm` is set, and V100 proof shows default
+  mode emits the pool gate while disable mode does not.
 - Sprint 327 made the production compressed-KV memory contract executable in
   `tools/ds4-v100-plan-tp.c`. With the real TP pack and F8 KV, `32` slots at
   `256K` fits at `27.00 GiB/GPU` with `5.00 GiB` headroom after reserve;
@@ -2291,6 +2295,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 359 promoted fused compressed pool+norm. | Direct 32-step non-HTTP A/B resolves the Sprint 358 metric conflict: pool+norm improves decode tok/s by `+1.84%`, wall tok/s by `+1.77%`, and compressed-KV sum by `62.624806 ms` with the same first token. | Keep pool+norm default-on for TP/EP serving. Continue deeper compressed state/emit fusion or rerun full HTTP chat topline with the promoted default. |
 | 2026-05-25 | Sprint 360 validated the pool+norm default through the launcher. | The TP/EP launcher emits the pool+norm gate by default, and a launcher-started selected-token HTTP run returns `32/32` HTTP 200 with `187` fused pool-norm rows and `73.289956` client generated tok/s. | Use the launcher default for future TP/EP serving tests; next rerun chat/topline or continue compressed state/emit fusion. |
 | 2026-05-25 | Sprint 361 ran the launcher chat/completions A/B. | The promoted pool+norm default is active through chat and stable, but short chat is flat/slightly slower: `24.118711` vs `24.280060` client generated tok/s for `8` tokens/request. | Do not claim chat topline improvement. Use longer decode-heavy chat tests or continue larger compressed-KV fusion work. |
+| 2026-05-25 | Sprint 362 aligned the profile harness with launcher defaults. | HTTP profile runs now inherit the production pool+norm default, and an explicit `--disable-fused-compressed-pool-norm` flag provides the control path. V100 proof returned `1/1` HTTP 200 in both modes with `40` fused pool layers by default and `0` when disabled. | Use the permanent harness for future launcher-level TP/EP A/B tests instead of ad hoc shell scripts. |
 
 ## Open Questions
 
