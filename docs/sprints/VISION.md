@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-25
 last_updated_by: vision
-revision: 384
+revision: 385
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -38,6 +38,33 @@ Routed MoE paths are expert-parallel, using the existing low-bit TurboMind /
 CUTLASS kernel work where it helps. The execution goal is to make decode look
 like batched mat-mat work over active slots, not single-slot mat-vec work and
 not a serial layer-chain.
+
+## Active Performance Thesis
+
+`TEMP_THROUGHPUT_PROMPT.md` is now the controlling throughput plan. The current
+evidence says the TP/EP serving path is launch/synchronization fragmented:
+server decode stays roughly `97-100` aggregate tok/s and average GPU
+utilization stays around `10%` from `1` to `32` active requests at the target
+`32` slot / `256K` shape. That makes the immediate priority launch-count and
+sync-elimination work, not another broad dtype conversion.
+
+The performance program is intentionally isolated:
+
+| Priority | Gate | Status | Decision |
+|---:|---|---|---|
+| 1 | `--async-output-gate` | Complete | Rejected as default; preserved parity but regressed server decode |
+| 2 | `--decode-cudagraph-gate` | Active | Must produce real capture/replay evidence or a precise CUDA blocker |
+| 3 | `--batched-paged-attn-gate` | Next if graph blocked/flat | Collapse per-slot/per-family attention/KV launches |
+| 4 | `--compact-moe-decode-gate` | Next if graph blocked/flat | Reduce idle expert work and small grouped-GEMM fragmentation |
+| 5 | `--fused-gated-silu-gate` | Follow-on | Remove routed-FFN clamp/SwiGLU launch and intermediate |
+| 6 | `--tp-experts-ab-gate` | Topology measurement | Compare TP-sharded experts against EP8 all-to-all with real serving metrics |
+| 7 | `--fp8-e5m2-kv-gate` | Long-context bandwidth work | Test KV footprint/bandwidth reduction after base decode is measurable |
+| 8 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
+
+Promotion requires a same-binary V100 A/B at the real serving shape, unchanged
+first token/checksum, and improved GPU utilization or server decode tok/s.
+Rejected gates stay opt-in diagnostics. A sprint that cannot produce either a
+promotion or a concrete blocker is not complete.
 
 ## Current State
 
@@ -246,6 +273,8 @@ not a serial layer-chain.
   utilization from `1` to `32` active requests. The immediate work queue is
   therefore isolated gate experiments that either remove launch/sync overhead
   or prove that this thesis is wrong before more dtype or micro-kernel swaps.
+  The controlling order is CUDA graph replay first, then batched paged
+  attention and compact MoE if graph replay is blocked or flat.
 - Sprint 376 is executing that steering document's S-A gate:
   `--decode-cudagraph-gate`. The audit has already removed the broad
   in-step `sync_all` host waits and several helper-level host waits under the
@@ -254,7 +283,10 @@ not a serial layer-chain.
   non-emitted-row shape: helper blocker classes fell from `7` to `0`, first
   token stayed `54639`, output checksum stayed `24071637347`, and scaffold
   checksum stayed `3401922407`. The next work is a real graph capture/replay
-  attempt, not more audit-only cleanup.
+  attempt, not more audit-only cleanup. If the capture attempt exposes a
+  CUDA/runtime blocker or replay is flat, Sprint 376 closes with that result
+  and the next sprint starts `--batched-paged-attn-gate` rather than extending
+  audit plumbing.
 - Sprint 327 made the production compressed-KV memory contract executable in
   `tools/ds4-v100-plan-tp.c`. With the real TP pack and F8 KV, `32` slots at
   `256K` fits at `27.00 GiB/GPU` with `5.00 GiB` headroom after reserve;
@@ -975,9 +1007,11 @@ The near-term implementation policy is now:
    known host-sync blocker classes.
 3. Promote graph replay only with unchanged first token/checksum and a
    material utilization or server-decode improvement at `32` slots / `256K`.
-4. If graph replay is blocked or flat, move immediately to the next throughput
-   prompt gates in order: batched paged attention, compact MoE decode, then the
-   TP-sharded expert A/B.
+4. If graph replay is blocked or flat, close Sprint 376 with that evidence and
+   move immediately to the next throughput prompt gates in order: batched paged
+   attention, compact MoE decode, fused gated-SiLU, then the TP-sharded expert
+   A/B. Do not add another graph-audit sprint unless the blocker is a narrow
+   implementation mistake with a clear fix.
 5. Keep dtype conversion work scoped to measured hot paths. Sprint 374 showed
    a simple tc-grid INT8 compressor swap is slower than the FP16 tensor-op
    baseline at the target compressor shapes, so format changes are not the
@@ -1004,9 +1038,12 @@ roadmap pivots to S-C/S-D/S-F based on the graph audit and profiler evidence
 rather than assuming more launch amortization will help.
 
 Current S-A status: graph replay has not yet been attempted, but the one-step
-non-emitted-row audit now reports `capture_eligible=1`. The next concrete
-outcome must be a real replay A/B or a CUDA capture blocker report. If replay
-is blocked or flat, pivot to S-C/S-D/S-F rather than extending audit-only work.
+non-emitted-row audit now reports `capture_eligible=1`. There is local
+in-progress diagnostic capture plumbing in
+`tools/ds4-v100-tp-ep-full-layer-smoke.cu`; it is not yet a validated result.
+The next concrete outcome must be a real replay A/B or a CUDA capture blocker
+report. If replay is blocked or flat, pivot to S-C/S-D/S-E/S-F rather than
+extending audit-only work.
 
 ## Production Readiness Sequence
 
@@ -1211,9 +1248,10 @@ compact MoE, TP experts, or MTP before that decision.
 Goal: Implement `--batched-paged-attn-gate` to reduce per-slot typed-KV
 attention launches with block-table-indexed attention kernels.
 
-Rationale: This is the first fallback or follow-on if graph replay leaves a
-measured attention launch/state hot spot. It should not start before Sprint
-376 produces a clear graph-capture result.
+Rationale: This is the first fallback if graph replay is blocked or flat, and
+the first follow-on if graph replay lands but the captured graph still spends
+too much time in fragmented attention/KV work. It should not start before
+Sprint 376 produces a clear graph-capture result.
 
 ### Sprint 378 - Compact MoE Decode Gate [tentative]
 
@@ -1222,16 +1260,18 @@ experts into a smaller grouped-GEMM schedule.
 
 Rationale: This targets expert imbalance and idle expert work, especially
 when active requests are below the configured `32` slots. It follows the graph
-test because graph capture changes the cost model of small MoE launches.
+test because graph capture changes the cost model of small MoE launches, but
+it should move ahead of topology rewrites if EP/routed-FFN timing remains high.
 
 ### Sprint 379 - Fused Gated-SiLU Gate [tentative]
 
 Goal: Implement `--fused-gated-silu-gate` by moving the DS4 clamp/SwiGLU
 boundary into the routed grouped-GEMM epilogue.
 
-Rationale: This is a kernel-count reducer inside the routed FFN path, but it
-only matters after launch overhead is either fixed by graph replay or proven
-not to be the dominant limiter.
+Rationale: This is a kernel-count reducer inside the routed FFN path and a
+natural follow-on to compact MoE. It should bake the DS4 `10.0` routed-SwiGLU
+clamp into the grouped-GEMM epilogue and avoid extra intermediates, while
+preserving the source quantized weight layout.
 
 ### Sprint 380 - TP-Sharded Expert A/B [tentative]
 
@@ -1239,7 +1279,9 @@ Goal: Implement `--tp-experts-ab-gate` as a measurement of TP-sharded experts
 against the current EP8 all-to-all path.
 
 Rationale: This is the topology experiment that settles whether expert
-parallel all-to-all remains a structural bottleneck after the launch/sync work.
+parallel all-to-all remains a structural bottleneck after launch-count work.
+It is a measurement gate, not a commitment to rewrite the serving topology
+before paged attention and compact MoE have been tested.
 
 ### Sprint 381 - FP8 E5M2 KV Gate [tentative]
 
@@ -2665,6 +2707,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 376 attention-projection helper event pass ran on V100. | Attention projection host waits can be event-ordered under the graph gate; parity holds and helper blocker classes drop from `5` to `4`. | Continue with attention state/raw-read/output and compressed-KV helper waits. |
 | 2026-05-25 | Sprint 376 raw-read helper event pass ran on V100. | Raw attention read/window host waits can be skipped under the graph gate; parity holds and helper blocker classes drop from `4` to `3`. | Continue with attention state, typed-history, and compressed-KV helper waits. |
 | 2026-05-25 | Sprint 376 cleared tracked graph-audit helper blockers. | Attention-state, typed-history, and compressed-KV event-ordering passes preserve first token `54639`, output checksum `24071637347`, and scaffold checksum `3401922407`; helper blocker classes drop to `0`, and the one-step non-emitted-row audit reports `capture_eligible=1`. | Attempt real CUDA graph capture/replay next. If capture rejects an operation or replay is flat, close Sprint 376 with the blocker/performance result and pivot to batched paged attention, compact MoE, or TP-sharded expert A/B. |
+| 2026-05-25 | Re-centered the vision around `TEMP_THROUGHPUT_PROMPT.md` before further performance work. | The prompt's main insight is that the current TP/EP path is flat at about `97-100` server decode tok/s and about `10%` average GPU utilization from `1` to `32` active requests, so the next work should test launch/sync elimination and launch-count reduction before broad dtype rewrites. | Keep Sprint 376 focused on one real CUDA graph capture/replay result. If it is blocked or flat, move to batched paged attention, compact MoE, fused gated-SiLU, and then TP-sharded expert A/B as isolated default-off gates. |
 
 ## Open Questions
 
