@@ -4,6 +4,11 @@ Last updated: 2026-05-25
 
 ## Topline
 
+Current bottleneck reference:
+[`docs/architecture/DS4-V100-TP-EP-BOTTLENECKS.md`](../architecture/DS4-V100-TP-EP-BOTTLENECKS.md)
+summarizes the measured bottlenecks, layer-by-layer hot paths, and experiments
+already tried.
+
 Latest TP/EP format status: Sprint 373 added
 `tools/ds4-v100-tp-ep-int8-candidates`, a contract audit tool for scoped
 offline INT8+scale conversion. Running it on the real V100 TP/EP contract
