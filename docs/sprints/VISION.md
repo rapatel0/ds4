@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-25
 last_updated_by: codex
-revision: 354
+revision: 355
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -2244,6 +2244,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 348 rejected naive HC current peer-gather. | The opt-in `--tp-hc-current-input-peer-gather-gate` path is correct, but slower: control measured `87.263615` generated tok/s decode and `596.248809` HC-current ms, while peer gather measured `67.495350` and `801.525057`. Spreading the full-current gather to every rank adds more overhead than it removes from the GPU0 broadcast path. | Keep the gate diagnostic-only. Next target is HC control synchronization/fusion or direct sharded fill, not naive all-rank peer gathering. |
 | 2026-05-25 | Sprint 349 promoted HC-current stream-scoped barriers. | `--tp-hc-current-input-stream-sync-gate` keeps the layout unchanged but replaces selected GPU0 device-wide barriers with rank-0 stream barriers. Direct A/B improved generated decode tok/s from `74.841520` to `81.190638` and HC-current ms from `711.608991` to `647.492171`. HTTP 32-request A/B improved server generated tok/s from `82.573137` to `83.813937`, with `32/32` HTTP 200. | Promote `DS4_V100_TP_EP_HC_CURRENT_INPUT_STREAM_SYNC=1`; next fuse or bypass the HC control/fill chain itself. |
 | 2026-05-25 | Sprint 350 split the HC-current timer and corrected the bottleneck interpretation. | The actual HC-current substages sum to `83.066250` ms, while the old `sum_hc_current_input_ms` field is `557.301289` ms. The broad field includes true-attention/compressed-KV prefix work before the EP timer begins. | Stop chasing HC-current gather/broadcast as the main bottleneck. Split and optimize the true-attention/compressed-KV prefix next. |
+| 2026-05-25 | Sprint 351 split the true-attention pre-EP prefix. | The prior broad pre-EP timer is now explained by measured stage totals: compressed KV projection/store `228.813152` ms, attention projection `170.865666` ms, attention state `105.654904` ms, HC-current `85.249101` ms, raw/window read `34.932798` ms, and typed-history load `1.271677` ms across `86` layer-step invocations. | Optimize compressed-KV projection/store fragmentation first, then rerun direct profiler and HTTP A/B before moving to MTP. |
 
 ## Open Questions
 

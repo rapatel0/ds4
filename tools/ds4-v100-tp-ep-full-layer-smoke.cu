@@ -396,6 +396,14 @@ struct LayerRunSummary {
     double decode_hc_current_gather_ms_per_step = 0.0;
     double decode_hc_current_ffn_router_ms_per_step = 0.0;
     double decode_hc_current_fill_pack_ms_per_step = 0.0;
+    double decode_pre_ep_hc_current_ms_per_step = 0.0;
+    double decode_pre_ep_attention_projection_ms_per_step = 0.0;
+    double decode_pre_ep_compressed_kv_ms_per_step = 0.0;
+    double decode_pre_ep_attention_state_ms_per_step = 0.0;
+    double decode_pre_ep_typed_history_ms_per_step = 0.0;
+    double decode_pre_ep_raw_read_ms_per_step = 0.0;
+    double decode_pre_ep_attention_output_ms_per_step = 0.0;
+    double decode_pre_ep_post_attention_ffn_input_ms_per_step = 0.0;
     double decode_final_hc_ms_per_step = 0.0;
     uint64_t decode_checksum = 0;
     int decode_finite_bad = 0;
@@ -495,6 +503,14 @@ struct DecodeLoopStats {
     double hc_current_gather_ms_per_step = 0.0;
     double hc_current_ffn_router_ms_per_step = 0.0;
     double hc_current_fill_pack_ms_per_step = 0.0;
+    double pre_ep_hc_current_ms_per_step = 0.0;
+    double pre_ep_attention_projection_ms_per_step = 0.0;
+    double pre_ep_compressed_kv_ms_per_step = 0.0;
+    double pre_ep_attention_state_ms_per_step = 0.0;
+    double pre_ep_typed_history_ms_per_step = 0.0;
+    double pre_ep_raw_read_ms_per_step = 0.0;
+    double pre_ep_attention_output_ms_per_step = 0.0;
+    double pre_ep_post_attention_ffn_input_ms_per_step = 0.0;
     double final_hc_ms_per_step = 0.0;
     int finite_bad = 0;
     uint64_t checksum = 0;
@@ -512,6 +528,17 @@ struct HcCurrentInputBreakdown {
     double gather_ms = 0.0;
     double ffn_router_ms = 0.0;
     double fill_pack_ms = 0.0;
+};
+
+struct PreEpPrefixBreakdown {
+    double hc_current_ms = 0.0;
+    double attention_projection_ms = 0.0;
+    double compressed_kv_ms = 0.0;
+    double attention_state_ms = 0.0;
+    double typed_history_ms = 0.0;
+    double raw_read_ms = 0.0;
+    double attention_output_ms = 0.0;
+    double post_attention_ffn_input_ms = 0.0;
 };
 
 struct Options {
@@ -9913,9 +9940,11 @@ int run_decode_loop(const Options &opt,
                             double *compose_final_ms,
                             double *hc_current_input_ms,
                             HcCurrentInputBreakdown *hc_current_breakdown,
+                            PreEpPrefixBreakdown *pre_ep_breakdown,
                             double *final_hc_ms) -> int {
         auto t_pre = std::chrono::steady_clock::now();
         if (opt.tp_hc_current_input_gate) {
+            const auto t_stage = std::chrono::steady_clock::now();
             if (!shared_hc_controls || !shared_hc_controls->initialized) {
                 std::fprintf(stderr, "tp_hc_current_input_failed\tlayer\t%d\treason\tmissing_controls\n",
                              opt.layer);
@@ -9930,8 +9959,14 @@ int run_decode_loop(const Options &opt,
                              opt.layer, hc_rc);
                 return 9;
             }
+            if (pre_ep_breakdown) {
+                const auto t_done = std::chrono::steady_clock::now();
+                pre_ep_breakdown->hc_current_ms +=
+                    std::chrono::duration<double, std::milli>(t_done - t_stage).count();
+            }
         }
         if (opt.true_ds4_attention_projection_gate) {
+            const auto t_stage = std::chrono::steady_clock::now();
             const int attn_rc = run_true_ds4_attention_projection_prefix(
                 opt, shared_hc_controls, shared_dense_ops, ranks, opt.layer);
             if (attn_rc != 0) {
@@ -9940,8 +9975,14 @@ int run_decode_loop(const Options &opt,
                              opt.layer, attn_rc);
                 return 14;
             }
+            if (pre_ep_breakdown) {
+                const auto t_done = std::chrono::steady_clock::now();
+                pre_ep_breakdown->attention_projection_ms +=
+                    std::chrono::duration<double, std::milli>(t_done - t_stage).count();
+            }
         }
         if (opt.true_ds4_compressed_kv_gate) {
+            const auto t_stage = std::chrono::steady_clock::now();
             const int comp_rc = run_true_ds4_compressed_kv_projection_gate(
                 opt, shared_hc_controls, shared_dense_ops, ranks, rt, opt.layer);
             if (comp_rc != 0) {
@@ -9950,8 +9991,14 @@ int run_decode_loop(const Options &opt,
                              opt.layer, comp_rc);
                 return 19;
             }
+            if (pre_ep_breakdown) {
+                const auto t_done = std::chrono::steady_clock::now();
+                pre_ep_breakdown->compressed_kv_ms +=
+                    std::chrono::duration<double, std::milli>(t_done - t_stage).count();
+            }
         }
         if (opt.true_ds4_attention_state_gate) {
+            const auto t_stage = std::chrono::steady_clock::now();
             const int state_rc = run_true_ds4_attention_state_update(
                 opt, shared_hc_controls, shared_dense_ops, ranks, rt, opt.layer);
             if (state_rc != 0) {
@@ -9960,8 +10007,14 @@ int run_decode_loop(const Options &opt,
                              opt.layer, state_rc);
                 return 15;
             }
+            if (pre_ep_breakdown) {
+                const auto t_done = std::chrono::steady_clock::now();
+                pre_ep_breakdown->attention_state_ms +=
+                    std::chrono::duration<double, std::milli>(t_done - t_stage).count();
+            }
         }
         if (opt.true_ds4_attention_typed_kv_history_gate) {
+            const auto t_stage = std::chrono::steady_clock::now();
             const int history_rc = run_true_ds4_attention_typed_kv_history_load(
                 opt, shared_hc_controls, ranks, rt, opt.layer);
             if (history_rc != 0) {
@@ -9971,8 +10024,14 @@ int run_decode_loop(const Options &opt,
                              opt.layer, history_rc);
                 return 24;
             }
+            if (pre_ep_breakdown) {
+                const auto t_done = std::chrono::steady_clock::now();
+                pre_ep_breakdown->typed_history_ms +=
+                    std::chrono::duration<double, std::milli>(t_done - t_stage).count();
+            }
         }
         if (opt.true_ds4_attention_raw_read_gate) {
+            const auto t_stage = std::chrono::steady_clock::now();
             const int raw_read_rc = opt.true_ds4_attention_raw_window_gate
                 ? run_true_ds4_attention_raw_window(
                       opt, shared_hc_controls, shared_dense_ops, ranks, opt.layer)
@@ -9984,8 +10043,14 @@ int run_decode_loop(const Options &opt,
                              opt.layer, raw_read_rc);
                 return 16;
             }
+            if (pre_ep_breakdown) {
+                const auto t_done = std::chrono::steady_clock::now();
+                pre_ep_breakdown->raw_read_ms +=
+                    std::chrono::duration<double, std::milli>(t_done - t_stage).count();
+            }
         }
         if (opt.true_ds4_attention_output_gate) {
+            const auto t_stage = std::chrono::steady_clock::now();
             const int output_rc = run_true_ds4_attention_output_projection(
                 opt, shared_dense_ops, ranks, opt.layer);
             if (output_rc != 0) {
@@ -9994,8 +10059,14 @@ int run_decode_loop(const Options &opt,
                              opt.layer, output_rc);
                 return 17;
             }
+            if (pre_ep_breakdown) {
+                const auto t_done = std::chrono::steady_clock::now();
+                pre_ep_breakdown->attention_output_ms +=
+                    std::chrono::duration<double, std::milli>(t_done - t_stage).count();
+            }
         }
         if (opt.true_ds4_post_attention_ffn_input_gate) {
+            const auto t_stage = std::chrono::steady_clock::now();
             const int post_rc = run_true_ds4_post_attention_ffn_input(
                 opt, shared_hc_controls, shared_dense_ops, ranks, opt.layer);
             if (post_rc != 0) {
@@ -10003,6 +10074,11 @@ int run_decode_loop(const Options &opt,
                              "tp_ep_post_attention_ffn_input_failed\tlayer\t%d\trc\t%d\n",
                              opt.layer, post_rc);
                 return 18;
+            }
+            if (pre_ep_breakdown) {
+                const auto t_done = std::chrono::steady_clock::now();
+                pre_ep_breakdown->post_attention_ffn_input_ms +=
+                    std::chrono::duration<double, std::milli>(t_done - t_stage).count();
             }
         }
         auto t0 = std::chrono::steady_clock::now();
@@ -10504,7 +10580,7 @@ int run_decode_loop(const Options &opt,
         if (run_one_step(&warm_ep, &warm_dense, &warm_compose,
                          &warm_compose_reduce, &warm_compose_copy,
                          &warm_compose_final, &warm_hc_current_input,
-                         nullptr,
+                         nullptr, nullptr,
                          &warm_final_hc) != 0) {
             if (!shared_dense_ops) {
                 free_resident_f8_dense(attn, opt);
@@ -10522,13 +10598,14 @@ int run_decode_loop(const Options &opt,
     double compose_final_ms = 0.0;
     double hc_current_input_ms = 0.0;
     HcCurrentInputBreakdown hc_current_breakdown;
+    PreEpPrefixBreakdown pre_ep_breakdown;
     double final_hc_ms = 0.0;
     const auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < opt.decode_steps; ++i) {
         if (run_one_step(&ep_ms, &dense_ms, &compose_ms,
                          &compose_reduce_ms, &compose_copy_ms,
                          &compose_final_ms, &hc_current_input_ms,
-                         &hc_current_breakdown,
+                         &hc_current_breakdown, &pre_ep_breakdown,
                          &final_hc_ms) != 0) {
             if (!shared_dense_ops) {
                 free_resident_f8_dense(attn, opt);
@@ -10562,6 +10639,22 @@ int run_decode_loop(const Options &opt,
         hc_current_breakdown.ffn_router_ms / (double)opt.decode_steps;
     stats->hc_current_fill_pack_ms_per_step =
         hc_current_breakdown.fill_pack_ms / (double)opt.decode_steps;
+    stats->pre_ep_hc_current_ms_per_step =
+        pre_ep_breakdown.hc_current_ms / (double)opt.decode_steps;
+    stats->pre_ep_attention_projection_ms_per_step =
+        pre_ep_breakdown.attention_projection_ms / (double)opt.decode_steps;
+    stats->pre_ep_compressed_kv_ms_per_step =
+        pre_ep_breakdown.compressed_kv_ms / (double)opt.decode_steps;
+    stats->pre_ep_attention_state_ms_per_step =
+        pre_ep_breakdown.attention_state_ms / (double)opt.decode_steps;
+    stats->pre_ep_typed_history_ms_per_step =
+        pre_ep_breakdown.typed_history_ms / (double)opt.decode_steps;
+    stats->pre_ep_raw_read_ms_per_step =
+        pre_ep_breakdown.raw_read_ms / (double)opt.decode_steps;
+    stats->pre_ep_attention_output_ms_per_step =
+        pre_ep_breakdown.attention_output_ms / (double)opt.decode_steps;
+    stats->pre_ep_post_attention_ffn_input_ms_per_step =
+        pre_ep_breakdown.post_attention_ffn_input_ms / (double)opt.decode_steps;
     stats->final_hc_ms_per_step = final_hc_ms / (double)opt.decode_steps;
 
     if (opt.skip_decode_checksum) {
@@ -10710,6 +10803,22 @@ int run_resident_layer_decode(const Options &opt,
             decode_loop.hc_current_ffn_router_ms_per_step;
         summary->decode_hc_current_fill_pack_ms_per_step =
             decode_loop.hc_current_fill_pack_ms_per_step;
+        summary->decode_pre_ep_hc_current_ms_per_step =
+            decode_loop.pre_ep_hc_current_ms_per_step;
+        summary->decode_pre_ep_attention_projection_ms_per_step =
+            decode_loop.pre_ep_attention_projection_ms_per_step;
+        summary->decode_pre_ep_compressed_kv_ms_per_step =
+            decode_loop.pre_ep_compressed_kv_ms_per_step;
+        summary->decode_pre_ep_attention_state_ms_per_step =
+            decode_loop.pre_ep_attention_state_ms_per_step;
+        summary->decode_pre_ep_typed_history_ms_per_step =
+            decode_loop.pre_ep_typed_history_ms_per_step;
+        summary->decode_pre_ep_raw_read_ms_per_step =
+            decode_loop.pre_ep_raw_read_ms_per_step;
+        summary->decode_pre_ep_attention_output_ms_per_step =
+            decode_loop.pre_ep_attention_output_ms_per_step;
+        summary->decode_pre_ep_post_attention_ffn_input_ms_per_step =
+            decode_loop.pre_ep_post_attention_ffn_input_ms_per_step;
         summary->decode_final_hc_ms_per_step = decode_loop.final_hc_ms_per_step;
         summary->decode_checksum = decode_loop.checksum;
         summary->decode_finite_bad = decode_loop.finite_bad;
@@ -11385,6 +11494,34 @@ int run_layer(const Options &opt,
             decode_loop.compose_final_ms_per_step;
         summary->decode_hc_current_input_ms_per_step =
             decode_loop.hc_current_input_ms_per_step;
+        summary->decode_hc_current_seed_ms_per_step =
+            decode_loop.hc_current_seed_ms_per_step;
+        summary->decode_hc_current_attn_mix_ms_per_step =
+            decode_loop.hc_current_attn_mix_ms_per_step;
+        summary->decode_hc_current_split_ms_per_step =
+            decode_loop.hc_current_split_ms_per_step;
+        summary->decode_hc_current_gather_ms_per_step =
+            decode_loop.hc_current_gather_ms_per_step;
+        summary->decode_hc_current_ffn_router_ms_per_step =
+            decode_loop.hc_current_ffn_router_ms_per_step;
+        summary->decode_hc_current_fill_pack_ms_per_step =
+            decode_loop.hc_current_fill_pack_ms_per_step;
+        summary->decode_pre_ep_hc_current_ms_per_step =
+            decode_loop.pre_ep_hc_current_ms_per_step;
+        summary->decode_pre_ep_attention_projection_ms_per_step =
+            decode_loop.pre_ep_attention_projection_ms_per_step;
+        summary->decode_pre_ep_compressed_kv_ms_per_step =
+            decode_loop.pre_ep_compressed_kv_ms_per_step;
+        summary->decode_pre_ep_attention_state_ms_per_step =
+            decode_loop.pre_ep_attention_state_ms_per_step;
+        summary->decode_pre_ep_typed_history_ms_per_step =
+            decode_loop.pre_ep_typed_history_ms_per_step;
+        summary->decode_pre_ep_raw_read_ms_per_step =
+            decode_loop.pre_ep_raw_read_ms_per_step;
+        summary->decode_pre_ep_attention_output_ms_per_step =
+            decode_loop.pre_ep_attention_output_ms_per_step;
+        summary->decode_pre_ep_post_attention_ffn_input_ms_per_step =
+            decode_loop.pre_ep_post_attention_ffn_input_ms_per_step;
         summary->decode_final_hc_ms_per_step = decode_loop.final_hc_ms_per_step;
         summary->decode_checksum = decode_loop.checksum;
     }
@@ -11509,6 +11646,14 @@ int run_token_major_serving_loop(const Options &opt,
     double sum_hc_current_gather_ms = 0.0;
     double sum_hc_current_ffn_router_ms = 0.0;
     double sum_hc_current_fill_pack_ms = 0.0;
+    double sum_pre_ep_hc_current_ms = 0.0;
+    double sum_pre_ep_attention_projection_ms = 0.0;
+    double sum_pre_ep_compressed_kv_ms = 0.0;
+    double sum_pre_ep_attention_state_ms = 0.0;
+    double sum_pre_ep_typed_history_ms = 0.0;
+    double sum_pre_ep_raw_read_ms = 0.0;
+    double sum_pre_ep_attention_output_ms = 0.0;
+    double sum_pre_ep_post_attention_ffn_input_ms = 0.0;
     double sum_final_hc_ms = 0.0;
     double first_token_decode_ms = 0.0;
     double continuation_decode_ms = 0.0;
@@ -11622,6 +11767,14 @@ int run_token_major_serving_loop(const Options &opt,
                         "decode_hc_current_gather_ms_per_step\t%.6f\t"
                         "decode_hc_current_ffn_router_ms_per_step\t%.6f\t"
                         "decode_hc_current_fill_pack_ms_per_step\t%.6f\t"
+                        "decode_pre_ep_hc_current_ms_per_step\t%.6f\t"
+                        "decode_pre_ep_attention_projection_ms_per_step\t%.6f\t"
+                        "decode_pre_ep_compressed_kv_ms_per_step\t%.6f\t"
+                        "decode_pre_ep_attention_state_ms_per_step\t%.6f\t"
+                        "decode_pre_ep_typed_history_ms_per_step\t%.6f\t"
+                        "decode_pre_ep_raw_read_ms_per_step\t%.6f\t"
+                        "decode_pre_ep_attention_output_ms_per_step\t%.6f\t"
+                        "decode_pre_ep_post_attention_ffn_input_ms_per_step\t%.6f\t"
                         "decode_final_hc_ms_per_step\t%.6f\t"
                         "decode_checksum\t%llu\tdecode_finite_bad\t%d\trc\t%d\t%s\n",
                         step, s.layer, s.ratio,
@@ -11641,6 +11794,14 @@ int run_token_major_serving_loop(const Options &opt,
                         s.decode_hc_current_gather_ms_per_step,
                         s.decode_hc_current_ffn_router_ms_per_step,
                         s.decode_hc_current_fill_pack_ms_per_step,
+                        s.decode_pre_ep_hc_current_ms_per_step,
+                        s.decode_pre_ep_attention_projection_ms_per_step,
+                        s.decode_pre_ep_compressed_kv_ms_per_step,
+                        s.decode_pre_ep_attention_state_ms_per_step,
+                        s.decode_pre_ep_typed_history_ms_per_step,
+                        s.decode_pre_ep_raw_read_ms_per_step,
+                        s.decode_pre_ep_attention_output_ms_per_step,
+                        s.decode_pre_ep_post_attention_ffn_input_ms_per_step,
                         s.decode_final_hc_ms_per_step,
                         (unsigned long long)s.decode_checksum,
                         s.decode_finite_bad,
@@ -11663,6 +11824,18 @@ int run_token_major_serving_loop(const Options &opt,
                 sum_hc_current_gather_ms += s.decode_hc_current_gather_ms_per_step;
                 sum_hc_current_ffn_router_ms += s.decode_hc_current_ffn_router_ms_per_step;
                 sum_hc_current_fill_pack_ms += s.decode_hc_current_fill_pack_ms_per_step;
+                sum_pre_ep_hc_current_ms += s.decode_pre_ep_hc_current_ms_per_step;
+                sum_pre_ep_attention_projection_ms +=
+                    s.decode_pre_ep_attention_projection_ms_per_step;
+                sum_pre_ep_compressed_kv_ms += s.decode_pre_ep_compressed_kv_ms_per_step;
+                sum_pre_ep_attention_state_ms +=
+                    s.decode_pre_ep_attention_state_ms_per_step;
+                sum_pre_ep_typed_history_ms += s.decode_pre_ep_typed_history_ms_per_step;
+                sum_pre_ep_raw_read_ms += s.decode_pre_ep_raw_read_ms_per_step;
+                sum_pre_ep_attention_output_ms +=
+                    s.decode_pre_ep_attention_output_ms_per_step;
+                sum_pre_ep_post_attention_ffn_input_ms +=
+                    s.decode_pre_ep_post_attention_ffn_input_ms_per_step;
                 sum_final_hc_ms += s.decode_final_hc_ms_per_step;
                 checksum ^= s.decode_checksum +
                             (uint64_t)(step + 1) * 1000003ull +
@@ -11724,6 +11897,14 @@ int run_token_major_serving_loop(const Options &opt,
                 "sum_hc_current_gather_ms\t%.6f\t"
                 "sum_hc_current_ffn_router_ms\t%.6f\t"
                 "sum_hc_current_fill_pack_ms\t%.6f\t"
+                "sum_pre_ep_hc_current_ms\t%.6f\t"
+                "sum_pre_ep_attention_projection_ms\t%.6f\t"
+                "sum_pre_ep_compressed_kv_ms\t%.6f\t"
+                "sum_pre_ep_attention_state_ms\t%.6f\t"
+                "sum_pre_ep_typed_history_ms\t%.6f\t"
+                "sum_pre_ep_raw_read_ms\t%.6f\t"
+                "sum_pre_ep_attention_output_ms\t%.6f\t"
+                "sum_pre_ep_post_attention_ffn_input_ms\t%.6f\t"
                 "final_hc_carry_gate\t%d\tsum_final_hc_ms\t%.6f\t"
                 "wall_ms\t%.6f\tchecksum\t%llu\tPASS\n",
                 opt.decode_steps, pass_invocations, opt.slots,
@@ -11752,6 +11933,14 @@ int run_token_major_serving_loop(const Options &opt,
                 sum_hc_current_gather_ms,
                 sum_hc_current_ffn_router_ms,
                 sum_hc_current_fill_pack_ms,
+                sum_pre_ep_hc_current_ms,
+                sum_pre_ep_attention_projection_ms,
+                sum_pre_ep_compressed_kv_ms,
+                sum_pre_ep_attention_state_ms,
+                sum_pre_ep_typed_history_ms,
+                sum_pre_ep_raw_read_ms,
+                sum_pre_ep_attention_output_ms,
+                sum_pre_ep_post_attention_ffn_input_ms,
                 opt.final_hc_carry_gate ? 1 : 0, sum_final_hc_ms,
                 wall_ms, (unsigned long long)checksum);
     if (opt.serving_bench || serving_result) {

@@ -66,6 +66,16 @@ the EP/dense/compose timer begins. The next optimization target should be that
 true-attention/compressed-KV prefix, especially compressed projection/store and
 dense-fill/WMMA fragmentation, not more HC-current gather work.
 
+Sprint 351 split that true-attention/compressed-KV prefix. The V100 direct
+32-slot / 256K / 2-step run passed with finite output head, `83.265760`
+generated tok/s decode, and `99.612333` continuation tok/s decode. The old
+broad `sum_hc_current_input_ms` was `626.823138` ms, and the measured prefix
+stages now account for `626.787298` ms of it: compressed KV projection/store
+`228.813152`, attention projection `170.865666`, attention state
+`105.654904`, HC-current `85.249101`, raw/window read `34.932798`, and typed
+history load `1.271677`. The next optimization target is therefore compressed
+KV projection/store fragmentation first, then attention projection/state.
+
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
 TP runtime, sharded KV, rank buffers, TurboMind API handles, active MXFP4
