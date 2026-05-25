@@ -627,6 +627,7 @@ struct Options {
     bool true_ds4_indexer_attention_gate = false;
     bool true_ds4_compressed_kv_fused_input_fill_gate = false;
     bool true_ds4_compressed_kv_fused_rope_round_gate = false;
+    bool true_ds4_compressed_kv_fused_pool_norm_gate = false;
     bool true_ds4_compressed_reference_diff_gate = false;
     bool cuda_profiler_window = false;
     uint32_t true_ds4_attention_raw_valid_rows = 1;
@@ -1592,6 +1593,117 @@ __global__ void compressor_norm_emit_slots_kernel(float *rows,
     for (uint32_t d = threadIdx.x; d < head_dim; d += blockDim.x) {
         const float v = row[d];
         const float y = isfinite(v) ? v * scale * weight[d] : 0.0f;
+        row[d] = isfinite(y) ? y : 0.0f;
+    }
+}
+
+__device__ float compressor_pool_value_one_dim(const float *state_kv,
+                                               const float *state_score,
+                                               uint32_t head_dim,
+                                               uint32_t ratio,
+                                               uint32_t max_state_rows,
+                                               uint32_t max_width,
+                                               uint64_t slot_base,
+                                               uint32_t d) {
+    float max_s = -INFINITY;
+    if (ratio == 4u) {
+        for (uint32_t r = 0; r < 4u; ++r) {
+            max_s = fmaxf(max_s,
+                          state_score[slot_base + (uint64_t)r * max_width + d]);
+        }
+        for (uint32_t r = 0; r < 4u; ++r) {
+            const uint64_t off =
+                slot_base + (uint64_t)(ratio + r) * max_width + head_dim + d;
+            max_s = fmaxf(max_s, state_score[off]);
+        }
+    } else {
+        for (uint32_t r = 0; r < ratio && r < 128u; ++r) {
+            max_s = fmaxf(max_s,
+                          state_score[slot_base + (uint64_t)r * max_width + d]);
+        }
+    }
+
+    float den = 0.0f;
+    float acc = 0.0f;
+    if (ratio == 4u) {
+        for (uint32_t r = 0; r < 4u; ++r) {
+            const uint64_t off = slot_base + (uint64_t)r * max_width + d;
+            const float w = expf(state_score[off] - max_s);
+            den += w;
+            acc += state_kv[off] * w;
+        }
+        for (uint32_t r = 0; r < 4u; ++r) {
+            const uint64_t off =
+                slot_base + (uint64_t)(ratio + r) * max_width + head_dim + d;
+            const float w = expf(state_score[off] - max_s);
+            den += w;
+            acc += state_kv[off] * w;
+        }
+    } else {
+        for (uint32_t r = 0; r < ratio && r < 128u; ++r) {
+            const uint64_t off = slot_base + (uint64_t)r * max_width + d;
+            const float w = expf(state_score[off] - max_s);
+            den += w;
+            acc += state_kv[off] * w;
+        }
+    }
+    return den != 0.0f && isfinite(acc) ? acc / den : 0.0f;
+}
+
+__global__ void compressor_pool_norm_emit_slots_kernel(float *rows,
+                                                       const float *state_kv,
+                                                       const float *state_score,
+                                                       const float *weight,
+                                                       uint32_t slots,
+                                                       uint32_t head_dim,
+                                                       uint32_t ratio,
+                                                       uint32_t comp_row,
+                                                       uint32_t row_cap,
+                                                       uint32_t max_state_rows,
+                                                       uint32_t max_width,
+                                                       float eps) {
+    const uint32_t slot = blockIdx.x;
+    if (slot >= slots || head_dim > 512u || comp_row >= row_cap || ratio == 0u) {
+        return;
+    }
+    const uint32_t coff = ratio == 4u ? 2u : 1u;
+    const uint32_t width = coff * head_dim;
+    if (width > max_width) return;
+
+    __shared__ float pooled[512];
+    const uint64_t slot_base =
+        (uint64_t)slot * max_state_rows * (uint64_t)max_width;
+    float local_max = 0.0f;
+    for (uint32_t d = threadIdx.x; d < head_dim; d += blockDim.x) {
+        const float v = compressor_pool_value_one_dim(
+            state_kv, state_score, head_dim, ratio, max_state_rows, max_width,
+            slot_base, d);
+        pooled[d] = v;
+        if (isfinite(v)) local_max = fmaxf(local_max, fabsf(v));
+    }
+    __syncthreads();
+
+    const float max_abs = block_max_256_f32(local_max);
+    float sum = 0.0f;
+    if (max_abs > 0.0f && isfinite(max_abs)) {
+        for (uint32_t d = threadIdx.x; d < head_dim; d += blockDim.x) {
+            const float v = pooled[d];
+            if (isfinite(v)) {
+                const float scaled = v / max_abs;
+                sum += scaled * scaled;
+            }
+        }
+    }
+    sum = block_sum_256_f32(sum);
+    float scale = rsqrtf(eps);
+    if (max_abs > 0.0f && isfinite(max_abs)) {
+        scale = rsqrtf(sum / (float)head_dim + eps / (max_abs * max_abs)) / max_abs;
+    }
+
+    float *row = rows + ((uint64_t)slot * row_cap + comp_row) *
+                           (uint64_t)head_dim;
+    for (uint32_t d = threadIdx.x; d < head_dim; d += blockDim.x) {
+        const float y = isfinite(pooled[d]) ? pooled[d] * scale * weight[d] : 0.0f;
         row[d] = isfinite(y) ? y : 0.0f;
     }
 }
@@ -2750,6 +2862,7 @@ void usage(const char *argv0) {
                  "       [--true-ds4-indexer-attention-gate]\n"
                  "       [--true-ds4-compressed-kv-fused-input-fill-gate]\n"
                  "       [--true-ds4-compressed-kv-fused-rope-round-gate]\n"
+                 "       [--true-ds4-compressed-kv-fused-pool-norm-gate]\n"
                  "       [--true-ds4-compressed-reference-diff-gate]\n"
                  "       [--reference-hc-reduce-gate]\n"
                  "       [--reference-hc-state-guard-gate]\n"
@@ -3107,6 +3220,15 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--true-ds4-compressed-kv-fused-pool-norm-gate") == 0) {
+            opt->true_ds4_compressed_kv_fused_pool_norm_gate = true;
+            opt->true_ds4_compressed_kv_gate = true;
+            opt->true_ds4_attention_state_gate = true;
+            opt->true_ds4_attention_projection_gate = true;
+            opt->true_ds4_attention_residency_gate = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--true-ds4-compressed-reference-diff-gate") == 0) {
             opt->true_ds4_compressed_reference_diff_gate = true;
             opt->true_ds4_indexer_attention_gate = true;
@@ -3214,6 +3336,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
            (!opt->true_ds4_compressed_kv_fused_rope_round_gate ||
             (opt->true_ds4_compressed_kv_gate &&
              opt->true_ds4_attention_rope_gate)) &&
+           (!opt->true_ds4_compressed_kv_fused_pool_norm_gate ||
+            opt->true_ds4_compressed_kv_gate) &&
            (!opt->true_ds4_compressed_reference_diff_gate ||
             opt->true_ds4_indexer_attention_gate) &&
            !(opt->dense_compute_tensor &&
@@ -8209,6 +8333,8 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
     const bool fused_rope_round =
         opt.true_ds4_compressed_kv_fused_rope_round_gate &&
         opt.true_ds4_attention_rope_gate && emitted;
+    const bool fused_pool_norm =
+        opt.true_ds4_compressed_kv_fused_pool_norm_gate && emitted;
     for (int rank = 0; rank < kGpus; ++rank) {
         RankState &r = ranks[rank];
         CHECK_CUDA(cudaSetDevice(r.device));
@@ -8372,20 +8498,31 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             if (rank == 0) emitted_comp_row = comp_row;
             r.attn_comp_row_position_layers[layer][comp_row] = opt.position;
             r.attn_comp_row_loaded_layers[layer][comp_row] = false;
-            compressor_pool_emit_slots_kernel<<<
-                dim3((unsigned int)((kHeadDim + block - 1) / block),
-                     (unsigned int)opt.slots, 1u),
-                block, 0, r.stream>>>(
-                r.d_attn_comp_rows, r.d_attn_comp_state_kv,
-                r.d_attn_comp_state_score, (uint32_t)opt.slots,
-                (uint32_t)kHeadDim, (uint32_t)ratio, comp_row,
-                (uint32_t)kBoundedCompRows, (uint32_t)kCompStateRowsMax,
-                (uint32_t)kCompWidthMax);
-            compressor_norm_emit_slots_kernel<<<(unsigned int)opt.slots, 256, 0,
-                                                r.stream>>>(
-                r.d_attn_comp_rows, hc->d_attn_compress_norm[layer],
-                (uint32_t)opt.slots, (uint32_t)kHeadDim, comp_row,
-                (uint32_t)kBoundedCompRows, 1.0e-6f);
+            if (fused_pool_norm) {
+                compressor_pool_norm_emit_slots_kernel<<<
+                    (unsigned int)opt.slots, 256, 0, r.stream>>>(
+                    r.d_attn_comp_rows, r.d_attn_comp_state_kv,
+                    r.d_attn_comp_state_score, hc->d_attn_compress_norm[layer],
+                    (uint32_t)opt.slots, (uint32_t)kHeadDim, (uint32_t)ratio,
+                    comp_row, (uint32_t)kBoundedCompRows,
+                    (uint32_t)kCompStateRowsMax, (uint32_t)kCompWidthMax,
+                    1.0e-6f);
+            } else {
+                compressor_pool_emit_slots_kernel<<<
+                    dim3((unsigned int)((kHeadDim + block - 1) / block),
+                         (unsigned int)opt.slots, 1u),
+                    block, 0, r.stream>>>(
+                    r.d_attn_comp_rows, r.d_attn_comp_state_kv,
+                    r.d_attn_comp_state_score, (uint32_t)opt.slots,
+                    (uint32_t)kHeadDim, (uint32_t)ratio, comp_row,
+                    (uint32_t)kBoundedCompRows, (uint32_t)kCompStateRowsMax,
+                    (uint32_t)kCompWidthMax);
+                compressor_norm_emit_slots_kernel<<<(unsigned int)opt.slots, 256,
+                                                    0, r.stream>>>(
+                    r.d_attn_comp_rows, hc->d_attn_compress_norm[layer],
+                    (uint32_t)opt.slots, (uint32_t)kHeadDim, comp_row,
+                    (uint32_t)kBoundedCompRows, 1.0e-6f);
+            }
             if (fused_rope_round) {
                 rope_tail_round_comp_emit_slots_kernel<<<
                     (unsigned int)opt.slots, 256, 0, r.stream>>>(
@@ -8779,20 +8916,33 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 const uint32_t visible_after =
                     std::min(r.index_comp_rows_written_layers[layer] + 1u,
                              (uint32_t)kBoundedCompRows);
-                compressor_pool_emit_slots_kernel<<<
-                    dim3((unsigned int)((kIndexerHeadDim + block - 1) / block),
-                         (unsigned int)opt.slots, 1u),
-                    block, 0, r.stream>>>(
-                    r.d_index_comp_rows, r.d_index_comp_state_kv,
-                    r.d_index_comp_state_score, (uint32_t)opt.slots,
-                    (uint32_t)kIndexerHeadDim, 4u, comp_row,
-                    (uint32_t)kBoundedCompRows, (uint32_t)kIndexCompStateRows,
-                    (uint32_t)kIndexCompWidth);
-                compressor_norm_emit_slots_kernel<<<(unsigned int)opt.slots, 256,
-                                                    0, r.stream>>>(
-                    r.d_index_comp_rows, hc->d_indexer_compress_norm[layer],
-                    (uint32_t)opt.slots, (uint32_t)kIndexerHeadDim, comp_row,
-                    (uint32_t)kBoundedCompRows, 1.0e-6f);
+                if (fused_pool_norm) {
+                    compressor_pool_norm_emit_slots_kernel<<<
+                        (unsigned int)opt.slots, 256, 0, r.stream>>>(
+                        r.d_index_comp_rows, r.d_index_comp_state_kv,
+                        r.d_index_comp_state_score,
+                        hc->d_indexer_compress_norm[layer],
+                        (uint32_t)opt.slots, (uint32_t)kIndexerHeadDim, 4u,
+                        comp_row, (uint32_t)kBoundedCompRows,
+                        (uint32_t)kIndexCompStateRows,
+                        (uint32_t)kIndexCompWidth, 1.0e-6f);
+                } else {
+                    compressor_pool_emit_slots_kernel<<<
+                        dim3((unsigned int)((kIndexerHeadDim + block - 1) / block),
+                             (unsigned int)opt.slots, 1u),
+                        block, 0, r.stream>>>(
+                        r.d_index_comp_rows, r.d_index_comp_state_kv,
+                        r.d_index_comp_state_score, (uint32_t)opt.slots,
+                        (uint32_t)kIndexerHeadDim, 4u, comp_row,
+                        (uint32_t)kBoundedCompRows,
+                        (uint32_t)kIndexCompStateRows,
+                        (uint32_t)kIndexCompWidth);
+                    compressor_norm_emit_slots_kernel<<<(unsigned int)opt.slots,
+                                                        256, 0, r.stream>>>(
+                        r.d_index_comp_rows, hc->d_indexer_compress_norm[layer],
+                        (uint32_t)opt.slots, (uint32_t)kIndexerHeadDim, comp_row,
+                        (uint32_t)kBoundedCompRows, 1.0e-6f);
+                }
                 if (fused_rope_round) {
                     rope_tail_round_comp_emit_slots_kernel<<<
                         (unsigned int)opt.slots, 256, 0, r.stream>>>(
@@ -9099,7 +9249,8 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 "indexer_dense_ms\t%.6f\tindexer_gather_rope_ms\t%.6f\t"
                 "indexer_state_emit_ms\t%.6f\tindexer_typed_score_ms\t%.6f\t"
                 "reference_diff_ms\t%.6f\tratio_shift_ms\t%.6f\t"
-                "fused_input_fill\t%d\tfused_rope_round\t%d\tms\t%.6f\tPASS\n",
+                "fused_input_fill\t%d\tfused_rope_round\t%d\t"
+                "fused_pool_norm\t%d\tms\t%.6f\tPASS\n",
                 layer, opt.slots, ratio, emitted, visible, indexer_topk,
                 comp_width, attn_kv_stats.max_abs, attn_kv_stats.finite_bad,
                 attn_gate_stats.max_abs, attn_gate_stats.finite_bad,
@@ -9113,7 +9264,8 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 indexer_state_emit_ms, indexer_typed_score_ms,
                 reference_diff_ms, ratio_shift_ms,
                 fused_ratio4_current_fill ? 1 : 0,
-                fused_rope_round ? 1 : 0, ms);
+                fused_rope_round ? 1 : 0,
+                fused_pool_norm ? 1 : 0, ms);
     return (attn_kv_stats.finite_bad || attn_gate_stats.finite_bad ||
             index_q_stats.finite_bad || index_w_stats.finite_bad ||
             index_kv_stats.finite_bad || index_gate_stats.finite_bad) ? 8 : 0;

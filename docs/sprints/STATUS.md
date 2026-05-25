@@ -116,6 +116,19 @@ decode regressed within noise. This gate remains diagnostic-only; the next
 state/emit work should target pooling+normalization or store+pooling rather
 than RoPE+round alone.
 
+Sprint 355 tested that larger pooling+normalization boundary with
+`--true-ds4-compressed-kv-fused-pool-norm-gate` /
+`--fused-compressed-pool-norm`. The fused kernel computes each emitted
+compressor row into shared memory, normalizes it in the same block, and writes
+only the normalized row. V100 same-binary emitted-row A/B at `32` slots /
+`256K` passed with identical output token `54639`. Control measured
+`81.189757` generated decode tok/s, `131.016911` ms pre-EP compressed-KV
+time, and `130.510967` ms compressed-KV sum. Fused pool+norm selected `41`
+emitted layers and measured `81.687107` tok/s, `128.201681` ms pre-EP
+compressed-KV time, and `127.736989` ms compressed-KV sum. This is a real
+stage-level win but only `+0.61%` topline in one run, so it remains opt-in
+pending repeat/combination testing with fused input fill.
+
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
 TP runtime, sharded KV, rank buffers, TurboMind API handles, active MXFP4
