@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 347
+revision: 348
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -229,6 +229,20 @@ not a serial layer-chain.
   formatting is not the main bottleneck. The next target is the typed row API
   shape itself: per-slot row calls, per-rank row kernels, broad device
   synchronizations, and hot-loop typed-history bookkeeping.
+- Sprint 343 batched the typed row API across slots. The runtime now exposes
+  `ds4_v100_tp_runtime_kv_rows_store_f32_device` and
+  `ds4_v100_tp_runtime_kv_rows_load_f32_device`, and the serving path can use
+  them with `DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_BATCH_ROWS=1` for
+  raw-SWA current rows, emitted compressed-attention rows, emitted ratio-4
+  indexer rows, and typed-history reloads. In the same `32` concurrent /
+  `32` slot / `256K` / `8` token HTTP A/B, control measured `303.282600`
+  wall tok/s / `735.908031` decode tok/s, typed-quiet measured `73.452667` /
+  `86.332914`, and typed-batch-rows-quiet measured `79.984163` /
+  `95.624885`. Batching gives a real `+8.9%` wall and `+10.8%` decode
+  improvement versus typed-quiet, but the remaining gap to control is still
+  large. The next target is broad device synchronization/order around typed row
+  work, ideally replacing device-wide barriers with stream-ordered row stores
+  and loads.
 - The system is not production-ready yet because the bridge HC sequence has
   not been proven equivalent to the DeepSeek V4 reference layer semantics, and
   production serving still needs readiness/overload/cancellation/streaming

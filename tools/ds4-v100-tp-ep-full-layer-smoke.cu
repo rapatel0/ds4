@@ -568,6 +568,7 @@ struct Options {
     bool true_ds4_attention_typed_kv_skip_compressed_store_gate = false;
     bool true_ds4_attention_typed_kv_skip_indexer_store_gate = false;
     bool true_ds4_attention_typed_kv_quiet_gate = false;
+    bool true_ds4_attention_typed_kv_batch_rows_gate = false;
     bool true_ds4_attention_output_gate = false;
     bool true_ds4_post_attention_ffn_input_gate = false;
     bool true_ds4_compressed_kv_gate = false;
@@ -2525,6 +2526,7 @@ void usage(const char *argv0) {
                  "       [--true-ds4-attention-typed-kv-skip-compressed-store-gate]\n"
                  "       [--true-ds4-attention-typed-kv-skip-indexer-store-gate]\n"
                  "       [--true-ds4-attention-typed-kv-quiet-gate]\n"
+                 "       [--true-ds4-attention-typed-kv-batch-rows-gate]\n"
                  "       [--true-ds4-attention-output-gate]\n"
                  "       [--true-ds4-post-attention-ffn-input-gate]\n"
                  "       [--true-ds4-compressed-kv-gate]\n"
@@ -2811,6 +2813,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->true_ds4_attention_typed_kv_skip_indexer_store_gate = true;
         } else if (std::strcmp(arg, "--true-ds4-attention-typed-kv-quiet-gate") == 0) {
             opt->true_ds4_attention_typed_kv_quiet_gate = true;
+        } else if (std::strcmp(arg, "--true-ds4-attention-typed-kv-batch-rows-gate") == 0) {
+            opt->true_ds4_attention_typed_kv_batch_rows_gate = true;
         } else if (std::strcmp(arg, "--true-ds4-attention-output-gate") == 0) {
             opt->true_ds4_attention_output_gate = true;
             opt->true_ds4_attention_raw_window_gate = true;
@@ -2929,6 +2933,11 @@ bool parse_args(int argc, char **argv, Options *opt) {
            (!opt->true_ds4_attention_typed_kv_skip_indexer_store_gate ||
             opt->true_ds4_attention_typed_kv_indexer_gate) &&
            (!opt->true_ds4_attention_typed_kv_quiet_gate ||
+            (opt->true_ds4_attention_typed_kv_raw_gate ||
+             opt->true_ds4_attention_typed_kv_compressed_gate ||
+             opt->true_ds4_attention_typed_kv_indexer_gate ||
+             opt->true_ds4_attention_typed_kv_history_gate)) &&
+           (!opt->true_ds4_attention_typed_kv_batch_rows_gate ||
             (opt->true_ds4_attention_typed_kv_raw_gate ||
              opt->true_ds4_attention_typed_kv_compressed_gate ||
              opt->true_ds4_attention_typed_kv_indexer_gate ||
@@ -8037,23 +8046,43 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
         }
         int current_store = 0;
         if (!opt.true_ds4_attention_typed_kv_skip_compressed_store_gate) {
-            for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
+            if (opt.true_ds4_attention_typed_kv_batch_rows_gate) {
                 const void *src[kGpus] = {};
                 const size_t row_offset =
-                    ((size_t)slot * (size_t)kBoundedCompRows +
-                     (size_t)emitted_comp_row) *
-                    (size_t)kHeadDim;
+                    (size_t)emitted_comp_row * (size_t)kHeadDim;
                 for (int rank = 0; rank < kGpus; ++rank) {
                     src[rank] = ranks[rank].d_attn_comp_rows + row_offset;
                 }
-                if (ds4_v100_tp_runtime_kv_row_store_f32_device(
-                        rt, layer, slot, opt.position, DS4_V100_TP_KV_ROW_ATTN, src,
+                if (ds4_v100_tp_runtime_kv_rows_store_f32_device(
+                        rt, layer, 0, (uint32_t)opt.slots, opt.position,
+                        DS4_V100_TP_KV_ROW_ATTN, src,
+                        (uint64_t)kBoundedCompRows * (uint64_t)kHeadDim,
                         err, sizeof(err)) != 0) {
                     std::fprintf(stderr,
                                  "tp_ep_true_attention_typed_kv_compressed_store_failed\t"
-                                 "layer\t%d\tslot\t%u\t%s\n",
-                                 layer, slot, err);
+                                 "layer\t%d\tmode\tbatched\t%s\n",
+                                 layer, err);
                     return 16;
+                }
+            } else {
+                for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
+                    const void *src[kGpus] = {};
+                    const size_t row_offset =
+                        ((size_t)slot * (size_t)kBoundedCompRows +
+                         (size_t)emitted_comp_row) *
+                        (size_t)kHeadDim;
+                    for (int rank = 0; rank < kGpus; ++rank) {
+                        src[rank] = ranks[rank].d_attn_comp_rows + row_offset;
+                    }
+                    if (ds4_v100_tp_runtime_kv_row_store_f32_device(
+                            rt, layer, slot, opt.position, DS4_V100_TP_KV_ROW_ATTN,
+                            src, err, sizeof(err)) != 0) {
+                        std::fprintf(stderr,
+                                     "tp_ep_true_attention_typed_kv_compressed_store_failed\t"
+                                     "layer\t%d\tslot\t%u\t%s\n",
+                                     layer, slot, err);
+                        return 16;
+                    }
                 }
             }
             current_store = 1;
@@ -8065,23 +8094,43 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
         int current_load = 0;
         if (!opt.true_ds4_attention_typed_kv_skip_current_load_gate &&
             current_store) {
-            for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
+            if (opt.true_ds4_attention_typed_kv_batch_rows_gate) {
                 void *dst[kGpus] = {};
                 const size_t row_offset =
-                    ((size_t)slot * (size_t)kBoundedCompRows +
-                     (size_t)emitted_comp_row) *
-                    (size_t)kHeadDim;
+                    (size_t)emitted_comp_row * (size_t)kHeadDim;
                 for (int rank = 0; rank < kGpus; ++rank) {
                     dst[rank] = ranks[rank].d_attn_comp_rows + row_offset;
                 }
-                if (ds4_v100_tp_runtime_kv_row_load_f32_device(
-                        rt, layer, slot, opt.position, DS4_V100_TP_KV_ROW_ATTN, dst,
+                if (ds4_v100_tp_runtime_kv_rows_load_f32_device(
+                        rt, layer, 0, (uint32_t)opt.slots, opt.position,
+                        DS4_V100_TP_KV_ROW_ATTN, dst,
+                        (uint64_t)kBoundedCompRows * (uint64_t)kHeadDim,
                         err, sizeof(err)) != 0) {
                     std::fprintf(stderr,
                                  "tp_ep_true_attention_typed_kv_compressed_load_failed\t"
-                                 "layer\t%d\tslot\t%u\t%s\n",
-                                 layer, slot, err);
+                                 "layer\t%d\tmode\tbatched\t%s\n",
+                                 layer, err);
                     return 17;
+                }
+            } else {
+                for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
+                    void *dst[kGpus] = {};
+                    const size_t row_offset =
+                        ((size_t)slot * (size_t)kBoundedCompRows +
+                         (size_t)emitted_comp_row) *
+                        (size_t)kHeadDim;
+                    for (int rank = 0; rank < kGpus; ++rank) {
+                        dst[rank] = ranks[rank].d_attn_comp_rows + row_offset;
+                    }
+                    if (ds4_v100_tp_runtime_kv_row_load_f32_device(
+                            rt, layer, slot, opt.position, DS4_V100_TP_KV_ROW_ATTN,
+                            dst, err, sizeof(err)) != 0) {
+                        std::fprintf(stderr,
+                                     "tp_ep_true_attention_typed_kv_compressed_load_failed\t"
+                                     "layer\t%d\tslot\t%u\t%s\n",
+                                     layer, slot, err);
+                        return 17;
+                    }
                 }
             }
             current_load = 1;
@@ -8390,24 +8439,44 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                          (uint32_t)kBoundedCompRows);
             int current_store = 0;
             if (!opt.true_ds4_attention_typed_kv_skip_indexer_store_gate) {
-                for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
+                if (opt.true_ds4_attention_typed_kv_batch_rows_gate) {
                     const void *src[kGpus] = {};
                     const size_t row_offset =
-                        ((size_t)slot * (size_t)kBoundedCompRows +
-                         (size_t)bounded_row) *
-                        (size_t)kIndexerHeadDim;
+                        (size_t)bounded_row * (size_t)kIndexerHeadDim;
                     for (int rank = 0; rank < kGpus; ++rank) {
                         src[rank] = ranks[rank].d_index_comp_rows + row_offset;
                     }
-                    if (ds4_v100_tp_runtime_kv_row_store_f32_device(
-                            rt, layer, slot, opt.position,
-                            DS4_V100_TP_KV_ROW_INDEXER, src, err,
-                            sizeof(err)) != 0) {
+                    if (ds4_v100_tp_runtime_kv_rows_store_f32_device(
+                            rt, layer, 0, (uint32_t)opt.slots, opt.position,
+                            DS4_V100_TP_KV_ROW_INDEXER, src,
+                            (uint64_t)kBoundedCompRows * (uint64_t)kIndexerHeadDim,
+                            err, sizeof(err)) != 0) {
                         std::fprintf(stderr,
                                      "tp_ep_true_attention_typed_kv_indexer_store_failed\t"
-                                     "layer\t%d\tslot\t%u\t%s\n",
-                                     layer, slot, err);
+                                     "layer\t%d\tmode\tbatched\t%s\n",
+                                     layer, err);
                         return 20;
+                    }
+                } else {
+                    for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
+                        const void *src[kGpus] = {};
+                        const size_t row_offset =
+                            ((size_t)slot * (size_t)kBoundedCompRows +
+                             (size_t)bounded_row) *
+                            (size_t)kIndexerHeadDim;
+                        for (int rank = 0; rank < kGpus; ++rank) {
+                            src[rank] = ranks[rank].d_index_comp_rows + row_offset;
+                        }
+                        if (ds4_v100_tp_runtime_kv_row_store_f32_device(
+                                rt, layer, slot, opt.position,
+                                DS4_V100_TP_KV_ROW_INDEXER, src, err,
+                                sizeof(err)) != 0) {
+                            std::fprintf(stderr,
+                                         "tp_ep_true_attention_typed_kv_indexer_store_failed\t"
+                                         "layer\t%d\tslot\t%u\t%s\n",
+                                         layer, slot, err);
+                            return 20;
+                        }
                     }
                 }
                 current_store = 1;
@@ -8419,24 +8488,44 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             int current_load = 0;
             if (!opt.true_ds4_attention_typed_kv_skip_current_load_gate &&
                 current_store) {
-                for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
+                if (opt.true_ds4_attention_typed_kv_batch_rows_gate) {
                     void *dst[kGpus] = {};
                     const size_t row_offset =
-                        ((size_t)slot * (size_t)kBoundedCompRows +
-                         (size_t)bounded_row) *
-                        (size_t)kIndexerHeadDim;
+                        (size_t)bounded_row * (size_t)kIndexerHeadDim;
                     for (int rank = 0; rank < kGpus; ++rank) {
                         dst[rank] = ranks[rank].d_index_comp_rows + row_offset;
                     }
-                    if (ds4_v100_tp_runtime_kv_row_load_f32_device(
-                            rt, layer, slot, opt.position,
-                            DS4_V100_TP_KV_ROW_INDEXER, dst, err,
-                            sizeof(err)) != 0) {
+                    if (ds4_v100_tp_runtime_kv_rows_load_f32_device(
+                            rt, layer, 0, (uint32_t)opt.slots, opt.position,
+                            DS4_V100_TP_KV_ROW_INDEXER, dst,
+                            (uint64_t)kBoundedCompRows * (uint64_t)kIndexerHeadDim,
+                            err, sizeof(err)) != 0) {
                         std::fprintf(stderr,
                                      "tp_ep_true_attention_typed_kv_indexer_load_failed\t"
-                                     "layer\t%d\tslot\t%u\t%s\n",
-                                     layer, slot, err);
+                                     "layer\t%d\tmode\tbatched\t%s\n",
+                                     layer, err);
                         return 21;
+                    }
+                } else {
+                    for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
+                        void *dst[kGpus] = {};
+                        const size_t row_offset =
+                            ((size_t)slot * (size_t)kBoundedCompRows +
+                             (size_t)bounded_row) *
+                            (size_t)kIndexerHeadDim;
+                        for (int rank = 0; rank < kGpus; ++rank) {
+                            dst[rank] = ranks[rank].d_index_comp_rows + row_offset;
+                        }
+                        if (ds4_v100_tp_runtime_kv_row_load_f32_device(
+                                rt, layer, slot, opt.position,
+                                DS4_V100_TP_KV_ROW_INDEXER, dst, err,
+                                sizeof(err)) != 0) {
+                            std::fprintf(stderr,
+                                         "tp_ep_true_attention_typed_kv_indexer_load_failed\t"
+                                         "layer\t%d\tslot\t%u\t%s\n",
+                                         layer, slot, err);
+                            return 21;
+                        }
                     }
                 }
                 current_load = 1;
@@ -8685,20 +8774,38 @@ int run_true_ds4_attention_state_update(const Options &opt,
         }
         int current_store = 0;
         if (!opt.true_ds4_attention_typed_kv_skip_raw_store_gate) {
-            for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
+            if (opt.true_ds4_attention_typed_kv_batch_rows_gate) {
                 const void *src[kGpus] = {};
                 for (int rank = 0; rank < kGpus; ++rank) {
-                    src[rank] = ranks[rank].d_attn_kv_full +
-                                (size_t)slot * (size_t)kHeadDim;
+                    src[rank] = ranks[rank].d_attn_kv_full;
                 }
-                if (ds4_v100_tp_runtime_kv_row_store_f32_device(
-                        rt, layer, slot, opt.position, DS4_V100_TP_KV_ROW_ATTN_RAW,
-                        src, err, sizeof(err)) != 0) {
+                if (ds4_v100_tp_runtime_kv_rows_store_f32_device(
+                        rt, layer, 0, (uint32_t)opt.slots, opt.position,
+                        DS4_V100_TP_KV_ROW_ATTN_RAW, src, (uint64_t)kHeadDim,
+                        err, sizeof(err)) != 0) {
                     std::fprintf(stderr,
                                  "tp_ep_true_attention_typed_kv_raw_store_failed\t"
-                                 "layer\t%d\tslot\t%u\t%s\n",
-                                 layer, slot, err);
+                                 "layer\t%d\tmode\tbatched\t%s\n",
+                                 layer, err);
                     return 6;
+                }
+            } else {
+                for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
+                    const void *src[kGpus] = {};
+                    for (int rank = 0; rank < kGpus; ++rank) {
+                        src[rank] = ranks[rank].d_attn_kv_full +
+                                    (size_t)slot * (size_t)kHeadDim;
+                    }
+                    if (ds4_v100_tp_runtime_kv_row_store_f32_device(
+                            rt, layer, slot, opt.position,
+                            DS4_V100_TP_KV_ROW_ATTN_RAW, src, err,
+                            sizeof(err)) != 0) {
+                        std::fprintf(stderr,
+                                     "tp_ep_true_attention_typed_kv_raw_store_failed\t"
+                                     "layer\t%d\tslot\t%u\t%s\n",
+                                     layer, slot, err);
+                        return 6;
+                    }
                 }
             }
             current_store = 1;
@@ -8710,22 +8817,43 @@ int run_true_ds4_attention_state_update(const Options &opt,
         int current_load = 0;
         if (!opt.true_ds4_attention_typed_kv_skip_current_load_gate &&
             current_store) {
-            for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
+            if (opt.true_ds4_attention_typed_kv_batch_rows_gate) {
                 void *dst[kGpus] = {};
                 const size_t row_offset =
-                    ((size_t)slot * (size_t)kRawSwaRows + (size_t)raw_row) *
-                    (size_t)kHeadDim;
+                    (size_t)raw_row * (size_t)kHeadDim;
                 for (int rank = 0; rank < kGpus; ++rank) {
                     dst[rank] = ranks[rank].d_attn_raw_swa + row_offset;
                 }
-                if (ds4_v100_tp_runtime_kv_row_load_f32_device(
-                        rt, layer, slot, opt.position, DS4_V100_TP_KV_ROW_ATTN_RAW,
-                        dst, err, sizeof(err)) != 0) {
+                if (ds4_v100_tp_runtime_kv_rows_load_f32_device(
+                        rt, layer, 0, (uint32_t)opt.slots, opt.position,
+                        DS4_V100_TP_KV_ROW_ATTN_RAW, dst,
+                        (uint64_t)kRawSwaRows * (uint64_t)kHeadDim,
+                        err, sizeof(err)) != 0) {
                     std::fprintf(stderr,
                                  "tp_ep_true_attention_typed_kv_raw_load_failed\t"
-                                 "layer\t%d\tslot\t%u\t%s\n",
-                                 layer, slot, err);
+                                 "layer\t%d\tmode\tbatched\t%s\n",
+                                 layer, err);
                     return 7;
+                }
+            } else {
+                for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
+                    void *dst[kGpus] = {};
+                    const size_t row_offset =
+                        ((size_t)slot * (size_t)kRawSwaRows + (size_t)raw_row) *
+                        (size_t)kHeadDim;
+                    for (int rank = 0; rank < kGpus; ++rank) {
+                        dst[rank] = ranks[rank].d_attn_raw_swa + row_offset;
+                    }
+                    if (ds4_v100_tp_runtime_kv_row_load_f32_device(
+                            rt, layer, slot, opt.position,
+                            DS4_V100_TP_KV_ROW_ATTN_RAW, dst, err,
+                            sizeof(err)) != 0) {
+                        std::fprintf(stderr,
+                                     "tp_ep_true_attention_typed_kv_raw_load_failed\t"
+                                     "layer\t%d\tslot\t%u\t%s\n",
+                                     layer, slot, err);
+                        return 7;
+                    }
                 }
             }
             current_load = 1;
@@ -8842,22 +8970,42 @@ int run_true_ds4_attention_typed_kv_history_load(const Options &opt,
             loaded_attn++;
             continue;
         }
-        for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
+        if (opt.true_ds4_attention_typed_kv_batch_rows_gate) {
             void *dst[kGpus] = {};
             const size_t row_offset =
-                ((size_t)slot * (size_t)kBoundedCompRows + (size_t)row) *
-                (size_t)kHeadDim;
+                (size_t)row * (size_t)kHeadDim;
             for (int rank = 0; rank < kGpus; ++rank) {
                 dst[rank] = ranks[rank].d_attn_comp_rows + row_offset;
             }
-            if (ds4_v100_tp_runtime_kv_row_load_f32_device(
-                    rt, layer, slot, pos, DS4_V100_TP_KV_ROW_ATTN, dst, err,
-                    sizeof(err)) != 0) {
+            if (ds4_v100_tp_runtime_kv_rows_load_f32_device(
+                    rt, layer, 0, (uint32_t)opt.slots, pos,
+                    DS4_V100_TP_KV_ROW_ATTN, dst,
+                    (uint64_t)kBoundedCompRows * (uint64_t)kHeadDim,
+                    err, sizeof(err)) != 0) {
                 std::fprintf(stderr,
                              "tp_ep_true_attention_typed_kv_history_attn_load_failed\t"
-                             "layer\t%d\trow\t%u\tslot\t%u\tposition\t%llu\t%s\n",
-                             layer, row, slot, (unsigned long long)pos, err);
+                             "layer\t%d\trow\t%u\tmode\tbatched\tposition\t%llu\t%s\n",
+                             layer, row, (unsigned long long)pos, err);
                 return 2;
+            }
+        } else {
+            for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
+                void *dst[kGpus] = {};
+                const size_t row_offset =
+                    ((size_t)slot * (size_t)kBoundedCompRows + (size_t)row) *
+                    (size_t)kHeadDim;
+                for (int rank = 0; rank < kGpus; ++rank) {
+                    dst[rank] = ranks[rank].d_attn_comp_rows + row_offset;
+                }
+                if (ds4_v100_tp_runtime_kv_row_load_f32_device(
+                        rt, layer, slot, pos, DS4_V100_TP_KV_ROW_ATTN, dst, err,
+                        sizeof(err)) != 0) {
+                    std::fprintf(stderr,
+                                 "tp_ep_true_attention_typed_kv_history_attn_load_failed\t"
+                                 "layer\t%d\trow\t%u\tslot\t%u\tposition\t%llu\t%s\n",
+                                 layer, row, slot, (unsigned long long)pos, err);
+                    return 2;
+                }
             }
         }
         loaded_attn++;
@@ -8895,22 +9043,42 @@ int run_true_ds4_attention_typed_kv_history_load(const Options &opt,
                 loaded_indexer++;
                 continue;
             }
-            for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
+            if (opt.true_ds4_attention_typed_kv_batch_rows_gate) {
                 void *dst[kGpus] = {};
                 const size_t row_offset =
-                    ((size_t)slot * (size_t)kBoundedCompRows + (size_t)row) *
-                    (size_t)kIndexerHeadDim;
+                    (size_t)row * (size_t)kIndexerHeadDim;
                 for (int rank = 0; rank < kGpus; ++rank) {
                     dst[rank] = ranks[rank].d_index_comp_rows + row_offset;
                 }
-                if (ds4_v100_tp_runtime_kv_row_load_f32_device(
-                        rt, layer, slot, pos, DS4_V100_TP_KV_ROW_INDEXER, dst,
+                if (ds4_v100_tp_runtime_kv_rows_load_f32_device(
+                        rt, layer, 0, (uint32_t)opt.slots, pos,
+                        DS4_V100_TP_KV_ROW_INDEXER, dst,
+                        (uint64_t)kBoundedCompRows * (uint64_t)kIndexerHeadDim,
                         err, sizeof(err)) != 0) {
                     std::fprintf(stderr,
                                  "tp_ep_true_attention_typed_kv_history_indexer_load_failed\t"
-                                 "layer\t%d\trow\t%u\tslot\t%u\tposition\t%llu\t%s\n",
-                                 layer, row, slot, (unsigned long long)pos, err);
+                                 "layer\t%d\trow\t%u\tmode\tbatched\tposition\t%llu\t%s\n",
+                                 layer, row, (unsigned long long)pos, err);
                     return 4;
+                }
+            } else {
+                for (uint32_t slot = 0; slot < (uint32_t)opt.slots; ++slot) {
+                    void *dst[kGpus] = {};
+                    const size_t row_offset =
+                        ((size_t)slot * (size_t)kBoundedCompRows + (size_t)row) *
+                        (size_t)kIndexerHeadDim;
+                    for (int rank = 0; rank < kGpus; ++rank) {
+                        dst[rank] = ranks[rank].d_index_comp_rows + row_offset;
+                    }
+                    if (ds4_v100_tp_runtime_kv_row_load_f32_device(
+                            rt, layer, slot, pos, DS4_V100_TP_KV_ROW_INDEXER, dst,
+                            err, sizeof(err)) != 0) {
+                        std::fprintf(stderr,
+                                     "tp_ep_true_attention_typed_kv_history_indexer_load_failed\t"
+                                     "layer\t%d\trow\t%u\tslot\t%u\tposition\t%llu\t%s\n",
+                                     layer, row, slot, (unsigned long long)pos, err);
+                        return 4;
+                    }
                 }
             }
             loaded_indexer++;
@@ -12237,6 +12405,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "\"true_ds4_attention_typed_kv_skip_compressed_store_gate\":%d,"
                           "\"true_ds4_attention_typed_kv_skip_indexer_store_gate\":%d,"
                           "\"true_ds4_attention_typed_kv_quiet_gate\":%d,"
+                          "\"true_ds4_attention_typed_kv_batch_rows_gate\":%d,"
                           "\"cache_slots_total\":%zu,"
                           "\"cache_slots_used\":%d,"
                           "\"cache_hits\":%llu,"
@@ -12281,6 +12450,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           base_opt.true_ds4_attention_typed_kv_skip_compressed_store_gate ? 1 : 0,
                           base_opt.true_ds4_attention_typed_kv_skip_indexer_store_gate ? 1 : 0,
                           base_opt.true_ds4_attention_typed_kv_quiet_gate ? 1 : 0,
+                          base_opt.true_ds4_attention_typed_kv_batch_rows_gate ? 1 : 0,
                           sessions.slots.size(),
                           sessions.used(),
                           (unsigned long long)sessions.hits,
@@ -12345,6 +12515,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "ds4_v100_tp_ep_true_ds4_attention_typed_kv_skip_compressed_store_gate %d\n"
                           "ds4_v100_tp_ep_true_ds4_attention_typed_kv_skip_indexer_store_gate %d\n"
                           "ds4_v100_tp_ep_true_ds4_attention_typed_kv_quiet_gate %d\n"
+                          "ds4_v100_tp_ep_true_ds4_attention_typed_kv_batch_rows_gate %d\n"
                           "ds4_v100_tp_ep_cache_slots_total %zu\n"
                           "ds4_v100_tp_ep_cache_slots_used %d\n"
                           "ds4_v100_tp_ep_cache_hits %llu\n"
@@ -12388,6 +12559,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           base_opt.true_ds4_attention_typed_kv_skip_compressed_store_gate ? 1 : 0,
                           base_opt.true_ds4_attention_typed_kv_skip_indexer_store_gate ? 1 : 0,
                           base_opt.true_ds4_attention_typed_kv_quiet_gate ? 1 : 0,
+                          base_opt.true_ds4_attention_typed_kv_batch_rows_gate ? 1 : 0,
                           sessions.slots.size(),
                           sessions.used(),
                           (unsigned long long)sessions.hits,
@@ -12869,6 +13041,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   "\"true_ds4_attention_typed_kv_skip_compressed_store_gate\":%d,"
                                   "\"true_ds4_attention_typed_kv_skip_indexer_store_gate\":%d,"
                                   "\"true_ds4_attention_typed_kv_quiet_gate\":%d,"
+                                  "\"true_ds4_attention_typed_kv_batch_rows_gate\":%d,"
                                   "\"decode_slots\":%d,"
                                   "\"prompt_tokens\":%llu,"
                                   "\"generated_tokens\":%llu,"
@@ -12943,6 +13116,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   req_opt.true_ds4_attention_typed_kv_skip_compressed_store_gate ? 1 : 0,
                                   req_opt.true_ds4_attention_typed_kv_skip_indexer_store_gate ? 1 : 0,
                                   req_opt.true_ds4_attention_typed_kv_quiet_gate ? 1 : 0,
+                                  req_opt.true_ds4_attention_typed_kv_batch_rows_gate ? 1 : 0,
                                   req_opt.slots,
                                   (unsigned long long)request_prompt_tokens,
                                   (unsigned long long)request_generated,

@@ -4,14 +4,14 @@ Last updated: 2026-05-24
 
 ## Topline
 
-Latest TP/EP typed-KV serving status: Sprint 342 proved that verbose typed
-PASS logging is not the main regression. At `32` concurrent
-`/v1/chat/completions` requests, `32` slots, `256K` context, and `8`
-generated tokens/request, the no-typed-KV control measured `309.202473`
-server tok/s and `730.769885` decode tok/s. Verbose typed-history measured
-`73.427107` / `85.479279`; typed-quiet suppressed all `2058` typed PASS lines
-but only improved to `75.284862` / `87.627420`. The current next target is the
-typed row API/synchronization shape, not logging and not store bandwidth.
+Latest TP/EP typed-KV serving status: Sprint 343 batched typed KV row
+store/load calls across slots. At `32` concurrent `/v1/chat/completions`
+requests, `32` slots, `256K` context, and `8` generated tokens/request, the
+no-typed-KV control measured `303.282600` server tok/s and `735.908031`
+decode tok/s. Typed-quiet measured `73.452667` / `86.332914`;
+typed-batch-rows-quiet improved to `79.984163` / `95.624885`. Batching is a
+real gain, but the current next target is typed row synchronization/order:
+replace broad device-wide barriers with stream-ordered row stores and loads.
 
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
