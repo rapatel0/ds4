@@ -217,3 +217,39 @@ stream/event dependencies where semantics allow it, then rerun this audit. If
 the remaining blockers move into non-capturable library calls or required
 host-read dependencies, close Sprint 376 with that explicit blocker list and
 move to the next throughput-prompt gate.
+
+### Event-Barrier Audit
+
+Added a first gated replacement for the top-level `sync_all()` calls. With
+`--decode-cudagraph-gate`, those broad host waits enqueue cross-GPU CUDA event
+dependencies instead of calling `cudaStreamSynchronize` on every rank and
+dense stream.
+
+Result:
+
+| Field | Initial audit | Event-barrier audit |
+|---|---:|---:|
+| Generated decode tok/s | `82.384054` | `44.247981` |
+| Output first token | `54639` | `54639` |
+| Output checksum | `24071637347` | `24071637347` |
+| Scaffold checksum | `3401922407` | `3401922407` |
+| `sync_all_calls` | `172` | `0` |
+| `event_barrier_calls` | n/a | `172` |
+| `rank_stream_sync_count` | `1376` | `0` |
+| `dense_stream_sync_count` | `1376` | `0` |
+| `copy_stream_sync_count` | `0` | `0` |
+| `helper_host_sync_blocker_classes` | n/a | `7` |
+| `capture_eligible` | `0` | `0` |
+| Blocker | `host_stream_synchronization` | `helper_host_synchronization` |
+
+Artifacts:
+
+```text
+logs/from-cluster/sprint376-decode-cudagraph/event-barrier-audit/none-direct-decode-cudagraph
+```
+
+Interpretation: this preserves parity and proves the top-level host waits can
+be converted to stream ordering, but it is not itself a speed win before graph
+capture. The remaining blocker has moved into helper-level synchronizations.
+Next target: convert the hottest helper waits, starting with HC-current input
+and final HC expansion, then rerun the audit.

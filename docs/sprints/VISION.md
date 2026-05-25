@@ -1146,9 +1146,12 @@ Current execution note: Sprint 376 audit plumbing now builds and runs on the
 V100 pod. The first direct `32` slot / `256K` audit reports
 `capture_eligible=0` with `172` broad in-step `sync_all` calls, `1376`
 rank-stream waits, and `1376` dense-stream waits in one 43-layer decode step.
-The next concrete task is an in-step synchronization-elimination pass using
-stream/event dependencies, followed by the same audit again before any graph
-replay attempt.
+The first stream/event substitution pass preserved token/checksum parity and
+moved those top-level wait counts to zero, but it remains slower before graph
+capture and `capture_eligible` is still `0` because helper-level host
+synchronizations remain. The next concrete task is to remove those helper
+waits, starting with HC-current input and final HC expansion, then rerun the
+same audit before any graph replay attempt.
 
 ### Sprint 377 - Batched Paged Attention Gate [tentative]
 
@@ -2603,6 +2606,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 375 rejected async output as a default. | The gate preserved tokens and reduced output-head device syncs, but the real HTTP A/B regressed server decode tok/s and did not improve utilization. | Keep `--async-output-gate` opt-in; Sprint 376 should audit and test CUDA graph capture without assuming output-head event sequencing is a serving win. |
 | 2026-05-25 | Tightened the vision around `TEMP_THROUGHPUT_PROMPT.md`. | The next performance work should not blur multiple ideas together; each gate needs a same-binary V100 A/B and a promote/reject decision. | Finish Sprint 376's graph audit, then choose graph replay, paged attention, compact MoE, TP-expert A/B, FP8 KV, or MTP from measured evidence. |
 | 2026-05-25 | Sprint 376 initial graph audit ran on V100. | The decode step is not yet capturable: it has `172` broad host synchronization points across the 43-layer step. | Replace those syncs with stream/event dependencies where possible, then rerun the audit before graph replay. |
+| 2026-05-25 | Sprint 376 event-barrier audit ran on V100. | Top-level `sync_all` host waits can be replaced with CUDA event ordering while preserving token/checksum parity, but the pre-graph path slows down and helper synchronizations still block capture. | Convert helper-level waits next; do not promote the event-barrier path as a performance optimization by itself. |
 
 ## Open Questions
 

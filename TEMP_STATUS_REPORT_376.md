@@ -69,3 +69,30 @@ This validates the throughput prompt's warning that host-side synchronization mu
 3. Rebuild on the V100 pod.
 4. Rerun the same direct audit.
 5. Attempt graph capture only if the audit becomes clean enough to test honestly.
+
+## Event-Barrier Audit Pass
+
+Implemented a first gated stream-ordering replacement for the broad top-level `sync_all()` calls. Under `--decode-cudagraph-gate`, those waits now enqueue cross-GPU CUDA event dependencies instead of host `cudaStreamSynchronize` calls. This is still diagnostic-only and default-off.
+
+Artifact path:
+
+```text
+logs/from-cluster/sprint376-decode-cudagraph/event-barrier-audit/none-direct-decode-cudagraph
+```
+
+| Metric | Initial audit | Event-barrier audit |
+|---|---:|---:|
+| Generated decode tok/s | `82.384054` | `44.247981` |
+| Output first token | `54639` | `54639` |
+| Output checksum | `24071637347` | `24071637347` |
+| Scaffold checksum | `3401922407` | `3401922407` |
+| `sync_all_calls` | `172` | `0` |
+| `event_barrier_calls` | n/a | `172` |
+| `rank_stream_sync_count` | `1376` | `0` |
+| `dense_stream_sync_count` | `1376` | `0` |
+| `copy_stream_sync_count` | `0` | `0` |
+| `helper_host_sync_blocker_classes` | n/a | `7` |
+| `capture_eligible` | `0` | `0` |
+| Blocker | `host_stream_synchronization` | `helper_host_synchronization` |
+
+Interpretation: the ordering substitution preserved token/checksum parity and removed the audited top-level host stream waits, but it is not a performance win before graph replay. The remaining graph blockers are inside helper stages such as HC-current input, attention projection/state, compressed KV, typed history/raw read, and final HC expansion. The next useful work is to convert the hottest helper-level host waits to stream/event dependencies, starting with `run_shared_hc_current_input` and final HC expansion.

@@ -31,7 +31,12 @@ to test honestly. The first direct audit now builds and runs on the V100 pod,
 but reports `capture_eligible=0`: `172` broad `sync_all` calls, `1376`
 rank-stream waits, and `1376` dense-stream waits inside one 43-layer decode
 step. Next work is to replace those in-step host waits with stream/event
-dependencies where possible before attempting CUDA graph replay.
+dependencies where possible before attempting CUDA graph replay. The first
+event-barrier pass preserved first token/checksum and reduced the audited
+top-level wait counts to zero (`sync_all_calls=0`,
+`rank_stream_sync_count=0`, `dense_stream_sync_count=0`), but pre-graph decode
+regressed to `44.247981` tok/s and `capture_eligible` remains `0` because
+helper-level host synchronizations are still present.
 
 Latest TP/EP format status: Sprint 374 built and ran the V100 workbench for
 the Sprint 373 INT8 candidate shapes. The copied tc-grid INT8 kernels are
