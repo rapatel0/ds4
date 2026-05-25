@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-25
 last_updated_by: vision
-revision: 386
+revision: 387
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -45,8 +45,12 @@ not a serial layer-chain.
 evidence says the TP/EP serving path is launch/synchronization fragmented:
 server decode stays roughly `97-100` aggregate tok/s and average GPU
 utilization stays around `10%` from `1` to `32` active requests at the target
-`32` slot / `256K` shape. That makes the immediate priority launch-count and
-sync-elimination work, not another broad dtype conversion.
+`32` slot / `256K` shape. Sprint 377's fresh serving baseline at the same
+shape is worse after the fully typed long-context path is enabled:
+`88.372350` server decode tok/s, `40.157540` client generated tok/s, and
+`7.972222%` average GPU utilization for `32/32` HTTP 200 responses. That makes
+the immediate priority launch-count and sync-elimination work in the typed
+attention/KV path, not another broad dtype conversion.
 
 The performance program is intentionally isolated:
 
@@ -54,17 +58,39 @@ The performance program is intentionally isolated:
 |---:|---|---|---|
 | 1 | `--async-output-gate` | Complete | Rejected as default; preserved parity but regressed server decode |
 | 2 | `--decode-cudagraph-gate` | Complete | Rejected; stream capture is blocked by pervasive `cudaMemcpyPeerAsync` transport |
-| 3 | `--batched-paged-attn-gate` | Next | Collapse per-slot/per-family attention/KV launches |
-| 4 | `--compact-moe-decode-gate` | Next if graph blocked/flat | Reduce idle expert work and small grouped-GEMM fragmentation |
+| 3 | `--batched-paged-attn-gate` | Active Sprint 377 | Collapse per-slot/per-family attention/KV launches in the typed long-context path |
+| 4 | `--compact-moe-decode-gate` | Next | Reduce idle expert work and small grouped-GEMM fragmentation |
 | 5 | `--fused-gated-silu-gate` | Follow-on | Remove routed-FFN clamp/SwiGLU launch and intermediate |
 | 6 | `--tp-experts-ab-gate` | Topology measurement | Compare TP-sharded experts against EP8 all-to-all with real serving metrics |
-| 7 | `--fp8-e5m2-kv-gate` | Long-context bandwidth work | Test KV footprint/bandwidth reduction after base decode is measurable |
+| 7 | `--fp8-e5m2-kv-gate` | Long-context bandwidth work | Test KV footprint/bandwidth reduction after launch-count reducers are measured |
 | 8 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
 
 Promotion requires a same-binary V100 A/B at the real serving shape, unchanged
 first token/checksum, and improved GPU utilization or server decode tok/s.
 Rejected gates stay opt-in diagnostics. A sprint that cannot produce either a
 promotion or a concrete blocker is not complete.
+
+This sequence intentionally pauses CUDA graph work. Sprint 376 proved the
+current peer-copy transport is not stream-capture-compatible on the V100 stack:
+after helper sync blockers were removed, capture failed first on HC-current
+`cudaMemcpyPeerAsync` and then on attention-projection peer copies. Reopening
+graphs requires a separate P2P transport replacement plan; it is not the next
+throughput sprint.
+
+The near-term implementation focus is therefore:
+
+1. Finish Sprint 377's `--batched-paged-attn-gate` with a fixed-size row-family
+   plan and the smallest batched attention/KV kernel that can reduce launch
+   count while preserving checksum and first-token parity.
+2. If Sprint 377 is flat or blocked, move directly to `--compact-moe-decode-gate`
+   because EP/MoE still contributes measurable small-kernel and imbalance cost.
+3. Follow with `--fused-gated-silu-gate` to remove a routed-FFN launch and
+   intermediate only after the compact MoE baseline is measured.
+4. Run `--tp-experts-ab-gate` as a topology experiment, not a rewrite, using
+   the same serving metrics to decide whether TP-sharded experts are worth a
+   larger implementation.
+5. Delay FP8 KV and MTP until the base TP/EP decode path has a stable, low-noise
+   performance surface.
 
 ## Current State
 
@@ -273,8 +299,9 @@ promotion or a concrete blocker is not complete.
   utilization from `1` to `32` active requests. The immediate work queue is
   therefore isolated gate experiments that either remove launch/sync overhead
   or prove that this thesis is wrong before more dtype or micro-kernel swaps.
-  The controlling order is CUDA graph replay first, then batched paged
-  attention and compact MoE if graph replay is blocked or flat.
+  Async output and CUDA graph replay have now both been tested and rejected as
+  defaults. The controlling order is now batched paged attention, compact MoE,
+  fused gated-SiLU, TP-sharded expert A/B, FP8 KV, then MTP.
 - Sprint 376 executed that steering document's S-A gate:
   `--decode-cudagraph-gate`. The audit removed broad in-step `sync_all` host
   waits and tracked helper-level host waits under the graph gate while
@@ -289,6 +316,18 @@ promotion or a concrete blocker is not complete.
   device copy kernels moved the failure to the next peer copy in attention
   projection. Decision: reject graph replay as a promotion path and move next
   to `--batched-paged-attn-gate`.
+- Sprint 377 is now the active S-C gate. The baseline V100 serving run at
+  `32` active requests / `32` configured slots / `256K` context /
+  `position=262080` / `32` generated tokens returned `32/32` HTTP 200 with
+  first token `89340`, client generated `40.157540` tok/s, server generated
+  decode `88.372350` tok/s, average GPU utilization `7.972222%`, max GPU
+  utilization `38%`, and compressed-KV sum `5436.764269` ms. Gate plumbing is
+  implemented and validated for `--batched-paged-attn-gate`,
+  `DS4_V100_TP_EP_BATCHED_PAGED_ATTN=1`, and
+  `tools/ds4-v100-tp-ep-profile.py --batched-paged-attn`; the direct no-op
+  smoke preserved first token `54639` and finite output. The remaining Sprint
+  377 work is the fixed-size row-family plan plus the first batched kernel
+  that actually reduces attention/KV launch count.
 - Sprint 327 made the production compressed-KV memory contract executable in
   `tools/ds4-v100-plan-tp.c`. With the real TP pack and F8 KV, `32` slots at
   `256K` fits at `27.00 GiB/GPU` with `5.00 GiB` headroom after reserve;
@@ -965,18 +1004,17 @@ promotion or a concrete blocker is not complete.
   same-binary V100 A/B per gate, promotion only with unchanged first token,
   preserved decode checksum, and improved GPU utilization or server decode
   tok/s.
-- The active performance question is launch/synchronization overhead. More
-  dtype swaps, sidecar probes, or isolated single-layer kernels are secondary
-  until the async-output and decode-CUDA-graph gates are measured at the full
-  `32` slot / `256K` serving shape.
-- The current CUDA-graph work is audit-first. A fake graph flag that still
-  leaves host synchronizations, allocations, or host-read launch dependencies
-  inside the steady decode step is not useful. Sprint 376 must emit the
-  blocker list before attempting graph replay.
-- Do not let the graph audit become open-ended infrastructure work. Once the
-  remaining helper blockers are converted or proven non-capturable, Sprint 376
-  must run the graph replay A/B if possible; otherwise it closes with the
-  blocker list and the roadmap moves to the next isolated performance gate.
+- The active performance question is now launch-count and state-fragmentation
+  reduction in the typed attention/KV and MoE paths. More dtype swaps, sidecar
+  probes, or isolated single-layer kernels are secondary unless they directly
+  reduce one of the measured serving hot spots.
+- CUDA graph replay is not an active sprint path. Sprint 376 proved the current
+  P2P transport is not stream-capture-compatible on this stack. A future graph
+  revisit requires a scoped transport replacement plan; it should not displace
+  S-C/S-D/S-E performance gates.
+- Sprint 377 is the immediate execution path. It should either promote a real
+  batched attention/KV row-family kernel, keep it opt-in with measured flat
+  results, or reject it with a concrete blocker before moving to compact MoE.
 
 ## Throughput Optimization Pivot
 
@@ -996,25 +1034,22 @@ primary limiter = steady-state decode launch/sync latency and fragmented
 not primary     = raw HBM bandwidth or a missing single dense GEMM dtype
 ```
 
-This is not a permanent conclusion. It is the next falsifiable thesis. If the
-async-output cleanup plus graph replay does not materially raise GPU
-utilization at `32` active slots, the roadmap pivots away from launch
-amortization and back to measured layer hot spots such as paged attention,
-compact MoE, or TP-sharded experts.
+This is not a permanent conclusion. It is the next falsifiable thesis. The
+first two tests have already narrowed it: async output reduced output-head
+syncs but regressed serving throughput, and CUDA graph replay is blocked by
+P2P copy capture semantics. The roadmap therefore pivots from broad launch
+replay to measured launch-count reducers in attention/KV and MoE.
 
 The near-term implementation policy is now:
 
-1. Finish the active graph-capture audit, not more side experiments.
-2. Attempt real graph capture/replay only after the steady decode step has no
-   known host-sync blocker classes.
-3. Promote graph replay only with unchanged first token/checksum and a
-   material utilization or server-decode improvement at `32` slots / `256K`.
-4. If graph replay is blocked or flat, close Sprint 376 with that evidence and
-   move immediately to the next throughput prompt gates in order: batched paged
-   attention, compact MoE decode, fused gated-SiLU, then the TP-sharded expert
-   A/B. Do not add another graph-audit sprint unless the blocker is a narrow
-   implementation mistake with a clear fix.
-5. Keep dtype conversion work scoped to measured hot paths. Sprint 374 showed
+1. Finish Sprint 377's batched paged attention gate before starting another
+   broad optimization thread.
+2. Promote the gate only if it preserves first token/checksum and improves
+   server decode tok/s or average GPU utilization at `32` slots / `256K`.
+3. If S-C is flat or blocked, move immediately to compact MoE decode and then
+   fused gated-SiLU. Do not reopen CUDA graphs unless there is a full P2P
+   transport replacement plan.
+4. Keep dtype conversion work scoped to measured hot paths. Sprint 374 showed
    a simple tc-grid INT8 compressor swap is slower than the FP16 tensor-op
    baseline at the target compressor shapes, so format changes are not the
    first response to the current low-utilization symptom.
@@ -1023,14 +1058,12 @@ The next performance sequence is ordered to test that thesis directly:
 
 | Order | Gate | Purpose | Decision Criteria |
 |---:|---|---|---|
-| 1 | `--async-output-gate` | Remove host synchronization from the sampler/output path so one decode step becomes CUDA-graph eligible | same first token/checksum; utilization or decode tok/s flat-or-up |
-| 2 | `--decode-cudagraph-gate` | Capture and replay the shape-static 32-wide per-rank decode step, including peer-copy compose | material GPU-utilization increase; checksum-identical longer run |
-| 3 | `--batched-paged-attn-gate` | Collapse per-slot/per-family typed-KV row store/load into block-table-indexed attention kernels | lower attention kernel count and better util/tok/s |
-| 4 | `--compact-moe-decode-gate` | Avoid idle expert work at low batch by compacting active top-k experts into one grouped GEMM | lower EP/compose ms without token drift |
-| 5 | `--fused-gated-silu-gate` | Remove standalone clamp/SwiGLU launch by baking the DS4 clamp into the grouped-GEMM epilogue | lower routed-FFN ms with parity preserved |
-| 6 | `--tp-experts-ab-gate` | Measure TP-sharded expert execution against current EP8 all-to-all, without committing topology | report compose/all-to-all ms and total decode tok/s |
-| 7 | `--fp8-e5m2-kv-gate` | Test smaller KV storage/load traffic for long-context serving | no NaNs, bounded drift, parity token stable |
-| 8 | `--mtp-decode-gate` | Add MTP only after base decode graphing and metrology are stable | accepted tokens/step and effective decode tok/s improve |
+| 1 | `--batched-paged-attn-gate` | Collapse per-slot/per-family typed-KV row store/load into block-table-indexed attention kernels | lower attention kernel count and better util/tok/s |
+| 2 | `--compact-moe-decode-gate` | Avoid idle expert work at low batch by compacting active top-k experts into one grouped GEMM | lower EP/compose ms without token drift |
+| 3 | `--fused-gated-silu-gate` | Remove standalone clamp/SwiGLU launch by baking the DS4 clamp into the grouped-GEMM epilogue | lower routed-FFN ms with parity preserved |
+| 4 | `--tp-experts-ab-gate` | Measure TP-sharded expert execution against current EP8 all-to-all, without committing topology | report compose/all-to-all ms and total decode tok/s |
+| 5 | `--fp8-e5m2-kv-gate` | Test smaller KV storage/load traffic for long-context serving | no NaNs, bounded drift, parity token stable |
+| 6 | `--mtp-decode-gate` | Add MTP only after base TP/EP decode metrology and launch strategy are stable | accepted tokens/step and effective decode tok/s improve |
 
 S-B is complete and rejected as a default. S-A is complete and rejected as a
 promotion path: real capture is blocked by stream-capture-incompatible
@@ -1038,8 +1071,10 @@ promotion path: real capture is blocked by stream-capture-incompatible
 therefore pivots to S-C/S-D/S-E/S-F rather than extending audit-only graph work
 or starting a broad P2P transport rewrite inside the graph sprint.
 
-Current next step: plan and execute S-C, `--batched-paged-attn-gate`, as the
-first launch-count reducer that does not depend on CUDA graph replay.
+Current next step: finish S-C, `--batched-paged-attn-gate`, as the first
+launch-count reducer that does not depend on CUDA graph replay. Sprint 377
+already has baseline metrology and gate plumbing; the remaining work is the
+row-family plan and first real batched kernel.
 
 ## Production Readiness Sequence
 
@@ -2711,6 +2746,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 376 cleared tracked graph-audit helper blockers. | Attention-state, typed-history, and compressed-KV event-ordering passes preserve first token `54639`, output checksum `24071637347`, and scaffold checksum `3401922407`; helper blocker classes drop to `0`, and the one-step non-emitted-row audit reports `capture_eligible=1`. | Attempt real CUDA graph capture/replay next. If capture rejects an operation or replay is flat, close Sprint 376 with the blocker/performance result and pivot to batched paged attention, compact MoE, or TP-sharded expert A/B. |
 | 2026-05-25 | Re-centered the vision around `TEMP_THROUGHPUT_PROMPT.md` before further performance work. | The prompt's main insight is that the current TP/EP path is flat at about `97-100` server decode tok/s and about `10%` average GPU utilization from `1` to `32` active requests, so the next work should test launch/sync elimination and launch-count reduction before broad dtype rewrites. | Keep Sprint 376 focused on one real CUDA graph capture/replay result. If it is blocked or flat, move to batched paged attention, compact MoE, fused gated-SiLU, and then TP-sharded expert A/B as isolated default-off gates. |
 | 2026-05-25 | Sprint 376 real capture attempts rejected CUDA graph replay. | After audit cleanup, real capture failed first on separate capture sequence merging, then uncaptured stream dependencies, then `cudaMemcpyPeerAsync` being disallowed during stream capture. Replacing HC-current peer copies with graph-gated device copy kernels moved the same peer-copy error to attention projection. | Close Sprint 376 as REJECT, leave graph work diagnostic-only, and plan Sprint 377 around `--batched-paged-attn-gate`. |
+| 2026-05-25 | Rebased the vision on `TEMP_THROUGHPUT_PROMPT.md` after Sprint 377 baseline/plumbing. | S-B and S-A are no longer future bets: async output regressed and graph capture is blocked by P2P transport. Sprint 377's fresh typed long-context baseline is `88.372350` server decode tok/s, `40.157540` client tok/s, and `7.972222%` average GPU utilization at `32` slots / `256K`. | Finish S-C row-family planning and the first batched attention/KV kernel, then move to compact MoE, fused gated-SiLU, TP-expert A/B, FP8 KV, and MTP in that order unless measured evidence changes the sequence. |
 
 ## Open Questions
 
