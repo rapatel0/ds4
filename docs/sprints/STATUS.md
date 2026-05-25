@@ -274,6 +274,18 @@ wall tok/s, and `96.116667` server decode tok/s. The default event-wait path
 measured `52.022782`, `83.891024`, and `99.521680` respectively, with
 compressed-KV sum reduced from `5100.469710` to `4681.992882` ms.
 
+Sprint 368 converted that invalid chat boundary from a backend decode failure
+into explicit HTTP admission. The TP/EP server now checks
+`start_position + prompt_prefill_steps + requested_decode_steps <= 262144`
+before slot assignment and GPU decode. The Sprint 367 invalid shape
+(`position=262112`, `32` requested tokens, `16` prompt-prefill steps) now
+returns HTTP 400 with `context_window_exceeded`, `final_position=262160`, and
+no `tp_ep_http_decode_failed` log line. The valid long-context shape
+(`position=262080`, `32` concurrent chat requests, `32` generated
+tokens/request) still returns `32/32` HTTP 200, coalesces batch `32`, preserves
+first token `89340`, and measures `51.069220` client tok/s,
+`82.089657` server wall tok/s, and `98.301727` server decode tok/s.
+
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
 TP runtime, sharded KV, rank buffers, TurboMind API handles, active MXFP4

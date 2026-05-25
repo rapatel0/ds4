@@ -1,0 +1,3 @@
+{"error":"context_window_exceeded","ctx":262144,"start_position":262112,"prompt_prefill_steps":16,"requested_decode_steps":32,"final_position":262160,"cache_hit":0}
+
+HTTP_STATUS:400

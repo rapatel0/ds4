@@ -13121,6 +13121,16 @@ struct TpEpHttpSessionAssignment {
     uint64_t pos_out = 0;
 };
 
+struct TpEpHttpContextAdmission {
+    bool ok = false;
+    bool cache_hit = false;
+    uint64_t start_position = 0;
+    uint64_t prompt_prefill_steps = 0;
+    uint64_t requested_decode_steps = 0;
+    uint64_t final_position = 0;
+    uint64_t ctx = 262144ull;
+};
+
 struct TpEpHttpSessionTable {
     std::vector<TpEpHttpSessionSlot> slots;
     uint64_t clock = 0;
@@ -13164,6 +13174,23 @@ struct TpEpHttpSessionTable {
             return slots[(size_t)idx].pos;
         }
         return base_pos;
+    }
+
+    bool preview_hit(const std::string &key,
+                     bool prompt_present,
+                     uint64_t prompt_fingerprint,
+                     uint64_t *pos_out) const {
+        const int idx = find(key);
+        if (idx >= 0 &&
+            slots[(size_t)idx].kv_valid &&
+            slots[(size_t)idx].hc_valid &&
+            slot_prompt_matches(slots[(size_t)idx],
+                                prompt_present,
+                                prompt_fingerprint)) {
+            if (pos_out) *pos_out = slots[(size_t)idx].pos;
+            return true;
+        }
+        return false;
     }
 
     TpEpHttpSessionAssignment assign(const std::string &key,
@@ -13332,6 +13359,51 @@ struct TpEpHttpSessionTable {
         }
     }
 };
+
+static TpEpHttpContextAdmission tp_ep_http_context_admission(
+    const TpEpHttpSessionTable &sessions,
+    const HttpParsedRequest &req,
+    uint64_t base_position,
+    uint64_t ctx) {
+    TpEpHttpContextAdmission out;
+    out.ctx = ctx;
+    out.requested_decode_steps =
+        req.requested_tokens > 0 ? (uint64_t)req.requested_tokens : 0ull;
+    uint64_t hit_pos = 0;
+    out.cache_hit = sessions.preview_hit(req.cache_key,
+                                         req.prompt_fingerprint_present,
+                                         req.prompt_fingerprint,
+                                         &hit_pos);
+    out.start_position = out.cache_hit ? hit_pos : base_position;
+    if (!out.cache_hit && req.prompt_token_ids.size() > 1) {
+        out.prompt_prefill_steps =
+            (uint64_t)req.prompt_token_ids.size() - 1ull;
+    }
+    out.final_position = out.start_position + out.prompt_prefill_steps +
+                         out.requested_decode_steps;
+    out.ok = out.final_position <= out.ctx;
+    return out;
+}
+
+static std::string tp_ep_http_context_error_json(
+    const TpEpHttpContextAdmission &admission) {
+    char buf[1024];
+    std::snprintf(buf, sizeof(buf),
+                  "{\"error\":\"context_window_exceeded\","
+                  "\"ctx\":%llu,"
+                  "\"start_position\":%llu,"
+                  "\"prompt_prefill_steps\":%llu,"
+                  "\"requested_decode_steps\":%llu,"
+                  "\"final_position\":%llu,"
+                  "\"cache_hit\":%d}\n",
+                  (unsigned long long)admission.ctx,
+                  (unsigned long long)admission.start_position,
+                  (unsigned long long)admission.prompt_prefill_steps,
+                  (unsigned long long)admission.requested_decode_steps,
+                  (unsigned long long)admission.final_position,
+                  admission.cache_hit ? 1 : 0);
+    return std::string(buf);
+}
 
 static unsigned long long http_epoch_seconds() {
     using namespace std::chrono;
@@ -13703,6 +13775,29 @@ int run_tp_ep_http_server(const Options &base_opt,
                                           first_req.prompt_fingerprint_present,
                                           first_req.prompt_fingerprint,
                                           base_opt.position);
+            {
+                const TpEpHttpContextAdmission admission =
+                    tp_ep_http_context_admission(sessions, first_req,
+                                                 base_opt.position, 262144ull);
+                if (!admission.ok) {
+                    std::fprintf(stderr,
+                                 "tp_ep_http_context_rejected\tstart_position\t%llu\t"
+                                 "prompt_prefill_steps\t%llu\trequested_steps\t%llu\t"
+                                 "final_position\t%llu\tctx\t%llu\tcache_hit\t%d\n",
+                                 (unsigned long long)admission.start_position,
+                                 (unsigned long long)admission.prompt_prefill_steps,
+                                 (unsigned long long)admission.requested_decode_steps,
+                                 (unsigned long long)admission.final_position,
+                                 (unsigned long long)admission.ctx,
+                                 admission.cache_hit ? 1 : 0);
+                    const std::string body =
+                        tp_ep_http_context_error_json(admission);
+                    http_write_json(first_req.fd, 400, body.c_str());
+                    close(first_req.fd);
+                    rejected++;
+                    continue;
+                }
+            }
 
             std::vector<HttpParsedRequest> batch;
             batch.push_back(first_req);
@@ -13748,6 +13843,29 @@ int run_tp_ep_http_server(const Options &base_opt,
                                               extra_req.prompt_fingerprint_present,
                                               extra_req.prompt_fingerprint,
                                               base_opt.position);
+                {
+                    const TpEpHttpContextAdmission admission =
+                        tp_ep_http_context_admission(sessions, extra_req,
+                                                     base_opt.position, 262144ull);
+                    if (!admission.ok) {
+                        std::fprintf(stderr,
+                                     "tp_ep_http_context_rejected\tstart_position\t%llu\t"
+                                     "prompt_prefill_steps\t%llu\trequested_steps\t%llu\t"
+                                     "final_position\t%llu\tctx\t%llu\tcache_hit\t%d\n",
+                                     (unsigned long long)admission.start_position,
+                                     (unsigned long long)admission.prompt_prefill_steps,
+                                     (unsigned long long)admission.requested_decode_steps,
+                                     (unsigned long long)admission.final_position,
+                                     (unsigned long long)admission.ctx,
+                                     admission.cache_hit ? 1 : 0);
+                        const std::string body =
+                            tp_ep_http_context_error_json(admission);
+                        http_write_json(extra_fd, 400, body.c_str());
+                        close(extra_fd);
+                        rejected++;
+                        continue;
+                    }
+                }
                 if (extra_req.requested_tokens != first_req.requested_tokens) {
                     bucketed_requests++;
                     pending_generation.push_back(std::move(extra_req));
