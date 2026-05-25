@@ -33,7 +33,8 @@ def http_post(base, path, payload, timeout=900):
         return exc.code, exc.read()
 
 
-def run_case(args, name, port, typed, skip_stores=None, typed_quiet=False, batch_rows=False):
+def run_case(args, name, port, typed, skip_stores=None, typed_quiet=False,
+             batch_rows=False, stream_sync=False):
     skip_stores = set(skip_stores or [])
     case_dir = args.artifact_dir / name
     case_dir.mkdir(parents=True, exist_ok=True)
@@ -68,6 +69,8 @@ def run_case(args, name, port, typed, skip_stores=None, typed_quiet=False, batch
                 "1" if typed_quiet else "0",
             "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_BATCH_ROWS":
                 "1" if batch_rows else "0",
+            "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_STREAM_SYNC":
+                "1" if stream_sync else "0",
         }
     )
 
@@ -190,6 +193,9 @@ def run_case(args, name, port, typed, skip_stores=None, typed_quiet=False, batch
             "typed_batch_rows_meta": first.get(
                 "true_ds4_attention_typed_kv_batch_rows_gate"
             ),
+            "typed_stream_sync_meta": first.get(
+                "true_ds4_attention_typed_kv_stream_sync_gate"
+            ),
             "typed_raw_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_raw", server_text)),
             "typed_compressed_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_compressed", server_text)),
             "typed_indexer_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_indexer", server_text)),
@@ -286,6 +292,13 @@ def main():
         default=[],
         help="additional typed candidates that batch typed KV row operations across slots",
     )
+    parser.add_argument(
+        "--typed-stream-sync-variant",
+        action="append",
+        choices=["stream-sync-quiet", "batch-rows-stream-sync-quiet"],
+        default=[],
+        help="additional typed candidates that narrow typed KV barriers to stream sync",
+    )
     args = parser.parse_args()
 
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -346,6 +359,31 @@ def main():
                 )
             )
         port += 1
+    for variant in args.typed_stream_sync_variant:
+        if variant == "stream-sync-quiet":
+            summaries.append(
+                run_case(
+                    args,
+                    "typed-stream-sync-quiet",
+                    port,
+                    True,
+                    typed_quiet=True,
+                    stream_sync=True,
+                )
+            )
+        elif variant == "batch-rows-stream-sync-quiet":
+            summaries.append(
+                run_case(
+                    args,
+                    "typed-batch-rows-stream-sync-quiet",
+                    port,
+                    True,
+                    typed_quiet=True,
+                    batch_rows=True,
+                    stream_sync=True,
+                )
+            )
+        port += 1
     (args.artifact_dir / "summary.json").write_text(json.dumps(summaries, indent=2, sort_keys=True) + "\n")
     keys = [
         "case",
@@ -369,6 +407,7 @@ def main():
         "typed_skip_indexer_store_meta",
         "typed_quiet_meta",
         "typed_batch_rows_meta",
+        "typed_stream_sync_meta",
         "typed_raw_lines",
         "typed_compressed_lines",
         "typed_indexer_lines",

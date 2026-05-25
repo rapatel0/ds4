@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 348
+revision: 349
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -243,6 +243,17 @@ not a serial layer-chain.
   large. The next target is broad device synchronization/order around typed row
   work, ideally replacing device-wide barriers with stream-ordered row stores
   and loads.
+- Sprint 344 tested that synchronization hypothesis. The new
+  `DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_STREAM_SYNC=1` gate narrows
+  typed KV row barriers from device-wide synchronization to stream
+  synchronization. In the same `32` concurrent / `32` slot / `256K` /
+  `8` token HTTP A/B, control measured `309.709482` wall tok/s /
+  `730.989696` decode tok/s, typed-batch-rows-quiet measured `79.794096` /
+  `94.238623`, and typed-batch-rows-stream-sync-quiet measured `81.006809` /
+  `95.558274`. The `~1.5%` gain is too small to explain the low utilization
+  or the gap to control. The next sprint must collect Nsight evidence for the
+  typed serving window: top kernels, tensor-core/HMMA activity, row pack/unpack
+  costs, peer-read costs, and synchronization gaps.
 - The system is not production-ready yet because the bridge HC sequence has
   not been proven equivalent to the DeepSeek V4 reference layer semantics, and
   production serving still needs readiness/overload/cancellation/streaming

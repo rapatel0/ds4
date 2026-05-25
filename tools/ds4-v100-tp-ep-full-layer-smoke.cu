@@ -569,6 +569,7 @@ struct Options {
     bool true_ds4_attention_typed_kv_skip_indexer_store_gate = false;
     bool true_ds4_attention_typed_kv_quiet_gate = false;
     bool true_ds4_attention_typed_kv_batch_rows_gate = false;
+    bool true_ds4_attention_typed_kv_stream_sync_gate = false;
     bool true_ds4_attention_output_gate = false;
     bool true_ds4_post_attention_ffn_input_gate = false;
     bool true_ds4_compressed_kv_gate = false;
@@ -576,6 +577,17 @@ struct Options {
     bool true_ds4_compressed_reference_diff_gate = false;
     uint32_t true_ds4_attention_raw_valid_rows = 1;
 };
+
+void sync_typed_kv_boundary(const Options &opt, RankState ranks[kGpus]) {
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        if (opt.true_ds4_attention_typed_kv_stream_sync_gate) {
+            CHECK_CUDA(cudaStreamSynchronize(0));
+        } else {
+            CHECK_CUDA(cudaDeviceSynchronize());
+        }
+    }
+}
 
 struct TensorF32Stats {
     int finite_bad = 0;
@@ -2527,6 +2539,7 @@ void usage(const char *argv0) {
                  "       [--true-ds4-attention-typed-kv-skip-indexer-store-gate]\n"
                  "       [--true-ds4-attention-typed-kv-quiet-gate]\n"
                  "       [--true-ds4-attention-typed-kv-batch-rows-gate]\n"
+                 "       [--true-ds4-attention-typed-kv-stream-sync-gate]\n"
                  "       [--true-ds4-attention-output-gate]\n"
                  "       [--true-ds4-post-attention-ffn-input-gate]\n"
                  "       [--true-ds4-compressed-kv-gate]\n"
@@ -2815,6 +2828,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->true_ds4_attention_typed_kv_quiet_gate = true;
         } else if (std::strcmp(arg, "--true-ds4-attention-typed-kv-batch-rows-gate") == 0) {
             opt->true_ds4_attention_typed_kv_batch_rows_gate = true;
+        } else if (std::strcmp(arg, "--true-ds4-attention-typed-kv-stream-sync-gate") == 0) {
+            opt->true_ds4_attention_typed_kv_stream_sync_gate = true;
         } else if (std::strcmp(arg, "--true-ds4-attention-output-gate") == 0) {
             opt->true_ds4_attention_output_gate = true;
             opt->true_ds4_attention_raw_window_gate = true;
@@ -2938,6 +2953,11 @@ bool parse_args(int argc, char **argv, Options *opt) {
              opt->true_ds4_attention_typed_kv_indexer_gate ||
              opt->true_ds4_attention_typed_kv_history_gate)) &&
            (!opt->true_ds4_attention_typed_kv_batch_rows_gate ||
+            (opt->true_ds4_attention_typed_kv_raw_gate ||
+             opt->true_ds4_attention_typed_kv_compressed_gate ||
+             opt->true_ds4_attention_typed_kv_indexer_gate ||
+             opt->true_ds4_attention_typed_kv_history_gate)) &&
+           (!opt->true_ds4_attention_typed_kv_stream_sync_gate ||
             (opt->true_ds4_attention_typed_kv_raw_gate ||
              opt->true_ds4_attention_typed_kv_compressed_gate ||
              opt->true_ds4_attention_typed_kv_indexer_gate ||
@@ -8087,10 +8107,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             }
             current_store = 1;
         }
-        for (int rank = 0; rank < kGpus; ++rank) {
-            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-            CHECK_CUDA(cudaDeviceSynchronize());
-        }
+        sync_typed_kv_boundary(opt, ranks);
         int current_load = 0;
         if (!opt.true_ds4_attention_typed_kv_skip_current_load_gate &&
             current_store) {
@@ -8135,10 +8152,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             }
             current_load = 1;
         }
-        for (int rank = 0; rank < kGpus; ++rank) {
-            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-            CHECK_CUDA(cudaDeviceSynchronize());
-        }
+        sync_typed_kv_boundary(opt, ranks);
         if (!opt.true_ds4_attention_typed_kv_skip_current_load_gate ||
             !current_store) {
             for (int rank = 0; rank < kGpus; ++rank) {
@@ -8481,10 +8495,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 }
                 current_store = 1;
             }
-            for (int rank = 0; rank < kGpus; ++rank) {
-                CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-                CHECK_CUDA(cudaDeviceSynchronize());
-            }
+            sync_typed_kv_boundary(opt, ranks);
             int current_load = 0;
             if (!opt.true_ds4_attention_typed_kv_skip_current_load_gate &&
                 current_store) {
@@ -8530,10 +8541,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 }
                 current_load = 1;
             }
-            for (int rank = 0; rank < kGpus; ++rank) {
-                CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-                CHECK_CUDA(cudaDeviceSynchronize());
-            }
+            sync_typed_kv_boundary(opt, ranks);
             if (!opt.true_ds4_attention_typed_kv_skip_current_load_gate ||
                 !current_store) {
                 for (int rank = 0; rank < kGpus; ++rank) {
@@ -8810,10 +8818,7 @@ int run_true_ds4_attention_state_update(const Options &opt,
             }
             current_store = 1;
         }
-        for (int rank = 0; rank < kGpus; ++rank) {
-            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-            CHECK_CUDA(cudaDeviceSynchronize());
-        }
+        sync_typed_kv_boundary(opt, ranks);
         int current_load = 0;
         if (!opt.true_ds4_attention_typed_kv_skip_current_load_gate &&
             current_store) {
@@ -8858,10 +8863,7 @@ int run_true_ds4_attention_state_update(const Options &opt,
             }
             current_load = 1;
         }
-        for (int rank = 0; rank < kGpus; ++rank) {
-            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-            CHECK_CUDA(cudaDeviceSynchronize());
-        }
+        sync_typed_kv_boundary(opt, ranks);
         if (!opt.true_ds4_attention_typed_kv_quiet_gate) {
             std::printf("tp_ep_true_attention_typed_kv_raw\tlayer\t%d\tslots\t%d\t"
                         "position\t%llu\tphysical_row\t%llu\traw_row\t%u\tlogical_cols\t%u\t"
@@ -9015,10 +9017,7 @@ int run_true_ds4_attention_typed_kv_history_load(const Options &opt,
             ranks[rank].attn_comp_row_loaded_position_layers[layer][row] = pos;
         }
     }
-    for (int rank = 0; rank < kGpus; ++rank) {
-        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-        CHECK_CUDA(cudaDeviceSynchronize());
-    }
+    sync_typed_kv_boundary(opt, ranks);
 
     int loaded_indexer = 0;
     int reloaded_indexer = 0;
@@ -9088,10 +9087,7 @@ int run_true_ds4_attention_typed_kv_history_load(const Options &opt,
                 ranks[rank].index_comp_row_loaded_position_layers[layer][row] = pos;
             }
         }
-        for (int rank = 0; rank < kGpus; ++rank) {
-            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-            CHECK_CUDA(cudaDeviceSynchronize());
-        }
+        sync_typed_kv_boundary(opt, ranks);
         CHECK_CUDA(cudaSetDevice(ranks[0].device));
         indexer_score_bounded_rows_slots_kernel<<<
             (unsigned int)opt.slots, 256, 0, ranks[0].stream>>>(
@@ -12406,6 +12402,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "\"true_ds4_attention_typed_kv_skip_indexer_store_gate\":%d,"
                           "\"true_ds4_attention_typed_kv_quiet_gate\":%d,"
                           "\"true_ds4_attention_typed_kv_batch_rows_gate\":%d,"
+                          "\"true_ds4_attention_typed_kv_stream_sync_gate\":%d,"
                           "\"cache_slots_total\":%zu,"
                           "\"cache_slots_used\":%d,"
                           "\"cache_hits\":%llu,"
@@ -12451,6 +12448,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           base_opt.true_ds4_attention_typed_kv_skip_indexer_store_gate ? 1 : 0,
                           base_opt.true_ds4_attention_typed_kv_quiet_gate ? 1 : 0,
                           base_opt.true_ds4_attention_typed_kv_batch_rows_gate ? 1 : 0,
+                          base_opt.true_ds4_attention_typed_kv_stream_sync_gate ? 1 : 0,
                           sessions.slots.size(),
                           sessions.used(),
                           (unsigned long long)sessions.hits,
@@ -12516,6 +12514,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "ds4_v100_tp_ep_true_ds4_attention_typed_kv_skip_indexer_store_gate %d\n"
                           "ds4_v100_tp_ep_true_ds4_attention_typed_kv_quiet_gate %d\n"
                           "ds4_v100_tp_ep_true_ds4_attention_typed_kv_batch_rows_gate %d\n"
+                          "ds4_v100_tp_ep_true_ds4_attention_typed_kv_stream_sync_gate %d\n"
                           "ds4_v100_tp_ep_cache_slots_total %zu\n"
                           "ds4_v100_tp_ep_cache_slots_used %d\n"
                           "ds4_v100_tp_ep_cache_hits %llu\n"
@@ -12560,6 +12559,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           base_opt.true_ds4_attention_typed_kv_skip_indexer_store_gate ? 1 : 0,
                           base_opt.true_ds4_attention_typed_kv_quiet_gate ? 1 : 0,
                           base_opt.true_ds4_attention_typed_kv_batch_rows_gate ? 1 : 0,
+                          base_opt.true_ds4_attention_typed_kv_stream_sync_gate ? 1 : 0,
                           sessions.slots.size(),
                           sessions.used(),
                           (unsigned long long)sessions.hits,
@@ -13042,6 +13042,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   "\"true_ds4_attention_typed_kv_skip_indexer_store_gate\":%d,"
                                   "\"true_ds4_attention_typed_kv_quiet_gate\":%d,"
                                   "\"true_ds4_attention_typed_kv_batch_rows_gate\":%d,"
+                                  "\"true_ds4_attention_typed_kv_stream_sync_gate\":%d,"
                                   "\"decode_slots\":%d,"
                                   "\"prompt_tokens\":%llu,"
                                   "\"generated_tokens\":%llu,"
@@ -13117,6 +13118,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   req_opt.true_ds4_attention_typed_kv_skip_indexer_store_gate ? 1 : 0,
                                   req_opt.true_ds4_attention_typed_kv_quiet_gate ? 1 : 0,
                                   req_opt.true_ds4_attention_typed_kv_batch_rows_gate ? 1 : 0,
+                                  req_opt.true_ds4_attention_typed_kv_stream_sync_gate ? 1 : 0,
                                   req_opt.slots,
                                   (unsigned long long)request_prompt_tokens,
                                   (unsigned long long)request_generated,

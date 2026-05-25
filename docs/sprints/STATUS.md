@@ -4,14 +4,16 @@ Last updated: 2026-05-24
 
 ## Topline
 
-Latest TP/EP typed-KV serving status: Sprint 343 batched typed KV row
-store/load calls across slots. At `32` concurrent `/v1/chat/completions`
-requests, `32` slots, `256K` context, and `8` generated tokens/request, the
-no-typed-KV control measured `303.282600` server tok/s and `735.908031`
-decode tok/s. Typed-quiet measured `73.452667` / `86.332914`;
-typed-batch-rows-quiet improved to `79.984163` / `95.624885`. Batching is a
-real gain, but the current next target is typed row synchronization/order:
-replace broad device-wide barriers with stream-ordered row stores and loads.
+Latest TP/EP typed-KV serving status: Sprint 344 showed that narrowing typed
+KV barriers from device-wide sync to stream sync is not the main lever. At
+`32` concurrent `/v1/chat/completions` requests, `32` slots, `256K` context,
+and `8` generated tokens/request, the no-typed-KV control measured
+`309.709482` server tok/s and `730.989696` decode tok/s.
+Typed-batch-rows-quiet measured `79.794096` / `94.238623`; adding stream-sync
+measured `81.006809` / `95.558274`. The next target is Nsight-backed
+profiling of the typed serving window to identify the actual kernel mix,
+tensor-core/HMMA activity, row pack/unpack cost, peer-read cost, and
+synchronization gaps.
 
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
