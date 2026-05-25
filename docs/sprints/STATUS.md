@@ -9,6 +9,15 @@ Current bottleneck reference:
 summarizes the measured bottlenecks, layer-by-layer hot paths, and experiments
 already tried.
 
+Latest throughput direction: `TEMP_THROUGHPUT_PROMPT.md` reframes the next
+performance sequence around launch/sync elimination rather than another dtype
+swap. Sprint 375 is planned as `--async-output-gate`, the enabler that removes
+host synchronization from the sampler/output path so the token-major decode
+step can become CUDA-graph eligible. Sprint 376 is planned as
+`--decode-cudagraph-gate`, the make-or-break test of the current low-utilization
+thesis. Each gate remains default-off and must pass same-binary V100 A/B with
+unchanged first token/checksum before promotion.
+
 Latest TP/EP format status: Sprint 374 built and ran the V100 workbench for
 the Sprint 373 INT8 candidate shapes. The copied tc-grid INT8 kernels are
 numerically acceptable but not performance candidates for the BF16 attention

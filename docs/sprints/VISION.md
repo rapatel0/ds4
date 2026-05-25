@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-25
 last_updated_by: codex
-revision: 378
+revision: 379
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -904,6 +904,43 @@ not a serial layer-chain.
   `active_microbatch == slots`.
 - MTP stays out of the critical path until TP/EP serving is correct and
   measured.
+- Performance work now follows the isolated gate discipline from
+  `TEMP_THROUGHPUT_PROMPT.md`: one default-off CLI gate per activity, one
+  same-binary V100 A/B per gate, promotion only with unchanged first token,
+  preserved decode checksum, and improved GPU utilization or server decode
+  tok/s.
+
+## Throughput Optimization Pivot
+
+Sprint 371 changed the performance diagnosis. At `32` slots / `256K`, server
+decode stays roughly flat around `98` aggregate tok/s from `1` to `32` active
+requests, while average GPU utilization stays around `10%`. Sprint 374 then
+rejected a simple copied tc-grid INT8 swap for the BF16 compressor GEMMs.
+
+The current throughput thesis is therefore:
+
+```text
+primary limiter = steady-state decode launch/sync latency and fragmented
+                  per-layer CUDA work
+not primary     = raw HBM bandwidth or a missing single dense GEMM dtype
+```
+
+The next performance sequence is ordered to test that thesis directly:
+
+| Order | Gate | Purpose | Decision Criteria |
+|---:|---|---|---|
+| 1 | `--async-output-gate` | Remove host synchronization from the sampler/output path so one decode step becomes CUDA-graph eligible | same first token/checksum; utilization or decode tok/s flat-or-up |
+| 2 | `--decode-cudagraph-gate` | Capture and replay the shape-static 32-wide per-rank decode step, including peer-copy compose | material GPU-utilization increase; checksum-identical longer run |
+| 3 | `--batched-paged-attn-gate` | Collapse per-slot/per-family typed-KV row store/load into block-table-indexed attention kernels | lower attention kernel count and better util/tok/s |
+| 4 | `--compact-moe-decode-gate` | Avoid idle expert work at low batch by compacting active top-k experts into one grouped GEMM | lower EP/compose ms without token drift |
+| 5 | `--fused-gated-silu-gate` | Remove standalone clamp/SwiGLU launch by baking the DS4 clamp into the grouped-GEMM epilogue | lower routed-FFN ms with parity preserved |
+| 6 | `--tp-experts-ab-gate` | Measure TP-sharded expert execution against current EP8 all-to-all, without committing topology | report compose/all-to-all ms and total decode tok/s |
+| 7 | `--fp8-e5m2-kv-gate` | Test smaller KV storage/load traffic for long-context serving | no NaNs, bounded drift, parity token stable |
+| 8 | `--mtp-decode-gate` | Add MTP only after base decode graphing and metrology are stable | accepted tokens/step and effective decode tok/s improve |
+
+Start with S-B then S-A and stop for review. If S-A does not materially move
+GPU utilization, the entire performance roadmap should be reassessed before
+building the later gates.
 
 ## Production Readiness Sequence
 
@@ -920,12 +957,15 @@ The remaining work is ordered by production risk, not by benchmark curiosity.
 3. **API completeness gate.** Finish role-aware multi-message chat parsing,
    stop/EOS behavior, streaming responses, and clear error contracts for bad
    requests, context overflow, queue saturation, and session conflicts.
-4. **Performance gate.** Replace correctness-oriented prompt prefill with
-   optimized batched prefill, add active-slot-only decode for low occupancy,
-   then optimize the final parity-preserving HC/compose path.
+4. **Performance gate.** First remove steady-state host synchronization
+   (`--async-output-gate`), then attempt per-rank CUDA graph replay of the
+   32-wide decode step (`--decode-cudagraph-gate`). Only after that test
+   should we spend larger implementation effort on paged attention, compact
+   MoE, fused gated-SiLU, TP-expert topology A/B, or FP8 KV.
 5. **MTP gate.** Add MTP only after base TP/EP serving is correct and
-   continuously benchmarkable. MTP should be measured as a decode multiplier
-   across `1`, `8`, `16`, and `32` active slots, not as a sidecar smoke.
+   continuously benchmarkable, ideally after decode graph capture lands.
+   MTP should be measured as a decode multiplier across `1`, `8`, `16`, and
+   `32` active slots, not as a sidecar smoke.
 
 ## Sprint Sequence
 
@@ -1016,6 +1056,39 @@ Goal: Add MTP to the TP/EP appliance as a measured decode accelerator.
 Rationale: MTP is likely the largest user-visible speed multiplier, but it
 should not be merged before base TP/EP serving is correct and operationally
 measurable.
+
+### Sprint 375 - Async Output Sync Removal [planned]
+
+Goal: Implement `--async-output-gate`, a default-off gate that removes
+steady-state host synchronization from the sampler/output path and makes the
+token-major decode step eligible for CUDA graph capture.
+
+Rationale: The active-slot matrix shows low, flat utilization at full
+32-slot target shape. `TEMP_THROUGHPUT_PROMPT.md` identifies launch/sync
+latency as the next highest-value performance thesis to test. S-B is the
+required enabler before S-A CUDA graph capture.
+
+Definition: audit `tools/ds4-v100-tp-ep-full-layer-smoke.cu` for
+`cudaDeviceSynchronize` and `cudaStreamSynchronize` inside the steady-state
+`run_one_step` region, move selected-token D2H to stream/event sequencing,
+and A/B the gate on the V100 pod with active-slot matrix and same-binary HTTP
+profile evidence. Promote only if first token/checksum remain stable and GPU
+utilization or server decode tok/s is flat-or-up.
+
+### Sprint 376 - Decode CUDA Graph Capture [planned]
+
+Goal: Implement `--decode-cudagraph-gate`, capturing the shape-static
+32-wide per-rank decode step into CUDA graphs and replaying it across decode
+steps.
+
+Rationale: This is the make-or-break test of the launch-bound thesis. If graph
+replay does not materially improve GPU utilization, later throughput work
+should be replanned around a different bottleneck.
+
+Definition: persistent graph input/output buffers, per-rank graph capture,
+captured peer-copy compose/event dependencies, checksum-identical longer
+decode run, and V100 A/B reporting utilization, decode tok/s, first token,
+and all-layer checksum.
 
 ### Sprint 226 - TP/EP Planner And Topology Contract [complete]
 
