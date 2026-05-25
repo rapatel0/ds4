@@ -297,3 +297,54 @@ logs/from-cluster/sprint377-batched-paged-attn/gate-plumbing-smoke/none-direct-b
 
 Next implementation step: fixed-size row-family plan and the first batched row
 kernel.
+
+### Row-Family Plan
+
+Added a fixed-size row-family plan audit behind `--batched-paged-attn-gate`.
+The audit logs only when a layer's compressed/indexer row signature changes,
+with a per-layer cap, so it can be used in serving-shaped runs without turning
+stdout into the benchmark.
+
+Artifacts:
+
+```text
+logs/from-cluster/sprint377-batched-paged-attn/row-plan-smoke/none-direct-batched-paged-attn
+logs/from-cluster/sprint377-batched-paged-attn/row-plan-change-smoke/none-direct-batched-paged-attn
+```
+
+Validation:
+
+| Check | Result |
+|---|---|
+| V100 build | pass |
+| 1-token direct row-plan smoke | pass, `43` plan rows, first token `54639` |
+| 8-token direct row-plan smoke | pass, `127` plan rows, first token `98751` |
+
+8-token topline:
+
+| Metric | Value |
+|---|---:|
+| Generated decode tok/s | `96.553089` |
+| Continuation decode tok/s | `99.794998` |
+| Compressed rows emitted | `42` |
+| Compressed-KV sum | `813.233407 ms` |
+| Attention projection sum | `479.943118 ms` |
+| Attention state sum | `339.001691 ms` |
+| Raw-read sum | `124.838245 ms` |
+| Typed-history sum | `30.807917 ms` |
+| EP sum | `208.598725 ms` |
+| Compose sum | `145.634186 ms` |
+
+Representative plan samples:
+
+```text
+layer 2 position 262083 raw_valid_rows 4 visible_attn_rows 1 visible_indexer_rows 1 target_family_kernels 3
+layer 4 position 262087 raw_valid_rows 8 visible_attn_rows 2 visible_indexer_rows 2 target_family_kernels 3
+```
+
+Finding: the row plan works, but the narrow typed-history load target is not
+the current hot path. Pending typed-history reloads are `0` in the observed
+compressed/indexer samples because the current skip-load/cache path already
+avoids the reload storm. The first real S-C kernel should therefore fuse more
+of the raw+compressed attention computation, or this sprint should close with
+the evidence and move to compact MoE.

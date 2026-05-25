@@ -38,6 +38,18 @@ serving baseline. The read-only baseline has been captured:
 `88.372350` tok/s, average GPU utilization `7.972222%`, max GPU utilization
 `38%`, and compressed-KV sum `5436.764269` ms.
 
+Sprint 377 row-family planning is now implemented and validated on the V100
+pod. The 8-token direct smoke emitted `127` plan rows, preserved finite output
+with first token `98751`, and showed ratio-4 layers reaching
+`visible_attn_rows=2` and `visible_indexer_rows=2`. The important finding is
+that pending typed-history reloads are `0` in those samples; the current
+skip-current/cache path already avoids the narrow reload storm. Typed-history
+is only `30.807917` ms of `2651.391081` ms summed decode in that run, while
+compressed-KV, attention projection, and attention state are much larger. A
+narrow S-C load-only kernel is therefore unlikely to move topline throughput;
+the remaining S-C choice is a broader raw+compressed attention fusion or close
+the gate and move to compact MoE.
+
 Latest TP/EP format status: Sprint 374 built and ran the V100 workbench for
 the Sprint 373 INT8 candidate shapes. The copied tc-grid INT8 kernels are
 numerically acceptable but not performance candidates for the BF16 attention

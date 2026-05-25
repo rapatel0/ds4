@@ -113,3 +113,66 @@ Smoke result:
 Interpretation: the gate is now safely wired and default-off. It is currently
 a no-op except for enabling existing typed batch-row state; the next step is
 the fixed-size row-family plan and first batched row kernel.
+
+## Row-Family Plan Smoke
+
+Implemented the fixed-size row-family plan audit behind
+`--batched-paged-attn-gate`.
+
+Validation artifacts:
+
+```text
+logs/from-cluster/sprint377-batched-paged-attn/row-plan-smoke/none-direct-batched-paged-attn
+logs/from-cluster/sprint377-batched-paged-attn/row-plan-change-smoke/none-direct-batched-paged-attn
+```
+
+V100 build:
+
+```text
+make -j80 CUDA_HOME=/usr/local/cuda CUDA_ARCH=sm_70 tools/ds4-v100-tp-ep-full-layer-smoke
+```
+
+Result: pass.
+
+The first 1-token direct smoke emitted `43` plan rows and preserved first token
+`54639`, but all compressed/indexer counts were zero because the first step
+was raw-SWA only.
+
+The 8-token direct smoke is the useful row-plan result:
+
+| Metric | Value |
+|---|---:|
+| Return code | `0` |
+| First token | `98751` |
+| Output finite bad | `0` |
+| Plan rows emitted | `127` |
+| Generated tok/s decode | `96.553089` |
+| Continuation tok/s decode | `99.794998` |
+| Compressed rows emitted | `42` |
+| Compressed-KV sum | `813.233407 ms` |
+| Attention projection sum | `479.943118 ms` |
+| Attention state sum | `339.001691 ms` |
+| Raw-read sum | `124.838245 ms` |
+| Typed-history sum | `30.807917 ms` |
+| EP sum | `208.598725 ms` |
+| Compose sum | `145.634186 ms` |
+
+Representative ratio-4 row-plan line once compressed/indexer rows appear:
+
+```text
+layer 2 position 262083 raw_valid_rows 4 visible_attn_rows 1 visible_indexer_rows 1 target_family_kernels 3
+layer 4 position 262087 raw_valid_rows 8 visible_attn_rows 2 visible_indexer_rows 2 target_family_kernels 3
+```
+
+Interpretation: the row-family planner is working, but it also weakens the
+original S-C bottleneck assumption. At this served shape, pending typed-history
+reloads are `0` in the observed compressed/indexer samples because
+skip-current-load and the bounded reload cache are already avoiding the reload
+storm. Typed-history is only `30.807917 ms` of `2651.391081 ms` summed decode
+in the 8-token direct run. The larger measured costs are still compressed KV
+projection/state, attention projection/state, then EP/compose.
+
+Practical consequence: a narrow S-C kernel that only replaces typed-history
+row loads is unlikely to move topline throughput. The next useful S-C work must
+either fuse more of raw+compressed attention itself or Sprint 377 should close
+with this evidence and move to `--compact-moe-decode-gate`.

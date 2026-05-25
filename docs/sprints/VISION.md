@@ -326,8 +326,15 @@ The near-term implementation focus is therefore:
   `DS4_V100_TP_EP_BATCHED_PAGED_ATTN=1`, and
   `tools/ds4-v100-tp-ep-profile.py --batched-paged-attn`; the direct no-op
   smoke preserved first token `54639` and finite output. The remaining Sprint
-  377 work is the fixed-size row-family plan plus the first batched kernel
-  that actually reduces attention/KV launch count.
+  377 work started with the fixed-size row-family plan. The 8-token direct
+  V100 smoke emitted `127` plan rows, preserved finite output with first token
+  `98751`, and showed ratio-4 layers reaching `visible_attn_rows=2` plus
+  `visible_indexer_rows=2`. The key planning result is that pending
+  typed-history reloads are `0` in the observed compressed/indexer samples:
+  skip-current-load and the bounded reload cache already avoid the narrow
+  reload storm. A load-only S-C kernel is therefore unlikely to move topline
+  throughput; Sprint 377 should either broaden to raw+compressed attention
+  fusion or close with this evidence and move to compact MoE.
 - Sprint 327 made the production compressed-KV memory contract executable in
   `tools/ds4-v100-plan-tp.c`. With the real TP pack and F8 KV, `32` slots at
   `256K` fits at `27.00 GiB/GPU` with `5.00 GiB` headroom after reserve;

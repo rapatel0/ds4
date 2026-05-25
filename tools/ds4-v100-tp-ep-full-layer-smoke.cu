@@ -218,6 +218,8 @@ struct RankState {
     uint64_t attn_comp_row_position_layers[43][kBoundedCompRows] = {};
     uint64_t attn_comp_row_loaded_position_layers[43][kBoundedCompRows] = {};
     bool attn_comp_row_loaded_layers[43][kBoundedCompRows] = {};
+    uint32_t batched_paged_attn_plan_logged_layers[43] = {};
+    uint32_t batched_paged_attn_plan_last_key_layers[43] = {};
     float *d_index_comp_kv_cur = nullptr;
     float *d_index_comp_score_cur = nullptr;
     float *d_index_comp_state_kv = nullptr;
@@ -708,6 +710,132 @@ void sync_typed_kv_boundary(const Options &opt, RankState ranks[kGpus]) {
         } else {
             CHECK_CUDA(cudaDeviceSynchronize());
         }
+    }
+}
+
+int ds4_layer_ratio(int layer);
+
+struct BatchedPagedAttnPlan {
+    int layer = -1;
+    int ratio = 0;
+    uint32_t slots = 0;
+    uint64_t position = 0;
+    uint32_t raw_current_row = 0;
+    uint32_t raw_valid_rows = 0;
+    uint32_t visible_attn_rows = 0;
+    uint32_t selected_attn_rows = 0;
+    uint32_t visible_indexer_rows = 0;
+    uint32_t pending_attn_reloads = 0;
+    uint32_t pending_indexer_reloads = 0;
+    uint32_t legacy_history_load_calls = 0;
+    uint32_t batch_row_history_load_calls = 0;
+    uint32_t target_family_kernels = 0;
+};
+
+uint32_t count_pending_batched_attn_reloads(
+    const Options &opt, const RankState &r, int layer, bool indexer_rows,
+    uint32_t visible_rows) {
+    uint32_t pending = 0;
+    for (uint32_t row = 0; row < visible_rows; ++row) {
+        const uint64_t pos = indexer_rows
+            ? r.index_comp_row_position_layers[layer][row]
+            : r.attn_comp_row_position_layers[layer][row];
+        const bool loaded = indexer_rows
+            ? r.index_comp_row_loaded_layers[layer][row]
+            : r.attn_comp_row_loaded_layers[layer][row];
+        const uint64_t loaded_pos = indexer_rows
+            ? r.index_comp_row_loaded_position_layers[layer][row]
+            : r.attn_comp_row_loaded_position_layers[layer][row];
+        if (opt.true_ds4_attention_typed_kv_skip_current_load_gate &&
+            pos == opt.position) {
+            continue;
+        }
+        if (loaded && loaded_pos == pos) {
+            continue;
+        }
+        pending++;
+    }
+    return pending;
+}
+
+BatchedPagedAttnPlan build_batched_paged_attn_plan(
+    const Options &opt, const RankState ranks[kGpus], int layer) {
+    BatchedPagedAttnPlan plan;
+    plan.layer = layer;
+    plan.ratio = ds4_layer_ratio(layer);
+    plan.slots = (uint32_t)opt.slots;
+    plan.position = opt.position;
+    plan.raw_current_row = (uint32_t)(opt.position % kRawSwaRows);
+    plan.raw_valid_rows =
+        std::max(1u, std::min(opt.true_ds4_attention_raw_valid_rows,
+                              (uint32_t)kRawSwaRows));
+    if (opt.true_ds4_compressed_kv_gate && plan.ratio != 0) {
+        plan.visible_attn_rows =
+            std::min(ranks[0].attn_comp_rows_written_layers[layer],
+                     (uint32_t)kBoundedCompRows);
+        plan.selected_attn_rows =
+            plan.ratio == 4 && opt.true_ds4_indexer_attention_gate
+                ? std::min(plan.visible_attn_rows, (uint32_t)kBoundedCompRows)
+                : plan.visible_attn_rows;
+    }
+    if (opt.true_ds4_indexer_attention_gate && plan.ratio == 4 &&
+        plan.visible_attn_rows > 0) {
+        plan.visible_indexer_rows =
+            std::min(ranks[0].index_comp_rows_written_layers[layer],
+                     (uint32_t)kBoundedCompRows);
+    }
+    plan.pending_attn_reloads = count_pending_batched_attn_reloads(
+        opt, ranks[0], layer, false, plan.visible_attn_rows);
+    plan.pending_indexer_reloads = count_pending_batched_attn_reloads(
+        opt, ranks[0], layer, true, plan.visible_indexer_rows);
+    plan.legacy_history_load_calls =
+        (plan.pending_attn_reloads + plan.pending_indexer_reloads) *
+        (uint32_t)opt.slots;
+    plan.batch_row_history_load_calls =
+        plan.pending_attn_reloads + plan.pending_indexer_reloads;
+    plan.target_family_kernels =
+        (opt.true_ds4_attention_raw_read_gate ? 1u : 0u) +
+        (plan.visible_attn_rows > 0 ? 1u : 0u) +
+        (plan.visible_indexer_rows > 0 ? 1u : 0u);
+    return plan;
+}
+
+void maybe_log_batched_paged_attn_plan(const Options &opt,
+                                       RankState ranks[kGpus],
+                                       int layer) {
+    if (!opt.batched_paged_attn_gate || layer < 0 || layer >= 43) return;
+    const BatchedPagedAttnPlan plan =
+        build_batched_paged_attn_plan(opt, ranks, layer);
+    const uint32_t key =
+        (plan.visible_attn_rows & 0xffu) |
+        ((plan.visible_indexer_rows & 0xffu) << 8) |
+        ((plan.pending_attn_reloads & 0xffu) << 16) |
+        ((plan.pending_indexer_reloads & 0xffu) << 24);
+    const uint32_t logged =
+        ranks[0].batched_paged_attn_plan_logged_layers[layer];
+    if (logged > 0 &&
+        ranks[0].batched_paged_attn_plan_last_key_layers[layer] == key) {
+        return;
+    }
+    if (logged >= 8u) return;
+    std::printf("tp_ep_batched_paged_attn_plan\tlayer\t%d\tslots\t%u\t"
+                "ratio\t%d\tposition\t%llu\traw_current_row\t%u\t"
+                "raw_valid_rows\t%u\tvisible_attn_rows\t%u\t"
+                "selected_attn_rows\t%u\tvisible_indexer_rows\t%u\t"
+                "pending_attn_reloads\t%u\tpending_indexer_reloads\t%u\t"
+                "legacy_history_load_calls\t%u\tbatch_row_history_load_calls\t%u\t"
+                "target_family_kernels\t%u\tplan_sample\t%u\tPASS\n",
+                plan.layer, plan.slots, plan.ratio,
+                (unsigned long long)plan.position, plan.raw_current_row,
+                plan.raw_valid_rows, plan.visible_attn_rows,
+                plan.selected_attn_rows, plan.visible_indexer_rows,
+                plan.pending_attn_reloads, plan.pending_indexer_reloads,
+                plan.legacy_history_load_calls,
+                plan.batch_row_history_load_calls, plan.target_family_kernels,
+                logged + 1u);
+    for (int rank = 0; rank < kGpus; ++rank) {
+        ranks[rank].batched_paged_attn_plan_logged_layers[layer] = logged + 1u;
+        ranks[rank].batched_paged_attn_plan_last_key_layers[layer] = key;
     }
 }
 
@@ -11374,6 +11502,7 @@ int run_decode_loop(const Options &opt,
                     std::chrono::duration<double, std::milli>(t_done - t_stage).count();
             }
         }
+        maybe_log_batched_paged_attn_plan(opt, ranks, opt.layer);
         if (opt.true_ds4_attention_typed_kv_history_gate) {
             const auto t_stage = std::chrono::steady_clock::now();
             const int history_rc = run_true_ds4_attention_typed_kv_history_load(
