@@ -37,6 +37,12 @@ def profile_case_dir(tool, hc_stream_sync, extra_profile_args=None):
             suffix += "-decode-cudagraph"
         if arg == "--batched-paged-attn":
             suffix += "-batched-paged-attn"
+        if arg == "--model-router-routes":
+            suffix += "-model-router"
+        if arg == "--compact-moe-decode":
+            suffix += "-compact-moe"
+        if arg == "--disable-compact-route-compose":
+            suffix += "-no-compact-route"
     return f"{tool}{suffix}"
 
 

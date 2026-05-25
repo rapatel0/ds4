@@ -39,6 +39,17 @@ matrix runner now has `--case-cooldown-seconds` for repeated server startups.
 This confirms the next bottleneck is steady-state launch/synchronization and
 GPU0-heavy orchestration, not active-slot admission or VRAM capacity.
 
+Latest real-router status: Sprint 384 measured the quality-preserving
+model-router compact-MoE serving path at the same `32` slot / `256K` shape.
+The matrix in `/workspace/logs/sprint384-real-router-matrix/` completed
+active requests `1,4,8,16,32` with `vram_failures=0`, `vram_min_free_mib=1754`,
+and max sampled memory `32418 MiB`. Server decode was `80.934514`,
+`81.231383`, `79.547736`, `76.816196`, and `81.505160` tok/s; `32`-request
+client throughput was `38.554075` tok/s. This is slower than the Sprint 383
+default/synthetic-route baseline, but it is the correct baseline for
+intelligence-preserving DS4 serving. The extra cost shows up in the
+HC-current FFN/router stage, around `85-88 ms` per all-layer decode step.
+
 Latest throughput direction before memory hardening: Sprint 381 implemented
 `--fp8-e5m2-kv-gate` as a default-off typed-KV format diagnostic. The row
 layout stays block-128 with one E8M0 scale byte plus 128 FP8 payload bytes, so
