@@ -230,6 +230,27 @@ int ggml_turbomind_mul_mat_grouped_gated_silu_total_tokens(
     void*              stream  /* cudaStream_t */);
 
 /**
+ * DS4-specific variant of ggml_turbomind_mul_mat_grouped_gated_silu_total_tokens().
+ * Uses the DeepSeek-V4 routed SwiGLU clamp in the GEMM epilogue:
+ * gate=min(gate, 10), up=clamp(up, -10, 10), out=silu(gate)*up.
+ */
+int ggml_turbomind_mul_mat_grouped_gated_silu_clamped_total_tokens(
+    const void*        A,
+    const int*         token_indices,    // may be NULL
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,    // may be NULL for FP16
+    int                ggml_type,
+    int                N,
+    int                K,
+    int                group_size,
+    int                k_pack_value,
+    void*              D,
+    void*              stream  /* cudaStream_t */);
+
+/**
  * DS4/V100 fixed-shape probe for the per-request routed gate/up decode shape.
  *
  * Same contract as ggml_turbomind_ds4_mxfp4_gated_silu_96, but for the shape the

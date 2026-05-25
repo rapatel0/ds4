@@ -182,3 +182,114 @@ clamp/route-scale semantics, or regresses serving throughput.
   GEMM or all-to-all remains dominant.
 - The real serving shape may have route counts that do not match the fastest
   fixed-shape TurboMind probes.
+
+## Progress
+
+Phase 1 gate and harness plumbing is implemented.
+
+Added:
+
+- `--fused-gated-silu-gate`
+- `DS4_V100_TP_EP_FUSED_GATED_SILU=1`
+- `tools/ds4-v100-tp-ep-profile.py --fused-gated-silu`
+- `tools/ds4-v100-tp-ep-profile.py --routed-ffn-norm-input`
+- scaffold fields for `fused_gated_silu_gate`,
+  `routed_ffn_norm_input_gate`, and `routed_gate_standalone_swiglu`
+
+Local validation passed:
+
+```text
+bash -n tools/ds4-v100-run-appliance.sh
+python3 -m py_compile tools/ds4-v100-tp-ep-profile.py
+git diff --check
+```
+
+V100 build passed:
+
+```text
+make -j80 CUDA_HOME=/usr/local/cuda CUDA_ARCH=sm_70 tools/ds4-v100-tp-ep-full-layer-smoke
+```
+
+Direct V100 evidence at `32` slots / `256K` / `position=262080` /
+`1` generated token:
+
+| Branch | Mode | First token | Decode tok/s | EP ms | Standalone SwiGLU |
+|---|---|---:|---:|---:|---:|
+| current serving-shaped | control | 54639 | 68.313313 | 16.873766 | 0 |
+| current serving-shaped | fused flag | 54639 | 67.795224 | 17.999301 | 0 |
+| routed-normalized | clamped control | 41432 | 45.368432 | 34.189967 | 1 |
+| routed-normalized | generic fused epilogue | 54639 | 57.367413 | 27.038617 | 0 |
+
+Current finding: the production-shaped model-router compact-MoE branch already
+has no standalone routed SwiGLU launch, so the fused flag is a parity-clean
+no-op there. The routed-normalized branch does contain the standalone clamped
+SwiGLU launch, and the generic TurboMind fused epilogue removes it and improves
+the direct proxy, but changes the first token. The generic epilogue is not
+DS4-equivalent.
+
+A narrowly scoped DS4-clamped TurboMind ABI was then implemented:
+
+```text
+ggml_turbomind_mul_mat_grouped_gated_silu_clamped_total_tokens
+```
+
+It preserves the existing generic ABI and adds an opt-in epilogue bit for:
+
+```text
+gate = min(gate, 10)
+up   = clamp(up, -10, 10)
+out  = silu(gate) * up
+```
+
+V100 validation after the ABI change:
+
+```text
+cmake --build build/turbomind-v100 --target ggml-turbomind -j80
+nm -D build/turbomind-v100/libggml-turbomind.so | grep ggml_turbomind_mul_mat_grouped_gated_silu_clamped_total_tokens
+make -j80 CUDA_HOME=/usr/local/cuda CUDA_ARCH=sm_70 tools/ds4-v100-tp-ep-full-layer-smoke
+```
+
+The exported symbol exists and the full-layer smoke harness rebuilds.
+
+Layer-0 EP-only V100 evidence at `32` slots / `256K` / `position=262080` /
+model-router routes / routed-normalized input:
+
+| Mode | Worst gate ms | Worst down ms | Worst EP ms | Result |
+|---|---:|---:|---:|---|
+| two-step clamped gate | 4.102144 | 0.223232 | 4.254720 | PASS |
+| fused DS4-clamped gate | 0.622592 | 0.181248 | 0.803840 | PASS |
+
+That proves the clamped fused ABI launches and removes the expensive
+standalone clamped SwiGLU boundary in isolation.
+
+Resident serving-shaped A/B did not complete. With
+`--routed-ffn-norm-input --fused-gated-silu`, both candidate attempts failed at
+layer 0 before the routed gate executed:
+
+```text
+returncode: 4
+tp_ep_token_major_item step 0 layer 0 rc 4 FAIL
+scaffold_pass_invocations: 0
+```
+
+The failure is the resident `ds4_v100_tp_runtime_dense_kv_slice` precheck
+returning non-zero `max_abs` before `run_decode_loop()` reaches
+`run_gate_selected()`. A same-binary routed-normalized control rerun passes
+with first token `41432` and `59.381346` direct generated tok/s. The
+serving-shaped fused flag without routed-normalized input also passes with
+first token `54639` and `68.824485` direct generated tok/s.
+
+## Outcome
+
+Decision: keep `--fused-gated-silu-gate` default-off and diagnostic-only; do
+not promote.
+
+The generic fused epilogue is rejected for correctness. The DS4-clamped
+TurboMind ABI is promising in the EP-only shape, but Sprint 379 cannot claim
+serving correctness or throughput because the resident direct A/B fails before
+the candidate gate executes. No HTTP A/B was run after that blocker because
+direct serving parity is the prerequisite.
+
+Follow-up: diagnose the resident dense-KV precheck interaction under
+`routed-normalized + fused-gated-silu`, or add a deterministic fused-gate
+output parity harness before attempting another serving promotion.

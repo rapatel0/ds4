@@ -106,6 +106,7 @@ struct Api {
     pfn_shutdown shutdown = nullptr;
     pfn_mmgt mmgt = nullptr;
     pfn_mmgs mmgs = nullptr;
+    pfn_mmgs mmgs_clamped = nullptr;
 };
 
 struct ContractRow {
@@ -618,6 +619,7 @@ struct Options {
     bool decode_cudagraph_gate = false;
     bool batched_paged_attn_gate = false;
     bool compact_moe_decode_gate = false;
+    bool fused_gated_silu_gate = false;
     bool final_hc_carry_gate = false;
     bool diagnostic_output_head = false;
     bool tp_hc_final_expand_gate = false;
@@ -3185,6 +3187,7 @@ void usage(const char *argv0) {
                  "       [--source-copy-schedule] [--dest-copy-schedule]\n"
                  "       [--copy-event-compose]\n"
                  "       [--compact-route-compose] [--compact-moe-decode-gate]\n"
+                 "       [--fused-gated-silu-gate]\n"
                  "       [--token-major-all-layers] [--shared-dense-ops]\n"
                  "       [--skip-self-compose-copy] [--copy-self-compose]\n"
                  "       [--multi-copy-streams] [--serving-bench]\n"
@@ -3347,6 +3350,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
         } else if (std::strcmp(arg, "--compact-moe-decode-gate") == 0) {
             opt->compact_moe_decode_gate = true;
             opt->compact_route_compose = true;
+        } else if (std::strcmp(arg, "--fused-gated-silu-gate") == 0) {
+            opt->fused_gated_silu_gate = true;
         } else if (std::strcmp(arg, "--token-major-all-layers") == 0) {
             opt->token_major_all_layers = true;
         } else if (std::strcmp(arg, "--shared-dense-ops") == 0) {
@@ -7522,6 +7527,8 @@ void load_api(void *lib, Api *api) {
     api->shutdown = (pfn_shutdown)dlsym(lib, "ggml_turbomind_shutdown");
     api->mmgt = (pfn_mmgt)dlsym(lib, "ggml_turbomind_mul_mat_grouped_total_tokens");
     api->mmgs = (pfn_mmgs)dlsym(lib, "ggml_turbomind_mul_mat_grouped_gated_silu_total_tokens");
+    api->mmgs_clamped =
+        (pfn_mmgs)dlsym(lib, "ggml_turbomind_mul_mat_grouped_gated_silu_clamped_total_tokens");
     if (!api->init || !api->shutdown || !api->mmgt || !api->mmgs) {
         std::fprintf(stderr, "dlsym failed for required TurboMind ABI\n");
         std::exit(2);
@@ -7691,6 +7698,22 @@ int run_gate_clamped(RankState &rank, const Api &api, bool apply_route_scale) {
             (uint64_t)rank.routes, kRoutedSwigluClamp);
     CHECK_CUDA(cudaGetLastError());
     return 0;
+}
+
+int run_gate_selected(RankState &rank, const Api &api, const Options &opt) {
+    if (!opt.routed_ffn_norm_input_gate) {
+        return run_gate(rank, api);
+    }
+    if (opt.fused_gated_silu_gate && !opt.reference_hc_reduce_gate &&
+        api.mmgs_clamped) {
+        return api.mmgs_clamped(
+            rank.d_a, nullptr, rank.d_offsets, kLocalExperts, rank.routes,
+            (const void * const *)rank.gated.d_w_table,
+            (const void * const *)rank.gated.d_s_table,
+            kDType, kFusedN, kHidden, kGroupSize, rank.gated.k_pack,
+            rank.d_gated, rank.stream);
+    }
+    return run_gate_clamped(rank, api, opt.reference_hc_reduce_gate);
 }
 
 int run_down(RankState &rank, const Api &api) {
@@ -11796,9 +11819,7 @@ int run_decode_loop(const Options &opt,
             }
         }
         for (int p = 0; p < kGpus; ++p) {
-            const int gate_rc = opt.routed_ffn_norm_input_gate
-                ? run_gate_clamped(ranks[p], api, opt.reference_hc_reduce_gate)
-                : run_gate(ranks[p], api);
+            const int gate_rc = run_gate_selected(ranks[p], api, opt);
             if (gate_rc != 0 || run_down(ranks[p], api) != 0) return 1;
         }
         double ep_stage_ms = 0.0;
@@ -13000,9 +13021,7 @@ int run_layer(const Options &opt,
     if (!opt.skip_predecode_probes) {
         for (int i = 0; i < opt.warmup; ++i) {
             for (int p = 0; p < kGpus; ++p) {
-                const int gate_rc = opt.routed_ffn_norm_input_gate
-                    ? run_gate_clamped(ranks[p], *api, opt.reference_hc_reduce_gate)
-                    : run_gate(ranks[p], *api);
+                const int gate_rc = run_gate_selected(ranks[p], *api, opt);
                 if (gate_rc != 0 || run_down(ranks[p], *api) != 0) {
                     close_local_runtime();
                     return 9;
@@ -13020,9 +13039,7 @@ int run_layer(const Options &opt,
         }
         for (int i = 0; i < opt.iters; ++i) {
             for (int p = 0; p < kGpus; ++p) {
-                const int gate_rc = opt.routed_ffn_norm_input_gate
-                    ? run_gate_clamped(ranks[p], *api, opt.reference_hc_reduce_gate)
-                    : run_gate(ranks[p], *api);
+                const int gate_rc = run_gate_selected(ranks[p], *api, opt);
                 if (gate_rc != 0) return 10;
             }
         }
@@ -13783,6 +13800,9 @@ int run_token_major_serving_loop(const Options &opt,
                 "multi_copy_streams\t%d\t"
                 "batched_paged_attn_gate\t%d\t"
                 "compact_moe_decode_gate\t%d\t"
+                "fused_gated_silu_gate\t%d\t"
+                "routed_ffn_norm_input_gate\t%d\t"
+                "routed_gate_standalone_swiglu\t%d\t"
                 "sum_decode_ms\t%.6f\tms_per_token\t%.6f\t"
                 "projected_slot_step_tok_s\t%.6f\t"
                 "sum_ep_ms\t%.6f\tsum_dense_ms\t%.6f\tsum_compose_ms\t%.6f\t"
@@ -13822,6 +13842,10 @@ int run_token_major_serving_loop(const Options &opt,
                 opt.multi_copy_streams ? 1 : 0,
                 opt.batched_paged_attn_gate ? 1 : 0,
                 opt.compact_moe_decode_gate ? 1 : 0,
+                opt.fused_gated_silu_gate ? 1 : 0,
+                opt.routed_ffn_norm_input_gate ? 1 : 0,
+                (opt.routed_ffn_norm_input_gate &&
+                 !(opt.fused_gated_silu_gate && !opt.reference_hc_reduce_gate)) ? 1 : 0,
                 sum_decode_ms, ms_per_token, slot_step_tok_s,
                 sum_ep_ms, sum_dense_ms, sum_compose_ms,
                 sum_compose_reduce_ms, sum_compose_copy_ms,

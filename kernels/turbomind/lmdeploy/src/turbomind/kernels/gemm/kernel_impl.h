@@ -181,6 +181,8 @@ public:
         }
 
         const bool silu_act = ((int)operation.epilogue & (int)Epilogue::kGatedSilu);
+        const bool ds4_clamped_silu_act =
+            ((int)operation.epilogue & (int)Epilogue::kDs4ClampedGatedSilu);
 
         MatrixLayout Pdesc = Ddesc;
         Pdesc.ld           = mk2cs<Gemm::kOrderC>(Pdesc.rows, Pdesc.cols).x;
@@ -192,6 +194,7 @@ public:
                                (int*)workspace.barriers,
                                combin_mat,
                                silu_act,
+                               ds4_clamped_silu_act,
                                false,
                                nullptr,
                                nullptr,

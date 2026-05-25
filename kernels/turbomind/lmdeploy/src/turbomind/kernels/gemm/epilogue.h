@@ -168,6 +168,23 @@ struct GatedActivation {
     }
 };
 
+struct Ds4ClampedGatedSilu {
+    template<class T, int N>
+    __device__ static void apply(Array<T, N>& x)
+    {
+        static_assert(N % 2 == 0);
+        PRAGMA_UNROLL
+        for (int i = 0; i < N; i += 2) {
+            float gate = static_cast<float>(x[i]);
+            float up = static_cast<float>(x[i + 1]);
+            gate = fminf(gate, 10.0f);
+            up = fminf(fmaxf(up, -10.0f), 10.0f);
+            const float silu = fdividef(gate, 1.f + expf(-gate));
+            x[i / 2] = static_cast<T>(silu * up);
+        }
+    }
+};
+
 struct Silu {
     __device__ static float apply(float x)
     {
@@ -186,6 +203,7 @@ struct EpilogueParam {
     MatrixCombination_v3 combine_mat;
 
     bool silu_act;
+    bool ds4_clamped_silu_act;
     bool ds4_route_reduce;
     float* ds4_route_out;
     const int* ds4_sorted_pairs;
@@ -473,7 +491,12 @@ struct Epilogue_ {
             for (int s = 0; s < S; ++s) {
                 PRAGMA_UNROLL
                 for (int c = 0; c < C; ++c) {
-                    GatedActivation<Silu>::apply(tmp_C[s][c]);
+                    if (param.ds4_clamped_silu_act) {
+                        Ds4ClampedGatedSilu::apply(tmp_C[s][c]);
+                    }
+                    else {
+                        GatedActivation<Silu>::apply(tmp_C[s][c]);
+                    }
                     if (pred(s, c)) {
                         const auto tmp = cast<Tc>((Array<Dtype, kAccess / 2>&)tmp_C[s][c]);
                         Store(reinterpret_cast<Tc*>(ptr), tmp);

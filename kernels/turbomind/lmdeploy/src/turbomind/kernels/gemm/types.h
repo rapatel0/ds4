@@ -126,6 +126,7 @@ enum class Epilogue : int
     kNone               = 0,
     kChannelCombination = 0x1,
     kGatedSilu          = 0x2,
+    kDs4ClampedGatedSilu = 0x4,
 };
 
 struct QuantDesc {

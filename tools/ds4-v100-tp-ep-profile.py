@@ -287,6 +287,8 @@ def build_env(args, port):
             else "1",
             "DS4_V100_TP_EP_MODEL_ROUTER_ROUTES": "1" if args.model_router_routes else "0",
             "DS4_V100_TP_EP_COMPACT_MOE_DECODE": "1" if args.compact_moe_decode else "0",
+            "DS4_V100_TP_EP_FUSED_GATED_SILU": "1" if args.fused_gated_silu else "0",
+            "DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT": "1" if args.routed_ffn_norm_input else "0",
             "DS4_V100_RESERVE_MIB": "0",
             "DS4_V100_PORT": str(port),
             "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_HISTORY": "1",
@@ -368,6 +370,10 @@ def variant_suffix(args):
         suffix += "-no-compact-route"
     if getattr(args, "compact_moe_decode", False):
         suffix += "-compact-moe"
+    if getattr(args, "fused_gated_silu", False):
+        suffix += "-fused-gated-silu"
+    if getattr(args, "routed_ffn_norm_input", False):
+        suffix += "-routed-norm"
     return suffix
 
 
@@ -431,6 +437,10 @@ def direct_command(args):
         cmd.append("--model-router-routes")
     if args.compact_moe_decode:
         cmd.append("--compact-moe-decode-gate")
+    if args.fused_gated_silu:
+        cmd.append("--fused-gated-silu-gate")
+    if args.routed_ffn_norm_input:
+        cmd.append("--routed-ffn-norm-input-gate")
     if "window" in args.tool:
         cmd.append("--cuda-profiler-window")
     if args.hc_current_peer_gather:
@@ -559,6 +569,9 @@ def add_tp_ep_line_summaries(summary, stdout):
                 "tp_hc_current_input_peer_gather",
                 "tp_hc_current_input_stream_sync",
                 "compact_moe_decode_gate",
+                "fused_gated_silu_gate",
+                "routed_ffn_norm_input_gate",
+                "routed_gate_standalone_swiglu",
                 "sum_final_hc_ms",
                 "wall_ms",
             ]:
@@ -790,6 +803,8 @@ def main():
     parser.add_argument("--model-router-routes", action="store_true")
     parser.add_argument("--disable-compact-route-compose", action="store_true")
     parser.add_argument("--compact-moe-decode", action="store_true")
+    parser.add_argument("--fused-gated-silu", action="store_true")
+    parser.add_argument("--routed-ffn-norm-input", action="store_true")
     parser.add_argument("--port", type=int, default=18357)
     parser.add_argument("--readiness-seconds", type=int, default=600)
     parser.add_argument("--request-timeout-seconds", type=int, default=1200)

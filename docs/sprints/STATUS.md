@@ -9,19 +9,24 @@ Current bottleneck reference:
 summarizes the measured bottlenecks, layer-by-layer hot paths, and experiments
 already tried.
 
-Latest throughput direction: Sprint 378 implemented and promoted
-`--compact-moe-decode-gate` for the real model-router compact-compose path.
-The gate makes true DS4 model-router top-k routes compatible with compact EP
-return composition by replacing the old one-route-per-source-rank/slot index
-with bounded per-source-rank, per-slot route lists. V100 HTTP serving A/B at
-`32` requests / `32` slots / `256K` / `position=262080` /
-`32` generated tokens/request preserved the response token stream and improved
-client throughput from `37.394075` to `39.034685` tok/s, server decode from
-`80.812914` to `81.313535` tok/s, average GPU utilization from `8.385417%` to
-`8.559783%`, and compose time from `19.167728` to `14.703119` ms. The
-candidate route audit saw `64` duplicate same-rank slots, `max_same_rank_routes=2`,
-and compact return bytes of `3145728` versus `4194304` for the all-destination
-path.
+Latest throughput direction: Sprint 379 implemented
+`--fused-gated-silu-gate` plus a narrow DS4-clamped TurboMind ABI,
+`ggml_turbomind_mul_mat_grouped_gated_silu_clamped_total_tokens`, and closed
+the sprint as non-promoted. The current production-shaped model-router
+compact-MoE branch already reports `routed_gate_standalone_swiglu=0`, so the
+fused flag is parity-clean but effectively a no-op there (`54639` first token,
+`68.824485` direct generated tok/s after the ABI rebuild). The routed-normalized
+branch does contain the standalone clamped SwiGLU launch; the generic TurboMind
+fused epilogue removes it and improves direct proxy throughput from
+`45.368432` to `57.367413` tok/s, but changes the first token from `41432` to
+`54639`, so it is rejected for correctness. The DS4-clamped ABI launches and is
+fast in a layer-0 EP-only V100 run (`4.102144` ms two-step gate versus
+`0.622592` ms fused gate), but resident serving-shaped direct A/B with
+`routed-normalized + fused-gated-silu` fails at layer 0 before the routed gate
+executes because the resident dense-KV precheck returns rc `4`. Keep the flag
+default-off and diagnostic-only; the next work is either a deterministic
+fused-gate parity harness or diagnosis of that resident dense-KV precheck
+interaction.
 
 Current active steering source: `TEMP_THROUGHPUT_PROMPT.md`. The near-term
 performance queue remains isolated default-off gates, same-binary V100 A/B,
@@ -32,6 +37,10 @@ already `0` in the observed compressed/indexer samples. S-D compact MoE is now
 promoted for model-router compact compose. The next sprint should execute S-E
 `--fused-gated-silu-gate`, removing the routed-FFN clamp/SwiGLU launch and
 intermediate while preserving the same model-router serving parity checks.
+Sprint 379's result says the existing generic epilogue is insufficient for the
+clamped routed-normalized branch, and the new DS4-clamped ABI needs a resident
+serving precheck fix or a narrower parity harness before promotion can be
+considered.
 
 Latest TP/EP format status: Sprint 374 built and ran the V100 workbench for
 the Sprint 373 INT8 candidate shapes. The copied tc-grid INT8 kernels are

@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-25
-last_updated_by: vision
-revision: 389
+last_updated_by: sprint-379
+revision: 391
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -60,7 +60,7 @@ The performance program is intentionally isolated:
 | 2 | `--decode-cudagraph-gate` | Complete | Rejected; stream capture is blocked by pervasive `cudaMemcpyPeerAsync` transport |
 | 3 | `--batched-paged-attn-gate` | Complete | Rejected as narrow load target; row planner remains diagnostic-only |
 | 4 | `--compact-moe-decode-gate` | Complete | Promoted for real model-router compact compose; response tokens matched and HTTP serving improved |
-| 5 | `--fused-gated-silu-gate` | Active next | Remove routed-FFN clamp/SwiGLU launch and intermediate |
+| 5 | `--fused-gated-silu-gate` | Complete | Not promoted; generic epilogue changes token, DS4-clamped ABI is fast in EP-only isolation but resident serving A/B fails before the gate |
 | 6 | `--tp-experts-ab-gate` | Topology measurement | Compare TP-sharded experts against EP8 all-to-all with real serving metrics |
 | 7 | `--fp8-e5m2-kv-gate` | Long-context bandwidth work | Test KV footprint/bandwidth reduction after launch-count reducers are measured |
 | 8 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
@@ -79,10 +79,17 @@ throughput sprint.
 
 The near-term implementation focus is therefore:
 
-1. Execute S-E `--fused-gated-silu-gate`. This should remove the routed-FFN
-   clamp/SwiGLU launch and intermediate without changing storage format or
-   broad dtype semantics.
-2. Run S-F `--tp-experts-ab-gate` as a topology measurement, not a rewrite.
+1. Close the S-E follow-up with a narrow parity/precheck fix if we want to
+   revisit fused gated-SiLU. Sprint 379 showed the current serving-shaped
+   branch already has no standalone routed SwiGLU launch, the generic
+   TurboMind gated-SiLU epilogue is not DS4-equivalent, and the new
+   DS4-clamped ABI is fast only in EP-only isolation so far (`4.102144` ms
+   two-step gate versus `0.622592` ms fused gate on layer 0). It is not a
+   serving promotion candidate until the resident dense-KV precheck failure
+   under `routed-normalized + fused-gated-silu` is diagnosed or a deterministic
+   fused-gate parity harness proves the ABI.
+2. Run S-F `--tp-experts-ab-gate` as the next topology measurement, not a
+   rewrite.
    It should compare TP-sharded experts against the current EP8 all-to-all path
    with the same serving harness, reporting compose/all-to-all ms, server decode
    tok/s, GPU utilization, first token, and checksum.
@@ -1021,7 +1028,9 @@ The near-term implementation focus is therefore:
   revisit requires a scoped transport replacement plan; it should not displace
   S-C/S-D/S-E performance gates.
 - Sprint 378 promoted compact MoE for the real model-router compact-compose
-  path. The immediate execution path is now S-E fused gated-SiLU.
+  path. Sprint 379 then tested S-E fused gated-SiLU and closed it as
+  diagnostic-only: the generic epilogue changes tokens, while the DS4-clamped
+  ABI is fast in isolation but not resident-serving validated.
 
 ## Throughput Optimization Pivot
 
@@ -1066,7 +1075,7 @@ The next performance sequence is ordered to test that thesis directly:
 |---:|---|---|---|
 | 1 | `--batched-paged-attn-gate` | Collapse per-slot/per-family typed-KV row store/load into block-table-indexed attention kernels | Closed diagnostic-only; row planner showed pending typed-history reloads already `0` |
 | 2 | `--compact-moe-decode-gate` | Make real model-router top-k routes compatible with compact EP compose | Promoted for model-router compact compose |
-| 3 | `--fused-gated-silu-gate` | Remove standalone clamp/SwiGLU launch by baking the DS4 clamp into the grouped-GEMM epilogue | Active next |
+| 3 | `--fused-gated-silu-gate` | Remove standalone clamp/SwiGLU launch by baking the DS4 clamp into the grouped-GEMM epilogue | Complete diagnostic; not promoted |
 | 4 | `--tp-experts-ab-gate` | Measure TP-sharded expert execution against current EP8 all-to-all, without committing topology | Planned measurement |
 | 5 | `--fp8-e5m2-kv-gate` | Test smaller KV storage/load traffic for long-context serving | Planned after launch/MoE gates |
 | 6 | `--mtp-decode-gate` | Add MTP only after base TP/EP decode metrology and launch strategy are stable | Deferred multiplier |
@@ -1077,8 +1086,11 @@ promotion path: real capture is blocked by stream-capture-incompatible
 therefore pivots to S-C/S-D/S-E/S-F rather than extending audit-only graph work
 or starting a broad P2P transport rewrite inside the graph sprint.
 
-Current next step: start S-E, `--fused-gated-silu-gate`, using the promoted
-model-router compact-compose path as the serving baseline.
+Current next step: move to S-F TP-sharded expert A/B as a topology measurement.
+S-E can be revisited only after the resident dense-KV precheck failure under
+`routed-normalized + fused-gated-silu` is diagnosed, or after a deterministic
+fused-gate parity harness proves the DS4-clamped ABI against the two-step
+reference.
 
 ## Production Readiness Sequence
 
@@ -1299,7 +1311,7 @@ improved client throughput from `37.394075` to `39.034685` tok/s, improved
 server decode from `80.812914` to `81.313535` tok/s, and reduced compose time
 from `19.167728` to `14.703119` ms.
 
-### Sprint 379 - Fused Gated-SiLU Gate [active next]
+### Sprint 379 - Fused Gated-SiLU Gate [complete]
 
 Goal: Implement `--fused-gated-silu-gate` by moving the DS4 clamp/SwiGLU
 boundary into the routed grouped-GEMM epilogue.
@@ -1308,6 +1320,17 @@ Rationale: This is a kernel-count reducer inside the routed FFN path and a
 natural follow-on to compact MoE. It should bake the DS4 `10.0` routed-SwiGLU
 clamp into the grouped-GEMM epilogue and avoid extra intermediates, while
 preserving the source quantized weight layout.
+
+Outcome: Not promoted. The current production-shaped model-router compact-MoE
+branch already reports `routed_gate_standalone_swiglu=0`, so the fused flag is
+a no-op there. The routed-normalized branch reports
+`routed_gate_standalone_swiglu=1`; the generic TurboMind fused epilogue removes
+it and improves direct proxy throughput from `45.368432` to `57.367413` tok/s,
+but changes first token from `41432` to `54639`. A true DS4-clamped TurboMind
+ABI was implemented and is fast in a layer-0 EP-only V100 run
+(`4.102144` ms two-step gate versus `0.622592` ms fused gate), but resident
+serving-shaped direct A/B fails before the routed gate executes because the
+dense-KV precheck returns rc `4`. Keep the flag diagnostic-only.
 
 ### Sprint 380 - TP-Sharded Expert A/B [tentative]
 
@@ -2748,6 +2771,8 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Rebased the vision on `TEMP_THROUGHPUT_PROMPT.md` after Sprint 377 baseline/plumbing. | S-B and S-A are no longer future bets: async output regressed and graph capture is blocked by P2P transport. Sprint 377's fresh typed long-context baseline is `88.372350` server decode tok/s, `40.157540` client tok/s, and `7.972222%` average GPU utilization at `32` slots / `256K`. | Finish S-C row-family planning and the first batched attention/KV kernel, then move to compact MoE, fused gated-SiLU, TP-expert A/B, FP8 KV, and MTP in that order unless measured evidence changes the sequence. |
 | 2026-05-25 | Re-aligned the vision to the isolated throughput prompt after S-C closed. | S-C row planning is no longer the active branch: the observed typed-history pending reload count is already `0`, so a narrow load-only paged-attention kernel is unlikely to move the topline. The active performance work is S-D compact MoE, specifically real model-router compatibility with compact EP compose. | Finish `--compact-moe-decode-gate`, then run S-E fused gated-SiLU, S-F TP-expert A/B, S-G FP8 KV, and S-H MTP as separate default-off gates with same-binary V100 A/Bs. |
 | 2026-05-25 | Sprint 378 promoted compact MoE for model-router compact compose. | Direct A/B preserved first token `54639` and checksum `6840320333`, improving decode from `62.617354` to `66.481242` tok/s. HTTP serving A/B preserved response token streams, improved client throughput from `37.394075` to `39.034685` tok/s, server decode from `80.812914` to `81.313535` tok/s, and compose from `19.167728` to `14.703119` ms. | Use the promoted model-router compact-compose path as the baseline for S-E `--fused-gated-silu-gate`. |
+| 2026-05-25 | Sprint 379 phase 1 tested the generic fused gated-SiLU epilogue. | The current production-shaped branch already has `routed_gate_standalone_swiglu=0`; explicit fused mode preserved first token `54639` but was effectively a no-op. The routed-normalized branch has the standalone clamped launch; generic fused mode removed it and improved direct proxy from `45.368432` to `57.367413` tok/s, but changed first token from `41432` to `54639`. | Do not promote the generic epilogue. Continue S-E only through a true DS4-clamped TurboMind epilogue ABI, or close S-E with that concrete blocker. |
+| 2026-05-25 | Sprint 379 implemented the true DS4-clamped TurboMind epilogue ABI. | The ABI exports and the clamped fused gate is fast in layer-0 EP-only isolation (`4.102144` ms two-step gate versus `0.622592` ms fused gate), but resident direct serving A/B with `routed-normalized + fused-gated-silu` fails at layer 0 before the routed gate executes due to the dense-KV precheck returning rc `4`. | Keep S-E default-off and diagnostic-only. Move to S-F TP-sharded expert A/B unless we first add a deterministic fused-gate parity harness or diagnose the resident dense-KV precheck interaction. |
 
 ## Open Questions
 

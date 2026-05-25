@@ -393,6 +393,7 @@ int launch_ds4_mxfp4_down_reduce_epilogue(
         (int*)barriers,
         combin_mat,
         false,
+        false,
         true,
         route_out,
         sorted_pairs,

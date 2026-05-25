@@ -1300,7 +1300,7 @@ extern "C" GGML_TM_EXPORT int ggml_turbomind_mul_mat_grouped_total_tokens(
     return rc;
 }
 
-extern "C" GGML_TM_EXPORT int ggml_turbomind_mul_mat_grouped_gated_silu_total_tokens(
+static int mul_mat_grouped_gated_silu_total_tokens_impl(
     const void*        A,
     const int*         token_indices,
     const int*         expert_offsets,
@@ -1314,7 +1314,8 @@ extern "C" GGML_TM_EXPORT int ggml_turbomind_mul_mat_grouped_gated_silu_total_to
     int                group_size,
     int                k_pack_value,
     void*              D,
-    void*              stream_v)
+    void*              stream_v,
+    bool               ds4_clamped_silu)
 {
     int cur_dev = -1;
     cudaGetDevice(&cur_dev);
@@ -1335,7 +1336,10 @@ extern "C" GGML_TM_EXPORT int ggml_turbomind_mul_mat_grouped_gated_silu_total_to
 
     tmg::Operation op{};
     op.dispatch  = dispatch_policy_from_env();
-    op.epilogue  = tmg::Epilogue::kGatedSilu;
+    op.epilogue  = ds4_clamped_silu
+        ? (tmg::Epilogue)((int)tmg::Epilogue::kGatedSilu |
+                          (int)tmg::Epilogue::kDs4ClampedGatedSilu)
+        : tmg::Epilogue::kGatedSilu;
     op.quant_a   = tmg::QuantDesc{tmg::QuantType::kNone, 0};
     op.quant_b   = (ggml_type == GGML_TM_DTYPE_FP16)
                        ? tmg::QuantDesc{tmg::QuantType::kNone, 0}
@@ -1428,6 +1432,50 @@ extern "C" GGML_TM_EXPORT int ggml_turbomind_mul_mat_grouped_gated_silu_total_to
         weights_packed, Bdesc, scales_packed, Vdesc, 0.0f, nullptr, Cdesc,
         D, Ddesc, workspace, stream);
     return rc;
+}
+
+extern "C" GGML_TM_EXPORT int ggml_turbomind_mul_mat_grouped_gated_silu_total_tokens(
+    const void*        A,
+    const int*         token_indices,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                ggml_type,
+    int                N,
+    int                K,
+    int                group_size,
+    int                k_pack_value,
+    void*              D,
+    void*              stream_v)
+{
+    return mul_mat_grouped_gated_silu_total_tokens_impl(
+        A, token_indices, expert_offsets, num_experts, total_tokens,
+        weights_packed, scales_packed, ggml_type, N, K, group_size,
+        k_pack_value, D, stream_v, false);
+}
+
+extern "C" GGML_TM_EXPORT int ggml_turbomind_mul_mat_grouped_gated_silu_clamped_total_tokens(
+    const void*        A,
+    const int*         token_indices,
+    const int*         expert_offsets,
+    int                num_experts,
+    int                total_tokens,
+    const void* const* weights_packed,
+    const void* const* scales_packed,
+    int                ggml_type,
+    int                N,
+    int                K,
+    int                group_size,
+    int                k_pack_value,
+    void*              D,
+    void*              stream_v)
+{
+    return mul_mat_grouped_gated_silu_total_tokens_impl(
+        A, token_indices, expert_offsets, num_experts, total_tokens,
+        weights_packed, scales_packed, ggml_type, N, K, group_size,
+        k_pack_value, D, stream_v, true);
 }
 
 extern "C" GGML_TM_EXPORT int ggml_turbomind_ds4_mxfp4_gated_silu_6(
