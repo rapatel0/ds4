@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-25
-last_updated_by: codex
-revision: 379
+last_updated_by: vision
+revision: 380
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -909,6 +909,10 @@ not a serial layer-chain.
   same-binary V100 A/B per gate, promotion only with unchanged first token,
   preserved decode checksum, and improved GPU utilization or server decode
   tok/s.
+- The active performance question is launch/synchronization overhead. More
+  dtype swaps, sidecar probes, or isolated single-layer kernels are secondary
+  until the async-output and decode-CUDA-graph gates are measured at the full
+  `32` slot / `256K` serving shape.
 
 ## Throughput Optimization Pivot
 
@@ -916,6 +920,9 @@ Sprint 371 changed the performance diagnosis. At `32` slots / `256K`, server
 decode stays roughly flat around `98` aggregate tok/s from `1` to `32` active
 requests, while average GPU utilization stays around `10%`. Sprint 374 then
 rejected a simple copied tc-grid INT8 swap for the BF16 compressor GEMMs.
+`TEMP_THROUGHPUT_PROMPT.md` reframes the next work around the fact that the
+runtime has many small launches and host synchronizations inside the steady
+decode step, with no CUDA graph capture today.
 
 The current throughput thesis is therefore:
 
@@ -924,6 +931,12 @@ primary limiter = steady-state decode launch/sync latency and fragmented
                   per-layer CUDA work
 not primary     = raw HBM bandwidth or a missing single dense GEMM dtype
 ```
+
+This is not a permanent conclusion. It is the next falsifiable thesis. If the
+async-output cleanup plus graph replay does not materially raise GPU
+utilization at `32` active slots, the roadmap pivots away from launch
+amortization and back to measured layer hot spots such as paged attention,
+compact MoE, or TP-sharded experts.
 
 The next performance sequence is ordered to test that thesis directly:
 
@@ -944,24 +957,23 @@ building the later gates.
 
 ## Production Readiness Sequence
 
-The remaining work is ordered by production risk, not by benchmark curiosity.
+The remaining work is ordered by what blocks practical use on the V100 box,
+not by benchmark curiosity.
 
-1. **Reference parity gate.** Prove the TP/EP token loop matches the DS4
-   reference semantics closely enough to trust generated tokens. This means
-   layer/HC sequence parity, logits/top-token comparisons on fixed prompts, and
-   long-context cache reuse checks at `128K` and `256K`.
-2. **Persistent serving gate.** Run the TP/EP server as a long-lived appliance
+1. **Performance capture gate.** Remove steady-state host synchronization
+   (`--async-output-gate`) and then attempt per-rank CUDA graph replay of the
+   32-wide decode step (`--decode-cudagraph-gate`). This is the immediate
+   critical path because the current serving path is askable but low-utilization.
+2. **Reference parity gate.** Keep first-token/checksum parity attached to
+   every performance gate, then broaden it into fixed prompt suites and
+   long-context cache-reuse checks at `128K` and `256K`.
+3. **Persistent serving gate.** Run the TP/EP server as a long-lived appliance
    process with `MAX_REQUESTS=0`, readiness that reflects tokenizer/model/GPU
    residency, stable session reset/eviction semantics, overload behavior,
    cancellation/timeout handling, and operational logs/metrics.
-3. **API completeness gate.** Finish role-aware multi-message chat parsing,
+4. **API completeness gate.** Finish role-aware multi-message chat parsing,
    stop/EOS behavior, streaming responses, and clear error contracts for bad
    requests, context overflow, queue saturation, and session conflicts.
-4. **Performance gate.** First remove steady-state host synchronization
-   (`--async-output-gate`), then attempt per-rank CUDA graph replay of the
-   32-wide decode step (`--decode-cudagraph-gate`). Only after that test
-   should we spend larger implementation effort on paged attention, compact
-   MoE, fused gated-SiLU, TP-expert topology A/B, or FP8 KV.
 5. **MTP gate.** Add MTP only after base TP/EP serving is correct and
    continuously benchmarkable, ideally after decode graph capture lands.
    MTP should be measured as a decode multiplier across `1`, `8`, `16`, and
@@ -1057,7 +1069,7 @@ Rationale: MTP is likely the largest user-visible speed multiplier, but it
 should not be merged before base TP/EP serving is correct and operationally
 measurable.
 
-### Sprint 375 - Async Output Sync Removal [planned]
+### Sprint 375 - Async Output Sync Removal [active]
 
 Goal: Implement `--async-output-gate`, a default-off gate that removes
 steady-state host synchronization from the sampler/output path and makes the
@@ -1070,10 +1082,13 @@ required enabler before S-A CUDA graph capture.
 
 Definition: audit `tools/ds4-v100-tp-ep-full-layer-smoke.cu` for
 `cudaDeviceSynchronize` and `cudaStreamSynchronize` inside the steady-state
-`run_one_step` region, move selected-token D2H to stream/event sequencing,
-and A/B the gate on the V100 pod with active-slot matrix and same-binary HTTP
-profile evidence. Promote only if first token/checksum remain stable and GPU
-utilization or server decode tok/s is flat-or-up.
+`run_one_step` region, move selected-token D2H to stream/event sequencing
+where it is safely movable, and A/B the gate on the V100 pod with active-slot
+matrix and same-binary HTTP profile evidence. Promote only if first
+token/checksum remain stable and GPU utilization or server decode tok/s is
+flat-or-up. If CPU token consumption still forces a synchronization at the
+next-step embed seed, record the remaining dependency explicitly for Sprint
+376 rather than hiding it.
 
 ### Sprint 376 - Decode CUDA Graph Capture [planned]
 
@@ -1089,6 +1104,57 @@ Definition: persistent graph input/output buffers, per-rank graph capture,
 captured peer-copy compose/event dependencies, checksum-identical longer
 decode run, and V100 A/B reporting utilization, decode tok/s, first token,
 and all-layer checksum.
+
+### Sprint 377 - Batched Paged Attention Gate [tentative]
+
+Goal: Implement `--batched-paged-attn-gate` to reduce per-slot typed-KV
+attention launches with block-table-indexed attention kernels.
+
+Rationale: This is the first fallback or follow-on if graph replay leaves a
+measured attention launch/state hot spot. It should not start before Sprint
+376 produces a clear graph-capture result.
+
+### Sprint 378 - Compact MoE Decode Gate [tentative]
+
+Goal: Implement `--compact-moe-decode-gate` to compact the active top-k
+experts into a smaller grouped-GEMM schedule.
+
+Rationale: This targets expert imbalance and idle expert work, especially
+when active requests are below the configured `32` slots. It follows the graph
+test because graph capture changes the cost model of small MoE launches.
+
+### Sprint 379 - Fused Gated-SiLU Gate [tentative]
+
+Goal: Implement `--fused-gated-silu-gate` by moving the DS4 clamp/SwiGLU
+boundary into the routed grouped-GEMM epilogue.
+
+Rationale: This is a kernel-count reducer inside the routed FFN path, but it
+only matters after launch overhead is either fixed by graph replay or proven
+not to be the dominant limiter.
+
+### Sprint 380 - TP-Sharded Expert A/B [tentative]
+
+Goal: Implement `--tp-experts-ab-gate` as a measurement of TP-sharded experts
+against the current EP8 all-to-all path.
+
+Rationale: This is the topology experiment that settles whether expert
+parallel all-to-all remains a structural bottleneck after the launch/sync work.
+
+### Sprint 381 - FP8 E5M2 KV Gate [tentative]
+
+Goal: Implement `--fp8-e5m2-kv-gate` for compressed/raw KV storage and loads.
+
+Rationale: The typed KV memory plan already fits `32` slots / `256K`, so this
+is a bandwidth and long-context optimization, not the current operational
+blocker.
+
+### Sprint 382 - MTP Decode Gate [tentative]
+
+Goal: Wire MTP into the TP/EP serving loop as a measured decode multiplier.
+
+Rationale: MTP is likely a large user-visible multiplier, but it should run
+after graph capture or another stable launch-amortization strategy exists;
+otherwise acceptance work may be hidden by per-step launch overhead.
 
 ### Sprint 226 - TP/EP Planner And Topology Contract [complete]
 
@@ -2488,6 +2554,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 369 added opt-in GPU utilization sampling to the TP/EP profile harness. | `--gpu-sample-interval-ms` writes `gpu_util.csv` and summary utilization fields without overhead when disabled. A 4-request / 32-slot chat smoke passed and showed `8.412879%` average GPU util with GPU0 much busier than peers. | Use sampled active-slot matrices before changing scheduling; then optimize active-slot compaction, dense projection/state fragmentation, or EP balance with utilization evidence attached. |
 | 2026-05-25 | Sprint 370 added the active-slot matrix driver. | The smoke matrix for active requests `1,4` passed and wrote aggregate TSV/JSON plus per-case profile artifacts; decode stayed flat around `101` tok/s and average GPU util stayed around `8.3%`. | Run the full `1,4,8,16,32` longer-decode matrix, then choose active-slot compaction versus deeper dense/state kernel work from the evidence. |
 | 2026-05-25 | Sprint 371 ran the full active-slot matrix. | At `32` slots / `256K` / `32` tokens/request, all cases `1,4,8,16,32` passed. Client aggregate tok/s scaled with active responses, but server decode stayed `97.4-100.0` tok/s and average GPU util stayed `9.8-10.3%`. | Use active-slot compaction for low-occupancy efficiency later; next optimize the full 32-slot bottleneck in compressed/indexer dense projection, attention projection/state, and GPU0-heavy staging. |
+| 2026-05-25 | Reprioritized performance work around `TEMP_THROUGHPUT_PROMPT.md`. | The full active-slot matrix plus INT8-compressor rejection makes another narrow dtype swap less compelling than testing launch/sync elimination. | Sprint 375 is active for async-output synchronization removal; Sprint 376 is the CUDA graph make-or-break gate before paged attention, compact MoE, TP-expert A/B, FP8 KV, or MTP. |
 
 ## Open Questions
 
@@ -2501,3 +2568,6 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 4. Should active-slot-only decode land before or after streaming? Active-slot
    decode helps low-occupancy use; streaming improves practical UX and timeout
    behavior.
+5. Does CUDA graph replay materially raise GPU utilization at the real
+   `32` slot / `256K` decode shape, or is the remaining bottleneck inside
+   kernel math/state movement rather than host launch overhead?
