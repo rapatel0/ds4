@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-25
 last_updated_by: codex
-revision: 375
+revision: 376
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -193,6 +193,26 @@ not a serial layer-chain.
   is: active-slot compaction helps low/moderate occupancy cost, but the 32-slot
   topline needs full-occupancy kernel/state work, especially compressed/indexer
   dense projection, attention projection/state, and GPU0-heavy staging.
+- Sprint 372 implemented an opt-in production-candidate gate to skip
+  host-side dense-output statistics in the compressed-KV projection path:
+  `DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_SKIP_DENSE_STATS=1`. This preserves
+  the current packed/runtime dtypes and removes diagnostic host copies and
+  synchronization from compressed/indexer dense outputs. Direct token-major
+  `32` slot / `256K` / `32` step validation kept the same first token
+  (`98751`), improved scaffold decode from `100.739521` to `117.463961`
+  tok/s, and reduced parsed compressed-KV time from `3141.768079` to
+  `1789.795027` ms. The full chat A/B improved server decode from
+  `99.748339` to `117.340768` tok/s and client throughput from `51.345855`
+  to `58.923892` tok/s, but normal chat text parity still needs a cleaner
+  deterministic comparator before default promotion. The current measured
+  bottleneck remains compressed/indexer dense projection and surrounding
+  staging, with visible GPU0-heavy harness/control imbalance.
+- Next format direction: evaluate an offline INT8+scale pack variant for the
+  FP8 source compressed/indexer dense tensors. This should be a scoped
+  A/B path, not a whole-model conversion. The candidate must preserve source
+  quantization metadata in the pack manifest, produce FP32-equivalent outputs
+  for downstream state math, and prove token/logit parity before serving
+  enablement.
 - Sprint 327 made the production compressed-KV memory contract executable in
   `tools/ds4-v100-plan-tp.c`. With the real TP pack and F8 KV, `32` slots at
   `256K` fits at `27.00 GiB/GPU` with `5.00 GiB` headroom after reserve;

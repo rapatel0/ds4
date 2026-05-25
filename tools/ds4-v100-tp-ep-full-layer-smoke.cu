@@ -628,6 +628,7 @@ struct Options {
     bool true_ds4_indexer_attention_gate = false;
     bool true_ds4_compressed_kv_direct_input_fill_gate = false;
     bool true_ds4_compressed_kv_dense_event_wait_gate = false;
+    bool true_ds4_compressed_kv_skip_dense_stats_gate = false;
     bool true_ds4_compressed_kv_fused_attn_input_fill_gate = false;
     bool true_ds4_compressed_kv_fused_input_fill_gate = false;
     bool true_ds4_compressed_kv_fused_rope_round_gate = false;
@@ -3345,6 +3346,14 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--true-ds4-compressed-kv-skip-dense-stats-gate") == 0) {
+            opt->true_ds4_compressed_kv_skip_dense_stats_gate = true;
+            opt->true_ds4_compressed_kv_gate = true;
+            opt->true_ds4_attention_projection_gate = true;
+            opt->true_ds4_attention_residency_gate = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--true-ds4-compressed-kv-fused-attn-input-fill-gate") == 0) {
             opt->true_ds4_compressed_kv_fused_attn_input_fill_gate = true;
             opt->true_ds4_compressed_kv_gate = true;
@@ -3496,6 +3505,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
            (!opt->true_ds4_compressed_kv_direct_input_fill_gate ||
             opt->true_ds4_compressed_kv_gate) &&
            (!opt->true_ds4_compressed_kv_dense_event_wait_gate ||
+            opt->true_ds4_compressed_kv_gate) &&
+           (!opt->true_ds4_compressed_kv_skip_dense_stats_gate ||
             opt->true_ds4_compressed_kv_gate) &&
            (!opt->true_ds4_compressed_kv_fused_attn_input_fill_gate ||
             opt->true_ds4_compressed_kv_gate) &&
@@ -8516,6 +8527,8 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
         opt.true_ds4_compressed_kv_direct_input_fill_gate;
     const bool dense_event_wait =
         opt.true_ds4_compressed_kv_dense_event_wait_gate;
+    const bool skip_dense_stats =
+        opt.true_ds4_compressed_kv_skip_dense_stats_gate;
     const bool fused_attn_current_fill =
         opt.true_ds4_compressed_kv_fused_attn_input_fill_gate;
     const bool fused_ratio4_current_fill =
@@ -8611,16 +8624,18 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
         cudaStream_t stream = ranks[rank].dense_stream ? ranks[rank].dense_stream
                                                        : ranks[rank].stream;
         CHECK_CUDA(cudaStreamSynchronize(stream));
-        const size_t comp_elems =
-            (size_t)opt.slots * (size_t)ops->attn_compress_kv.rows_per_gpu;
-        merge_tensor_stats(&attn_kv_stats,
-                           collect_tensor_f32_stats(
-                               ops->attn_compress_kv.d_out[(size_t)rank],
-                               comp_elems, stream));
-        merge_tensor_stats(&attn_gate_stats,
-                           collect_tensor_f32_stats(
-                               ops->attn_compress_gate.d_out[(size_t)rank],
-                               comp_elems, stream));
+        if (!skip_dense_stats) {
+            const size_t comp_elems =
+                (size_t)opt.slots * (size_t)ops->attn_compress_kv.rows_per_gpu;
+            merge_tensor_stats(&attn_kv_stats,
+                               collect_tensor_f32_stats(
+                                   ops->attn_compress_kv.d_out[(size_t)rank],
+                                   comp_elems, stream));
+            merge_tensor_stats(&attn_gate_stats,
+                               collect_tensor_f32_stats(
+                                   ops->attn_compress_gate.d_out[(size_t)rank],
+                                   comp_elems, stream));
+        }
     }
     {
         const auto now = std::chrono::steady_clock::now();
@@ -9003,30 +9018,32 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             cudaStream_t stream = ranks[rank].dense_stream ? ranks[rank].dense_stream
                                                            : ranks[rank].stream;
             CHECK_CUDA(cudaStreamSynchronize(stream));
-            merge_tensor_stats(&index_q_stats,
-                               collect_tensor_f32_stats(
-                                   ops->indexer_attn_q_b.d_out[(size_t)rank],
-                                   (size_t)opt.slots *
-                                       (size_t)ops->indexer_attn_q_b.rows_per_gpu,
-                                   stream));
-            merge_tensor_stats(&index_w_stats,
-                               collect_tensor_f32_stats(
-                                   ops->indexer_proj.d_out[(size_t)rank],
-                                   (size_t)opt.slots *
-                                       (size_t)ops->indexer_proj.rows_per_gpu,
-                                   stream));
-            merge_tensor_stats(&index_kv_stats,
-                               collect_tensor_f32_stats(
-                                   ops->indexer_compress_kv.d_out[(size_t)rank],
-                                   (size_t)opt.slots *
-                                       (size_t)ops->indexer_compress_kv.rows_per_gpu,
-                                   stream));
-            merge_tensor_stats(&index_gate_stats,
-                               collect_tensor_f32_stats(
-                                   ops->indexer_compress_gate.d_out[(size_t)rank],
-                                   (size_t)opt.slots *
-                                       (size_t)ops->indexer_compress_gate.rows_per_gpu,
-                                   stream));
+            if (!skip_dense_stats) {
+                merge_tensor_stats(&index_q_stats,
+                                   collect_tensor_f32_stats(
+                                       ops->indexer_attn_q_b.d_out[(size_t)rank],
+                                       (size_t)opt.slots *
+                                           (size_t)ops->indexer_attn_q_b.rows_per_gpu,
+                                       stream));
+                merge_tensor_stats(&index_w_stats,
+                                   collect_tensor_f32_stats(
+                                       ops->indexer_proj.d_out[(size_t)rank],
+                                       (size_t)opt.slots *
+                                           (size_t)ops->indexer_proj.rows_per_gpu,
+                                       stream));
+                merge_tensor_stats(&index_kv_stats,
+                                   collect_tensor_f32_stats(
+                                       ops->indexer_compress_kv.d_out[(size_t)rank],
+                                       (size_t)opt.slots *
+                                           (size_t)ops->indexer_compress_kv.rows_per_gpu,
+                                       stream));
+                merge_tensor_stats(&index_gate_stats,
+                                   collect_tensor_f32_stats(
+                                       ops->indexer_compress_gate.d_out[(size_t)rank],
+                                       (size_t)opt.slots *
+                                           (size_t)ops->indexer_compress_gate.rows_per_gpu,
+                                       stream));
+            }
         }
         {
             const auto now = std::chrono::steady_clock::now();
@@ -9497,6 +9514,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 "indexer_state_emit_ms\t%.6f\tindexer_typed_score_ms\t%.6f\t"
                 "reference_diff_ms\t%.6f\tratio_shift_ms\t%.6f\t"
                 "direct_input_fill\t%d\tdense_event_wait\t%d\t"
+                "skip_dense_stats\t%d\t"
                 "fused_attn_input_fill\t%d\t"
                 "fused_input_fill\t%d\tfused_rope_round\t%d\t"
                 "fused_pool_norm\t%d\tfused_pool_norm_rope_round\t%d\t"
@@ -9515,14 +9533,16 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 reference_diff_ms, ratio_shift_ms,
                 direct_current_input_fill ? 1 : 0,
                 dense_event_wait ? 1 : 0,
+                skip_dense_stats ? 1 : 0,
                 fused_attn_current_fill ? 1 : 0,
                 fused_ratio4_current_fill ? 1 : 0,
                 fused_rope_round ? 1 : 0,
                 fused_pool_norm ? 1 : 0,
                 fused_pool_norm_rope_round ? 1 : 0, ms);
-    return (attn_kv_stats.finite_bad || attn_gate_stats.finite_bad ||
+    return (!skip_dense_stats &&
+            (attn_kv_stats.finite_bad || attn_gate_stats.finite_bad ||
             index_q_stats.finite_bad || index_w_stats.finite_bad ||
-            index_kv_stats.finite_bad || index_gate_stats.finite_bad) ? 8 : 0;
+             index_kv_stats.finite_bad || index_gate_stats.finite_bad)) ? 8 : 0;
 }
 
 int run_true_ds4_attention_state_update(const Options &opt,

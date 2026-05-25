@@ -301,6 +301,9 @@ def build_env(args, port):
             "DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_ATTN_INPUT_FILL": "1"
             if args.fused_compressed_attn_input_fill
             else "0",
+            "DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_SKIP_DENSE_STATS": "1"
+            if args.skip_compressed_dense_stats
+            else "0",
             "DS4_V100_CUDA_PROFILER_WINDOW": "1" if "window" in args.tool else "0",
         }
     )
@@ -341,6 +344,8 @@ def variant_suffix(args):
         suffix += "-compressed-dense-event-wait"
     if getattr(args, "disable_compressed_dense_event_wait", False):
         suffix += "-no-compressed-dense-event-wait"
+    if getattr(args, "skip_compressed_dense_stats", False):
+        suffix += "-skip-compressed-dense-stats"
     if getattr(args, "fused_compressed_attn_input_fill", False):
         suffix += "-fused-compressed-attn-input-fill"
     return suffix
@@ -417,6 +422,8 @@ def direct_command(args):
         cmd.append("--true-ds4-compressed-kv-direct-input-fill-gate")
     if args.compressed_dense_event_wait or not args.disable_compressed_dense_event_wait:
         cmd.append("--true-ds4-compressed-kv-dense-event-wait-gate")
+    if args.skip_compressed_dense_stats:
+        cmd.append("--true-ds4-compressed-kv-skip-dense-stats-gate")
     if args.fused_compressed_attn_input_fill:
         cmd.append("--true-ds4-compressed-kv-fused-attn-input-fill-gate")
     return cmd
@@ -473,6 +480,7 @@ def add_tp_ep_line_summaries(summary, stdout):
         "ratio128_layers": 0,
         "direct_input_fill_layers": 0,
         "dense_event_wait_layers": 0,
+        "skip_dense_stats_layers": 0,
         "fused_attn_input_fill_layers": 0,
         "fused_input_fill_layers": 0,
         "fused_rope_round_layers": 0,
@@ -538,6 +546,8 @@ def add_tp_ep_line_summaries(summary, stdout):
                 compressed_counts["direct_input_fill_layers"] += 1
             if maybe_number(fields.get("dense_event_wait")):
                 compressed_counts["dense_event_wait_layers"] += 1
+            if maybe_number(fields.get("skip_dense_stats")):
+                compressed_counts["skip_dense_stats_layers"] += 1
             if maybe_number(fields.get("fused_attn_input_fill")):
                 compressed_counts["fused_attn_input_fill_layers"] += 1
             if maybe_number(fields.get("fused_rope_round")):
@@ -729,6 +739,7 @@ def main():
     parser.add_argument("--direct-compressed-input-fill", action="store_true")
     parser.add_argument("--compressed-dense-event-wait", action="store_true")
     parser.add_argument("--disable-compressed-dense-event-wait", action="store_true")
+    parser.add_argument("--skip-compressed-dense-stats", action="store_true")
     parser.add_argument("--fused-compressed-attn-input-fill", action="store_true")
     parser.add_argument("--disable-fused-compressed-pool-norm", action="store_true")
     parser.add_argument("--port", type=int, default=18357)

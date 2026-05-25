@@ -4,6 +4,19 @@ Last updated: 2026-05-25
 
 ## Topline
 
+Latest TP/EP optimization status: Sprint 372 added an opt-in gate to skip
+host-side dense-output statistics in the compressed-KV projection path:
+`DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_SKIP_DENSE_STATS=1`. This is diagnostic
+work being removed from the serving path, not a dtype change. Direct
+token-major `32` slot / `256K` / `32` step validation kept the same first
+token (`98751`), improved scaffold decode from `100.739521` to `117.463961`
+tok/s, and reduced parsed compressed-KV time from `3141.768079` to
+`1789.795027` ms. Full chat A/B at `32` requests / `32` slots / `256K` /
+`position=262080` improved client tok/s from `51.345855` to `58.923892` and
+server decode tok/s from `99.748339` to `117.340768`. The gate remains
+default-off until chat/token parity is compared deterministically; selected
+token parity is clean.
+
 Latest TP/EP metrology status: Sprint 369 added opt-in GPU utilization
 sampling to `tools/ds4-v100-tp-ep-profile.py`. Passing
 `--gpu-sample-interval-ms N` now writes `gpu_util.csv` and adds aggregate plus
