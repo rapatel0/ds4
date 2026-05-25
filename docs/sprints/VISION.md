@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-24
 last_updated_by: codex
-revision: 346
+revision: 347
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -217,6 +217,18 @@ not a serial layer-chain.
   typed PASS logging, and typed-history/indexer bookkeeping in the hot serving
   loop. The next step is to gate or remove that overhead while preserving typed
   production KV semantics.
+- Sprint 342 isolated typed KV PASS logging overhead. A production-compatible
+  quiet gate,
+  `DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_QUIET=1`, suppresses the
+  per-layer typed raw/compressed/indexer/history PASS logs while preserving
+  typed KV semantics. In the same `32` concurrent / `32` slot / `256K` /
+  `8` token HTTP A/B, control measured `309.202473` wall tok/s /
+  `730.769885` decode tok/s, verbose typed-history measured `73.427107` /
+  `85.479279`, and typed-quiet measured `75.284862` / `87.627420`.
+  Removing `2058` typed PASS lines produced only a `~2.5%` gain, so stdout
+  formatting is not the main bottleneck. The next target is the typed row API
+  shape itself: per-slot row calls, per-rank row kernels, broad device
+  synchronizations, and hot-loop typed-history bookkeeping.
 - The system is not production-ready yet because the bridge HC sequence has
   not been proven equivalent to the DeepSeek V4 reference layer semantics, and
   production serving still needs readiness/overload/cancellation/streaming

@@ -33,7 +33,7 @@ def http_post(base, path, payload, timeout=900):
         return exc.code, exc.read()
 
 
-def run_case(args, name, port, typed, skip_stores=None):
+def run_case(args, name, port, typed, skip_stores=None, typed_quiet=False):
     skip_stores = set(skip_stores or [])
     case_dir = args.artifact_dir / name
     case_dir.mkdir(parents=True, exist_ok=True)
@@ -64,6 +64,8 @@ def run_case(args, name, port, typed, skip_stores=None):
                 "1" if "compressed" in skip_stores else "0",
             "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_SKIP_INDEXER_STORE":
                 "1" if "indexer" in skip_stores else "0",
+            "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_QUIET":
+                "1" if typed_quiet else "0",
         }
     )
 
@@ -182,6 +184,7 @@ def run_case(args, name, port, typed, skip_stores=None):
             "typed_skip_indexer_store_meta": first.get(
                 "true_ds4_attention_typed_kv_skip_indexer_store_gate"
             ),
+            "typed_quiet_meta": first.get("true_ds4_attention_typed_kv_quiet_gate"),
             "typed_raw_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_raw", server_text)),
             "typed_compressed_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_compressed", server_text)),
             "typed_indexer_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_indexer", server_text)),
@@ -264,6 +267,13 @@ def main():
     parser.add_argument("--readiness-seconds", type=int, default=240)
     parser.add_argument("--case-cooldown-seconds", type=int, default=20)
     parser.add_argument("--skip-control", action="store_true")
+    parser.add_argument(
+        "--typed-quiet-variant",
+        action="append",
+        choices=["quiet", "no-stores-quiet"],
+        default=[],
+        help="additional typed candidates that suppress per-layer typed KV PASS logs",
+    )
     args = parser.parse_args()
 
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -294,6 +304,21 @@ def main():
                 )
             )
         port += 1
+    for variant in args.typed_quiet_variant:
+        if variant == "quiet":
+            summaries.append(run_case(args, "typed-quiet", port, True, typed_quiet=True))
+        elif variant == "no-stores-quiet":
+            summaries.append(
+                run_case(
+                    args,
+                    "typed-no-stores-quiet",
+                    port,
+                    True,
+                    {"raw", "compressed", "indexer"},
+                    typed_quiet=True,
+                )
+            )
+        port += 1
     (args.artifact_dir / "summary.json").write_text(json.dumps(summaries, indent=2, sort_keys=True) + "\n")
     keys = [
         "case",
@@ -315,6 +340,7 @@ def main():
         "typed_skip_raw_store_meta",
         "typed_skip_compressed_store_meta",
         "typed_skip_indexer_store_meta",
+        "typed_quiet_meta",
         "typed_raw_lines",
         "typed_compressed_lines",
         "typed_indexer_lines",
