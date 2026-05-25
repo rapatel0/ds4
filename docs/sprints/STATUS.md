@@ -28,19 +28,27 @@ default-off and diagnostic-only; the next work is either a deterministic
 fused-gate parity harness or diagnosis of that resident dense-KV precheck
 interaction.
 
-Current active steering source: `TEMP_THROUGHPUT_PROMPT.md`. The near-term
+Current active steering source: `TEMP_THROUGHPUT_PROMPT.md`. Sprint 380 has
+started S-F `--tp-experts-ab-gate` with a permanent measurement driver,
+`tools/ds4-v100-tp-experts-ab.py`. The first V100 smoke produced an EP8 direct
+serving control at `66.569095` direct decode tok/s (`54639` first token,
+`18.220610` ms EP, `22.522762` ms compose) and reconfirmed TP8 MXFP4 expert
+failure at the route tiers: `96/192/384` routes all fail correctness with
+`378153/756305/1512469` NaNs, and TP8 total speedup remains below 1.0x because
+simple reduction dominates. Continue Sprint 380 by exposing or rerunning the
+historically correct TP4 branch before deciding whether TP-sharded experts
+deserve serving integration.
+
+The near-term
 performance queue remains isolated default-off gates, same-binary V100 A/B,
 and a strict promote/reject decision per gate. S-B async output and S-A CUDA
 graph replay were rejected. S-C batched paged attention row planning was
 closed as a diagnostic-only redirect because pending typed-history reloads were
 already `0` in the observed compressed/indexer samples. S-D compact MoE is now
-promoted for model-router compact compose. The next sprint should execute S-E
-`--fused-gated-silu-gate`, removing the routed-FFN clamp/SwiGLU launch and
-intermediate while preserving the same model-router serving parity checks.
-Sprint 379's result says the existing generic epilogue is insufficient for the
-clamped routed-normalized branch, and the new DS4-clamped ABI needs a resident
-serving precheck fix or a narrower parity harness before promotion can be
-considered.
+promoted for model-router compact compose. S-E fused gated-SiLU is closed
+diagnostic-only: the generic epilogue changes tokens, and the new DS4-clamped
+ABI needs a resident serving precheck fix or a narrower parity harness before
+promotion can be considered. S-F is now active.
 
 Latest TP/EP format status: Sprint 374 built and ran the V100 workbench for
 the Sprint 373 INT8 candidate shapes. The copied tc-grid INT8 kernels are
