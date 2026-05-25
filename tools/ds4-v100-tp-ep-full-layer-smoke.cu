@@ -390,6 +390,12 @@ struct LayerRunSummary {
     double decode_compose_copy_ms_per_step = 0.0;
     double decode_compose_final_ms_per_step = 0.0;
     double decode_hc_current_input_ms_per_step = 0.0;
+    double decode_hc_current_seed_ms_per_step = 0.0;
+    double decode_hc_current_attn_mix_ms_per_step = 0.0;
+    double decode_hc_current_split_ms_per_step = 0.0;
+    double decode_hc_current_gather_ms_per_step = 0.0;
+    double decode_hc_current_ffn_router_ms_per_step = 0.0;
+    double decode_hc_current_fill_pack_ms_per_step = 0.0;
     double decode_final_hc_ms_per_step = 0.0;
     uint64_t decode_checksum = 0;
     int decode_finite_bad = 0;
@@ -483,6 +489,12 @@ struct DecodeLoopStats {
     double compose_copy_ms_per_step = 0.0;
     double compose_final_ms_per_step = 0.0;
     double hc_current_input_ms_per_step = 0.0;
+    double hc_current_seed_ms_per_step = 0.0;
+    double hc_current_attn_mix_ms_per_step = 0.0;
+    double hc_current_split_ms_per_step = 0.0;
+    double hc_current_gather_ms_per_step = 0.0;
+    double hc_current_ffn_router_ms_per_step = 0.0;
+    double hc_current_fill_pack_ms_per_step = 0.0;
     double final_hc_ms_per_step = 0.0;
     int finite_bad = 0;
     uint64_t checksum = 0;
@@ -491,6 +503,15 @@ struct DecodeLoopStats {
     bool dense_hmma_compose = false;
     bool dense_f16_cublas_compose = false;
     bool dense_f16_cache_compose = false;
+};
+
+struct HcCurrentInputBreakdown {
+    double seed_ms = 0.0;
+    double attn_mix_ms = 0.0;
+    double split_ms = 0.0;
+    double gather_ms = 0.0;
+    double ffn_router_ms = 0.0;
+    double fill_pack_ms = 0.0;
 };
 
 struct Options {
@@ -4147,7 +4168,8 @@ int run_shared_hc_current_input(const Options &opt,
                                 RankState ranks[kGpus],
                                 const ResidentF8Dense &attn_op,
                                 const ResidentF8Dense &shared_op,
-                                int layer) {
+                                int layer,
+                                HcCurrentInputBreakdown *breakdown) {
     if (!hc || !hc->initialized || hc->slots != opt.slots ||
         layer < 0 || layer >= 43) {
         return 1;
@@ -4158,6 +4180,7 @@ int run_shared_hc_current_input(const Options &opt,
     const uint64_t hc_shard_elems = shard_elems * kHcRows;
     const uint64_t full_elems = (uint64_t)opt.slots * kHidden;
     const int block = 256;
+    const auto t_start = std::chrono::steady_clock::now();
     cudaStream_t control_stream =
         opt.tp_hc_current_input_stream_sync_gate ? ranks[0].stream : (cudaStream_t)0;
     auto sync_control_device = [&]() {
@@ -4188,6 +4211,7 @@ int run_shared_hc_current_input(const Options &opt,
         CHECK_CUDA(cudaSetDevice(ranks[rank].device));
         CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
     }
+    auto t_seed_done = std::chrono::steady_clock::now();
     if (should_log_reference_hc_window(opt)) {
         for (int rank = 0; rank < kGpus; ++rank) {
             CHECK_CUDA(cudaSetDevice(ranks[rank].device));
@@ -4242,10 +4266,12 @@ int run_shared_hc_current_input(const Options &opt,
                            opt.reference_hc_reduce_gate ? 1 : 0);
         CHECK_CUDA(cudaGetLastError());
     }
+    auto t_split_done = std::chrono::steady_clock::now();
     for (int rank = 0; rank < kGpus; ++rank) {
         CHECK_CUDA(cudaSetDevice(ranks[rank].device));
         CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
     }
+    auto t_weighted_done = std::chrono::steady_clock::now();
 
     float *control_current_full = hc->d_current_full;
     const bool peer_gather_current = opt.tp_hc_current_input_peer_gather_gate;
@@ -4285,6 +4311,7 @@ int run_shared_hc_current_input(const Options &opt,
         CHECK_CUDA(cudaGetLastError());
         sync_control_device();
     }
+    auto t_gather_done = std::chrono::steady_clock::now();
     if (should_log_reference_hc_window(opt)) {
         CHECK_CUDA(cudaSetDevice(opt.devices[0]));
         log_tensor_f32_stats("hc_current_full", layer, 0, control_current_full,
@@ -4338,6 +4365,7 @@ int run_shared_hc_current_input(const Options &opt,
             return 5;
         }
     }
+    auto t_router_done = std::chrono::steady_clock::now();
 
     for (int rank = 0; rank < kGpus; ++rank) {
         RankState &r = ranks[rank];
@@ -4414,6 +4442,21 @@ int run_shared_hc_current_input(const Options &opt,
     for (int rank = 0; rank < kGpus; ++rank) {
         CHECK_CUDA(cudaSetDevice(ranks[rank].device));
         CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    }
+    auto t_fill_done = std::chrono::steady_clock::now();
+    if (breakdown) {
+        breakdown->seed_ms +=
+            std::chrono::duration<double, std::milli>(t_seed_done - t_start).count();
+        breakdown->attn_mix_ms +=
+            std::chrono::duration<double, std::milli>(t_split_done - t_seed_done).count();
+        breakdown->split_ms +=
+            std::chrono::duration<double, std::milli>(t_weighted_done - t_split_done).count();
+        breakdown->gather_ms +=
+            std::chrono::duration<double, std::milli>(t_gather_done - t_weighted_done).count();
+        breakdown->ffn_router_ms +=
+            std::chrono::duration<double, std::milli>(t_router_done - t_gather_done).count();
+        breakdown->fill_pack_ms +=
+            std::chrono::duration<double, std::milli>(t_fill_done - t_router_done).count();
     }
     return 0;
 }
@@ -9869,6 +9912,7 @@ int run_decode_loop(const Options &opt,
                             double *compose_copy_ms,
                             double *compose_final_ms,
                             double *hc_current_input_ms,
+                            HcCurrentInputBreakdown *hc_current_breakdown,
                             double *final_hc_ms) -> int {
         auto t_pre = std::chrono::steady_clock::now();
         if (opt.tp_hc_current_input_gate) {
@@ -9879,7 +9923,8 @@ int run_decode_loop(const Options &opt,
             }
             const int hc_rc = run_shared_hc_current_input(opt, shared_hc_controls, ranks,
                                                           *attn_op, *shared_op,
-                                                          opt.layer);
+                                                          opt.layer,
+                                                          hc_current_breakdown);
             if (hc_rc != 0) {
                 std::fprintf(stderr, "tp_hc_current_input_failed\tlayer\t%d\trc\t%d\n",
                              opt.layer, hc_rc);
@@ -10459,6 +10504,7 @@ int run_decode_loop(const Options &opt,
         if (run_one_step(&warm_ep, &warm_dense, &warm_compose,
                          &warm_compose_reduce, &warm_compose_copy,
                          &warm_compose_final, &warm_hc_current_input,
+                         nullptr,
                          &warm_final_hc) != 0) {
             if (!shared_dense_ops) {
                 free_resident_f8_dense(attn, opt);
@@ -10475,12 +10521,14 @@ int run_decode_loop(const Options &opt,
     double compose_copy_ms = 0.0;
     double compose_final_ms = 0.0;
     double hc_current_input_ms = 0.0;
+    HcCurrentInputBreakdown hc_current_breakdown;
     double final_hc_ms = 0.0;
     const auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < opt.decode_steps; ++i) {
         if (run_one_step(&ep_ms, &dense_ms, &compose_ms,
                          &compose_reduce_ms, &compose_copy_ms,
                          &compose_final_ms, &hc_current_input_ms,
+                         &hc_current_breakdown,
                          &final_hc_ms) != 0) {
             if (!shared_dense_ops) {
                 free_resident_f8_dense(attn, opt);
@@ -10502,6 +10550,18 @@ int run_decode_loop(const Options &opt,
     stats->compose_copy_ms_per_step = compose_copy_ms / (double)opt.decode_steps;
     stats->compose_final_ms_per_step = compose_final_ms / (double)opt.decode_steps;
     stats->hc_current_input_ms_per_step = hc_current_input_ms / (double)opt.decode_steps;
+    stats->hc_current_seed_ms_per_step =
+        hc_current_breakdown.seed_ms / (double)opt.decode_steps;
+    stats->hc_current_attn_mix_ms_per_step =
+        hc_current_breakdown.attn_mix_ms / (double)opt.decode_steps;
+    stats->hc_current_split_ms_per_step =
+        hc_current_breakdown.split_ms / (double)opt.decode_steps;
+    stats->hc_current_gather_ms_per_step =
+        hc_current_breakdown.gather_ms / (double)opt.decode_steps;
+    stats->hc_current_ffn_router_ms_per_step =
+        hc_current_breakdown.ffn_router_ms / (double)opt.decode_steps;
+    stats->hc_current_fill_pack_ms_per_step =
+        hc_current_breakdown.fill_pack_ms / (double)opt.decode_steps;
     stats->final_hc_ms_per_step = final_hc_ms / (double)opt.decode_steps;
 
     if (opt.skip_decode_checksum) {
@@ -10638,6 +10698,18 @@ int run_resident_layer_decode(const Options &opt,
             decode_loop.compose_final_ms_per_step;
         summary->decode_hc_current_input_ms_per_step =
             decode_loop.hc_current_input_ms_per_step;
+        summary->decode_hc_current_seed_ms_per_step =
+            decode_loop.hc_current_seed_ms_per_step;
+        summary->decode_hc_current_attn_mix_ms_per_step =
+            decode_loop.hc_current_attn_mix_ms_per_step;
+        summary->decode_hc_current_split_ms_per_step =
+            decode_loop.hc_current_split_ms_per_step;
+        summary->decode_hc_current_gather_ms_per_step =
+            decode_loop.hc_current_gather_ms_per_step;
+        summary->decode_hc_current_ffn_router_ms_per_step =
+            decode_loop.hc_current_ffn_router_ms_per_step;
+        summary->decode_hc_current_fill_pack_ms_per_step =
+            decode_loop.hc_current_fill_pack_ms_per_step;
         summary->decode_final_hc_ms_per_step = decode_loop.final_hc_ms_per_step;
         summary->decode_checksum = decode_loop.checksum;
         summary->decode_finite_bad = decode_loop.finite_bad;
@@ -11431,6 +11503,12 @@ int run_token_major_serving_loop(const Options &opt,
     double sum_compose_copy_ms = 0.0;
     double sum_compose_final_ms = 0.0;
     double sum_hc_current_input_ms = 0.0;
+    double sum_hc_current_seed_ms = 0.0;
+    double sum_hc_current_attn_mix_ms = 0.0;
+    double sum_hc_current_split_ms = 0.0;
+    double sum_hc_current_gather_ms = 0.0;
+    double sum_hc_current_ffn_router_ms = 0.0;
+    double sum_hc_current_fill_pack_ms = 0.0;
     double sum_final_hc_ms = 0.0;
     double first_token_decode_ms = 0.0;
     double continuation_decode_ms = 0.0;
@@ -11538,6 +11616,12 @@ int run_token_major_serving_loop(const Options &opt,
                         "decode_compose_copy_ms_per_step\t%.6f\t"
                         "decode_compose_final_ms_per_step\t%.6f\t"
                         "decode_hc_current_input_ms_per_step\t%.6f\t"
+                        "decode_hc_current_seed_ms_per_step\t%.6f\t"
+                        "decode_hc_current_attn_mix_ms_per_step\t%.6f\t"
+                        "decode_hc_current_split_ms_per_step\t%.6f\t"
+                        "decode_hc_current_gather_ms_per_step\t%.6f\t"
+                        "decode_hc_current_ffn_router_ms_per_step\t%.6f\t"
+                        "decode_hc_current_fill_pack_ms_per_step\t%.6f\t"
                         "decode_final_hc_ms_per_step\t%.6f\t"
                         "decode_checksum\t%llu\tdecode_finite_bad\t%d\trc\t%d\t%s\n",
                         step, s.layer, s.ratio,
@@ -11551,6 +11635,12 @@ int run_token_major_serving_loop(const Options &opt,
                         s.decode_compose_copy_ms_per_step,
                         s.decode_compose_final_ms_per_step,
                         s.decode_hc_current_input_ms_per_step,
+                        s.decode_hc_current_seed_ms_per_step,
+                        s.decode_hc_current_attn_mix_ms_per_step,
+                        s.decode_hc_current_split_ms_per_step,
+                        s.decode_hc_current_gather_ms_per_step,
+                        s.decode_hc_current_ffn_router_ms_per_step,
+                        s.decode_hc_current_fill_pack_ms_per_step,
                         s.decode_final_hc_ms_per_step,
                         (unsigned long long)s.decode_checksum,
                         s.decode_finite_bad,
@@ -11567,6 +11657,12 @@ int run_token_major_serving_loop(const Options &opt,
                 sum_compose_copy_ms += s.decode_compose_copy_ms_per_step;
                 sum_compose_final_ms += s.decode_compose_final_ms_per_step;
                 sum_hc_current_input_ms += s.decode_hc_current_input_ms_per_step;
+                sum_hc_current_seed_ms += s.decode_hc_current_seed_ms_per_step;
+                sum_hc_current_attn_mix_ms += s.decode_hc_current_attn_mix_ms_per_step;
+                sum_hc_current_split_ms += s.decode_hc_current_split_ms_per_step;
+                sum_hc_current_gather_ms += s.decode_hc_current_gather_ms_per_step;
+                sum_hc_current_ffn_router_ms += s.decode_hc_current_ffn_router_ms_per_step;
+                sum_hc_current_fill_pack_ms += s.decode_hc_current_fill_pack_ms_per_step;
                 sum_final_hc_ms += s.decode_final_hc_ms_per_step;
                 checksum ^= s.decode_checksum +
                             (uint64_t)(step + 1) * 1000003ull +
@@ -11622,6 +11718,12 @@ int run_token_major_serving_loop(const Options &opt,
                 "tp_hc_current_input_peer_gather\t%d\t"
                 "tp_hc_current_input_stream_sync\t%d\t"
                 "sum_hc_current_input_ms\t%.6f\t"
+                "sum_hc_current_seed_ms\t%.6f\t"
+                "sum_hc_current_attn_mix_ms\t%.6f\t"
+                "sum_hc_current_split_ms\t%.6f\t"
+                "sum_hc_current_gather_ms\t%.6f\t"
+                "sum_hc_current_ffn_router_ms\t%.6f\t"
+                "sum_hc_current_fill_pack_ms\t%.6f\t"
                 "final_hc_carry_gate\t%d\tsum_final_hc_ms\t%.6f\t"
                 "wall_ms\t%.6f\tchecksum\t%llu\tPASS\n",
                 opt.decode_steps, pass_invocations, opt.slots,
@@ -11644,6 +11746,12 @@ int run_token_major_serving_loop(const Options &opt,
                 opt.tp_hc_current_input_peer_gather_gate ? 1 : 0,
                 opt.tp_hc_current_input_stream_sync_gate ? 1 : 0,
                 sum_hc_current_input_ms,
+                sum_hc_current_seed_ms,
+                sum_hc_current_attn_mix_ms,
+                sum_hc_current_split_ms,
+                sum_hc_current_gather_ms,
+                sum_hc_current_ffn_router_ms,
+                sum_hc_current_fill_pack_ms,
                 opt.final_hc_carry_gate ? 1 : 0, sum_final_hc_ms,
                 wall_ms, (unsigned long long)checksum);
     if (opt.serving_bench || serving_result) {

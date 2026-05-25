@@ -54,6 +54,18 @@ default. The next optimization target remains the HC control/fill chain
 itself, because synchronization scope only moves a small part of the serving
 topline.
 
+Sprint 350 corrected the interpretation of that hot timer. The direct summary
+now splits HC-current substages, and a 32-slot / 256K / 2-step V100 run with
+stream sync enabled passed with `92.630324` generated tok/s decode and finite
+output head. The measured HC-current substages were only `83.066250` ms total:
+seed `2.485326`, attention-HC mix `42.340819`, split `1.245295`, current
+gather `6.960973`, FFN/router `1.784974`, and fill/pack `28.248863`. The old
+`sum_hc_current_input_ms` field was `557.301289` ms, so that label is broader
+than HC-current and includes true-attention/compressed-KV prefix work before
+the EP/dense/compose timer begins. The next optimization target should be that
+true-attention/compressed-KV prefix, especially compressed projection/store and
+dense-fill/WMMA fragmentation, not more HC-current gather work.
+
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
 TP runtime, sharded KV, rank buffers, TurboMind API handles, active MXFP4
