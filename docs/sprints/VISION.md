@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
-last_updated: 2026-05-24
+last_updated: 2026-05-25
 last_updated_by: codex
-revision: 349
+revision: 350
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -2139,6 +2139,9 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 - Single-slot throughput reports: rejected as practical-serving evidence.
 - MTP serving: deferred until TP/EP serving is operational.
 - PP-oriented MTP block-2 promotion: paused; useful correctness evidence only.
+- HTTP-wrapper profiler windows: useful wiring, but not sufficient for NCU
+  metrics in the current container/toolchain. Use a direct non-server TP/EP
+  profile target for scoped kernel evidence.
 
 ## Pivot Log
 
@@ -2236,6 +2239,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-24 | Sprint 325 added a compact compressed-reference diff gate and fixed layer-local attention state. | The first all-layer diagnostic found layer `4` diverging at `attn_comp_row0_compact_reference` because raw-SWA, attention-compressed, and indexer-compressed buffers were reused across layers in the smoke path. The buffers are now layer-local; `slots=1` / `position=100003` and `slots=32` / `position=262143` both pass all 43 layers, and ratio-4 compact compressed-row/indexer-score diffs pass through layer `42`. The `32` slot diagnostic reports `39.258626` projected slot-step tok/s. | Replace the compact one-row diagnostic with full production compressed-row cache/history selection and raw+compressed attention output parity against the reference layer path, then rerun HTTP parity. |
 | 2026-05-24 | Sprint 326 added bounded multi-row compressed attention history. | The TP/EP path now stores up to `8` bounded compressed rows per layer, tracks visible row counts, scores all bounded visible ratio-4 indexer rows, replicates selected row indices to all TP ranks, and includes multiple compressed rows in the raw+compressed attention softmax/read. The `32` slot / `256K` / `8` step attention gate passes all `344` layer-step invocations with `visible_compressed_rows=2`, `selected_compressed_rows=2`, no compact diff failures, and `20.780883` projected slot-step tok/s. | Replace bounded diagnostic rows with production compressed-KV allocation/ownership, validate ratio-128 history, and compare raw+compressed attention output against the full reference layer path before rerunning HTTP parity. |
 | 2026-05-24 | Sprint 327 made the production compressed-KV memory contract executable. | `tools/ds4-v100-plan-tp.c` now reports raw/compressed/indexer rows, persistent typed KV bytes, replicated f32 warning bytes, bounded diagnostic bytes, per-layer row tables, and JSON fields. With the real pack and F8 KV, `32` slots / `256K` fits at `27.00 GiB/GPU` with `3.40 GiB/GPU` persistent typed KV and `5.00 GiB` headroom after reserve; replicated f32 would be `107.84 GiB/GPU`. `1` slot / `1M` fits at `22.56 GiB/GPU`. | Implement the runtime allocator against this typed TP-sharded contract and validate ratio-4 plus ratio-128 row reads from the production arena. |
+| 2026-05-25 | Sprint 345/346 moved performance work from tok/s guessing to profiler evidence. | Broad `nvprof` shows tensor-core-capable Cutlass and TurboMind kernels are active, but the path is launch/transform fragmented: compressor, gather, dense-fill, and many small WMMA launches dominate. TP/EP CUDA profiler windows are now wired, but HTTP-wrapper `profile-from-start off` does not emit scoped metrics. | Build a direct non-server TP/EP replay/profile target, then fuse the largest non-GEMM boundary proven by that target. |
 
 ## Open Questions
 

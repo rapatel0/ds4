@@ -1,0 +1,1 @@
+/usr/local/cuda/bin/nvprof --profile-from-start off --csv --print-gpu-trace --log-file /workspace/logs/sprint346-tp-ep-profiler-window/nvprof-window-gpu-trace/nvprof-window-gpu-trace.%p.csv ./tools/ds4-v100-run-appliance.sh

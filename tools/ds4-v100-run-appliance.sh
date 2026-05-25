@@ -1237,6 +1237,9 @@ if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
     if [ "$DS4_V100_TP_EP_KV_ALL_SLOTS" -eq 1 ]; then
         cmd+=(--tp-kv-all-slots-gate)
     fi
+    if [ "$cuda_profiler_window" -eq 1 ]; then
+        cmd+=(--cuda-profiler-window)
+    fi
     if [ "$DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD" -eq 1 ]; then
         cmd+=(--diagnostic-output-head)
     fi

@@ -1,0 +1,1 @@
+/usr/local/cuda/bin/ncu --target-processes all --profile-from-start off --set basic --launch-count 8 --csv --log-file /workspace/logs/sprint346-tp-ep-profiler-window/ncu-window-basic/ncu-window-basic.csv --kernel-name regex:.*cutlass_70_wmma.* ./tools/ds4-v100-run-appliance.sh

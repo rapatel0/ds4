@@ -50,6 +50,16 @@ def profiler_prefix(args, case_dir):
             "--log-file",
             profiler_log_pattern(case_dir, "nvprof-gpu-trace"),
         ]
+    if args.tool == "nvprof-window-gpu-trace":
+        return [
+            args.nvprof,
+            "--profile-from-start",
+            "off",
+            "--csv",
+            "--print-gpu-trace",
+            "--log-file",
+            profiler_log_pattern(case_dir, "nvprof-window-gpu-trace"),
+        ]
     if args.tool == "nvprof-api-trace":
         return [
             args.nvprof,
@@ -58,6 +68,16 @@ def profiler_prefix(args, case_dir):
             "--print-api-trace",
             "--log-file",
             profiler_log_pattern(case_dir, "nvprof-api-trace"),
+        ]
+    if args.tool == "nvprof-window-api-trace":
+        return [
+            args.nvprof,
+            "--profile-from-start",
+            "off",
+            "--csv",
+            "--print-api-trace",
+            "--log-file",
+            profiler_log_pattern(case_dir, "nvprof-window-api-trace"),
         ]
     if args.tool == "ncu-basic":
         cmd = [
@@ -77,6 +97,26 @@ def profiler_prefix(args, case_dir):
         if args.ncu_kernel_name:
             cmd.extend(["--kernel-name", args.ncu_kernel_name])
         return cmd
+    if args.tool == "ncu-window-basic":
+        cmd = [
+            args.ncu,
+            "--target-processes",
+            "all",
+            "--profile-from-start",
+            "off",
+            "--set",
+            "basic",
+            "--launch-count",
+            str(args.ncu_launch_count),
+            "--csv",
+            "--log-file",
+            str(case_dir / "ncu-window-basic.csv"),
+        ]
+        if args.ncu_launch_skip:
+            cmd.extend(["--launch-skip", str(args.ncu_launch_skip)])
+        if args.ncu_kernel_name:
+            cmd.extend(["--kernel-name", args.ncu_kernel_name])
+        return cmd
     if args.tool == "ncu-nvlink":
         cmd = [
             args.ncu,
@@ -89,6 +129,26 @@ def profiler_prefix(args, case_dir):
             "--csv",
             "--log-file",
             str(case_dir / "ncu-nvlink.csv"),
+        ]
+        if args.ncu_launch_skip:
+            cmd.extend(["--launch-skip", str(args.ncu_launch_skip)])
+        if args.ncu_kernel_name:
+            cmd.extend(["--kernel-name", args.ncu_kernel_name])
+        return cmd
+    if args.tool == "ncu-window-nvlink":
+        cmd = [
+            args.ncu,
+            "--target-processes",
+            "all",
+            "--profile-from-start",
+            "off",
+            "--set",
+            "nvlink",
+            "--launch-count",
+            str(args.ncu_launch_count),
+            "--csv",
+            "--log-file",
+            str(case_dir / "ncu-window-nvlink.csv"),
         ]
         if args.ncu_launch_skip:
             cmd.extend(["--launch-skip", str(args.ncu_launch_skip)])
@@ -121,6 +181,7 @@ def build_env(args, port):
             "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_QUIET": "1",
             "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_BATCH_ROWS": "1",
             "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_STREAM_SYNC": "1",
+            "DS4_V100_CUDA_PROFILER_WINDOW": "1" if "window" in args.tool else "0",
         }
     )
     return env
@@ -189,6 +250,8 @@ def write_top_kernels(case_dir):
     kernels = []
     for path in sorted(case_dir.glob("nvprof-gpu-trace.*.csv")):
         kernels.extend(parse_nvprof_gpu_trace(path))
+    for path in sorted(case_dir.glob("nvprof-window-gpu-trace.*.csv")):
+        kernels.extend(parse_nvprof_gpu_trace(path))
     if not kernels:
         return
     by_name = {}
@@ -247,7 +310,17 @@ def main():
     )
     parser.add_argument(
         "--tool",
-        choices=["none", "nvprof-gpu-trace", "nvprof-api-trace", "ncu-basic", "ncu-nvlink"],
+        choices=[
+            "none",
+            "nvprof-gpu-trace",
+            "nvprof-window-gpu-trace",
+            "nvprof-api-trace",
+            "nvprof-window-api-trace",
+            "ncu-basic",
+            "ncu-window-basic",
+            "ncu-nvlink",
+            "ncu-window-nvlink",
+        ],
         default="nvprof-gpu-trace",
     )
     args = parser.parse_args()

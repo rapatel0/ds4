@@ -4,24 +4,27 @@ Last updated: 2026-05-25
 
 ## Topline
 
-Latest TP/EP typed-KV serving status: Sprint 345 added a permanent opt-in
-profiler harness, `tools/ds4-v100-tp-ep-profile.py`, and collected the first
-profiler-backed evidence for the 32-slot typed path. No-profiler sanity at
-`32` concurrent `/v1/chat/completions` requests, `32` slots, `256K` context,
-and `2` generated tokens/request measured `79.571869` server tok/s and
-`94.059803` decode tok/s. The matching `nvprof --print-gpu-trace` run stayed
-correct at `32/32` responses and measured `62.986544` / `73.352688` under
-profiler overhead. The parsed trace contains about `274495` kernel launches
-and `177864` memcpy events for only `64` generated tokens. Tensor-core-capable
-kernels are present: Cutlass WMMA/HMMA is the top family
-(`43496` calls, `544.815258 ms`) and TurboMind SM70 FP4 HMMA is active
-(`1300` calls, `348.017383 ms`). The larger finding is launch and transform
-fragmentation: compressor, gather, and dense-fill kernels are comparable to
-or larger than the expert GEMM time, while typed KV row store/load total only
-`44.717453 ms` / `28.144692 ms`. The first Nsight Compute filtered attempt
-connected but did not emit useful metrics because the server wrapper
-terminated the process; future NCU capture needs an internal profiler
-start/stop window or a non-server replay target.
+Latest TP/EP typed-KV serving status: Sprint 346 added
+`--cuda-profiler-window` support to the TP/EP full-layer smoke/server binary,
+propagated `DS4_V100_CUDA_PROFILER_WINDOW=1` through the TP/EP launcher, and
+added permanent windowed profiler modes to `tools/ds4-v100-tp-ep-profile.py`.
+The implementation is correct and opt-in: no-profiler sanity at `32`
+concurrent `/v1/chat/completions` requests, `32` slots, `256K` context, and
+`2` generated tokens/request measured `78.032873` server tok/s and
+`92.070787` decode tok/s. Windowed `nvprof` and `ncu` runs both returned
+`32/32` HTTP 200 responses and emitted CUDA profiler start/stop markers
+(`36` and `34` marker lines respectively), but the profiler tools still did
+not produce scoped kernel metrics in the HTTP-wrapper setup: `nvprof
+--profile-from-start off` wrote a zero-byte GPU trace, and NCU produced only
+process lifecycle lines. Sprint 345's broad trace therefore remains the
+current performance evidence: about `274495` kernel launches and `177864`
+memcpy events for `64` generated tokens, with Cutlass WMMA/HMMA
+(`43496` calls, `544.815258 ms`), compressor kernels (`434.288469 ms`),
+gather kernels (`429.056773 ms`), dense-fill kernels (`422.979145 ms`), and
+TurboMind SM70 FP4 HMMA (`1300` calls, `348.017383 ms`) dominating. The next
+required metrology step is a direct non-server TP/EP replay/profile target
+that reuses the resident 32-slot typed decode path and exits naturally after
+one decode window.
 
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the

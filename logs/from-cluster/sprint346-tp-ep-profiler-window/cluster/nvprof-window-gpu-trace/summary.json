@@ -1,0 +1,20 @@
+{
+  "cache_hits": 0,
+  "cache_misses": 32,
+  "client_generated_tok_s": 1.311105290824331,
+  "coalesced_batch_size": 32,
+  "elapsed_s": 48.81377601623535,
+  "generated_tokens_meta": 64,
+  "http_200": 32,
+  "requests": 32,
+  "server_continuation_tok_s": 72.263029,
+  "server_continuation_tok_s_decode": 85.043028,
+  "server_generated_tok_s": 72.078755,
+  "server_generated_tok_s_decode": 84.920155,
+  "tokens": 2,
+  "tool": "nvprof-window-gpu-trace",
+  "typed_compressed_lines": 0,
+  "typed_history_lines": 0,
+  "typed_indexer_lines": 0,
+  "typed_raw_lines": 0
+}

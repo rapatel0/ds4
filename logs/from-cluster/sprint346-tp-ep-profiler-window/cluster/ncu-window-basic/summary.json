@@ -1,0 +1,20 @@
+{
+  "cache_hits": 0,
+  "cache_misses": 32,
+  "client_generated_tok_s": 1.7250326694355653,
+  "coalesced_batch_size": 32,
+  "elapsed_s": 18.550373315811157,
+  "generated_tokens_meta": 32,
+  "http_200": 32,
+  "requests": 32,
+  "server_continuation_tok_s": 0.0,
+  "server_continuation_tok_s_decode": 0.0,
+  "server_generated_tok_s": 35.193444,
+  "server_generated_tok_s_decode": 39.720168,
+  "tokens": 1,
+  "tool": "ncu-window-basic",
+  "typed_compressed_lines": 0,
+  "typed_history_lines": 0,
+  "typed_indexer_lines": 0,
+  "typed_raw_lines": 0
+}

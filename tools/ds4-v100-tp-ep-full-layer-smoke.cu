@@ -7,6 +7,7 @@ extern "C" {
 }
 
 #include <cuda_fp16.h>
+#include <cuda_profiler_api.h>
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 #include <dlfcn.h>
@@ -575,7 +576,45 @@ struct Options {
     bool true_ds4_compressed_kv_gate = false;
     bool true_ds4_indexer_attention_gate = false;
     bool true_ds4_compressed_reference_diff_gate = false;
+    bool cuda_profiler_window = false;
     uint32_t true_ds4_attention_raw_valid_rows = 1;
+};
+
+bool tp_ep_profiler_start_if_requested(const Options &opt) {
+    if (!opt.cuda_profiler_window) return false;
+    const cudaError_t err = cudaProfilerStart();
+    if (err != cudaSuccess) {
+        std::fprintf(stderr, "tp_ep_cuda_profiler_start_failed\terr\t%s\n",
+                     cudaGetErrorString(err));
+        return false;
+    }
+    std::fprintf(stderr, "tp_ep_cuda_profiler_window\tstate\tstart\n");
+    return true;
+}
+
+int tp_ep_profiler_stop_if_active(bool *active) {
+    if (!active || !*active) return 0;
+    const cudaError_t err = cudaProfilerStop();
+    if (err != cudaSuccess) {
+        std::fprintf(stderr, "tp_ep_cuda_profiler_stop_failed\terr\t%s\n",
+                     cudaGetErrorString(err));
+        *active = false;
+        return 1;
+    }
+    std::fprintf(stderr, "tp_ep_cuda_profiler_window\tstate\tstop\n");
+    *active = false;
+    return 0;
+}
+
+struct TpEpProfilerWindowGuard {
+    bool active = false;
+
+    explicit TpEpProfilerWindowGuard(const Options &opt)
+        : active(tp_ep_profiler_start_if_requested(opt)) {}
+
+    ~TpEpProfilerWindowGuard() {
+        (void)tp_ep_profiler_stop_if_active(&active);
+    }
 };
 
 void sync_typed_kv_boundary(const Options &opt, RankState ranks[kGpus]) {
@@ -2547,6 +2586,7 @@ void usage(const char *argv0) {
                  "       [--true-ds4-compressed-reference-diff-gate]\n"
                  "       [--reference-hc-reduce-gate]\n"
                  "       [--reference-hc-state-guard-gate]\n"
+                 "       [--cuda-profiler-window]\n"
                  "       [--diagnostic-output-head]\n",
                  argv0);
 }
@@ -2896,6 +2936,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--tp-kv-all-slots-gate") == 0) {
             opt->tp_kv_all_slots_gate = true;
+        } else if (std::strcmp(arg, "--cuda-profiler-window") == 0) {
+            opt->cuda_profiler_window = true;
         } else if (std::strcmp(arg, "--diagnostic-output-head") == 0) {
             opt->diagnostic_output_head = true;
             opt->final_hc_carry_gate = true;
@@ -11308,6 +11350,7 @@ int run_token_major_serving_loop(const Options &opt,
             shared_rank_buffers->ranks[rank].hc_initialized = false;
         }
     }
+    TpEpProfilerWindowGuard profiler_guard(opt);
     const auto start = std::chrono::steady_clock::now();
     for (int step = 0; step < opt.decode_steps; ++step) {
         const auto step_start = std::chrono::steady_clock::now();
