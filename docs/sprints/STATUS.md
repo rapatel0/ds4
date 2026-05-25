@@ -195,6 +195,16 @@ input-fill rows. The first selected token was `109328`. The initial bare
 launcher attempt returned HTTP 500 because it omitted the full TP/EP
 true-attention gate set; this does not affect the default-promotion result.
 
+Sprint 361 reran the launcher path through `/v1/chat/completions`, comparing
+an explicit pool-norm-off control against the launcher default. Both runs used
+`32` concurrent requests and `8` generated tokens/request at `32` slots /
+`256K`; both returned `32/32` HTTP 200 and first token `24893`. Control
+measured `24.280060` client generated tok/s with `0` fused pool rows. The
+default-pool run measured `24.118711` client generated tok/s with `126` fused
+pool rows. This proves the promoted default is active and stable through the
+full chat endpoint, but does not show a short-chat topline gain; the result is
+`-0.66%` at a shape where tokenization/prefill/HTTP overhead dominate.
+
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
 TP runtime, sharded KV, rank buffers, TurboMind API handles, active MXFP4

@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-25
 last_updated_by: codex
-revision: 364
+revision: 365
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -113,6 +113,12 @@ not a serial layer-chain.
   returned `32/32` HTTP 200 at `32` slots / `256K` / `position=262112` /
   `32` tokens/request with `73.289956` client generated tok/s and `187`
   fused pool-norm rows.
+- Sprint 361 checked the full `/v1/chat/completions` endpoint. The promoted
+  default is active and stable there (`126` fused pool-norm rows, `32/32`
+  HTTP 200, same first token), but the short `8` token/request chat shape is
+  flat/slightly slower (`24.118711` vs `24.280060` client generated tok/s).
+  Treat pool+norm as a decode-path win, not yet a proven short-chat topline
+  win.
 - Sprint 327 made the production compressed-KV memory contract executable in
   `tools/ds4-v100-plan-tp.c`. With the real TP pack and F8 KV, `32` slots at
   `256K` fits at `27.00 GiB/GPU` with `5.00 GiB` headroom after reserve;
@@ -2284,6 +2290,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 358 ran the longer selected-token HTTP A/B. | `position=262112` leaves room for a 32-token run while still reaching the emitted-row boundary. Combined input-fill + pool-norm is not promotable; pool-norm only improves client tok/s and compressed-KV sum but regresses the scaffold decode proxy. | Keep all compressed fusions default-off. Confirm pool-norm with repeated/direct multi-step A/B or move to deeper compressed state/emit fusion. |
 | 2026-05-25 | Sprint 359 promoted fused compressed pool+norm. | Direct 32-step non-HTTP A/B resolves the Sprint 358 metric conflict: pool+norm improves decode tok/s by `+1.84%`, wall tok/s by `+1.77%`, and compressed-KV sum by `62.624806 ms` with the same first token. | Keep pool+norm default-on for TP/EP serving. Continue deeper compressed state/emit fusion or rerun full HTTP chat topline with the promoted default. |
 | 2026-05-25 | Sprint 360 validated the pool+norm default through the launcher. | The TP/EP launcher emits the pool+norm gate by default, and a launcher-started selected-token HTTP run returns `32/32` HTTP 200 with `187` fused pool-norm rows and `73.289956` client generated tok/s. | Use the launcher default for future TP/EP serving tests; next rerun chat/topline or continue compressed state/emit fusion. |
+| 2026-05-25 | Sprint 361 ran the launcher chat/completions A/B. | The promoted pool+norm default is active through chat and stable, but short chat is flat/slightly slower: `24.118711` vs `24.280060` client generated tok/s for `8` tokens/request. | Do not claim chat topline improvement. Use longer decode-heavy chat tests or continue larger compressed-KV fusion work. |
 
 ## Open Questions
 

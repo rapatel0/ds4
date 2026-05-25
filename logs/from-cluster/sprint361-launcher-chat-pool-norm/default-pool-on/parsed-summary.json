@@ -1,0 +1,13 @@
+{
+  "case": "default-pool-on",
+  "client_generated_tok_s": 24.11871073856738,
+  "compressed_lines": 1032,
+  "elapsed_s": 10.614166021347046,
+  "first_token": 24893,
+  "fused_input_fill_lines": 0,
+  "fused_pool_norm_lines": 126,
+  "generated_tokens": 256,
+  "http_200": 32,
+  "output_head_lines": 8,
+  "requests": 32
+}

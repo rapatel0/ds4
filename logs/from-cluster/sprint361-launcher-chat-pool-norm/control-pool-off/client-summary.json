@@ -1,0 +1,8 @@
+{
+  "case": "control-pool-off",
+  "client_generated_tok_s": 24.280059909737414,
+  "elapsed_s": 10.543631315231323,
+  "generated_tokens": 256,
+  "http_200": 32,
+  "requests": 32
+}
