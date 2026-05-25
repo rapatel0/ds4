@@ -215,6 +215,18 @@ V100 selected-token proof returned `1/1` HTTP 200 in both modes: default
 command had the pool-norm gate and logged `40` fused pool layers; disabled
 command omitted the gate and logged `0` fused pool layers.
 
+Sprint 363 tested the next wider emitted-row fusion,
+`--true-ds4-compressed-kv-fused-pool-norm-rope-round-gate`, which combines
+compressor pooling, RMSNorm, compressed-row RoPE, F16 rounding, and final row
+write into one opt-in kernel. It is correct but not promotable. The V100
+direct 32-step A/B at `32` slots / `256K` / `position=262112` preserved first
+token `98751` and finite output in both variants, but regressed from
+`95.908399` to `95.463298` generated decode tok/s and increased
+compressed-KV sum from `3460.932833` to `3470.682826` ms. A one-token
+`nvprof-window` boundary run showed lower compressed-KV sum
+(`142.456129` to `140.699321` ms) but the full direct decode result is the
+decision gate. Keep the fused pool+norm+RoPE+round path diagnostic-only.
+
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
 TP runtime, sharded KV, rank buffers, TurboMind API handles, active MXFP4

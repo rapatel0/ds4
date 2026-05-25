@@ -190,6 +190,9 @@ def build_env(args, port):
             "DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_ROPE_ROUND": "1"
             if args.fused_compressed_rope_round
             else "0",
+            "DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_POOL_NORM_ROPE_ROUND": "1"
+            if args.fused_compressed_pool_norm_rope_round
+            else "0",
             "DS4_V100_CUDA_PROFILER_WINDOW": "1" if "window" in args.tool else "0",
         }
     )
@@ -218,6 +221,8 @@ def variant_suffix(args):
         suffix += "-fused-compressed-pool-norm"
     if getattr(args, "disable_fused_compressed_pool_norm", False):
         suffix += "-no-fused-compressed-pool-norm"
+    if getattr(args, "fused_compressed_pool_norm_rope_round", False):
+        suffix += "-fused-compressed-pool-norm-rope-round"
     return suffix
 
 
@@ -286,6 +291,8 @@ def direct_command(args):
         cmd.append("--true-ds4-compressed-kv-fused-rope-round-gate")
     if args.fused_compressed_pool_norm:
         cmd.append("--true-ds4-compressed-kv-fused-pool-norm-gate")
+    if args.fused_compressed_pool_norm_rope_round:
+        cmd.append("--true-ds4-compressed-kv-fused-pool-norm-rope-round-gate")
     return cmd
 
 
@@ -327,6 +334,7 @@ def add_tp_ep_line_summaries(summary, stdout):
         "fused_input_fill",
         "fused_rope_round",
         "fused_pool_norm",
+        "fused_pool_norm_rope_round",
         "ms",
     ]
     compressed_counts = {
@@ -337,6 +345,7 @@ def add_tp_ep_line_summaries(summary, stdout):
         "fused_input_fill_layers": 0,
         "fused_rope_round_layers": 0,
         "fused_pool_norm_layers": 0,
+        "fused_pool_norm_rope_round_layers": 0,
     }
     for line in stdout.splitlines():
         tag, fields = parse_tab_line(line)
@@ -397,6 +406,8 @@ def add_tp_ep_line_summaries(summary, stdout):
                 compressed_counts["fused_rope_round_layers"] += 1
             if maybe_number(fields.get("fused_pool_norm")):
                 compressed_counts["fused_pool_norm_layers"] += 1
+            if maybe_number(fields.get("fused_pool_norm_rope_round")):
+                compressed_counts["fused_pool_norm_rope_round_layers"] += 1
             for key in compressed_sum_keys:
                 value = maybe_number(fields.get(key))
                 if isinstance(value, (int, float)):
@@ -574,6 +585,7 @@ def main():
     parser.add_argument("--fused-compressed-input-fill", action="store_true")
     parser.add_argument("--fused-compressed-rope-round", action="store_true")
     parser.add_argument("--fused-compressed-pool-norm", action="store_true")
+    parser.add_argument("--fused-compressed-pool-norm-rope-round", action="store_true")
     parser.add_argument("--disable-fused-compressed-pool-norm", action="store_true")
     parser.add_argument("--port", type=int, default=18357)
     parser.add_argument("--readiness-seconds", type=int, default=600)

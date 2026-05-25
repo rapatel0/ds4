@@ -628,6 +628,7 @@ struct Options {
     bool true_ds4_compressed_kv_fused_input_fill_gate = false;
     bool true_ds4_compressed_kv_fused_rope_round_gate = false;
     bool true_ds4_compressed_kv_fused_pool_norm_gate = false;
+    bool true_ds4_compressed_kv_fused_pool_norm_rope_round_gate = false;
     bool true_ds4_compressed_reference_diff_gate = false;
     bool cuda_profiler_window = false;
     uint32_t true_ds4_attention_raw_valid_rows = 1;
@@ -1705,6 +1706,116 @@ __global__ void compressor_pool_norm_emit_slots_kernel(float *rows,
     for (uint32_t d = threadIdx.x; d < head_dim; d += blockDim.x) {
         const float y = isfinite(pooled[d]) ? pooled[d] * scale * weight[d] : 0.0f;
         row[d] = isfinite(y) ? y : 0.0f;
+    }
+}
+
+__global__ void compressor_pool_norm_rope_round_emit_slots_kernel(
+    float *rows,
+    const float *state_kv,
+    const float *state_score,
+    const float *weight,
+    uint32_t slots,
+    uint32_t head_dim,
+    uint32_t ratio,
+    uint32_t comp_row,
+    uint32_t row_cap,
+    uint32_t max_state_rows,
+    uint32_t max_width,
+    float eps,
+    uint32_t n_rot,
+    uint32_t pos,
+    uint32_t n_ctx_orig,
+    float freq_base,
+    float freq_scale,
+    float ext_factor,
+    float attn_factor,
+    float beta_fast,
+    float beta_slow) {
+    const uint32_t slot = blockIdx.x;
+    if (slot >= slots || head_dim > 512u || comp_row >= row_cap ||
+        ratio == 0u || n_rot > head_dim || (n_rot & 1u)) {
+        return;
+    }
+    const uint32_t coff = ratio == 4u ? 2u : 1u;
+    const uint32_t width = coff * head_dim;
+    if (width > max_width) return;
+
+    __shared__ float normalized[512];
+    const uint64_t slot_base =
+        (uint64_t)slot * max_state_rows * (uint64_t)max_width;
+    float local_max = 0.0f;
+    for (uint32_t d = threadIdx.x; d < head_dim; d += blockDim.x) {
+        const float v = compressor_pool_value_one_dim(
+            state_kv, state_score, head_dim, ratio, max_state_rows, max_width,
+            slot_base, d);
+        normalized[d] = v;
+        if (isfinite(v)) local_max = fmaxf(local_max, fabsf(v));
+    }
+    __syncthreads();
+
+    const float max_abs = block_max_256_f32(local_max);
+    float sum = 0.0f;
+    if (max_abs > 0.0f && isfinite(max_abs)) {
+        for (uint32_t d = threadIdx.x; d < head_dim; d += blockDim.x) {
+            const float v = normalized[d];
+            if (isfinite(v)) {
+                const float scaled = v / max_abs;
+                sum += scaled * scaled;
+            }
+        }
+    }
+    sum = block_sum_256_f32(sum);
+    float scale = rsqrtf(eps);
+    if (max_abs > 0.0f && isfinite(max_abs)) {
+        scale = rsqrtf(sum / (float)head_dim + eps / (max_abs * max_abs)) / max_abs;
+    }
+    for (uint32_t d = threadIdx.x; d < head_dim; d += blockDim.x) {
+        const float v = normalized[d];
+        const float y = isfinite(v) ? v * scale * weight[d] : 0.0f;
+        normalized[d] = isfinite(y) ? y : 0.0f;
+    }
+    __syncthreads();
+
+    float *row = rows + ((uint64_t)slot * row_cap + comp_row) *
+                           (uint64_t)head_dim;
+    const uint32_t n_nope = head_dim - n_rot;
+    for (uint32_t d = threadIdx.x; d < n_nope; d += blockDim.x) {
+        row[d] = __half2float(f32_to_half_saturate(normalized[d]));
+    }
+
+    float corr0 = 0.0f, corr1 = 0.0f;
+    if (ext_factor != 0.0f) {
+        const float denom = 2.0f * logf(freq_base);
+        corr0 = floorf((float)n_rot *
+                       logf((float)n_ctx_orig /
+                            (beta_fast * 2.0f * (float)M_PI)) /
+                       denom);
+        corr1 = ceilf((float)n_rot *
+                      logf((float)n_ctx_orig /
+                           (beta_slow * 2.0f * (float)M_PI)) /
+                      denom);
+        corr0 = fmaxf(0.0f, corr0);
+        corr1 = fminf((float)(n_rot - 1), corr1);
+    }
+    for (uint32_t pair = threadIdx.x; pair < n_rot / 2u; pair += blockDim.x) {
+        const uint32_t i = pair * 2u;
+        const float theta_extrap =
+            (float)pos * powf(freq_base, -((float)i) / (float)n_rot);
+        const float theta_interp = freq_scale * theta_extrap;
+        float theta = theta_interp;
+        float mscale = attn_factor;
+        if (ext_factor != 0.0f) {
+            const float ramp_mix =
+                rope_yarn_ramp_tp_dev(corr0, corr1, (int)i) * ext_factor;
+            theta = theta_interp * (1.0f - ramp_mix) + theta_extrap * ramp_mix;
+            mscale *= 1.0f + 0.1f * logf(1.0f / freq_scale);
+        }
+        const float c = cosf(theta) * mscale;
+        const float s = sinf(theta) * mscale;
+        const float x0 = normalized[n_nope + i + 0];
+        const float x1 = normalized[n_nope + i + 1];
+        row[n_nope + i + 0] = __half2float(f32_to_half_saturate(x0 * c - x1 * s));
+        row[n_nope + i + 1] = __half2float(f32_to_half_saturate(x0 * s + x1 * c));
     }
 }
 
@@ -3229,6 +3340,16 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--true-ds4-compressed-kv-fused-pool-norm-rope-round-gate") == 0) {
+            opt->true_ds4_compressed_kv_fused_pool_norm_rope_round_gate = true;
+            opt->true_ds4_compressed_kv_gate = true;
+            opt->true_ds4_attention_rope_gate = true;
+            opt->true_ds4_attention_state_gate = true;
+            opt->true_ds4_attention_projection_gate = true;
+            opt->true_ds4_attention_residency_gate = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--true-ds4-compressed-reference-diff-gate") == 0) {
             opt->true_ds4_compressed_reference_diff_gate = true;
             opt->true_ds4_indexer_attention_gate = true;
@@ -3338,6 +3459,9 @@ bool parse_args(int argc, char **argv, Options *opt) {
              opt->true_ds4_attention_rope_gate)) &&
            (!opt->true_ds4_compressed_kv_fused_pool_norm_gate ||
             opt->true_ds4_compressed_kv_gate) &&
+           (!opt->true_ds4_compressed_kv_fused_pool_norm_rope_round_gate ||
+            (opt->true_ds4_compressed_kv_gate &&
+             opt->true_ds4_attention_rope_gate)) &&
            (!opt->true_ds4_compressed_reference_diff_gate ||
             opt->true_ds4_indexer_attention_gate) &&
            !(opt->dense_compute_tensor &&
@@ -8335,6 +8459,9 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
         opt.true_ds4_attention_rope_gate && emitted;
     const bool fused_pool_norm =
         opt.true_ds4_compressed_kv_fused_pool_norm_gate && emitted;
+    const bool fused_pool_norm_rope_round =
+        opt.true_ds4_compressed_kv_fused_pool_norm_rope_round_gate &&
+        opt.true_ds4_attention_rope_gate && emitted;
     for (int rank = 0; rank < kGpus; ++rank) {
         RankState &r = ranks[rank];
         CHECK_CUDA(cudaSetDevice(r.device));
@@ -8498,7 +8625,20 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             if (rank == 0) emitted_comp_row = comp_row;
             r.attn_comp_row_position_layers[layer][comp_row] = opt.position;
             r.attn_comp_row_loaded_layers[layer][comp_row] = false;
-            if (fused_pool_norm) {
+            if (fused_pool_norm_rope_round) {
+                compressor_pool_norm_rope_round_emit_slots_kernel<<<
+                    (unsigned int)opt.slots, 256, 0, r.stream>>>(
+                    r.d_attn_comp_rows, r.d_attn_comp_state_kv,
+                    r.d_attn_comp_state_score, hc->d_attn_compress_norm[layer],
+                    (uint32_t)opt.slots, (uint32_t)kHeadDim, (uint32_t)ratio,
+                    comp_row, (uint32_t)kBoundedCompRows,
+                    (uint32_t)kCompStateRowsMax, (uint32_t)kCompWidthMax,
+                    1.0e-6f, (uint32_t)kRotaryDim,
+                    (uint32_t)(opt.position + 1ull - (uint64_t)ratio),
+                    kRopeOrigCtx, kCompressRopeFreqBase, comp_freq_scale,
+                    comp_ext_factor, comp_attn_factor, kRopeYarnBetaFast,
+                    kRopeYarnBetaSlow);
+            } else if (fused_pool_norm) {
                 compressor_pool_norm_emit_slots_kernel<<<
                     (unsigned int)opt.slots, 256, 0, r.stream>>>(
                     r.d_attn_comp_rows, r.d_attn_comp_state_kv,
@@ -8523,7 +8663,9 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                     (uint32_t)opt.slots, (uint32_t)kHeadDim, comp_row,
                     (uint32_t)kBoundedCompRows, 1.0e-6f);
             }
-            if (fused_rope_round) {
+            if (fused_pool_norm_rope_round) {
+                // RoPE and F16 rounding were already applied by the fused emit.
+            } else if (fused_rope_round) {
                 rope_tail_round_comp_emit_slots_kernel<<<
                     (unsigned int)opt.slots, 256, 0, r.stream>>>(
                     r.d_attn_comp_rows, (uint32_t)opt.slots,
@@ -8916,7 +9058,22 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 const uint32_t visible_after =
                     std::min(r.index_comp_rows_written_layers[layer] + 1u,
                              (uint32_t)kBoundedCompRows);
-                if (fused_pool_norm) {
+                if (fused_pool_norm_rope_round) {
+                    compressor_pool_norm_rope_round_emit_slots_kernel<<<
+                        (unsigned int)opt.slots, 256, 0, r.stream>>>(
+                        r.d_index_comp_rows, r.d_index_comp_state_kv,
+                        r.d_index_comp_state_score,
+                        hc->d_indexer_compress_norm[layer],
+                        (uint32_t)opt.slots, (uint32_t)kIndexerHeadDim, 4u,
+                        comp_row, (uint32_t)kBoundedCompRows,
+                        (uint32_t)kIndexCompStateRows,
+                        (uint32_t)kIndexCompWidth, 1.0e-6f,
+                        (uint32_t)kRotaryDim,
+                        (uint32_t)(opt.position + 1ull - 4ull),
+                        kRopeOrigCtx, kCompressRopeFreqBase, comp_freq_scale,
+                        comp_ext_factor, comp_attn_factor, kRopeYarnBetaFast,
+                        kRopeYarnBetaSlow);
+                } else if (fused_pool_norm) {
                     compressor_pool_norm_emit_slots_kernel<<<
                         (unsigned int)opt.slots, 256, 0, r.stream>>>(
                         r.d_index_comp_rows, r.d_index_comp_state_kv,
@@ -8943,7 +9100,9 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                         (uint32_t)opt.slots, (uint32_t)kIndexerHeadDim, comp_row,
                         (uint32_t)kBoundedCompRows, 1.0e-6f);
                 }
-                if (fused_rope_round) {
+                if (fused_pool_norm_rope_round) {
+                    // RoPE and F16 rounding were already applied by the fused emit.
+                } else if (fused_rope_round) {
                     rope_tail_round_comp_emit_slots_kernel<<<
                         (unsigned int)opt.slots, 256, 0, r.stream>>>(
                         r.d_index_comp_rows, (uint32_t)opt.slots,
@@ -9250,7 +9409,8 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 "indexer_state_emit_ms\t%.6f\tindexer_typed_score_ms\t%.6f\t"
                 "reference_diff_ms\t%.6f\tratio_shift_ms\t%.6f\t"
                 "fused_input_fill\t%d\tfused_rope_round\t%d\t"
-                "fused_pool_norm\t%d\tms\t%.6f\tPASS\n",
+                "fused_pool_norm\t%d\tfused_pool_norm_rope_round\t%d\t"
+                "ms\t%.6f\tPASS\n",
                 layer, opt.slots, ratio, emitted, visible, indexer_topk,
                 comp_width, attn_kv_stats.max_abs, attn_kv_stats.finite_bad,
                 attn_gate_stats.max_abs, attn_gate_stats.finite_bad,
@@ -9265,7 +9425,8 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 reference_diff_ms, ratio_shift_ms,
                 fused_ratio4_current_fill ? 1 : 0,
                 fused_rope_round ? 1 : 0,
-                fused_pool_norm ? 1 : 0, ms);
+                fused_pool_norm ? 1 : 0,
+                fused_pool_norm_rope_round ? 1 : 0, ms);
     return (attn_kv_stats.finite_bad || attn_gate_stats.finite_bad ||
             index_q_stats.finite_bad || index_w_stats.finite_bad ||
             index_kv_stats.finite_bad || index_gate_stats.finite_bad) ? 8 : 0;
