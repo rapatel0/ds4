@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-25
 last_updated_by: codex
-revision: 368
+revision: 369
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -135,6 +135,13 @@ not a serial layer-chain.
   peer-read half-fill is far slower than explicit per-rank staging. Preserve
   local per-rank reads; future work should reduce local launch count or improve
   dense projection kernels instead.
+- Sprint 365 implemented and rejected local fused attention input fill as a
+  default. It preserves local per-rank staging and is correct, but the
+  selected-token HTTP long-context gate regressed from `72.886325` to
+  `70.674037` client tok/s even though direct 32-step decode was slightly
+  positive (`94.237924` to `94.396298` tok/s). Keep the gate diagnostic-only;
+  larger compressed/indexer dense projection or attention projection/state
+  boundaries are the next TP/EP optimization target.
 - Sprint 327 made the production compressed-KV memory contract executable in
   `tools/ds4-v100-plan-tp.c`. With the real TP pack and F8 KV, `32` slots at
   `256K` fits at `27.00 GiB/GPU` with `5.00 GiB` headroom after reserve;
@@ -2310,6 +2317,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 362 aligned the profile harness with launcher defaults. | HTTP profile runs now inherit the production pool+norm default, and an explicit `--disable-fused-compressed-pool-norm` flag provides the control path. V100 proof returned `1/1` HTTP 200 in both modes with `40` fused pool layers by default and `0` when disabled. | Use the permanent harness for future launcher-level TP/EP A/B tests instead of ad hoc shell scripts. |
 | 2026-05-25 | Sprint 363 rejected wider emitted-row scalar fusion. | The new fused pool+norm+RoPE+round kernel is correct and selected on all emitted rows, but the full 32-step direct gate regressed: `95.463298` vs `95.908399` generated decode tok/s and `3470.682826` vs `3460.932833` ms compressed-KV sum. | Keep the gate diagnostic-only. Shift optimization upstream to compressed/indexer dense projection or current/gather staging. |
 | 2026-05-25 | Sprint 364 rejected remote direct compressed input fill. | Reading `hc->d_attn_normed` directly from rank-0 memory is legal and correct but much slower: one-step compressed-KV sum regressed from `126.724613` to `260.365841` ms, with attention/indexer input-fill costs increasing sharply. | Do not use peer-read half-fill. Preserve local staged current reads and target local launch reduction or dense projection kernels. |
+| 2026-05-25 | Sprint 365 rejected local attention input-fill micro-fusion as a default. | The fused local attention fill gate is correct and slightly positive in direct 32-step decode (`94.237924` to `94.396298` tok/s), but selected-token HTTP regresses (`72.886325` to `70.674037` client tok/s). | Keep the gate diagnostic-only. Move up to larger compressed/indexer dense projection or attention projection/state boundaries. |
 
 ## Open Questions
 

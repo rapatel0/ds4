@@ -237,6 +237,18 @@ input fill: attention input fill moved from `12.587939` to `84.142732` ms, and
 indexer input fill from `3.754212` to `65.145245` ms. Keep direct compressed
 input fill diagnostic-only and preserve local per-rank reads.
 
+Sprint 365 tested local fused attention input fill, preserving the staged
+per-rank current vector while replacing the two attention compressor half-fill
+launches with one two-destination kernel. The gate is correct and selected
+`1312` fused attention rows in the full 32-step direct run. Direct A/B at
+`32` slots / `256K` / `position=262112` moved generated decode tok/s from
+`94.237924` to `94.396298` and compressed-KV sum from `3532.911129` to
+`3499.213977` ms. The same selected-token HTTP shape regressed client tok/s
+from `72.886325` to `70.674037` and compressed-KV sum from `3493.666516` to
+`3506.331429` ms. Keep fused attention input fill diagnostic-only; the next
+TP/EP lever should be a larger compressed/indexer dense projection or
+attention projection/state boundary.
+
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
 TP runtime, sharded KV, rank buffers, TurboMind API handles, active MXFP4
