@@ -7,7 +7,9 @@ import os
 import pathlib
 import re
 import signal
+import shutil
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -36,6 +38,106 @@ def http_post(base, path, payload, timeout=1200):
             return resp.status, resp.read()
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read()
+
+
+class GpuSampler:
+    def __init__(self, path, interval_s):
+        self.path = pathlib.Path(path)
+        self.interval_s = interval_s
+        self.stop = threading.Event()
+        self.thread = None
+
+    def __enter__(self):
+        if self.interval_s <= 0:
+            return self
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if self.thread is None:
+            return False
+        self.stop.set()
+        self.thread.join(timeout=2.0)
+        return False
+
+    def _run(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.path, "w", encoding="utf-8") as out:
+            out.write("timestamp,index,utilization.gpu,memory.used,memory.total\n")
+            if not shutil.which("nvidia-smi"):
+                out.write("sample_error,-1,0,0,0 # nvidia-smi not found\n")
+                return
+            while not self.stop.is_set():
+                try:
+                    text = subprocess.check_output(
+                        [
+                            "nvidia-smi",
+                            "--query-gpu=timestamp,index,utilization.gpu,memory.used,memory.total",
+                            "--format=csv,noheader,nounits",
+                        ],
+                        text=True,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    out.write(text)
+                    out.flush()
+                except Exception as exc:
+                    out.write(f"sample_error,-1,0,0,0 # {exc}\n")
+                    out.flush()
+                self.stop.wait(self.interval_s)
+
+
+def summarize_gpu_samples(path):
+    path = pathlib.Path(path)
+    rows = []
+    by_gpu = {}
+    if not path.exists():
+        return {}
+    with open(path, "r", encoding="utf-8", errors="replace") as src:
+        next(src, None)
+        for line in src:
+            parts = [part.strip() for part in line.split(",")]
+            if len(parts) < 5:
+                continue
+            try:
+                gpu = int(parts[1])
+                util = float(parts[2])
+                mem_used = float(parts[3])
+                mem_total = float(parts[4].split()[0])
+            except ValueError:
+                continue
+            if gpu < 0:
+                continue
+            row = {
+                "gpu": gpu,
+                "util": util,
+                "mem_used_mib": mem_used,
+                "mem_total_mib": mem_total,
+            }
+            rows.append(row)
+            by_gpu.setdefault(gpu, []).append(row)
+    if not rows:
+        return {"gpu_sample_count": 0}
+    utils = [row["util"] for row in rows]
+    mem_used = [row["mem_used_mib"] for row in rows]
+    summary = {
+        "gpu_sample_count": len(rows),
+        "gpu_util_avg": sum(utils) / len(utils),
+        "gpu_util_max": max(utils),
+        "gpu_mem_used_max_mib": max(mem_used),
+    }
+    per_gpu = {}
+    for gpu, gpu_rows in sorted(by_gpu.items()):
+        gpu_utils = [row["util"] for row in gpu_rows]
+        gpu_mem = [row["mem_used_mib"] for row in gpu_rows]
+        per_gpu[str(gpu)] = {
+            "samples": len(gpu_rows),
+            "util_avg": sum(gpu_utils) / len(gpu_utils),
+            "util_max": max(gpu_utils),
+            "mem_used_max_mib": max(gpu_mem),
+        }
+    summary["gpu_per_gpu"] = per_gpu
+    return summary
 
 
 def profiler_prefix(args, case_dir):
@@ -481,18 +583,20 @@ def run_direct_case(args):
     (case_dir / "profile-command.txt").write_text(" ".join(cmd) + "\n")
     (case_dir / "command.txt").write_text(" ".join(direct_command(args)) + "\n")
     started = time.time()
-    with open(case_dir / "stdout.txt", "wb") as stdout, open(case_dir / "stderr.txt", "wb") as stderr:
-        proc = subprocess.run(
-            cmd,
-            cwd=args.repo_dir,
-            env=env,
-            stdout=stdout,
-            stderr=stderr,
-            timeout=args.request_timeout_seconds,
-            check=False,
-        )
+    with GpuSampler(case_dir / "gpu_util.csv", args.gpu_sample_interval_ms / 1000.0):
+        with open(case_dir / "stdout.txt", "wb") as stdout, open(case_dir / "stderr.txt", "wb") as stderr:
+            proc = subprocess.run(
+                cmd,
+                cwd=args.repo_dir,
+                env=env,
+                stdout=stdout,
+                stderr=stderr,
+                timeout=args.request_timeout_seconds,
+                check=False,
+            )
     elapsed_s = time.time() - started
     summary = summarize_direct(case_dir, args.tool, proc.returncode, elapsed_s)
+    summary.update(summarize_gpu_samples(case_dir / "gpu_util.csv"))
     (case_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     write_top_kernels(case_dir)
     print(json.dumps(summary, sort_keys=True), flush=True)
@@ -640,6 +744,12 @@ def main():
     parser.add_argument("--ncu-launch-count", type=int, default=160)
     parser.add_argument("--ncu-launch-skip", type=int, default=0)
     parser.add_argument(
+        "--gpu-sample-interval-ms",
+        type=int,
+        default=0,
+        help="sample nvidia-smi utilization/memory into gpu_util.csv; 0 disables sampling",
+    )
+    parser.add_argument(
         "--ncu-kernel-name",
         default="",
         help="optional Nsight Compute --kernel-name filter, e.g. regex:.*cutlass_70_wmma.*",
@@ -753,9 +863,10 @@ def main():
             )
             return status, body
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=args.requests) as executor:
-            for result in executor.map(one, enumerate(payloads)):
-                results.append(result)
+        with GpuSampler(case_dir / "gpu_util.csv", args.gpu_sample_interval_ms / 1000.0):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=args.requests) as executor:
+                for result in executor.map(one, enumerate(payloads)):
+                    results.append(result)
 
         elapsed_s = time.time() - started
         _, body = http_get(base, "/status", timeout=30)
@@ -795,6 +906,7 @@ def main():
             "typed_history_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_history", server_text)),
         }
         add_tp_ep_line_summaries(summary, server_text)
+        summary.update(summarize_gpu_samples(case_dir / "gpu_util.csv"))
         (case_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
         print(json.dumps(summary, sort_keys=True), flush=True)
     finally:

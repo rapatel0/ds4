@@ -4,6 +4,19 @@ Last updated: 2026-05-25
 
 ## Topline
 
+Latest TP/EP metrology status: Sprint 369 added opt-in GPU utilization
+sampling to `tools/ds4-v100-tp-ep-profile.py`. Passing
+`--gpu-sample-interval-ms N` now writes `gpu_util.csv` and adds aggregate plus
+per-GPU utilization/memory fields to `summary.json` for both HTTP serving and
+direct token-major profiles; the default `0` keeps the sampler disabled. A
+V100 `/v1/chat/completions` smoke at `32` configured slots, `4` active
+requests, `4` tokens/request, `256K` context, and `position=100000` returned
+`4/4` HTTP 200 with `coalesced_batch_size=4`, server decode `99.340235` tok/s,
+average GPU utilization `8.412879%`, and max GPU utilization `39%`. Per-GPU
+averages showed GPU0 at `27.090909%` while peers were mostly `3-12%`, giving
+the next active-slot/scheduling work concrete imbalance evidence in the normal
+profile artifact.
+
 Latest TP/EP typed-KV serving status: Sprint 347 added a direct non-server
 profile mode to the permanent profiler harness:
 `tools/ds4-v100-tp-ep-profile.py --run-mode direct-token-major`. It invokes
