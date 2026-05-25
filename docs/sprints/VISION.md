@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-25
 last_updated_by: vision
-revision: 383
+revision: 384
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -246,6 +246,15 @@ not a serial layer-chain.
   utilization from `1` to `32` active requests. The immediate work queue is
   therefore isolated gate experiments that either remove launch/sync overhead
   or prove that this thesis is wrong before more dtype or micro-kernel swaps.
+- Sprint 376 is executing that steering document's S-A gate:
+  `--decode-cudagraph-gate`. The audit has already removed the broad
+  in-step `sync_all` host waits and several helper-level host waits under the
+  graph gate while preserving first-token/checksum parity. The current
+  graph-gated diagnostic is now capture eligible for the target one-step
+  non-emitted-row shape: helper blocker classes fell from `7` to `0`, first
+  token stayed `54639`, output checksum stayed `24071637347`, and scaffold
+  checksum stayed `3401922407`. The next work is a real graph capture/replay
+  attempt, not more audit-only cleanup.
 - Sprint 327 made the production compressed-KV memory contract executable in
   `tools/ds4-v100-plan-tp.c`. With the real TP pack and F8 KV, `32` slots at
   `256K` fits at `27.00 GiB/GPU` with `5.00 GiB` headroom after reserve;
@@ -930,6 +939,10 @@ not a serial layer-chain.
   leaves host synchronizations, allocations, or host-read launch dependencies
   inside the steady decode step is not useful. Sprint 376 must emit the
   blocker list before attempting graph replay.
+- Do not let the graph audit become open-ended infrastructure work. Once the
+  remaining helper blockers are converted or proven non-capturable, Sprint 376
+  must run the graph replay A/B if possible; otherwise it closes with the
+  blocker list and the roadmap moves to the next isolated performance gate.
 
 ## Throughput Optimization Pivot
 
@@ -955,6 +968,21 @@ utilization at `32` active slots, the roadmap pivots away from launch
 amortization and back to measured layer hot spots such as paged attention,
 compact MoE, or TP-sharded experts.
 
+The near-term implementation policy is now:
+
+1. Finish the active graph-capture audit, not more side experiments.
+2. Attempt real graph capture/replay only after the steady decode step has no
+   known host-sync blocker classes.
+3. Promote graph replay only with unchanged first token/checksum and a
+   material utilization or server-decode improvement at `32` slots / `256K`.
+4. If graph replay is blocked or flat, move immediately to the next throughput
+   prompt gates in order: batched paged attention, compact MoE decode, then the
+   TP-sharded expert A/B.
+5. Keep dtype conversion work scoped to measured hot paths. Sprint 374 showed
+   a simple tc-grid INT8 compressor swap is slower than the FP16 tensor-op
+   baseline at the target compressor shapes, so format changes are not the
+   first response to the current low-utilization symptom.
+
 The next performance sequence is ordered to test that thesis directly:
 
 | Order | Gate | Purpose | Decision Criteria |
@@ -975,6 +1003,11 @@ without hiding blockers. If S-A does not materially move GPU utilization, the
 roadmap pivots to S-C/S-D/S-F based on the graph audit and profiler evidence
 rather than assuming more launch amortization will help.
 
+Current S-A status: graph replay has not yet been attempted, but the one-step
+non-emitted-row audit now reports `capture_eligible=1`. The next concrete
+outcome must be a real replay A/B or a CUDA capture blocker report. If replay
+is blocked or flat, pivot to S-C/S-D/S-F rather than extending audit-only work.
+
 ## Production Readiness Sequence
 
 The remaining work is ordered by what blocks practical use on the V100 box,
@@ -986,17 +1019,25 @@ not by benchmark curiosity.
    low-utilization. The output of this gate is either a promoted graph replay,
    an opt-in diagnostic graph path, or a concrete blocker list that determines
    the next kernel sprint.
-2. **Reference parity gate.** Keep first-token/checksum parity attached to
+2. **Launch-count reduction gate.** If Sprint 376 does not promote real graph
+   replay, move directly to the throughput-prompt gates that reduce steady
+   decode kernel count and fragmented state work: batched paged attention,
+   compact MoE decode, and fused gated-SiLU. These gates should use the same
+   32-slot / 256K A/B discipline and should not be mixed into one sprint.
+3. **Topology measurement gate.** Run the TP-sharded expert A/B if EP compose
+   or all-to-all remains a measured bottleneck after launch-count work. This is
+   a topology measurement, not a commitment to rip out EP8.
+4. **Reference parity gate.** Keep first-token/checksum parity attached to
    every performance gate, then broaden it into fixed prompt suites and
    long-context cache-reuse checks at `128K` and `256K`.
-3. **Persistent serving gate.** Run the TP/EP server as a long-lived appliance
+5. **Persistent serving gate.** Run the TP/EP server as a long-lived appliance
    process with `MAX_REQUESTS=0`, readiness that reflects tokenizer/model/GPU
    residency, stable session reset/eviction semantics, overload behavior,
    cancellation/timeout handling, and operational logs/metrics.
-4. **API completeness gate.** Finish role-aware multi-message chat parsing,
+6. **API completeness gate.** Finish role-aware multi-message chat parsing,
    stop/EOS behavior, streaming responses, and clear error contracts for bad
    requests, context overflow, queue saturation, and session conflicts.
-5. **MTP gate.** Add MTP only after base TP/EP serving is correct and
+7. **MTP gate.** Add MTP only after base TP/EP serving is correct and
    continuously benchmarkable, ideally after decode graph capture lands.
    MTP should be measured as a decode multiplier across `1`, `8`, `16`, and
    `32` active slots, not as a sidecar smoke.
@@ -1155,9 +1196,15 @@ decode tok/s while preserving parity. The final-HC pass removed another
 blocker class and reduced final-HC stage time, leaving five helper blocker
 classes. The attention-projection pass removed one more blocker class, leaving
 four. The raw-read/window pass removed another blocker class and improved the
-graph-gated diagnostic to `54.144225` decode tok/s, leaving three blockers.
-The next concrete task is attention state/output and compressed-KV helper
-waits, followed by the same audit before any graph replay attempt.
+graph-gated diagnostic to `54.144225` decode tok/s, leaving three blockers:
+attention state, typed-history, and compressed-KV. The following
+attention-state, typed-history, and compressed-KV passes preserved parity and
+dropped helper blockers to zero. The latest direct audit reports
+`capture_eligible=1`, blocker `none`, first token `54639`, output checksum
+`24071637347`, scaffold checksum `3401922407`, and `54.788890` generated
+decode tok/s before graph replay. The next concrete task is an actual CUDA
+graph capture attempt; Sprint 376 should not drift into paged attention,
+compact MoE, TP experts, or MTP before that decision.
 
 ### Sprint 377 - Batched Paged Attention Gate [tentative]
 
@@ -2616,7 +2663,8 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 376 HC-current helper event pass ran on V100. | HC-current stream/control waits can be event-ordered under the graph gate; parity holds and helper blocker classes drop from `7` to `6`. | Continue helper-level event ordering, starting with final HC expansion and attention helpers. |
 | 2026-05-25 | Sprint 376 final-HC helper event pass ran on V100. | Final-HC host waits can be event-ordered under the graph gate; parity holds and helper blocker classes drop from `6` to `5`. | Continue with attention projection/state/output and compressed-KV helper waits. |
 | 2026-05-25 | Sprint 376 attention-projection helper event pass ran on V100. | Attention projection host waits can be event-ordered under the graph gate; parity holds and helper blocker classes drop from `5` to `4`. | Continue with attention state/raw-read/output and compressed-KV helper waits. |
-| 2026-05-25 | Sprint 376 raw-read helper event pass ran on V100. | Raw attention read/window host waits can be skipped under the graph gate; parity holds and helper blocker classes drop from `4` to `3`. | Continue with attention state/output and compressed-KV helper waits. |
+| 2026-05-25 | Sprint 376 raw-read helper event pass ran on V100. | Raw attention read/window host waits can be skipped under the graph gate; parity holds and helper blocker classes drop from `4` to `3`. | Continue with attention state, typed-history, and compressed-KV helper waits. |
+| 2026-05-25 | Sprint 376 cleared tracked graph-audit helper blockers. | Attention-state, typed-history, and compressed-KV event-ordering passes preserve first token `54639`, output checksum `24071637347`, and scaffold checksum `3401922407`; helper blocker classes drop to `0`, and the one-step non-emitted-row audit reports `capture_eligible=1`. | Attempt real CUDA graph capture/replay next. If capture rejects an operation or replay is flat, close Sprint 376 with the blocker/performance result and pivot to batched paged attention, compact MoE, or TP-sharded expert A/B. |
 
 ## Open Questions
 

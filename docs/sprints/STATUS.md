@@ -27,26 +27,16 @@ and rejected async output as a default. Current active sprint: Sprint 376,
 `--decode-cudagraph-gate`. It begins with a graph-capture audit of the
 token-major `run_one_step` region, then attempts per-rank graph replay only if
 the audit shows the normal `32` slot / `256K` decode step is capturable enough
-to test honestly. The first direct audit now builds and runs on the V100 pod,
-but reports `capture_eligible=0`: `172` broad `sync_all` calls, `1376`
-rank-stream waits, and `1376` dense-stream waits inside one 43-layer decode
-step. Next work is to replace those in-step host waits with stream/event
-dependencies where possible before attempting CUDA graph replay. The first
-event-barrier pass preserved first token/checksum and reduced the audited
-top-level wait counts to zero (`sync_all_calls=0`,
-`rank_stream_sync_count=0`, `dense_stream_sync_count=0`), but pre-graph decode
-regressed to `44.247981` tok/s and `capture_eligible` remains `0` because
-helper-level host synchronizations are still present. The HC-current helper
-pass also preserves token/checksum parity, improves graph-gated decode to
-`49.429146` tok/s, and drops helper blocker classes from `7` to `6`; graph
-capture is still not eligible. The final-HC helper pass preserves parity and
-drops helper blocker classes to `5`, with final-HC time improving from
-`88.910098` to `74.314952` ms. The attention-projection helper pass preserves
-parity and drops helper blocker classes to `4`; attention state/raw-read/output
-and compressed-KV helper waits remain. The raw-read/window helper pass
-preserves parity, improves graph-gated decode to `54.144225` tok/s, and drops
-helper blocker classes to `3`; remaining blockers are attention state,
-attention output, and compressed-KV.
+to test honestly. The graph-gated audit has now replaced the broad host waits
+and all tracked helper-level host waits with stream/event ordering for the
+target one-step non-emitted-row shape. The progression preserved first token
+`54639`, output checksum `24071637347`, and scaffold checksum `3401922407`
+through every pass. Helper blocker classes moved `7 -> 6 -> 5 -> 4 -> 3 ->
+2 -> 1 -> 0`; the latest compressed-KV event pass reports
+`capture_eligible=1`, blocker `none`, and `54.788890` generated decode tok/s
+before graph replay. This is not a performance win yet. The next work is a
+real CUDA graph capture attempt and either a replay A/B or a precise CUDA
+capture blocker.
 
 Latest TP/EP format status: Sprint 374 built and ran the V100 workbench for
 the Sprint 373 INT8 candidate shapes. The copied tc-grid INT8 kernels are

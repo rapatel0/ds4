@@ -382,4 +382,92 @@ logs/from-cluster/sprint376-decode-cudagraph/raw-read-event-audit/none-direct-de
 Interpretation: raw-read/window event ordering preserves parity and removes
 another helper blocker class. The raw-read stage improves from `19.437900` to
 `4.487099` ms in the graph-gated diagnostic. Remaining helper blockers:
-attention state, attention output, and compressed-KV.
+attention state, typed-history, and compressed-KV.
+
+### Attention-State Event-Ordering Pass
+
+Converted attention-state host waits under `--decode-cudagraph-gate` by
+ordering rank streams after dense streams with CUDA events, skipping
+graph-gated tensor-stat synchronizations, and making typed-KV boundaries
+non-blocking in graph audit mode. The default path is unchanged.
+
+Result:
+
+| Field | Raw-read event pass | Attention-state event pass |
+|---|---:|---:|
+| Generated decode tok/s | `54.144225` | `60.525660` |
+| Output first token | `54639` | `54639` |
+| Output checksum | `24071637347` | `24071637347` |
+| Scaffold checksum | `3401922407` | `3401922407` |
+| `sync_all_calls` | `0` | `0` |
+| `event_barrier_calls` | `172` | `172` |
+| `helper_host_sync_blocker_classes` | `3` | `2` |
+| `capture_eligible` | `0` | `0` |
+| Blocker | `helper_host_synchronization` | `helper_host_synchronization` |
+
+Artifacts:
+
+```text
+logs/from-cluster/sprint376-decode-cudagraph/attention-state-event-audit/none-direct-decode-cudagraph
+```
+
+### Typed-History Event-Ordering Pass
+
+Converted the typed-history indexer top-k propagation waits under the graph
+gate. Rank 0 now records an event after indexer scoring and peer streams wait
+before consuming the copied top-k buffer. The default path is unchanged.
+
+Result:
+
+| Field | Attention-state event pass | Typed-history event pass |
+|---|---:|---:|
+| Generated decode tok/s | `60.525660` | `59.120555` |
+| Output first token | `54639` | `54639` |
+| Output checksum | `24071637347` | `24071637347` |
+| Scaffold checksum | `3401922407` | `3401922407` |
+| `sync_all_calls` | `0` | `0` |
+| `event_barrier_calls` | `172` | `172` |
+| `helper_host_sync_blocker_classes` | `2` | `1` |
+| `capture_eligible` | `0` | `0` |
+| Blocker | `helper_host_synchronization` | `helper_host_synchronization` |
+
+Artifacts:
+
+```text
+logs/from-cluster/sprint376-decode-cudagraph/typed-history-event-audit/none-direct-decode-cudagraph
+```
+
+### Compressed-KV Event-Ordering Pass
+
+Converted the active compressed-KV waits under the graph gate for the target
+non-emitted-row audit shape. Dense output waits now use events, gather/control
+work runs on the graph control stream, rank streams wait on control events
+before state work, dense-output stats are skipped under graph audit, and
+compressed/indexer state waits are removed from the graph-gated path. The
+default path is unchanged.
+
+Result:
+
+| Field | Typed-history event pass | Compressed-KV event pass |
+|---|---:|---:|
+| Generated decode tok/s | `59.120555` | `54.788890` |
+| Output first token | `54639` | `54639` |
+| Output checksum | `24071637347` | `24071637347` |
+| Scaffold checksum | `3401922407` | `3401922407` |
+| `sync_all_calls` | `0` | `0` |
+| `event_barrier_calls` | `172` | `172` |
+| `helper_host_sync_blocker_classes` | `1` | `0` |
+| `capture_eligible` | `0` | `1` |
+| Blocker | `helper_host_synchronization` | `none` |
+
+Artifacts:
+
+```text
+logs/from-cluster/sprint376-decode-cudagraph/compressed-event-audit/none-direct-decode-cudagraph
+```
+
+Interpretation: the one-step, `32` slot / `256K`, position `262080`
+non-emitted-row decode path is now audit-clean enough to attempt real CUDA
+graph capture. This is not yet a performance win; the graph-gated event path
+is still slower before replay. The next step is an actual capture attempt and
+the first CUDA error/blocker report if capture rejects any operation.

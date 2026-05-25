@@ -203,4 +203,61 @@ logs/from-cluster/sprint376-decode-cudagraph/raw-read-event-audit/none-direct-de
 | `capture_eligible` | `0` | `0` |
 | Blocker | `helper_host_synchronization` | `helper_host_synchronization` |
 
-The raw-read stage improved from `19.437900` ms to `4.487099` ms in the graph-gated diagnostic, and parity remained stable. Remaining helper blockers are attention state, attention output, and compressed-KV.
+The raw-read stage improved from `19.437900` ms to `4.487099` ms in the graph-gated diagnostic, and parity remained stable. Remaining helper blockers at that point were attention state, typed-history, and compressed-KV.
+
+## Attention-State Event-Ordering Pass
+
+Artifact path:
+
+```text
+logs/from-cluster/sprint376-decode-cudagraph/attention-state-event-audit/none-direct-decode-cudagraph
+```
+
+| Metric | Raw-read pass | Attention-state pass |
+|---|---:|---:|
+| Generated decode tok/s | `54.144225` | `60.525660` |
+| Output first token | `54639` | `54639` |
+| Output checksum | `24071637347` | `24071637347` |
+| Scaffold checksum | `3401922407` | `3401922407` |
+| `helper_host_sync_blocker_classes` | `3` | `2` |
+| `capture_eligible` | `0` | `0` |
+
+## Typed-History Event-Ordering Pass
+
+Artifact path:
+
+```text
+logs/from-cluster/sprint376-decode-cudagraph/typed-history-event-audit/none-direct-decode-cudagraph
+```
+
+| Metric | Attention-state pass | Typed-history pass |
+|---|---:|---:|
+| Generated decode tok/s | `60.525660` | `59.120555` |
+| Output first token | `54639` | `54639` |
+| Output checksum | `24071637347` | `24071637347` |
+| Scaffold checksum | `3401922407` | `3401922407` |
+| `helper_host_sync_blocker_classes` | `2` | `1` |
+| `capture_eligible` | `0` | `0` |
+
+## Compressed-KV Event-Ordering Pass
+
+Artifact path:
+
+```text
+logs/from-cluster/sprint376-decode-cudagraph/compressed-event-audit/none-direct-decode-cudagraph
+```
+
+| Metric | Typed-history pass | Compressed-KV pass |
+|---|---:|---:|
+| Generated decode tok/s | `59.120555` | `54.788890` |
+| Output first token | `54639` | `54639` |
+| Output checksum | `24071637347` | `24071637347` |
+| Scaffold checksum | `3401922407` | `3401922407` |
+| `helper_host_sync_blocker_classes` | `1` | `0` |
+| `capture_eligible` | `0` | `1` |
+| Blocker | `helper_host_synchronization` | `none` |
+
+Current result: the graph-gated direct one-step non-emitted-row decode shape
+is now audit-clean enough to attempt real CUDA graph capture. The next work is
+not promotion; it is a capture attempt and the CUDA error/blocker report if
+capture rejects any operation.

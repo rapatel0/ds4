@@ -691,6 +691,7 @@ struct TpEpProfilerWindowGuard {
 };
 
 void sync_typed_kv_boundary(const Options &opt, RankState ranks[kGpus]) {
+    if (opt.decode_cudagraph_gate) return;
     for (int rank = 0; rank < kGpus; ++rank) {
         CHECK_CUDA(cudaSetDevice(ranks[rank].device));
         if (opt.true_ds4_attention_typed_kv_stream_sync_gate) {
@@ -6826,6 +6827,18 @@ int enqueue_dense_wait_after_rank_stream(RankState ranks[kGpus]) {
     return 0;
 }
 
+int enqueue_rank_streams_wait_after_dense_streams(RankState ranks[kGpus]) {
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        RankState &r = ranks[gpu];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        if (!r.dense_stream || r.dense_stream == r.stream) continue;
+        if (!r.dense_done) return 1;
+        CHECK_CUDA(cudaEventRecord(r.dense_done, r.dense_stream));
+        CHECK_CUDA(cudaStreamWaitEvent(r.stream, r.dense_done, 0));
+    }
+    return 0;
+}
+
 int enqueue_cross_gpu_stream_barrier(RankState ranks[kGpus],
                                      bool include_copy_streams) {
     for (int src = 0; src < kGpus; ++src) {
@@ -8998,6 +9011,8 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
     const bool fused_pool_norm_rope_round =
         opt.true_ds4_compressed_kv_fused_pool_norm_rope_round_gate &&
         opt.true_ds4_attention_rope_gate && emitted;
+    const bool graph_event_order = opt.decode_cudagraph_gate;
+    cudaStream_t control_stream = graph_event_order ? ranks[0].stream : (cudaStream_t)0;
     for (int rank = 0; rank < kGpus; ++rank) {
         RankState &r = ranks[rank];
         CHECK_CUDA(cudaSetDevice(r.device));
@@ -9055,7 +9070,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
         }
         CHECK_CUDA(cudaGetLastError());
     }
-    if (dense_event_wait) {
+    if (dense_event_wait || graph_event_order) {
         if (enqueue_dense_wait_after_rank_stream(ranks) != 0) return 22;
     } else {
         for (int rank = 0; rank < kGpus; ++rank) {
@@ -9075,22 +9090,27 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
 
     TensorF32Stats attn_kv_stats;
     TensorF32Stats attn_gate_stats;
-    for (int rank = 0; rank < kGpus; ++rank) {
-        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-        cudaStream_t stream = ranks[rank].dense_stream ? ranks[rank].dense_stream
-                                                       : ranks[rank].stream;
-        CHECK_CUDA(cudaStreamSynchronize(stream));
-        if (!skip_dense_stats) {
+    if (graph_event_order) {
+        if (enqueue_control_wait_after_dense_streams(
+                opt, ranks, control_stream) != 0) return 24;
+    } else {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            cudaStream_t stream = ranks[rank].dense_stream ? ranks[rank].dense_stream
+                                                           : ranks[rank].stream;
+            CHECK_CUDA(cudaStreamSynchronize(stream));
+            if (!skip_dense_stats) {
             const size_t comp_elems =
                 (size_t)opt.slots * (size_t)ops->attn_compress_kv.rows_per_gpu;
-            merge_tensor_stats(&attn_kv_stats,
-                               collect_tensor_f32_stats(
-                                   ops->attn_compress_kv.d_out[(size_t)rank],
-                                   comp_elems, stream));
-            merge_tensor_stats(&attn_gate_stats,
-                               collect_tensor_f32_stats(
-                                   ops->attn_compress_gate.d_out[(size_t)rank],
-                                   comp_elems, stream));
+                merge_tensor_stats(&attn_kv_stats,
+                                   collect_tensor_f32_stats(
+                                       ops->attn_compress_kv.d_out[(size_t)rank],
+                                       comp_elems, stream));
+                merge_tensor_stats(&attn_gate_stats,
+                                   collect_tensor_f32_stats(
+                                       ops->attn_compress_gate.d_out[(size_t)rank],
+                                       comp_elems, stream));
+            }
         }
     }
     {
@@ -9112,22 +9132,29 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                                 (uint64_t)ops->attn_compress_kv.rows_per_gpu +
                             block - 1) /
                            block),
-            block>>>(hc->d_attn_comp_kv_full,
-                     ops->attn_compress_kv.d_out[(size_t)rank], rank,
-                     (uint32_t)ops->attn_compress_kv.rows_per_gpu,
-                     (uint32_t)comp_width, (uint32_t)opt.slots);
+            block, 0, control_stream>>>(
+            hc->d_attn_comp_kv_full,
+            ops->attn_compress_kv.d_out[(size_t)rank], rank,
+            (uint32_t)ops->attn_compress_kv.rows_per_gpu,
+            (uint32_t)comp_width, (uint32_t)opt.slots);
         gather_dense_shard_to_full_kernel<<<
             (unsigned int)(((uint64_t)opt.slots *
                                 (uint64_t)ops->attn_compress_gate.rows_per_gpu +
                             block - 1) /
                            block),
-            block>>>(hc->d_attn_comp_score_full,
-                     ops->attn_compress_gate.d_out[(size_t)rank], rank,
-                     (uint32_t)ops->attn_compress_gate.rows_per_gpu,
-                     (uint32_t)comp_width, (uint32_t)opt.slots);
+            block, 0, control_stream>>>(
+            hc->d_attn_comp_score_full,
+            ops->attn_compress_gate.d_out[(size_t)rank], rank,
+            (uint32_t)ops->attn_compress_gate.rows_per_gpu,
+            (uint32_t)comp_width, (uint32_t)opt.slots);
     }
     CHECK_CUDA(cudaGetLastError());
-    CHECK_CUDA(cudaDeviceSynchronize());
+    if (graph_event_order) {
+        if (enqueue_rank_streams_wait_after_control(
+                opt, ranks, control_stream) != 0) return 25;
+    } else {
+        CHECK_CUDA(cudaDeviceSynchronize());
+    }
     {
         const auto now = std::chrono::steady_clock::now();
         attn_gather_ms = elapsed_ms(t_stage, now);
@@ -9255,9 +9282,11 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                      (uint32_t)kBoundedCompRows));
         CHECK_CUDA(cudaGetLastError());
     }
-    for (int rank = 0; rank < kGpus; ++rank) {
-        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-        CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    if (!graph_event_order) {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        }
     }
     {
         const auto now = std::chrono::steady_clock::now();
@@ -9450,7 +9479,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             }
             CHECK_CUDA(cudaGetLastError());
         }
-        if (dense_event_wait) {
+        if (dense_event_wait || graph_event_order) {
             if (enqueue_dense_wait_after_rank_stream(ranks) != 0) return 23;
         } else {
             for (int rank = 0; rank < kGpus; ++rank) {
@@ -9469,12 +9498,16 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             launch_resident_f8_dense(opt, ops->indexer_compress_gate, ranks) != 0) {
             return 7;
         }
-        for (int rank = 0; rank < kGpus; ++rank) {
-            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-            cudaStream_t stream = ranks[rank].dense_stream ? ranks[rank].dense_stream
-                                                           : ranks[rank].stream;
-            CHECK_CUDA(cudaStreamSynchronize(stream));
-            if (!skip_dense_stats) {
+        if (graph_event_order) {
+            if (enqueue_control_wait_after_dense_streams(
+                    opt, ranks, control_stream) != 0) return 26;
+        } else {
+            for (int rank = 0; rank < kGpus; ++rank) {
+                CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+                cudaStream_t stream = ranks[rank].dense_stream ? ranks[rank].dense_stream
+                                                               : ranks[rank].stream;
+                CHECK_CUDA(cudaStreamSynchronize(stream));
+                if (!skip_dense_stats) {
                 merge_tensor_stats(&index_q_stats,
                                    collect_tensor_f32_stats(
                                        ops->indexer_attn_q_b.d_out[(size_t)rank],
@@ -9499,6 +9532,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                                        (size_t)opt.slots *
                                            (size_t)ops->indexer_compress_gate.rows_per_gpu,
                                        stream));
+                }
             }
         }
         {
@@ -9519,51 +9553,64 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                                     (uint64_t)ops->indexer_attn_q_b.rows_per_gpu +
                                 block - 1) /
                                block),
-                block>>>(hc->d_indexer_q_full,
-                         ops->indexer_attn_q_b.d_out[(size_t)rank], rank,
-                         (uint32_t)ops->indexer_attn_q_b.rows_per_gpu,
-                         (uint32_t)(kIndexerHead * kIndexerHeadDim),
-                         (uint32_t)opt.slots);
+                block, 0, control_stream>>>(
+                hc->d_indexer_q_full,
+                ops->indexer_attn_q_b.d_out[(size_t)rank], rank,
+                (uint32_t)ops->indexer_attn_q_b.rows_per_gpu,
+                (uint32_t)(kIndexerHead * kIndexerHeadDim),
+                (uint32_t)opt.slots);
             gather_dense_shard_to_full_kernel<<<
                 (unsigned int)(((uint64_t)opt.slots *
                                     (uint64_t)ops->indexer_proj.rows_per_gpu +
                                 block - 1) /
                                block),
-                block>>>(hc->d_indexer_w_full,
-                         ops->indexer_proj.d_out[(size_t)rank], rank,
-                         (uint32_t)ops->indexer_proj.rows_per_gpu,
-                         (uint32_t)kIndexerHead, (uint32_t)opt.slots);
+                block, 0, control_stream>>>(
+                hc->d_indexer_w_full,
+                ops->indexer_proj.d_out[(size_t)rank], rank,
+                (uint32_t)ops->indexer_proj.rows_per_gpu,
+                (uint32_t)kIndexerHead, (uint32_t)opt.slots);
             gather_dense_shard_to_full_kernel<<<
                 (unsigned int)(((uint64_t)opt.slots *
                                     (uint64_t)ops->indexer_compress_kv.rows_per_gpu +
                                 block - 1) /
                                block),
-                block>>>(hc->d_index_comp_kv_full,
-                         ops->indexer_compress_kv.d_out[(size_t)rank], rank,
-                         (uint32_t)ops->indexer_compress_kv.rows_per_gpu,
-                         (uint32_t)kIndexCompWidth, (uint32_t)opt.slots);
+                block, 0, control_stream>>>(
+                hc->d_index_comp_kv_full,
+                ops->indexer_compress_kv.d_out[(size_t)rank], rank,
+                (uint32_t)ops->indexer_compress_kv.rows_per_gpu,
+                (uint32_t)kIndexCompWidth, (uint32_t)opt.slots);
             gather_dense_shard_to_full_kernel<<<
                 (unsigned int)(((uint64_t)opt.slots *
                                     (uint64_t)ops->indexer_compress_gate.rows_per_gpu +
                                 block - 1) /
                                block),
-                block>>>(hc->d_index_comp_score_full,
-                         ops->indexer_compress_gate.d_out[(size_t)rank], rank,
-                         (uint32_t)ops->indexer_compress_gate.rows_per_gpu,
-                         (uint32_t)kIndexCompWidth, (uint32_t)opt.slots);
+                block, 0, control_stream>>>(
+                hc->d_index_comp_score_full,
+                ops->indexer_compress_gate.d_out[(size_t)rank], rank,
+                (uint32_t)ops->indexer_compress_gate.rows_per_gpu,
+                (uint32_t)kIndexCompWidth, (uint32_t)opt.slots);
         }
         CHECK_CUDA(cudaGetLastError());
-        CHECK_CUDA(cudaDeviceSynchronize());
+        if (!graph_event_order) {
+            CHECK_CUDA(cudaDeviceSynchronize());
+        }
         if (opt.true_ds4_attention_rope_gate) {
             rope_tail_rows_kernel<<<
-                (unsigned int)(opt.slots * kIndexerHead), 64>>>(
+                (unsigned int)(opt.slots * kIndexerHead), 64, 0,
+                control_stream>>>(
                 hc->d_indexer_q_full, (uint32_t)(opt.slots * kIndexerHead),
                 (uint32_t)kIndexerHeadDim, (uint32_t)kRotaryDim,
                 (uint32_t)opt.position, kRopeOrigCtx, 0, kCompressRopeFreqBase,
                 comp_freq_scale, comp_ext_factor, comp_attn_factor,
                 kRopeYarnBetaFast, kRopeYarnBetaSlow);
             CHECK_CUDA(cudaGetLastError());
-            CHECK_CUDA(cudaDeviceSynchronize());
+            if (!graph_event_order) {
+                CHECK_CUDA(cudaDeviceSynchronize());
+            }
+        }
+        if (graph_event_order) {
+            if (enqueue_rank_streams_wait_after_control(
+                    opt, ranks, control_stream) != 0) return 27;
         }
         {
             const auto now = std::chrono::steady_clock::now();
@@ -9714,9 +9761,11 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             }
             CHECK_CUDA(cudaGetLastError());
         }
-        for (int rank = 0; rank < kGpus; ++rank) {
-            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        if (!graph_event_order) {
+            for (int rank = 0; rank < kGpus; ++rank) {
+                CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+                CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+            }
         }
         {
             const auto now = std::chrono::steady_clock::now();
@@ -9865,9 +9914,21 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                     (uint32_t)opt.slots, (uint32_t)kIndexerTopK);
                 CHECK_CUDA(cudaGetLastError());
             }
-            for (int rank = 0; rank < kGpus; ++rank) {
-                CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-                CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+            if (graph_event_order) {
+                CHECK_CUDA(cudaSetDevice(ranks[0].device));
+                if (!ranks[0].stream_done) return 28;
+                CHECK_CUDA(cudaEventRecord(ranks[0].stream_done,
+                                           ranks[0].stream));
+                for (int rank = 1; rank < kGpus; ++rank) {
+                    CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+                    CHECK_CUDA(cudaStreamWaitEvent(ranks[rank].stream,
+                                                   ranks[0].stream_done, 0));
+                }
+            } else {
+                for (int rank = 0; rank < kGpus; ++rank) {
+                    CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+                    CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+                }
             }
             if (!opt.true_ds4_attention_typed_kv_quiet_gate) {
                 std::printf("tp_ep_true_attention_typed_kv_indexer\tlayer\t%d\t"
@@ -9896,9 +9957,11 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                                                topk_bytes,
                                                ranks[rank].stream));
             }
-            for (int rank = 1; rank < kGpus; ++rank) {
-                CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-                CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+            if (!graph_event_order) {
+                for (int rank = 1; rank < kGpus; ++rank) {
+                    CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+                    CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+                }
             }
         }
         {
@@ -9944,9 +10007,11 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             }
             CHECK_CUDA(cudaGetLastError());
         }
-        for (int rank = 0; rank < kGpus; ++rank) {
-            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        if (!graph_event_order) {
+            for (int rank = 0; rank < kGpus; ++rank) {
+                CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+                CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+            }
         }
     }
     ratio_shift_ms =
@@ -10090,12 +10155,18 @@ int run_true_ds4_attention_state_update(const Options &opt,
             CHECK_CUDA(cudaGetLastError());
         }
     }
-    for (int rank = 0; rank < kGpus; ++rank) {
-        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-        if (ranks[rank].dense_stream) {
-            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].dense_stream));
+    if (opt.decode_cudagraph_gate) {
+        if (enqueue_rank_streams_wait_after_dense_streams(ranks) != 0) {
+            return 8;
         }
-        CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    } else {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            if (ranks[rank].dense_stream) {
+                CHECK_CUDA(cudaStreamSynchronize(ranks[rank].dense_stream));
+            }
+            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        }
     }
     if (opt.true_ds4_attention_typed_kv_raw_gate) {
         if (!rt) {
@@ -10213,7 +10284,7 @@ int run_true_ds4_attention_state_update(const Options &opt,
     }
     const auto stop = std::chrono::steady_clock::now();
     const double ms = std::chrono::duration<double, std::milli>(stop - start).count();
-    if (layer <= 2) {
+    if (!opt.decode_cudagraph_gate && layer <= 2) {
         for (int rank = 0; rank < kGpus; ++rank) {
             CHECK_CUDA(cudaSetDevice(ranks[rank].device));
             log_tensor_f32_stats("true_attn_q_heads_normed_shard", layer, rank,
@@ -10440,9 +10511,20 @@ int run_true_ds4_attention_typed_kv_history_load(const Options &opt,
                 (uint32_t)opt.slots, (uint32_t)kIndexerTopK);
             CHECK_CUDA(cudaGetLastError());
         }
-        for (int rank = 0; rank < kGpus; ++rank) {
-            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        if (opt.decode_cudagraph_gate) {
+            CHECK_CUDA(cudaSetDevice(ranks[0].device));
+            if (!ranks[0].stream_done) return 5;
+            CHECK_CUDA(cudaEventRecord(ranks[0].stream_done, ranks[0].stream));
+            for (int rank = 1; rank < kGpus; ++rank) {
+                CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+                CHECK_CUDA(cudaStreamWaitEvent(ranks[rank].stream,
+                                               ranks[0].stream_done, 0));
+            }
+        } else {
+            for (int rank = 0; rank < kGpus; ++rank) {
+                CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+                CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+            }
         }
         const size_t topk_bytes = (size_t)opt.slots * kIndexerTopK * sizeof(uint32_t);
         for (int rank = 1; rank < kGpus; ++rank) {
@@ -10453,9 +10535,11 @@ int run_true_ds4_attention_typed_kv_history_load(const Options &opt,
                                            topk_bytes,
                                            ranks[rank].stream));
         }
-        for (int rank = 1; rank < kGpus; ++rank) {
-            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        if (!opt.decode_cudagraph_gate) {
+            for (int rank = 1; rank < kGpus; ++rank) {
+                CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+                CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+            }
         }
     }
 
@@ -13269,9 +13353,12 @@ int run_token_major_serving_loop(const Options &opt,
             (opt.tp_hc_current_input_gate && !opt.decode_cudagraph_gate ? 1 : 0) +
             (opt.true_ds4_attention_projection_gate &&
              !opt.decode_cudagraph_gate ? 1 : 0) +
-            (opt.true_ds4_compressed_kv_gate ? 1 : 0) +
-            (opt.true_ds4_attention_state_gate ? 1 : 0) +
-            (opt.true_ds4_attention_typed_kv_history_gate ? 1 : 0) +
+            (opt.true_ds4_compressed_kv_gate &&
+             !opt.decode_cudagraph_gate ? 1 : 0) +
+            (opt.true_ds4_attention_state_gate &&
+             !opt.decode_cudagraph_gate ? 1 : 0) +
+            (opt.true_ds4_attention_typed_kv_history_gate &&
+             !opt.decode_cudagraph_gate ? 1 : 0) +
             (opt.true_ds4_attention_raw_read_gate &&
              !opt.decode_cudagraph_gate ? 1 : 0) +
             (opt.true_ds4_attention_output_gate ? 1 : 0) +
