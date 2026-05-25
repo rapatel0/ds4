@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-25
 last_updated_by: vision
-revision: 380
+revision: 381
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -233,6 +233,12 @@ not a serial layer-chain.
   compressor shape or fuse the compressor dense boundary with adjacent
   state/emit work so we remove staging/launch traffic rather than only changing
   dtype.
+- Sprint 375 implemented `--async-output-gate` and rejected it as a default.
+  It preserves selected-token/checksum parity and reduces output-head device
+  synchronizations from `26` to `0`, but the real `32` active request /
+  `32` slot / `256K` HTTP A/B regressed server decode throughput from
+  `99.476540` to `93.764276` tok/s and left average GPU utilization flat.
+  Keep it opt-in for graph-capture investigation only.
 - Sprint 327 made the production compressed-KV memory contract executable in
   `tools/ds4-v100-plan-tp.c`. With the real TP pack and F8 KV, `32` slots at
   `256K` fits at `27.00 GiB/GPU` with `5.00 GiB` headroom after reserve;
@@ -1069,7 +1075,7 @@ Rationale: MTP is likely the largest user-visible speed multiplier, but it
 should not be merged before base TP/EP serving is correct and operationally
 measurable.
 
-### Sprint 375 - Async Output Sync Removal [active]
+### Sprint 375 - Async Output Sync Removal [complete]
 
 Goal: Implement `--async-output-gate`, a default-off gate that removes
 steady-state host synchronization from the sampler/output path and makes the
@@ -1089,6 +1095,14 @@ token/checksum remain stable and GPU utilization or server decode tok/s is
 flat-or-up. If CPU token consumption still forces a synchronization at the
 next-step embed seed, record the remaining dependency explicitly for Sprint
 376 rather than hiding it.
+
+Outcome: Implemented and rejected as a default. Direct smoke preserved first
+token `98751` and output checksum `81959669916`, reducing output-head device
+syncs from `26` to `0` with `8` event waits. The real HTTP `32` active request
+/ `32` slot / `256K` A/B preserved first token `89340` and checksum
+`101896170076`, but server decode regressed from `99.476540` to `93.764276`
+tok/s and average GPU utilization stayed flat. The gate remains opt-in for
+Sprint 376 graph-capture investigation.
 
 ### Sprint 376 - Decode CUDA Graph Capture [planned]
 
@@ -2554,7 +2568,8 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 369 added opt-in GPU utilization sampling to the TP/EP profile harness. | `--gpu-sample-interval-ms` writes `gpu_util.csv` and summary utilization fields without overhead when disabled. A 4-request / 32-slot chat smoke passed and showed `8.412879%` average GPU util with GPU0 much busier than peers. | Use sampled active-slot matrices before changing scheduling; then optimize active-slot compaction, dense projection/state fragmentation, or EP balance with utilization evidence attached. |
 | 2026-05-25 | Sprint 370 added the active-slot matrix driver. | The smoke matrix for active requests `1,4` passed and wrote aggregate TSV/JSON plus per-case profile artifacts; decode stayed flat around `101` tok/s and average GPU util stayed around `8.3%`. | Run the full `1,4,8,16,32` longer-decode matrix, then choose active-slot compaction versus deeper dense/state kernel work from the evidence. |
 | 2026-05-25 | Sprint 371 ran the full active-slot matrix. | At `32` slots / `256K` / `32` tokens/request, all cases `1,4,8,16,32` passed. Client aggregate tok/s scaled with active responses, but server decode stayed `97.4-100.0` tok/s and average GPU util stayed `9.8-10.3%`. | Use active-slot compaction for low-occupancy efficiency later; next optimize the full 32-slot bottleneck in compressed/indexer dense projection, attention projection/state, and GPU0-heavy staging. |
-| 2026-05-25 | Reprioritized performance work around `TEMP_THROUGHPUT_PROMPT.md`. | The full active-slot matrix plus INT8-compressor rejection makes another narrow dtype swap less compelling than testing launch/sync elimination. | Sprint 375 is active for async-output synchronization removal; Sprint 376 is the CUDA graph make-or-break gate before paged attention, compact MoE, TP-expert A/B, FP8 KV, or MTP. |
+| 2026-05-25 | Reprioritized performance work around `TEMP_THROUGHPUT_PROMPT.md`. | The full active-slot matrix plus INT8-compressor rejection makes another narrow dtype swap less compelling than testing launch/sync elimination. | Sprint 375 tested async-output synchronization removal; Sprint 376 is the CUDA graph make-or-break gate before paged attention, compact MoE, TP-expert A/B, FP8 KV, or MTP. |
+| 2026-05-25 | Sprint 375 rejected async output as a default. | The gate preserved tokens and reduced output-head device syncs, but the real HTTP A/B regressed server decode tok/s and did not improve utilization. | Keep `--async-output-gate` opt-in; Sprint 376 should audit and test CUDA graph capture without assuming output-head event sequencing is a serving win. |
 
 ## Open Questions
 

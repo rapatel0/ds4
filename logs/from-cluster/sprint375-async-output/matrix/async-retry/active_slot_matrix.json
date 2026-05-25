@@ -1,0 +1,30 @@
+{
+  "cases": [
+    {
+      "artifact_dir": "/workspace/logs/sprint375-async-output-matrix/async-retry/requests-032/none-async-output",
+      "client_generated_tok_s": 41.28690083070454,
+      "coalesced_batch_size": 32,
+      "compressed_kv_sum_ms": 5180.32350400001,
+      "generated_tokens_meta": 1024,
+      "gpu_mem_used_max_mib": 32398.0,
+      "gpu_sample_count": 352,
+      "gpu_util_avg": 8.204545454545455,
+      "gpu_util_max": 39.0,
+      "http_200": 32,
+      "requests": 32,
+      "scaffold_projected_slot_step_tok_s": 97.676725,
+      "server_continuation_tok_s_decode": 93.656567,
+      "server_generated_tok_s": 79.109039,
+      "server_generated_tok_s_decode": 93.764276,
+      "tokens": 32
+    }
+  ],
+  "ctx": 262144,
+  "gpu_sample_interval_ms": 200,
+  "http_endpoint": "chat",
+  "position": 262080,
+  "schema": "ds4_v100_tp_ep_active_slot_matrix.v1",
+  "slots": 32,
+  "tokens": 32,
+  "tool": "none"
+}

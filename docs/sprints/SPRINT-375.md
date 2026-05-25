@@ -107,3 +107,68 @@ Promote only if the gate preserves first token/checksum and improves either
 GPU utilization or server decode tok/s. If it is flat but removes the final
 CUDA graph blocker, keep it opt-in and carry the evidence into Sprint 376. If
 it changes tokens/checksum, reject it.
+
+## Implementation Result
+
+Implemented:
+
+- Added `--async-output-gate`, default off.
+- Added launcher/profile plumbing via `DS4_V100_TP_EP_ASYNC_OUTPUT=1` and
+  `tools/ds4-v100-tp-ep-profile.py --async-output`.
+- Added nonblocking output-head streams, stream-ordered events, pinned
+  selected-token/logit host buffers, and sync-count reporting.
+- Patched `tools/ds4-v100-tp-ep-active-slot-matrix.py` so extra profile args
+  such as `--async-output` resolve the correct variant artifact directory.
+
+The gate moves the output-head path from early host/device barriers to
+stream/event sequencing. It still synchronizes at selected-token D2H
+consumption because the current CPU serving loop needs the selected token to
+seed the next decode step.
+
+## V100 Validation
+
+Build:
+
+```text
+make -j80 CUDA_HOME=/usr/local/cuda CUDA_ARCH=sm_70 tools/ds4-v100-tp-ep-full-layer-smoke
+```
+
+Result: pass on `llamacpp-build-8gpu`.
+
+Artifacts:
+
+```text
+logs/from-cluster/sprint375-async-output/direct-smoke
+logs/from-cluster/sprint375-async-output/matrix
+```
+
+Direct 2-step smoke at `32` slots / `256K`:
+
+| Mode | First token | Output checksum | Gen decode tok/s | Output-head ms | Device syncs | Event syncs |
+|---|---:|---:|---:|---:|---:|---:|
+| control | 98751 | 81959669916 | 88.889462 | 9.459974 | 26 | 0 |
+| async-output | 98751 | 81959669916 | 88.744811 | 8.173478 | 0 | 8 |
+
+HTTP active-slot matrix at `32` active requests / `32` configured slots /
+`256K` / `32` generated tokens/request:
+
+| Mode | HTTP 200 | First token | Output checksum | Client tok/s | Server decode tok/s | Avg GPU util | Max GPU util |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| control | 32/32 | 89340 | 101896170076 | 42.000194 | 99.476540 | 8.212209% | 40.0% |
+| async-output | 32/32 | 89340 | 101896170076 | 41.286901 | 93.764276 | 8.204545% | 39.0% |
+
+Operational caveat: the first async matrix attempt immediately after the
+control server exited hit OOM during dense-cache allocation. A retry from idle
+completed successfully. This reinforces that the current `32` slot / `256K`
+profile is near the 32GB card limit and startup sequencing must stay careful.
+
+## Decision
+
+REJECT as a default.
+
+The gate preserves selected-token parity and output-head checksum, and it
+reduces output-head device synchronizations from `26` to `0`, but the real
+HTTP serving A/B regressed server decode throughput from `99.476540` to
+`93.764276` tok/s and did not improve GPU utilization. Keep
+`--async-output-gate` as an opt-in diagnostic/enabler for Sprint 376 graph
+capture investigation, not as a production default.

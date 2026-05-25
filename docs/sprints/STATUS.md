@@ -9,15 +9,16 @@ Current bottleneck reference:
 summarizes the measured bottlenecks, layer-by-layer hot paths, and experiments
 already tried.
 
-Latest throughput direction: `TEMP_THROUGHPUT_PROMPT.md` is now the active
-performance steering artifact. The next work pauses additional dtype swaps and
-tests the launch/sync thesis directly. Sprint 375 is active as
-`--async-output-gate`, the enabler that removes host synchronization from the
-sampler/output path where possible so the token-major decode step can become
-CUDA-graph eligible. Sprint 376 follows as `--decode-cudagraph-gate`, the
-make-or-break test of the current low-utilization thesis. Each gate remains
-default-off and must pass same-binary V100 A/B with unchanged first
-token/checksum before promotion.
+Latest throughput direction: Sprint 375 implemented `--async-output-gate` and
+rejected it as a default. The gate is correct and reduces the output-head path
+from `26` device synchronizations to `0` device synchronizations plus `8`
+event synchronizations at selected-token D2H consumption, but the real
+`32` active request / `32` slot / `256K` HTTP A/B regressed server decode
+throughput from `99.476540` to `93.764276` tok/s and left average GPU
+utilization flat (`8.212209%` to `8.204545%`). Keep the gate opt-in for
+Sprint 376 graph-capture investigation; do not promote it. Sprint 376 remains
+the make-or-break test of whether CUDA graph replay can raise the current
+low-utilization TP/EP serving path.
 
 Latest TP/EP format status: Sprint 374 built and ran the V100 workbench for
 the Sprint 373 INT8 candidate shapes. The copied tc-grid INT8 kernels are

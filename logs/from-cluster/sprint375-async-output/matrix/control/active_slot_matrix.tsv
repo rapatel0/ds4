@@ -1,0 +1,2 @@
+requests	http_200	tokens	generated_tokens_meta	coalesced_batch_size	client_generated_tok_s	server_generated_tok_s	server_generated_tok_s_decode	server_continuation_tok_s_decode	scaffold_projected_slot_step_tok_s	compressed_kv_sum_ms	gpu_sample_count	gpu_util_avg	gpu_util_max	gpu_mem_used_max_mib	artifact_dir
+32	32	32	1024	32	42.000193896667234	83.696569	99.47654	99.40126	101.756674	4928.822511999997	344	8.212209302325581	40.0	32398.0	/workspace/logs/sprint375-async-output-matrix/control/requests-032/none

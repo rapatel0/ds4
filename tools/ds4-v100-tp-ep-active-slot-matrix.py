@@ -25,10 +25,13 @@ def parse_csv_ints(text, name):
     return out
 
 
-def profile_case_dir(tool, hc_stream_sync):
+def profile_case_dir(tool, hc_stream_sync, extra_profile_args=None):
     suffix = ""
     if hc_stream_sync:
         suffix += "-hc-stream-sync"
+    for arg in extra_profile_args or []:
+        if arg == "--async-output":
+            suffix += "-async-output"
     return f"{tool}{suffix}"
 
 
@@ -95,7 +98,9 @@ def main():
         (case_root / "matrix-command.txt").parent.mkdir(parents=True, exist_ok=True)
         (case_root / "matrix-command.txt").write_text(" ".join(cmd) + "\n")
         proc = subprocess.run(cmd, cwd=args.repo_dir, text=True, check=False)
-        case_name = profile_case_dir(args.tool, args.hc_current_stream_sync)
+        case_name = profile_case_dir(
+            args.tool, args.hc_current_stream_sync, args.extra_profile_arg
+        )
         summary_path = case_root / case_name / "summary.json"
         if proc.returncode != 0:
             raise SystemExit(f"profile case requests={requests} failed rc={proc.returncode}")

@@ -590,6 +590,7 @@ struct Options {
     int microbatch_wait_us = 5000;
     bool output_head_gate = false;
     bool output_head_resident_gate = false;
+    bool async_output_gate = false;
     bool final_hc_carry_gate = false;
     bool diagnostic_output_head = false;
     bool tp_hc_final_expand_gate = false;
@@ -2996,6 +2997,7 @@ void usage(const char *argv0) {
                  "       [--reference-hc-reduce-gate]\n"
                  "       [--reference-hc-state-guard-gate]\n"
                  "       [--cuda-profiler-window]\n"
+                 "       [--async-output-gate]\n"
                  "       [--diagnostic-output-head]\n",
                  argv0);
 }
@@ -3146,6 +3148,10 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->output_head_gate = true;
         } else if (std::strcmp(arg, "--output-head-resident-gate") == 0) {
             opt->output_head_resident_gate = true;
+        } else if (std::strcmp(arg, "--async-output-gate") == 0) {
+            opt->async_output_gate = true;
+            opt->diagnostic_output_head = true;
+            opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--final-hc-carry-gate") == 0) {
             opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--tp-hc-final-expand-gate") == 0) {
@@ -4966,6 +4972,12 @@ struct SharedOutputHead {
     float *d_best_logit[kGpus] = {};
     cudaEvent_t projection_start[kGpus] = {};
     cudaEvent_t projection_stop[kGpus] = {};
+    cudaStream_t stream[kGpus] = {};
+    cudaEvent_t prep_ready = {};
+    cudaEvent_t broadcast_ready[kGpus] = {};
+    cudaEvent_t top1_done[kGpus] = {};
+    uint32_t *h_best_token[kGpus] = {};
+    float *h_best_logit[kGpus] = {};
     uint64_t output_weight_bytes = 0;
     uint64_t logits_bytes = 0;
 };
@@ -4983,6 +4995,10 @@ struct OutputHeadRunResult {
     std::vector<float> logits;
     uint64_t checksum = 0;
     int finite_bad = 0;
+    bool async_output_gate = false;
+    int device_sync_count = 0;
+    int stream_sync_count = 0;
+    int event_sync_count = 0;
 };
 
 struct SharedTokenEmbedding {
@@ -5762,6 +5778,8 @@ int open_shared_output_head(const Options &opt,
                           hc_head_scale.size() * sizeof(float), cudaMemcpyHostToDevice));
     CHECK_CUDA(cudaMemcpy(out->d_output_norm, output_norm.data(),
                           output_norm.size() * sizeof(float), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaStreamCreateWithFlags(&out->stream[0], cudaStreamNonBlocking));
+    CHECK_CUDA(cudaEventCreateWithFlags(&out->prep_ready, cudaEventDisableTiming));
 
     std::vector<uint16_t> host_w((size_t)out->rows_per_gpu * (size_t)kHidden);
     for (int gpu = 0; gpu < kGpus; ++gpu) {
@@ -5782,6 +5800,18 @@ int open_shared_output_head(const Options &opt,
                               (size_t)opt.slots * sizeof(float)));
         CHECK_CUDA(cudaEventCreate(&out->projection_start[gpu]));
         CHECK_CUDA(cudaEventCreate(&out->projection_stop[gpu]));
+        if (gpu != 0) {
+            CHECK_CUDA(cudaStreamCreateWithFlags(&out->stream[gpu],
+                                                 cudaStreamNonBlocking));
+        }
+        CHECK_CUDA(cudaEventCreateWithFlags(&out->broadcast_ready[gpu],
+                                            cudaEventDisableTiming));
+        CHECK_CUDA(cudaEventCreateWithFlags(&out->top1_done[gpu],
+                                            cudaEventDisableTiming));
+        CHECK_CUDA(cudaMallocHost(&out->h_best_token[gpu],
+                                  (size_t)opt.slots * sizeof(uint32_t)));
+        CHECK_CUDA(cudaMallocHost(&out->h_best_logit[gpu],
+                                  (size_t)opt.slots * sizeof(float)));
         CHECK_CUDA(cudaMemcpy(out->d_w[gpu], host_w.data(),
                               (size_t)output_shard_bytes, cudaMemcpyHostToDevice));
         out->output_weight_bytes += output_shard_bytes;
@@ -5795,8 +5825,13 @@ void close_shared_output_head(const Options &opt, SharedOutputHead *out) {
     if (!out || !out->initialized) return;
     for (int gpu = 0; gpu < kGpus; ++gpu) {
         CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        if (out->h_best_logit[gpu]) CHECK_CUDA(cudaFreeHost(out->h_best_logit[gpu]));
+        if (out->h_best_token[gpu]) CHECK_CUDA(cudaFreeHost(out->h_best_token[gpu]));
+        if (out->top1_done[gpu]) CHECK_CUDA(cudaEventDestroy(out->top1_done[gpu]));
+        if (out->broadcast_ready[gpu]) CHECK_CUDA(cudaEventDestroy(out->broadcast_ready[gpu]));
         if (out->projection_stop[gpu]) CHECK_CUDA(cudaEventDestroy(out->projection_stop[gpu]));
         if (out->projection_start[gpu]) CHECK_CUDA(cudaEventDestroy(out->projection_start[gpu]));
+        if (out->stream[gpu]) CHECK_CUDA(cudaStreamDestroy(out->stream[gpu]));
         if (out->d_best_logit[gpu]) CHECK_CUDA(cudaFree(out->d_best_logit[gpu]));
         if (out->d_best_token[gpu]) CHECK_CUDA(cudaFree(out->d_best_token[gpu]));
         if (out->d_logits[gpu]) CHECK_CUDA(cudaFree(out->d_logits[gpu]));
@@ -5804,6 +5839,7 @@ void close_shared_output_head(const Options &opt, SharedOutputHead *out) {
         if (out->d_w[gpu]) CHECK_CUDA(cudaFree(out->d_w[gpu]));
     }
     CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    if (out->prep_ready) CHECK_CUDA(cudaEventDestroy(out->prep_ready));
     if (out->d_output_norm) CHECK_CUDA(cudaFree(out->d_output_norm));
     if (out->d_head_scale) CHECK_CUDA(cudaFree(out->d_head_scale));
     if (out->d_head_base) CHECK_CUDA(cudaFree(out->d_head_base));
@@ -5829,6 +5865,177 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
     const uint64_t embd_elems = (uint64_t)opt.slots * (uint64_t)kHidden;
     const uint64_t logits_elems =
         (uint64_t)opt.slots * (uint64_t)head->rows_per_gpu;
+    result->async_output_gate = opt.async_output_gate;
+
+    if (opt.async_output_gate) {
+        const auto gather_start = std::chrono::steady_clock::now();
+        CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+        for (int rank = 0; rank < kGpus; ++rank) {
+            if (!ranks[rank].d_final_hc_shard) {
+                std::fprintf(stderr, "diagnostic output-head missing final HC shard rank=%d\n",
+                             rank);
+                return 2;
+            }
+            gather_hc_shard_to_full_kernel<<<
+                (unsigned int)((hc_shard_elems + 255) / 256), 256, 0,
+                head->stream[0]>>>(
+                head->d_hc, ranks[rank].d_final_hc_shard, rank,
+                (uint32_t)opt.slots);
+        }
+        CHECK_CUDA(cudaGetLastError());
+        const auto gather_stop = std::chrono::steady_clock::now();
+
+        const auto prep_start = std::chrono::steady_clock::now();
+        rms_norm_plain_rows_stable_kernel<<<(unsigned int)opt.slots, 256, 0,
+                                             head->stream[0]>>>(
+            head->d_hc_norm, head->d_hc, 4u * (uint32_t)kHidden,
+            (uint32_t)opt.slots, 1.0e-6f);
+        const dim3 head_grid(4u, (unsigned int)opt.slots, 1u);
+        f32_dense_kernel<<<head_grid, 256, 0, head->stream[0]>>>(
+            head->d_head_pre, head->d_head_fn, head->d_hc_norm, 4u,
+            4u * (uint32_t)kHidden, (uint32_t)opt.slots);
+        output_hc_weights_rows_kernel<<<
+            (unsigned int)(((uint64_t)opt.slots * 4ull + 255) / 256), 256, 0,
+            head->stream[0]>>>(
+            head->d_head_weights, head->d_head_pre, head->d_head_scale,
+            head->d_head_base, (uint32_t)opt.slots);
+        hc_weighted_sum_rows_kernel<<<
+            (unsigned int)((embd_elems + 255) / 256), 256, 0,
+            head->stream[0]>>>(
+            head->d_embd, head->d_hc, head->d_head_weights,
+            (uint32_t)opt.slots);
+        rms_norm_weight_rows_stable_kernel<<<(unsigned int)opt.slots, 256, 0,
+                                             head->stream[0]>>>(
+            head->d_embd_norm, head->d_embd, head->d_output_norm,
+            (uint32_t)kHidden, (uint32_t)opt.slots, 1.0e-6f);
+        CHECK_CUDA(cudaGetLastError());
+        CHECK_CUDA(cudaEventRecord(head->prep_ready, head->stream[0]));
+        const auto prep_stop = std::chrono::steady_clock::now();
+
+        const auto broadcast_start = std::chrono::steady_clock::now();
+        for (int gpu = 0; gpu < kGpus; ++gpu) {
+            CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+            CHECK_CUDA(cudaStreamWaitEvent(head->stream[gpu], head->prep_ready, 0));
+            if (gpu == 0) {
+                CHECK_CUDA(cudaMemcpyAsync(head->d_x[gpu], head->d_embd_norm,
+                                           (size_t)embd_elems * sizeof(float),
+                                           cudaMemcpyDeviceToDevice,
+                                           head->stream[gpu]));
+            } else {
+                CHECK_CUDA(cudaMemcpyPeerAsync(head->d_x[gpu], opt.devices[gpu],
+                                               head->d_embd_norm, opt.devices[0],
+                                               (size_t)embd_elems * sizeof(float),
+                                               head->stream[gpu]));
+            }
+            CHECK_CUDA(cudaEventRecord(head->broadcast_ready[gpu],
+                                       head->stream[gpu]));
+        }
+        const auto broadcast_stop = std::chrono::steady_clock::now();
+
+        const auto projection_start_wall = std::chrono::steady_clock::now();
+        for (int gpu = 0; gpu < kGpus; ++gpu) {
+            CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+            CHECK_CUDA(cudaStreamWaitEvent(head->stream[gpu],
+                                           head->broadcast_ready[gpu], 0));
+            const dim3 grid((unsigned int)head->rows_per_gpu,
+                            (unsigned int)opt.slots, 1u);
+            CHECK_CUDA(cudaEventRecord(head->projection_start[gpu],
+                                       head->stream[gpu]));
+            bf16_dense_kernel<<<grid, 256, 0, head->stream[gpu]>>>(
+                head->d_logits[gpu], head->d_w[gpu], head->d_x[gpu],
+                (uint32_t)head->rows_per_gpu, (uint32_t)kHidden,
+                (uint32_t)kHidden, (uint32_t)opt.slots);
+            CHECK_CUDA(cudaEventRecord(head->projection_stop[gpu],
+                                       head->stream[gpu]));
+            CHECK_CUDA(cudaGetLastError());
+        }
+
+        const auto top1_start = std::chrono::steady_clock::now();
+        result->tokens.assign((size_t)opt.slots, UINT32_MAX);
+        result->logits.assign((size_t)opt.slots,
+                              -std::numeric_limits<float>::max());
+        for (int gpu = 0; gpu < kGpus; ++gpu) {
+            CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+            const int shard_index = head->output_rows[gpu].shard_index >= 0
+                ? head->output_rows[gpu].shard_index
+                : gpu;
+            shard_top1_kernel<<<(unsigned int)opt.slots, 256, 0,
+                                head->stream[gpu]>>>(
+                head->d_best_token[gpu], head->d_best_logit[gpu],
+                head->d_logits[gpu], (uint32_t)head->rows_per_gpu,
+                (uint32_t)(shard_index * head->rows_per_gpu),
+                (uint32_t)opt.slots);
+            CHECK_CUDA(cudaGetLastError());
+            CHECK_CUDA(cudaMemcpyAsync(head->h_best_token[gpu],
+                                       head->d_best_token[gpu],
+                                       (size_t)opt.slots * sizeof(uint32_t),
+                                       cudaMemcpyDeviceToHost,
+                                       head->stream[gpu]));
+            CHECK_CUDA(cudaMemcpyAsync(head->h_best_logit[gpu],
+                                       head->d_best_logit[gpu],
+                                       (size_t)opt.slots * sizeof(float),
+                                       cudaMemcpyDeviceToHost,
+                                       head->stream[gpu]));
+            CHECK_CUDA(cudaEventRecord(head->top1_done[gpu],
+                                       head->stream[gpu]));
+        }
+
+        for (int gpu = 0; gpu < kGpus; ++gpu) {
+            CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+            CHECK_CUDA(cudaEventSynchronize(head->top1_done[gpu]));
+            result->event_sync_count++;
+            float kernel_ms = 0.0f;
+            CHECK_CUDA(cudaEventElapsedTime(&kernel_ms,
+                                            head->projection_start[gpu],
+                                            head->projection_stop[gpu]));
+            result->projection_kernel_worst_ms =
+                std::max(result->projection_kernel_worst_ms, (double)kernel_ms);
+            for (int slot = 0; slot < opt.slots; ++slot) {
+                const float logit = head->h_best_logit[gpu][(size_t)slot];
+                if (!std::isfinite(logit)) {
+                    result->finite_bad++;
+                    result->pass = false;
+                    continue;
+                }
+                if (logit > result->logits[(size_t)slot]) {
+                    result->logits[(size_t)slot] = logit;
+                    result->tokens[(size_t)slot] =
+                        head->h_best_token[gpu][(size_t)slot];
+                }
+            }
+        }
+        const auto projection_stop_wall = std::chrono::steady_clock::now();
+        const auto top1_stop = std::chrono::steady_clock::now();
+        const auto total_stop = std::chrono::steady_clock::now();
+
+        for (int slot = 0; slot < opt.slots; ++slot) {
+            if (result->tokens[(size_t)slot] >= (uint32_t)head->vocab ||
+                !std::isfinite(result->logits[(size_t)slot])) {
+                result->pass = false;
+            }
+            uint32_t bits = 0;
+            std::memcpy(&bits, &result->logits[(size_t)slot], sizeof(bits));
+            result->checksum ^= (uint64_t)result->tokens[(size_t)slot] * 1000003ull +
+                                (uint64_t)bits + (uint64_t)(slot + 1) * 7907ull;
+        }
+        if (result->checksum == 0 || result->finite_bad != 0) result->pass = false;
+
+        result->gather_ms =
+            std::chrono::duration<double, std::milli>(gather_stop - gather_start).count();
+        result->prep_ms =
+            std::chrono::duration<double, std::milli>(prep_stop - prep_start).count();
+        result->broadcast_ms =
+            std::chrono::duration<double, std::milli>(broadcast_stop - broadcast_start).count();
+        result->projection_ms =
+            std::chrono::duration<double, std::milli>(projection_stop_wall - projection_start_wall).count();
+        result->top1_ms =
+            std::chrono::duration<double, std::milli>(top1_stop - top1_start).count();
+        result->total_ms =
+            std::chrono::duration<double, std::milli>(total_stop - total_start).count();
+        (void)hc_elems;
+        (void)logits_elems;
+        return result->pass ? 0 : 5;
+    }
 
     const auto gather_start = std::chrono::steady_clock::now();
     CHECK_CUDA(cudaSetDevice(opt.devices[0]));
@@ -5843,6 +6050,7 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
     }
     CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaDeviceSynchronize());
+    result->device_sync_count++;
     const auto gather_stop = std::chrono::steady_clock::now();
 
     const auto prep_start = std::chrono::steady_clock::now();
@@ -5864,6 +6072,7 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
         (uint32_t)kHidden, (uint32_t)opt.slots, 1.0e-6f);
     CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaDeviceSynchronize());
+    result->device_sync_count++;
     const auto prep_stop = std::chrono::steady_clock::now();
 
     const auto broadcast_start = std::chrono::steady_clock::now();
@@ -5882,6 +6091,7 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
     for (int gpu = 0; gpu < kGpus; ++gpu) {
         CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
         CHECK_CUDA(cudaDeviceSynchronize());
+        result->device_sync_count++;
     }
     const auto broadcast_stop = std::chrono::steady_clock::now();
 
@@ -5902,6 +6112,7 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
     for (int gpu = 0; gpu < kGpus; ++gpu) {
         CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
         CHECK_CUDA(cudaDeviceSynchronize());
+        result->device_sync_count++;
         float kernel_ms = 0.0f;
         CHECK_CUDA(cudaEventElapsedTime(&kernel_ms,
                                         head->projection_start[gpu],
@@ -5933,6 +6144,7 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
     for (int gpu = 0; gpu < kGpus; ++gpu) {
         CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
         CHECK_CUDA(cudaDeviceSynchronize());
+        result->device_sync_count++;
         CHECK_CUDA(cudaMemcpy(host_tokens[(size_t)gpu].data(), head->d_best_token[gpu],
                               (size_t)opt.slots * sizeof(uint32_t),
                               cudaMemcpyDeviceToHost));
@@ -12682,6 +12894,8 @@ int run_token_major_serving_loop(const Options &opt,
                         "proxy_hc\t%d\ttotal_ms\t%.6f\tgather_ms\t%.6f\t"
                         "prep_ms\t%.6f\tbroadcast_ms\t%.6f\tprojection_ms\t%.6f\t"
                         "projection_kernel_worst_ms\t%.6f\ttop1_ms\t%.6f\t"
+                        "async_output_gate\t%d\tdevice_sync_count\t%d\t"
+                        "stream_sync_count\t%d\tevent_sync_count\t%d\t"
                         "first_token\t%u\tfirst_logit\t%.9f\tfinite_bad\t%d\t"
                         "checksum\t%llu\t%s\n",
                         opt.decode_steps, opt.slots,
@@ -12690,6 +12904,10 @@ int run_token_major_serving_loop(const Options &opt,
                         head_result.gather_ms, head_result.prep_ms,
                         head_result.broadcast_ms, head_result.projection_ms,
                         head_result.projection_kernel_worst_ms, head_result.top1_ms,
+                        head_result.async_output_gate ? 1 : 0,
+                        head_result.device_sync_count,
+                        head_result.stream_sync_count,
+                        head_result.event_sync_count,
                         head_result.tokens.empty() ? UINT32_MAX : head_result.tokens[0],
                         head_result.logits.empty() ? 0.0f : head_result.logits[0],
                         head_result.finite_bad,
