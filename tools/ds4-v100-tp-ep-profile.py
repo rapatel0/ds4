@@ -174,6 +174,7 @@ def build_env(args, port):
             "DS4_V100_MAX_REQUESTS": str(max(args.max_requests, args.requests)),
             "DS4_V100_TP_EP_HC_PERSIST_STATE": "1",
             "DS4_V100_TP_EP_HC_CURRENT_INPUT_PEER_GATHER": "1" if args.hc_current_peer_gather else "0",
+            "DS4_V100_TP_EP_HC_CURRENT_INPUT_STREAM_SYNC": "1" if args.hc_current_stream_sync else "0",
             "DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD": "1",
             "DS4_V100_RESERVE_MIB": "0",
             "DS4_V100_PORT": str(port),
@@ -192,6 +193,8 @@ def variant_suffix(args):
     suffix = ""
     if args.hc_current_peer_gather:
         suffix += "-hc-peer-gather"
+    if args.hc_current_stream_sync:
+        suffix += "-hc-stream-sync"
     return suffix
 
 
@@ -248,6 +251,8 @@ def direct_command(args):
         cmd.append("--cuda-profiler-window")
     if args.hc_current_peer_gather:
         cmd.append("--tp-hc-current-input-peer-gather-gate")
+    if args.hc_current_stream_sync:
+        cmd.append("--tp-hc-current-input-stream-sync-gate")
     return cmd
 
 
@@ -307,6 +312,7 @@ def summarize_direct(case_dir, tool, rc, elapsed_s):
                 "sum_compose_ms",
                 "sum_hc_current_input_ms",
                 "tp_hc_current_input_peer_gather",
+                "tp_hc_current_input_stream_sync",
                 "sum_final_hc_ms",
                 "wall_ms",
             ]:
@@ -455,6 +461,7 @@ def main():
     parser.add_argument("--requests", type=int, default=32)
     parser.add_argument("--max-requests", type=int, default=80)
     parser.add_argument("--hc-current-peer-gather", action="store_true")
+    parser.add_argument("--hc-current-stream-sync", action="store_true")
     parser.add_argument("--port", type=int, default=18357)
     parser.add_argument("--readiness-seconds", type=int, default=600)
     parser.add_argument("--request-timeout-seconds", type=int, default=1200)

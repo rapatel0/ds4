@@ -39,6 +39,21 @@ respectively, with finite output head in both cases. The next optimization
 should therefore target HC control computation/synchronization or fuse the
 split/norm/fill chain, not naive all-rank peer gathering.
 
+Sprint 349 tested the synchronization part of that target. The new
+`--tp-hc-current-input-stream-sync-gate` /
+`DS4_V100_TP_EP_HC_CURRENT_INPUT_STREAM_SYNC=1` keeps the layout unchanged but
+runs central GPU0 HC-current control kernels on rank 0's stream and uses
+stream-scoped barriers where the old path used GPU0 device-wide barriers.
+Direct 32-slot / 256K / 2-step A/B improved generated decode throughput from
+`74.841520` to `81.190638` tok/s and reduced HC-current time from
+`711.608991` to `647.492171` ms. HTTP 32-request / 32-slot / 256K / 2-token
+A/B also stayed correct (`32/32` HTTP 200) and improved server generated
+throughput from `82.573137` to `83.813937` tok/s and decode throughput from
+`97.500352` to `98.859925` tok/s. This gate is now promoted as the launcher
+default. The next optimization target remains the HC control/fill chain
+itself, because synchronization scope only moves a small part of the serving
+topline.
+
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
 TP runtime, sharded KV, rank buffers, TurboMind API handles, active MXFP4
