@@ -180,6 +180,9 @@ tools/ds4-v100-plan-tp: tools/ds4-v100-plan-tp.c
 tools/ds4-v100-tp-ep-pack-contract: tools/ds4-v100-tp-ep-pack-contract.c
 	$(CC) $(CFLAGS) -o $@ tools/ds4-v100-tp-ep-pack-contract.c $(LDLIBS)
 
+tools/ds4-v100-tp-ep-int8-candidates: tools/ds4-v100-tp-ep-int8-candidates.c
+	$(CC) $(CFLAGS) -o $@ tools/ds4-v100-tp-ep-int8-candidates.c $(LDLIBS)
+
 tools/ds4-v100-tp-ep-layer-descriptor-smoke: tools/ds4-v100-tp-ep-layer-descriptor-smoke.c
 	$(CC) $(CFLAGS) -o $@ tools/ds4-v100-tp-ep-layer-descriptor-smoke.c $(LDLIBS)
 

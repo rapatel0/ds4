@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-25
 last_updated_by: codex
-revision: 376
+revision: 377
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -213,6 +213,15 @@ not a serial layer-chain.
   quantization metadata in the pack manifest, produce FP32-equivalent outputs
   for downstream state math, and prove token/logit parity before serving
   enablement.
+- Sprint 373 converted that format question into a reusable TP/EP contract
+  audit. The current hot compressed/indexer dense candidate set is mostly BF16,
+  not FP8: BF16 attention compressor, BF16 indexer compressor, BF16 tiny
+  indexer projection, plus F8 `indexer.attn_q_b`. An INT8+fp16-scale layout
+  with `qk=32` would reduce the scoped candidate bytes from `0.742 GiB` to
+  `0.481 GiB` aggregate (`94.977 MiB` to `61.525 MiB` per GPU). The primary
+  workbench target is BF16 attention compressor GEMMs at `M=32`, `K=4096`,
+  and `N=128/64`; F8 `indexer.attn_q_b` is not a memory win because INT8+scale
+  is larger than F8 block-128 (`169.312 MiB` to `178.500 MiB`).
 - Sprint 327 made the production compressed-KV memory contract executable in
   `tools/ds4-v100-plan-tp.c`. With the real TP pack and F8 KV, `32` slots at
   `256K` fits at `27.00 GiB/GPU` with `5.00 GiB` headroom after reserve;

@@ -4,6 +4,18 @@ Last updated: 2026-05-25
 
 ## Topline
 
+Latest TP/EP format status: Sprint 373 added
+`tools/ds4-v100-tp-ep-int8-candidates`, a contract audit tool for scoped
+offline INT8+scale conversion. Running it on the real V100 TP/EP contract
+shows the compressed/indexer dense candidate set is `1328` TP rows and is
+mostly BF16, not FP8. With tc-grid style `int8 weights + fp16 scales` at
+`qk=32`, the scoped set moves from `796721152` source bytes (`0.742 GiB`) to
+`516112384` bytes (`0.481 GiB`), saving `280608768` bytes aggregate and
+`33.451 MiB/GPU`. The primary target is BF16 attention compressor GEMMs at
+`M=32`, `N=128/64`, `K=4096`. F8 `indexer.attn_q_b` is not a memory win:
+`169.312 MiB` source becomes `178.500 MiB` INT8+scale, so it should only be
+tested as a compute-only candidate.
+
 Latest TP/EP optimization status: Sprint 372 added an opt-in gate to skip
 host-side dense-output statistics in the compressed-KV projection path:
 `DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_SKIP_DENSE_STATS=1`. This is diagnostic
