@@ -227,6 +227,16 @@ compressed-KV sum from `3460.932833` to `3470.682826` ms. A one-token
 (`142.456129` to `140.699321` ms) but the full direct decode result is the
 decision gate. Keep the fused pool+norm+RoPE+round path diagnostic-only.
 
+Sprint 364 tested direct compressed input fill, bypassing the per-rank
+`d_current_full` staging copy and having each rank's half-fill kernels read
+`hc->d_attn_normed` directly. The gate is legal and correct but clearly slower.
+Same-build one-token emitted-row A/B at `32` slots / `256K` preserved first
+token `54639` and finite output, but compressed-KV sum regressed from
+`126.724613` to `260.365841` ms. The regression is localized to peer-read
+input fill: attention input fill moved from `12.587939` to `84.142732` ms, and
+indexer input fill from `3.754212` to `65.145245` ms. Keep direct compressed
+input fill diagnostic-only and preserve local per-rank reads.
+
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
 TP runtime, sharded KV, rank buffers, TurboMind API handles, active MXFP4

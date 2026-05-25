@@ -625,6 +625,7 @@ struct Options {
     bool true_ds4_post_attention_ffn_input_gate = false;
     bool true_ds4_compressed_kv_gate = false;
     bool true_ds4_indexer_attention_gate = false;
+    bool true_ds4_compressed_kv_direct_input_fill_gate = false;
     bool true_ds4_compressed_kv_fused_input_fill_gate = false;
     bool true_ds4_compressed_kv_fused_rope_round_gate = false;
     bool true_ds4_compressed_kv_fused_pool_norm_gate = false;
@@ -3312,6 +3313,14 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--true-ds4-compressed-kv-direct-input-fill-gate") == 0) {
+            opt->true_ds4_compressed_kv_direct_input_fill_gate = true;
+            opt->true_ds4_compressed_kv_gate = true;
+            opt->true_ds4_attention_projection_gate = true;
+            opt->true_ds4_attention_residency_gate = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--true-ds4-compressed-kv-fused-input-fill-gate") == 0) {
             opt->true_ds4_compressed_kv_fused_input_fill_gate = true;
             opt->true_ds4_indexer_attention_gate = true;
@@ -3451,6 +3460,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
            (!opt->true_ds4_compressed_kv_gate ||
             opt->true_ds4_attention_projection_gate) &&
            (!opt->true_ds4_indexer_attention_gate ||
+            opt->true_ds4_compressed_kv_gate) &&
+           (!opt->true_ds4_compressed_kv_direct_input_fill_gate ||
             opt->true_ds4_compressed_kv_gate) &&
            (!opt->true_ds4_compressed_kv_fused_input_fill_gate ||
             opt->true_ds4_indexer_attention_gate) &&
@@ -8451,6 +8462,8 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
     double ratio_shift_ms = 0.0;
     const int block = 256;
     const uint64_t hidden_elems = (uint64_t)opt.slots * (uint64_t)kHidden;
+    const bool direct_current_input_fill =
+        opt.true_ds4_compressed_kv_direct_input_fill_gate;
     const bool fused_ratio4_current_fill =
         opt.true_ds4_compressed_kv_fused_input_fill_gate &&
         opt.true_ds4_indexer_attention_gate && ratio == 4;
@@ -8474,15 +8487,19 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
               !ops->indexer_compress_gate.d_x_half[(size_t)rank]))) {
             return 3;
         }
-        if (rank == 0) {
-            CHECK_CUDA(cudaMemcpyAsync(r.d_current_full, hc->d_attn_normed,
-                                       (size_t)hidden_elems * sizeof(float),
-                                       cudaMemcpyDeviceToDevice, r.stream));
-        } else {
-            CHECK_CUDA(cudaMemcpyPeerAsync(r.d_current_full, r.device,
-                                           hc->d_attn_normed, opt.devices[0],
+        const float *current_src = hc->d_attn_normed;
+        if (!direct_current_input_fill) {
+            if (rank == 0) {
+                CHECK_CUDA(cudaMemcpyAsync(r.d_current_full, hc->d_attn_normed,
                                            (size_t)hidden_elems * sizeof(float),
-                                           r.stream));
+                                           cudaMemcpyDeviceToDevice, r.stream));
+            } else {
+                CHECK_CUDA(cudaMemcpyPeerAsync(r.d_current_full, r.device,
+                                               hc->d_attn_normed, opt.devices[0],
+                                               (size_t)hidden_elems * sizeof(float),
+                                               r.stream));
+            }
+            current_src = r.d_current_full;
         }
         if (fused_ratio4_current_fill) {
             fill_ratio4_compressed_indexer_inputs_half_kernel<<<
@@ -8493,17 +8510,17 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 ops->indexer_proj.d_x_half[(size_t)rank],
                 ops->indexer_compress_kv.d_x_half[(size_t)rank],
                 ops->indexer_compress_gate.d_x_half[(size_t)rank],
-                r.d_current_full, (uint32_t)opt.slots);
+                current_src, (uint32_t)opt.slots);
         } else {
             fill_dense_input_half_from_current_kernel<<<
                 (unsigned int)((hidden_elems + block - 1) / block), block, 0,
                 r.stream>>>(ops->attn_compress_kv.d_x_half[(size_t)rank],
-                             r.d_current_full, (uint32_t)kHidden,
+                             current_src, (uint32_t)kHidden,
                              (uint32_t)opt.slots);
             fill_dense_input_half_from_current_kernel<<<
                 (unsigned int)((hidden_elems + block - 1) / block), block, 0,
                 r.stream>>>(ops->attn_compress_gate.d_x_half[(size_t)rank],
-                             r.d_current_full, (uint32_t)kHidden,
+                             current_src, (uint32_t)kHidden,
                              (uint32_t)opt.slots);
         }
         CHECK_CUDA(cudaGetLastError());
@@ -8866,6 +8883,8 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
         for (int rank = 0; rank < kGpus; ++rank) {
             RankState &r = ranks[rank];
             CHECK_CUDA(cudaSetDevice(r.device));
+            const float *current_src =
+                direct_current_input_fill ? hc->d_attn_normed : r.d_current_full;
             if (!ops->indexer_attn_q_b.d_x_half[(size_t)rank] ||
                 !ops->indexer_proj.d_x_half[(size_t)rank] ||
                 !ops->indexer_compress_kv.d_x_half[(size_t)rank] ||
@@ -8880,17 +8899,17 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 fill_dense_input_half_from_current_kernel<<<
                     (unsigned int)((hidden_elems + block - 1) / block), block, 0,
                     r.stream>>>(ops->indexer_proj.d_x_half[(size_t)rank],
-                                 r.d_current_full, (uint32_t)kHidden,
+                                 current_src, (uint32_t)kHidden,
                                  (uint32_t)opt.slots);
                 fill_dense_input_half_from_current_kernel<<<
                     (unsigned int)((hidden_elems + block - 1) / block), block, 0,
                     r.stream>>>(ops->indexer_compress_kv.d_x_half[(size_t)rank],
-                                 r.d_current_full, (uint32_t)kHidden,
+                                 current_src, (uint32_t)kHidden,
                                  (uint32_t)opt.slots);
                 fill_dense_input_half_from_current_kernel<<<
                     (unsigned int)((hidden_elems + block - 1) / block), block, 0,
                     r.stream>>>(ops->indexer_compress_gate.d_x_half[(size_t)rank],
-                                 r.d_current_full, (uint32_t)kHidden,
+                                 current_src, (uint32_t)kHidden,
                                  (uint32_t)opt.slots);
             }
             CHECK_CUDA(cudaGetLastError());
@@ -9408,7 +9427,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 "indexer_dense_ms\t%.6f\tindexer_gather_rope_ms\t%.6f\t"
                 "indexer_state_emit_ms\t%.6f\tindexer_typed_score_ms\t%.6f\t"
                 "reference_diff_ms\t%.6f\tratio_shift_ms\t%.6f\t"
-                "fused_input_fill\t%d\tfused_rope_round\t%d\t"
+                "direct_input_fill\t%d\tfused_input_fill\t%d\tfused_rope_round\t%d\t"
                 "fused_pool_norm\t%d\tfused_pool_norm_rope_round\t%d\t"
                 "ms\t%.6f\tPASS\n",
                 layer, opt.slots, ratio, emitted, visible, indexer_topk,
@@ -9423,6 +9442,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 indexer_dense_ms, indexer_gather_rope_ms,
                 indexer_state_emit_ms, indexer_typed_score_ms,
                 reference_diff_ms, ratio_shift_ms,
+                direct_current_input_fill ? 1 : 0,
                 fused_ratio4_current_fill ? 1 : 0,
                 fused_rope_round ? 1 : 0,
                 fused_pool_norm ? 1 : 0,
