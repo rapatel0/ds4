@@ -34,6 +34,8 @@ def profile_case_dir(tool, hc_stream_sync, extra_profile_args=None):
             suffix += "-async-output"
         if arg == "--decode-cudagraph":
             suffix += "-decode-cudagraph"
+        if arg == "--batched-paged-attn":
+            suffix += "-batched-paged-attn"
     return f"{tool}{suffix}"
 
 

@@ -75,3 +75,41 @@ KV and attention state/projection the most visible targets for this sprint.
 4. Add the smallest batched row-family kernel that can reduce launch count
    while preserving first-token/checksum parity.
 5. Build and run direct + HTTP V100 A/B.
+
+## Gate Plumbing Smoke
+
+Implemented default-off plumbing for:
+
+- `tools/ds4-v100-tp-ep-full-layer-smoke.cu --batched-paged-attn-gate`
+- `DS4_V100_TP_EP_BATCHED_PAGED_ATTN=1`
+- `tools/ds4-v100-tp-ep-profile.py --batched-paged-attn`
+- active-slot matrix artifact suffixing for `--batched-paged-attn`
+
+Validation:
+
+| Check | Result |
+|---|---|
+| `python3 -m py_compile tools/ds4-v100-tp-ep-profile.py tools/ds4-v100-tp-ep-active-slot-matrix.py` | pass |
+| `bash -n tools/ds4-v100-run-appliance.sh` | pass |
+| V100 `make -j80 CUDA_HOME=/usr/local/cuda CUDA_ARCH=sm_70 tools/ds4-v100-tp-ep-full-layer-smoke` | pass |
+| launcher `--print-command` with `DS4_V100_TP_EP_BATCHED_PAGED_ATTN=1` | emits `--batched-paged-attn-gate` |
+
+No-op direct smoke artifact:
+
+```text
+logs/from-cluster/sprint377-batched-paged-attn/gate-plumbing-smoke/none-direct-batched-paged-attn
+```
+
+Smoke result:
+
+| Metric | Value |
+|---|---:|
+| Return code | `0` |
+| First token | `54639` |
+| Output finite bad | `0` |
+| Generated tok/s decode | `77.855330` |
+| Scaffold checksum path | pass |
+
+Interpretation: the gate is now safely wired and default-off. It is currently
+a no-op except for enabling existing typed batch-row state; the next step is
+the fixed-size row-family plan and first batched row kernel.

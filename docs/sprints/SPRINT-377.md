@@ -263,3 +263,37 @@ logs/from-cluster/sprint377-batched-paged-attn/baseline-matrix
 
 Next implementation step: add default-off gate plumbing and the first
 fixed-size row-family plan.
+
+### Gate Plumbing
+
+Added default-off gate plumbing:
+
+- `tools/ds4-v100-tp-ep-full-layer-smoke.cu --batched-paged-attn-gate`
+- `DS4_V100_TP_EP_BATCHED_PAGED_ATTN=1`
+- `tools/ds4-v100-tp-ep-profile.py --batched-paged-attn`
+- active-slot matrix artifact suffix support
+
+Validation:
+
+| Check | Result |
+|---|---|
+| Python profile/matrix compile | pass |
+| launcher shell syntax | pass |
+| V100 build | pass |
+| launcher `--print-command` | includes `--batched-paged-attn-gate` |
+
+No-op direct smoke:
+
+```text
+logs/from-cluster/sprint377-batched-paged-attn/gate-plumbing-smoke/none-direct-batched-paged-attn
+```
+
+| Metric | Value |
+|---|---:|
+| Return code | `0` |
+| First token | `54639` |
+| Output finite bad | `0` |
+| Generated tok/s decode | `77.855330` |
+
+Next implementation step: fixed-size row-family plan and the first batched row
+kernel.

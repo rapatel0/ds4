@@ -612,6 +612,7 @@ struct Options {
     bool output_head_resident_gate = false;
     bool async_output_gate = false;
     bool decode_cudagraph_gate = false;
+    bool batched_paged_attn_gate = false;
     bool final_hc_carry_gate = false;
     bool diagnostic_output_head = false;
     bool tp_hc_final_expand_gate = false;
@@ -3029,6 +3030,7 @@ void usage(const char *argv0) {
                  "       [--cuda-profiler-window]\n"
                  "       [--async-output-gate]\n"
                  "       [--decode-cudagraph-gate]\n"
+                 "       [--batched-paged-attn-gate]\n"
                  "       [--diagnostic-output-head]\n",
                  argv0);
 }
@@ -3185,6 +3187,9 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--decode-cudagraph-gate") == 0) {
             opt->decode_cudagraph_gate = true;
+        } else if (std::strcmp(arg, "--batched-paged-attn-gate") == 0) {
+            opt->batched_paged_attn_gate = true;
+            opt->true_ds4_attention_typed_kv_batch_rows_gate = true;
         } else if (std::strcmp(arg, "--final-hc-carry-gate") == 0) {
             opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--tp-hc-final-expand-gate") == 0) {
@@ -13421,6 +13426,7 @@ int run_token_major_serving_loop(const Options &opt,
                 "direct_remote_compose\t%d\tsource_copy_schedule\t%d\t"
                 "skip_self_compose_copy\t%d\t"
                 "multi_copy_streams\t%d\t"
+                "batched_paged_attn_gate\t%d\t"
                 "sum_decode_ms\t%.6f\tms_per_token\t%.6f\t"
                 "projected_slot_step_tok_s\t%.6f\t"
                 "sum_ep_ms\t%.6f\tsum_dense_ms\t%.6f\tsum_compose_ms\t%.6f\t"
@@ -13458,6 +13464,7 @@ int run_token_major_serving_loop(const Options &opt,
                 opt.source_copy_schedule ? 1 : 0,
                 opt.skip_self_compose_copy ? 1 : 0,
                 opt.multi_copy_streams ? 1 : 0,
+                opt.batched_paged_attn_gate ? 1 : 0,
                 sum_decode_ms, ms_per_token, slot_step_tok_s,
                 sum_ep_ms, sum_dense_ms, sum_compose_ms,
                 sum_compose_reduce_ms, sum_compose_copy_ms,
