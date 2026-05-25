@@ -152,3 +152,31 @@ logs/from-cluster/sprint376-decode-cudagraph/final-hc-event-audit/none-direct-de
 The final-HC stage itself improved (`sum_final_hc_ms` from `88.910098` to `74.314952` ms), while overall diagnostic decode was roughly flat/slightly lower because remaining broad event barriers and attention/helper waits still dominate. This validates the pointer-swap approach for this path but still does not make graph capture eligible.
 
 Next helper target: attention projection and attention state/output helpers, then compressed-KV helper waits.
+
+## Attention-Projection Event-Ordering Pass
+
+Converted `run_true_ds4_attention_projection_prefix` host waits to stream/event ordering under `--decode-cudagraph-gate`, and skipped its diagnostic tensor-stat syncs while the graph gate is active. The default path is unchanged.
+
+Artifact path:
+
+```text
+logs/from-cluster/sprint376-decode-cudagraph/attention-projection-event-audit/none-direct-decode-cudagraph
+```
+
+| Metric | Final-HC event pass | Attention-projection event pass |
+|---|---:|---:|
+| Generated decode tok/s | `48.189878` | `45.864458` |
+| Output first token | `54639` | `54639` |
+| Output checksum | `24071637347` | `24071637347` |
+| Scaffold checksum | `3401922407` | `3401922407` |
+| `sync_all_calls` | `0` | `0` |
+| `event_barrier_calls` | `172` | `172` |
+| `rank_stream_sync_count` | `0` | `0` |
+| `dense_stream_sync_count` | `0` | `0` |
+| `helper_host_sync_blocker_classes` | `5` | `4` |
+| `capture_eligible` | `0` | `0` |
+| Blocker | `helper_host_synchronization` | `helper_host_synchronization` |
+
+This removes one more graph blocker class and preserves token/checksum parity. The standalone graph-gated path remains slower before graph replay, mostly because the diagnostic event barriers are broad and attention/compressed helper waits remain.
+
+Next helper target: attention state/raw-read/output helpers, then compressed-KV helper waits.

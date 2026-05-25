@@ -41,7 +41,9 @@ pass also preserves token/checksum parity, improves graph-gated decode to
 `49.429146` tok/s, and drops helper blocker classes from `7` to `6`; graph
 capture is still not eligible. The final-HC helper pass preserves parity and
 drops helper blocker classes to `5`, with final-HC time improving from
-`88.910098` to `74.314952` ms; attention/compressed/helper waits remain.
+`88.910098` to `74.314952` ms. The attention-projection helper pass preserves
+parity and drops helper blocker classes to `4`; attention state/raw-read/output
+and compressed-KV helper waits remain.
 
 Latest TP/EP format status: Sprint 374 built and ran the V100 workbench for
 the Sprint 373 INT8 candidate shapes. The copied tc-grid INT8 kernels are

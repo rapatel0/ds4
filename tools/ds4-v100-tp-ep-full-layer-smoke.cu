@@ -6864,6 +6864,55 @@ int enqueue_cross_gpu_stream_barrier(RankState ranks[kGpus],
     return 0;
 }
 
+int enqueue_control_wait_after_rank_streams(const Options &opt,
+                                            RankState ranks[kGpus],
+                                            cudaStream_t control_stream) {
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        if (!r.stream_done) return 1;
+        CHECK_CUDA(cudaEventRecord(r.stream_done, r.stream));
+    }
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaStreamWaitEvent(control_stream, ranks[rank].stream_done, 0));
+    }
+    return 0;
+}
+
+int enqueue_control_wait_after_dense_streams(const Options &opt,
+                                             RankState ranks[kGpus],
+                                             cudaStream_t control_stream) {
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        if (!r.dense_done) return 1;
+        CHECK_CUDA(cudaEventRecord(r.dense_done,
+                                   r.dense_stream ? r.dense_stream : r.stream));
+    }
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaStreamWaitEvent(control_stream, ranks[rank].dense_done, 0));
+    }
+    return 0;
+}
+
+int enqueue_rank_streams_wait_after_control(const Options &opt,
+                                            RankState ranks[kGpus],
+                                            cudaStream_t control_stream) {
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    if (!ranks[0].stream_done) return 1;
+    CHECK_CUDA(cudaEventRecord(ranks[0].stream_done, control_stream));
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        CHECK_CUDA(cudaStreamWaitEvent(r.stream, ranks[0].stream_done, 0));
+    }
+    return 0;
+}
+
 int fill_shared_ffn_inputs_from_normed(const Options &opt,
                                        const SharedHcControls *hc,
                                        const ResidentF8Dense &gate,
@@ -8427,13 +8476,21 @@ int run_true_ds4_attention_projection_prefix(const Options &opt,
     const uint64_t hidden_elems = (uint64_t)opt.slots * (uint64_t)kHidden;
     const uint64_t q_a_elems = (uint64_t)opt.slots * 1024ull;
     const uint64_t kv_elems = (uint64_t)opt.slots * (uint64_t)kHeadDim;
+    const bool graph_event_order = opt.decode_cudagraph_gate;
+    cudaStream_t control_stream = graph_event_order ? ranks[0].stream : (cudaStream_t)0;
 
     CHECK_CUDA(cudaSetDevice(opt.devices[0]));
-    rms_norm_weight_rows_stable_kernel<<<(unsigned int)opt.slots, 256>>>(
+    rms_norm_weight_rows_stable_kernel<<<
+        (unsigned int)opt.slots, 256, 0, control_stream>>>(
         hc->d_attn_normed, hc->d_current_full, hc->d_attn_norm_weight[layer],
         (uint32_t)kHidden, (uint32_t)opt.slots, 1.0e-6f);
     CHECK_CUDA(cudaGetLastError());
-    CHECK_CUDA(cudaDeviceSynchronize());
+    if (graph_event_order) {
+        if (enqueue_rank_streams_wait_after_control(
+                opt, ranks, control_stream) != 0) return 8;
+    } else {
+        CHECK_CUDA(cudaDeviceSynchronize());
+    }
 
     for (int rank = 0; rank < kGpus; ++rank) {
         RankState &r = ranks[rank];
@@ -8465,21 +8522,30 @@ int run_true_ds4_attention_projection_prefix(const Options &opt,
                          (uint32_t)opt.slots);
         CHECK_CUDA(cudaGetLastError());
     }
-    for (int rank = 0; rank < kGpus; ++rank) {
-        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-        CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    if (graph_event_order) {
+        if (enqueue_dense_wait_after_rank_stream(ranks) != 0) return 9;
+    } else {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        }
     }
 
     if (launch_resident_f8_dense(opt, ops->attn_q_a, ranks) != 0 ||
         launch_resident_f8_dense(opt, ops->attn_kv_latent, ranks) != 0) {
         return 5;
     }
-    for (int rank = 0; rank < kGpus; ++rank) {
-        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-        if (ranks[rank].dense_stream) {
-            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].dense_stream));
-        } else {
-            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    if (graph_event_order) {
+        if (enqueue_control_wait_after_dense_streams(
+                opt, ranks, control_stream) != 0) return 10;
+    } else {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            if (ranks[rank].dense_stream) {
+                CHECK_CUDA(cudaStreamSynchronize(ranks[rank].dense_stream));
+            } else {
+                CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+            }
         }
     }
 
@@ -8487,26 +8553,35 @@ int run_true_ds4_attention_projection_prefix(const Options &opt,
     for (int rank = 0; rank < kGpus; ++rank) {
         gather_dense_shard_to_full_kernel<<<
             (unsigned int)(((uint64_t)opt.slots * (1024u / kGpus) + block - 1) / block),
-            block>>>(
+            block, 0, control_stream>>>(
             hc->d_q_a_full, ops->attn_q_a.d_out[(size_t)rank], rank,
             1024u / kGpus, 1024u, (uint32_t)opt.slots);
         gather_dense_shard_to_full_kernel<<<
             (unsigned int)(((uint64_t)opt.slots * (kHeadDim / kGpus) + block - 1) / block),
-            block>>>(
+            block, 0, control_stream>>>(
             hc->d_kv_full, ops->attn_kv_latent.d_out[(size_t)rank], rank,
             kHeadDim / kGpus, kHeadDim, (uint32_t)opt.slots);
     }
     CHECK_CUDA(cudaGetLastError());
-    CHECK_CUDA(cudaDeviceSynchronize());
+    if (!graph_event_order) {
+        CHECK_CUDA(cudaDeviceSynchronize());
+    }
 
-    rms_norm_weight_rows_stable_kernel<<<(unsigned int)opt.slots, 256>>>(
+    rms_norm_weight_rows_stable_kernel<<<
+        (unsigned int)opt.slots, 256, 0, control_stream>>>(
         hc->d_q_a_normed, hc->d_q_a_full, hc->d_q_a_norm_weight[layer],
         1024u, (uint32_t)opt.slots, 1.0e-6f);
-    rms_norm_weight_rows_stable_kernel<<<(unsigned int)opt.slots, 256>>>(
+    rms_norm_weight_rows_stable_kernel<<<
+        (unsigned int)opt.slots, 256, 0, control_stream>>>(
         hc->d_kv_normed, hc->d_kv_full, hc->d_kv_a_norm_weight[layer],
         (uint32_t)kHeadDim, (uint32_t)opt.slots, 1.0e-6f);
     CHECK_CUDA(cudaGetLastError());
-    CHECK_CUDA(cudaDeviceSynchronize());
+    if (graph_event_order) {
+        if (enqueue_rank_streams_wait_after_control(
+                opt, ranks, control_stream) != 0) return 11;
+    } else {
+        CHECK_CUDA(cudaDeviceSynchronize());
+    }
 
     if (opt.true_ds4_attention_kv_norm_reference_gate) {
         float *d_kv_ref = nullptr;
@@ -8552,26 +8627,32 @@ int run_true_ds4_attention_projection_prefix(const Options &opt,
                          hc->d_q_a_normed, 1024u, (uint32_t)opt.slots);
         CHECK_CUDA(cudaGetLastError());
     }
-    for (int rank = 0; rank < kGpus; ++rank) {
-        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-        CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    if (graph_event_order) {
+        if (enqueue_dense_wait_after_rank_stream(ranks) != 0) return 12;
+    } else {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        }
     }
 
     if (launch_resident_f8_dense(opt, ops->attn_q_b, ranks) != 0) {
         return 7;
     }
-    for (int rank = 0; rank < kGpus; ++rank) {
-        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-        if (ranks[rank].dense_stream) {
-            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].dense_stream));
-        } else {
-            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    if (!graph_event_order) {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            if (ranks[rank].dense_stream) {
+                CHECK_CUDA(cudaStreamSynchronize(ranks[rank].dense_stream));
+            } else {
+                CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+            }
         }
     }
 
     const auto stop = std::chrono::steady_clock::now();
     const double ms = std::chrono::duration<double, std::milli>(stop - start).count();
-    if (layer <= 2) {
+    if (!graph_event_order && layer <= 2) {
         CHECK_CUDA(cudaSetDevice(opt.devices[0]));
         log_tensor_f32_stats("true_attn_q_a_full", layer, 0, hc->d_q_a_full,
                              (size_t)q_a_elems, nullptr);
@@ -8586,7 +8667,7 @@ int run_true_ds4_attention_projection_prefix(const Options &opt,
                                                           : ranks[rank].stream);
         }
     }
-    if (opt.true_ds4_attention_saturation_audit_gate) {
+    if (!graph_event_order && opt.true_ds4_attention_saturation_audit_gate) {
         CHECK_CUDA(cudaSetDevice(opt.devices[0]));
         const TensorF32Stats current =
             collect_tensor_f32_stats(hc->d_current_full, (size_t)hidden_elems,
@@ -13182,7 +13263,8 @@ int run_token_major_serving_loop(const Options &opt,
             serving_result->diagnostic_output_head;
         const int helper_host_sync_blocker_classes =
             (opt.tp_hc_current_input_gate && !opt.decode_cudagraph_gate ? 1 : 0) +
-            (opt.true_ds4_attention_projection_gate ? 1 : 0) +
+            (opt.true_ds4_attention_projection_gate &&
+             !opt.decode_cudagraph_gate ? 1 : 0) +
             (opt.true_ds4_compressed_kv_gate ? 1 : 0) +
             (opt.true_ds4_attention_state_gate ? 1 : 0) +
             (opt.true_ds4_attention_typed_kv_history_gate ? 1 : 0) +

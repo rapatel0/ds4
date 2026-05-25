@@ -320,3 +320,35 @@ Interpretation: final-HC event ordering preserves parity and removes another
 helper blocker class. The final-HC stage improves from `88.910098` to
 `74.314952` ms, but the graph-gated diagnostic remains slower than the
 original host-sync path and still cannot be captured.
+
+### Attention-Projection Event-Ordering Pass
+
+Converted `run_true_ds4_attention_projection_prefix` host waits to stream/event
+ordering under `--decode-cudagraph-gate`, and skipped its diagnostic tensor
+statistics while the graph gate is active. The default path is unchanged.
+
+Result:
+
+| Field | Final-HC event pass | Attention-projection event pass |
+|---|---:|---:|
+| Generated decode tok/s | `48.189878` | `45.864458` |
+| Output first token | `54639` | `54639` |
+| Output checksum | `24071637347` | `24071637347` |
+| Scaffold checksum | `3401922407` | `3401922407` |
+| `sync_all_calls` | `0` | `0` |
+| `event_barrier_calls` | `172` | `172` |
+| `rank_stream_sync_count` | `0` | `0` |
+| `dense_stream_sync_count` | `0` | `0` |
+| `helper_host_sync_blocker_classes` | `5` | `4` |
+| `capture_eligible` | `0` | `0` |
+| Blocker | `helper_host_synchronization` | `helper_host_synchronization` |
+
+Artifacts:
+
+```text
+logs/from-cluster/sprint376-decode-cudagraph/attention-projection-event-audit/none-direct-decode-cudagraph
+```
+
+Interpretation: this removes one more graph blocker class while preserving
+token/checksum parity. It remains diagnostic-only; the graph-gated path is
+not faster before graph replay.
