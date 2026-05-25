@@ -1,19 +1,27 @@
 # DS4 V100 Appliance Status
 
-Last updated: 2026-05-24
+Last updated: 2026-05-25
 
 ## Topline
 
-Latest TP/EP typed-KV serving status: Sprint 344 showed that narrowing typed
-KV barriers from device-wide sync to stream sync is not the main lever. At
+Latest TP/EP typed-KV serving status: Sprint 345 added a permanent opt-in
+profiler harness, `tools/ds4-v100-tp-ep-profile.py`, and collected the first
+profiler-backed evidence for the 32-slot typed path. No-profiler sanity at
 `32` concurrent `/v1/chat/completions` requests, `32` slots, `256K` context,
-and `8` generated tokens/request, the no-typed-KV control measured
-`309.709482` server tok/s and `730.989696` decode tok/s.
-Typed-batch-rows-quiet measured `79.794096` / `94.238623`; adding stream-sync
-measured `81.006809` / `95.558274`. The next target is Nsight-backed
-profiling of the typed serving window to identify the actual kernel mix,
-tensor-core/HMMA activity, row pack/unpack cost, peer-read cost, and
-synchronization gaps.
+and `2` generated tokens/request measured `79.571869` server tok/s and
+`94.059803` decode tok/s. The matching `nvprof --print-gpu-trace` run stayed
+correct at `32/32` responses and measured `62.986544` / `73.352688` under
+profiler overhead. The parsed trace contains about `274495` kernel launches
+and `177864` memcpy events for only `64` generated tokens. Tensor-core-capable
+kernels are present: Cutlass WMMA/HMMA is the top family
+(`43496` calls, `544.815258 ms`) and TurboMind SM70 FP4 HMMA is active
+(`1300` calls, `348.017383 ms`). The larger finding is launch and transform
+fragmentation: compressor, gather, and dense-fill kernels are comparable to
+or larger than the expert GEMM time, while typed KV row store/load total only
+`44.717453 ms` / `28.144692 ms`. The first Nsight Compute filtered attempt
+connected but did not emit useful metrics because the server wrapper
+terminated the process; future NCU capture needs an internal profiler
+start/stop window or a non-server replay target.
 
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the

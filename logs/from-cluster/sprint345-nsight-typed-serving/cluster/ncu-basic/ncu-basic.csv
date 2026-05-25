@@ -1,0 +1,7 @@
+==PROF== Target process 101048 terminated before first instrumented API call.
+==PROF== Target process 101049 terminated before first instrumented API call.
+==PROF== Target process 101050 terminated before first instrumented API call.
+==PROF== Target process 101051 terminated before first instrumented API call.
+==PROF== Connected to process 101047 (/workspace/ds4-sprint181/tools/ds4-v100-tp-ep-full-layer-smoke)
+==PROF== Received signal
+==PROF== Trying to shutdown target application

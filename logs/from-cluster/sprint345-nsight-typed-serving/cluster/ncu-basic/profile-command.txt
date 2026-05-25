@@ -1,0 +1,1 @@
+/usr/local/cuda/bin/ncu --target-processes all --set basic --launch-count 8 --csv --log-file /workspace/logs/sprint345-nsight-typed-serving/ncu-basic/ncu-basic.csv --kernel-name regex:.*cutlass_70_wmma.* ./tools/ds4-v100-run-appliance.sh

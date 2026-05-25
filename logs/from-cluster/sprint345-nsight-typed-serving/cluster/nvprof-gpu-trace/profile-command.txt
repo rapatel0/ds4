@@ -1,0 +1,1 @@
+/usr/local/cuda/bin/nvprof --profile-child-processes --csv --print-gpu-trace --log-file /workspace/logs/sprint345-nsight-typed-serving/nvprof-gpu-trace/nvprof-gpu-trace.%p.csv ./tools/ds4-v100-run-appliance.sh

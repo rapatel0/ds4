@@ -1,0 +1,20 @@
+{
+  "cache_hits": 0,
+  "cache_misses": 32,
+  "client_generated_tok_s": 5.372994835600669,
+  "coalesced_batch_size": 32,
+  "elapsed_s": 11.911420345306396,
+  "generated_tokens_meta": 64,
+  "http_200": 32,
+  "requests": 32,
+  "server_continuation_tok_s": 79.77988,
+  "server_continuation_tok_s_decode": 94.531764,
+  "server_generated_tok_s": 79.571869,
+  "server_generated_tok_s_decode": 94.059803,
+  "tokens": 2,
+  "tool": "none",
+  "typed_compressed_lines": 0,
+  "typed_history_lines": 0,
+  "typed_indexer_lines": 0,
+  "typed_raw_lines": 0
+}
