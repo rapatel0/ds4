@@ -413,6 +413,10 @@ struct LayerRunSummary {
     int decode_cudagraph_rank_stream_syncs = 0;
     int decode_cudagraph_dense_stream_syncs = 0;
     int decode_cudagraph_copy_stream_syncs = 0;
+    int decode_cudagraph_capture_attempted = 0;
+    int decode_cudagraph_capture_succeeded = 0;
+    int decode_cudagraph_capture_error = 0;
+    size_t decode_cudagraph_capture_nodes = 0;
     uint64_t decode_checksum = 0;
     int decode_finite_bad = 0;
     int rc = 0;
@@ -525,6 +529,10 @@ struct DecodeLoopStats {
     int cudagraph_rank_stream_syncs = 0;
     int cudagraph_dense_stream_syncs = 0;
     int cudagraph_copy_stream_syncs = 0;
+    int cudagraph_capture_attempted = 0;
+    int cudagraph_capture_succeeded = 0;
+    int cudagraph_capture_error = 0;
+    size_t cudagraph_capture_nodes = 0;
     int finite_bad = 0;
     uint64_t checksum = 0;
     bool ep_return_fp16 = false;
@@ -739,6 +747,14 @@ __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
         local += (unsigned long long)data[i] * (unsigned long long)((i % 251u) + 1u);
     }
     atomicAdd(out, local);
+}
+
+__global__ void copy_f32_kernel(float *dst, const float *src, uint64_t n) {
+    for (uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+         i < n;
+         i += (uint64_t)blockDim.x * gridDim.x) {
+        dst[i] = src[i];
+    }
 }
 
 __device__ float f8_e8m0_to_f32_dev(uint8_t e) {
@@ -4636,11 +4652,18 @@ int run_shared_hc_final_expand(const Options &opt,
         CHECK_CUDA(cudaDeviceSynchronize());
     }
 
+    const int block = 256;
     for (int rank = 0; rank < kGpus; ++rank) {
         RankState &r = ranks[rank];
         CHECK_CUDA(cudaSetDevice(r.device));
         if (!r.d_hc_scratch_shard || !r.d_hc_split) return 3;
-        if (rank == 0) {
+        if (graph_event_order) {
+            copy_f32_kernel<<<
+                (unsigned int)(((uint64_t)opt.slots * kHcMix + block - 1) / block),
+                block, 0, r.stream>>>(
+                r.d_hc_split, hc->d_split, (uint64_t)opt.slots * kHcMix);
+            CHECK_CUDA(cudaGetLastError());
+        } else if (rank == 0) {
             CHECK_CUDA(cudaMemcpyAsync(r.d_hc_split, hc->d_split,
                                        (size_t)opt.slots * kHcMix * sizeof(float),
                                        cudaMemcpyDeviceToDevice, r.stream));
@@ -4650,7 +4673,6 @@ int run_shared_hc_final_expand(const Options &opt,
                                            (size_t)opt.slots * kHcMix * sizeof(float),
                                            r.stream));
         }
-        const int block = 256;
         const int grid = (int)((hc_shard_elems + block - 1) / block);
         hc_expand_shard_kernel<<<grid, block, 0, r.stream>>>(
             r.d_hc_scratch_shard, r.d_next_hidden, r.d_final_hc_shard,
@@ -4804,7 +4826,13 @@ int run_shared_hc_current_input(const Options &opt,
     for (int rank = 0; rank < kGpus; ++rank) {
         RankState &r = ranks[rank];
         CHECK_CUDA(cudaSetDevice(r.device));
-        if (rank == 0) {
+        if (graph_event_order) {
+            copy_f32_kernel<<<
+                (unsigned int)(((uint64_t)opt.slots * kHcMix + block - 1) / block),
+                block, 0, r.stream>>>(
+                r.d_hc_split, hc->d_split, (uint64_t)opt.slots * kHcMix);
+            CHECK_CUDA(cudaGetLastError());
+        } else if (rank == 0) {
             CHECK_CUDA(cudaMemcpyAsync(r.d_hc_split, hc->d_split,
                                        (size_t)opt.slots * kHcMix * sizeof(float),
                                        cudaMemcpyDeviceToDevice, r.stream));
@@ -4938,7 +4966,13 @@ int run_shared_hc_current_input(const Options &opt,
         CHECK_CUDA(cudaSetDevice(r.device));
         const size_t full_bytes = (size_t)full_elems * sizeof(float);
         if (!peer_gather_current) {
-            if (rank == 0) {
+            if (graph_event_order) {
+                copy_f32_kernel<<<
+                    (unsigned int)((full_elems + block - 1) / block),
+                    block, 0, r.stream>>>(
+                    r.d_current_full, hc->d_current_full, full_elems);
+                CHECK_CUDA(cudaGetLastError());
+            } else if (rank == 0) {
                 CHECK_CUDA(cudaMemcpyAsync(r.d_current_full, hc->d_current_full,
                                            full_bytes, cudaMemcpyDeviceToDevice, r.stream));
             } else {
@@ -4976,7 +5010,13 @@ int run_shared_hc_current_input(const Options &opt,
         }
         const uint64_t route_elems = (uint64_t)r.routes * kHidden;
         if (opt.routed_ffn_norm_input_gate && route_elems > 0) {
-            if (rank == 0) {
+            if (graph_event_order) {
+                copy_f32_kernel<<<
+                    (unsigned int)((full_elems + block - 1) / block),
+                    block, 0, r.stream>>>(
+                    r.d_current_full, hc->d_ffn_normed, full_elems);
+                CHECK_CUDA(cudaGetLastError());
+            } else if (rank == 0) {
                 CHECK_CUDA(cudaMemcpyAsync(r.d_current_full, hc->d_ffn_normed,
                                            full_bytes, cudaMemcpyDeviceToDevice,
                                            r.stream));
@@ -11150,6 +11190,10 @@ int run_decode_loop(const Options &opt,
     int cudagraph_audit_stream_syncs = 0;
     int cudagraph_audit_dense_stream_syncs = 0;
     int cudagraph_audit_copy_stream_syncs = 0;
+    int cudagraph_capture_attempted = 0;
+    int cudagraph_capture_succeeded = 0;
+    int cudagraph_capture_error = 0;
+    size_t cudagraph_capture_nodes = 0;
     auto sync_all = [&]() {
         if (opt.decode_cudagraph_gate) {
             cudagraph_audit_event_barrier_calls++;
@@ -11170,6 +11214,80 @@ int run_decode_loop(const Options &opt,
         }
     };
 
+    struct CaptureHostRankState {
+        float *final_hc_shard = nullptr;
+        float *hc_scratch_shard = nullptr;
+        bool hc_initialized = false;
+        uint32_t attn_rows_written = 0;
+        uint32_t index_rows_written = 0;
+        bool attn_loaded[kBoundedCompRows] = {};
+        bool index_loaded[kBoundedCompRows] = {};
+        uint64_t attn_position[kBoundedCompRows] = {};
+        uint64_t index_position[kBoundedCompRows] = {};
+        uint64_t attn_loaded_position[kBoundedCompRows] = {};
+        uint64_t index_loaded_position[kBoundedCompRows] = {};
+    };
+    auto save_capture_host_state = [&](CaptureHostRankState saved[kGpus]) {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            CaptureHostRankState &s = saved[rank];
+            s.final_hc_shard = r.d_final_hc_shard;
+            s.hc_scratch_shard = r.d_hc_scratch_shard;
+            s.hc_initialized = r.hc_initialized;
+            s.attn_rows_written = r.attn_comp_rows_written_layers[opt.layer];
+            s.index_rows_written = r.index_comp_rows_written_layers[opt.layer];
+            for (int row = 0; row < kBoundedCompRows; ++row) {
+                s.attn_loaded[row] = r.attn_comp_row_loaded_layers[opt.layer][row];
+                s.index_loaded[row] = r.index_comp_row_loaded_layers[opt.layer][row];
+                s.attn_position[row] = r.attn_comp_row_position_layers[opt.layer][row];
+                s.index_position[row] = r.index_comp_row_position_layers[opt.layer][row];
+                s.attn_loaded_position[row] =
+                    r.attn_comp_row_loaded_position_layers[opt.layer][row];
+                s.index_loaded_position[row] =
+                    r.index_comp_row_loaded_position_layers[opt.layer][row];
+            }
+        }
+    };
+    auto restore_capture_host_state = [&](const CaptureHostRankState saved[kGpus]) {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            const CaptureHostRankState &s = saved[rank];
+            r.d_final_hc_shard = s.final_hc_shard;
+            r.d_hc_scratch_shard = s.hc_scratch_shard;
+            r.hc_initialized = s.hc_initialized;
+            r.attn_comp_rows_written_layers[opt.layer] = s.attn_rows_written;
+            r.index_comp_rows_written_layers[opt.layer] = s.index_rows_written;
+            for (int row = 0; row < kBoundedCompRows; ++row) {
+                r.attn_comp_row_loaded_layers[opt.layer][row] = s.attn_loaded[row];
+                r.index_comp_row_loaded_layers[opt.layer][row] = s.index_loaded[row];
+                r.attn_comp_row_position_layers[opt.layer][row] = s.attn_position[row];
+                r.index_comp_row_position_layers[opt.layer][row] = s.index_position[row];
+                r.attn_comp_row_loaded_position_layers[opt.layer][row] =
+                    s.attn_loaded_position[row];
+                r.index_comp_row_loaded_position_layers[opt.layer][row] =
+                    s.index_loaded_position[row];
+            }
+        }
+    };
+    auto begin_capture_stream = [](int device, cudaStream_t stream) -> cudaError_t {
+        if (!stream) return cudaSuccess;
+        cudaError_t rc = cudaSetDevice(device);
+        if (rc != cudaSuccess) return rc;
+        return cudaStreamBeginCapture(stream, cudaStreamCaptureModeRelaxed);
+    };
+    auto end_capture_stream = [](int device, cudaStream_t stream,
+                                 cudaGraph_t *graph) -> cudaError_t {
+        if (!stream) return cudaSuccess;
+        cudaError_t rc = cudaSetDevice(device);
+        if (rc != cudaSuccess) return rc;
+        return cudaStreamEndCapture(stream, graph);
+    };
+    auto destroy_capture_graphs = [](std::vector<cudaGraph_t> *graphs) {
+        for (cudaGraph_t graph : *graphs) {
+            if (graph) cudaGraphDestroy(graph);
+        }
+        graphs->clear();
+    };
     auto run_one_step = [&](double *ep_ms,
                             double *dense_ms,
                             double *compose_ms,
@@ -11808,6 +11926,116 @@ int run_decode_loop(const Options &opt,
         return 0;
     };
 
+    auto attempt_capture_probe = [&]() -> int {
+        if (!opt.decode_cudagraph_gate) return 0;
+        cudagraph_capture_attempted++;
+        CaptureHostRankState saved[kGpus];
+        save_capture_host_state(saved);
+
+        cudaError_t first_error = cudaSuccess;
+        const char *phase = "begin";
+        const int root_device = ranks[0].device;
+        cudaStream_t root_stream = ranks[0].stream;
+        struct CaptureStream {
+            int device = 0;
+            cudaStream_t stream = nullptr;
+        };
+        std::vector<CaptureStream> streams;
+        auto add_stream = [&](int device, cudaStream_t stream) {
+            if (!stream) return;
+            for (const CaptureStream &s : streams) {
+                if (s.device == device && s.stream == stream) return;
+            }
+            streams.push_back(CaptureStream{device, stream});
+        };
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            add_stream(r.device, r.stream);
+            add_stream(r.device, r.dense_stream);
+            add_stream(r.device, r.copy_stream);
+            for (int q = 0; q < kGpus; ++q) {
+                add_stream(r.device, r.copy_streams[q]);
+            }
+        }
+        cudaEvent_t capture_seed = nullptr;
+        CHECK_CUDA(cudaSetDevice(root_device));
+        CHECK_CUDA(cudaEventCreateWithFlags(&capture_seed, cudaEventDisableTiming));
+        cudaError_t rc = begin_capture_stream(root_device, root_stream);
+        if (rc != cudaSuccess) first_error = rc;
+        bool capture_begun = first_error == cudaSuccess;
+        if (first_error == cudaSuccess) {
+            phase = "join";
+            rc = cudaEventRecord(capture_seed, root_stream);
+            if (rc != cudaSuccess) first_error = rc;
+            for (const CaptureStream &s : streams) {
+                if (first_error != cudaSuccess) break;
+                if (s.device == root_device && s.stream == root_stream) continue;
+                rc = cudaSetDevice(s.device);
+                if (rc != cudaSuccess) {
+                    first_error = rc;
+                    break;
+                }
+                rc = cudaStreamWaitEvent(s.stream, capture_seed, 0);
+                if (rc != cudaSuccess) first_error = rc;
+            }
+        }
+
+        int step_rc = 0;
+        double cap_ep = 0.0;
+        double cap_dense = 0.0;
+        double cap_compose = 0.0;
+        double cap_compose_reduce = 0.0;
+        double cap_compose_copy = 0.0;
+        double cap_compose_final = 0.0;
+        double cap_hc_current = 0.0;
+        double cap_final_hc = 0.0;
+        if (first_error == cudaSuccess) {
+            phase = "enqueue";
+            step_rc = run_one_step(&cap_ep, &cap_dense, &cap_compose,
+                                   &cap_compose_reduce, &cap_compose_copy,
+                                   &cap_compose_final, &cap_hc_current,
+                                   nullptr, nullptr, &cap_final_hc);
+            if (step_rc != 0) {
+                first_error = cudaErrorUnknown;
+            }
+        }
+
+        phase = first_error == cudaSuccess ? "end" : phase;
+        std::vector<cudaGraph_t> graphs;
+        size_t node_count = 0;
+        cudaGraph_t graph = nullptr;
+        if (capture_begun) {
+            rc = end_capture_stream(root_device, root_stream, &graph);
+            if (rc == cudaSuccess && graph) {
+                size_t graph_nodes = 0;
+                cudaError_t count_rc = cudaGraphGetNodes(graph, nullptr,
+                                                         &graph_nodes);
+                if (count_rc == cudaSuccess) node_count += graph_nodes;
+                graphs.push_back(graph);
+            } else if (first_error == cudaSuccess) {
+                first_error = rc;
+            }
+        }
+        restore_capture_host_state(saved);
+        CHECK_CUDA(cudaSetDevice(root_device));
+        CHECK_CUDA(cudaEventDestroy(capture_seed));
+
+        cudagraph_capture_error = (int)first_error;
+        cudagraph_capture_nodes = node_count;
+        if (first_error == cudaSuccess && step_rc == 0) {
+            cudagraph_capture_succeeded++;
+        }
+        std::printf("tp_ep_decode_cudagraph_capture\tlayer\t%d\tstreams\t%zu\t"
+                    "roots\t1\tattempted\t1\tsucceeded\t%d\terror_code\t%d\t"
+                    "error_name\t%s\tphase\t%s\tnodes\t%zu\tstep_rc\t%d\n",
+                    opt.layer, streams.size(),
+                    first_error == cudaSuccess && step_rc == 0 ? 1 : 0,
+                    (int)first_error, cudaGetErrorName(first_error), phase,
+                    node_count, step_rc);
+        destroy_capture_graphs(&graphs);
+        return 0;
+    };
+
     double warm_ep = 0.0;
     double warm_dense = 0.0;
     double warm_compose = 0.0;
@@ -11961,6 +12189,17 @@ int run_decode_loop(const Options &opt,
     }
     if (stats->checksum == 0 || stats->finite_bad != 0) stats->pass = false;
 
+    if (opt.decode_cudagraph_gate && stats->pass) {
+        const int cap_rc = attempt_capture_probe();
+        if (cap_rc != 0) {
+            stats->pass = false;
+        }
+    }
+    stats->cudagraph_capture_attempted = cudagraph_capture_attempted;
+    stats->cudagraph_capture_succeeded = cudagraph_capture_succeeded;
+    stats->cudagraph_capture_error = cudagraph_capture_error;
+    stats->cudagraph_capture_nodes = cudagraph_capture_nodes;
+
     if (!shared_dense_ops) {
         free_resident_f8_dense(attn, opt);
         free_resident_f8_dense(shared, opt);
@@ -12076,6 +12315,14 @@ int run_resident_layer_decode(const Options &opt,
             decode_loop.cudagraph_dense_stream_syncs;
         summary->decode_cudagraph_copy_stream_syncs =
             decode_loop.cudagraph_copy_stream_syncs;
+        summary->decode_cudagraph_capture_attempted =
+            decode_loop.cudagraph_capture_attempted;
+        summary->decode_cudagraph_capture_succeeded =
+            decode_loop.cudagraph_capture_succeeded;
+        summary->decode_cudagraph_capture_error =
+            decode_loop.cudagraph_capture_error;
+        summary->decode_cudagraph_capture_nodes =
+            decode_loop.cudagraph_capture_nodes;
         summary->decode_checksum = decode_loop.checksum;
         summary->decode_finite_bad = decode_loop.finite_bad;
         summary->rc = rc;
@@ -12922,6 +13169,10 @@ int run_token_major_serving_loop(const Options &opt,
     int sum_cudagraph_rank_stream_syncs = 0;
     int sum_cudagraph_dense_stream_syncs = 0;
     int sum_cudagraph_copy_stream_syncs = 0;
+    int sum_cudagraph_capture_attempted = 0;
+    int sum_cudagraph_capture_succeeded = 0;
+    int sum_cudagraph_capture_error = 0;
+    size_t sum_cudagraph_capture_nodes = 0;
     double first_token_decode_ms = 0.0;
     double continuation_decode_ms = 0.0;
     double first_token_wall_ms = 0.0;
@@ -13114,6 +13365,17 @@ int run_token_major_serving_loop(const Options &opt,
                     s.decode_cudagraph_dense_stream_syncs;
                 sum_cudagraph_copy_stream_syncs +=
                     s.decode_cudagraph_copy_stream_syncs;
+                sum_cudagraph_capture_attempted +=
+                    s.decode_cudagraph_capture_attempted;
+                sum_cudagraph_capture_succeeded +=
+                    s.decode_cudagraph_capture_succeeded;
+                if (sum_cudagraph_capture_error == 0 &&
+                    s.decode_cudagraph_capture_error != 0) {
+                    sum_cudagraph_capture_error =
+                        s.decode_cudagraph_capture_error;
+                }
+                sum_cudagraph_capture_nodes +=
+                    s.decode_cudagraph_capture_nodes;
                 checksum ^= s.decode_checksum +
                             (uint64_t)(step + 1) * 1000003ull +
                             (uint64_t)(layer + 1) * 104729ull;
@@ -13380,7 +13642,9 @@ int run_token_major_serving_loop(const Options &opt,
                     "copy_stream_sync_count\t%d\toutput_head_outside_step\t%d\t"
                     "host_selected_token_dependency\t%d\t"
                     "helper_host_sync_blocker_classes\t%d\t"
-                    "capture_attempted\t0\tcapture_eligible\t%d\tblocker\t%s\n",
+                    "capture_attempted\t%d\tcapture_succeeded\t%d\t"
+                    "capture_error_code\t%d\tcapture_error_name\t%s\t"
+                    "capture_nodes\t%zu\tcapture_eligible\t%d\tblocker\t%s\n",
                     graph_audit_steps,
                     sum_cudagraph_sync_all_calls,
                     sum_cudagraph_event_barrier_calls,
@@ -13391,6 +13655,11 @@ int run_token_major_serving_loop(const Options &opt,
                     output_head_outside_step ? 1 : 0,
                     host_token_dependency ? 1 : 0,
                     helper_host_sync_blocker_classes,
+                    sum_cudagraph_capture_attempted,
+                    sum_cudagraph_capture_succeeded,
+                    sum_cudagraph_capture_error,
+                    cudaGetErrorName((cudaError_t)sum_cudagraph_capture_error),
+                    sum_cudagraph_capture_nodes,
                     capture_eligible ? 1 : 0,
                     blocker);
     }

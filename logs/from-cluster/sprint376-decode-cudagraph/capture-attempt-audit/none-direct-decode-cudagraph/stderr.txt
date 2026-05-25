@@ -1,0 +1,1 @@
+cuda error tools/ds4-v100-tp-ep-full-layer-smoke.cu:4724: operation would result in a merge of separate capture sequences

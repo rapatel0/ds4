@@ -9,34 +9,26 @@ Current bottleneck reference:
 summarizes the measured bottlenecks, layer-by-layer hot paths, and experiments
 already tried.
 
-Latest throughput direction: Sprint 375 implemented `--async-output-gate` and
-rejected it as a default. The gate is correct and reduces the output-head path
-from `26` device synchronizations to `0` device synchronizations plus `8`
-event synchronizations at selected-token D2H consumption, but the real
-`32` active request / `32` slot / `256K` HTTP A/B regressed server decode
-throughput from `99.476540` to `93.764276` tok/s and left average GPU
-utilization flat (`8.212209%` to `8.204545%`). Keep the gate opt-in for
-Sprint 376 graph-capture investigation; do not promote it. Sprint 376 remains
-the make-or-break test of whether CUDA graph replay can raise the current
-low-utilization TP/EP serving path.
+Latest throughput direction: Sprint 376 tested `--decode-cudagraph-gate` and
+rejected graph replay as a promotion path. The audit work removed broad
+in-step host waits and all tracked helper host waits under the graph gate while
+preserving first token `54639`, output checksum `24071637347`, and scaffold
+checksum `3401922407`. Real capture then failed on the V100 stack: independent
+stream captures conflict with cross-stream event waits, root capture needs
+explicit stream joining, and after joining, CUDA rejects `cudaMemcpyPeerAsync`
+inside stream capture. Replacing HC-current peer copies with graph-gated device
+copy kernels moved the failure to the next peer copy in attention projection,
+so the blocker is pervasive P2P copy transport rather than one call site.
+Sprint 376 is therefore rejected for promotion; the next performance sprint is
+`--batched-paged-attn-gate`.
 
 Current active steering source: `TEMP_THROUGHPUT_PROMPT.md`. The near-term
 performance queue is isolated default-off gates, same-binary V100 A/B, and a
-strict promote/reject decision per gate. Sprint 375 completed the first gate
-and rejected async output as a default. Current active sprint: Sprint 376,
-`--decode-cudagraph-gate`. It begins with a graph-capture audit of the
-token-major `run_one_step` region, then attempts per-rank graph replay only if
-the audit shows the normal `32` slot / `256K` decode step is capturable enough
-to test honestly. The graph-gated audit has now replaced the broad host waits
-and all tracked helper-level host waits with stream/event ordering for the
-target one-step non-emitted-row shape. The progression preserved first token
-`54639`, output checksum `24071637347`, and scaffold checksum `3401922407`
-through every pass. Helper blocker classes moved `7 -> 6 -> 5 -> 4 -> 3 ->
-2 -> 1 -> 0`; the latest compressed-KV event pass reports
-`capture_eligible=1`, blocker `none`, and `54.788890` generated decode tok/s
-before graph replay. This is not a performance win yet. The next work is a
-real CUDA graph capture attempt and either a replay A/B or a precise CUDA
-capture blocker.
+strict promote/reject decision per gate. Sprint 375 rejected async output as a
+default. Sprint 376 rejected CUDA graph replay because the current TP/EP decode
+step relies on stream-capture-incompatible `cudaMemcpyPeerAsync` transport.
+Per the vision, the next sprint should start the first launch-count reducer
+that does not depend on graph capture: `--batched-paged-attn-gate`.
 
 Latest TP/EP format status: Sprint 374 built and ran the V100 workbench for
 the Sprint 373 INT8 candidate shapes. The copied tc-grid INT8 kernels are

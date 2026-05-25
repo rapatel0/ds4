@@ -471,3 +471,43 @@ non-emitted-row decode path is now audit-clean enough to attempt real CUDA
 graph capture. This is not yet a performance win; the graph-gated event path
 is still slower before replay. The next step is an actual capture attempt and
 the first CUDA error/blocker report if capture rejects any operation.
+
+### Real Capture Attempts And Decision
+
+Implemented diagnostic real capture attempts behind `--decode-cudagraph-gate`
+and built on the V100 pod:
+
+```text
+make -j80 CUDA_HOME=/usr/local/cuda CUDA_ARCH=sm_70 tools/ds4-v100-tp-ep-full-layer-smoke
+```
+
+Target shape:
+
+```text
+32 slots / 256K context / position 262080 / 1 generated token / direct token-major
+```
+
+Artifacts:
+
+```text
+logs/from-cluster/sprint376-decode-cudagraph/capture-attempt-audit/none-direct-decode-cudagraph
+logs/from-cluster/sprint376-decode-cudagraph/capture-attempt-unified/none-direct-decode-cudagraph
+logs/from-cluster/sprint376-decode-cudagraph/capture-attempt-seed/none-direct-decode-cudagraph
+logs/from-cluster/sprint376-decode-cudagraph/capture-attempt-peer-kernel/none-direct-decode-cudagraph
+```
+
+| Attempt | Return | CUDA error | Meaning |
+|---|---:|---|---|
+| capture all streams separately | `2` | `operation would result in a merge of separate capture sequences` at line `4724` | The existing cross-stream waits cannot be represented by independent per-stream captures. |
+| single root stream capture | `2` | `dependency created on uncaptured work in another stream` at line `4724` | Root capture alone does not include rank-stream work before the first control wait. |
+| root capture with seed event joining all streams | `2` | `operation not permitted when stream is capturing` at line `4820` | Capture reaches the first HC-current `cudaMemcpyPeerAsync`, which the runtime rejects while capturing. |
+| HC-current peer copies replaced with graph-gated device copy kernels | `2` | `operation not permitted when stream is capturing` at line `8561` | Capture advances to attention projection and fails on the next `cudaMemcpyPeerAsync`. |
+
+Decision: **REJECT** Sprint 376 as a promotion path. The graph-gated path is
+correct through the audit passes, but real replay is blocked by pervasive
+`cudaMemcpyPeerAsync` use in the TP/EP decode step on this V100/CUDA stack.
+Replacing every P2P transfer with graph-capturable kernel/UVA copies is a
+separate transport rewrite, not a small graph replay finish.
+
+Per `TEMP_THROUGHPUT_PROMPT.md`, the next sprint should move to the next
+isolated launch-count reducer: `--batched-paged-attn-gate`.

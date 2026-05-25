@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-25
 last_updated_by: vision
-revision: 385
+revision: 386
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -53,8 +53,8 @@ The performance program is intentionally isolated:
 | Priority | Gate | Status | Decision |
 |---:|---|---|---|
 | 1 | `--async-output-gate` | Complete | Rejected as default; preserved parity but regressed server decode |
-| 2 | `--decode-cudagraph-gate` | Active | Must produce real capture/replay evidence or a precise CUDA blocker |
-| 3 | `--batched-paged-attn-gate` | Next if graph blocked/flat | Collapse per-slot/per-family attention/KV launches |
+| 2 | `--decode-cudagraph-gate` | Complete | Rejected; stream capture is blocked by pervasive `cudaMemcpyPeerAsync` transport |
+| 3 | `--batched-paged-attn-gate` | Next | Collapse per-slot/per-family attention/KV launches |
 | 4 | `--compact-moe-decode-gate` | Next if graph blocked/flat | Reduce idle expert work and small grouped-GEMM fragmentation |
 | 5 | `--fused-gated-silu-gate` | Follow-on | Remove routed-FFN clamp/SwiGLU launch and intermediate |
 | 6 | `--tp-experts-ab-gate` | Topology measurement | Compare TP-sharded experts against EP8 all-to-all with real serving metrics |
@@ -275,18 +275,20 @@ promotion or a concrete blocker is not complete.
   or prove that this thesis is wrong before more dtype or micro-kernel swaps.
   The controlling order is CUDA graph replay first, then batched paged
   attention and compact MoE if graph replay is blocked or flat.
-- Sprint 376 is executing that steering document's S-A gate:
-  `--decode-cudagraph-gate`. The audit has already removed the broad
-  in-step `sync_all` host waits and several helper-level host waits under the
-  graph gate while preserving first-token/checksum parity. The current
-  graph-gated diagnostic is now capture eligible for the target one-step
-  non-emitted-row shape: helper blocker classes fell from `7` to `0`, first
-  token stayed `54639`, output checksum stayed `24071637347`, and scaffold
-  checksum stayed `3401922407`. The next work is a real graph capture/replay
-  attempt, not more audit-only cleanup. If the capture attempt exposes a
-  CUDA/runtime blocker or replay is flat, Sprint 376 closes with that result
-  and the next sprint starts `--batched-paged-attn-gate` rather than extending
-  audit plumbing.
+- Sprint 376 executed that steering document's S-A gate:
+  `--decode-cudagraph-gate`. The audit removed broad in-step `sync_all` host
+  waits and tracked helper-level host waits under the graph gate while
+  preserving first-token/checksum parity. The graph-gated diagnostic became
+  capture eligible for the target one-step non-emitted-row shape:
+  helper blocker classes fell from `7` to `0`, first token stayed `54639`,
+  output checksum stayed `24071637347`, and scaffold checksum stayed
+  `3401922407`. Real stream capture was then rejected by the V100/CUDA stack:
+  separate captures conflict with cross-stream event dependencies, root capture
+  needs explicit stream joining, and joined capture fails on
+  `cudaMemcpyPeerAsync`. Replacing HC-current peer copies with graph-gated
+  device copy kernels moved the failure to the next peer copy in attention
+  projection. Decision: reject graph replay as a promotion path and move next
+  to `--batched-paged-attn-gate`.
 - Sprint 327 made the production compressed-KV memory contract executable in
   `tools/ds4-v100-plan-tp.c`. With the real TP pack and F8 KV, `32` slots at
   `256K` fits at `27.00 GiB/GPU` with `5.00 GiB` headroom after reserve;
@@ -1030,37 +1032,29 @@ The next performance sequence is ordered to test that thesis directly:
 | 7 | `--fp8-e5m2-kv-gate` | Test smaller KV storage/load traffic for long-context serving | no NaNs, bounded drift, parity token stable |
 | 8 | `--mtp-decode-gate` | Add MTP only after base decode graphing and metrology are stable | accepted tokens/step and effective decode tok/s improve |
 
-S-B is complete and rejected as a default. The active next step is S-A:
-`--decode-cudagraph-gate`. It starts with a capture audit, then attempts
-per-rank graph replay only if the steady 32-wide decode region is capturable
-without hiding blockers. If S-A does not materially move GPU utilization, the
-roadmap pivots to S-C/S-D/S-F based on the graph audit and profiler evidence
-rather than assuming more launch amortization will help.
+S-B is complete and rejected as a default. S-A is complete and rejected as a
+promotion path: real capture is blocked by stream-capture-incompatible
+`cudaMemcpyPeerAsync` transport in the existing TP/EP decode step. The roadmap
+therefore pivots to S-C/S-D/S-E/S-F rather than extending audit-only graph work
+or starting a broad P2P transport rewrite inside the graph sprint.
 
-Current S-A status: graph replay has not yet been attempted, but the one-step
-non-emitted-row audit now reports `capture_eligible=1`. There is local
-in-progress diagnostic capture plumbing in
-`tools/ds4-v100-tp-ep-full-layer-smoke.cu`; it is not yet a validated result.
-The next concrete outcome must be a real replay A/B or a CUDA capture blocker
-report. If replay is blocked or flat, pivot to S-C/S-D/S-E/S-F rather than
-extending audit-only work.
+Current next step: plan and execute S-C, `--batched-paged-attn-gate`, as the
+first launch-count reducer that does not depend on CUDA graph replay.
 
 ## Production Readiness Sequence
 
 The remaining work is ordered by what blocks practical use on the V100 box,
 not by benchmark curiosity.
 
-1. **Performance capture gate.** Keep `--async-output-gate` opt-in only, then
-   finish Sprint 376's audit-first `--decode-cudagraph-gate`. This is the
-   immediate critical path because the current serving path is askable but
-   low-utilization. The output of this gate is either a promoted graph replay,
-   an opt-in diagnostic graph path, or a concrete blocker list that determines
-   the next kernel sprint.
-2. **Launch-count reduction gate.** If Sprint 376 does not promote real graph
-   replay, move directly to the throughput-prompt gates that reduce steady
-   decode kernel count and fragmented state work: batched paged attention,
-   compact MoE decode, and fused gated-SiLU. These gates should use the same
-   32-slot / 256K A/B discipline and should not be mixed into one sprint.
+1. **Launch-count reduction gate.** Sprint 376 rejected real CUDA graph replay
+   because peer-copy transport is not stream-capture compatible on this stack.
+   Move directly to the throughput-prompt gates that reduce steady decode
+   kernel count and fragmented state work: batched paged attention, compact
+   MoE decode, and fused gated-SiLU. These gates should use the same 32-slot /
+   256K A/B discipline and should not be mixed into one sprint.
+2. **P2P transport revisit.** A future graph sprint is only justified after a
+   scoped P2P transport plan exists for replacing `cudaMemcpyPeerAsync` with
+   graph-capturable kernel/UVA copies across the whole steady decode step.
 3. **Topology measurement gate.** Run the TP-sharded expert A/B if EP compose
    or all-to-all remains a measured bottleneck after launch-count work. This is
    a topology measurement, not a commitment to rip out EP8.
@@ -1198,7 +1192,7 @@ syncs from `26` to `0` with `8` event waits. The real HTTP `32` active request
 tok/s and average GPU utilization stayed flat. The gate remains opt-in for
 Sprint 376 graph-capture investigation.
 
-### Sprint 376 - Decode CUDA Graph Capture [active]
+### Sprint 376 - Decode CUDA Graph Capture [complete]
 
 Goal: Implement `--decode-cudagraph-gate`, capturing the shape-static
 32-wide per-rank decode step into CUDA graphs and replaying it across decode
@@ -1220,7 +1214,7 @@ point outside `run_one_step`. The first deliverable is therefore an explicit
 blocker/audit line for remaining graph blockers inside the token-major decode
 step; replay follows only if the audit proves the region is capturable enough.
 
-Current execution note: Sprint 376 audit plumbing now builds and runs on the
+Execution note: Sprint 376 audit plumbing builds and runs on the
 V100 pod. The first direct `32` slot / `256K` audit reports
 `capture_eligible=0` with `172` broad in-step `sync_all` calls, `1376`
 rank-stream waits, and `1376` dense-stream waits in one 43-layer decode step.
@@ -1240,8 +1234,17 @@ dropped helper blockers to zero. The latest direct audit reports
 `capture_eligible=1`, blocker `none`, first token `54639`, output checksum
 `24071637347`, scaffold checksum `3401922407`, and `54.788890` generated
 decode tok/s before graph replay. The next concrete task is an actual CUDA
-graph capture attempt; Sprint 376 should not drift into paged attention,
-compact MoE, TP experts, or MTP before that decision.
+graph capture attempt.
+
+Outcome: rejected as a promotion path. Separate stream captures fail with
+`operation would result in a merge of separate capture sequences`; root stream
+capture fails with `dependency created on uncaptured work in another stream`;
+seeded root capture reaches the first HC-current `cudaMemcpyPeerAsync` and
+fails with `operation not permitted when stream is capturing`; replacing that
+HC-current peer copy with graph-gated device copy kernels moves the same error
+to attention projection. The graph blocker is therefore pervasive P2P transport
+inside the current decode step, not one residual host wait. The next sprint is
+batched paged attention.
 
 ### Sprint 377 - Batched Paged Attention Gate [tentative]
 
@@ -2708,6 +2711,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 376 raw-read helper event pass ran on V100. | Raw attention read/window host waits can be skipped under the graph gate; parity holds and helper blocker classes drop from `4` to `3`. | Continue with attention state, typed-history, and compressed-KV helper waits. |
 | 2026-05-25 | Sprint 376 cleared tracked graph-audit helper blockers. | Attention-state, typed-history, and compressed-KV event-ordering passes preserve first token `54639`, output checksum `24071637347`, and scaffold checksum `3401922407`; helper blocker classes drop to `0`, and the one-step non-emitted-row audit reports `capture_eligible=1`. | Attempt real CUDA graph capture/replay next. If capture rejects an operation or replay is flat, close Sprint 376 with the blocker/performance result and pivot to batched paged attention, compact MoE, or TP-sharded expert A/B. |
 | 2026-05-25 | Re-centered the vision around `TEMP_THROUGHPUT_PROMPT.md` before further performance work. | The prompt's main insight is that the current TP/EP path is flat at about `97-100` server decode tok/s and about `10%` average GPU utilization from `1` to `32` active requests, so the next work should test launch/sync elimination and launch-count reduction before broad dtype rewrites. | Keep Sprint 376 focused on one real CUDA graph capture/replay result. If it is blocked or flat, move to batched paged attention, compact MoE, fused gated-SiLU, and then TP-sharded expert A/B as isolated default-off gates. |
+| 2026-05-25 | Sprint 376 real capture attempts rejected CUDA graph replay. | After audit cleanup, real capture failed first on separate capture sequence merging, then uncaptured stream dependencies, then `cudaMemcpyPeerAsync` being disallowed during stream capture. Replacing HC-current peer copies with graph-gated device copy kernels moved the same peer-copy error to attention projection. | Close Sprint 376 as REJECT, leave graph work diagnostic-only, and plan Sprint 377 around `--batched-paged-attn-gate`. |
 
 ## Open Questions
 

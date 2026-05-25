@@ -261,3 +261,47 @@ Current result: the graph-gated direct one-step non-emitted-row decode shape
 is now audit-clean enough to attempt real CUDA graph capture. The next work is
 not promotion; it is a capture attempt and the CUDA error/blocker report if
 capture rejects any operation.
+
+## Real Capture Attempts
+
+After the audit reported `capture_eligible=1`, I attempted real stream capture
+on the V100 pod at the same target shape:
+
+```text
+32 slots / 256K context / position 262080 / 1 generated token / direct token-major
+```
+
+Build still passes on gpu-01:
+
+```text
+make -j80 CUDA_HOME=/usr/local/cuda CUDA_ARCH=sm_70 tools/ds4-v100-tp-ep-full-layer-smoke
+```
+
+Capture attempt artifacts:
+
+```text
+logs/from-cluster/sprint376-decode-cudagraph/capture-attempt-audit/none-direct-decode-cudagraph
+logs/from-cluster/sprint376-decode-cudagraph/capture-attempt-unified/none-direct-decode-cudagraph
+logs/from-cluster/sprint376-decode-cudagraph/capture-attempt-seed/none-direct-decode-cudagraph
+logs/from-cluster/sprint376-decode-cudagraph/capture-attempt-peer-kernel/none-direct-decode-cudagraph
+```
+
+Results:
+
+| Attempt | Return | CUDA error | Interpretation |
+|---|---:|---|---|
+| separate captures for all streams | `2` | `operation would result in a merge of separate capture sequences` at line `4724` | Independent per-stream/per-rank captures cannot represent the existing cross-stream event waits. |
+| single root stream capture | `2` | `dependency created on uncaptured work in another stream` at line `4724` | Root capture alone does not pull rank streams into the graph soon enough. |
+| root capture with seed event joining all streams | `2` | `operation not permitted when stream is capturing` at line `4820` | The first `cudaMemcpyPeerAsync` in HC-current split broadcast is not graph-capturable on this stack. |
+| HC-current peer copies replaced with graph-gated device copy kernels | `2` | `operation not permitted when stream is capturing` at line `8561` | Capture advances past HC-current copies, then fails at the next `cudaMemcpyPeerAsync` in attention projection. |
+
+Decision: **REJECT graph replay as a Sprint 376 promotion path**. The blocker
+is no longer generic host synchronization; it is that the current TP/EP decode
+step uses many `cudaMemcpyPeerAsync` transfers, and this V100/CUDA stack rejects
+those operations during stream capture. A full solution would require a broader
+P2P transport rewrite to kernel/UVA copies or a different graph topology. That
+is larger than Sprint 376 and not the next highest-confidence throughput step.
+
+Next work per `TEMP_THROUGHPUT_PROMPT.md` and `docs/sprints/VISION.md`:
+start the next isolated gate, `--batched-paged-attn-gate`, to reduce launch
+count and fragmented attention/KV work without depending on CUDA graph capture.

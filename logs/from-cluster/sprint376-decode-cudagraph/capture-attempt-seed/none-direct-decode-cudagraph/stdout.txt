@@ -1,0 +1,14 @@
+tp_ep_all_layer_dense_f16_cache	rows	4096	source_bytes	8640413696	cache_bytes	14451998720	cache_aligned_bytes	14451998720	max_temp_bytes	132382720	cache_ms	8877.827196	PASS
+tp_ep_all_layer_turbomind_api_shared	devices	8	PASS
+tp_ep_all_layer_rank_buffers_shared	devices	8	core_bytes	44067872	PASS
+tp_ep_all_layer_tp_runtime_shared	devices	8	slots	32	ctx	262144	kv_bytes_per_gpu	3707940864	comp_state_bytes_per_gpu	1803550720	scratch_bytes_per_gpu	1610612736	total_bytes_per_gpu	7122628608	PASS
+tp_ep_all_layer_expert_bindings_shared	layers	43	devices	8	bytes	147169738752	bytes_per_gpu	18396217344	PASS
+tp_ep_all_layer_dense_ops_shared	layers	43	devices	8	loaded_bytes	5795233792	PASS
+tp_ep_resident_serving_loop	layers	43	mode	direct_decode	PASS
+tp_ep_hc_final_expand_shared	layers	43	slots	32	control_bytes	332431688	PASS
+tp_ep_diagnostic_output_head_shared	slots	32	vocab	129280	rows_per_gpu	16160	output_weight_bytes	1059061760	logits_bytes	16547840	proxy_hc	0	PASS
+tp_ep_true_attention_projection_prefix	layer	0	slots	32	q_a_cols	1024	kv_cols	512	q_width	32768	ms	47.144715	PASS
+tp_ep_compressed_kv_projection	layer	0	slots	32	ratio	0	emitted_compressed_rows	0	visible_compressed_rows	0	indexer_topk_count	0	attn_input_fill_ms	0.000000	attn_dense_ms	0.000000	attn_gather_ms	0.000000	attn_state_emit_ms	0.000000	attn_typed_ms	0.000000	indexer_input_fill_ms	0.000000	indexer_dense_ms	0.000000	indexer_gather_rope_ms	0.000000	indexer_state_emit_ms	0.000000	indexer_typed_score_ms	0.000000	reference_diff_ms	0.000000	ratio_shift_ms	0.000000	ms	0.000000	PASS
+tp_ep_true_attention_rope	layer	0	slots	32	local_heads	8	head_dim	512	rotary_dim	64	freq_base	10000.0	freq_scale	1.000000000	position	262080	PASS
+tp_ep_true_attention_state_update	layer	0	slots	32	local_heads	8	head_dim	512	raw_rows	128	raw_row	64	kv_width	512	ms	0.928813	PASS
+tp_ep_true_attention_raw_window	layer	0	slots	32	local_heads	8	head_dim	512	raw_rows	128	raw_row	64	valid_rows	1	visible_compressed_rows	0	selected_compressed_rows	0	ms	0.284382	PASS

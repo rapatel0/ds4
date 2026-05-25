@@ -1,0 +1,1 @@
+cuda error tools/ds4-v100-tp-ep-full-layer-smoke.cu:8561: operation not permitted when stream is capturing
