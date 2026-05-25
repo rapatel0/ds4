@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-25
 last_updated_by: codex
-revision: 357
+revision: 358
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -2247,6 +2247,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 351 split the true-attention pre-EP prefix. | The prior broad pre-EP timer is now explained by measured stage totals: compressed KV projection/store `228.813152` ms, attention projection `170.865666` ms, attention state `105.654904` ms, HC-current `85.249101` ms, raw/window read `34.932798` ms, and typed-history load `1.271677` ms across `86` layer-step invocations. | Optimize compressed-KV projection/store fragmentation first, then rerun direct profiler and HTTP A/B before moving to MTP. |
 | 2026-05-25 | Sprint 352 split compressed-KV internals and rejected store suppression as the next lever. | At emitted row position `262143`, the one-token 32-slot run passes and shows compressed-KV is dominated by indexer dense `36.615896` ms, attention dense `24.659453` ms, attention state/emit `24.362932` ms, combined input fill `16.776362` ms, and indexer state/emit `9.007686` ms. Suppressing compressed and indexer typed stores is flat: `81.647302` to `81.733945` generated decode tok/s. | Target fused/shared compressor-indexer input fill and compressor state/emit work before revisiting typed KV stores. |
 | 2026-05-25 | Sprint 353 tested fused ratio-4 compressor/indexer input fill. | The opt-in fused fill selected all `21` ratio-4 layers and preserved the same output token. Same-binary emitted-row decode improved only from `79.011931` to `80.534845` tok/s, and pre-EP compressed-KV time moved from `130.391665` to `129.781758` ms. | Keep fused fill diagnostic-only. Target compressor/indexer state+emit fusion or dense/state boundary reduction next. |
+| 2026-05-25 | Sprint 354 rejected narrow compressed RoPE+round fusion as a material lever. | The opt-in fused kernel selected `41` emitted compressed layers and preserved token `54639`, but decode moved from `79.810167` to `79.344207` tok/s while compressed-KV stayed effectively flat. | Keep the gate diagnostic-only. Target larger state/emit boundaries such as pooling+normalization or store+pooling. |
 
 ## Open Questions
 

@@ -201,6 +201,8 @@ def variant_suffix(args):
         suffix += "-skip-indexer-store"
     if getattr(args, "fused_compressed_input_fill", False):
         suffix += "-fused-compressed-input-fill"
+    if getattr(args, "fused_compressed_rope_round", False):
+        suffix += "-fused-compressed-rope-round"
     return suffix
 
 
@@ -265,6 +267,8 @@ def direct_command(args):
         cmd.append("--true-ds4-attention-typed-kv-skip-indexer-store-gate")
     if args.fused_compressed_input_fill:
         cmd.append("--true-ds4-compressed-kv-fused-input-fill-gate")
+    if args.fused_compressed_rope_round:
+        cmd.append("--true-ds4-compressed-kv-fused-rope-round-gate")
     return cmd
 
 
@@ -313,6 +317,7 @@ def summarize_direct(case_dir, tool, rc, elapsed_s):
         "reference_diff_ms",
         "ratio_shift_ms",
         "fused_input_fill",
+        "fused_rope_round",
         "ms",
     ]
     compressed_counts = {
@@ -321,6 +326,7 @@ def summarize_direct(case_dir, tool, rc, elapsed_s):
         "ratio4_layers": 0,
         "ratio128_layers": 0,
         "fused_input_fill_layers": 0,
+        "fused_rope_round_layers": 0,
     }
     for line in stdout.splitlines():
         tag, fields = parse_tab_line(line)
@@ -377,6 +383,8 @@ def summarize_direct(case_dir, tool, rc, elapsed_s):
                 compressed_counts["ratio128_layers"] += 1
             if maybe_number(fields.get("fused_input_fill")):
                 compressed_counts["fused_input_fill_layers"] += 1
+            if maybe_number(fields.get("fused_rope_round")):
+                compressed_counts["fused_rope_round_layers"] += 1
             for key in compressed_sum_keys:
                 value = maybe_number(fields.get(key))
                 if isinstance(value, (int, float)):
@@ -534,6 +542,7 @@ def main():
     parser.add_argument("--skip-compressed-store", action="store_true")
     parser.add_argument("--skip-indexer-store", action="store_true")
     parser.add_argument("--fused-compressed-input-fill", action="store_true")
+    parser.add_argument("--fused-compressed-rope-round", action="store_true")
     parser.add_argument("--port", type=int, default=18357)
     parser.add_argument("--readiness-seconds", type=int, default=600)
     parser.add_argument("--request-timeout-seconds", type=int, default=1200)

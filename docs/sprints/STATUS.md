@@ -102,6 +102,20 @@ the stage reduction was under `1 ms`, so this remains opt-in and is not
 promoted as a default. The next lever should be compressor/indexer state/emit
 fusion rather than more fill-only work.
 
+Sprint 354 tested the first narrow state/emit fusion:
+`--true-ds4-compressed-kv-fused-rope-round-gate` /
+`--fused-compressed-rope-round`. It combines compressed-row RoPE and the
+following F16-round pass for emitted rows. The V100 same-binary emitted-row
+A/B at `32` slots / `256K` passed with identical output token `54639`.
+Control measured `79.810167` generated decode tok/s and `130.520098` ms
+pre-EP compressed-KV time. Fused RoPE+round selected `41` emitted compressed
+layers and measured `79.344207` tok/s and `130.382524` ms. Attention
+state/emit improved slightly (`24.680003` to `24.352357` ms) and indexer
+state/emit also moved slightly (`9.003129` to `8.880899` ms), but total
+decode regressed within noise. This gate remains diagnostic-only; the next
+state/emit work should target pooling+normalization or store+pooling rather
+than RoPE+round alone.
+
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
 TP runtime, sharded KV, rank buffers, TurboMind API handles, active MXFP4
