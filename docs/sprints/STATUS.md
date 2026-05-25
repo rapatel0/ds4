@@ -20,6 +20,11 @@ Sprint 376 graph-capture investigation; do not promote it. Sprint 376 remains
 the make-or-break test of whether CUDA graph replay can raise the current
 low-utilization TP/EP serving path.
 
+Current active sprint: Sprint 376, `--decode-cudagraph-gate`. The sprint is
+planned to begin with a graph-capture audit of the token-major `run_one_step`
+region, then attempt per-rank graph replay only if the audit shows the normal
+`32` slot / `256K` decode step is capturable enough to test honestly.
+
 Latest TP/EP format status: Sprint 374 built and ran the V100 workbench for
 the Sprint 373 INT8 candidate shapes. The copied tc-grid INT8 kernels are
 numerically acceptable but not performance candidates for the BF16 attention

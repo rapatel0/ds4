@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-25
 last_updated_by: vision
-revision: 381
+revision: 382
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -1104,7 +1104,7 @@ syncs from `26` to `0` with `8` event waits. The real HTTP `32` active request
 tok/s and average GPU utilization stayed flat. The gate remains opt-in for
 Sprint 376 graph-capture investigation.
 
-### Sprint 376 - Decode CUDA Graph Capture [planned]
+### Sprint 376 - Decode CUDA Graph Capture [active]
 
 Goal: Implement `--decode-cudagraph-gate`, capturing the shape-static
 32-wide per-rank decode step into CUDA graphs and replaying it across decode
@@ -1118,6 +1118,13 @@ Definition: persistent graph input/output buffers, per-rank graph capture,
 captured peer-copy compose/event dependencies, checksum-identical longer
 decode run, and V100 A/B reporting utilization, decode tok/s, first token,
 and all-layer checksum.
+
+Planning update: Sprint 376 starts with a graph-capture audit, not immediate
+graph replay. Sprint 375 showed output-head event sequencing is correct but
+not a serving-speed win, and selected-token D2H still forces a CPU consumption
+point outside `run_one_step`. The first deliverable is therefore an explicit
+blocker/audit line for remaining graph blockers inside the token-major decode
+step; replay follows only if the audit proves the region is capturable enough.
 
 ### Sprint 377 - Batched Paged Attention Gate [tentative]
 
