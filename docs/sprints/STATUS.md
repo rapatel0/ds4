@@ -30,6 +30,11 @@ step relies on stream-capture-incompatible `cudaMemcpyPeerAsync` transport.
 Per the vision, the next sprint should start the first launch-count reducer
 that does not depend on graph capture: `--batched-paged-attn-gate`.
 
+Sprint 377 is planned as that next gate. It will add
+`--batched-paged-attn-gate`, keep the current default path unchanged, and A/B a
+batched typed-KV attention row plan against the current `32` slot / `256K`
+serving baseline.
+
 Latest TP/EP format status: Sprint 374 built and ran the V100 workbench for
 the Sprint 373 INT8 candidate shapes. The copied tc-grid INT8 kernels are
 numerically acceptable but not performance candidates for the BF16 attention

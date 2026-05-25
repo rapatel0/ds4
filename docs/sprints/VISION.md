@@ -1246,15 +1246,14 @@ to attention projection. The graph blocker is therefore pervasive P2P transport
 inside the current decode step, not one residual host wait. The next sprint is
 batched paged attention.
 
-### Sprint 377 - Batched Paged Attention Gate [tentative]
+### Sprint 377 - Batched Paged Attention Gate [planned]
 
 Goal: Implement `--batched-paged-attn-gate` to reduce per-slot typed-KV
 attention launches with block-table-indexed attention kernels.
 
-Rationale: This is the first fallback if graph replay is blocked or flat, and
-the first follow-on if graph replay lands but the captured graph still spends
-too much time in fragmented attention/KV work. It should not start before
-Sprint 376 produces a clear graph-capture result.
+Rationale: This is the first fallback now that graph replay is blocked by
+stream-capture-incompatible P2P transport. It targets launch count and
+fragmented attention/KV row work without requiring CUDA graphs.
 
 ### Sprint 378 - Compact MoE Decode Gate [tentative]
 
