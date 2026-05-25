@@ -4,27 +4,27 @@ Last updated: 2026-05-25
 
 ## Topline
 
-Latest TP/EP typed-KV serving status: Sprint 346 added
-`--cuda-profiler-window` support to the TP/EP full-layer smoke/server binary,
-propagated `DS4_V100_CUDA_PROFILER_WINDOW=1` through the TP/EP launcher, and
-added permanent windowed profiler modes to `tools/ds4-v100-tp-ep-profile.py`.
-The implementation is correct and opt-in: no-profiler sanity at `32`
-concurrent `/v1/chat/completions` requests, `32` slots, `256K` context, and
-`2` generated tokens/request measured `78.032873` server tok/s and
-`92.070787` decode tok/s. Windowed `nvprof` and `ncu` runs both returned
-`32/32` HTTP 200 responses and emitted CUDA profiler start/stop markers
-(`36` and `34` marker lines respectively), but the profiler tools still did
-not produce scoped kernel metrics in the HTTP-wrapper setup: `nvprof
---profile-from-start off` wrote a zero-byte GPU trace, and NCU produced only
-process lifecycle lines. Sprint 345's broad trace therefore remains the
-current performance evidence: about `274495` kernel launches and `177864`
-memcpy events for `64` generated tokens, with Cutlass WMMA/HMMA
-(`43496` calls, `544.815258 ms`), compressor kernels (`434.288469 ms`),
-gather kernels (`429.056773 ms`), dense-fill kernels (`422.979145 ms`), and
-TurboMind SM70 FP4 HMMA (`1300` calls, `348.017383 ms`) dominating. The next
-required metrology step is a direct non-server TP/EP replay/profile target
-that reuses the resident 32-slot typed decode path and exits naturally after
-one decode window.
+Latest TP/EP typed-KV serving status: Sprint 347 added a direct non-server
+profile mode to the permanent profiler harness:
+`tools/ds4-v100-tp-ep-profile.py --run-mode direct-token-major`. It invokes
+`tools/ds4-v100-tp-ep-full-layer-smoke` directly with the same resident
+32-slot / 256K typed-KV serving flags as the HTTP path, then writes command,
+stdout/stderr, summary JSON, and parsed top-kernel TSV artifacts. Direct V100
+no-profiler validation passed at `32` slots / `256K` / `2` decode steps with
+`64` generated tokens, `83.882587` generated tok/s decode, `91.958152`
+continuation tok/s decode, and finite output-head results. Direct windowed
+`nvprof` also passed, emitted profiler start/stop markers, and produced usable
+kernel rows: TurboMind SM70 FP4 HMMA (`46.028956 ms`, `172` calls), CUTLASS
+WMMA FP16 (`14.949741 ms`, `720` calls), dense input fill
+(`14.745042 ms`, `128` calls), compressor store (`12.823440 ms`, `124`
+calls), and `bf16_dense_kernel` (`7.437483 ms`, `1` call) lead the scoped
+window. A broad direct trace also produced rows and confirmed BF16/F8 unpack,
+gather, dense-fill, cast, compressor, CUTLASS, and TurboMind kernels are all
+active. The current measured bottleneck is not missing tensor-core dispatch;
+it is current-HC/input staging and transform fragmentation:
+`sum_hc_current_input_ms=622.442653` out of `sum_decode_ms=762.971220` in the
+direct no-profiler run. Next work should fuse or bypass this staging path, then
+rerun direct profiler plus HTTP serving A/B.
 
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the

@@ -2,7 +2,7 @@
 created: 2026-05-17
 last_updated: 2026-05-25
 last_updated_by: codex
-revision: 350
+revision: 351
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -2240,6 +2240,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-24 | Sprint 326 added bounded multi-row compressed attention history. | The TP/EP path now stores up to `8` bounded compressed rows per layer, tracks visible row counts, scores all bounded visible ratio-4 indexer rows, replicates selected row indices to all TP ranks, and includes multiple compressed rows in the raw+compressed attention softmax/read. The `32` slot / `256K` / `8` step attention gate passes all `344` layer-step invocations with `visible_compressed_rows=2`, `selected_compressed_rows=2`, no compact diff failures, and `20.780883` projected slot-step tok/s. | Replace bounded diagnostic rows with production compressed-KV allocation/ownership, validate ratio-128 history, and compare raw+compressed attention output against the full reference layer path before rerunning HTTP parity. |
 | 2026-05-24 | Sprint 327 made the production compressed-KV memory contract executable. | `tools/ds4-v100-plan-tp.c` now reports raw/compressed/indexer rows, persistent typed KV bytes, replicated f32 warning bytes, bounded diagnostic bytes, per-layer row tables, and JSON fields. With the real pack and F8 KV, `32` slots / `256K` fits at `27.00 GiB/GPU` with `3.40 GiB/GPU` persistent typed KV and `5.00 GiB` headroom after reserve; replicated f32 would be `107.84 GiB/GPU`. `1` slot / `1M` fits at `22.56 GiB/GPU`. | Implement the runtime allocator against this typed TP-sharded contract and validate ratio-4 plus ratio-128 row reads from the production arena. |
 | 2026-05-25 | Sprint 345/346 moved performance work from tok/s guessing to profiler evidence. | Broad `nvprof` shows tensor-core-capable Cutlass and TurboMind kernels are active, but the path is launch/transform fragmented: compressor, gather, dense-fill, and many small WMMA launches dominate. TP/EP CUDA profiler windows are now wired, but HTTP-wrapper `profile-from-start off` does not emit scoped metrics. | Build a direct non-server TP/EP replay/profile target, then fuse the largest non-GEMM boundary proven by that target. |
+| 2026-05-25 | Sprint 347 made direct TP/EP profiling operational. | `tools/ds4-v100-tp-ep-profile.py --run-mode direct-token-major` reuses the 32-slot / 256K typed-KV serving flags without the HTTP wrapper and produces usable `nvprof` top-kernel rows. Direct no-profiler measured `83.882587` generated tok/s decode and `91.958152` continuation tok/s decode; windowed direct `nvprof` showed TurboMind FP4 HMMA, CUTLASS WMMA, dense-fill, compressor store, and BF16/F8 transform kernels active. The dominant direct-stage timer is `sum_hc_current_input_ms=622.442653` out of `762.971220` summed decode ms. | Target HC/current-input staging and transform fragmentation directly, then validate with direct profiler and HTTP serving A/B. |
 
 ## Open Questions
 

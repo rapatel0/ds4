@@ -187,6 +187,153 @@ def build_env(args, port):
     return env
 
 
+def direct_command(args):
+    cmd = [
+        "./tools/ds4-v100-tp-ep-full-layer-smoke",
+        "--pack-dir", args.pack_dir,
+        "--contract", args.contract,
+        "--tm-index", str(pathlib.Path(args.pack_dir) / "turbomind-pack-index.tsv"),
+        "--lib", args.turbomind_lib,
+        "--slots", str(args.slots),
+        "--top-k", "6",
+        "--kv-slot", "7",
+        "--position", "100000",
+        "--warmup", "0",
+        "--iters", "1",
+        "--decode-steps", str(args.tokens),
+        "--fuse-compose-sum",
+        "--dense-f16-cublas-compose",
+        "--dense-f16-cache-compose",
+        "--skip-descriptor-checks",
+        "--skip-predecode-probes",
+        "--shared-expert-bindings",
+        "--shared-dense-ops",
+        "--overlap-ep-dense",
+        "--source-copy-schedule",
+        "--skip-self-compose-copy",
+        "--multi-copy-streams",
+        "--token-major-all-layers",
+        "--all-layers",
+        "--serving-bench",
+        "--copy-event-compose",
+        "--compact-route-compose",
+        "--tp-hc-final-expand-gate",
+        "--tp-hc-current-input-gate",
+        "--tp-hc-persist-state-gate",
+        "--true-ds4-attention-residency-gate",
+        "--true-ds4-attention-projection-gate",
+        "--true-ds4-attention-state-gate",
+        "--true-ds4-attention-rope-gate",
+        "--true-ds4-attention-raw-read-gate",
+        "--true-ds4-attention-raw-window-gate",
+        "--true-ds4-attention-typed-kv-raw-gate",
+        "--true-ds4-attention-typed-kv-compressed-gate",
+        "--true-ds4-attention-typed-kv-indexer-gate",
+        "--true-ds4-attention-typed-kv-history-gate",
+        "--true-ds4-attention-typed-kv-skip-current-load-gate",
+        "--true-ds4-attention-typed-kv-quiet-gate",
+        "--true-ds4-attention-typed-kv-batch-rows-gate",
+        "--true-ds4-attention-typed-kv-stream-sync-gate",
+        "--diagnostic-output-head",
+    ]
+    if "window" in args.tool:
+        cmd.append("--cuda-profiler-window")
+    return cmd
+
+
+def parse_tab_line(line):
+    parts = line.strip().split("\t")
+    if not parts:
+        return "", {}
+    out = {}
+    for i in range(1, len(parts) - 1, 2):
+        out[parts[i]] = parts[i + 1]
+    return parts[0], out
+
+
+def maybe_number(value):
+    if value is None:
+        return None
+    try:
+        if re.search(r"[.eE]", value):
+            return float(value)
+        return int(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def summarize_direct(case_dir, tool, rc, elapsed_s):
+    stdout = (case_dir / "stdout.txt").read_text(errors="replace")
+    stderr = (case_dir / "stderr.txt").read_text(errors="replace")
+    summary = {
+        "tool": tool,
+        "run_mode": "direct-token-major",
+        "returncode": rc,
+        "elapsed_s": elapsed_s,
+        "profiler_marker_lines": len(re.findall(r"tp_ep_cuda_profiler_window", stderr)),
+    }
+    for line in stdout.splitlines():
+        tag, fields = parse_tab_line(line)
+        if tag == "tp_ep_serving_bench":
+            for key in [
+                "generated_tokens",
+                "continuation_tokens",
+                "total_decode_ms",
+                "total_wall_ms",
+                "aggregate_generated_tok_s_decode",
+                "aggregate_generated_tok_s_wall",
+                "aggregate_continuation_tok_s_decode",
+                "aggregate_continuation_tok_s_wall",
+            ]:
+                summary[f"serving_{key}"] = maybe_number(fields.get(key))
+        elif tag == "tp_ep_token_major_scaffold":
+            for key in [
+                "pass_invocations",
+                "sum_decode_ms",
+                "ms_per_token",
+                "projected_slot_step_tok_s",
+                "sum_ep_ms",
+                "sum_dense_ms",
+                "sum_compose_ms",
+                "sum_hc_current_input_ms",
+                "sum_final_hc_ms",
+                "wall_ms",
+            ]:
+                summary[f"scaffold_{key}"] = maybe_number(fields.get(key))
+        elif tag == "tp_ep_diagnostic_output_head":
+            for key in ["total_ms", "projection_ms", "top1_ms", "first_token", "finite_bad"]:
+                summary[f"output_head_{key}"] = maybe_number(fields.get(key))
+    return summary
+
+
+def run_direct_case(args):
+    case_name = f"{args.tool}-direct"
+    case_dir = args.artifact_dir / case_name
+    case_dir.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"
+    cmd = profiler_prefix(args, case_dir) + direct_command(args)
+    (case_dir / "profile-command.txt").write_text(" ".join(cmd) + "\n")
+    (case_dir / "command.txt").write_text(" ".join(direct_command(args)) + "\n")
+    started = time.time()
+    with open(case_dir / "stdout.txt", "wb") as stdout, open(case_dir / "stderr.txt", "wb") as stderr:
+        proc = subprocess.run(
+            cmd,
+            cwd=args.repo_dir,
+            env=env,
+            stdout=stdout,
+            stderr=stderr,
+            timeout=args.request_timeout_seconds,
+            check=False,
+        )
+    elapsed_s = time.time() - started
+    summary = summarize_direct(case_dir, args.tool, proc.returncode, elapsed_s)
+    (case_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+    write_top_kernels(case_dir)
+    print(json.dumps(summary, sort_keys=True), flush=True)
+    return proc.returncode
+
+
 def parse_nvprof_gpu_trace(path):
     if not path.exists():
         return []
@@ -299,6 +446,11 @@ def main():
     parser.add_argument("--port", type=int, default=18357)
     parser.add_argument("--readiness-seconds", type=int, default=600)
     parser.add_argument("--request-timeout-seconds", type=int, default=1200)
+    parser.add_argument(
+        "--run-mode",
+        choices=["http", "direct-token-major"],
+        default="http",
+    )
     parser.add_argument("--ncu", default="/usr/local/cuda/bin/ncu")
     parser.add_argument("--nvprof", default="/usr/local/cuda/bin/nvprof")
     parser.add_argument("--ncu-launch-count", type=int, default=160)
@@ -324,6 +476,10 @@ def main():
         default="nvprof-gpu-trace",
     )
     args = parser.parse_args()
+    args.artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.run_mode == "direct-token-major":
+        raise SystemExit(run_direct_case(args))
 
     case_dir = args.artifact_dir / args.tool
     case_dir.mkdir(parents=True, exist_ok=True)
