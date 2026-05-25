@@ -183,6 +183,8 @@ struct RankState {
     int *d_route_index_by_slot[kGpus] = {};
     int *d_route_indices_by_slot[kGpus] = {};
     int *d_route_count_by_slot[kGpus] = {};
+    int *d_route_compact_plan = nullptr;
+    size_t route_compact_plan_ints = 0;
     int *d_offsets = nullptr;
     int *d_route_slots = nullptr;
     float *d_route_weights = nullptr;
@@ -8147,6 +8149,23 @@ void build_route_indices_by_slot_for_rank(int rank, int slots, int top_k,
     }
 }
 
+size_t compact_route_plan_ints(const Options &opt) {
+    const size_t indices = (size_t)opt.slots * (size_t)opt.top_k;
+    const size_t counts = (size_t)opt.slots;
+    return (size_t)kGpus * (indices + counts);
+}
+
+void bind_compact_route_plan(RankState *r, const Options &opt) {
+    const size_t indices = (size_t)opt.slots * (size_t)opt.top_k;
+    const size_t counts = (size_t)opt.slots;
+    int *base = r->d_route_compact_plan;
+    for (int src = 0; src < kGpus; ++src) {
+        r->d_route_indices_by_slot[src] = base + (size_t)src * indices;
+        r->d_route_count_by_slot[src] =
+            base + (size_t)kGpus * indices + (size_t)src * counts;
+    }
+}
+
 int upload_model_router_route_plan(const Options &opt,
                                    RankState ranks[kGpus],
                                    const std::vector<int> &selected,
@@ -8163,6 +8182,7 @@ int upload_model_router_route_plan(const Options &opt,
     std::vector<int> route_count_by_slot[kGpus];
     std::vector<int> counts[kGpus];
     const bool needs_single_route_index = !opt.compact_moe_decode_gate;
+    const bool needs_packed_compact_plan = opt.compact_moe_decode_gate;
     for (int rank = 0; rank < kGpus; ++rank) {
         counts[rank].assign((size_t)kLocalExperts, 0);
         if (needs_single_route_index) {
@@ -8352,6 +8372,21 @@ int upload_model_router_route_plan(const Options &opt,
                         ranks[6].max_routes_per_expert, ranks[7].max_routes_per_expert);
         }
     }
+    std::vector<int> compact_plan;
+    if (needs_packed_compact_plan) {
+        compact_plan.assign(compact_route_plan_ints(opt), -1);
+        const size_t compact_indices = (size_t)opt.slots * (size_t)opt.top_k;
+        const size_t compact_counts = (size_t)opt.slots;
+        for (int src = 0; src < kGpus; ++src) {
+            std::copy(route_indices_by_slot[src].begin(),
+                      route_indices_by_slot[src].end(),
+                      compact_plan.begin() + (size_t)src * compact_indices);
+            std::copy(route_count_by_slot[src].begin(),
+                      route_count_by_slot[src].end(),
+                      compact_plan.begin() + (size_t)kGpus * compact_indices +
+                          (size_t)src * compact_counts);
+        }
+    }
     for (int dst = 0; dst < kGpus; ++dst) {
         CHECK_CUDA(cudaSetDevice(ranks[dst].device));
         for (int src = 0; src < kGpus; ++src) {
@@ -8361,13 +8396,25 @@ int upload_model_router_route_plan(const Options &opt,
                                       route_index_by_slot[src].size() * sizeof(int),
                                       cudaMemcpyHostToDevice));
             }
-            CHECK_CUDA(cudaMemcpy(ranks[dst].d_route_indices_by_slot[src],
-                                  route_indices_by_slot[src].data(),
-                                  route_indices_by_slot[src].size() * sizeof(int),
-                                  cudaMemcpyHostToDevice));
-            CHECK_CUDA(cudaMemcpy(ranks[dst].d_route_count_by_slot[src],
-                                  route_count_by_slot[src].data(),
-                                  route_count_by_slot[src].size() * sizeof(int),
+            if (!needs_packed_compact_plan) {
+                CHECK_CUDA(cudaMemcpy(ranks[dst].d_route_indices_by_slot[src],
+                                      route_indices_by_slot[src].data(),
+                                      route_indices_by_slot[src].size() * sizeof(int),
+                                      cudaMemcpyHostToDevice));
+                CHECK_CUDA(cudaMemcpy(ranks[dst].d_route_count_by_slot[src],
+                                      route_count_by_slot[src].data(),
+                                      route_count_by_slot[src].size() * sizeof(int),
+                                      cudaMemcpyHostToDevice));
+            }
+        }
+        if (needs_packed_compact_plan) {
+            if (!ranks[dst].d_route_compact_plan ||
+                ranks[dst].route_compact_plan_ints < compact_plan.size()) {
+                return 7;
+            }
+            CHECK_CUDA(cudaMemcpy(ranks[dst].d_route_compact_plan,
+                                  compact_plan.data(),
+                                  compact_plan.size() * sizeof(int),
                                   cudaMemcpyHostToDevice));
         }
     }
@@ -8394,6 +8441,13 @@ int open_shared_rank_buffers(const Options &opt, SharedRankBuffers *shared) {
         CHECK_CUDA(cudaEventCreate(&r.start));
         CHECK_CUDA(cudaEventCreate(&r.mid));
         CHECK_CUDA(cudaEventCreate(&r.stop));
+        r.route_compact_plan_ints = compact_route_plan_ints(opt);
+        CHECK_CUDA(cudaMalloc(&r.d_route_compact_plan,
+                              r.route_compact_plan_ints * sizeof(int)));
+        bind_compact_route_plan(&r, opt);
+        std::vector<int> compact_plan(r.route_compact_plan_ints, -1);
+        const size_t compact_indices = (size_t)opt.slots * (size_t)opt.top_k;
+        const size_t compact_counts = (size_t)opt.slots;
         for (int src = 0; src < kGpus; ++src) {
             std::vector<int> route_index_by_slot;
             build_route_index_by_slot_for_rank(src, opt.slots, opt.top_k,
@@ -8409,22 +8463,17 @@ int open_shared_rank_buffers(const Options &opt, SharedRankBuffers *shared) {
             build_route_indices_by_slot_for_rank(src, opt.slots, opt.top_k,
                                                  &route_indices_by_slot,
                                                  &route_count_by_slot);
-            CHECK_CUDA(cudaMalloc(&r.d_route_indices_by_slot[src],
-                                  route_indices_by_slot.size() * sizeof(int)));
-            CHECK_CUDA(cudaMemcpy(r.d_route_indices_by_slot[src],
-                                  route_indices_by_slot.data(),
-                                  route_indices_by_slot.size() * sizeof(int),
-                                  cudaMemcpyHostToDevice));
-            CHECK_CUDA(cudaMalloc(&r.d_route_count_by_slot[src],
-                                  route_count_by_slot.size() * sizeof(int)));
-            CHECK_CUDA(cudaMemcpy(r.d_route_count_by_slot[src],
-                                  route_count_by_slot.data(),
-                                  route_count_by_slot.size() * sizeof(int),
-                                  cudaMemcpyHostToDevice));
+            std::copy(route_indices_by_slot.begin(), route_indices_by_slot.end(),
+                      compact_plan.begin() + (size_t)src * compact_indices);
+            std::copy(route_count_by_slot.begin(), route_count_by_slot.end(),
+                      compact_plan.begin() + (size_t)kGpus * compact_indices +
+                          (size_t)src * compact_counts);
             shared->core_bytes += route_index_by_slot.size() * sizeof(int);
-            shared->core_bytes += route_indices_by_slot.size() * sizeof(int);
-            shared->core_bytes += route_count_by_slot.size() * sizeof(int);
         }
+        CHECK_CUDA(cudaMemcpy(r.d_route_compact_plan, compact_plan.data(),
+                              compact_plan.size() * sizeof(int),
+                              cudaMemcpyHostToDevice));
+        shared->core_bytes += compact_plan.size() * sizeof(int);
 
         std::vector<int> offsets;
         std::vector<int> route_slots;
@@ -8497,10 +8546,16 @@ void close_shared_rank_buffers(SharedRankBuffers *shared) {
         if (r.d_down) CHECK_CUDA(cudaFree(r.d_down));
         if (r.d_ep_contrib_all) CHECK_CUDA(cudaFree(r.d_ep_contrib_all));
         if (r.d_ep_contrib_half_all) CHECK_CUDA(cudaFree(r.d_ep_contrib_half_all));
+        const bool has_route_compact_plan = r.d_route_compact_plan != nullptr;
+        if (r.d_route_compact_plan) CHECK_CUDA(cudaFree(r.d_route_compact_plan));
         for (int src = 0; src < kGpus; ++src) {
             if (r.d_route_index_by_slot[src]) CHECK_CUDA(cudaFree(r.d_route_index_by_slot[src]));
-            if (r.d_route_indices_by_slot[src]) CHECK_CUDA(cudaFree(r.d_route_indices_by_slot[src]));
-            if (r.d_route_count_by_slot[src]) CHECK_CUDA(cudaFree(r.d_route_count_by_slot[src]));
+            if (!has_route_compact_plan && r.d_route_indices_by_slot[src]) {
+                CHECK_CUDA(cudaFree(r.d_route_indices_by_slot[src]));
+            }
+            if (!has_route_compact_plan && r.d_route_count_by_slot[src]) {
+                CHECK_CUDA(cudaFree(r.d_route_count_by_slot[src]));
+            }
             if (r.d_ep_remote[src]) CHECK_CUDA(cudaFree(r.d_ep_remote[src]));
             if (r.d_ep_remote_half[src]) CHECK_CUDA(cudaFree(r.d_ep_remote_half[src]));
         }
@@ -13092,6 +13147,13 @@ int run_layer(const Options &opt,
             CHECK_CUDA(cudaEventCreate(&r.start));
             CHECK_CUDA(cudaEventCreate(&r.mid));
             CHECK_CUDA(cudaEventCreate(&r.stop));
+            r.route_compact_plan_ints = compact_route_plan_ints(opt);
+            CHECK_CUDA(cudaMalloc(&r.d_route_compact_plan,
+                                  r.route_compact_plan_ints * sizeof(int)));
+            bind_compact_route_plan(&r, opt);
+            std::vector<int> compact_plan(r.route_compact_plan_ints, -1);
+            const size_t compact_indices = (size_t)opt.slots * (size_t)opt.top_k;
+            const size_t compact_counts = (size_t)opt.slots;
             for (int src = 0; src < kGpus; ++src) {
                 std::vector<int> route_index_by_slot;
                 build_route_index_by_slot_for_rank(src, opt.slots, opt.top_k,
@@ -13102,7 +13164,20 @@ int run_layer(const Options &opt,
                                       route_index_by_slot.data(),
                                       route_index_by_slot.size() * sizeof(int),
                                       cudaMemcpyHostToDevice));
+                std::vector<int> route_indices_by_slot;
+                std::vector<int> route_count_by_slot;
+                build_route_indices_by_slot_for_rank(src, opt.slots, opt.top_k,
+                                                     &route_indices_by_slot,
+                                                     &route_count_by_slot);
+                std::copy(route_indices_by_slot.begin(), route_indices_by_slot.end(),
+                          compact_plan.begin() + (size_t)src * compact_indices);
+                std::copy(route_count_by_slot.begin(), route_count_by_slot.end(),
+                          compact_plan.begin() + (size_t)kGpus * compact_indices +
+                              (size_t)src * compact_counts);
             }
+            CHECK_CUDA(cudaMemcpy(r.d_route_compact_plan, compact_plan.data(),
+                                  compact_plan.size() * sizeof(int),
+                                  cudaMemcpyHostToDevice));
 
             std::vector<int> offsets;
             std::vector<int> route_slots;
@@ -13637,10 +13712,16 @@ int run_layer(const Options &opt,
             if (r.start) CHECK_CUDA(cudaEventDestroy(r.start));
             if (r.mid) CHECK_CUDA(cudaEventDestroy(r.mid));
             if (r.stop) CHECK_CUDA(cudaEventDestroy(r.stop));
+            const bool has_route_compact_plan = r.d_route_compact_plan != nullptr;
+            if (r.d_route_compact_plan) CHECK_CUDA(cudaFree(r.d_route_compact_plan));
             for (int src = 0; src < kGpus; ++src) {
                 if (r.d_route_index_by_slot[src]) CHECK_CUDA(cudaFree(r.d_route_index_by_slot[src]));
-                if (r.d_route_indices_by_slot[src]) CHECK_CUDA(cudaFree(r.d_route_indices_by_slot[src]));
-                if (r.d_route_count_by_slot[src]) CHECK_CUDA(cudaFree(r.d_route_count_by_slot[src]));
+                if (!has_route_compact_plan && r.d_route_indices_by_slot[src]) {
+                    CHECK_CUDA(cudaFree(r.d_route_indices_by_slot[src]));
+                }
+                if (!has_route_compact_plan && r.d_route_count_by_slot[src]) {
+                    CHECK_CUDA(cudaFree(r.d_route_count_by_slot[src]));
+                }
             }
             for (int q = 0; q < kGpus; ++q) {
                 if (r.copy_done[q]) CHECK_CUDA(cudaEventDestroy(r.copy_done[q]));

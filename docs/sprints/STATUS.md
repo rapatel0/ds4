@@ -50,16 +50,18 @@ default/synthetic-route baseline, but it is the correct baseline for
 intelligence-preserving DS4 serving. The extra cost shows up in the
 HC-current FFN/router stage, around `85-88 ms` per all-layer decode step.
 
-Latest real-router optimization status: Sprint 385 split that FFN/router
-bucket and removed unused legacy single-route-index uploads on the
-`--compact-moe-decode` path. Direct real-router validation preserved first
-token `54639`, reduced route upload from `60.356962` to `44.079759` ms, and
-improved generated decode from `67.804166` to `68.544741` tok/s. The
-serving-shaped HTTP `32` request run preserved first token `83484`, improved
-client tok/s from Sprint 384's `38.554075` to `42.427324`, improved server
-decode from `81.505160` to `85.792845` tok/s, and kept `vram_failures=0`.
-The remaining real-router hot substages are route upload (`38.837019` ms) and
-router dense/select (`27.758786` ms) in the HTTP `32` case.
+Latest real-router optimization status: Sprint 386 packed the compact-MoE
+route plan into one H2D upload per destination GPU. Direct real-router
+validation preserved first token `54639`, reduced route upload from Sprint
+385's `44.079759` to `10.241125` ms, and improved generated decode from
+`68.544741` to `74.838601` tok/s. The serving-shaped HTTP `32` request run
+preserved first token `83484`, returned `32/32` HTTP 200 responses, improved
+server decode from `85.792845` to `91.778174` tok/s, and reduced route upload
+from `38.837019` to `6.796221` ms with `vram_failures=0`. Client aggregate
+tok/s moved down from `42.427324` to `40.302457` in this single run, so the
+result is a server-side decode/stage win rather than a proven full-stack HTTP
+topline win. The remaining measured real-router hot substage is router
+dense/select, still flat at about `27.8` ms in the HTTP `32` case.
 
 Latest throughput direction before memory hardening: Sprint 381 implemented
 `--fp8-e5m2-kv-gate` as a default-off typed-KV format diagnostic. The row

@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-25
-last_updated_by: sprint-385
-revision: 398
+last_updated_by: sprint-386
+revision: 399
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -103,13 +103,18 @@ The near-term implementation focus is therefore:
    around `77-82` tok/s, and `32`-request client throughput `38.554075` tok/s.
    Future optimization should A/B against this real-router baseline unless
    the sprint is explicitly synthetic/diagnostic.
-4. Continue reducing the real-router route planning boundary. Sprint 385 split
-   the broad FFN/router bucket and removed unused legacy single-route-index
-   uploads on the compact-MoE path. The `32` request real-router HTTP case
-   improved to `42.427324` client tok/s and `85.792845` server decode tok/s
-   with the same first token and no VRAM failures. The remaining measured
-   router costs are route upload (`38.837019` ms) and router dense/select
-   (`27.758786` ms) per all-layer decode step.
+4. Continue reducing the real-router route planning boundary, but shift away
+   from H2D upload count after Sprint 386. Sprint 385 split the broad
+   FFN/router bucket and removed unused legacy single-route-index uploads on
+   the compact-MoE path. Sprint 386 then packed the compact route plan into
+   one H2D upload per destination GPU. Direct real-router decode improved
+   from `68.544741` to `74.838601` tok/s while route upload dropped from
+   `44.079759` to `10.241125` ms. The `32` request real-router HTTP case
+   preserved first token `83484`, improved server decode from `85.792845` to
+   `91.778174` tok/s, and reduced route upload from `38.837019` to
+   `6.796221` ms, though client aggregate tok/s moved from `42.427324` to
+   `40.302457` in the single run. The remaining measured router cost is
+   router dense/select, still about `27.8` ms per all-layer decode step.
 5. Close the S-E follow-up with a narrow parity/precheck fix if we want to
    revisit fused gated-SiLU. Sprint 379 showed the current serving-shaped
    branch already has no standalone routed SwiGLU launch, the generic
