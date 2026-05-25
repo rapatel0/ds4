@@ -158,6 +158,20 @@ orchestration. Keep compressed fusions opt-in; the next useful gate should
 amortize request overhead with a longer serving A/B or reduce the remaining
 state/emit fragmentation in direct decode.
 
+Sprint 358 ran that longer selected-token HTTP A/B. The first attempted shape
+(`position=262143`, `32` tokens) correctly failed after one generated token
+because the next position is outside `ctx=262144`; the valid amortized run
+starts at `position=262112` and generates `32` tokens/request. At `32` slots /
+`256K`, all valid variants returned `32/32` HTTP 200 responses and preserved
+first token `109328`. Control measured `71.818394` client tok/s,
+`3506.921796` ms compressed-KV sum, and `98.772310` scaffold decode tok/s.
+Combined input-fill + pool-norm measured `72.297469`, `3509.986423`, and
+`98.505291`, so it is not promotable. Pool-norm only measured `73.052883`,
+`3474.878472`, and `97.552747`: promising for client wall and compressed-KV
+sum, but conflicting with the scaffold decode proxy. Keep all compressed
+fusions default-off; next work should be a repeated/direct multi-step A/B for
+pool-norm or a deeper state/emit fusion.
+
 Current TP/EP implementation status: the forward path is TP8/EP8 only, with
 PP/layer-split work frozen as a baseline. The resident TP/EP backend keeps the
 TP runtime, sharded KV, rank buffers, TurboMind API handles, active MXFP4
