@@ -1151,9 +1151,11 @@ moved those top-level wait counts to zero, but it remains slower before graph
 capture and `capture_eligible` is still `0` because helper-level host
 synchronizations remain. The HC-current helper pass removed one blocker class
 and improved the graph-gated diagnostic from `44.247981` to `49.429146`
-decode tok/s while preserving parity. The next concrete task is final HC
-expansion and attention projection/state helper waits, followed by the same
-audit before any graph replay attempt.
+decode tok/s while preserving parity. The final-HC pass removed another
+blocker class and reduced final-HC stage time, leaving five helper blocker
+classes. The next concrete task is attention projection/state/output and
+compressed-KV helper waits, followed by the same audit before any graph replay
+attempt.
 
 ### Sprint 377 - Batched Paged Attention Gate [tentative]
 
@@ -2610,6 +2612,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 376 initial graph audit ran on V100. | The decode step is not yet capturable: it has `172` broad host synchronization points across the 43-layer step. | Replace those syncs with stream/event dependencies where possible, then rerun the audit before graph replay. |
 | 2026-05-25 | Sprint 376 event-barrier audit ran on V100. | Top-level `sync_all` host waits can be replaced with CUDA event ordering while preserving token/checksum parity, but the pre-graph path slows down and helper synchronizations still block capture. | Convert helper-level waits next; do not promote the event-barrier path as a performance optimization by itself. |
 | 2026-05-25 | Sprint 376 HC-current helper event pass ran on V100. | HC-current stream/control waits can be event-ordered under the graph gate; parity holds and helper blocker classes drop from `7` to `6`. | Continue helper-level event ordering, starting with final HC expansion and attention helpers. |
+| 2026-05-25 | Sprint 376 final-HC helper event pass ran on V100. | Final-HC host waits can be event-ordered under the graph gate; parity holds and helper blocker classes drop from `6` to `5`. | Continue with attention projection/state/output and compressed-KV helper waits. |
 
 ## Open Questions
 

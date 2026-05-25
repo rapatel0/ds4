@@ -124,3 +124,31 @@ logs/from-cluster/sprint376-decode-cudagraph/hc-current-event-audit/none-direct-
 HC-current timing improved materially inside the graph-gated path: `sum_pre_ep_hc_current_ms` moved from `47.654108` ms to `18.389539` ms and HC-current gather/fill subtimings dropped. Total decode is still slower than the initial host-sync control because the graph-gated path still pays broad event-barrier enqueue overhead and remains blocked by six helper classes.
 
 Next helper target: final HC expansion and attention projection/state helpers. Capture should still not be attempted until helper blocker classes reach zero or the remaining blockers are explicitly accepted as non-capturable.
+
+## Final-HC Event-Ordering Pass
+
+Converted `run_shared_hc_final_expand` host waits to stream/event ordering under `--decode-cudagraph-gate`, including graph-gated control-stream launch and deferred host pointer swaps. The default path is unchanged.
+
+Artifact path:
+
+```text
+logs/from-cluster/sprint376-decode-cudagraph/final-hc-event-audit/none-direct-decode-cudagraph
+```
+
+| Metric | HC-current event pass | Final-HC event pass |
+|---|---:|---:|
+| Generated decode tok/s | `49.429146` | `48.189878` |
+| Output first token | `54639` | `54639` |
+| Output checksum | `24071637347` | `24071637347` |
+| Scaffold checksum | `3401922407` | `3401922407` |
+| `sync_all_calls` | `0` | `0` |
+| `event_barrier_calls` | `172` | `172` |
+| `rank_stream_sync_count` | `0` | `0` |
+| `dense_stream_sync_count` | `0` | `0` |
+| `helper_host_sync_blocker_classes` | `6` | `5` |
+| `capture_eligible` | `0` | `0` |
+| Blocker | `helper_host_synchronization` | `helper_host_synchronization` |
+
+The final-HC stage itself improved (`sum_final_hc_ms` from `88.910098` to `74.314952` ms), while overall diagnostic decode was roughly flat/slightly lower because remaining broad event barriers and attention/helper waits still dominate. This validates the pointer-swap approach for this path but still does not make graph capture eligible.
+
+Next helper target: attention projection and attention state/output helpers, then compressed-KV helper waits.

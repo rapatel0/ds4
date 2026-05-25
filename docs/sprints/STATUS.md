@@ -39,7 +39,9 @@ regressed to `44.247981` tok/s and `capture_eligible` remains `0` because
 helper-level host synchronizations are still present. The HC-current helper
 pass also preserves token/checksum parity, improves graph-gated decode to
 `49.429146` tok/s, and drops helper blocker classes from `7` to `6`; graph
-capture is still not eligible.
+capture is still not eligible. The final-HC helper pass preserves parity and
+drops helper blocker classes to `5`, with final-HC time improving from
+`88.910098` to `74.314952` ms; attention/compressed/helper waits remain.
 
 Latest TP/EP format status: Sprint 374 built and ran the V100 workbench for
 the Sprint 373 INT8 candidate shapes. The copied tc-grid INT8 kernels are
