@@ -15499,7 +15499,7 @@ int run_token_major_serving_loop(const Options &opt,
         SharedOutputHead *output_head_for_step = shared_output_head;
         const bool use_lazy_output_head =
             opt.diagnostic_output_head && opt.diagnostic_output_head_lazy_gate &&
-            opt.serving_bench &&
+            (opt.serving_bench || serving_result) &&
             (!output_head_for_step || !output_head_for_step->initialized) &&
             shared_rank_buffers && shared_rank_buffers->initialized;
         if (use_lazy_output_head) {
@@ -16945,6 +16945,8 @@ int run_tp_ep_http_server(const Options &base_opt,
                 if (!any_prefill) continue;
                 Options prefill_opt = req_opt;
                 prefill_opt.position = first_req.cache_position + (uint64_t)prefill_step;
+                prefill_opt.diagnostic_output_head = false;
+                prefill_opt.diagnostic_output_head_lazy_gate = false;
                 std::vector<unsigned char> prefill_active_slots((size_t)req_opt.slots, 0u);
                 for (size_t i = 0; i < batch.size(); ++i) {
                     const int slot = batch[i].cache_slot;

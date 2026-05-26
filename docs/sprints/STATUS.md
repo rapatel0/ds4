@@ -9,7 +9,24 @@ Current bottleneck reference:
 summarizes the measured bottlenecks, layer-by-layer hot paths, and experiments
 already tried.
 
-Latest NCCL status: Sprint 406 replaced the padded attention compressed-KV
+Latest NCCL/serving status: Sprint 407 made lazy/on-demand output-head work in
+the HTTP serving loop. The lazy path now opens a temporary output head for
+decode steps when `serving_result` is requested, while HTTP prefill explicitly
+disables output-head work. V100 HTTP validation at `32` requests / `32` slots
+/ `256K` passed: non-NCCL lazy control returned `32/32` HTTP 200 responses,
+first token `83480`, generated sequence `[83480, 79768]` for response 0,
+server generated decode `108.683003` tok/s, continuation decode `108.261807`
+tok/s, client generated `5.031959` tok/s, and `1018 MiB` minimum free VRAM.
+The HTTP HC-current NCCL + lazy-output-head case also returned `32/32` HTTP
+200 responses with the same first token and response sequence, generated
+decode `110.879994` tok/s, continuation decode `109.438988` tok/s, and
+client generated `5.594779` tok/s. It remains diagnostic-only because
+`nccl_after_lazy_output_head` has only `386 MiB` free on GPU0 and all eight
+GPUs fail the `1536 MiB` NCCL reserve. Decision: promote HTTP lazy
+output-head as the prototype serving path; keep HC-current NCCL default-off
+until output-head peak/reserve is fixed.
+
+Previous NCCL status: Sprint 406 replaced the padded attention compressed-KV
 state layout with exact DS4 per-ratio geometry. Ratio-4 layers now allocate
 `8 x 1024` state and ratio-128 layers allocate `128 x 512` state instead of
 the old universal `128 x 1024` padded state. V100 build passed. At `32` slots
