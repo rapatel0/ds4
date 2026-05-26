@@ -4,6 +4,24 @@ Last updated: 2026-05-26
 
 ## Topline
 
+Latest NCCL/serving status: Sprint 410 added the permanent
+`tools/ds4-v100-tp-ep-nccl-http-ab.py` harness and ran the target-shape HTTP
+A/B at `32` requests / `32` slots / `256K` context / `32` generated
+tokens/request. Control and HC-current NCCL both passed readiness with resident
+KV, typed KV, compact MoE, checksums, token-match, GPU samples, and
+`vram_failures=0`. Response parity matched `32/32` artifacts, with first token
+`83484` in both cases. Control measured server generated decode
+`101.897890` tok/s and continuation decode `101.682616` tok/s. HC-current
+NCCL measured server generated decode `107.723452` tok/s and continuation
+decode `107.545644` tok/s, a `1.057x` server-decode improvement. Candidate
+minimum free VRAM was `2106 MiB`; post-close NCCL reserve was `2240 MiB`.
+Decision: promote `DS4_V100_TP_EP_HC_CURRENT_INPUT_NCCL_ALLGATHER=1` as the
+launcher/env default while retaining the harness for future A/B tests. Caveat:
+client generated throughput regressed from `17.223947` to `16.627120` tok/s
+and average sampled GPU utilization fell from `4.535714%` to `3.524272%`, so
+the next performance work should look above this narrow boundary at request
+orchestration and broader TP/EP collectives.
+
 Current bottleneck reference:
 [`docs/architecture/DS4-V100-TP-EP-BOTTLENECKS.md`](../architecture/DS4-V100-TP-EP-BOTTLENECKS.md)
 summarizes the measured bottlenecks, layer-by-layer hot paths, and experiments

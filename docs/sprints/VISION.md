@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-26
-last_updated_by: sprint-409
-revision: 422
+last_updated_by: sprint-410
+revision: 423
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -75,7 +75,8 @@ The performance program is intentionally isolated:
 | 17 | HTTP lazy output-head | Complete prototype serving path | Promoted for prototype serving; 32/32 HTTP chat works at 32 slots/256K, HC-current NCCL also serves but still fails 1536 MiB reserve |
 | 18 | Post-close lazy output-head VRAM checkpoint | Complete diagnostic | Keep telemetry; closing lazy output head recovers only ~136 MiB and HC-current NCCL still fails reserve at 520-522 MiB free |
 | 19 | Skip unused TP-runtime comp-state arena | Complete memory fix | Promoted; HC-current NCCL now passes target 32-slot/256K reserve with 2240-2242 MiB post-close free |
-| 20 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
+| 20 | `tools/ds4-v100-tp-ep-nccl-http-ab.py` | Complete promotion harness | Promoted; target 32-slot/256K/32-token HTTP A/B passed readiness/parity and HC-current NCCL improved server decode 101.897890 -> 107.723452 tok/s |
+| 21 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
 
 Promotion requires a same-binary V100 A/B at the real serving shape, unchanged
 first token/checksum, and improved GPU utilization or server decode tok/s.
@@ -174,9 +175,18 @@ The near-term implementation focus is therefore:
    `[83480, 79768]`, `113.117381` server decode tok/s, and zero NCCL reserve
    failures. A sampled HTTP repeat passed readiness with GPU samples, resident
    KV, typed KV, compact MoE, checksums, and `vram_failures=0`. The launcher
-   and profile harness now default this skip on. HC-current NCCL is
-   memory-admitted; the next decision is whether its throughput/latency profile
-   is strong enough to promote the collective boundary itself.
+   and profile harness now default this skip on.
+   Sprint 410 turned the admission proof into a permanent HTTP A/B promotion
+   gate. At `32` requests / `32` slots / `256K` / `32` generated
+   tokens/request, control and HC-current NCCL both passed readiness and
+   response parity matched `32/32` artifacts. HC-current NCCL improved server
+   generated decode from `101.897890` to `107.723452` tok/s and continuation
+   decode from `101.682616` to `107.545644` tok/s, with `2106 MiB` minimum
+   free VRAM and zero failures. Promote
+   `DS4_V100_TP_EP_HC_CURRENT_INPUT_NCCL_ALLGATHER=1` as a launcher/env
+   default. Caveat: client generated throughput regressed from `17.223947` to
+   `16.627120` tok/s and sampled average GPU utilization stayed low, so this
+   is not the final utilization lever.
 2. Use the Sprint 383 matrix as the current before/after performance baseline.
    At `32` configured slots, `256K`, `position=262080`, and `32` generated
    chat tokens/request, active requests `1,4,8,16,32` all pass with
@@ -3052,6 +3062,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 391 reran longer E5M2 KV parity. | E5M2 preserved first token and passed `32/32` HTTP response parity pairs. HTTP server decode improved `101.206458 -> 107.281060` tok/s and client throughput improved `46.115999 -> 47.895831`, but direct decode moved `103.237368 -> 102.152512`. | Keep E5M2 default-off pending broader multi-prompt parity/soak. |
 | 2026-05-25 | Sprint 392 added multi-prompt soak support. | `--prompt-file` now lets the HTTP profiler cycle JSONL chat prompts. The `16` prompt E5M2 soak passed `32/32` parity pairs, but server decode was flat (`106.390802 -> 106.483285`) and the layout does not save VRAM. | Keep E5M2 default-off; use prompt files for future risky gate promotion checks. |
 | 2026-05-26 | Sprint 397 tested serving-path NCCL compose. | Added a default-off `--nccl-reduce-scatter-compose-gate` and launcher/profile wiring. The compatible non-compact FP32 EP compose path preserved checksum `1908166124`, but NCCL was slower than peer-copy fused compose at layer 2 / `32` slots (`6.401091` ms vs `2.521989` ms). Compact route compose correctly leaves the backend inactive because the production path is route-indexed and not a dense reduce-scatter. | Keep NCCL compose diagnostic-only. Use NCCL for future true TP hidden/expert collectives, but do not force it into current compact EP compose. |
+| 2026-05-26 | Sprint 410 promoted HC-current NCCL at the target HTTP serving shape. | Added `tools/ds4-v100-tp-ep-nccl-http-ab.py` and ran a same-binary control/candidate A/B at `32` requests / `32` slots / `256K` / `32` tokens. Both legs passed readiness, response parity matched `32/32`, and HC-current NCCL improved server generated decode from `101.897890` to `107.723452` tok/s with `2106 MiB` minimum free VRAM. | Promote `DS4_V100_TP_EP_HC_CURRENT_INPUT_NCCL_ALLGATHER=1` in the appliance launcher/env defaults. Keep the harness for future NCCL and TP/EP default checks; next work should target broader collectives or request orchestration because client tok/s and utilization did not improve. |
 
 ## Open Questions
 
