@@ -15582,6 +15582,14 @@ int run_token_major_serving_loop(const Options &opt,
         }
         if (lazy_output_head.initialized) {
             close_shared_output_head(opt, &lazy_output_head);
+            if (report_vram_checkpoint(opt, "after_lazy_output_head_close") != 0) {
+                return 14;
+            }
+            if (nccl_gate_active(opt) && opt.nccl_min_free_mib != 0) {
+                (void)report_vram_checkpoint_min_free(
+                    opt, "nccl_after_lazy_output_head_close",
+                    opt.nccl_min_free_mib);
+            }
         }
         if (opt.serving_bench) {
             std::printf("tp_ep_serving_bench\tschema\tds4_v100_tp_ep_serving_bench.v1\t"

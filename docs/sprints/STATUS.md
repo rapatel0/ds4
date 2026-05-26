@@ -9,8 +9,23 @@ Current bottleneck reference:
 summarizes the measured bottlenecks, layer-by-layer hot paths, and experiments
 already tried.
 
-Latest NCCL/serving status: Sprint 407 made lazy/on-demand output-head work in
-the HTTP serving loop. The lazy path now opens a temporary output head for
+Latest NCCL/serving status: Sprint 408 split lazy output-head peak memory from
+post-close steady-state residency. The target `32` slot / `256K` HC-current
+NCCL path still serves correctly, but closing the temporary lazy output head
+only recovers `134-136 MiB` on the tightest GPU. Direct HC-current NCCL +
+lazy-output-head returned first token `54639`, generated decode `96.275816`
+tok/s, `386 MiB` free before close, and `522 MiB` free after close. HTTP
+HC-current NCCL + lazy-output-head returned `32/32` HTTP 200 responses, first
+token `83480`, response-0 sequence `[83480, 79768]`, server generated decode
+`112.666647` tok/s, continuation decode `110.891026` tok/s, `386 MiB` free
+before close, and `520 MiB` free after close. All eight GPUs still fail the
+`1536 MiB` NCCL reserve after close, so HC-current NCCL remains
+diagnostic-only. Decision: keep the post-close checkpoint as telemetry; next
+NCCL work must reclaim persistent TP/EP decode state and GPU0-heavy controls,
+not just change output-head timing.
+
+Previous NCCL/serving status: Sprint 407 made lazy/on-demand output-head work
+in the HTTP serving loop. The lazy path now opens a temporary output head for
 decode steps when `serving_result` is requested, while HTTP prefill explicitly
 disables output-head work. V100 HTTP validation at `32` requests / `32` slots
 / `256K` passed: non-NCCL lazy control returned `32/32` HTTP 200 responses,

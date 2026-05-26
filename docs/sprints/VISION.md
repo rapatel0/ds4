@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-26
-last_updated_by: sprint-407
-revision: 420
+last_updated_by: sprint-408
+revision: 421
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -73,7 +73,8 @@ The performance program is intentionally isolated:
 | 15 | `--diagnostic-output-head-lazy-gate` | Complete diagnostic | Correct but not promotable; lazy output-head preserves first token but leaves only 68 MiB free in control and HC-current NCCL still OOMs before first-token completion |
 | 16 | Exact attention compressed-KV state layout | Complete memory fix | Promoted; target 32-slot/256K HC-current NCCL now completes with first token 54639, but reserve still fails at 386 MiB free after lazy output-head |
 | 17 | HTTP lazy output-head | Complete prototype serving path | Promoted for prototype serving; 32/32 HTTP chat works at 32 slots/256K, HC-current NCCL also serves but still fails 1536 MiB reserve |
-| 18 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
+| 18 | Post-close lazy output-head VRAM checkpoint | Complete diagnostic | Keep telemetry; closing lazy output head recovers only ~136 MiB and HC-current NCCL still fails reserve at 520-522 MiB free |
+| 19 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
 
 Promotion requires a same-binary V100 A/B at the real serving shape, unchanged
 first token/checksum, and improved GPU utilization or server decode tok/s.
@@ -149,6 +150,17 @@ The near-term implementation focus is therefore:
    The appliance now has a target-shape prototype serving path; next work must
    reclaim output-head peak memory or otherwise pass the NCCL reserve before
    promoting NCCL.
+   Sprint 408 split that measurement by adding a post-close lazy output-head
+   checkpoint. Direct HC-current NCCL + lazy output-head at the target shape
+   completed with first token `54639`, `96.275816` generated decode tok/s,
+   `386 MiB` free before close, and `522 MiB` free after close. HTTP
+   HC-current NCCL + lazy output-head returned `32/32` HTTP responses, first
+   token `83480`, response-0 sequence `[83480, 79768]`, `112.666647` server
+   generated decode tok/s, `386 MiB` free before close, and `520 MiB` free
+   after close. Closing the lazy output head recovers only `134-136 MiB`, so
+   output-head timing is not the primary remaining reserve lever. Keep
+   HC-current NCCL diagnostic-only; the next memory implementation needs to
+   reclaim persistent decode state and GPU0-heavy controls.
 2. Use the Sprint 383 matrix as the current before/after performance baseline.
    At `32` configured slots, `256K`, `position=262080`, and `32` generated
    chat tokens/request, active requests `1,4,8,16,32` all pass with
