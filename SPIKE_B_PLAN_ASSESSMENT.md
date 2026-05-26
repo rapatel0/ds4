@@ -52,6 +52,31 @@ They also distilled prior lessons into `TEMP_GRAPH_PRIOR_INSIGHTS.md` (no
 steady-state recapture, no pointer drift, fixed device metadata buffers) — the
 right guardrails.
 
+### sprint 416 — persistent multi-step replay WORKS (architecture milestone)
+
+`--decode-cudagraph-persistent-replay-gate` + a per-layer `cudaGraphExec_t` cache
+(owned by shared rank buffers). gpu-01 validation:
+`capture 43/43, replay 172/172` (43 layers × 4 steps), `capture_eligible=1`,
+`blocker=none`, all `cudaSuccess`. **This fixes the 415 multi-step hazard** by
+caching the graph exec and replaying across token steps instead of re-entering
+capture — exactly plan #8 / my gap #4. The capture+replay architecture risk is
+now fully retired (one-shot AND persistent multi-step both proven).
+
+Benchmark (8-slot, 4-token, 256K): `decode 80.73 tok/s`, `continuation 88.53`,
+`wall 20.48`. **Still not a throughput win** (agent's own words), and that is the
+honest, important point: the graph path is operational but does not yet beat the
+eager path measurably. Wall is low partly because capture/instantiate is amortized
+over only 4 steps; the decode/continuation figures are the steady-state proxy.
+
+**The risk has now shifted to its final form:** with launch overhead removed, the
+binding question is *what's inside the replayed graph* — kernel/collective
+efficiency. This is the secondary wall I flagged earlier: the heavy
+attention-output projection (~486 ms in sprint 412), collective time, and the
+head_dim-512 occupancy/spill question. **Next decisive measurement: Nsight/ncu on
+replay mode** to find the in-graph bottleneck, then optimize it. Also still open:
+the parity gate (probe used `skip_decode_checksum`), and VRAM headroom at useful
+slot counts.
+
 ## What the plan gets right (keep)
 
 - **No re-baselining** (#1, #3) — the ~97–108 tok/s / low-util numbers are trusted.
