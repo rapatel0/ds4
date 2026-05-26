@@ -300,7 +300,7 @@ tools/ds4-v100-tp-ep-layer-smoke: tools/ds4-v100-tp-ep-layer-smoke.cu ds4_v100_t
 	$(NVCC) $(NVCCFLAGS) --std=c++17 -I. -o $@ tools/ds4-v100-tp-ep-layer-smoke.cu ds4_v100_tp_runtime.cu $(CUDA_LDLIBS)
 
 tools/ds4-v100-tp-ep-full-layer-smoke: tools/ds4-v100-tp-ep-full-layer-smoke.cu ds4_v100_tp_runtime.cu ds4_v100_tp_runtime.h ds4.h $(CPU_CORE_OBJS) kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h
-	$(NVCC) $(NVCCFLAGS) --std=c++17 -I. -o $@ tools/ds4-v100-tp-ep-full-layer-smoke.cu ds4_v100_tp_runtime.cu $(CPU_CORE_OBJS) $(CUDA_LDLIBS)
+	$(NVCC) $(NVCCFLAGS) --std=c++17 -I. -o $@ tools/ds4-v100-tp-ep-full-layer-smoke.cu ds4_v100_tp_runtime.cu $(CPU_CORE_OBJS) $(CUDA_LDLIBS) -lnccl
 
 tools/ds4-v100-tp-ep-dense-cache-smoke: tools/ds4-v100-tp-ep-dense-cache-smoke.cu
 	$(NVCC) $(NVCCFLAGS) --std=c++17 -I. -o $@ $< $(CUDA_LDLIBS)

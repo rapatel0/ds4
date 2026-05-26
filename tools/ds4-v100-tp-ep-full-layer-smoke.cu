@@ -12,6 +12,7 @@ extern "C" {
 #include <cublas_v2.h>
 #include <dlfcn.h>
 #include <mma.h>
+#include <nccl.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -82,6 +83,16 @@ constexpr float kFp16Max = 65504.0f;
         if (err__ != cudaSuccess) {                                                   \
             std::fprintf(stderr, "cuda error %s:%d: %s\n", __FILE__, __LINE__,      \
                          cudaGetErrorString(err__));                                  \
+            std::exit(2);                                                             \
+        }                                                                             \
+    } while (0)
+
+#define CHECK_NCCL(expr)                                                              \
+    do {                                                                              \
+        ncclResult_t err__ = (expr);                                                   \
+        if (err__ != ncclSuccess) {                                                   \
+            std::fprintf(stderr, "nccl error %s:%d: %s\n", __FILE__, __LINE__,       \
+                         ncclGetErrorString(err__));                                  \
             std::exit(2);                                                             \
         }                                                                             \
     } while (0)
@@ -246,6 +257,8 @@ struct RankState {
     bool hc_initialized = false;
     PackedExperts gated;
     PackedExperts down;
+    ncclComm_t compose_nccl = nullptr;
+    bool compose_nccl_initialized = false;
     cudaEvent_t dense_wait = nullptr;
     cudaEvent_t start = nullptr;
     cudaEvent_t mid = nullptr;
@@ -405,6 +418,7 @@ struct ComposeStats {
     bool dense_hmma_compose = false;
     bool dense_f16_cublas_compose = false;
     bool dense_f16_cache_compose = false;
+    bool nccl_reduce_scatter_compose = false;
 };
 
 struct LayerRunSummary {
@@ -581,6 +595,7 @@ struct DecodeLoopStats {
     bool dense_hmma_compose = false;
     bool dense_f16_cublas_compose = false;
     bool dense_f16_cache_compose = false;
+    bool nccl_reduce_scatter_compose = false;
 };
 
 struct HcCurrentInputBreakdown {
@@ -646,6 +661,7 @@ struct Options {
     bool share_dense_ops = false;
     bool skip_self_compose_copy = true;
     bool multi_copy_streams = false;
+    bool nccl_reduce_scatter_compose_gate = false;
     bool serving_bench = false;
     bool skip_decode_checksum = false;
     bool serve_http = false;
@@ -3451,7 +3467,8 @@ void usage(const char *argv0) {
                  "       [--fp8-e5m2-kv-gate]\n"
                  "       [--token-major-all-layers] [--shared-dense-ops]\n"
                  "       [--skip-self-compose-copy] [--copy-self-compose]\n"
-                 "       [--multi-copy-streams] [--serving-bench]\n"
+                 "       [--multi-copy-streams]\n"
+                 "       [--nccl-reduce-scatter-compose-gate] [--serving-bench]\n"
                  "       [--skip-decode-checksum]\n"
                  "       [--serve-http] [--host ADDR] [--port N] [--max-requests N]\n"
                  "       [--microbatch-wait-us N]\n"
@@ -3628,6 +3645,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->skip_self_compose_copy = false;
         } else if (std::strcmp(arg, "--multi-copy-streams") == 0) {
             opt->multi_copy_streams = true;
+        } else if (std::strcmp(arg, "--nccl-reduce-scatter-compose-gate") == 0) {
+            opt->nccl_reduce_scatter_compose_gate = true;
         } else if (std::strcmp(arg, "--serving-bench") == 0) {
             opt->serving_bench = true;
         } else if (std::strcmp(arg, "--skip-decode-checksum") == 0) {
@@ -3997,6 +4016,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
            opt->top_k <= kPackedLocalExperts && opt->layer >= 0 &&
            (!opt->model_router_routes || opt->top_k == kModelTopK) &&
            (!opt->gpu_route_plan_gate || opt->compact_moe_decode_gate) &&
+           (!opt->nccl_reduce_scatter_compose_gate ||
+            !opt->decode_cudagraph_gate) &&
            !(opt->model_router_routes && opt->compact_route_compose &&
              !opt->compact_moe_decode_gate) &&
            !(opt->dense_hmma_compose && opt->dense_f16_cublas_compose) &&
@@ -9234,6 +9255,9 @@ int upload_model_router_route_plan_async(const Options &opt,
     return 0;
 }
 
+int open_compose_nccl(const Options &opt, RankState ranks[kGpus]);
+void close_compose_nccl(RankState ranks[kGpus]);
+
 int open_shared_rank_buffers(const Options &opt, SharedRankBuffers *shared) {
     shared->core_bytes = 0;
     for (int p = 0; p < kGpus; ++p) {
@@ -9347,12 +9371,43 @@ int open_shared_rank_buffers(const Options &opt, SharedRankBuffers *shared) {
         shared->core_bytes += (size_t)r.route_capacity * kMid * sizeof(__half);
         shared->core_bytes += route_capacity_elems * sizeof(__half);
     }
+    if (open_compose_nccl(opt, shared->ranks) != 0) {
+        return 1;
+    }
     shared->initialized = true;
     return 0;
 }
 
+int open_compose_nccl(const Options &opt, RankState ranks[kGpus]) {
+    if (!opt.nccl_reduce_scatter_compose_gate) return 0;
+    if (opt.compact_route_compose || opt.ep_return_fp16) return 0;
+    int devices[kGpus] = {};
+    ncclComm_t comms[kGpus] = {};
+    for (int p = 0; p < kGpus; ++p) devices[p] = ranks[p].device;
+    CHECK_NCCL(ncclCommInitAll(comms, kGpus, devices));
+    for (int p = 0; p < kGpus; ++p) {
+        ranks[p].compose_nccl = comms[p];
+        ranks[p].compose_nccl_initialized = true;
+    }
+    std::printf("tp_ep_compose_nccl\tdevices\t%d\tbackend\treduce_scatter\tPASS\n",
+                kGpus);
+    return 0;
+}
+
+void close_compose_nccl(RankState ranks[kGpus]) {
+    for (int p = 0; p < kGpus; ++p) {
+        RankState &r = ranks[p];
+        if (!r.compose_nccl_initialized || !r.compose_nccl) continue;
+        CHECK_CUDA(cudaSetDevice(r.device));
+        CHECK_NCCL(ncclCommDestroy(r.compose_nccl));
+        r.compose_nccl = nullptr;
+        r.compose_nccl_initialized = false;
+    }
+}
+
 void close_shared_rank_buffers(SharedRankBuffers *shared) {
     if (!shared || !shared->initialized) return;
+    close_compose_nccl(shared->ranks);
     for (int p = 0; p < kGpus; ++p) {
         RankState &r = shared->ranks[p];
         CHECK_CUDA(cudaSetDevice(r.device));
@@ -9655,6 +9710,9 @@ int run_next_hidden_compose(const Options &opt,
         opt.fuse_compose_sum && !opt.ep_return_fp16 && !opt.compact_route_compose;
     stats->dense_hmma_compose = opt.dense_hmma_compose;
     stats->dense_f16_cublas_compose = opt.dense_f16_cublas_compose;
+    stats->nccl_reduce_scatter_compose =
+        opt.nccl_reduce_scatter_compose_gate &&
+        !opt.compact_route_compose && !opt.ep_return_fp16;
 
     DeviceDenseOutputs attn;
     DeviceDenseOutputs shared;
@@ -9676,6 +9734,7 @@ int run_next_hidden_compose(const Options &opt,
     const uint64_t all_contrib_elems = (uint64_t)kGpus * shard_elems;
     const uint64_t all_contrib_bytes = all_contrib_elems * sizeof(float);
     const bool skip_self_copy = opt.skip_self_compose_copy && !opt.ep_return_fp16;
+    const bool nccl_reduce_scatter = stats->nccl_reduce_scatter_compose;
     stats->ep_contribution_bytes = all_contrib_bytes * kGpus;
     if (opt.compact_route_compose && !opt.ep_return_fp16) {
         uint64_t compact_return_bytes = 0;
@@ -9726,28 +9785,48 @@ int run_next_hidden_compose(const Options &opt,
         CHECK_CUDA(cudaStreamSynchronize(ranks[p].stream));
     }
 
-    for (int dst = 0; dst < kGpus; ++dst) {
-        CHECK_CUDA(cudaSetDevice(ranks[dst].device));
-        for (int src = 0; src < kGpus; ++src) {
-            if (skip_self_copy && src == dst) continue;
-            if (opt.ep_return_fp16) {
-                const __half *src_ptr =
-                    ranks[src].d_ep_contrib_half_all + (uint64_t)dst * shard_elems;
-                CHECK_CUDA(cudaMemcpyPeerAsync(ranks[dst].d_ep_remote_half[src],
-                                               ranks[dst].device,
-                                               src_ptr,
-                                               ranks[src].device,
-                                               (size_t)return_shard_bytes,
-                                               ranks[dst].stream));
-            } else {
-                const float *src_ptr = ranks[src].d_ep_contrib_all +
-                                       (uint64_t)dst * shard_elems;
-                CHECK_CUDA(cudaMemcpyPeerAsync(ranks[dst].d_ep_remote[src],
-                                               ranks[dst].device,
-                                               src_ptr,
-                                               ranks[src].device,
-                                               (size_t)return_shard_bytes,
-                                               ranks[dst].stream));
+    if (nccl_reduce_scatter) {
+        for (int p = 0; p < kGpus; ++p) {
+            if (!ranks[p].compose_nccl_initialized || !ranks[p].compose_nccl) {
+                return 3;
+            }
+        }
+        CHECK_NCCL(ncclGroupStart());
+        for (int p = 0; p < kGpus; ++p) {
+            CHECK_CUDA(cudaSetDevice(ranks[p].device));
+            CHECK_NCCL(ncclReduceScatter(ranks[p].d_ep_contrib_all,
+                                         ranks[p].d_ep_sum,
+                                         (size_t)shard_elems,
+                                         ncclFloat,
+                                         ncclSum,
+                                         ranks[p].compose_nccl,
+                                         ranks[p].stream));
+        }
+        CHECK_NCCL(ncclGroupEnd());
+    } else {
+        for (int dst = 0; dst < kGpus; ++dst) {
+            CHECK_CUDA(cudaSetDevice(ranks[dst].device));
+            for (int src = 0; src < kGpus; ++src) {
+                if (skip_self_copy && src == dst) continue;
+                if (opt.ep_return_fp16) {
+                    const __half *src_ptr =
+                        ranks[src].d_ep_contrib_half_all + (uint64_t)dst * shard_elems;
+                    CHECK_CUDA(cudaMemcpyPeerAsync(ranks[dst].d_ep_remote_half[src],
+                                                   ranks[dst].device,
+                                                   src_ptr,
+                                                   ranks[src].device,
+                                                   (size_t)return_shard_bytes,
+                                                   ranks[dst].stream));
+                } else {
+                    const float *src_ptr = ranks[src].d_ep_contrib_all +
+                                           (uint64_t)dst * shard_elems;
+                    CHECK_CUDA(cudaMemcpyPeerAsync(ranks[dst].d_ep_remote[src],
+                                                   ranks[dst].device,
+                                                   src_ptr,
+                                                   ranks[src].device,
+                                                   (size_t)return_shard_bytes,
+                                                   ranks[dst].stream));
+                }
             }
         }
     }
@@ -9763,7 +9842,11 @@ int run_next_hidden_compose(const Options &opt,
             CHECK_CUDA(cudaSetDevice(r.device));
             const int block = 256;
             int grid = (int)((shard_elems + block - 1) / block);
-            if (stats->fused_compose_sum) {
+            if (nccl_reduce_scatter) {
+                compose_next_hidden_kernel<<<grid, block, 0, r.stream>>>(
+                    r.d_next_hidden, r.d_current_shard, attn.d_out[(size_t)dst],
+                    shared.d_out[(size_t)dst], r.d_ep_sum, dst, opt.slots);
+            } else if (stats->fused_compose_sum) {
                 const float *r0 = skip_self_copy && dst == 0
                     ? ranks[0].d_ep_contrib_all + (uint64_t)dst * shard_elems
                     : r.d_ep_remote[0];
@@ -12516,6 +12599,9 @@ int run_decode_loop(const Options &opt,
     stats->dense_hmma_compose = opt.dense_hmma_compose;
     stats->dense_f16_cublas_compose = opt.dense_f16_cublas_compose;
     stats->dense_f16_cache_compose = opt.dense_f16_cache_compose;
+    stats->nccl_reduce_scatter_compose =
+        opt.nccl_reduce_scatter_compose_gate &&
+        !opt.compact_route_compose && !opt.ep_return_fp16;
     stats->steps = opt.decode_steps;
     stats->slots = opt.slots;
     stats->slot_steps = (uint64_t)opt.decode_steps * (uint64_t)opt.slots;
@@ -12563,6 +12649,7 @@ int run_decode_loop(const Options &opt,
     const uint64_t all_contrib_elems = (uint64_t)kGpus * shard_elems;
     const uint64_t all_contrib_bytes = all_contrib_elems * sizeof(float);
     const bool skip_self_copy = opt.skip_self_compose_copy && !opt.ep_return_fp16;
+    const bool nccl_reduce_scatter = stats->nccl_reduce_scatter_compose;
     stats->ep_contribution_bytes = all_contrib_bytes * kGpus;
     if (opt.compact_route_compose && !opt.ep_return_fp16) {
         uint64_t compact_return_bytes = 0;
@@ -13031,6 +13118,8 @@ int run_decode_loop(const Options &opt,
                                         : (uint64_t)opt.slots;
         const uint64_t compact_segment_elems =
             compact_segment_routes * (uint64_t)(kHidden / kGpus);
+        const bool use_nccl_reduce_scatter =
+            nccl_reduce_scatter && !compact_route && !opt.ep_return_fp16;
         for (int p = 0; p < kGpus; ++p) {
             RankState &r = ranks[p];
             CHECK_CUDA(cudaSetDevice(r.device));
@@ -13066,7 +13155,29 @@ int run_decode_loop(const Options &opt,
         auto t_reduce_done = std::chrono::steady_clock::now();
         auto t_copy_done = t_reduce_done;
 
-        if (!opt.direct_remote_compose || opt.ep_return_fp16) {
+        if (use_nccl_reduce_scatter) {
+            for (int p = 0; p < kGpus; ++p) {
+                if (!ranks[p].compose_nccl_initialized || !ranks[p].compose_nccl) {
+                    return 12;
+                }
+            }
+            CHECK_NCCL(ncclGroupStart());
+            for (int p = 0; p < kGpus; ++p) {
+                RankState &r = ranks[p];
+                CHECK_CUDA(cudaSetDevice(r.device));
+                CHECK_NCCL(ncclReduceScatter(r.d_ep_contrib_all,
+                                             r.d_ep_sum,
+                                             (size_t)shard_elems,
+                                             ncclFloat,
+                                             ncclSum,
+                                             r.compose_nccl,
+                                             r.stream));
+            }
+            CHECK_NCCL(ncclGroupEnd());
+            sync_all();
+            t_reduce_done = std::chrono::steady_clock::now();
+            t_copy_done = t_reduce_done;
+        } else if (!opt.direct_remote_compose || opt.ep_return_fp16) {
             if (opt.source_copy_schedule) {
                 for (int src = 0; src < kGpus; ++src) {
                     CHECK_CUDA(cudaSetDevice(ranks[src].device));
@@ -13225,6 +13336,10 @@ int run_decode_loop(const Options &opt,
                         r.d_route_index_by_slot[6], r.d_route_index_by_slot[7],
                         dst, opt.slots);
                 }
+            } else if (use_nccl_reduce_scatter) {
+                compose_next_hidden_kernel<<<grid, block, 0, r.stream>>>(
+                    r.d_next_hidden, r.d_current_shard, attn_op->d_out[(size_t)dst],
+                    shared_op->d_out[(size_t)dst], r.d_ep_sum, dst, opt.slots);
             } else if (stats->fused_compose_sum) {
                 const float *r0 = skip_self_copy && dst == 0
                     ? ranks[0].d_ep_contrib_all + (uint64_t)dst * shard_elems
@@ -14111,6 +14226,11 @@ int run_layer(const Options &opt,
     }
     layer_stats.ep_loaded_bytes = ep_loaded_bytes;
 
+    if (!shared_rank_buffers && open_compose_nccl(opt, ranks) != 0) {
+        close_local_runtime();
+        return 8;
+    }
+
     if (!opt.skip_predecode_probes) {
         for (int i = 0; i < opt.warmup; ++i) {
             for (int p = 0; p < kGpus; ++p) {
@@ -14203,7 +14323,8 @@ int run_layer(const Options &opt,
                     "ep_return_dtype\t%s\tep_return_bytes\t%llu\tdense_hmma\t%d\t"
                     "dense_f16_cublas\t%d\t"
                     "attn_dense_ms\t%.6f\t"
-                    "shared_dense_ms\t%.6f\tfused_compose_sum\t%d\tcompose_ms\t%.6f\t"
+                    "shared_dense_ms\t%.6f\tfused_compose_sum\t%d\t"
+                    "nccl_reduce_scatter\t%d\tcompose_ms\t%.6f\t"
                     "checksum\t%llu\tfinite_bad\t%d\trepeat_max_abs\t%.9f\t"
                     "repeat_bad\t%d\t%s\n",
                     opt.slots, (unsigned long long)cfg.ctx, kHidden / kGpus,
@@ -14214,6 +14335,7 @@ int run_layer(const Options &opt,
                     compose.dense_f16_cublas_compose ? 1 : 0,
                     compose.attn_dense_ms, compose.shared_dense_ms,
                     compose.fused_compose_sum ? 1 : 0,
+                    compose.nccl_reduce_scatter_compose ? 1 : 0,
                     compose.compose_ms, (unsigned long long)compose.checksum,
                     compose.finite_bad, compose.repeat_max_abs,
                     compose.repeat_bad, compose.pass ? "PASS" : "FAIL");
@@ -14239,7 +14361,8 @@ int run_layer(const Options &opt,
                     "source_copy_schedule\t%d\tskip_self_compose_copy\t%d\t"
                     "multi_copy_streams\t%d\t"
                     "ep_ms_per_step\t%.6f\tdense_ms_per_step\t%.6f\t"
-                    "fused_compose_sum\t%d\tcompose_ms_per_step\t%.6f\t"
+                    "fused_compose_sum\t%d\tnccl_reduce_scatter\t%d\t"
+                    "compose_ms_per_step\t%.6f\t"
                     "compose_reduce_ms_per_step\t%.6f\t"
                     "compose_copy_ms_per_step\t%.6f\t"
                     "compose_final_ms_per_step\t%.6f\t"
@@ -14267,6 +14390,7 @@ int run_layer(const Options &opt,
                     decode_loop.ep_ms_per_step,
                     decode_loop.dense_ms_per_step,
                     decode_loop.fused_compose_sum ? 1 : 0,
+                    decode_loop.nccl_reduce_scatter_compose ? 1 : 0,
                     decode_loop.compose_ms_per_step,
                     decode_loop.compose_reduce_ms_per_step,
                     decode_loop.compose_copy_ms_per_step,
@@ -14348,6 +14472,7 @@ int run_layer(const Options &opt,
                 "compose_dense_hmma\t%d\tcompose_dense_f16_cublas\t%d\t"
                 "compose_attn_dense_ms\t%.6f\t"
                 "compose_shared_dense_ms\t%.6f\tcompose_fused_sum\t%d\t"
+                "compose_nccl_reduce_scatter\t%d\t"
                 "compose_ms\t%.6f\t"
                 "compose_checksum\t%llu\tcompose_finite_bad\t%d\t"
                 "compose_repeat_max_abs\t%.9f\tcompose_repeat_bad\t%d\t"
@@ -14359,7 +14484,8 @@ int run_layer(const Options &opt,
                 "decode_overlap_ep_dense\t%d\tdecode_direct_remote_compose\t%d\t"
                 "decode_source_copy_schedule\t%d\t"
                 "decode_ep_ms_per_step\t%.6f\tdecode_dense_ms_per_step\t%.6f\t"
-                "decode_fused_compose_sum\t%d\tdecode_compose_ms_per_step\t%.6f\t"
+                "decode_fused_compose_sum\t%d\tdecode_nccl_reduce_scatter\t%d\t"
+                "decode_compose_ms_per_step\t%.6f\t"
                 "decode_ep_return_dtype\t%s\t"
                 "decode_ep_return_bytes\t%llu\tdecode_checksum\t%llu\t"
                 "decode_finite_bad\t%d\tdecode_pass\t%d\t"
@@ -14412,6 +14538,7 @@ int run_layer(const Options &opt,
                 compose.attn_dense_ms,
                 compose.shared_dense_ms,
                 compose.fused_compose_sum ? 1 : 0,
+                compose.nccl_reduce_scatter_compose ? 1 : 0,
                 compose.compose_ms,
                 (unsigned long long)compose.checksum,
                 compose.finite_bad,
@@ -14432,6 +14559,7 @@ int run_layer(const Options &opt,
                 decode_loop.ep_ms_per_step,
                 decode_loop.dense_ms_per_step,
                 decode_loop.fused_compose_sum ? 1 : 0,
+                decode_loop.nccl_reduce_scatter_compose ? 1 : 0,
                 decode_loop.compose_ms_per_step,
                 decode_loop.ep_return_fp16 ? "fp16" : "fp32",
                 (unsigned long long)decode_loop.ep_return_bytes,
@@ -14508,6 +14636,9 @@ int run_layer(const Options &opt,
         summary->decode_checksum = decode_loop.checksum;
     }
 
+    if (!shared_rank_buffers) {
+        close_compose_nccl(ranks);
+    }
     for (int p = 0; p < kGpus; ++p) {
         RankState &r = ranks[p];
         CHECK_CUDA(cudaSetDevice(r.device));

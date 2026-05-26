@@ -9,7 +9,19 @@ Current bottleneck reference:
 summarizes the measured bottlenecks, layer-by-layer hot paths, and experiments
 already tried.
 
-Latest NCCL status: Sprint 396 added `--algo nccl` to
+Latest NCCL status: Sprint 397 integrated a serving-harness
+`--nccl-reduce-scatter-compose-gate` for the compatible non-compact FP32 EP
+compose boundary and linked the TP/EP full-layer smoke against NCCL. V100 build
+passed. A single-layer non-compact compose A/B at layer 2 / `32` slots /
+`position=262080` preserved checksum `1908166124`, but NCCL was slower:
+peer-copy fused compose was `2.521989` ms while NCCL reduce-scatter was
+`6.401091` ms. A compact route smoke with the NCCL gate requested left NCCL
+inactive and passed, because compact route compose is route-indexed and is not
+semantically equivalent to dense reduce-scatter. Decision: keep NCCL compose
+default-off and diagnostic-only; use NCCL later for true TP hidden/expert
+collectives, not current compact EP compose.
+
+Previous NCCL status: Sprint 396 added `--algo nccl` to
 `tools/ds4-v100-tp8-collective-workbench` and linked it against NCCL
 `2.19.3`. All V100 modes passed correctness at `tokens=32` and `tokens=128`.
 NCCL is materially faster than the current peer-copy doubling workbench:
@@ -17,7 +29,7 @@ NCCL is materially faster than the current peer-copy doubling workbench:
 `32`-token rs-ag from `31.431235` to `10.282541` ms (`3.06x`),
 `128`-token reduce-scatter from `29.035444` to `6.076402` ms (`4.78x`), and
 `128`-token allgather from `20.682822` to `6.142763` ms (`3.37x`). This is
-strong enough to make serving-path NCCL integration the next TP/EP sprint.
+strong enough to justify the Sprint 397 serving-path NCCL integration test.
 
 Latest promoted TP/EP default: Sprint 395 promoted
 `DS4_V100_TP_EP_ROUTE_PLAN_ASYNC_UPLOAD=1` in the launcher/profile path. It

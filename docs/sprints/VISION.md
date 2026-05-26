@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-26
-last_updated_by: sprint-396
-revision: 409
+last_updated_by: sprint-397
+revision: 410
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -182,10 +182,13 @@ The near-term implementation focus is therefore:
    workbench: NCCL `2.19.3` is available on the V100 pod and is `2.2x-4.8x`
    faster than the current peer-copy doubling workbench across allreduce,
    reduce-scatter, allgather, rs-ag, and ep-reduce at `32` and `128` tokens,
-   with exact verification. The next sprint should integrate NCCL into the
-   serving-path TP/EP hidden collective/reduction boundary behind a gate,
-   because average GPU utilization remains only about `9.3%` at the target
-   shape.
+   with exact verification. Sprint 397 then tested NCCL in the serving
+   harness for the compatible non-compact FP32 EP compose boundary. It
+   preserved checksum but was slower than peer-copy fused compose
+   (`6.401091` ms vs `2.521989` ms), and the production compact route compose
+   path correctly keeps NCCL inactive because it is route-indexed rather than
+   a dense reduce-scatter. Keep NCCL diagnostic-only until a true TP hidden or
+   expert collective boundary exists.
 8. Close the S-E follow-up with a narrow parity/precheck fix if we want to
    revisit fused gated-SiLU. Sprint 379 showed the current serving-shaped
    branch already has no standalone routed SwiGLU launch, the generic
@@ -2921,6 +2924,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 390 made HTTP response parity permanent. | Added `tools/ds4-v100-http-response-parity.py`; it passes on Sprint 389's `32` control/candidate response pairs and fails a mutated generated-token fixture. | Use this comparator for future HTTP A/B promotion evidence. |
 | 2026-05-25 | Sprint 391 reran longer E5M2 KV parity. | E5M2 preserved first token and passed `32/32` HTTP response parity pairs. HTTP server decode improved `101.206458 -> 107.281060` tok/s and client throughput improved `46.115999 -> 47.895831`, but direct decode moved `103.237368 -> 102.152512`. | Keep E5M2 default-off pending broader multi-prompt parity/soak. |
 | 2026-05-25 | Sprint 392 added multi-prompt soak support. | `--prompt-file` now lets the HTTP profiler cycle JSONL chat prompts. The `16` prompt E5M2 soak passed `32/32` parity pairs, but server decode was flat (`106.390802 -> 106.483285`) and the layout does not save VRAM. | Keep E5M2 default-off; use prompt files for future risky gate promotion checks. |
+| 2026-05-26 | Sprint 397 tested serving-path NCCL compose. | Added a default-off `--nccl-reduce-scatter-compose-gate` and launcher/profile wiring. The compatible non-compact FP32 EP compose path preserved checksum `1908166124`, but NCCL was slower than peer-copy fused compose at layer 2 / `32` slots (`6.401091` ms vs `2.521989` ms). Compact route compose correctly leaves the backend inactive because the production path is route-indexed and not a dense reduce-scatter. | Keep NCCL compose diagnostic-only. Use NCCL for future true TP hidden/expert collectives, but do not force it into current compact EP compose. |
 
 ## Open Questions
 

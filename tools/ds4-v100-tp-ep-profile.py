@@ -341,6 +341,9 @@ def build_env(args, port):
             if args.disable_route_plan_async_upload
             else "1",
             "DS4_V100_TP_EP_COMPACT_MOE_DECODE": "1" if args.compact_moe_decode else "0",
+            "DS4_V100_TP_EP_NCCL_REDUCE_SCATTER_COMPOSE": "1"
+            if args.nccl_reduce_scatter_compose
+            else "0",
             "DS4_V100_TP_EP_FUSED_GATED_SILU": "1" if args.fused_gated_silu else "0",
             "DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT": "1" if args.routed_ffn_norm_input else "0",
             "DS4_V100_TP_EP_FP8_E5M2_KV": "1" if args.fp8_e5m2_kv else "0",
@@ -516,6 +519,8 @@ def direct_command(args):
         cmd.append("--route-plan-async-upload-gate")
     if args.compact_moe_decode:
         cmd.append("--compact-moe-decode-gate")
+    if args.nccl_reduce_scatter_compose:
+        cmd.append("--nccl-reduce-scatter-compose-gate")
     if args.fused_gated_silu:
         cmd.append("--fused-gated-silu-gate")
     if args.routed_ffn_norm_input:
@@ -927,6 +932,7 @@ def main():
     parser.add_argument("--disable-route-plan-async-upload", action="store_true")
     parser.add_argument("--disable-compact-route-compose", action="store_true")
     parser.add_argument("--compact-moe-decode", action="store_true")
+    parser.add_argument("--nccl-reduce-scatter-compose", action="store_true")
     parser.add_argument("--fused-gated-silu", action="store_true")
     parser.add_argument("--routed-ffn-norm-input", action="store_true")
     parser.add_argument("--fp8-e5m2-kv", action="store_true")
