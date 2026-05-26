@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-26
-last_updated_by: sprint-402
-revision: 415
+last_updated_by: sprint-403
+revision: 416
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -68,7 +68,8 @@ The performance program is intentionally isolated:
 | 10 | `--true-ds4-attention-output-nccl-allgather-gate` | Complete diagnostic | Correct at 16 slots, but rejected for target 32-slot/256K serving because NCCL communicator overhead triggers OOM |
 | 11 | `--tp-hc-current-input-nccl-allgather-gate` | Complete diagnostic | Correct at 16 slots, but rejected: target 32-slot/256K OOMs and smaller shape regresses HC gather/decode |
 | 12 | `--nccl-min-free-mib` / `DS4_V100_TP_EP_NCCL_MIN_FREE_MIB` | Complete harness guard | Promoted; NCCL candidates now fail early when communicator overhead leaves insufficient 32-slot/256K VRAM reserve |
-| 13 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
+| 13 | `tools/ds4-v100-tp-ep-nccl-kv-matrix.py` | Complete measurement | FP8 E5M2 KV does not reclaim VRAM; target HC-current NCCL still fails at 1114 MiB free vs 1536 MiB reserve |
+| 14 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
 
 Promotion requires a same-binary V100 A/B at the real serving shape, unchanged
 first token/checksum, and improved GPU utilization or server decode tok/s.
@@ -100,6 +101,11 @@ The near-term implementation focus is therefore:
    `nccl_after_output_head` with `1114 MiB` free, while non-NCCL control
    remains admitted at `1746 MiB` and the smaller `16` slot NCCL diagnostic
    remains admitted at `3820 MiB`.
+   Sprint 403 proved that `--fp8-e5m2-kv` does not create additional target
+   headroom for NCCL: the TP runtime already defaults to FP8 E4M3 block-128 KV,
+   so E5M2 is a format flavor switch, not an F16-to-FP8 allocation reduction.
+   The combined E5M2 KV + HC-current NCCL case still failed at `1114 MiB`
+   free against the `1536 MiB` NCCL reserve.
 2. Use the Sprint 383 matrix as the current before/after performance baseline.
    At `32` configured slots, `256K`, `position=262080`, and `32` generated
    chat tokens/request, active requests `1,4,8,16,32` all pass with

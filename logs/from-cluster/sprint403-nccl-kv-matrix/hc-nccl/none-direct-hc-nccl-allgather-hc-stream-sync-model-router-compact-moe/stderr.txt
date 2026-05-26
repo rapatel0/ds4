@@ -1,0 +1,1 @@
+tp_ep_nccl_vram_admission_failed label=nccl_after_output_head min_free_mib=1536

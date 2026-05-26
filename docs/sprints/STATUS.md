@@ -9,7 +9,23 @@ Current bottleneck reference:
 summarizes the measured bottlenecks, layer-by-layer hot paths, and experiments
 already tried.
 
-Latest NCCL status: Sprint 402 added a permanent NCCL-specific VRAM admission
+Latest NCCL status: Sprint 403 added
+`tools/ds4-v100-tp-ep-nccl-kv-matrix.py` and ran the target-shape NCCL plus KV
+matrix at `32` slots / `256K` / `position=262080`. Control passed with first
+token `54639`, generated decode `98.076858` tok/s, continuation decode
+`107.106917` tok/s, and `1746 MiB` minimum free VRAM. `--fp8-e5m2-kv` also
+passed with the same first token but did not reclaim VRAM: minimum free stayed
+`1746 MiB` and generated decode moved to `93.927351` tok/s. HC-current NCCL
+failed the Sprint 402 admission guard with return `14`, `1114 MiB` free
+against the `1536 MiB` threshold, and the combined
+`--fp8-e5m2-kv --hc-current-nccl-allgather` case failed identically. The key
+finding is that `--fp8-e5m2-kv` is an FP8 flavor switch, not an F16-to-FP8
+memory reclamation switch; the current TP runtime already defaults to FP8 E4M3
+block-128 KV. Decision: keep E5M2 KV and narrow NCCL diagnostic-only. Future
+NCCL work must remove/reschedule resident allocations or replace a broader TP
+boundary; E5M2 KV does not create the missing headroom.
+
+Previous NCCL status: Sprint 402 added a permanent NCCL-specific VRAM admission
 guard so doomed NCCL candidates fail before decode rather than later during
 raw-SWA allocation. The full-layer smoke now accepts `--nccl-min-free-mib`,
 the launcher exposes `DS4_V100_TP_EP_NCCL_MIN_FREE_MIB`, and the profile
