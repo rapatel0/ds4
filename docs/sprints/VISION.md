@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-26
-last_updated_by: sprint-398
-revision: 411
+last_updated_by: sprint-399
+revision: 412
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -64,7 +64,8 @@ The performance program is intentionally isolated:
 | 6 | `--tp-experts-ab-gate` | Complete measurement | Do not integrate yet; TP8 fails correctness, TP4 is correct but reduction erases the win |
 | 7 | `--fp8-e5m2-kv-gate` | Complete diagnostic | Correct and promising in short A/B, but not promoted pending longer parity and VRAM margin |
 | 8 | `--tp-hc-current-input-fused-fill-pack-gate` | Complete diagnostic | Rejected; direct remote-load fusion preserved first token but regressed decode and HC fill/pack sharply |
-| 9 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
+| 9 | `tools/ds4-v100-tp8-layer-proxy --algo nccl` | Complete measurement | Promoted as the proxy path for true TP hidden all-reduce; serving defaults unchanged until a real TP dense/expert boundary exists |
+| 10 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
 
 Promotion requires a same-binary V100 A/B at the real serving shape, unchanged
 first token/checksum, and improved GPU utilization or server decode tok/s.
@@ -198,6 +199,15 @@ The near-term implementation focus is therefore:
    `320.439853` ms. This rejects direct peer/UVA remote-load fusion for this
    boundary. Future HC-current work should preserve local staging or fuse into
    downstream dense/expert consumers, not replace local reads with remote loads.
+   Sprint 399 then added NCCL to the TP8 layer-boundary proxy, which is the
+   correct proxy for future dense TP hidden-state all-reduce. With `43` layers,
+   `2` collectives/layer, and F16 hidden payloads, NCCL beat peer-copy doubling
+   at every tested shape: `32` tokens improved `29.918408` to `13.960581` ms
+   (`2.14x`), `128` tokens improved `37.313934` to `17.326618` ms (`2.15x`),
+   and resident-work cases with `local_op_repeats=64` still improved `2.01x`
+   and `1.88x`. This keeps the architecture direction clear: use NCCL for true
+   TP hidden/expert collectives, but do not attach it to compact route-indexed
+   EP compose.
 8. Close the S-E follow-up with a narrow parity/precheck fix if we want to
    revisit fused gated-SiLU. Sprint 379 showed the current serving-shaped
    branch already has no standalone routed SwiGLU launch, the generic

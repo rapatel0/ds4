@@ -279,7 +279,7 @@ tools/ds4-v100-tp8-collective-workbench: tools/ds4-v100-tp8-collective-workbench
 	$(NVCC) $(NVCCFLAGS) -I. -o $@ $< $(CUDA_LDLIBS) -lnccl
 
 tools/ds4-v100-tp8-layer-proxy: tools/ds4-v100-tp8-layer-proxy.cu
-	$(NVCC) $(NVCCFLAGS) -I. -o $@ $< $(CUDA_LDLIBS)
+	$(NVCC) $(NVCCFLAGS) -I. -o $@ $< $(CUDA_LDLIBS) -lnccl
 
 tools/ds4-v100-tp-runtime-smoke: tools/ds4-v100-tp-runtime-smoke.cu ds4_v100_tp_runtime.cu ds4_v100_tp_runtime.h
 	$(NVCC) $(NVCCFLAGS) -I. -o $@ tools/ds4-v100-tp-runtime-smoke.cu ds4_v100_tp_runtime.cu $(CUDA_LDLIBS)

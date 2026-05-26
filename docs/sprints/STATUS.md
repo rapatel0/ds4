@@ -34,6 +34,19 @@ all-layer run. Decision: reject as default and keep diagnostic-only. Direct
 peer/UVA remote loads from GPU0 are the wrong fusion shape for this boundary;
 future work should preserve local staging or fuse into downstream consumers.
 
+Latest TP8 NCCL boundary status: Sprint 399 added `--algo nccl` to
+`tools/ds4-v100-tp8-layer-proxy` and linked the proxy with NCCL so the future
+TP hidden-state all-reduce boundary can be measured with resident GPU work
+between collectives. V100 build passed. With `43` layers, `2` collectives per
+layer, F16 hidden payloads, and exact cross-device verification, NCCL beat the
+peer-copy doubling transport across all tested shapes: `32` tokens improved
+from `29.918408` to `13.960581` ms (`2.14x`), `128` tokens from `37.313934`
+to `17.326618` ms (`2.15x`), `32` tokens with `local_op_repeats=64` from
+`28.918738` to `14.404446` ms (`2.01x`), and `128` tokens with resident work
+from `37.140958` to `19.768570` ms (`1.88x`). Decision: promote the proxy
+capability as the NCCL measurement path for true TP hidden collectives, but do
+not change serving defaults until a true TP dense/expert boundary exists.
+
 Previous NCCL status: Sprint 396 added `--algo nccl` to
 `tools/ds4-v100-tp8-collective-workbench` and linked it against NCCL
 `2.19.3`. All V100 modes passed correctness at `tokens=32` and `tokens=128`.

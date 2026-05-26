@@ -1,0 +1,1 @@
+./tools/ds4-v100-tp8-layer-proxy --algo doubling --tokens 32 --hidden 4096 --layers 43 --collectives-per-layer 2 --local-op-repeats 64 --warmup 2 --iters 10
