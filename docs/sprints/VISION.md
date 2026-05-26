@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-26
-last_updated_by: sprint-399
-revision: 412
+last_updated_by: sprint-400
+revision: 413
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -65,7 +65,8 @@ The performance program is intentionally isolated:
 | 7 | `--fp8-e5m2-kv-gate` | Complete diagnostic | Correct and promising in short A/B, but not promoted pending longer parity and VRAM margin |
 | 8 | `--tp-hc-current-input-fused-fill-pack-gate` | Complete diagnostic | Rejected; direct remote-load fusion preserved first token but regressed decode and HC fill/pack sharply |
 | 9 | `tools/ds4-v100-tp8-layer-proxy --algo nccl` | Complete measurement | Promoted as the proxy path for true TP hidden all-reduce; serving defaults unchanged until a real TP dense/expert boundary exists |
-| 10 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
+| 10 | `--true-ds4-attention-output-nccl-allgather-gate` | Complete diagnostic | Correct at 16 slots, but rejected for target 32-slot/256K serving because NCCL communicator overhead triggers OOM |
+| 11 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
 
 Promotion requires a same-binary V100 A/B at the real serving shape, unchanged
 first token/checksum, and improved GPU utilization or server decode tok/s.
@@ -207,7 +208,17 @@ The near-term implementation focus is therefore:
    and resident-work cases with `local_op_repeats=64` still improved `2.01x`
    and `1.88x`. This keeps the architecture direction clear: use NCCL for true
    TP hidden/expert collectives, but do not attach it to compact route-indexed
-   EP compose.
+   EP compose. Sprint 400 then attached NCCL to a real serving-facing TP
+   attention-output allgather boundary. The implementation is functionally
+   correct at `16` slots / `256K` with matching first token `45178`, but it is
+   not promotable: at the target `32` slot / `256K` shape, NCCL communicator
+   overhead adds roughly `+660 MiB/GPU`, reduces minimum free VRAM from
+   `1746 MiB` to `1114 MiB`, and OOMs during raw-SWA allocation before a full
+   token can complete. The smaller `16` slot run is also slightly slower
+   overall (`29.467687` to `28.925690` generated decode tok/s). NCCL remains a
+   strategic direction, but future NCCL work must amortize one shared
+   communicator across broader TP hidden/expert boundaries and be admitted by
+   the memory planner before promotion.
 8. Close the S-E follow-up with a narrow parity/precheck fix if we want to
    revisit fused gated-SiLU. Sprint 379 showed the current serving-shaped
    branch already has no standalone routed SwiGLU launch, the generic

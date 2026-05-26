@@ -359,6 +359,12 @@ def build_env(args, port):
             "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_QUIET": "1",
             "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_BATCH_ROWS": "1",
             "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_STREAM_SYNC": "1",
+            "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_OUTPUT": "1"
+            if args.attention_output
+            else "0",
+            "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_OUTPUT_NCCL_ALLGATHER": "1"
+            if args.attention_output_nccl_allgather
+            else "0",
             "DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_INPUT_FILL": "1"
             if args.fused_compressed_input_fill
             else "0",
@@ -415,6 +421,10 @@ def variant_suffix(args):
         suffix += "-fused-compressed-pool-norm-rope-round"
     if getattr(args, "direct_compressed_input_fill", False):
         suffix += "-direct-compressed-input-fill"
+    if getattr(args, "attention_output", False):
+        suffix += "-attention-output"
+    if getattr(args, "attention_output_nccl_allgather", False):
+        suffix += "-attention-output-nccl-allgather"
     if getattr(args, "compressed_dense_event_wait", False):
         suffix += "-compressed-dense-event-wait"
     if getattr(args, "disable_compressed_dense_event_wait", False):
@@ -544,6 +554,10 @@ def direct_command(args):
         cmd.append("--tp-hc-current-input-stream-sync-gate")
     if args.hc_current_fused_fill_pack:
         cmd.append("--tp-hc-current-input-fused-fill-pack-gate")
+    if args.attention_output:
+        cmd.append("--true-ds4-attention-output-gate")
+    if args.attention_output_nccl_allgather:
+        cmd.append("--true-ds4-attention-output-nccl-allgather-gate")
     if args.skip_compressed_store:
         cmd.append("--true-ds4-attention-typed-kv-skip-compressed-store-gate")
     if args.skip_indexer_store:
@@ -916,6 +930,8 @@ def main():
     parser.add_argument("--hc-current-peer-gather", action="store_true")
     parser.add_argument("--hc-current-stream-sync", action="store_true")
     parser.add_argument("--hc-current-fused-fill-pack", action="store_true")
+    parser.add_argument("--attention-output", action="store_true")
+    parser.add_argument("--attention-output-nccl-allgather", action="store_true")
     parser.add_argument("--skip-compressed-store", action="store_true")
     parser.add_argument("--skip-indexer-store", action="store_true")
     parser.add_argument("--fused-compressed-input-fill", action="store_true")

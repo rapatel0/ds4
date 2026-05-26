@@ -9,7 +9,24 @@ Current bottleneck reference:
 summarizes the measured bottlenecks, layer-by-layer hot paths, and experiments
 already tried.
 
-Latest NCCL status: Sprint 397 integrated a serving-harness
+Latest NCCL status: Sprint 400 added a serving-facing default-off
+`--true-ds4-attention-output-nccl-allgather-gate` for the true DS4
+attention-output boundary. The gate replaces the peer-copy gather of
+`attn_output_a` shards with NCCL allgather and a rank-major-to-slot-major fill
+kernel. V100 build passed. At the target `32` slot / `256K` shape, the peer
+copy control completed with first token `45178`, generated decode
+`36.053783` tok/s, continuation decode `39.095421` tok/s, and `1746 MiB`
+minimum free VRAM. The NCCL candidate emitted many per-layer PASS rows but
+failed with CUDA OOM at raw-SWA allocation after reducing minimum free VRAM to
+`1114 MiB`; communicator overhead is about `+660 MiB/GPU`. A smaller `16`
+slot / `256K` diagnostic proved correctness with the same first token
+`45178`, but generated decode moved from `29.467687` to `28.925690` tok/s and
+continuation decode from `32.482707` to `32.202492`. Decision: keep this gate
+diagnostic-only. NCCL remains the right candidate for broader TP hidden/expert
+collectives, but this narrow attention-output gather is not promotable at the
+production target shape.
+
+Previous NCCL status: Sprint 397 integrated a serving-harness
 `--nccl-reduce-scatter-compose-gate` for the compatible non-compact FP32 EP
 compose boundary and linked the TP/EP full-layer smoke against NCCL. V100 build
 passed. A single-layer non-compact compose A/B at layer 2 / `32` slots /

@@ -715,6 +715,7 @@ struct Options {
     bool true_ds4_attention_typed_kv_stream_sync_gate = false;
     bool fp8_e5m2_kv_gate = false;
     bool true_ds4_attention_output_gate = false;
+    bool true_ds4_attention_output_nccl_allgather_gate = false;
     bool true_ds4_post_attention_ffn_input_gate = false;
     bool true_ds4_compressed_kv_gate = false;
     bool true_ds4_indexer_attention_gate = false;
@@ -1471,6 +1472,27 @@ __global__ void fill_dense_input_half_from_tensor_kernel(__half *dst,
     const uint64_t n = (uint64_t)slots * (uint64_t)cols;
     if (i >= n) return;
     dst[i] = f32_to_half_saturate(src[i]);
+}
+
+__global__ void fill_dense_input_half_from_rank_major_shards_kernel(
+    __half *dst,
+    const float *rank_major,
+    uint32_t shard_cols,
+    uint32_t ranks,
+    uint32_t slots) {
+    const uint64_t cols = (uint64_t)shard_cols * (uint64_t)ranks;
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t n = (uint64_t)slots * cols;
+    if (i >= n) return;
+    const uint32_t slot = (uint32_t)(i / cols);
+    const uint32_t col = (uint32_t)(i % cols);
+    const uint32_t rank = col / shard_cols;
+    const uint32_t local_col = col - rank * shard_cols;
+    const uint64_t src_i =
+        ((uint64_t)rank * (uint64_t)slots + (uint64_t)slot) *
+            (uint64_t)shard_cols +
+        (uint64_t)local_col;
+    dst[i] = f32_to_half_saturate(rank_major[src_i]);
 }
 
 __device__ float e4m3fn_quant_dequant_dev(float x) {
@@ -3554,6 +3576,7 @@ void usage(const char *argv0) {
                  "       [--true-ds4-attention-typed-kv-batch-rows-gate]\n"
                  "       [--true-ds4-attention-typed-kv-stream-sync-gate]\n"
                  "       [--true-ds4-attention-output-gate]\n"
+                 "       [--true-ds4-attention-output-nccl-allgather-gate]\n"
                  "       [--true-ds4-post-attention-ffn-input-gate]\n"
                  "       [--true-ds4-compressed-kv-gate]\n"
                  "       [--true-ds4-indexer-attention-gate]\n"
@@ -3932,6 +3955,18 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--true-ds4-attention-output-nccl-allgather-gate") == 0) {
+            opt->true_ds4_attention_output_nccl_allgather_gate = true;
+            opt->true_ds4_attention_output_gate = true;
+            opt->true_ds4_attention_raw_window_gate = true;
+            opt->true_ds4_attention_rope_gate = true;
+            opt->true_ds4_attention_raw_read_gate = true;
+            opt->true_ds4_attention_state_gate = true;
+            opt->true_ds4_attention_projection_gate = true;
+            opt->true_ds4_attention_residency_gate = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--true-ds4-post-attention-ffn-input-gate") == 0) {
             opt->true_ds4_post_attention_ffn_input_gate = true;
             opt->true_ds4_attention_output_gate = true;
@@ -4131,6 +4166,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
              opt->true_ds4_attention_typed_kv_history_gate)) &&
            (!opt->true_ds4_attention_output_gate ||
             opt->true_ds4_attention_raw_window_gate) &&
+           (!opt->true_ds4_attention_output_nccl_allgather_gate ||
+            opt->true_ds4_attention_output_gate) &&
            (!opt->true_ds4_post_attention_ffn_input_gate ||
             (opt->true_ds4_attention_output_gate && opt->true_shared_ffn_gate &&
              opt->model_router_routes && opt->routed_ffn_norm_input_gate)) &&
@@ -9465,8 +9502,12 @@ int open_shared_rank_buffers(const Options &opt, SharedRankBuffers *shared) {
 }
 
 int open_compose_nccl(const Options &opt, RankState ranks[kGpus]) {
-    if (!opt.nccl_reduce_scatter_compose_gate) return 0;
-    if (opt.compact_route_compose || opt.ep_return_fp16) return 0;
+    const bool need_compose =
+        opt.nccl_reduce_scatter_compose_gate &&
+        !opt.compact_route_compose && !opt.ep_return_fp16;
+    const bool need_attention_output =
+        opt.true_ds4_attention_output_nccl_allgather_gate;
+    if (!need_compose && !need_attention_output) return 0;
     int devices[kGpus] = {};
     ncclComm_t comms[kGpus] = {};
     for (int p = 0; p < kGpus; ++p) devices[p] = ranks[p].device;
@@ -9475,8 +9516,9 @@ int open_compose_nccl(const Options &opt, RankState ranks[kGpus]) {
         ranks[p].compose_nccl = comms[p];
         ranks[p].compose_nccl_initialized = true;
     }
-    std::printf("tp_ep_compose_nccl\tdevices\t%d\tbackend\treduce_scatter\tPASS\n",
-                kGpus);
+    std::printf("tp_ep_nccl\tdevices\t%d\tcompose_reduce_scatter\t%d\t"
+                "attention_output_allgather\t%d\tPASS\n",
+                kGpus, need_compose ? 1 : 0, need_attention_output ? 1 : 0);
     return 0;
 }
 
@@ -12376,25 +12418,60 @@ int run_true_ds4_attention_output_projection(const Options &opt,
         }
     }
 
-    for (int dst = 0; dst < kGpus; ++dst) {
-        RankState &dr = ranks[dst];
-        CHECK_CUDA(cudaSetDevice(dr.device));
-        for (int src = 0; src < kGpus; ++src) {
-            const float *src_shard = ops->attn_output_a.d_out[(size_t)src];
-            if (!src_shard) return 6;
-            CHECK_CUDA(cudaMemcpy2DAsync(
-                dr.d_attn_output_a_full + (size_t)src * out_a_shard_cols,
-                out_a_full_row_bytes, src_shard, out_a_shard_row_bytes,
-                out_a_shard_row_bytes, (size_t)opt.slots, cudaMemcpyDefault,
-                dr.stream));
+    const bool use_nccl_allgather =
+        opt.true_ds4_attention_output_nccl_allgather_gate;
+    if (use_nccl_allgather) {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            if (!ranks[rank].compose_nccl_initialized ||
+                !ranks[rank].compose_nccl ||
+                !ops->attn_output_a.d_out[(size_t)rank]) {
+                return 6;
+            }
         }
-        fill_dense_input_half_from_tensor_kernel<<<
-            (unsigned int)((out_a_full_elems + block - 1) / block), block, 0,
-            dr.stream>>>(ops->attn.d_x_half[(size_t)dst],
-                          dr.d_attn_output_a_full,
-                          (uint32_t)kAttentionOutputAFull,
-                          (uint32_t)opt.slots);
-        CHECK_CUDA(cudaGetLastError());
+        CHECK_NCCL(ncclGroupStart());
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            CHECK_CUDA(cudaSetDevice(r.device));
+            CHECK_NCCL(ncclAllGather(ops->attn_output_a.d_out[(size_t)rank],
+                                     r.d_attn_output_a_full,
+                                     (size_t)opt.slots * out_a_shard_cols,
+                                     ncclFloat,
+                                     r.compose_nccl,
+                                     r.stream));
+        }
+        CHECK_NCCL(ncclGroupEnd());
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            CHECK_CUDA(cudaSetDevice(r.device));
+            fill_dense_input_half_from_rank_major_shards_kernel<<<
+                (unsigned int)((out_a_full_elems + block - 1) / block),
+                block, 0, r.stream>>>(
+                ops->attn.d_x_half[(size_t)rank], r.d_attn_output_a_full,
+                (uint32_t)out_a_shard_cols, (uint32_t)kGpus,
+                (uint32_t)opt.slots);
+            CHECK_CUDA(cudaGetLastError());
+        }
+    } else {
+        for (int dst = 0; dst < kGpus; ++dst) {
+            RankState &dr = ranks[dst];
+            CHECK_CUDA(cudaSetDevice(dr.device));
+            for (int src = 0; src < kGpus; ++src) {
+                const float *src_shard = ops->attn_output_a.d_out[(size_t)src];
+                if (!src_shard) return 6;
+                CHECK_CUDA(cudaMemcpy2DAsync(
+                    dr.d_attn_output_a_full + (size_t)src * out_a_shard_cols,
+                    out_a_full_row_bytes, src_shard, out_a_shard_row_bytes,
+                    out_a_shard_row_bytes, (size_t)opt.slots, cudaMemcpyDefault,
+                    dr.stream));
+            }
+            fill_dense_input_half_from_tensor_kernel<<<
+                (unsigned int)((out_a_full_elems + block - 1) / block), block, 0,
+                dr.stream>>>(ops->attn.d_x_half[(size_t)dst],
+                              dr.d_attn_output_a_full,
+                              (uint32_t)kAttentionOutputAFull,
+                              (uint32_t)opt.slots);
+            CHECK_CUDA(cudaGetLastError());
+        }
     }
     for (int rank = 0; rank < kGpus; ++rank) {
         CHECK_CUDA(cudaSetDevice(ranks[rank].device));
@@ -12439,11 +12516,13 @@ int run_true_ds4_attention_output_projection(const Options &opt,
         std::chrono::duration<double, std::milli>(stop - start).count();
     std::printf("tp_ep_true_attention_output_projection\tlayer\t%d\tslots\t%d\t"
                 "head_input_cols\t%d\tout_a_cols\t%d\tout_b_shard_cols\t%d\t"
+                "nccl_allgather\t%d\t"
                 "heads_max\t%.9g\theads_bad\t%d\t"
                 "out_a_max\t%.9g\tout_a_bad\t%d\t"
                 "out_b_max\t%.9g\tout_b_bad\t%d\tms\t%.6f\tPASS\n",
                 layer, opt.slots, kAttentionOutputAInput, kAttentionOutputAFull,
-                ops->attn.rows_per_gpu, head_stats.max_abs,
+                ops->attn.rows_per_gpu, use_nccl_allgather ? 1 : 0,
+                head_stats.max_abs,
                 head_stats.finite_bad, out_a_stats.max_abs,
                 out_a_stats.finite_bad, out_b_stats.max_abs,
                 out_b_stats.finite_bad, ms);
