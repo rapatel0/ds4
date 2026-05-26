@@ -163,6 +163,21 @@ minimum free VRAM. Keep E5M2 default-off: the broader prompt soak is
 parity-clean, but the performance win is not material and the current E5M2
 layout is not a capacity win over E4M3.
 
+Latest serving readiness gate: Sprint 393 added
+`tools/ds4-v100-http-readiness-check.py` as the standard one-case artifact
+checker for TP/EP serving promotion gates. It validates response files,
+`summary.json`, `status.json`, generated-token sequence length, `32` slots,
+`256K` context, resident KV/HC metadata, typed DS4 KV gates, compact MoE,
+token-match metadata, DS4 checksums, GPU utilization samples, prompt soak
+metadata, and VRAM admission. It passes on the Sprint 392 control artifact
+with `32/32` HTTP 200, `106.390802` server decode tok/s, `38.912861` client
+generated tok/s, `9.772727%` average GPU utilization, first token `83484`,
+`vram_failures=0`, and `1746 MiB` minimum free VRAM. It also passes on the
+Sprint 392 E5M2 candidate artifact with `106.483285` server decode tok/s and
+fails non-zero on a mutated response fixture that sets `token_mismatch=1` and
+removes the checksum. Future default promotions should attach both response
+parity and readiness summaries.
+
 Current active steering source: `TEMP_THROUGHPUT_PROMPT.md`. Sprint 380
 implemented S-F `--tp-experts-ab-gate` as a permanent measurement driver,
 `tools/ds4-v100-tp-experts-ab.py`, and closed the immediate topology decision:

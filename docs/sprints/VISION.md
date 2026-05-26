@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-25
-last_updated_by: sprint-392
-revision: 405
+last_updated_by: sprint-393
+revision: 406
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -123,7 +123,21 @@ The near-term implementation focus is therefore:
    checksum. The tool also fails non-zero on a mutated generated-token fixture.
    Future HTTP A/B sprints should attach this JSON summary instead of relying
    on manual response inspection.
-6. Continue reducing the real-router route planning boundary, but shift away
+6. Use permanent HTTP readiness checks for future serving promotion gates.
+   Sprint 393 added `tools/ds4-v100-http-readiness-check.py`, a single-case
+   artifact checker for the target TP/EP serving shape. It validates response
+   files, `summary.json`, `status.json`, generated-token sequence length,
+   resident KV/HC metadata, typed DS4 KV gates, compact MoE, DS4 checksums,
+   GPU-util samples, prompt-soak metadata, and VRAM admission. The checker
+   passed on Sprint 392's real V100 multi-prompt control run at `32` requests /
+   `32` slots / `256K` / `32` generated tokens with `106.390802` server decode
+   tok/s, `38.912861` client generated tok/s, `9.772727%` average GPU
+   utilization, first token `83484`, `vram_failures=0`, and `1746 MiB` minimum
+   free VRAM. It also passed on the E5M2 candidate artifact and failed
+   non-zero on a mutated token/checksum fixture. Future performance sprints
+   should run this checker in addition to response parity before promoting a
+   default.
+7. Continue reducing the real-router route planning boundary, but shift away
    from H2D upload count after Sprint 386. Sprint 385 split the broad
    FFN/router bucket and removed unused legacy single-route-index uploads on
    the compact-MoE path. Sprint 386 then packed the compact route plan into
@@ -150,7 +164,7 @@ The near-term implementation focus is therefore:
    Future route work should fuse planning with expert dispatch/compose or
    remove per-layer host involvement entirely; do not promote the naive GPU
    planner.
-7. Close the S-E follow-up with a narrow parity/precheck fix if we want to
+8. Close the S-E follow-up with a narrow parity/precheck fix if we want to
    revisit fused gated-SiLU. Sprint 379 showed the current serving-shaped
    branch already has no standalone routed SwiGLU launch, the generic
    TurboMind gated-SiLU epilogue is not DS4-equivalent, and the new
@@ -159,12 +173,12 @@ The near-term implementation focus is therefore:
    serving promotion candidate until the resident dense-KV precheck failure
    under `routed-normalized + fused-gated-silu` is diagnosed or a deterministic
    fused-gate parity harness proves the ABI.
-8. Keep TP-sharded experts out of serving for now. Sprint 380 measured TP8 and
+9. Keep TP-sharded experts out of serving for now. Sprint 380 measured TP8 and
    TP4: TP8 is still numerically invalid, and TP4 is correct but only
    `1.055x/0.891x/0.927x` total speedup at `96/192/384` routes because
    reduction dominates. Revisit TP experts only as a focused fused TP4
    reduction/compose sprint.
-9. Treat S-G E5M2 KV as a positive diagnostic, not a default yet. Sprint 381
+10. Treat S-G E5M2 KV as a positive diagnostic, not a default yet. Sprint 381
    added `DS4_V100_TP_KV_F8_E5M2_B128` and `--fp8-e5m2-kv-gate`; V100 row
    tests passed with zero byte mismatches, direct 4-token checksum matched
    while decode improved from `70.710875` to `75.787866` tok/s, and HTTP
@@ -180,7 +194,7 @@ The near-term implementation focus is therefore:
    response parity passed `32/32`, but server decode was effectively flat
    (`106.390802` to `106.483285` tok/s) and the layout is not a capacity win.
    Keep E5M2 diagnostic-only.
-10. Add S-H MTP only after base TP/EP decode has stable metrology and a settled
+11. Add S-H MTP only after base TP/EP decode has stable metrology and a settled
    launch strategy. MTP remains the decode multiplier, but it should not hide
    kernel scheduling or topology bottlenecks.
 

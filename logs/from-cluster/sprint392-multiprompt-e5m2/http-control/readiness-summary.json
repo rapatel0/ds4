@@ -1,0 +1,191 @@
+{
+  "case_dir": "logs/from-cluster/sprint392-multiprompt-e5m2/http-control/requests-032/none-model-router-compact-moe",
+  "checks": [
+    {
+      "actual": "logs/from-cluster/sprint392-multiprompt-e5m2/http-control/requests-032/none-model-router-compact-moe/summary.json",
+      "detail": "summary loaded",
+      "name": "summary_json",
+      "ok": true
+    },
+    {
+      "actual": "logs/from-cluster/sprint392-multiprompt-e5m2/http-control/requests-032/none-model-router-compact-moe/status.json",
+      "detail": "status loaded",
+      "name": "status_json",
+      "ok": true
+    },
+    {
+      "detail": "all responses parsed",
+      "name": "responses_parse",
+      "ok": true
+    },
+    {
+      "actual": {
+        "http_200": 32,
+        "responses": 32
+      },
+      "detail": "all responses have HTTP 200",
+      "name": "http_200",
+      "ok": true
+    },
+    {
+      "actual": 32,
+      "detail": "response count matches expected requests",
+      "expected": 32,
+      "name": "request_count",
+      "ok": true
+    },
+    {
+      "actual": 32,
+      "detail": "summary HTTP count matches response files",
+      "expected": 32,
+      "name": "summary_http_200",
+      "ok": true
+    },
+    {
+      "actual": {
+        "lengths": [
+          32
+        ],
+        "missing": 0
+      },
+      "detail": "generated token sequences are present and have expected length",
+      "expected": 32,
+      "name": "generated_token_sequences",
+      "ok": true
+    },
+    {
+      "actual": [
+        32
+      ],
+      "detail": "all response metadata slots values match",
+      "expected": 32,
+      "name": "slots",
+      "ok": true
+    },
+    {
+      "actual": [
+        262144
+      ],
+      "detail": "all response metadata ctx values match",
+      "expected": 262144,
+      "name": "ctx",
+      "ok": true
+    },
+    {
+      "actual": 16,
+      "detail": "summary prompt count matches",
+      "expected": 16,
+      "name": "prompt_count",
+      "ok": true
+    },
+    {
+      "actual": "03f814a38f6f5f8949c271c57cc7a9a7e6c8c0b289c17a04f97b2b53a00d6446",
+      "detail": "summary prompt digest matches",
+      "expected": "03f814a38f6f5f8949c271c57cc7a9a7e6c8c0b289c17a04f97b2b53a00d6446",
+      "name": "prompt_digest",
+      "ok": true
+    },
+    {
+      "actual": {
+        "token_match_values": [],
+        "token_mismatch_values": []
+      },
+      "detail": "token_match metadata is clean",
+      "name": "token_match",
+      "ok": true
+    },
+    {
+      "actual": [],
+      "detail": "all responses include DS4 checksum",
+      "name": "checksum",
+      "ok": true
+    },
+    {
+      "actual": [],
+      "detail": "KV runtime and HC persistence are resident in response metadata",
+      "name": "resident_kv",
+      "ok": true
+    },
+    {
+      "actual": [],
+      "detail": "typed DS4 KV metadata gates are enabled",
+      "name": "typed_kv",
+      "ok": true
+    },
+    {
+      "actual": 1,
+      "detail": "summary confirms compact MoE decode gate",
+      "expected": 1,
+      "name": "compact_moe",
+      "ok": true
+    },
+    {
+      "actual": 1024,
+      "detail": "summary generated token total matches shape",
+      "expected": 1024,
+      "name": "generated_tokens_meta",
+      "ok": true
+    },
+    {
+      "actual": 106.390802,
+      "detail": "server_generated_tok_s_decode is present and above threshold",
+      "expected": 80.0,
+      "name": "server_generated_tok_s_decode",
+      "ok": true
+    },
+    {
+      "actual": 38.91286058543871,
+      "detail": "client_generated_tok_s is present and above threshold",
+      "expected": 30.0,
+      "name": "client_generated_tok_s",
+      "ok": true
+    },
+    {
+      "actual": 9.772727272727273,
+      "detail": "gpu_util_avg is present and above threshold",
+      "expected": 1.0,
+      "name": "gpu_util_avg",
+      "ok": true
+    },
+    {
+      "actual": 352,
+      "detail": "GPU utilization samples are present",
+      "expected": 1,
+      "name": "gpu_samples",
+      "ok": true
+    },
+    {
+      "actual": 0,
+      "detail": "VRAM admission failure count is acceptable",
+      "expected": 0,
+      "name": "vram_failures",
+      "ok": true
+    },
+    {
+      "actual": 1746.0,
+      "detail": "minimum free VRAM is above threshold",
+      "expected": 64.0,
+      "name": "vram_min_free_mib",
+      "ok": true
+    }
+  ],
+  "failure_count": 0,
+  "ready": true,
+  "response_count": 32,
+  "schema": "ds4_v100_http_readiness.v1",
+  "status": "logs/from-cluster/sprint392-multiprompt-e5m2/http-control/requests-032/none-model-router-compact-moe/status.json",
+  "summary": "logs/from-cluster/sprint392-multiprompt-e5m2/http-control/requests-032/none-model-router-compact-moe/summary.json",
+  "topline": {
+    "client_generated_tok_s": 38.91286058543871,
+    "compressed_kv_sum_ms": 3343.550356000003,
+    "gpu_util_avg": 9.772727272727273,
+    "gpu_util_max": 52.0,
+    "http_200": 32,
+    "output_head_first_token": 83484,
+    "requests": 32,
+    "server_generated_tok_s_decode": 106.390802,
+    "tokens": 32,
+    "vram_failures": 0,
+    "vram_min_free_mib": 1746
+  }
+}
