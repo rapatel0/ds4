@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-26
-last_updated_by: sprint-395
-revision: 408
+last_updated_by: sprint-396
+revision: 409
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -178,8 +178,14 @@ The near-term implementation focus is therefore:
    the current architecture. Future route work should fuse planning with
    expert dispatch/compose or remove per-layer host involvement entirely; do
    not promote the naive GPU planner or isolated hash-select micro-
-   optimization. The next requested focus is NCCL/collective work, because
-   average GPU utilization remains only about `9.3%` at the target shape.
+   optimization. Sprint 396 answered the NCCL question in the TP8 collective
+   workbench: NCCL `2.19.3` is available on the V100 pod and is `2.2x-4.8x`
+   faster than the current peer-copy doubling workbench across allreduce,
+   reduce-scatter, allgather, rs-ag, and ep-reduce at `32` and `128` tokens,
+   with exact verification. The next sprint should integrate NCCL into the
+   serving-path TP/EP hidden collective/reduction boundary behind a gate,
+   because average GPU utilization remains only about `9.3%` at the target
+   shape.
 8. Close the S-E follow-up with a narrow parity/precheck fix if we want to
    revisit fused gated-SiLU. Sprint 379 showed the current serving-shaped
    branch already has no standalone routed SwiGLU launch, the generic

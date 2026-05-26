@@ -1,0 +1,5 @@
+RUN mode=rs-ag algo=doubling tokens=32
+ds4-v100-tp8-collective-workbench mode=rs-ag algo=doubling devices=0,1,2,3,4,5,6,7 root=0 tokens=32 hidden=4096 dtype=f16 full_bytes=262144 chunk_bytes=32768 layers=43 collectives_per_layer=1 ops_per_iter=43 warmup=3 iters=20
+latency_ms avg=31.431235 min=31.210372 max=31.919944 per_layer=0.730959 per_collective=0.730959 effective_wire_gbps=5.335 overhead_only_tok_s=1018.096
+ep_shape top_k=6 active_routes=192 routes_per_gpu=24.000
+verify max_abs=0.000000000 ok

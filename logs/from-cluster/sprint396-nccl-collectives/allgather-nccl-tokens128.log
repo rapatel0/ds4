@@ -1,0 +1,6 @@
+RUN mode=allgather algo=nccl tokens=128
+NCCL version 2.19.3+cuda12.2
+ds4-v100-tp8-collective-workbench mode=allgather algo=nccl devices=0,1,2,3,4,5,6,7 root=0 tokens=128 hidden=4096 dtype=f16 full_bytes=1048576 chunk_bytes=131072 layers=43 collectives_per_layer=1 ops_per_iter=43 warmup=3 iters=20
+latency_ms avg=6.142763 min=5.988330 max=6.874153 per_layer=0.142855 per_collective=0.142855 effective_wire_gbps=51.381 overhead_only_tok_s=20837.530
+ep_shape top_k=6 active_routes=768 routes_per_gpu=96.000
+verify max_abs=0.000000000 ok

@@ -9,6 +9,16 @@ Current bottleneck reference:
 summarizes the measured bottlenecks, layer-by-layer hot paths, and experiments
 already tried.
 
+Latest NCCL status: Sprint 396 added `--algo nccl` to
+`tools/ds4-v100-tp8-collective-workbench` and linked it against NCCL
+`2.19.3`. All V100 modes passed correctness at `tokens=32` and `tokens=128`.
+NCCL is materially faster than the current peer-copy doubling workbench:
+`32`-token allreduce improved from `13.365976` to `4.513166` ms (`2.96x`),
+`32`-token rs-ag from `31.431235` to `10.282541` ms (`3.06x`),
+`128`-token reduce-scatter from `29.035444` to `6.076402` ms (`4.78x`), and
+`128`-token allgather from `20.682822` to `6.142763` ms (`3.37x`). This is
+strong enough to make serving-path NCCL integration the next TP/EP sprint.
+
 Latest promoted TP/EP default: Sprint 395 promoted
 `DS4_V100_TP_EP_ROUTE_PLAN_ASYNC_UPLOAD=1` in the launcher/profile path. It
 keeps the existing CPU route-plan semantics but uses persistent pinned host

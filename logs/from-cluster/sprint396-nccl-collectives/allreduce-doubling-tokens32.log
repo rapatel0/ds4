@@ -1,0 +1,5 @@
+RUN mode=allreduce algo=doubling tokens=32
+ds4-v100-tp8-collective-workbench mode=allreduce algo=doubling devices=0,1,2,3,4,5,6,7 root=0 tokens=32 hidden=4096 dtype=f16 full_bytes=262144 chunk_bytes=32768 layers=43 collectives_per_layer=1 ops_per_iter=43 warmup=3 iters=20
+latency_ms avg=13.365976 min=13.064863 max=14.340279 per_layer=0.310837 per_collective=0.310837 effective_wire_gbps=13.494 overhead_only_tok_s=2394.139
+ep_shape top_k=6 active_routes=192 routes_per_gpu=24.000
+verify max_abs=0.000000000 ok

@@ -1,5 +1,6 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#include <nccl.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -23,6 +24,16 @@ constexpr int kTopK = 6;
         if (err__ != cudaSuccess) {                                                               \
             std::fprintf(stderr, "cuda error %s:%d: %s\n", __FILE__, __LINE__,                  \
                          cudaGetErrorString(err__));                                              \
+            std::exit(2);                                                                         \
+        }                                                                                         \
+    } while (0)
+
+#define NCCL_CHECK(expr)                                                                          \
+    do {                                                                                          \
+        ncclResult_t err__ = (expr);                                                              \
+        if (err__ != ncclSuccess) {                                                               \
+            std::fprintf(stderr, "nccl error %s:%d: %s\n", __FILE__, __LINE__,                  \
+                         ncclGetErrorString(err__));                                              \
             std::exit(2);                                                                         \
         }                                                                                         \
     } while (0)
@@ -69,6 +80,7 @@ enum class Mode {
 enum class Algorithm {
     Root,
     Doubling,
+    Nccl,
 };
 
 struct Options {
@@ -141,6 +153,7 @@ const char * algo_name(Algorithm algo) {
     switch (algo) {
     case Algorithm::Root: return "root";
     case Algorithm::Doubling: return "doubling";
+    case Algorithm::Nccl: return "nccl";
     }
     return "unknown";
 }
@@ -158,7 +171,7 @@ bool parse_mode(const char * text, Mode * out) {
 void usage(const char * argv0) {
     std::fprintf(stderr,
                  "usage: %s [--mode allreduce|reduce-scatter|allgather|rs-ag|ep-reduce]\n"
-                 "       [--algo root|doubling] [--devices 0,1,2,3,4,5,6,7]\n"
+                 "       [--algo root|doubling|nccl] [--devices 0,1,2,3,4,5,6,7]\n"
                  "       [--tokens N] [--hidden N] [--layers N]\n"
                  "       [--collectives-per-layer N] [--warmup N] [--iters N]\n",
                  argv0);
@@ -178,6 +191,7 @@ bool parse_args(int argc, char ** argv, Options * opt) {
             if (val == nullptr) return false;
             if (std::strcmp(val, "root") == 0) opt->algo = Algorithm::Root;
             else if (std::strcmp(val, "doubling") == 0) opt->algo = Algorithm::Doubling;
+            else if (std::strcmp(val, "nccl") == 0) opt->algo = Algorithm::Nccl;
             else {
                 std::fprintf(stderr, "invalid --algo value\n");
                 return false;
@@ -424,10 +438,71 @@ void run_allgather_direct(const Options & opt, half ** chunk_inputs, half ** ful
     sync_streams(opt, streams);
 }
 
+void run_nccl_allreduce(const Options & opt, half ** inputs, half ** outputs,
+                        ncclComm_t comms[kParticipants],
+                        cudaStream_t streams[kParticipants], size_t elems) {
+    NCCL_CHECK(ncclGroupStart());
+    for (int p = 0; p < kParticipants; ++p) {
+        CUDA_CHECK(cudaSetDevice(opt.devices[p]));
+        NCCL_CHECK(ncclAllReduce(inputs[p], outputs[p], elems, ncclHalf, ncclSum,
+                                 comms[p], streams[p]));
+    }
+    NCCL_CHECK(ncclGroupEnd());
+    sync_streams(opt, streams);
+}
+
+void run_nccl_reduce_scatter(const Options & opt, half ** full_inputs,
+                             half ** chunk_outputs, ncclComm_t comms[kParticipants],
+                             cudaStream_t streams[kParticipants], size_t chunk_elems) {
+    NCCL_CHECK(ncclGroupStart());
+    for (int p = 0; p < kParticipants; ++p) {
+        CUDA_CHECK(cudaSetDevice(opt.devices[p]));
+        NCCL_CHECK(ncclReduceScatter(full_inputs[p], chunk_outputs[p], chunk_elems,
+                                     ncclHalf, ncclSum, comms[p], streams[p]));
+    }
+    NCCL_CHECK(ncclGroupEnd());
+    sync_streams(opt, streams);
+}
+
+void run_nccl_allgather(const Options & opt, half ** chunk_inputs, half ** full_outputs,
+                        ncclComm_t comms[kParticipants],
+                        cudaStream_t streams[kParticipants], size_t chunk_elems) {
+    NCCL_CHECK(ncclGroupStart());
+    for (int p = 0; p < kParticipants; ++p) {
+        CUDA_CHECK(cudaSetDevice(opt.devices[p]));
+        NCCL_CHECK(ncclAllGather(chunk_inputs[p], full_outputs[p], chunk_elems,
+                                 ncclHalf, comms[p], streams[p]));
+    }
+    NCCL_CHECK(ncclGroupEnd());
+    sync_streams(opt, streams);
+}
+
 void run_once(const Options & opt, half ** full_inputs, half ** full_outputs, half ** recv,
               half ** chunk_inputs, half ** chunk_outputs, half * staging, half * root_full,
               cudaStream_t root_stream, cudaStream_t streams[kParticipants],
+              ncclComm_t comms[kParticipants],
               size_t full_elems, size_t chunk_elems, size_t full_bytes, size_t chunk_bytes) {
+    if (opt.algo == Algorithm::Nccl) {
+        switch (opt.mode) {
+        case Mode::AllReduce:
+        case Mode::ExpertReduce:
+            run_nccl_allreduce(opt, full_inputs, full_outputs, comms, streams, full_elems);
+            return;
+        case Mode::ReduceScatter:
+            run_nccl_reduce_scatter(opt, full_inputs, chunk_outputs, comms, streams,
+                                    chunk_elems);
+            return;
+        case Mode::AllGather:
+            run_nccl_allgather(opt, chunk_inputs, full_outputs, comms, streams, chunk_elems);
+            return;
+        case Mode::ReduceScatterAllGather:
+            run_nccl_reduce_scatter(opt, full_inputs, chunk_outputs, comms, streams,
+                                    chunk_elems);
+            run_nccl_allgather(opt, chunk_outputs, full_outputs, comms, streams,
+                               chunk_elems);
+            return;
+        }
+    }
     switch (opt.mode) {
     case Mode::AllReduce:
     case Mode::ExpertReduce:
@@ -525,7 +600,9 @@ double wire_bytes_per_collective(const Options & opt, size_t full_bytes, size_t 
     switch (opt.mode) {
     case Mode::AllReduce:
     case Mode::ExpertReduce:
-        if (opt.algo == Algorithm::Doubling) return (double) full_bytes * kParticipants * 2.0;
+        if (opt.algo == Algorithm::Doubling || opt.algo == Algorithm::Nccl) {
+            return (double) full_bytes * kParticipants * 2.0;
+        }
         return (double) full_bytes * (kParticipants - 1) * 2.0;
     case Mode::ReduceScatter:
         return (double) full_bytes * (kParticipants - 1) +
@@ -600,13 +677,17 @@ int main(int argc, char ** argv) {
         CUDA_CHECK(cudaSetDevice(opt.devices[p]));
         CUDA_CHECK(cudaStreamCreate(&streams[p]));
     }
+    ncclComm_t comms[kParticipants] = {};
+    if (opt.algo == Algorithm::Nccl) {
+        NCCL_CHECK(ncclCommInitAll(comms, kParticipants, opt.devices));
+    }
 
     const int ops_per_iter = opt.layers * opt.collectives_per_layer;
     for (int i = 0; i < opt.warmup; ++i) {
         for (int op = 0; op < ops_per_iter; ++op) {
             run_once(opt, full_inputs, full_outputs, recv, chunk_inputs, chunk_outputs,
-                     staging, root_full, root_stream, streams, full_elems, chunk_elems,
-                     full_bytes, chunk_bytes);
+                     staging, root_full, root_stream, streams, comms, full_elems,
+                     chunk_elems, full_bytes, chunk_bytes);
         }
     }
 
@@ -617,8 +698,8 @@ int main(int argc, char ** argv) {
         auto start = std::chrono::steady_clock::now();
         for (int op = 0; op < ops_per_iter; ++op) {
             run_once(opt, full_inputs, full_outputs, recv, chunk_inputs, chunk_outputs,
-                     staging, root_full, root_stream, streams, full_elems, chunk_elems,
-                     full_bytes, chunk_bytes);
+                     staging, root_full, root_stream, streams, comms, full_elems,
+                     chunk_elems, full_bytes, chunk_bytes);
         }
         auto stop = std::chrono::steady_clock::now();
         const double ms = std::chrono::duration<double, std::milli>(stop - start).count();
@@ -658,6 +739,11 @@ int main(int argc, char ** argv) {
     std::printf("verify max_abs=%.9f %s\n", max_abs,
                 max_abs <= 1.0e-5f ? "ok" : "FAIL");
 
+    if (opt.algo == Algorithm::Nccl) {
+        for (int p = 0; p < kParticipants; ++p) {
+            if (comms[p]) NCCL_CHECK(ncclCommDestroy(comms[p]));
+        }
+    }
     for (int p = 0; p < kParticipants; ++p) {
         CUDA_CHECK(cudaSetDevice(opt.devices[p]));
         CUDA_CHECK(cudaStreamDestroy(streams[p]));
