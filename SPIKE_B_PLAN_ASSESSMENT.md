@@ -3,39 +3,54 @@
 Reviewer: Spike A side. Scope: the revised 10-point Spike B plan (graph/NCCL
 capture-first), checked against the latest executed work (sprints 410–414).
 
-## Verdict: the PLAN is strong, and EXECUTION has now turned toward it.
+## Verdict: the PLAN is strong, and the make-or-break test has now PASSED.
 
-The plan correctly targets the real lever and encodes the right discipline.
-Sprints 412–414 had drifted (per-transfer NCCL + slot/stat tuning on the
-ungraphed path — the #4/#6/#9 trap). The **latest in-flight work (uncommitted)
-has pivoted to the right thing**: capture-eligibility prep in the TP runtime.
-Remaining step is the actual capture+replay and a slots=4 probe — not yet done.
+The plan correctly targets the real lever. After a drift (412–414) it turned to
+the graph path, and **sprint 415 proved the thesis: the correct semantic
+all-layer TP/EP decode step CAPTURES and REPLAYS on V100.** This is the most
+important positive result in the whole throughput arc — the dominant unknown
+("is this dynamic MoE+MLA+HC+NCCL path even CUDA-graph-launchable on SM70?") is
+resolved YES. The win is now an *engineering* path (persistent graph exec +
+multi-step replay), not an open question. Two things remain before it's a banked
+throughput gain: the persistent-exec architecture, and a parity gate.
 
-## UPDATE — what changed since this assessment (in-flight, uncommitted)
+## UPDATE — sprint 415: capture + replay SUCCEEDED (the milestone)
 
-Working-tree changes in `ds4_v100_tp_runtime.{cu,h}` and the smoke file (no new
-commit yet) are building capture eligibility under `--decode-cudagraph-gate`:
-- `graph_event_order` — broad host `sync_all` waits replaced by cross-stream
-  CUDA **event joins** (`capture_join_events`: `cudaEventRecord` +
-  `cudaStreamWaitEvent(root_stream, …)`).
-- `capture_probe_active` flag + a `CaptureStream` abstraction — scaffolding for
-  an actual capture probe.
-- `if (!decode_cudagraph_gate && …)` guards skipping host-sync paths when the
-  gate is on; compose copy handled under the gate.
+`--decode-cudagraph-replay-probe-gate` captures one decode step, instantiates,
+and launches it, using graph output as the step result. On gpu-01 (sm_70), full
+correct semantic path (true attention output + post-attn FFN + NCCL HC-current +
+NCCL attn-output + compressed KV + compact MoE):
 
-**This is the correct direction — it directly addresses the drift critique.** Two
-caveats:
-1. It is still **prep, not capture**: I see no `cudaStreamBeginCapture` /
-   `cudaGraphInstantiate` / `cudaGraphLaunch` and no slots=4 probe result yet.
-   This is re-doing the sprint-376 event-ordering inside the TP runtime.
-2. **Do not judge this by throughput.** Sprint 376 already showed event-ordering
-   alone *lowers* throughput (enqueue overhead) with no payoff until capture+
-   replay lands (the plan's #9). Expect the same here — the win only appears
-   after `cudaGraphLaunch` works.
+| Slots | Capture | Replay | sum_replay_ms | Proj. slot tok/s | Graph nodes |
+|---:|---:|---:|---:|---:|---:|
+| 4 | 43/43 | 43/43 | 94.3 | 42.4 | 46,134 |
+| 8 | 43/43 | 43/43 | 128.4 | 62.3 | 57,758 |
 
-Most imminent gap to get right *before* the first `BeginCapture`: **#1 NCCL
-warmup-before-capture** (below) — it will be the first failure the moment capture
-is attempted with NCCL collectives live.
+What this proves and what it doesn't:
+- ✅ **Launchable**: the whole correct path (incl. NCCL collectives + compressed
+  KV + MoE) records into a graph and replays. NCCL-in-graph worked one-shot (my
+  gap #1 didn't bite the one-shot case — but see multi-step).
+- ⚠️ **Not yet a clean throughput number**: it captures+instantiates *every layer
+  per invocation* — no persistent graph-exec cache, no multi-token loop, no
+  serving-loop integration. The 42–62 proj. slot tok/s is preliminary; the report
+  rightly says launch barrier is removed and the path is now
+  kernel/collective-bound (the goal), but the util-lift payoff is unmeasured.
+- ⚠️ **Multi-step replay FAILED** (the expected next hazard): recapturing every
+  token step blew up at step 3 / layer 2 —
+  `store_f32_device_to_f8_kv_rows_kernel: operation would make the legacy stream
+  depend on a capturing blocking stream` (compressed-KV path). Correct
+  conclusion in the report: **cache `cudaGraphExec_t` per layer and replay across
+  steps with persistent device buffers** — exactly plan #8 / my gap #4. Do not
+  re-enter capture in the token loop.
+- ⚠️ **Parity not gated**: probe uses `skip_decode_checksum=1` → launchability/
+  perf evidence, not the parity gate (my gap #5 still open; next task).
+- A stale `capture_eligible=0` heuristic was misreporting despite success; patched.
+
+Net: the risk has shifted from "can it be graphed?" (answered yes) to "build the
+persistent-exec serving loop, confirm the util/tok-s lift, and re-attach parity."
+They also distilled prior lessons into `TEMP_GRAPH_PRIOR_INSIGHTS.md` (no
+steady-state recapture, no pointer drift, fixed device metadata buffers) — the
+right guardrails.
 
 ## What the plan gets right (keep)
 
