@@ -722,7 +722,8 @@ def add_tp_ep_line_summaries(summary, stdout):
                 "sum_final_hc_ms",
                 "wall_ms",
             ]:
-                summary[f"scaffold_{key}"] = maybe_number(fields.get(key))
+                if key in fields:
+                    summary[f"scaffold_{key}"] = maybe_number(fields.get(key))
         elif tag == "tp_ep_vram_summary":
             label = fields.get("label", "unknown")
             min_free = maybe_number(fields.get("min_free_mib"))

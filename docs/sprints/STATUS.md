@@ -4,6 +4,22 @@ Last updated: 2026-05-26
 
 ## Topline
 
+Latest semantic/NCCL status: Sprint 412 tested the existing
+`--true-ds4-attention-output-nccl-allgather-gate` inside the full
+post-attention serving path at the target `32` requests / `32` slots / `256K`
+context / `32` generated tokens/request shape. The candidate again served
+`32/32` HTTP responses and now reports active semantic timers after a parser
+fix for truncated shutdown scaffold rows. Attention-output NCCL slightly
+improved the Sprint 411 semantic path: server generated decode moved from
+`20.315962` to `20.984393` tok/s, attention-output time moved from
+`512.629430` to `486.473759 ms`, and post-attention FFN-input time moved from
+`144.063057` to `138.337609 ms`. It did not fix admission: minimum free VRAM
+stayed `1328 MiB` with `62` reserve-threshold failures against the current
+`1536 MiB` NCCL reserve. Decision: keep attention-output NCCL diagnostic-only
+and move to implementation on the semantic path: reduce attention-output /
+post-attention scratch residency and replace the projection/gather sequence
+with a purpose-built TP kernel or collective shape.
+
 Latest semantic serving status: Sprint 411 exposed the true-attention output
 plus post-attention FFN-input path through the TP/EP HTTP serving harness at
 the target `32` requests / `32` slots / `256K` context / `32` generated

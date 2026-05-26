@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-26
-last_updated_by: sprint-411
-revision: 424
+last_updated_by: sprint-412
+revision: 425
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -77,7 +77,8 @@ The performance program is intentionally isolated:
 | 19 | Skip unused TP-runtime comp-state arena | Complete memory fix | Promoted; HC-current NCCL now passes target 32-slot/256K reserve with 2240-2242 MiB post-close free |
 | 20 | `tools/ds4-v100-tp-ep-nccl-http-ab.py` | Complete promotion harness | Promoted; target 32-slot/256K/32-token HTTP A/B passed readiness/parity and HC-current NCCL improved server decode 101.897890 -> 107.723452 tok/s |
 | 21 | `--true-ds4-post-attention-ffn-input-gate` | Complete semantic serving diagnostic | Served 32/32 HTTP requests at target shape and activated true attention-output/post-attn timers, but keep default-off: server decode dropped 108.084959 -> 20.315962 tok/s and the path missed the 1536 MiB NCCL reserve with 1328 MiB free |
-| 22 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
+| 22 | `--true-ds4-attention-output-nccl-allgather-gate` inside post-attn serving | Complete semantic NCCL diagnostic | Slightly improved semantic path server decode 20.315962 -> 20.984393 tok/s and attention-output timer 512.629430 -> 486.473759 ms, but keep diagnostic-only: min free VRAM stayed 1328 MiB with 62 reserve failures |
+| 23 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
 
 Promotion requires a same-binary V100 A/B at the real serving shape, unchanged
 first token/checksum, and improved GPU utilization or server decode tok/s.
@@ -202,6 +203,18 @@ The near-term implementation focus is therefore:
    memory-admitted and replace the current attention-output projection/gather
    structure with the intended TP collective/kernel shape. Keep the gate
    default-off until readiness and a quality baseline are both established.
+   Sprint 412 tested the already-existing attention-output NCCL allgather
+   inside that same post-attention semantic path. The rerun with fixed
+   scaffold parsing served `32/32` HTTP responses and changed server generated
+   decode from Sprint 411's `20.315962` to `20.984393` tok/s. The summed
+   attention-output timer improved from `512.629430` to `486.473759 ms`, and
+   post-attention FFN-input improved from `144.063057` to `138.337609 ms`.
+   This is useful evidence but not a promotion: target minimum free VRAM
+   stayed `1328 MiB` with `62` reserve-threshold failures. The next
+   implementation should not add another narrow flag; it should reduce
+   attention-output/post-attention scratch residency and replace the
+   projection/gather sequence with a purpose-built TP kernel or collective
+   shape.
 2. Use the Sprint 383 matrix as the current before/after performance baseline.
    At `32` configured slots, `256K`, `position=262080`, and `32` generated
    chat tokens/request, active requests `1,4,8,16,32` all pass with
