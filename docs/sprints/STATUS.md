@@ -4,6 +4,22 @@ Last updated: 2026-05-26
 
 ## Topline
 
+Latest semantic serving status: Sprint 413 made reduced-slot TP/EP serving a
+first-class operational mode by relaxing the launcher guard from exactly `32`
+slots to `DS4_V100_SLOTS<=32`, then ran a reduced-slot semantic HTTP A/B matrix
+at `256K` context. The post-attention semantic candidate is now
+readiness-clean at reduced slots. At `24` slots it served `24/24` HTTP
+responses with `2428 MiB` minimum free VRAM, zero reserve failures, and
+`19.716583` server decode tok/s. At `28` slots it served `28/28` responses
+with `1790 MiB` minimum free VRAM, zero reserve failures, and `20.624419`
+server decode tok/s. At `30` slots it served `30/30` responses with
+`1556 MiB` minimum free VRAM, zero reserve failures, and `21.089170` server
+decode tok/s. Decision: `30` is the highest clean tier tested, but `28` is the
+current practical semantic-serving tier because it leaves `254 MiB` above the
+`1536 MiB` NCCL reserve; `30` has only `20 MiB` of margin. The `32` slot target
+remains blocked until attention-output/post-attention memory and kernel shape
+are improved.
+
 Latest semantic/NCCL status: Sprint 412 tested the existing
 `--true-ds4-attention-output-nccl-allgather-gate` inside the full
 post-attention serving path at the target `32` requests / `32` slots / `256K`

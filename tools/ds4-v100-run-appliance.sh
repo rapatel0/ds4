@@ -1320,7 +1320,7 @@ if [ "$DS4_V100_TP_EP_ROUTED_FFN" -eq 1 ]; then
 fi
 if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
     [ "$DS4_V100_CTX" -eq 262144 ] || fail "DS4_V100_SERVE_MODE=tp-ep currently requires DS4_V100_CTX=262144"
-    [ "$DS4_V100_SLOTS" -eq 32 ] || fail "DS4_V100_SERVE_MODE=tp-ep currently requires DS4_V100_SLOTS=32"
+    [ "$DS4_V100_SLOTS" -le 32 ] || fail "DS4_V100_SERVE_MODE=tp-ep currently supports DS4_V100_SLOTS<=32"
     [ "$DS4_V100_ACTIVE_MICROBATCH" -eq "$DS4_V100_SLOTS" ] || fail "DS4_V100_SERVE_MODE=tp-ep requires active_microbatch == slots"
     if [ "$mtp_serving_enabled" -eq 1 ]; then
         fail "DS4_V100_SERVE_MODE=tp-ep does not support MTP yet"

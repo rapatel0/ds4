@@ -1,0 +1,177 @@
+{
+  "case_dir": "/workspace/logs/sprint413-post-attn-slot28-http-ab/control/none-hc-nccl-allgather-hc-stream-sync-model-router-compact-moe",
+  "checks": [
+    {
+      "actual": "/workspace/logs/sprint413-post-attn-slot28-http-ab/control/none-hc-nccl-allgather-hc-stream-sync-model-router-compact-moe/summary.json",
+      "detail": "summary loaded",
+      "name": "summary_json",
+      "ok": true
+    },
+    {
+      "actual": "/workspace/logs/sprint413-post-attn-slot28-http-ab/control/none-hc-nccl-allgather-hc-stream-sync-model-router-compact-moe/status.json",
+      "detail": "status loaded",
+      "name": "status_json",
+      "ok": true
+    },
+    {
+      "detail": "all responses parsed",
+      "name": "responses_parse",
+      "ok": true
+    },
+    {
+      "actual": {
+        "http_200": 28,
+        "responses": 28
+      },
+      "detail": "all responses have HTTP 200",
+      "name": "http_200",
+      "ok": true
+    },
+    {
+      "actual": 28,
+      "detail": "response count matches expected requests",
+      "expected": 28,
+      "name": "request_count",
+      "ok": true
+    },
+    {
+      "actual": 28,
+      "detail": "summary HTTP count matches response files",
+      "expected": 28,
+      "name": "summary_http_200",
+      "ok": true
+    },
+    {
+      "actual": {
+        "lengths": [
+          32
+        ],
+        "missing": 0
+      },
+      "detail": "generated token sequences are present and have expected length",
+      "expected": 32,
+      "name": "generated_token_sequences",
+      "ok": true
+    },
+    {
+      "actual": [
+        28
+      ],
+      "detail": "all response metadata slots values match",
+      "expected": 28,
+      "name": "slots",
+      "ok": true
+    },
+    {
+      "actual": [
+        262144
+      ],
+      "detail": "all response metadata ctx values match",
+      "expected": 262144,
+      "name": "ctx",
+      "ok": true
+    },
+    {
+      "actual": {
+        "token_match_values": [],
+        "token_mismatch_values": []
+      },
+      "detail": "token_match metadata is clean",
+      "name": "token_match",
+      "ok": true
+    },
+    {
+      "actual": [],
+      "detail": "all responses include DS4 checksum",
+      "name": "checksum",
+      "ok": true
+    },
+    {
+      "actual": [],
+      "detail": "KV runtime and HC persistence are resident in response metadata",
+      "name": "resident_kv",
+      "ok": true
+    },
+    {
+      "actual": [],
+      "detail": "typed DS4 KV metadata gates are enabled",
+      "name": "typed_kv",
+      "ok": true
+    },
+    {
+      "actual": 1,
+      "detail": "summary confirms compact MoE decode gate",
+      "expected": 1,
+      "name": "compact_moe",
+      "ok": true
+    },
+    {
+      "actual": 896,
+      "detail": "summary generated token total matches shape",
+      "expected": 896,
+      "name": "generated_tokens_meta",
+      "ok": true
+    },
+    {
+      "actual": 100.245595,
+      "detail": "server_generated_tok_s_decode is present and above threshold",
+      "expected": 1.0,
+      "name": "server_generated_tok_s_decode",
+      "ok": true
+    },
+    {
+      "actual": 15.250440667793258,
+      "detail": "client_generated_tok_s is present and above threshold",
+      "expected": 1.0,
+      "name": "client_generated_tok_s",
+      "ok": true
+    },
+    {
+      "actual": 3.47265625,
+      "detail": "gpu_util_avg is present and above threshold",
+      "expected": 0.0,
+      "name": "gpu_util_avg",
+      "ok": true
+    },
+    {
+      "actual": 768,
+      "detail": "GPU utilization samples are present",
+      "expected": 1,
+      "name": "gpu_samples",
+      "ok": true
+    },
+    {
+      "actual": 0,
+      "detail": "VRAM admission failure count is acceptable",
+      "expected": 0,
+      "name": "vram_failures",
+      "ok": true
+    },
+    {
+      "actual": 2566.0,
+      "detail": "minimum free VRAM is above threshold",
+      "expected": 1536.0,
+      "name": "vram_min_free_mib",
+      "ok": true
+    }
+  ],
+  "failure_count": 0,
+  "ready": true,
+  "response_count": 28,
+  "schema": "ds4_v100_http_readiness.v1",
+  "status": "/workspace/logs/sprint413-post-attn-slot28-http-ab/control/none-hc-nccl-allgather-hc-stream-sync-model-router-compact-moe/status.json",
+  "summary": "/workspace/logs/sprint413-post-attn-slot28-http-ab/control/none-hc-nccl-allgather-hc-stream-sync-model-router-compact-moe/summary.json",
+  "topline": {
+    "client_generated_tok_s": 15.250440667793258,
+    "compressed_kv_sum_ms": 2687.6320329999985,
+    "gpu_util_avg": 3.47265625,
+    "gpu_util_max": 46.0,
+    "http_200": 28,
+    "output_head_first_token": 83484,
+    "requests": 28,
+    "server_generated_tok_s_decode": 100.245595,
+    "tokens": 32,
+    "vram_failures": 0,
+    "vram_min_free_mib": 2566
+  }
+}

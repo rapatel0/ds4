@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-26
-last_updated_by: sprint-412
-revision: 425
+last_updated_by: sprint-413
+revision: 426
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -78,7 +78,8 @@ The performance program is intentionally isolated:
 | 20 | `tools/ds4-v100-tp-ep-nccl-http-ab.py` | Complete promotion harness | Promoted; target 32-slot/256K/32-token HTTP A/B passed readiness/parity and HC-current NCCL improved server decode 101.897890 -> 107.723452 tok/s |
 | 21 | `--true-ds4-post-attention-ffn-input-gate` | Complete semantic serving diagnostic | Served 32/32 HTTP requests at target shape and activated true attention-output/post-attn timers, but keep default-off: server decode dropped 108.084959 -> 20.315962 tok/s and the path missed the 1536 MiB NCCL reserve with 1328 MiB free |
 | 22 | `--true-ds4-attention-output-nccl-allgather-gate` inside post-attn serving | Complete semantic NCCL diagnostic | Slightly improved semantic path server decode 20.315962 -> 20.984393 tok/s and attention-output timer 512.629430 -> 486.473759 ms, but keep diagnostic-only: min free VRAM stayed 1328 MiB with 62 reserve failures |
-| 23 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
+| 23 | Reduced-slot semantic serving admission | Complete operational tier | Launcher now supports TP/EP serving with `DS4_V100_SLOTS<=32`; semantic post-attn candidate is readiness-clean at 24/28/30 slots and 256K, with 28 slots selected as the practical tier |
+| 24 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
 
 Promotion requires a same-binary V100 A/B at the real serving shape, unchanged
 first token/checksum, and improved GPU utilization or server decode tok/s.
@@ -215,6 +216,17 @@ The near-term implementation focus is therefore:
    attention-output/post-attention scratch residency and replace the
    projection/gather sequence with a purpose-built TP kernel or collective
    shape.
+   Sprint 413 made reduced-slot semantic serving operational. The launcher now
+   permits TP/EP serving with `DS4_V100_SLOTS<=32`, and the post-attention
+   semantic candidate passed readiness at `24`, `28`, and `30` slots with
+   `256K` context. The highest clean tier tested is `30` slots, with
+   `1556 MiB` minimum free VRAM and zero reserve failures, but it leaves only
+   `20 MiB` above the `1536 MiB` NCCL guard. The practical semantic tier is
+   therefore `28` slots: `28/28` HTTP responses, `1790 MiB` minimum free VRAM,
+   zero reserve failures, and `20.624419` server decode tok/s. Keep the
+   long-term target at `32` slots / `256K`; use `28` slots for quality and
+   performance iteration until the attention-output/post-attention path has
+   enough memory headroom to return to the full target.
 2. Use the Sprint 383 matrix as the current before/after performance baseline.
    At `32` configured slots, `256K`, `position=262080`, and `32` generated
    chat tokens/request, active requests `1,4,8,16,32` all pass with
