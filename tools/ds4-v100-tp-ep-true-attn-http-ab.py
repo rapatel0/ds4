@@ -107,6 +107,10 @@ def profile_cmd(args: argparse.Namespace, case: str, port: int, candidate: bool)
         cmd.append("--disable-route-plan-async-upload")
         if args.candidate_attention_output_nccl:
             cmd.append("--attention-output-nccl-allgather")
+        if args.candidate_semantic_skip_stats:
+            cmd.append("--semantic-skip-stats")
+        else:
+            cmd.append("--disable-semantic-skip-stats")
     return cmd
 
 
@@ -256,6 +260,17 @@ def main() -> int:
     parser.add_argument("--prompt-file", type=pathlib.Path)
     parser.add_argument("--http-endpoint", choices=["chat", "selected-token"], default="chat")
     parser.add_argument("--candidate-attention-output-nccl", action="store_true")
+    parser.add_argument(
+        "--candidate-semantic-skip-stats",
+        dest="candidate_semantic_skip_stats",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--disable-candidate-semantic-skip-stats",
+        dest="candidate_semantic_skip_stats",
+        action="store_false",
+    )
     parser.add_argument("--vram-min-free-mib", type=int, default=64)
     parser.add_argument("--nccl-min-free-mib", type=int, default=1536)
     parser.add_argument("--min-free-mib", type=float, default=1536.0)

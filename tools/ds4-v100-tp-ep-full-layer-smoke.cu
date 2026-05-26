@@ -720,6 +720,7 @@ struct Options {
     bool true_ds4_attention_output_gate = false;
     bool true_ds4_attention_output_nccl_allgather_gate = false;
     bool true_ds4_post_attention_ffn_input_gate = false;
+    bool true_ds4_semantic_skip_stats_gate = false;
     bool true_ds4_compressed_kv_gate = false;
     bool true_ds4_indexer_attention_gate = false;
     bool true_ds4_compressed_kv_direct_input_fill_gate = false;
@@ -4039,6 +4040,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--true-ds4-semantic-skip-stats-gate") == 0) {
+            opt->true_ds4_semantic_skip_stats_gate = true;
         } else if (std::strcmp(arg, "--true-ds4-compressed-kv-gate") == 0) {
             opt->true_ds4_compressed_kv_gate = true;
             opt->true_ds4_attention_projection_gate = true;
@@ -4234,6 +4237,9 @@ bool parse_args(int argc, char **argv, Options *opt) {
            (!opt->true_ds4_post_attention_ffn_input_gate ||
             (opt->true_ds4_attention_output_gate && opt->true_shared_ffn_gate &&
              opt->model_router_routes && opt->routed_ffn_norm_input_gate)) &&
+           (!opt->true_ds4_semantic_skip_stats_gate ||
+            (opt->true_ds4_attention_output_gate ||
+             opt->true_ds4_post_attention_ffn_input_gate)) &&
            (!opt->true_ds4_compressed_kv_gate ||
             opt->true_ds4_attention_projection_gate) &&
            (!opt->true_ds4_indexer_attention_gate ||
@@ -12627,23 +12633,25 @@ int run_true_ds4_attention_output_projection(const Options &opt,
     TensorF32Stats head_stats;
     TensorF32Stats out_a_stats;
     TensorF32Stats out_b_stats;
-    for (int rank = 0; rank < kGpus; ++rank) {
-        RankState &r = ranks[rank];
-        CHECK_CUDA(cudaSetDevice(r.device));
-        merge_tensor_stats(
-            &head_stats,
-            collect_tensor_f32_stats(r.d_attn_heads,
-                                     (size_t)head_input_elems, r.stream));
-        merge_tensor_stats(
-            &out_a_stats,
-            collect_tensor_f32_stats(r.d_attn_output_a_full,
-                                     (size_t)out_a_full_elems, r.stream));
-        merge_tensor_stats(
-            &out_b_stats,
-            collect_tensor_f32_stats(
-                ops->attn.d_out[(size_t)rank],
-                (size_t)opt.slots * (size_t)ops->attn.rows_per_gpu,
-                r.dense_stream ? r.dense_stream : r.stream));
+    if (!opt.true_ds4_semantic_skip_stats_gate) {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            CHECK_CUDA(cudaSetDevice(r.device));
+            merge_tensor_stats(
+                &head_stats,
+                collect_tensor_f32_stats(r.d_attn_heads,
+                                         (size_t)head_input_elems, r.stream));
+            merge_tensor_stats(
+                &out_a_stats,
+                collect_tensor_f32_stats(r.d_attn_output_a_full,
+                                         (size_t)out_a_full_elems, r.stream));
+            merge_tensor_stats(
+                &out_b_stats,
+                collect_tensor_f32_stats(
+                    ops->attn.d_out[(size_t)rank],
+                    (size_t)opt.slots * (size_t)ops->attn.rows_per_gpu,
+                    r.dense_stream ? r.dense_stream : r.stream));
+        }
     }
     const auto stop = std::chrono::steady_clock::now();
     const double ms =
@@ -12651,11 +12659,13 @@ int run_true_ds4_attention_output_projection(const Options &opt,
     std::printf("tp_ep_true_attention_output_projection\tlayer\t%d\tslots\t%d\t"
                 "head_input_cols\t%d\tout_a_cols\t%d\tout_b_shard_cols\t%d\t"
                 "nccl_allgather\t%d\t"
+                "stats_skipped\t%d\t"
                 "heads_max\t%.9g\theads_bad\t%d\t"
                 "out_a_max\t%.9g\tout_a_bad\t%d\t"
                 "out_b_max\t%.9g\tout_b_bad\t%d\tms\t%.6f\tPASS\n",
                 layer, opt.slots, kAttentionOutputAInput, kAttentionOutputAFull,
                 ops->attn.rows_per_gpu, use_nccl_allgather ? 1 : 0,
+                opt.true_ds4_semantic_skip_stats_gate ? 1 : 0,
                 head_stats.max_abs,
                 head_stats.finite_bad, out_a_stats.max_abs,
                 out_a_stats.finite_bad, out_b_stats.max_abs,
@@ -12708,11 +12718,13 @@ int run_true_ds4_post_attention_ffn_input(const Options &opt,
     for (int rank = 0; rank < kGpus; ++rank) {
         CHECK_CUDA(cudaSetDevice(ranks[rank].device));
         CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
-        merge_tensor_stats(
-            &post_shard_stats,
-            collect_tensor_f32_stats(ranks[rank].d_post_attn_shard,
-                                     (size_t)shard_elems,
-                                     ranks[rank].stream));
+        if (!opt.true_ds4_semantic_skip_stats_gate) {
+            merge_tensor_stats(
+                &post_shard_stats,
+                collect_tensor_f32_stats(ranks[rank].d_post_attn_shard,
+                                         (size_t)shard_elems,
+                                         ranks[rank].stream));
+        }
     }
 
     CHECK_CUDA(cudaSetDevice(opt.devices[0]));
@@ -12730,8 +12742,11 @@ int run_true_ds4_post_attention_ffn_input(const Options &opt,
         (uint32_t)kHidden, (uint32_t)opt.slots, 1.0e-6f);
     CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaDeviceSynchronize());
-    TensorF32Stats ffn_norm_stats =
-        collect_tensor_f32_stats(hc->d_ffn_normed, (size_t)full_elems, nullptr);
+    TensorF32Stats ffn_norm_stats;
+    if (!opt.true_ds4_semantic_skip_stats_gate) {
+        ffn_norm_stats =
+            collect_tensor_f32_stats(hc->d_ffn_normed, (size_t)full_elems, nullptr);
+    }
 
     if (opt.model_router_routes) {
         if (!hc->d_router_w[layer] || !hc->d_router_logits ||
@@ -12856,7 +12871,8 @@ int run_true_ds4_post_attention_ffn_input(const Options &opt,
     int total_routes = 0;
     for (int rank = 0; rank < kGpus; ++rank) {
         total_routes += ranks[rank].routes;
-        if (ranks[rank].d_route_inv_scale && ranks[rank].routes > 0) {
+        if (!opt.true_ds4_semantic_skip_stats_gate &&
+            ranks[rank].d_route_inv_scale && ranks[rank].routes > 0) {
             CHECK_CUDA(cudaSetDevice(ranks[rank].device));
             merge_tensor_stats(
                 &route_inv_scale_stats,
@@ -12869,11 +12885,13 @@ int run_true_ds4_post_attention_ffn_input(const Options &opt,
     const double ms =
         std::chrono::duration<double, std::milli>(stop - start).count();
     std::printf("tp_ep_post_attention_ffn_input\tlayer\t%d\tslots\t%d\t"
-                "total_routes\t%d\tpost_max\t%.9g\tpost_bad\t%d\t"
+                "total_routes\t%d\tstats_skipped\t%d\tpost_max\t%.9g\tpost_bad\t%d\t"
                 "ffn_norm_max\t%.9g\tffn_norm_bad\t%d\t"
                 "route_inv_scale_max\t%.9g\troute_inv_scale_bad\t%d\t"
                 "ms\t%.6f\tPASS\n",
-                layer, opt.slots, total_routes, post_shard_stats.max_abs,
+                layer, opt.slots, total_routes,
+                opt.true_ds4_semantic_skip_stats_gate ? 1 : 0,
+                post_shard_stats.max_abs,
                 post_shard_stats.finite_bad, ffn_norm_stats.max_abs,
                 ffn_norm_stats.finite_bad, route_inv_scale_stats.max_abs,
                 route_inv_scale_stats.finite_bad, ms);

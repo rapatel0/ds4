@@ -378,6 +378,16 @@ def build_env(args, port):
             "DS4_V100_TP_EP_TRUE_DS4_POST_ATTENTION_FFN_INPUT": "1"
             if args.post_attention_ffn_input
             else "0",
+            "DS4_V100_TP_EP_TRUE_DS4_SEMANTIC_SKIP_STATS": "1"
+            if (
+                args.semantic_skip_stats
+                and (
+                    args.attention_output
+                    or args.attention_output_nccl_allgather
+                    or args.post_attention_ffn_input
+                )
+            )
+            else "0",
             "DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_INPUT_FILL": "1"
             if args.fused_compressed_input_fill
             else "0",
@@ -963,6 +973,17 @@ def main():
     parser.add_argument("--attention-output", action="store_true")
     parser.add_argument("--attention-output-nccl-allgather", action="store_true")
     parser.add_argument("--post-attention-ffn-input", action="store_true")
+    parser.add_argument(
+        "--semantic-skip-stats",
+        dest="semantic_skip_stats",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--disable-semantic-skip-stats",
+        dest="semantic_skip_stats",
+        action="store_false",
+    )
     parser.add_argument("--skip-compressed-store", action="store_true")
     parser.add_argument("--skip-indexer-store", action="store_true")
     parser.add_argument("--fused-compressed-input-fill", action="store_true")

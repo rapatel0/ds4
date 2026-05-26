@@ -4,7 +4,25 @@ Last updated: 2026-05-26
 
 ## Topline
 
-Latest semantic serving status: Sprint 413 made reduced-slot TP/EP serving a
+Latest semantic/NCCL status: Sprint 414 promoted semantic skip-stats for the
+TP/EP true-attention plus post-attention FFN-input serving path. At the
+practical `28` slot / `256K` shape, the no-skip semantic candidate served
+`28/28` HTTP responses with `1790 MiB` minimum free VRAM, zero failures, and
+`19.708590` server decode tok/s. With
+`DS4_V100_TP_EP_TRUE_DS4_SEMANTIC_SKIP_STATS=auto`, the candidate again served
+`28/28` responses with the same `1790 MiB` free VRAM and zero failures, while
+server decode improved to `31.091919` tok/s and client generated throughput
+improved from `7.543523` to `10.366506` tok/s. The attention-output timed
+section dropped from `460.797268 ms` to `19.520681 ms`; post-attention dropped
+from `129.119597 ms` to `82.034351 ms`; response-0 semantic tokens matched.
+Decision: enable semantic skip-stats automatically for post-attention semantic
+serving and keep explicit disable switches for diagnostics. Remaining
+bottleneck: the semantic path is still only about one third of the promoted
+fast control at the same shape, so the next TP/EP-only work should remove the
+GPU0-centered post-attention full-hidden gather/broadcast and replace it with a
+sharded/NCCL boundary.
+
+Previous semantic serving status: Sprint 413 made reduced-slot TP/EP serving a
 first-class operational mode by relaxing the launcher guard from exactly `32`
 slots to `DS4_V100_SLOTS<=32`, then ran a reduced-slot semantic HTTP A/B matrix
 at `256K` context. The post-attention semantic candidate is now
