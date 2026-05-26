@@ -108,6 +108,16 @@ token `83484`; all `32` generated token sequences matched and checksum stayed
 average GPU utilization moved from `8.621875%` to `9.003289%`, and
 `vram_failures=0` with `1746 MiB` minimum free VRAM in both runs.
 
+Latest parity hardening: Sprint 390 added
+`tools/ds4-v100-http-response-parity.py` as the standard HTTP artifact
+comparator for TP/EP A/B promotions. It parses paired `response-NN.txt` files
+with trailing `HTTP_STATUS:NNN` lines, compares HTTP status, generated token
+sequence, choice token IDs, selected token, DS4 checksum, and generated text,
+then emits JSON and exits non-zero on parity failure. It passes on the Sprint
+389 control/candidate HTTP artifacts with `32/32` matched pairs and fails a
+mutated-token negative fixture on `generated_token_sequence`. Future HTTP A/B
+sprints should use this tool instead of ad hoc JSON snippets.
+
 Latest throughput direction before memory hardening: Sprint 381 implemented
 `--fp8-e5m2-kv-gate` as a default-off typed-KV format diagnostic. The row
 layout stays block-128 with one E8M0 scale byte plus 128 FP8 payload bytes, so

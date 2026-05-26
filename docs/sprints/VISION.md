@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-25
-last_updated_by: sprint-389
-revision: 402
+last_updated_by: sprint-390
+revision: 403
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -116,7 +116,14 @@ The near-term implementation focus is therefore:
    `=0` preserving the diagnostic path; the profile harness is aligned and
    exposes `--disable-skip-compressed-dense-stats` for future control runs.
    This is diagnostic work removal, not a dtype change.
-5. Continue reducing the real-router route planning boundary, but shift away
+5. Use permanent HTTP response parity for future serving A/B promotions.
+   Sprint 390 added `tools/ds4-v100-http-response-parity.py` and validated it
+   against Sprint 389 artifacts: `32/32` matched response pairs, same generated
+   token sequences, same selected tokens, same generated text, and same DS4
+   checksum. The tool also fails non-zero on a mutated generated-token fixture.
+   Future HTTP A/B sprints should attach this JSON summary instead of relying
+   on manual response inspection.
+6. Continue reducing the real-router route planning boundary, but shift away
    from H2D upload count after Sprint 386. Sprint 385 split the broad
    FFN/router bucket and removed unused legacy single-route-index uploads on
    the compact-MoE path. Sprint 386 then packed the compact route plan into
@@ -143,7 +150,7 @@ The near-term implementation focus is therefore:
    Future route work should fuse planning with expert dispatch/compose or
    remove per-layer host involvement entirely; do not promote the naive GPU
    planner.
-6. Close the S-E follow-up with a narrow parity/precheck fix if we want to
+7. Close the S-E follow-up with a narrow parity/precheck fix if we want to
    revisit fused gated-SiLU. Sprint 379 showed the current serving-shaped
    branch already has no standalone routed SwiGLU launch, the generic
    TurboMind gated-SiLU epilogue is not DS4-equivalent, and the new
@@ -152,12 +159,12 @@ The near-term implementation focus is therefore:
    serving promotion candidate until the resident dense-KV precheck failure
    under `routed-normalized + fused-gated-silu` is diagnosed or a deterministic
    fused-gate parity harness proves the ABI.
-7. Keep TP-sharded experts out of serving for now. Sprint 380 measured TP8 and
+8. Keep TP-sharded experts out of serving for now. Sprint 380 measured TP8 and
    TP4: TP8 is still numerically invalid, and TP4 is correct but only
    `1.055x/0.891x/0.927x` total speedup at `96/192/384` routes because
    reduction dominates. Revisit TP experts only as a focused fused TP4
    reduction/compose sprint.
-8. Treat S-G E5M2 KV as a positive diagnostic, not a default yet. Sprint 381
+9. Treat S-G E5M2 KV as a positive diagnostic, not a default yet. Sprint 381
    added `DS4_V100_TP_KV_F8_E5M2_B128` and `--fp8-e5m2-kv-gate`; V100 row
    tests passed with zero byte mismatches, direct 4-token checksum matched
    while decode improved from `70.710875` to `75.787866` tok/s, and HTTP
@@ -166,7 +173,7 @@ The near-term implementation focus is therefore:
    parity is proven. Sprint 382 put VRAM admission in place after one
    candidate startup OOM, but E4M3 remains the default until a longer
    parity/soak sprint proves E5M2 across continuation-heavy serving.
-9. Add S-H MTP only after base TP/EP decode has stable metrology and a settled
+10. Add S-H MTP only after base TP/EP decode has stable metrology and a settled
    launch strategy. MTP remains the decode multiplier, but it should not hide
    kernel scheduling or topology bottlenecks.
 
@@ -2868,6 +2875,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 380 reran TP4 and TP8 under one driver. | TP4 is correct at `96/192/384` routes with total speedup `1.055x/0.891x/0.927x`; TP8 remains incorrect with large NaN counts. The simple TP output reduction dominates at larger route tiers. | Do not integrate TP-sharded experts into serving yet. Revisit only with a fused TP4 reduction/compose boundary, otherwise move to the next Vision gate. |
 | 2026-05-25 | Sprint 381 implemented the FP8 E5M2 KV gate. | E5M2 row/device smokes passed for `attn`, `attn_raw`, and `indexer`; direct 4-token checksum matched while decode improved `70.710875 -> 75.787866` tok/s; HTTP selected-token 4-token client throughput improved `17.212677 -> 22.389190` tok/s with first-token parity. | Keep E5M2 default-off. It is promising, but needs longer parity/soak and VRAM margin work before replacing E4M3. |
 | 2026-05-25 | Sprint 389 promoted compressed dense stats skip. | Against the current real-router compact-MoE TP/EP baseline at `32` slots / `256K`, direct decode improved `91.869507 -> 102.871437` tok/s with first token `98751`; HTTP chat server decode improved `89.709430 -> 103.758804` tok/s, client throughput improved `42.183007 -> 44.592824` tok/s, first token stayed `83484`, all generated token sequences matched, and checksum stayed `17913667583206000416`. | Promote `DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_SKIP_DENSE_STATS=1` as the launcher/profile default; explicit `=0` or `--disable-skip-compressed-dense-stats` keeps the diagnostic stats path available. |
+| 2026-05-25 | Sprint 390 made HTTP response parity permanent. | Added `tools/ds4-v100-http-response-parity.py`; it passes on Sprint 389's `32` control/candidate response pairs and fails a mutated generated-token fixture. | Use this comparator for future HTTP A/B promotion evidence. |
 
 ## Open Questions
 
