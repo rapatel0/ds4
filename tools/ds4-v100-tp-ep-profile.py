@@ -375,6 +375,9 @@ def build_env(args, port):
             "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_OUTPUT_NCCL_ALLGATHER": "1"
             if args.attention_output_nccl_allgather
             else "0",
+            "DS4_V100_TP_EP_TRUE_DS4_POST_ATTENTION_FFN_INPUT": "1"
+            if args.post_attention_ffn_input
+            else "0",
             "DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_INPUT_FILL": "1"
             if args.fused_compressed_input_fill
             else "0",
@@ -437,6 +440,8 @@ def variant_suffix(args):
         suffix += "-attention-output"
     if getattr(args, "attention_output_nccl_allgather", False):
         suffix += "-attention-output-nccl-allgather"
+    if getattr(args, "post_attention_ffn_input", False):
+        suffix += "-post-attention-ffn-input"
     if getattr(args, "compressed_dense_event_wait", False):
         suffix += "-compressed-dense-event-wait"
     if getattr(args, "disable_compressed_dense_event_wait", False):
@@ -578,6 +583,8 @@ def direct_command(args):
         cmd.append("--true-ds4-attention-output-gate")
     if args.attention_output_nccl_allgather:
         cmd.append("--true-ds4-attention-output-nccl-allgather-gate")
+    if args.post_attention_ffn_input:
+        cmd.append("--true-ds4-post-attention-ffn-input-gate")
     if args.skip_compressed_store:
         cmd.append("--true-ds4-attention-typed-kv-skip-compressed-store-gate")
     if args.skip_indexer_store:
@@ -954,6 +961,7 @@ def main():
     parser.add_argument("--hc-current-fused-fill-pack", action="store_true")
     parser.add_argument("--attention-output", action="store_true")
     parser.add_argument("--attention-output-nccl-allgather", action="store_true")
+    parser.add_argument("--post-attention-ffn-input", action="store_true")
     parser.add_argument("--skip-compressed-store", action="store_true")
     parser.add_argument("--skip-indexer-store", action="store_true")
     parser.add_argument("--fused-compressed-input-fill", action="store_true")

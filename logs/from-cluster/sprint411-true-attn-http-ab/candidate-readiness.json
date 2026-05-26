@@ -1,0 +1,314 @@
+{
+  "case_dir": "/workspace/logs/sprint411-true-attn-http-ab/candidate/none-hc-nccl-allgather-hc-stream-sync-post-attention-ffn-input-model-router-compact-moe",
+  "checks": [
+    {
+      "actual": "/workspace/logs/sprint411-true-attn-http-ab/candidate/none-hc-nccl-allgather-hc-stream-sync-post-attention-ffn-input-model-router-compact-moe/summary.json",
+      "detail": "summary loaded",
+      "name": "summary_json",
+      "ok": true
+    },
+    {
+      "actual": "/workspace/logs/sprint411-true-attn-http-ab/candidate/none-hc-nccl-allgather-hc-stream-sync-post-attention-ffn-input-model-router-compact-moe/status.json",
+      "detail": "status loaded",
+      "name": "status_json",
+      "ok": true
+    },
+    {
+      "detail": "all responses parsed",
+      "name": "responses_parse",
+      "ok": true
+    },
+    {
+      "actual": {
+        "http_200": 0,
+        "responses": 32
+      },
+      "detail": "all responses have HTTP 200",
+      "name": "http_200",
+      "ok": false
+    },
+    {
+      "actual": 32,
+      "detail": "response count matches expected requests",
+      "expected": 32,
+      "name": "request_count",
+      "ok": true
+    },
+    {
+      "actual": 0,
+      "detail": "summary HTTP count matches response files",
+      "expected": 0,
+      "name": "summary_http_200",
+      "ok": true
+    },
+    {
+      "actual": {
+        "lengths": [],
+        "missing": 32
+      },
+      "detail": "generated token sequences are present and have expected length",
+      "expected": 32,
+      "name": "generated_token_sequences",
+      "ok": false
+    },
+    {
+      "actual": [
+        null
+      ],
+      "detail": "all response metadata slots values match",
+      "expected": 32,
+      "name": "slots",
+      "ok": false
+    },
+    {
+      "actual": [
+        null
+      ],
+      "detail": "all response metadata ctx values match",
+      "expected": 262144,
+      "name": "ctx",
+      "ok": false
+    },
+    {
+      "actual": {
+        "token_match_values": [],
+        "token_mismatch_values": []
+      },
+      "detail": "token_match metadata is clean",
+      "name": "token_match",
+      "ok": true
+    },
+    {
+      "actual": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31
+      ],
+      "detail": "all responses include DS4 checksum",
+      "name": "checksum",
+      "ok": false
+    },
+    {
+      "actual": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31
+      ],
+      "detail": "KV runtime and HC persistence are resident in response metadata",
+      "name": "resident_kv",
+      "ok": false
+    },
+    {
+      "actual": [
+        {
+          "field": "true_ds4_attention_typed_kv_raw_gate",
+          "index": 0,
+          "value": null
+        },
+        {
+          "field": "true_ds4_attention_typed_kv_compressed_gate",
+          "index": 0,
+          "value": null
+        },
+        {
+          "field": "true_ds4_attention_typed_kv_indexer_gate",
+          "index": 0,
+          "value": null
+        },
+        {
+          "field": "true_ds4_attention_typed_kv_history_gate",
+          "index": 0,
+          "value": null
+        },
+        {
+          "field": "true_ds4_attention_typed_kv_skip_current_load_gate",
+          "index": 0,
+          "value": null
+        },
+        {
+          "field": "true_ds4_attention_typed_kv_quiet_gate",
+          "index": 0,
+          "value": null
+        },
+        {
+          "field": "true_ds4_attention_typed_kv_batch_rows_gate",
+          "index": 0,
+          "value": null
+        },
+        {
+          "field": "true_ds4_attention_typed_kv_stream_sync_gate",
+          "index": 0,
+          "value": null
+        },
+        {
+          "field": "true_ds4_attention_typed_kv_raw_gate",
+          "index": 1,
+          "value": null
+        },
+        {
+          "field": "true_ds4_attention_typed_kv_compressed_gate",
+          "index": 1,
+          "value": null
+        },
+        {
+          "field": "true_ds4_attention_typed_kv_indexer_gate",
+          "index": 1,
+          "value": null
+        },
+        {
+          "field": "true_ds4_attention_typed_kv_history_gate",
+          "index": 1,
+          "value": null
+        },
+        {
+          "field": "true_ds4_attention_typed_kv_skip_current_load_gate",
+          "index": 1,
+          "value": null
+        },
+        {
+          "field": "true_ds4_attention_typed_kv_quiet_gate",
+          "index": 1,
+          "value": null
+        },
+        {
+          "field": "true_ds4_attention_typed_kv_batch_rows_gate",
+          "index": 1,
+          "value": null
+        },
+        {
+          "field": "true_ds4_attention_typed_kv_stream_sync_gate",
+          "index": 1,
+          "value": null
+        }
+      ],
+      "detail": "typed DS4 KV metadata gates are enabled",
+      "name": "typed_kv",
+      "ok": false
+    },
+    {
+      "detail": "summary confirms compact MoE decode gate",
+      "expected": 1,
+      "name": "compact_moe",
+      "ok": false
+    },
+    {
+      "actual": 0.0,
+      "detail": "server_generated_tok_s_decode is present and above threshold",
+      "expected": 1.0,
+      "name": "server_generated_tok_s_decode",
+      "ok": false
+    },
+    {
+      "actual": 0.0,
+      "detail": "client_generated_tok_s is present and above threshold",
+      "expected": 1.0,
+      "name": "client_generated_tok_s",
+      "ok": false
+    },
+    {
+      "actual": 0.0,
+      "detail": "gpu_util_avg is present and above threshold",
+      "expected": 0.0,
+      "name": "gpu_util_avg",
+      "ok": true
+    },
+    {
+      "actual": 8,
+      "detail": "GPU utilization samples are present",
+      "expected": 1,
+      "name": "gpu_samples",
+      "ok": true
+    },
+    {
+      "actual": 0,
+      "detail": "VRAM admission failure count is acceptable",
+      "expected": 0,
+      "name": "vram_failures",
+      "ok": true
+    },
+    {
+      "actual": 1934.0,
+      "detail": "minimum free VRAM is above threshold",
+      "expected": 1536.0,
+      "name": "vram_min_free_mib",
+      "ok": true
+    }
+  ],
+  "failure_count": 10,
+  "ready": false,
+  "response_count": 32,
+  "schema": "ds4_v100_http_readiness.v1",
+  "status": "/workspace/logs/sprint411-true-attn-http-ab/candidate/none-hc-nccl-allgather-hc-stream-sync-post-attention-ffn-input-model-router-compact-moe/status.json",
+  "summary": "/workspace/logs/sprint411-true-attn-http-ab/candidate/none-hc-nccl-allgather-hc-stream-sync-post-attention-ffn-input-model-router-compact-moe/summary.json",
+  "topline": {
+    "client_generated_tok_s": 0.0,
+    "compressed_kv_sum_ms": null,
+    "gpu_util_avg": 0.0,
+    "gpu_util_max": 0.0,
+    "http_200": 0,
+    "output_head_first_token": null,
+    "requests": 32,
+    "server_generated_tok_s_decode": 0.0,
+    "tokens": 32,
+    "vram_failures": 0,
+    "vram_min_free_mib": 1934
+  }
+}

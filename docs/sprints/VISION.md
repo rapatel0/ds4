@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-26
-last_updated_by: sprint-410
-revision: 423
+last_updated_by: sprint-411
+revision: 424
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -76,7 +76,8 @@ The performance program is intentionally isolated:
 | 18 | Post-close lazy output-head VRAM checkpoint | Complete diagnostic | Keep telemetry; closing lazy output head recovers only ~136 MiB and HC-current NCCL still fails reserve at 520-522 MiB free |
 | 19 | Skip unused TP-runtime comp-state arena | Complete memory fix | Promoted; HC-current NCCL now passes target 32-slot/256K reserve with 2240-2242 MiB post-close free |
 | 20 | `tools/ds4-v100-tp-ep-nccl-http-ab.py` | Complete promotion harness | Promoted; target 32-slot/256K/32-token HTTP A/B passed readiness/parity and HC-current NCCL improved server decode 101.897890 -> 107.723452 tok/s |
-| 21 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
+| 21 | `--true-ds4-post-attention-ffn-input-gate` | Complete semantic serving diagnostic | Served 32/32 HTTP requests at target shape and activated true attention-output/post-attn timers, but keep default-off: server decode dropped 108.084959 -> 20.315962 tok/s and the path missed the 1536 MiB NCCL reserve with 1328 MiB free |
+| 22 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
 
 Promotion requires a same-binary V100 A/B at the real serving shape, unchanged
 first token/checksum, and improved GPU utilization or server decode tok/s.
@@ -187,6 +188,20 @@ The near-term implementation focus is therefore:
    default. Caveat: client generated throughput regressed from `17.223947` to
    `16.627120` tok/s and sampled average GPU utilization stayed low, so this
    is not the final utilization lever.
+   Sprint 411 then moved from narrow NCCL transport to semantic completion:
+   the true-attention output plus post-attention FFN-input path is now exposed
+   in HTTP serving with `DS4_V100_TP_EP_TRUE_DS4_POST_ATTENTION_FFN_INPUT=1`.
+   At the same `32` request / `32` slot / `256K` / `32` token shape, the
+   candidate returned `32/32` HTTP 200 responses and activated
+   `scaffold_sum_pre_ep_attention_output_ms=512.629430` plus
+   `scaffold_sum_pre_ep_post_attention_ffn_input_ms=144.063057`. It is not a
+   promotion: readiness failed because target free VRAM fell to `1328 MiB`
+   with `62` reserve-threshold failures against the current `1536 MiB` NCCL
+   guard, and server generated decode dropped from `108.084959` to
+   `20.315962` tok/s. The next TP/EP-only work is to make this semantic path
+   memory-admitted and replace the current attention-output projection/gather
+   structure with the intended TP collective/kernel shape. Keep the gate
+   default-off until readiness and a quality baseline are both established.
 2. Use the Sprint 383 matrix as the current before/after performance baseline.
    At `32` configured slots, `256K`, `position=262080`, and `32` generated
    chat tokens/request, active requests `1,4,8,16,32` all pass with

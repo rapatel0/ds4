@@ -4,6 +4,24 @@ Last updated: 2026-05-26
 
 ## Topline
 
+Latest semantic serving status: Sprint 411 exposed the true-attention output
+plus post-attention FFN-input path through the TP/EP HTTP serving harness at
+the target `32` requests / `32` slots / `256K` context / `32` generated
+tokens/request shape. The candidate now runs:
+`attn_output_a -> attn_output_b`, `post_attn = current + attn_output_b`, and
+FFN norm/router/shared/routed inputs from `post_attn`. It returned `32/32`
+HTTP 200 responses and activated the new timers:
+`scaffold_sum_pre_ep_attention_output_ms=512.629430` and
+`scaffold_sum_pre_ep_post_attention_ffn_input_ms=144.063057`. It is not
+production-admitted yet: readiness failed only because the candidate crossed
+the current `1536 MiB` NCCL reserve, with `1328 MiB` minimum free VRAM and
+`62` reserve-threshold failures. Server generated decode dropped from the
+promoted fast control's `108.084959` tok/s to `20.315962` tok/s, exposing the
+real attention-output projection as the next semantic bottleneck. Decision:
+keep `DS4_V100_TP_EP_TRUE_DS4_POST_ATTENTION_FFN_INPUT=0` by default; continue
+TP/EP-only work on post-attention memory admission and attention-output
+projection/collective structure before any quality or performance promotion.
+
 Latest NCCL/serving status: Sprint 410 added the permanent
 `tools/ds4-v100-tp-ep-nccl-http-ab.py` harness and ran the target-shape HTTP
 A/B at `32` requests / `32` slots / `256K` context / `32` generated
