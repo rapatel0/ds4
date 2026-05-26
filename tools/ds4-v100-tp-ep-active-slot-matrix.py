@@ -39,6 +39,12 @@ def profile_case_dir(tool, hc_stream_sync, extra_profile_args=None):
             suffix += "-batched-paged-attn"
         if arg == "--model-router-routes":
             suffix += "-model-router"
+        if arg == "--router-cublas":
+            suffix += "-router-cublas"
+        if arg == "--router-hash-fast":
+            suffix += "-router-hash-fast"
+        if arg == "--gpu-route-plan":
+            suffix += "-gpu-route-plan"
         if arg == "--compact-moe-decode":
             suffix += "-compact-moe"
         if arg == "--disable-compact-route-compose":

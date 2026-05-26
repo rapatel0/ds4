@@ -178,6 +178,21 @@ fails non-zero on a mutated response fixture that sets `token_mismatch=1` and
 removes the checksum. Future default promotions should attach both response
 parity and readiness summaries.
 
+Latest router-boundary diagnostic: Sprint 394 added default-off
+`--router-hash-fast-gate` / `DS4_V100_TP_EP_ROUTER_HASH_FAST=1`. The gate uses
+a hash-specific router select kernel that evaluates only the six hash-row
+experts instead of computing probabilities for all `256` experts first. It is
+correct but not promotable. Same-binary V100 HTTP A/B at the real-router
+compact-MoE `32` request / `32` slot / `256K` / `32` generated-token shape
+passed `32/32` response parity and readiness on both sides. Server decode moved
+from `106.900859` to `107.274556` tok/s and client throughput from
+`37.231411` to `38.262372` tok/s, but the targeted router select boundary only
+moved from `27.766750` to `27.683134` ms, HC-current FFN/router moved from
+`36.211953` to `36.287395` ms, scaffold decode regressed from `289.821429` to
+`293.484520` ms, and compressed-KV sum regressed from `3285.935154` to
+`3317.395070` ms. Keep the gate diagnostic-only; the router bottleneck is not
+primarily the extra non-hash probability work inside the select kernel.
+
 Current active steering source: `TEMP_THROUGHPUT_PROMPT.md`. Sprint 380
 implemented S-F `--tp-experts-ab-gate` as a permanent measurement driver,
 `tools/ds4-v100-tp-experts-ab.py`, and closed the immediate topology decision:

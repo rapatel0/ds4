@@ -649,6 +649,7 @@ struct Options {
     bool tp_hc_persist_state_gate = false;
     bool model_router_routes = false;
     bool router_cublas_gate = false;
+    bool router_hash_fast_gate = false;
     bool gpu_route_plan_gate = false;
     bool routed_ffn_norm_input_gate = false;
     bool true_shared_ffn_gate = false;
@@ -3060,6 +3061,49 @@ __global__ void router_select_topk_rows_kernel(int *selected,
     }
 }
 
+__global__ void router_select_hash_fast_rows_kernel(int *selected,
+                                                    float *weights,
+                                                    const float *logits,
+                                                    const int *hash,
+                                                    const uint32_t *tokens,
+                                                    const unsigned char *active,
+                                                    uint32_t hash_rows,
+                                                    uint32_t slots) {
+    const uint32_t slot = blockIdx.x;
+    if (slot >= slots || threadIdx.x != 0u) return;
+    if (active && active[slot] == 0u) {
+        for (int k = 0; k < kModelTopK; ++k) {
+            selected[(uint64_t)slot * kModelTopK + (uint64_t)k] = -1;
+            weights[(uint64_t)slot * kModelTopK + (uint64_t)k] = 0.0f;
+        }
+        return;
+    }
+    uint32_t tok = tokens[slot];
+    if (tok >= hash_rows) tok = 0u;
+    const int *hrow = hash + (uint64_t)tok * kModelTopK;
+    const float *row = logits + (uint64_t)slot * kGlobalExperts;
+    float sum = 0.0f;
+    float local[kModelTopK];
+    for (int k = 0; k < kModelTopK; ++k) {
+        const int e = hrow[k];
+        selected[(uint64_t)slot * kModelTopK + (uint64_t)k] = e;
+        float w = 0.0f;
+        if (e >= 0 && e < kGlobalExperts) {
+            const float z = row[e];
+            const float softplus =
+                z > 20.0f ? z : (z < -20.0f ? expf(z) : log1pf(expf(z)));
+            w = sqrtf(fmaxf(softplus, 0.0f));
+        }
+        local[k] = w;
+        sum += w;
+    }
+    if (sum < 6.103515625e-5f) sum = 6.103515625e-5f;
+    for (int k = 0; k < kModelTopK; ++k) {
+        weights[(uint64_t)slot * kModelTopK + (uint64_t)k] =
+            local[k] / sum * 1.5f;
+    }
+}
+
 __global__ void gpu_route_count_all_kernel(const int *selected,
                                            int *offsets_all,
                                            uint32_t slots,
@@ -3435,6 +3479,7 @@ void usage(const char *argv0) {
                  "       [--decode-cudagraph-gate]\n"
                  "       [--batched-paged-attn-gate]\n"
                  "       [--router-cublas-gate]\n"
+                 "       [--router-hash-fast-gate]\n"
                  "       [--gpu-route-plan-gate]\n"
                  "       [--diagnostic-output-head]\n",
                  argv0);
@@ -3631,6 +3676,12 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--router-cublas-gate") == 0) {
             opt->router_cublas_gate = true;
+            opt->model_router_routes = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--router-hash-fast-gate") == 0) {
+            opt->router_hash_fast_gate = true;
             opt->model_router_routes = true;
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
@@ -5436,12 +5487,23 @@ int run_shared_hc_current_input(const Options &opt,
                          layer, router_dense_rc);
             return 4;
         }
-        router_select_topk_rows_kernel<<<(unsigned int)opt.slots, 1, 0, control_stream>>>(
-            hc->d_router_selected, hc->d_router_weights, hc->d_router_logits,
-            hc->d_router_bias[layer], hc->d_router_hash[layer],
-            hc->d_router_tokens, hc->d_router_active,
-            hc->router_hash_rows[layer],
-            (uint32_t)opt.slots);
+        if (opt.router_hash_fast_gate && hc->d_router_hash[layer] &&
+            hc->d_router_tokens && hc->router_hash_rows[layer] > 0u) {
+            router_select_hash_fast_rows_kernel<<<
+                (unsigned int)opt.slots, 1, 0, control_stream>>>(
+                hc->d_router_selected, hc->d_router_weights,
+                hc->d_router_logits, hc->d_router_hash[layer],
+                hc->d_router_tokens, hc->d_router_active,
+                hc->router_hash_rows[layer], (uint32_t)opt.slots);
+        } else {
+            router_select_topk_rows_kernel<<<
+                (unsigned int)opt.slots, 1, 0, control_stream>>>(
+                hc->d_router_selected, hc->d_router_weights,
+                hc->d_router_logits, hc->d_router_bias[layer],
+                hc->d_router_hash[layer], hc->d_router_tokens,
+                hc->d_router_active, hc->router_hash_rows[layer],
+                (uint32_t)opt.slots);
+        }
         CHECK_CUDA(cudaGetLastError());
         sync_control_device();
         t_router_select_done = std::chrono::steady_clock::now();
@@ -11906,12 +11968,21 @@ int run_true_ds4_post_attention_ffn_input(const Options &opt,
                          layer, router_dense_rc);
             return 5;
         }
-        router_select_topk_rows_kernel<<<(unsigned int)opt.slots, 1>>>(
-            hc->d_router_selected, hc->d_router_weights, hc->d_router_logits,
-            hc->d_router_bias[layer], hc->d_router_hash[layer],
-            hc->d_router_tokens, hc->d_router_active,
-            hc->router_hash_rows[layer],
-            (uint32_t)opt.slots);
+        if (opt.router_hash_fast_gate && hc->d_router_hash[layer] &&
+            hc->d_router_tokens && hc->router_hash_rows[layer] > 0u) {
+            router_select_hash_fast_rows_kernel<<<(unsigned int)opt.slots, 1>>>(
+                hc->d_router_selected, hc->d_router_weights,
+                hc->d_router_logits, hc->d_router_hash[layer],
+                hc->d_router_tokens, hc->d_router_active,
+                hc->router_hash_rows[layer], (uint32_t)opt.slots);
+        } else {
+            router_select_topk_rows_kernel<<<(unsigned int)opt.slots, 1>>>(
+                hc->d_router_selected, hc->d_router_weights,
+                hc->d_router_logits, hc->d_router_bias[layer],
+                hc->d_router_hash[layer], hc->d_router_tokens,
+                hc->d_router_active, hc->router_hash_rows[layer],
+                (uint32_t)opt.slots);
+        }
         CHECK_CUDA(cudaGetLastError());
         CHECK_CUDA(cudaDeviceSynchronize());
         int route_rc = 0;
@@ -14451,6 +14522,7 @@ int run_token_major_serving_loop(const Options &opt,
                 "batched_paged_attn_gate\t%d\t"
                 "compact_moe_decode_gate\t%d\t"
                 "router_cublas_gate\t%d\t"
+                "router_hash_fast_gate\t%d\t"
                 "gpu_route_plan_gate\t%d\t"
                 "fused_gated_silu_gate\t%d\t"
                 "routed_ffn_norm_input_gate\t%d\t"
@@ -14499,6 +14571,7 @@ int run_token_major_serving_loop(const Options &opt,
                 opt.batched_paged_attn_gate ? 1 : 0,
                 opt.compact_moe_decode_gate ? 1 : 0,
                 opt.router_cublas_gate ? 1 : 0,
+                opt.router_hash_fast_gate ? 1 : 0,
                 opt.gpu_route_plan_gate ? 1 : 0,
                 opt.fused_gated_silu_gate ? 1 : 0,
                 opt.routed_ffn_norm_input_gate ? 1 : 0,
@@ -15573,6 +15646,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "\"true_ds4_attention_typed_kv_batch_rows_gate\":%d,"
                           "\"true_ds4_attention_typed_kv_stream_sync_gate\":%d,"
                           "\"fp8_e5m2_kv_gate\":%d,"
+                          "\"router_hash_fast_gate\":%d,"
                           "\"cache_slots_total\":%zu,"
                           "\"cache_slots_used\":%d,"
                           "\"cache_hits\":%llu,"
@@ -15620,6 +15694,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           base_opt.true_ds4_attention_typed_kv_batch_rows_gate ? 1 : 0,
                           base_opt.true_ds4_attention_typed_kv_stream_sync_gate ? 1 : 0,
                           base_opt.fp8_e5m2_kv_gate ? 1 : 0,
+                          base_opt.router_hash_fast_gate ? 1 : 0,
                           sessions.slots.size(),
                           sessions.used(),
                           (unsigned long long)sessions.hits,
@@ -15687,6 +15762,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "ds4_v100_tp_ep_true_ds4_attention_typed_kv_batch_rows_gate %d\n"
                           "ds4_v100_tp_ep_true_ds4_attention_typed_kv_stream_sync_gate %d\n"
                           "ds4_v100_tp_ep_fp8_e5m2_kv_gate %d\n"
+                          "ds4_v100_tp_ep_router_hash_fast_gate %d\n"
                           "ds4_v100_tp_ep_cache_slots_total %zu\n"
                           "ds4_v100_tp_ep_cache_slots_used %d\n"
                           "ds4_v100_tp_ep_cache_hits %llu\n"
@@ -15733,6 +15809,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           base_opt.true_ds4_attention_typed_kv_batch_rows_gate ? 1 : 0,
                           base_opt.true_ds4_attention_typed_kv_stream_sync_gate ? 1 : 0,
                           base_opt.fp8_e5m2_kv_gate ? 1 : 0,
+                          base_opt.router_hash_fast_gate ? 1 : 0,
                           sessions.slots.size(),
                           sessions.used(),
                           (unsigned long long)sessions.hits,
@@ -16263,6 +16340,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   "\"true_ds4_attention_typed_kv_batch_rows_gate\":%d,"
                                   "\"true_ds4_attention_typed_kv_stream_sync_gate\":%d,"
                                   "\"fp8_e5m2_kv_gate\":%d,"
+                                  "\"router_hash_fast_gate\":%d,"
                                   "\"decode_slots\":%d,"
                                   "\"prompt_tokens\":%llu,"
                                   "\"generated_tokens\":%llu,"
@@ -16340,6 +16418,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   req_opt.true_ds4_attention_typed_kv_batch_rows_gate ? 1 : 0,
                                   req_opt.true_ds4_attention_typed_kv_stream_sync_gate ? 1 : 0,
                                   req_opt.fp8_e5m2_kv_gate ? 1 : 0,
+                                  req_opt.router_hash_fast_gate ? 1 : 0,
                                   req_opt.slots,
                                   (unsigned long long)request_prompt_tokens,
                                   (unsigned long long)request_generated,

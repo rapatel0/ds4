@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-25
-last_updated_by: sprint-393
-revision: 406
+last_updated_by: sprint-394
+revision: 407
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -161,9 +161,16 @@ The near-term implementation focus is therefore:
    (`76.179292` to `65.263520` tok/s) and HTTP server decode (`94.952767` to
    `87.652515` tok/s), because P2P replication, several tiny kernels,
    synchronization, and route-total readback cost more than the removed D2H.
-   Future route work should fuse planning with expert dispatch/compose or
-   remove per-layer host involvement entirely; do not promote the naive GPU
-   planner.
+   Sprint 394 then tested a narrower hash-router select optimization:
+   `--router-hash-fast-gate` evaluates only the six DS4 hash-row experts
+   instead of computing probabilities for all `256` experts before applying
+   the hash row. It preserved `32/32` HTTP response parity and readiness, but
+   was not promotable: server decode moved only `106.900859` to `107.274556`
+   tok/s, router select only `27.766750` to `27.683134` ms, and scaffold
+   decode regressed `289.821429` to `293.484520` ms. Future route work should
+   fuse planning with expert dispatch/compose or remove per-layer host
+   involvement entirely; do not promote the naive GPU planner or isolated
+   hash-select micro-optimization.
 8. Close the S-E follow-up with a narrow parity/precheck fix if we want to
    revisit fused gated-SiLU. Sprint 379 showed the current serving-shaped
    branch already has no standalone routed SwiGLU launch, the generic
