@@ -333,6 +333,9 @@ def build_env(args, port):
             if args.hc_current_fused_fill_pack
             else "0",
             "DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD": "1",
+            "DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD_LAZY": "1"
+            if args.lazy_output_head
+            else "0",
             "DS4_V100_TP_EP_ASYNC_OUTPUT": "1" if args.async_output else "0",
             "DS4_V100_TP_EP_DECODE_CUDAGRAPH": "1" if args.decode_cudagraph else "0",
             "DS4_V100_TP_EP_BATCHED_PAGED_ATTN": "1" if args.batched_paged_attn else "0",
@@ -554,6 +557,8 @@ def direct_command(args):
         cmd.extend(["--nccl-min-free-mib", str(args.nccl_min_free_mib)])
     if args.fp8_e5m2_kv:
         cmd.append("--fp8-e5m2-kv-gate")
+    if args.lazy_output_head:
+        cmd.append("--diagnostic-output-head-lazy-gate")
     if "window" in args.tool:
         cmd.append("--cuda-profiler-window")
     if args.hc_current_peer_gather:
@@ -972,6 +977,7 @@ def main():
     parser.add_argument("--fused-gated-silu", action="store_true")
     parser.add_argument("--routed-ffn-norm-input", action="store_true")
     parser.add_argument("--fp8-e5m2-kv", action="store_true")
+    parser.add_argument("--lazy-output-head", action="store_true")
     parser.add_argument("--vram-report", action="store_true")
     parser.add_argument("--vram-min-free-mib", type=int, default=64)
     parser.add_argument("--nccl-min-free-mib", type=int, default=1536)

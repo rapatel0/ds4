@@ -679,6 +679,7 @@ struct Options {
     bool fused_gated_silu_gate = false;
     bool final_hc_carry_gate = false;
     bool diagnostic_output_head = false;
+    bool diagnostic_output_head_lazy_gate = false;
     bool tp_hc_final_expand_gate = false;
     bool tp_hc_current_input_gate = false;
     bool tp_hc_current_input_peer_gather_gate = false;
@@ -3590,6 +3591,7 @@ void usage(const char *argv0) {
                  "       [--vram-report] [--vram-min-free-mib N]\n"
                  "       [--nccl-min-free-mib N]\n"
                  "       [--output-head-gate] [--output-head-resident-gate]\n"
+                 "       [--diagnostic-output-head-lazy-gate]\n"
                  "       [--final-hc-carry-gate] [--tp-hc-final-expand-gate]\n"
                  "       [--tp-hc-current-input-gate]\n"
                  "       [--tp-hc-current-input-peer-gather-gate]\n"
@@ -3639,7 +3641,8 @@ void usage(const char *argv0) {
                  "       [--router-hash-fast-gate]\n"
                  "       [--gpu-route-plan-gate]\n"
                  "       [--route-plan-async-upload-gate]\n"
-                 "       [--diagnostic-output-head]\n",
+                 "       [--diagnostic-output-head]\n"
+                 "       [--diagnostic-output-head-lazy-gate]\n",
                  argv0);
 }
 
@@ -4148,6 +4151,10 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->cuda_profiler_window = true;
         } else if (std::strcmp(arg, "--diagnostic-output-head") == 0) {
             opt->diagnostic_output_head = true;
+            opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--diagnostic-output-head-lazy-gate") == 0) {
+            opt->diagnostic_output_head = true;
+            opt->diagnostic_output_head_lazy_gate = true;
             opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
@@ -15473,11 +15480,47 @@ int run_token_major_serving_loop(const Options &opt,
             serving_result->aggregate_continuation_tok_s_wall = continuation_tok_s_wall;
             serving_result->checksum = checksum;
         }
-        if (shared_output_head && shared_output_head->initialized &&
+        SharedOutputHead lazy_output_head;
+        SharedOutputHead *output_head_for_step = shared_output_head;
+        const bool use_lazy_output_head =
+            opt.diagnostic_output_head && opt.diagnostic_output_head_lazy_gate &&
+            opt.serving_bench &&
+            (!output_head_for_step || !output_head_for_step->initialized) &&
+            shared_rank_buffers && shared_rank_buffers->initialized;
+        if (use_lazy_output_head) {
+            std::vector<ContractRow> all_rows;
+            LayerStats all_stats;
+            if (parse_contract(opt.contract_path, -1, &all_rows, &all_stats) != 0 ||
+                all_stats.bad_rows != 0 ||
+                open_shared_output_head(opt, all_rows, &lazy_output_head) != 0) {
+                std::fprintf(stderr, "tp_ep lazy diagnostic output-head open failed\n");
+                close_shared_output_head(opt, &lazy_output_head);
+                return 12;
+            }
+            std::printf("tp_ep_diagnostic_output_head_lazy_shared\tslots\t%d\t"
+                        "vocab\t%d\trows_per_gpu\t%d\toutput_weight_bytes\t%llu\t"
+                        "logits_bytes\t%llu\tproxy_hc\t%d\tPASS\n",
+                        opt.slots,
+                        lazy_output_head.vocab,
+                        lazy_output_head.rows_per_gpu,
+                        (unsigned long long)lazy_output_head.output_weight_bytes,
+                        (unsigned long long)lazy_output_head.logits_bytes,
+                        opt.tp_hc_final_expand_gate ? 0 : 1);
+            if (report_vram_checkpoint(opt, "after_lazy_output_head") != 0) {
+                close_shared_output_head(opt, &lazy_output_head);
+                return 14;
+            }
+            if (nccl_gate_active(opt) && opt.nccl_min_free_mib != 0) {
+                (void)report_vram_checkpoint_min_free(
+                    opt, "nccl_after_lazy_output_head", opt.nccl_min_free_mib);
+            }
+            output_head_for_step = &lazy_output_head;
+        }
+        if (output_head_for_step && output_head_for_step->initialized &&
             shared_rank_buffers && shared_rank_buffers->initialized) {
             OutputHeadRunResult head_result;
             const int head_rc = run_shared_output_head_from_rank_hc(
-                opt, shared_output_head, shared_rank_buffers->ranks, &head_result);
+                opt, output_head_for_step, shared_rank_buffers->ranks, &head_result);
             std::printf("tp_ep_diagnostic_output_head\tsteps\t%d\tslots\t%d\t"
                         "proxy_hc\t%d\ttotal_ms\t%.6f\tgather_ms\t%.6f\t"
                         "prep_ms\t%.6f\tbroadcast_ms\t%.6f\tprojection_ms\t%.6f\t"
@@ -15501,7 +15544,12 @@ int run_token_major_serving_loop(const Options &opt,
                         head_result.finite_bad,
                         (unsigned long long)head_result.checksum,
                         head_rc == 0 && head_result.pass ? "PASS" : "FAIL");
-            if (head_rc != 0 || !head_result.pass) return head_rc == 0 ? 14 : head_rc;
+            if (head_rc != 0 || !head_result.pass) {
+                if (lazy_output_head.initialized) {
+                    close_shared_output_head(opt, &lazy_output_head);
+                }
+                return head_rc == 0 ? 14 : head_rc;
+            }
             if (serving_result) {
                 serving_result->diagnostic_output_head = true;
                 serving_result->diagnostic_output_head_proxy_hc =
@@ -15516,6 +15564,9 @@ int run_token_major_serving_loop(const Options &opt,
                 serving_result->selected_logits = head_result.logits;
                 serving_result->checksum ^= head_result.checksum + 0x0A17EADull;
             }
+        }
+        if (lazy_output_head.initialized) {
+            close_shared_output_head(opt, &lazy_output_head);
         }
         if (opt.serving_bench) {
             std::printf("tp_ep_serving_bench\tschema\tds4_v100_tp_ep_serving_bench.v1\t"
@@ -17610,7 +17661,7 @@ int main(int argc, char **argv) {
         shared_hc_controls.initialized ? &shared_hc_controls : nullptr;
 
     SharedOutputHead shared_output_head;
-    if (opt.diagnostic_output_head) {
+    if (opt.diagnostic_output_head && !opt.diagnostic_output_head_lazy_gate) {
         std::vector<ContractRow> all_rows;
         LayerStats all_stats;
         if (parse_contract(opt.contract_path, -1, &all_rows, &all_stats) != 0 ||

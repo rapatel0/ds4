@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-26
-last_updated_by: sprint-404
-revision: 417
+last_updated_by: sprint-405
+revision: 418
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -70,7 +70,8 @@ The performance program is intentionally isolated:
 | 12 | `--nccl-min-free-mib` / `DS4_V100_TP_EP_NCCL_MIN_FREE_MIB` | Complete harness guard | Promoted; NCCL candidates now fail early when communicator overhead leaves insufficient 32-slot/256K VRAM reserve |
 | 13 | `tools/ds4-v100-tp-ep-nccl-kv-matrix.py` | Complete measurement | FP8 E5M2 KV does not reclaim VRAM; target HC-current NCCL still fails at 1114 MiB free vs 1536 MiB reserve |
 | 14 | `tools/ds4-v100-tp-ep-vram-ledger.py` | Complete analysis tool | Promoted; next NCCL memory sprint must pair lazy output head with GPU0 HC-control residency reduction |
-| 15 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
+| 15 | `--diagnostic-output-head-lazy-gate` | Complete diagnostic | Correct but not promotable; lazy output-head preserves first token but leaves only 68 MiB free in control and HC-current NCCL still OOMs before first-token completion |
+| 16 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
 
 Promotion requires a same-binary V100 A/B at the real serving shape, unchanged
 first token/checksum, and improved GPU utilization or server decode tok/s.
@@ -114,6 +115,16 @@ The near-term implementation focus is therefore:
    implementation should be paired: lazy/on-demand output-head residency plus
    streaming or shrinking GPU0 HC-control residency. Either change alone is
    insufficient at the target shape.
+   Sprint 405 implemented the lazy diagnostic output-head half and confirmed
+   that alone is insufficient. The direct non-NCCL control preserved first
+   token `54639` with `97.034724` generated decode tok/s and `1880 MiB` free
+   before opening the lazy head, but the lazy output-head checkpoint left only
+   `68 MiB` free on GPU0. The HC-current NCCL + lazy-output-head case then
+   failed before first-token completion with CUDA OOM at compressed KV state
+   allocation on layer 5; NCCL plus HC controls left only `1248 MiB` free after
+   `after_hc_controls`. Keep lazy output-head diagnostic-only. The next memory
+   implementation must reduce/stream GPU0 HC-control residency and compressed
+   KV transients, not just move the output-head allocation later.
 2. Use the Sprint 383 matrix as the current before/after performance baseline.
    At `32` configured slots, `256K`, `position=262080`, and `32` generated
    chat tokens/request, active requests `1,4,8,16,32` all pass with

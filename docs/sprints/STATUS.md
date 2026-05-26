@@ -9,7 +9,24 @@ Current bottleneck reference:
 summarizes the measured bottlenecks, layer-by-layer hot paths, and experiments
 already tried.
 
-Latest NCCL status: Sprint 404 added
+Latest NCCL status: Sprint 405 added a default-off lazy diagnostic output-head
+path: binary `--diagnostic-output-head-lazy-gate`, profile
+`--lazy-output-head`, and launcher
+`DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD_LAZY`. In direct `32` slot / `256K`
+model-router compact-MoE control, lazy output-head preserved first token
+`54639`, generated decode `97.034724` tok/s, continuation decode
+`105.686032` tok/s, and kept the pre-output-head `after_hc_controls`
+checkpoint at `1880 MiB` free. It is not promotable as a default: opening the
+output head after decode left only `68 MiB` free on GPU0. With HC-current
+NCCL enabled, lazy output-head no longer fails at startup output-head
+admission, but the run still OOMs before first-token completion at compressed
+KV state allocation on layer 5. NCCL + HC controls leave only `1248 MiB` free
+after `after_hc_controls`. Decision: keep lazy output-head diagnostic-only.
+The next NCCL sprint must reduce/stream GPU0 HC controls and compressed-KV
+transients; moving the output head alone shifts the peak rather than solving
+it.
+
+Previous NCCL status: Sprint 404 added
 `tools/ds4-v100-tp-ep-vram-ledger.py`, a reusable parser for `tp_ep_vram`
 artifact rows, and ran it against the Sprint 403 matrix. At the `1536 MiB`
 NCCL reserve, the failing HC-current NCCL target has per-GPU deficits:
