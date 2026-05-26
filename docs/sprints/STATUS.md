@@ -90,6 +90,24 @@ Future route-boundary work should fuse planning with expert dispatch/compose
 or eliminate per-layer host involvement completely, not move the current CPU
 planner structure kernel-for-kernel onto GPUs.
 
+Latest promoted TP/EP default: Sprint 389 promoted
+`DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_SKIP_DENSE_STATS=1` in
+`tools/ds4-v100-run-appliance.sh`. This removes host-side diagnostic dense
+output statistics from the production compressed/indexer projection path while
+leaving an explicit `=0` opt-out; the permanent profile harness is aligned
+and now has `--disable-skip-compressed-dense-stats` for control runs.
+Same-binary V100 direct A/B at `32` slots / `256K` / `position=262080` /
+`32` decode steps preserved first token `98751`,
+improved generated decode from `91.869507` to `102.871437` tok/s, and reduced
+compressed-KV sum from `3138.980697` to `1798.907552` ms. HTTP chat A/B at
+`32` requests / `32` slots / `256K` / `32` generated tokens preserved first
+token `83484`; all `32` generated token sequences matched and checksum stayed
+`17913667583206000416`. Server decode improved from `89.709430` to
+`103.758804` tok/s, client generated tok/s improved from `42.183007` to
+`44.592824`, compressed-KV sum dropped from `5063.395601` to `2835.901361` ms,
+average GPU utilization moved from `8.621875%` to `9.003289%`, and
+`vram_failures=0` with `1746 MiB` minimum free VRAM in both runs.
+
 Latest throughput direction before memory hardening: Sprint 381 implemented
 `--fp8-e5m2-kv-gate` as a default-off typed-KV format diagnostic. The row
 layout stays block-128 with one E8M0 scale byte plus 128 FP8 payload bytes, so

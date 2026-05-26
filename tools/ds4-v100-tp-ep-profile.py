@@ -317,7 +317,7 @@ def build_env(args, port):
             if args.fused_compressed_attn_input_fill
             else "0",
             "DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_SKIP_DENSE_STATS": "1"
-            if args.skip_compressed_dense_stats
+            if not args.disable_skip_compressed_dense_stats
             else "0",
             "DS4_V100_CUDA_PROFILER_WINDOW": "1" if "window" in args.tool else "0",
         }
@@ -361,6 +361,8 @@ def variant_suffix(args):
         suffix += "-no-compressed-dense-event-wait"
     if getattr(args, "skip_compressed_dense_stats", False):
         suffix += "-skip-compressed-dense-stats"
+    if getattr(args, "disable_skip_compressed_dense_stats", False):
+        suffix += "-no-skip-compressed-dense-stats"
     if getattr(args, "fused_compressed_attn_input_fill", False):
         suffix += "-fused-compressed-attn-input-fill"
     if getattr(args, "async_output", False):
@@ -842,6 +844,7 @@ def main():
     parser.add_argument("--compressed-dense-event-wait", action="store_true")
     parser.add_argument("--disable-compressed-dense-event-wait", action="store_true")
     parser.add_argument("--skip-compressed-dense-stats", action="store_true")
+    parser.add_argument("--disable-skip-compressed-dense-stats", action="store_true")
     parser.add_argument("--fused-compressed-attn-input-fill", action="store_true")
     parser.add_argument("--disable-fused-compressed-pool-norm", action="store_true")
     parser.add_argument("--async-output", action="store_true")
@@ -898,6 +901,8 @@ def main():
     args = parser.parse_args()
     if args.fused_compressed_pool_norm and args.disable_fused_compressed_pool_norm:
         parser.error("--fused-compressed-pool-norm and --disable-fused-compressed-pool-norm are mutually exclusive")
+    if args.skip_compressed_dense_stats and args.disable_skip_compressed_dense_stats:
+        parser.error("--skip-compressed-dense-stats and --disable-skip-compressed-dense-stats are mutually exclusive")
     if args.compressed_dense_event_wait and args.disable_compressed_dense_event_wait:
         parser.error("--compressed-dense-event-wait and --disable-compressed-dense-event-wait are mutually exclusive")
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
