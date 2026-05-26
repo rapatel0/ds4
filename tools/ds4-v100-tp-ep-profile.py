@@ -486,7 +486,7 @@ def direct_command(args):
         cmd.append("--true-ds4-compressed-kv-direct-input-fill-gate")
     if args.compressed_dense_event_wait or not args.disable_compressed_dense_event_wait:
         cmd.append("--true-ds4-compressed-kv-dense-event-wait-gate")
-    if args.skip_compressed_dense_stats:
+    if args.skip_compressed_dense_stats or not args.disable_skip_compressed_dense_stats:
         cmd.append("--true-ds4-compressed-kv-skip-dense-stats-gate")
     if args.fused_compressed_attn_input_fill:
         cmd.append("--true-ds4-compressed-kv-fused-attn-input-fill-gate")

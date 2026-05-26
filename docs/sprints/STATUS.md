@@ -135,6 +135,20 @@ E5M2 has lower mantissa precision, validation is short, and one immediate HTTP
 candidate run after control failed with CUDA OOM before readiness. The default
 remains E4M3 until longer parity/soak and VRAM-margin work are done.
 
+Latest E5M2 KV follow-up: Sprint 391 reran E5M2 at the real `32` slot /
+`256K` real-router compact-MoE shape with the promoted skip-dense-stats
+default and the permanent response parity comparator. The sprint also fixed a
+profile-harness bug where direct-token-major mode did not inherit the promoted
+skip-dense-stats default. Direct A/B preserved first token `98751` but moved
+generated decode from `103.237368` to `102.152512` tok/s. HTTP chat A/B
+preserved first token `83484`, passed `32/32` response parity pairs, improved
+server decode from `101.206458` to `107.281060` tok/s, improved client
+throughput from `46.115999` to `47.895831` tok/s, and reduced compressed-KV
+sum from `2882.657866` to `2678.431998` ms with `vram_failures=0` and
+`1746 MiB` minimum free VRAM. Keep E5M2 default-off for now because direct
+decode is slightly negative and E5M2 still needs a broader multi-prompt
+parity/soak before accepting the precision risk.
+
 Current active steering source: `TEMP_THROUGHPUT_PROMPT.md`. Sprint 380
 implemented S-F `--tp-experts-ab-gate` as a permanent measurement driver,
 `tools/ds4-v100-tp-experts-ab.py`, and closed the immediate topology decision:
