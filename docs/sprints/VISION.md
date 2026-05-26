@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-25
-last_updated_by: sprint-391
-revision: 404
+last_updated_by: sprint-392
+revision: 405
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -176,6 +176,10 @@ The near-term implementation focus is therefore:
    improved from `46.115999` to `47.895831` tok/s, but direct decode regressed
    slightly from `103.237368` to `102.152512` tok/s. E4M3 remains the default
    until a broader multi-prompt parity/soak accepts the precision risk.
+   Sprint 392 added that multi-prompt soak harness and ran `16` varied prompts:
+   response parity passed `32/32`, but server decode was effectively flat
+   (`106.390802` to `106.483285` tok/s) and the layout is not a capacity win.
+   Keep E5M2 diagnostic-only.
 10. Add S-H MTP only after base TP/EP decode has stable metrology and a settled
    launch strategy. MTP remains the decode multiplier, but it should not hide
    kernel scheduling or topology bottlenecks.
@@ -2880,6 +2884,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-25 | Sprint 389 promoted compressed dense stats skip. | Against the current real-router compact-MoE TP/EP baseline at `32` slots / `256K`, direct decode improved `91.869507 -> 102.871437` tok/s with first token `98751`; HTTP chat server decode improved `89.709430 -> 103.758804` tok/s, client throughput improved `42.183007 -> 44.592824` tok/s, first token stayed `83484`, all generated token sequences matched, and checksum stayed `17913667583206000416`. | Promote `DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_SKIP_DENSE_STATS=1` as the launcher/profile default; explicit `=0` or `--disable-skip-compressed-dense-stats` keeps the diagnostic stats path available. |
 | 2026-05-25 | Sprint 390 made HTTP response parity permanent. | Added `tools/ds4-v100-http-response-parity.py`; it passes on Sprint 389's `32` control/candidate response pairs and fails a mutated generated-token fixture. | Use this comparator for future HTTP A/B promotion evidence. |
 | 2026-05-25 | Sprint 391 reran longer E5M2 KV parity. | E5M2 preserved first token and passed `32/32` HTTP response parity pairs. HTTP server decode improved `101.206458 -> 107.281060` tok/s and client throughput improved `46.115999 -> 47.895831`, but direct decode moved `103.237368 -> 102.152512`. | Keep E5M2 default-off pending broader multi-prompt parity/soak. |
+| 2026-05-25 | Sprint 392 added multi-prompt soak support. | `--prompt-file` now lets the HTTP profiler cycle JSONL chat prompts. The `16` prompt E5M2 soak passed `32/32` parity pairs, but server decode was flat (`106.390802 -> 106.483285`) and the layout does not save VRAM. | Keep E5M2 default-off; use prompt files for future risky gate promotion checks. |
 
 ## Open Questions
 

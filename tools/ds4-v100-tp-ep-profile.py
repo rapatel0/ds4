@@ -2,6 +2,7 @@
 import argparse
 import concurrent.futures
 import csv
+import hashlib
 import json
 import os
 import pathlib
@@ -38,6 +39,53 @@ def http_post(base, path, payload, timeout=1200):
             return resp.status, resp.read()
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read()
+
+
+def load_prompt_records(path):
+    records = []
+    with open(path, "r", encoding="utf-8") as src:
+        for lineno, raw in enumerate(src, 1):
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{path}:{lineno}: invalid JSON: {exc}") from exc
+            if not isinstance(record, dict):
+                raise ValueError(f"{path}:{lineno}: prompt record must be an object")
+            prompt_id = record.get("id", f"prompt-{len(records):03d}")
+            if not isinstance(prompt_id, str) or not prompt_id:
+                raise ValueError(f"{path}:{lineno}: id must be a non-empty string")
+            messages = record.get("messages")
+            if messages is None and "prompt" in record:
+                prompt = record["prompt"]
+                if not isinstance(prompt, str):
+                    raise ValueError(f"{path}:{lineno}: prompt must be a string")
+                messages = [{"role": "user", "content": prompt}]
+            if not isinstance(messages, list) or not messages:
+                raise ValueError(f"{path}:{lineno}: messages must be a non-empty list")
+            normalized = []
+            for msg in messages:
+                if not isinstance(msg, dict):
+                    raise ValueError(f"{path}:{lineno}: each message must be an object")
+                role = msg.get("role")
+                content = msg.get("content")
+                if not isinstance(role, str) or not isinstance(content, str):
+                    raise ValueError(f"{path}:{lineno}: messages need string role/content")
+                normalized.append({"role": role, "content": content})
+            records.append({"id": prompt_id, "messages": normalized})
+    if not records:
+        raise ValueError(f"{path}: no prompt records found")
+    return records
+
+
+def prompt_digest(records):
+    h = hashlib.sha256()
+    for record in records:
+        h.update(json.dumps(record, sort_keys=True, separators=(",", ":")).encode())
+        h.update(b"\n")
+    return h.hexdigest()
 
 
 class GpuSampler:
@@ -828,6 +876,11 @@ def main():
     parser.add_argument("--requests", type=int, default=32)
     parser.add_argument("--max-requests", type=int, default=80)
     parser.add_argument(
+        "--prompt-file",
+        type=pathlib.Path,
+        help="JSONL chat prompt records; each line has id plus messages or prompt",
+    )
+    parser.add_argument(
         "--http-endpoint",
         choices=["chat", "selected-token"],
         default="chat",
@@ -905,6 +958,9 @@ def main():
         parser.error("--skip-compressed-dense-stats and --disable-skip-compressed-dense-stats are mutually exclusive")
     if args.compressed_dense_event_wait and args.disable_compressed_dense_event_wait:
         parser.error("--compressed-dense-event-wait and --disable-compressed-dense-event-wait are mutually exclusive")
+    prompt_records = None
+    if args.prompt_file:
+        prompt_records = load_prompt_records(args.prompt_file)
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
 
     if args.run_mode == "direct-token-major":
@@ -963,20 +1019,28 @@ def main():
             ]
         else:
             post_path = "/v1/chat/completions"
-            payloads = [
-                {
-                    "model": "ds4-v100-tp-ep-diagnostic",
-                    "messages": [
+            payloads = []
+            for i in range(args.requests):
+                if prompt_records:
+                    record = prompt_records[i % len(prompt_records)]
+                    prompt_id = record["id"]
+                    messages = record["messages"]
+                else:
+                    prompt_id = f"default-{i:02d}"
+                    messages = [
                         {
                             "role": "user",
                             "content": f"Say one short sentence about TP Nsight profile {i}.",
                         }
-                    ],
-                    "max_tokens": args.tokens,
-                    "session_id": f"s345-profile-{args.tool}-{i:02d}",
-                }
-                for i in range(args.requests)
-            ]
+                    ]
+                payloads.append(
+                    {
+                        "model": "ds4-v100-tp-ep-diagnostic",
+                        "messages": messages,
+                        "max_tokens": args.tokens,
+                        "session_id": f"s345-profile-{args.tool}-{prompt_id}-{i:02d}",
+                    }
+                )
 
         started = time.time()
         results = []
@@ -1018,6 +1082,9 @@ def main():
         summary = {
             "tool": args.tool,
             "http_endpoint": args.http_endpoint,
+            "prompt_file": str(args.prompt_file) if args.prompt_file else "",
+            "prompt_count": len(prompt_records) if prompt_records else 0,
+            "prompt_digest": prompt_digest(prompt_records) if prompt_records else "",
             "http_200": ok,
             "requests": len(results),
             "tokens": args.tokens,

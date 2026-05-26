@@ -1,0 +1,16 @@
+{"id":"concise-summary","prompt":"Summarize why tensor parallel serving helps decode latency in two concise sentences."}
+{"id":"json-shape","prompt":"Return a compact JSON object with keys status, slots, and note. Use status=ok and slots=32."}
+{"id":"code-review","prompt":"Review this C expression for overflow risk and answer briefly: int y = x * 4096 + lane;"}
+{"id":"math-steps","prompt":"Compute 37 * 19, then subtract 88. Show only the final integer."}
+{"id":"long-context-reference","prompt":"Use this reference phrase: V100 TP EP cache residency. Repeat the phrase once, then explain it in one sentence."}
+{"id":"multilingual","prompt":"Translate 'device resident cache' into Spanish and French, then stop."}
+{"id":"instruction-following","prompt":"Write exactly three comma-separated words related to GPU inference."}
+{"id":"edge-format","prompt":"Answer with a single markdown table row for columns layer, dtype, and owner."}
+{"id":"router","prompt":"Explain in one sentence what a MoE router chooses during inference."}
+{"id":"kv-cache","prompt":"Explain why KV cache reuse matters for chat serving in one sentence."}
+{"id":"nvlink","prompt":"Give a short reason NVLink matters less when only hidden states cross boundaries."}
+{"id":"precision","prompt":"Compare FP8 and FP16 for inference in one short sentence."}
+{"id":"safety","prompt":"Say whether a failed parity check should block a performance promotion, and why."}
+{"id":"throughput","prompt":"Define aggregate tokens per second in fewer than twelve words."}
+{"id":"latency","prompt":"Define single-slot decode latency in fewer than twelve words."}
+{"id":"debug","prompt":"List two fields you would inspect in a GPU benchmark summary."}

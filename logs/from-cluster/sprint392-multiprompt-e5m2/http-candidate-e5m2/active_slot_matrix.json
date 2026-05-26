@@ -1,0 +1,35 @@
+{
+  "case_cooldown_seconds": 60,
+  "cases": [
+    {
+      "artifact_dir": "/workspace/logs/sprint392-multiprompt-e5m2/http-candidate-e5m2/requests-032/none-model-router-compact-moe",
+      "client_generated_tok_s": 39.77418109430894,
+      "coalesced_batch_size": 32,
+      "compressed_kv_sum_ms": 3301.691101999998,
+      "generated_tokens_meta": 1024,
+      "gpu_mem_used_max_mib": 32426.0,
+      "gpu_sample_count": 344,
+      "gpu_util_avg": 9.69186046511628,
+      "gpu_util_max": 50.0,
+      "http_200": 32,
+      "requests": 32,
+      "scaffold_projected_slot_step_tok_s": 108.949855,
+      "server_continuation_tok_s_decode": 106.578033,
+      "server_generated_tok_s": 88.35122,
+      "server_generated_tok_s_decode": 106.483285,
+      "tokens": 32,
+      "vram_failures": 0,
+      "vram_max_used_mib": 30747,
+      "vram_min_free_mib": 1746,
+      "vram_threshold_mib": 64
+    }
+  ],
+  "ctx": 262144,
+  "gpu_sample_interval_ms": 500,
+  "http_endpoint": "chat",
+  "position": 262080,
+  "schema": "ds4_v100_tp_ep_active_slot_matrix.v1",
+  "slots": 32,
+  "tokens": 32,
+  "tool": "none"
+}

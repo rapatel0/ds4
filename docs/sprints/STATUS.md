@@ -149,6 +149,20 @@ sum from `2882.657866` to `2678.431998` ms with `vram_failures=0` and
 decode is slightly negative and E5M2 still needs a broader multi-prompt
 parity/soak before accepting the precision risk.
 
+Latest multi-prompt soak: Sprint 392 added `--prompt-file` support to
+`tools/ds4-v100-tp-ep-profile.py` and committed
+`tests/v100_tp_ep_soak_prompts.jsonl` with `16` varied prompts. The profile
+summary now records `prompt_file`, `prompt_count`, and `prompt_digest`. V100
+multi-prompt E5M2 A/B at `32` requests / `32` slots / `256K` /
+`32` generated tokens passed `32/32` HTTP responses and `32/32` permanent
+response-parity pairs. E5M2 preserved first token `83484`; server decode was
+effectively flat (`106.390802` to `106.483285` tok/s), client throughput moved
+from `38.912861` to `39.774181` tok/s, compressed-KV sum moved from
+`3343.550356` to `3301.691102` ms, and `vram_failures=0` with `1746 MiB`
+minimum free VRAM. Keep E5M2 default-off: the broader prompt soak is
+parity-clean, but the performance win is not material and the current E5M2
+layout is not a capacity win over E4M3.
+
 Current active steering source: `TEMP_THROUGHPUT_PROMPT.md`. Sprint 380
 implemented S-F `--tp-experts-ab-gate` as a permanent measurement driver,
 `tools/ds4-v100-tp-experts-ab.py`, and closed the immediate topology decision:
