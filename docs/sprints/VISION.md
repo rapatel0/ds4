@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-26
-last_updated_by: sprint-403
-revision: 416
+last_updated_by: sprint-404
+revision: 417
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -69,7 +69,8 @@ The performance program is intentionally isolated:
 | 11 | `--tp-hc-current-input-nccl-allgather-gate` | Complete diagnostic | Correct at 16 slots, but rejected: target 32-slot/256K OOMs and smaller shape regresses HC gather/decode |
 | 12 | `--nccl-min-free-mib` / `DS4_V100_TP_EP_NCCL_MIN_FREE_MIB` | Complete harness guard | Promoted; NCCL candidates now fail early when communicator overhead leaves insufficient 32-slot/256K VRAM reserve |
 | 13 | `tools/ds4-v100-tp-ep-nccl-kv-matrix.py` | Complete measurement | FP8 E5M2 KV does not reclaim VRAM; target HC-current NCCL still fails at 1114 MiB free vs 1536 MiB reserve |
-| 14 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
+| 14 | `tools/ds4-v100-tp-ep-vram-ledger.py` | Complete analysis tool | Promoted; next NCCL memory sprint must pair lazy output head with GPU0 HC-control residency reduction |
+| 15 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
 
 Promotion requires a same-binary V100 A/B at the real serving shape, unchanged
 first token/checksum, and improved GPU utilization or server decode tok/s.
@@ -106,6 +107,13 @@ The near-term implementation focus is therefore:
    so E5M2 is a format flavor switch, not an F16-to-FP8 allocation reduction.
    The combined E5M2 KV + HC-current NCCL case still failed at `1114 MiB`
    free against the `1536 MiB` NCCL reserve.
+   Sprint 404 converted this into a per-GPU memory target: HC-current NCCL is
+   short by `422 MiB` on GPU0, `74 MiB` on GPU1, `54 MiB` on GPU4, `70 MiB` on
+   GPU5, and `22 MiB` on GPU6. Output-head residency costs `130-134 MiB/GPU`;
+   HC controls cost `372 MiB` on GPU0 only. Therefore the next NCCL memory
+   implementation should be paired: lazy/on-demand output-head residency plus
+   streaming or shrinking GPU0 HC-control residency. Either change alone is
+   insufficient at the target shape.
 2. Use the Sprint 383 matrix as the current before/after performance baseline.
    At `32` configured slots, `256K`, `position=262080`, and `32` generated
    chat tokens/request, active requests `1,4,8,16,32` all pass with

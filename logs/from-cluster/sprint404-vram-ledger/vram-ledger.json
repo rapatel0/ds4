@@ -1,0 +1,3544 @@
+{
+  "cases": [
+    {
+      "checkpoints": {
+        "after_dense_f16_cache": {
+          "0": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          },
+          "1": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          },
+          "2": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          },
+          "3": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          },
+          "4": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          },
+          "5": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          },
+          "6": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          },
+          "7": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          }
+        },
+        "after_dense_ops": {
+          "0": {
+            "free_mib": 2252,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30241
+          },
+          "1": {
+            "free_mib": 2252,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30241
+          },
+          "2": {
+            "free_mib": 2252,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30241
+          },
+          "3": {
+            "free_mib": 2252,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30241
+          },
+          "4": {
+            "free_mib": 2252,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30241
+          },
+          "5": {
+            "free_mib": 2252,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30241
+          },
+          "6": {
+            "free_mib": 2252,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30241
+          },
+          "7": {
+            "free_mib": 2252,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30241
+          }
+        },
+        "after_hc_controls": {
+          "0": {
+            "free_mib": 1880,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30613
+          },
+          "1": {
+            "free_mib": 2252,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30241
+          },
+          "2": {
+            "free_mib": 2252,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30241
+          },
+          "3": {
+            "free_mib": 2252,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30241
+          },
+          "4": {
+            "free_mib": 2252,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30241
+          },
+          "5": {
+            "free_mib": 2252,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30241
+          },
+          "6": {
+            "free_mib": 2252,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30241
+          },
+          "7": {
+            "free_mib": 2252,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30241
+          }
+        },
+        "after_output_head": {
+          "0": {
+            "free_mib": 1746,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30747
+          },
+          "1": {
+            "free_mib": 2122,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30371
+          },
+          "2": {
+            "free_mib": 2122,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30371
+          },
+          "3": {
+            "free_mib": 2122,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30371
+          },
+          "4": {
+            "free_mib": 2122,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30371
+          },
+          "5": {
+            "free_mib": 2122,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30371
+          },
+          "6": {
+            "free_mib": 2122,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30371
+          },
+          "7": {
+            "free_mib": 2122,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30371
+          }
+        },
+        "after_rank_buffers": {
+          "0": {
+            "free_mib": 30176,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2317
+          },
+          "1": {
+            "free_mib": 30176,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2317
+          },
+          "2": {
+            "free_mib": 30176,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2317
+          },
+          "3": {
+            "free_mib": 30176,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2317
+          },
+          "4": {
+            "free_mib": 30176,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2317
+          },
+          "5": {
+            "free_mib": 30176,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2317
+          },
+          "6": {
+            "free_mib": 30176,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2317
+          },
+          "7": {
+            "free_mib": 30176,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2317
+          }
+        },
+        "after_tp_runtime": {
+          "0": {
+            "free_mib": 23380,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9113
+          },
+          "1": {
+            "free_mib": 23380,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9113
+          },
+          "2": {
+            "free_mib": 23380,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9113
+          },
+          "3": {
+            "free_mib": 23380,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9113
+          },
+          "4": {
+            "free_mib": 23380,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9113
+          },
+          "5": {
+            "free_mib": 23380,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9113
+          },
+          "6": {
+            "free_mib": 23380,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9113
+          },
+          "7": {
+            "free_mib": 23380,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9113
+          }
+        },
+        "startup": {
+          "0": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          },
+          "1": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          },
+          "2": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          },
+          "3": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          },
+          "4": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          },
+          "5": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          },
+          "6": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          },
+          "7": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          }
+        }
+      },
+      "deficit_label": "after_output_head",
+      "deficits_mib": {
+        "0": 0,
+        "1": 0,
+        "2": 0,
+        "3": 0,
+        "4": 0,
+        "5": 0,
+        "6": 0,
+        "7": 0
+      },
+      "deltas": [
+        {
+          "gpus": {
+            "0": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            },
+            "1": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            },
+            "2": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            },
+            "3": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            },
+            "4": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            },
+            "5": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            },
+            "6": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            },
+            "7": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            }
+          },
+          "label": "startup"
+        },
+        {
+          "delta_from_previous_label": "startup",
+          "delta_used_mib": {
+            "0": 1724,
+            "1": 1724,
+            "2": 1724,
+            "3": 1724,
+            "4": 1724,
+            "5": 1724,
+            "6": 1724,
+            "7": 1724
+          },
+          "gpus": {
+            "0": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            },
+            "1": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            },
+            "2": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            },
+            "3": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            },
+            "4": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            },
+            "5": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            },
+            "6": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            },
+            "7": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            }
+          },
+          "label": "after_dense_f16_cache"
+        },
+        {
+          "delta_from_previous_label": "after_dense_f16_cache",
+          "delta_used_mib": {
+            "0": 282,
+            "1": 282,
+            "2": 282,
+            "3": 282,
+            "4": 282,
+            "5": 282,
+            "6": 282,
+            "7": 282
+          },
+          "gpus": {
+            "0": {
+              "free_mib": 30176,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2317
+            },
+            "1": {
+              "free_mib": 30176,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2317
+            },
+            "2": {
+              "free_mib": 30176,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2317
+            },
+            "3": {
+              "free_mib": 30176,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2317
+            },
+            "4": {
+              "free_mib": 30176,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2317
+            },
+            "5": {
+              "free_mib": 30176,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2317
+            },
+            "6": {
+              "free_mib": 30176,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2317
+            },
+            "7": {
+              "free_mib": 30176,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2317
+            }
+          },
+          "label": "after_rank_buffers"
+        },
+        {
+          "delta_from_previous_label": "after_rank_buffers",
+          "delta_used_mib": {
+            "0": 6796,
+            "1": 6796,
+            "2": 6796,
+            "3": 6796,
+            "4": 6796,
+            "5": 6796,
+            "6": 6796,
+            "7": 6796
+          },
+          "gpus": {
+            "0": {
+              "free_mib": 23380,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9113
+            },
+            "1": {
+              "free_mib": 23380,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9113
+            },
+            "2": {
+              "free_mib": 23380,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9113
+            },
+            "3": {
+              "free_mib": 23380,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9113
+            },
+            "4": {
+              "free_mib": 23380,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9113
+            },
+            "5": {
+              "free_mib": 23380,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9113
+            },
+            "6": {
+              "free_mib": 23380,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9113
+            },
+            "7": {
+              "free_mib": 23380,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9113
+            }
+          },
+          "label": "after_tp_runtime"
+        },
+        {
+          "delta_from_previous_label": "after_tp_runtime",
+          "delta_used_mib": {
+            "0": 21128,
+            "1": 21128,
+            "2": 21128,
+            "3": 21128,
+            "4": 21128,
+            "5": 21128,
+            "6": 21128,
+            "7": 21128
+          },
+          "gpus": {
+            "0": {
+              "free_mib": 2252,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30241
+            },
+            "1": {
+              "free_mib": 2252,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30241
+            },
+            "2": {
+              "free_mib": 2252,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30241
+            },
+            "3": {
+              "free_mib": 2252,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30241
+            },
+            "4": {
+              "free_mib": 2252,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30241
+            },
+            "5": {
+              "free_mib": 2252,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30241
+            },
+            "6": {
+              "free_mib": 2252,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30241
+            },
+            "7": {
+              "free_mib": 2252,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30241
+            }
+          },
+          "label": "after_dense_ops"
+        },
+        {
+          "delta_from_previous_label": "after_dense_ops",
+          "delta_used_mib": {
+            "0": 372,
+            "1": 0,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 0,
+            "6": 0,
+            "7": 0
+          },
+          "gpus": {
+            "0": {
+              "free_mib": 1880,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30613
+            },
+            "1": {
+              "free_mib": 2252,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30241
+            },
+            "2": {
+              "free_mib": 2252,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30241
+            },
+            "3": {
+              "free_mib": 2252,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30241
+            },
+            "4": {
+              "free_mib": 2252,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30241
+            },
+            "5": {
+              "free_mib": 2252,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30241
+            },
+            "6": {
+              "free_mib": 2252,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30241
+            },
+            "7": {
+              "free_mib": 2252,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30241
+            }
+          },
+          "label": "after_hc_controls"
+        },
+        {
+          "delta_from_previous_label": "after_hc_controls",
+          "delta_used_mib": {
+            "0": 134,
+            "1": 130,
+            "2": 130,
+            "3": 130,
+            "4": 130,
+            "5": 130,
+            "6": 130,
+            "7": 130
+          },
+          "gpus": {
+            "0": {
+              "free_mib": 1746,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30747
+            },
+            "1": {
+              "free_mib": 2122,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30371
+            },
+            "2": {
+              "free_mib": 2122,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30371
+            },
+            "3": {
+              "free_mib": 2122,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30371
+            },
+            "4": {
+              "free_mib": 2122,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30371
+            },
+            "5": {
+              "free_mib": 2122,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30371
+            },
+            "6": {
+              "free_mib": 2122,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30371
+            },
+            "7": {
+              "free_mib": 2122,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30371
+            }
+          },
+          "label": "after_output_head"
+        }
+      ],
+      "failing_gpus": [],
+      "max_deficit_mib": 0,
+      "metadata": {
+        "hc_control_bytes": 332431688,
+        "hc_control_mib": 317.0315628051758,
+        "hc_slots": 32,
+        "output_logits_bytes": 16547840,
+        "output_logits_mib": 15.78125,
+        "output_rows_per_gpu": 16160,
+        "output_vocab": 129280,
+        "output_weight_bytes": 1059061760,
+        "output_weight_mib": 1010.0
+      },
+      "name": "control",
+      "path": "logs/from-cluster/sprint403-nccl-kv-matrix/control",
+      "profile": {
+        "continuation_decode_tok_s": 107.106917,
+        "first_token": 54639,
+        "generated_decode_tok_s": 98.076858,
+        "returncode": 0,
+        "vram_max_used_mib": 30747,
+        "vram_min_free_mib": 1746
+      },
+      "stdout": "logs/from-cluster/sprint403-nccl-kv-matrix/control/none-direct-hc-stream-sync-model-router-compact-moe/stdout.txt",
+      "summaries": {
+        "after_dense_f16_cache": {
+          "failures": 0,
+          "max_used_mib": 2035,
+          "min_free_mib": 30458,
+          "pass": true,
+          "threshold_mib": 64
+        },
+        "after_dense_ops": {
+          "failures": 0,
+          "max_used_mib": 30241,
+          "min_free_mib": 2252,
+          "pass": true,
+          "threshold_mib": 64
+        },
+        "after_hc_controls": {
+          "failures": 0,
+          "max_used_mib": 30613,
+          "min_free_mib": 1880,
+          "pass": true,
+          "threshold_mib": 64
+        },
+        "after_output_head": {
+          "failures": 0,
+          "max_used_mib": 30747,
+          "min_free_mib": 1746,
+          "pass": true,
+          "threshold_mib": 64
+        },
+        "after_rank_buffers": {
+          "failures": 0,
+          "max_used_mib": 2317,
+          "min_free_mib": 30176,
+          "pass": true,
+          "threshold_mib": 64
+        },
+        "after_tp_runtime": {
+          "failures": 0,
+          "max_used_mib": 9113,
+          "min_free_mib": 23380,
+          "pass": true,
+          "threshold_mib": 64
+        },
+        "startup": {
+          "failures": 0,
+          "max_used_mib": 311,
+          "min_free_mib": 32182,
+          "pass": true,
+          "threshold_mib": 64
+        }
+      },
+      "summary": "logs/from-cluster/sprint403-nccl-kv-matrix/control/none-direct-hc-stream-sync-model-router-compact-moe/summary.json",
+      "threshold_mib": 1536
+    },
+    {
+      "checkpoints": {
+        "after_dense_f16_cache": {
+          "0": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          },
+          "1": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          },
+          "2": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          },
+          "3": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          },
+          "4": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          },
+          "5": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          },
+          "6": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          },
+          "7": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          }
+        },
+        "after_dense_ops": {
+          "0": {
+            "free_mib": 1620,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30873
+          },
+          "1": {
+            "free_mib": 1592,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30901
+          },
+          "2": {
+            "free_mib": 1688,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30805
+          },
+          "3": {
+            "free_mib": 1684,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30809
+          },
+          "4": {
+            "free_mib": 1612,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30881
+          },
+          "5": {
+            "free_mib": 1596,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30897
+          },
+          "6": {
+            "free_mib": 1644,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30849
+          },
+          "7": {
+            "free_mib": 1668,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30825
+          }
+        },
+        "after_hc_controls": {
+          "0": {
+            "free_mib": 1248,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 31245
+          },
+          "1": {
+            "free_mib": 1592,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30901
+          },
+          "2": {
+            "free_mib": 1688,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30805
+          },
+          "3": {
+            "free_mib": 1684,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30809
+          },
+          "4": {
+            "free_mib": 1612,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30881
+          },
+          "5": {
+            "free_mib": 1596,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30897
+          },
+          "6": {
+            "free_mib": 1644,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30849
+          },
+          "7": {
+            "free_mib": 1668,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30825
+          }
+        },
+        "after_output_head": {
+          "0": {
+            "free_mib": 1114,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 31379
+          },
+          "1": {
+            "free_mib": 1462,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 31031
+          },
+          "2": {
+            "free_mib": 1558,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30935
+          },
+          "3": {
+            "free_mib": 1554,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30939
+          },
+          "4": {
+            "free_mib": 1482,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 31011
+          },
+          "5": {
+            "free_mib": 1466,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 31027
+          },
+          "6": {
+            "free_mib": 1514,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30979
+          },
+          "7": {
+            "free_mib": 1538,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30955
+          }
+        },
+        "after_rank_buffers": {
+          "0": {
+            "free_mib": 29542,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2951
+          },
+          "1": {
+            "free_mib": 29514,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2979
+          },
+          "2": {
+            "free_mib": 29610,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2883
+          },
+          "3": {
+            "free_mib": 29606,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2887
+          },
+          "4": {
+            "free_mib": 29534,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2959
+          },
+          "5": {
+            "free_mib": 29518,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2975
+          },
+          "6": {
+            "free_mib": 29566,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2927
+          },
+          "7": {
+            "free_mib": 29590,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2903
+          }
+        },
+        "after_tp_runtime": {
+          "0": {
+            "free_mib": 22748,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9745
+          },
+          "1": {
+            "free_mib": 22720,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9773
+          },
+          "2": {
+            "free_mib": 22816,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9677
+          },
+          "3": {
+            "free_mib": 22812,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9681
+          },
+          "4": {
+            "free_mib": 22740,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9753
+          },
+          "5": {
+            "free_mib": 22724,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9769
+          },
+          "6": {
+            "free_mib": 22772,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9721
+          },
+          "7": {
+            "free_mib": 22796,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9697
+          }
+        },
+        "nccl_after_output_head": {
+          "0": {
+            "free_mib": 1114,
+            "pass": false,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 31379
+          },
+          "1": {
+            "free_mib": 1462,
+            "pass": false,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 31031
+          },
+          "2": {
+            "free_mib": 1558,
+            "pass": true,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 30935
+          },
+          "3": {
+            "free_mib": 1554,
+            "pass": true,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 30939
+          },
+          "4": {
+            "free_mib": 1482,
+            "pass": false,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 31011
+          },
+          "5": {
+            "free_mib": 1466,
+            "pass": false,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 31027
+          },
+          "6": {
+            "free_mib": 1514,
+            "pass": false,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 30979
+          },
+          "7": {
+            "free_mib": 1538,
+            "pass": true,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 30955
+          }
+        },
+        "nccl_after_rank_buffers": {
+          "0": {
+            "free_mib": 29542,
+            "pass": true,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 2951
+          },
+          "1": {
+            "free_mib": 29514,
+            "pass": true,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 2979
+          },
+          "2": {
+            "free_mib": 29610,
+            "pass": true,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 2883
+          },
+          "3": {
+            "free_mib": 29606,
+            "pass": true,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 2887
+          },
+          "4": {
+            "free_mib": 29534,
+            "pass": true,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 2959
+          },
+          "5": {
+            "free_mib": 29518,
+            "pass": true,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 2975
+          },
+          "6": {
+            "free_mib": 29566,
+            "pass": true,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 2927
+          },
+          "7": {
+            "free_mib": 29590,
+            "pass": true,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 2903
+          }
+        },
+        "startup": {
+          "0": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          },
+          "1": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          },
+          "2": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          },
+          "3": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          },
+          "4": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          },
+          "5": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          },
+          "6": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          },
+          "7": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          }
+        }
+      },
+      "deficit_label": "nccl_after_output_head",
+      "deficits_mib": {
+        "0": 422,
+        "1": 74,
+        "2": 0,
+        "3": 0,
+        "4": 54,
+        "5": 70,
+        "6": 22,
+        "7": 0
+      },
+      "deltas": [
+        {
+          "gpus": {
+            "0": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            },
+            "1": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            },
+            "2": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            },
+            "3": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            },
+            "4": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            },
+            "5": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            },
+            "6": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            },
+            "7": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            }
+          },
+          "label": "startup"
+        },
+        {
+          "delta_from_previous_label": "startup",
+          "delta_used_mib": {
+            "0": 1724,
+            "1": 1724,
+            "2": 1724,
+            "3": 1724,
+            "4": 1724,
+            "5": 1724,
+            "6": 1724,
+            "7": 1724
+          },
+          "gpus": {
+            "0": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            },
+            "1": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            },
+            "2": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            },
+            "3": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            },
+            "4": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            },
+            "5": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            },
+            "6": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            },
+            "7": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            }
+          },
+          "label": "after_dense_f16_cache"
+        },
+        {
+          "delta_from_previous_label": "after_dense_f16_cache",
+          "delta_used_mib": {
+            "0": 916,
+            "1": 944,
+            "2": 848,
+            "3": 852,
+            "4": 924,
+            "5": 940,
+            "6": 892,
+            "7": 868
+          },
+          "gpus": {
+            "0": {
+              "free_mib": 29542,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2951
+            },
+            "1": {
+              "free_mib": 29514,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2979
+            },
+            "2": {
+              "free_mib": 29610,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2883
+            },
+            "3": {
+              "free_mib": 29606,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2887
+            },
+            "4": {
+              "free_mib": 29534,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2959
+            },
+            "5": {
+              "free_mib": 29518,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2975
+            },
+            "6": {
+              "free_mib": 29566,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2927
+            },
+            "7": {
+              "free_mib": 29590,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2903
+            }
+          },
+          "label": "after_rank_buffers"
+        },
+        {
+          "delta_from_previous_label": "after_rank_buffers",
+          "delta_used_mib": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 0,
+            "6": 0,
+            "7": 0
+          },
+          "gpus": {
+            "0": {
+              "free_mib": 29542,
+              "pass": true,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 2951
+            },
+            "1": {
+              "free_mib": 29514,
+              "pass": true,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 2979
+            },
+            "2": {
+              "free_mib": 29610,
+              "pass": true,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 2883
+            },
+            "3": {
+              "free_mib": 29606,
+              "pass": true,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 2887
+            },
+            "4": {
+              "free_mib": 29534,
+              "pass": true,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 2959
+            },
+            "5": {
+              "free_mib": 29518,
+              "pass": true,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 2975
+            },
+            "6": {
+              "free_mib": 29566,
+              "pass": true,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 2927
+            },
+            "7": {
+              "free_mib": 29590,
+              "pass": true,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 2903
+            }
+          },
+          "label": "nccl_after_rank_buffers"
+        },
+        {
+          "delta_from_previous_label": "nccl_after_rank_buffers",
+          "delta_used_mib": {
+            "0": 6794,
+            "1": 6794,
+            "2": 6794,
+            "3": 6794,
+            "4": 6794,
+            "5": 6794,
+            "6": 6794,
+            "7": 6794
+          },
+          "gpus": {
+            "0": {
+              "free_mib": 22748,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9745
+            },
+            "1": {
+              "free_mib": 22720,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9773
+            },
+            "2": {
+              "free_mib": 22816,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9677
+            },
+            "3": {
+              "free_mib": 22812,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9681
+            },
+            "4": {
+              "free_mib": 22740,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9753
+            },
+            "5": {
+              "free_mib": 22724,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9769
+            },
+            "6": {
+              "free_mib": 22772,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9721
+            },
+            "7": {
+              "free_mib": 22796,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9697
+            }
+          },
+          "label": "after_tp_runtime"
+        },
+        {
+          "delta_from_previous_label": "after_tp_runtime",
+          "delta_used_mib": {
+            "0": 21128,
+            "1": 21128,
+            "2": 21128,
+            "3": 21128,
+            "4": 21128,
+            "5": 21128,
+            "6": 21128,
+            "7": 21128
+          },
+          "gpus": {
+            "0": {
+              "free_mib": 1620,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30873
+            },
+            "1": {
+              "free_mib": 1592,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30901
+            },
+            "2": {
+              "free_mib": 1688,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30805
+            },
+            "3": {
+              "free_mib": 1684,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30809
+            },
+            "4": {
+              "free_mib": 1612,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30881
+            },
+            "5": {
+              "free_mib": 1596,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30897
+            },
+            "6": {
+              "free_mib": 1644,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30849
+            },
+            "7": {
+              "free_mib": 1668,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30825
+            }
+          },
+          "label": "after_dense_ops"
+        },
+        {
+          "delta_from_previous_label": "after_dense_ops",
+          "delta_used_mib": {
+            "0": 372,
+            "1": 0,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 0,
+            "6": 0,
+            "7": 0
+          },
+          "gpus": {
+            "0": {
+              "free_mib": 1248,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 31245
+            },
+            "1": {
+              "free_mib": 1592,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30901
+            },
+            "2": {
+              "free_mib": 1688,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30805
+            },
+            "3": {
+              "free_mib": 1684,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30809
+            },
+            "4": {
+              "free_mib": 1612,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30881
+            },
+            "5": {
+              "free_mib": 1596,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30897
+            },
+            "6": {
+              "free_mib": 1644,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30849
+            },
+            "7": {
+              "free_mib": 1668,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30825
+            }
+          },
+          "label": "after_hc_controls"
+        },
+        {
+          "delta_from_previous_label": "after_hc_controls",
+          "delta_used_mib": {
+            "0": 134,
+            "1": 130,
+            "2": 130,
+            "3": 130,
+            "4": 130,
+            "5": 130,
+            "6": 130,
+            "7": 130
+          },
+          "gpus": {
+            "0": {
+              "free_mib": 1114,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 31379
+            },
+            "1": {
+              "free_mib": 1462,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 31031
+            },
+            "2": {
+              "free_mib": 1558,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30935
+            },
+            "3": {
+              "free_mib": 1554,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30939
+            },
+            "4": {
+              "free_mib": 1482,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 31011
+            },
+            "5": {
+              "free_mib": 1466,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 31027
+            },
+            "6": {
+              "free_mib": 1514,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30979
+            },
+            "7": {
+              "free_mib": 1538,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30955
+            }
+          },
+          "label": "after_output_head"
+        },
+        {
+          "delta_from_previous_label": "after_output_head",
+          "delta_used_mib": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 0,
+            "6": 0,
+            "7": 0
+          },
+          "gpus": {
+            "0": {
+              "free_mib": 1114,
+              "pass": false,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 31379
+            },
+            "1": {
+              "free_mib": 1462,
+              "pass": false,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 31031
+            },
+            "2": {
+              "free_mib": 1558,
+              "pass": true,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 30935
+            },
+            "3": {
+              "free_mib": 1554,
+              "pass": true,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 30939
+            },
+            "4": {
+              "free_mib": 1482,
+              "pass": false,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 31011
+            },
+            "5": {
+              "free_mib": 1466,
+              "pass": false,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 31027
+            },
+            "6": {
+              "free_mib": 1514,
+              "pass": false,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 30979
+            },
+            "7": {
+              "free_mib": 1538,
+              "pass": true,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 30955
+            }
+          },
+          "label": "nccl_after_output_head"
+        }
+      ],
+      "failing_gpus": [
+        "0",
+        "1",
+        "4",
+        "5",
+        "6"
+      ],
+      "max_deficit_mib": 422,
+      "metadata": {
+        "hc_control_bytes": 332431688,
+        "hc_control_mib": 317.0315628051758,
+        "hc_slots": 32,
+        "output_logits_bytes": 16547840,
+        "output_logits_mib": 15.78125,
+        "output_rows_per_gpu": 16160,
+        "output_vocab": 129280,
+        "output_weight_bytes": 1059061760,
+        "output_weight_mib": 1010.0
+      },
+      "name": "hc-nccl",
+      "path": "logs/from-cluster/sprint403-nccl-kv-matrix/hc-nccl",
+      "profile": {
+        "continuation_decode_tok_s": null,
+        "first_token": null,
+        "generated_decode_tok_s": null,
+        "returncode": 14,
+        "vram_max_used_mib": 31379,
+        "vram_min_free_mib": 1114
+      },
+      "stdout": "logs/from-cluster/sprint403-nccl-kv-matrix/hc-nccl/none-direct-hc-nccl-allgather-hc-stream-sync-model-router-compact-moe/stdout.txt",
+      "summaries": {
+        "after_dense_f16_cache": {
+          "failures": 0,
+          "max_used_mib": 2035,
+          "min_free_mib": 30458,
+          "pass": true,
+          "threshold_mib": 64
+        },
+        "after_dense_ops": {
+          "failures": 0,
+          "max_used_mib": 30901,
+          "min_free_mib": 1592,
+          "pass": true,
+          "threshold_mib": 64
+        },
+        "after_hc_controls": {
+          "failures": 0,
+          "max_used_mib": 31245,
+          "min_free_mib": 1248,
+          "pass": true,
+          "threshold_mib": 64
+        },
+        "after_output_head": {
+          "failures": 0,
+          "max_used_mib": 31379,
+          "min_free_mib": 1114,
+          "pass": true,
+          "threshold_mib": 64
+        },
+        "after_rank_buffers": {
+          "failures": 0,
+          "max_used_mib": 2979,
+          "min_free_mib": 29514,
+          "pass": true,
+          "threshold_mib": 64
+        },
+        "after_tp_runtime": {
+          "failures": 0,
+          "max_used_mib": 9773,
+          "min_free_mib": 22720,
+          "pass": true,
+          "threshold_mib": 64
+        },
+        "nccl_after_output_head": {
+          "failures": 5,
+          "max_used_mib": 31379,
+          "min_free_mib": 1114,
+          "pass": false,
+          "threshold_mib": 1536
+        },
+        "nccl_after_rank_buffers": {
+          "failures": 0,
+          "max_used_mib": 2979,
+          "min_free_mib": 29514,
+          "pass": true,
+          "threshold_mib": 1536
+        },
+        "startup": {
+          "failures": 0,
+          "max_used_mib": 311,
+          "min_free_mib": 32182,
+          "pass": true,
+          "threshold_mib": 64
+        }
+      },
+      "summary": "logs/from-cluster/sprint403-nccl-kv-matrix/hc-nccl/none-direct-hc-nccl-allgather-hc-stream-sync-model-router-compact-moe/summary.json",
+      "threshold_mib": 1536
+    },
+    {
+      "checkpoints": {
+        "after_dense_f16_cache": {
+          "0": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          },
+          "1": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          },
+          "2": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          },
+          "3": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          },
+          "4": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          },
+          "5": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          },
+          "6": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          },
+          "7": {
+            "free_mib": 30458,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2035
+          }
+        },
+        "after_dense_ops": {
+          "0": {
+            "free_mib": 1620,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30873
+          },
+          "1": {
+            "free_mib": 1592,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30901
+          },
+          "2": {
+            "free_mib": 1688,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30805
+          },
+          "3": {
+            "free_mib": 1684,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30809
+          },
+          "4": {
+            "free_mib": 1612,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30881
+          },
+          "5": {
+            "free_mib": 1596,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30897
+          },
+          "6": {
+            "free_mib": 1644,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30849
+          },
+          "7": {
+            "free_mib": 1668,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30825
+          }
+        },
+        "after_hc_controls": {
+          "0": {
+            "free_mib": 1248,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 31245
+          },
+          "1": {
+            "free_mib": 1592,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30901
+          },
+          "2": {
+            "free_mib": 1688,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30805
+          },
+          "3": {
+            "free_mib": 1684,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30809
+          },
+          "4": {
+            "free_mib": 1612,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30881
+          },
+          "5": {
+            "free_mib": 1596,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30897
+          },
+          "6": {
+            "free_mib": 1644,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30849
+          },
+          "7": {
+            "free_mib": 1668,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30825
+          }
+        },
+        "after_output_head": {
+          "0": {
+            "free_mib": 1114,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 31379
+          },
+          "1": {
+            "free_mib": 1462,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 31031
+          },
+          "2": {
+            "free_mib": 1558,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30935
+          },
+          "3": {
+            "free_mib": 1554,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30939
+          },
+          "4": {
+            "free_mib": 1482,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 31011
+          },
+          "5": {
+            "free_mib": 1466,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 31027
+          },
+          "6": {
+            "free_mib": 1514,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30979
+          },
+          "7": {
+            "free_mib": 1538,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 30955
+          }
+        },
+        "after_rank_buffers": {
+          "0": {
+            "free_mib": 29542,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2951
+          },
+          "1": {
+            "free_mib": 29514,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2979
+          },
+          "2": {
+            "free_mib": 29610,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2883
+          },
+          "3": {
+            "free_mib": 29606,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2887
+          },
+          "4": {
+            "free_mib": 29534,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2959
+          },
+          "5": {
+            "free_mib": 29518,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2975
+          },
+          "6": {
+            "free_mib": 29566,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2927
+          },
+          "7": {
+            "free_mib": 29590,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 2903
+          }
+        },
+        "after_tp_runtime": {
+          "0": {
+            "free_mib": 22748,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9745
+          },
+          "1": {
+            "free_mib": 22720,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9773
+          },
+          "2": {
+            "free_mib": 22816,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9677
+          },
+          "3": {
+            "free_mib": 22812,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9681
+          },
+          "4": {
+            "free_mib": 22740,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9753
+          },
+          "5": {
+            "free_mib": 22724,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9769
+          },
+          "6": {
+            "free_mib": 22772,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9721
+          },
+          "7": {
+            "free_mib": 22796,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 9697
+          }
+        },
+        "nccl_after_output_head": {
+          "0": {
+            "free_mib": 1114,
+            "pass": false,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 31379
+          },
+          "1": {
+            "free_mib": 1462,
+            "pass": false,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 31031
+          },
+          "2": {
+            "free_mib": 1558,
+            "pass": true,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 30935
+          },
+          "3": {
+            "free_mib": 1554,
+            "pass": true,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 30939
+          },
+          "4": {
+            "free_mib": 1482,
+            "pass": false,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 31011
+          },
+          "5": {
+            "free_mib": 1466,
+            "pass": false,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 31027
+          },
+          "6": {
+            "free_mib": 1514,
+            "pass": false,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 30979
+          },
+          "7": {
+            "free_mib": 1538,
+            "pass": true,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 30955
+          }
+        },
+        "nccl_after_rank_buffers": {
+          "0": {
+            "free_mib": 29542,
+            "pass": true,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 2951
+          },
+          "1": {
+            "free_mib": 29514,
+            "pass": true,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 2979
+          },
+          "2": {
+            "free_mib": 29610,
+            "pass": true,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 2883
+          },
+          "3": {
+            "free_mib": 29606,
+            "pass": true,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 2887
+          },
+          "4": {
+            "free_mib": 29534,
+            "pass": true,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 2959
+          },
+          "5": {
+            "free_mib": 29518,
+            "pass": true,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 2975
+          },
+          "6": {
+            "free_mib": 29566,
+            "pass": true,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 2927
+          },
+          "7": {
+            "free_mib": 29590,
+            "pass": true,
+            "threshold_mib": 1536,
+            "total_mib": 32494,
+            "used_mib": 2903
+          }
+        },
+        "startup": {
+          "0": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          },
+          "1": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          },
+          "2": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          },
+          "3": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          },
+          "4": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          },
+          "5": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          },
+          "6": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          },
+          "7": {
+            "free_mib": 32182,
+            "pass": true,
+            "threshold_mib": 64,
+            "total_mib": 32494,
+            "used_mib": 311
+          }
+        }
+      },
+      "deficit_label": "nccl_after_output_head",
+      "deficits_mib": {
+        "0": 422,
+        "1": 74,
+        "2": 0,
+        "3": 0,
+        "4": 54,
+        "5": 70,
+        "6": 22,
+        "7": 0
+      },
+      "deltas": [
+        {
+          "gpus": {
+            "0": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            },
+            "1": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            },
+            "2": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            },
+            "3": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            },
+            "4": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            },
+            "5": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            },
+            "6": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            },
+            "7": {
+              "free_mib": 32182,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 311
+            }
+          },
+          "label": "startup"
+        },
+        {
+          "delta_from_previous_label": "startup",
+          "delta_used_mib": {
+            "0": 1724,
+            "1": 1724,
+            "2": 1724,
+            "3": 1724,
+            "4": 1724,
+            "5": 1724,
+            "6": 1724,
+            "7": 1724
+          },
+          "gpus": {
+            "0": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            },
+            "1": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            },
+            "2": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            },
+            "3": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            },
+            "4": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            },
+            "5": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            },
+            "6": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            },
+            "7": {
+              "free_mib": 30458,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2035
+            }
+          },
+          "label": "after_dense_f16_cache"
+        },
+        {
+          "delta_from_previous_label": "after_dense_f16_cache",
+          "delta_used_mib": {
+            "0": 916,
+            "1": 944,
+            "2": 848,
+            "3": 852,
+            "4": 924,
+            "5": 940,
+            "6": 892,
+            "7": 868
+          },
+          "gpus": {
+            "0": {
+              "free_mib": 29542,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2951
+            },
+            "1": {
+              "free_mib": 29514,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2979
+            },
+            "2": {
+              "free_mib": 29610,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2883
+            },
+            "3": {
+              "free_mib": 29606,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2887
+            },
+            "4": {
+              "free_mib": 29534,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2959
+            },
+            "5": {
+              "free_mib": 29518,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2975
+            },
+            "6": {
+              "free_mib": 29566,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2927
+            },
+            "7": {
+              "free_mib": 29590,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 2903
+            }
+          },
+          "label": "after_rank_buffers"
+        },
+        {
+          "delta_from_previous_label": "after_rank_buffers",
+          "delta_used_mib": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 0,
+            "6": 0,
+            "7": 0
+          },
+          "gpus": {
+            "0": {
+              "free_mib": 29542,
+              "pass": true,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 2951
+            },
+            "1": {
+              "free_mib": 29514,
+              "pass": true,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 2979
+            },
+            "2": {
+              "free_mib": 29610,
+              "pass": true,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 2883
+            },
+            "3": {
+              "free_mib": 29606,
+              "pass": true,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 2887
+            },
+            "4": {
+              "free_mib": 29534,
+              "pass": true,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 2959
+            },
+            "5": {
+              "free_mib": 29518,
+              "pass": true,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 2975
+            },
+            "6": {
+              "free_mib": 29566,
+              "pass": true,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 2927
+            },
+            "7": {
+              "free_mib": 29590,
+              "pass": true,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 2903
+            }
+          },
+          "label": "nccl_after_rank_buffers"
+        },
+        {
+          "delta_from_previous_label": "nccl_after_rank_buffers",
+          "delta_used_mib": {
+            "0": 6794,
+            "1": 6794,
+            "2": 6794,
+            "3": 6794,
+            "4": 6794,
+            "5": 6794,
+            "6": 6794,
+            "7": 6794
+          },
+          "gpus": {
+            "0": {
+              "free_mib": 22748,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9745
+            },
+            "1": {
+              "free_mib": 22720,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9773
+            },
+            "2": {
+              "free_mib": 22816,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9677
+            },
+            "3": {
+              "free_mib": 22812,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9681
+            },
+            "4": {
+              "free_mib": 22740,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9753
+            },
+            "5": {
+              "free_mib": 22724,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9769
+            },
+            "6": {
+              "free_mib": 22772,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9721
+            },
+            "7": {
+              "free_mib": 22796,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 9697
+            }
+          },
+          "label": "after_tp_runtime"
+        },
+        {
+          "delta_from_previous_label": "after_tp_runtime",
+          "delta_used_mib": {
+            "0": 21128,
+            "1": 21128,
+            "2": 21128,
+            "3": 21128,
+            "4": 21128,
+            "5": 21128,
+            "6": 21128,
+            "7": 21128
+          },
+          "gpus": {
+            "0": {
+              "free_mib": 1620,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30873
+            },
+            "1": {
+              "free_mib": 1592,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30901
+            },
+            "2": {
+              "free_mib": 1688,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30805
+            },
+            "3": {
+              "free_mib": 1684,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30809
+            },
+            "4": {
+              "free_mib": 1612,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30881
+            },
+            "5": {
+              "free_mib": 1596,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30897
+            },
+            "6": {
+              "free_mib": 1644,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30849
+            },
+            "7": {
+              "free_mib": 1668,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30825
+            }
+          },
+          "label": "after_dense_ops"
+        },
+        {
+          "delta_from_previous_label": "after_dense_ops",
+          "delta_used_mib": {
+            "0": 372,
+            "1": 0,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 0,
+            "6": 0,
+            "7": 0
+          },
+          "gpus": {
+            "0": {
+              "free_mib": 1248,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 31245
+            },
+            "1": {
+              "free_mib": 1592,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30901
+            },
+            "2": {
+              "free_mib": 1688,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30805
+            },
+            "3": {
+              "free_mib": 1684,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30809
+            },
+            "4": {
+              "free_mib": 1612,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30881
+            },
+            "5": {
+              "free_mib": 1596,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30897
+            },
+            "6": {
+              "free_mib": 1644,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30849
+            },
+            "7": {
+              "free_mib": 1668,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30825
+            }
+          },
+          "label": "after_hc_controls"
+        },
+        {
+          "delta_from_previous_label": "after_hc_controls",
+          "delta_used_mib": {
+            "0": 134,
+            "1": 130,
+            "2": 130,
+            "3": 130,
+            "4": 130,
+            "5": 130,
+            "6": 130,
+            "7": 130
+          },
+          "gpus": {
+            "0": {
+              "free_mib": 1114,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 31379
+            },
+            "1": {
+              "free_mib": 1462,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 31031
+            },
+            "2": {
+              "free_mib": 1558,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30935
+            },
+            "3": {
+              "free_mib": 1554,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30939
+            },
+            "4": {
+              "free_mib": 1482,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 31011
+            },
+            "5": {
+              "free_mib": 1466,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 31027
+            },
+            "6": {
+              "free_mib": 1514,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30979
+            },
+            "7": {
+              "free_mib": 1538,
+              "pass": true,
+              "threshold_mib": 64,
+              "total_mib": 32494,
+              "used_mib": 30955
+            }
+          },
+          "label": "after_output_head"
+        },
+        {
+          "delta_from_previous_label": "after_output_head",
+          "delta_used_mib": {
+            "0": 0,
+            "1": 0,
+            "2": 0,
+            "3": 0,
+            "4": 0,
+            "5": 0,
+            "6": 0,
+            "7": 0
+          },
+          "gpus": {
+            "0": {
+              "free_mib": 1114,
+              "pass": false,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 31379
+            },
+            "1": {
+              "free_mib": 1462,
+              "pass": false,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 31031
+            },
+            "2": {
+              "free_mib": 1558,
+              "pass": true,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 30935
+            },
+            "3": {
+              "free_mib": 1554,
+              "pass": true,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 30939
+            },
+            "4": {
+              "free_mib": 1482,
+              "pass": false,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 31011
+            },
+            "5": {
+              "free_mib": 1466,
+              "pass": false,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 31027
+            },
+            "6": {
+              "free_mib": 1514,
+              "pass": false,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 30979
+            },
+            "7": {
+              "free_mib": 1538,
+              "pass": true,
+              "threshold_mib": 1536,
+              "total_mib": 32494,
+              "used_mib": 30955
+            }
+          },
+          "label": "nccl_after_output_head"
+        }
+      ],
+      "failing_gpus": [
+        "0",
+        "1",
+        "4",
+        "5",
+        "6"
+      ],
+      "max_deficit_mib": 422,
+      "metadata": {
+        "hc_control_bytes": 332431688,
+        "hc_control_mib": 317.0315628051758,
+        "hc_slots": 32,
+        "output_logits_bytes": 16547840,
+        "output_logits_mib": 15.78125,
+        "output_rows_per_gpu": 16160,
+        "output_vocab": 129280,
+        "output_weight_bytes": 1059061760,
+        "output_weight_mib": 1010.0
+      },
+      "name": "fp8-kv-hc-nccl",
+      "path": "logs/from-cluster/sprint403-nccl-kv-matrix/fp8-kv-hc-nccl",
+      "profile": {
+        "continuation_decode_tok_s": null,
+        "first_token": null,
+        "generated_decode_tok_s": null,
+        "returncode": 14,
+        "vram_max_used_mib": 31379,
+        "vram_min_free_mib": 1114
+      },
+      "stdout": "logs/from-cluster/sprint403-nccl-kv-matrix/fp8-kv-hc-nccl/none-direct-hc-nccl-allgather-hc-stream-sync-model-router-compact-moe-fp8-e5m2-kv/stdout.txt",
+      "summaries": {
+        "after_dense_f16_cache": {
+          "failures": 0,
+          "max_used_mib": 2035,
+          "min_free_mib": 30458,
+          "pass": true,
+          "threshold_mib": 64
+        },
+        "after_dense_ops": {
+          "failures": 0,
+          "max_used_mib": 30901,
+          "min_free_mib": 1592,
+          "pass": true,
+          "threshold_mib": 64
+        },
+        "after_hc_controls": {
+          "failures": 0,
+          "max_used_mib": 31245,
+          "min_free_mib": 1248,
+          "pass": true,
+          "threshold_mib": 64
+        },
+        "after_output_head": {
+          "failures": 0,
+          "max_used_mib": 31379,
+          "min_free_mib": 1114,
+          "pass": true,
+          "threshold_mib": 64
+        },
+        "after_rank_buffers": {
+          "failures": 0,
+          "max_used_mib": 2979,
+          "min_free_mib": 29514,
+          "pass": true,
+          "threshold_mib": 64
+        },
+        "after_tp_runtime": {
+          "failures": 0,
+          "max_used_mib": 9773,
+          "min_free_mib": 22720,
+          "pass": true,
+          "threshold_mib": 64
+        },
+        "nccl_after_output_head": {
+          "failures": 5,
+          "max_used_mib": 31379,
+          "min_free_mib": 1114,
+          "pass": false,
+          "threshold_mib": 1536
+        },
+        "nccl_after_rank_buffers": {
+          "failures": 0,
+          "max_used_mib": 2979,
+          "min_free_mib": 29514,
+          "pass": true,
+          "threshold_mib": 1536
+        },
+        "startup": {
+          "failures": 0,
+          "max_used_mib": 311,
+          "min_free_mib": 32182,
+          "pass": true,
+          "threshold_mib": 64
+        }
+      },
+      "summary": "logs/from-cluster/sprint403-nccl-kv-matrix/fp8-kv-hc-nccl/none-direct-hc-nccl-allgather-hc-stream-sync-model-router-compact-moe-fp8-e5m2-kv/summary.json",
+      "threshold_mib": 1536
+    }
+  ],
+  "threshold_mib": 1536
+}

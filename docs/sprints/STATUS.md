@@ -9,7 +9,22 @@ Current bottleneck reference:
 summarizes the measured bottlenecks, layer-by-layer hot paths, and experiments
 already tried.
 
-Latest NCCL status: Sprint 403 added
+Latest NCCL status: Sprint 404 added
+`tools/ds4-v100-tp-ep-vram-ledger.py`, a reusable parser for `tp_ep_vram`
+artifact rows, and ran it against the Sprint 403 matrix. At the `1536 MiB`
+NCCL reserve, the failing HC-current NCCL target has per-GPU deficits:
+GPU0 `422 MiB`, GPU1 `74 MiB`, GPU4 `54 MiB`, GPU5 `70 MiB`, GPU6 `22 MiB`.
+The ledger also quantifies resident allocation deltas: NCCL rank
+buffers/communicator add `848-944 MiB/GPU` versus the non-NCCL rank-buffer
+checkpoint, TP runtime adds `6794 MiB/GPU`, dense ops add `21128 MiB/GPU`, HC
+controls add `372 MiB` on GPU0 only, and output head adds `134 MiB` on GPU0
+plus `130 MiB` on GPUs 1-7. Metadata reports `317.0 MiB` of HC control
+tensors, `1010.0 MiB` aggregate output weights, and `15.8 MiB` aggregate
+output logits. Decision: promote the ledger. The next NCCL implementation
+sprint should pair lazy/on-demand output-head residency with streaming or
+shrinking GPU0 HC-control residency; either alone is insufficient.
+
+Previous NCCL status: Sprint 403 added
 `tools/ds4-v100-tp-ep-nccl-kv-matrix.py` and ran the target-shape NCCL plus KV
 matrix at `32` slots / `256K` / `position=262080`. Control passed with first
 token `54639`, generated decode `98.076858` tok/s, continuation decode
