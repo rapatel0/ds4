@@ -216,6 +216,7 @@ struct RankState {
     float *d_next_hidden = nullptr;
     float *d_current_shard = nullptr;
     float *d_current_full = nullptr;
+    float *d_current_full_rank_major = nullptr;
     float *d_final_hc_shard = nullptr;
     float *d_hc_scratch_shard = nullptr;
     float *d_hc_split = nullptr;
@@ -681,6 +682,7 @@ struct Options {
     bool tp_hc_final_expand_gate = false;
     bool tp_hc_current_input_gate = false;
     bool tp_hc_current_input_peer_gather_gate = false;
+    bool tp_hc_current_input_nccl_allgather_gate = false;
     bool tp_hc_current_input_stream_sync_gate = false;
     bool tp_hc_current_input_fused_fill_pack_gate = false;
     bool tp_hc_persist_state_gate = false;
@@ -1447,6 +1449,27 @@ __global__ void gather_current_shards_to_full8_kernel(float *full,
     else if (rank == 6u) src = shard6;
     else if (rank == 7u) src = shard7;
     full[i] = src[src_i];
+}
+
+__global__ void rank_major_current_shards_to_slot_major_kernel(
+    float *full,
+    const float *rank_major,
+    uint32_t shard_cols,
+    uint32_t ranks,
+    uint32_t slots) {
+    const uint64_t cols = (uint64_t)shard_cols * (uint64_t)ranks;
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t n = (uint64_t)slots * cols;
+    if (i >= n) return;
+    const uint32_t slot = (uint32_t)(i / cols);
+    const uint32_t col = (uint32_t)(i % cols);
+    const uint32_t rank = col / shard_cols;
+    const uint32_t local_col = col - rank * shard_cols;
+    const uint64_t src_i =
+        ((uint64_t)rank * (uint64_t)slots + (uint64_t)slot) *
+            (uint64_t)shard_cols +
+        (uint64_t)local_col;
+    full[i] = rank_major[src_i];
 }
 
 __global__ void gather_dense_shard_to_full_kernel(float *full,
@@ -3550,6 +3573,7 @@ void usage(const char *argv0) {
                  "       [--final-hc-carry-gate] [--tp-hc-final-expand-gate]\n"
                  "       [--tp-hc-current-input-gate]\n"
                  "       [--tp-hc-current-input-peer-gather-gate]\n"
+                 "       [--tp-hc-current-input-nccl-allgather-gate]\n"
                  "       [--tp-hc-current-input-stream-sync-gate]\n"
                  "       [--tp-hc-current-input-fused-fill-pack-gate]\n"
                  "       [--tp-hc-persist-state-gate] [--tp-kv-all-slots-gate]\n"
@@ -3777,6 +3801,11 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--tp-hc-current-input-peer-gather-gate") == 0) {
             opt->tp_hc_current_input_peer_gather_gate = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--tp-hc-current-input-nccl-allgather-gate") == 0) {
+            opt->tp_hc_current_input_nccl_allgather_gate = true;
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
@@ -4110,6 +4139,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
            (!opt->gpu_route_plan_gate || opt->compact_moe_decode_gate) &&
            (!opt->nccl_reduce_scatter_compose_gate ||
             !opt->decode_cudagraph_gate) &&
+           (!opt->tp_hc_current_input_nccl_allgather_gate ||
+            opt->tp_hc_current_input_gate) &&
            !(opt->model_router_routes && opt->compact_route_compose &&
              !opt->compact_moe_decode_gate) &&
            !(opt->dense_hmma_compose && opt->dense_f16_cublas_compose) &&
@@ -5641,7 +5672,51 @@ int run_shared_hc_current_input(const Options &opt,
 
     float *control_current_full = hc->d_current_full;
     const bool peer_gather_current = opt.tp_hc_current_input_peer_gather_gate;
-    if (peer_gather_current) {
+    const bool nccl_gather_current =
+        opt.tp_hc_current_input_nccl_allgather_gate;
+    const bool rank_local_current_full =
+        peer_gather_current || nccl_gather_current;
+    if (nccl_gather_current) {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            if (!r.compose_nccl_initialized || !r.compose_nccl ||
+                !r.d_current_full_rank_major) {
+                return 9;
+            }
+        }
+        CHECK_NCCL(ncclGroupStart());
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            CHECK_CUDA(cudaSetDevice(r.device));
+            CHECK_NCCL(ncclAllGather(r.d_current_shard,
+                                     r.d_current_full_rank_major,
+                                     (size_t)shard_elems,
+                                     ncclFloat,
+                                     r.compose_nccl,
+                                     r.stream));
+        }
+        CHECK_NCCL(ncclGroupEnd());
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            CHECK_CUDA(cudaSetDevice(r.device));
+            rank_major_current_shards_to_slot_major_kernel<<<
+                (unsigned int)((full_elems + block - 1) / block), block, 0,
+                r.stream>>>(
+                r.d_current_full, r.d_current_full_rank_major,
+                (uint32_t)(kHidden / kGpus), (uint32_t)kGpus,
+                (uint32_t)opt.slots);
+            CHECK_CUDA(cudaGetLastError());
+        }
+        if (graph_event_order) {
+            if (control_wait_on_rank_streams() != 0) return 9;
+        } else {
+            for (int rank = 0; rank < kGpus; ++rank) {
+                CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+                CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+            }
+        }
+        control_current_full = ranks[0].d_current_full;
+    } else if (peer_gather_current) {
         const uint64_t full_grid_elems = full_elems;
         for (int dst = 0; dst < kGpus; ++dst) {
             RankState &r = ranks[dst];
@@ -5682,8 +5757,8 @@ int run_shared_hc_current_input(const Options &opt,
         sync_control_device();
     }
     auto t_gather_done = std::chrono::steady_clock::now();
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
     if (should_log_reference_hc_window(opt)) {
-        CHECK_CUDA(cudaSetDevice(opt.devices[0]));
         log_tensor_f32_stats("hc_current_full", layer, 0, control_current_full,
                              (size_t)full_elems, nullptr);
     }
@@ -5789,7 +5864,7 @@ int run_shared_hc_current_input(const Options &opt,
 
     const bool fused_fill_pack =
         opt.tp_hc_current_input_fused_fill_pack_gate &&
-        !peer_gather_current && !graph_event_order &&
+        !rank_local_current_full && !graph_event_order &&
         !opt.reference_hc_reduce_gate &&
         (!opt.routed_ffn_norm_input_gate || hc->d_ffn_normed);
     for (int rank = 0; rank < kGpus; ++rank) {
@@ -5822,7 +5897,7 @@ int run_shared_hc_current_input(const Options &opt,
                 r.routes, (uint32_t)opt.slots, total);
             CHECK_CUDA(cudaGetLastError());
         } else {
-            if (!peer_gather_current) {
+            if (!rank_local_current_full) {
                 if (graph_event_order) {
                 copy_f32_kernel<<<
                     (unsigned int)((full_elems + block - 1) / block),
@@ -9507,7 +9582,9 @@ int open_compose_nccl(const Options &opt, RankState ranks[kGpus]) {
         !opt.compact_route_compose && !opt.ep_return_fp16;
     const bool need_attention_output =
         opt.true_ds4_attention_output_nccl_allgather_gate;
-    if (!need_compose && !need_attention_output) return 0;
+    const bool need_hc_current =
+        opt.tp_hc_current_input_nccl_allgather_gate;
+    if (!need_compose && !need_attention_output && !need_hc_current) return 0;
     int devices[kGpus] = {};
     ncclComm_t comms[kGpus] = {};
     for (int p = 0; p < kGpus; ++p) devices[p] = ranks[p].device;
@@ -9517,8 +9594,10 @@ int open_compose_nccl(const Options &opt, RankState ranks[kGpus]) {
         ranks[p].compose_nccl_initialized = true;
     }
     std::printf("tp_ep_nccl\tdevices\t%d\tcompose_reduce_scatter\t%d\t"
-                "attention_output_allgather\t%d\tPASS\n",
-                kGpus, need_compose ? 1 : 0, need_attention_output ? 1 : 0);
+                "attention_output_allgather\t%d\t"
+                "hc_current_allgather\t%d\tPASS\n",
+                kGpus, need_compose ? 1 : 0, need_attention_output ? 1 : 0,
+                need_hc_current ? 1 : 0);
     return 0;
 }
 
@@ -9572,6 +9651,7 @@ void close_shared_rank_buffers(SharedRankBuffers *shared) {
         if (r.d_next_hidden) CHECK_CUDA(cudaFree(r.d_next_hidden));
         if (r.d_current_shard) CHECK_CUDA(cudaFree(r.d_current_shard));
         if (r.d_current_full) CHECK_CUDA(cudaFree(r.d_current_full));
+        if (r.d_current_full_rank_major) CHECK_CUDA(cudaFree(r.d_current_full_rank_major));
         if (r.d_final_hc_shard) CHECK_CUDA(cudaFree(r.d_final_hc_shard));
         if (r.d_hc_scratch_shard) CHECK_CUDA(cudaFree(r.d_hc_scratch_shard));
         if (r.d_hc_split) CHECK_CUDA(cudaFree(r.d_hc_split));
@@ -9699,6 +9779,11 @@ int ensure_compose_buffers(const Options &opt, RankState ranks[kGpus]) {
         }
         if (opt.tp_hc_current_input_gate && !r.d_current_full) {
             CHECK_CUDA(cudaMalloc(&r.d_current_full,
+                                  (size_t)opt.slots * kHidden * sizeof(float)));
+        }
+        if (opt.tp_hc_current_input_nccl_allgather_gate &&
+            !r.d_current_full_rank_major) {
+            CHECK_CUDA(cudaMalloc(&r.d_current_full_rank_major,
                                   (size_t)opt.slots * kHidden * sizeof(float)));
         }
         if (opt.final_hc_carry_gate && !r.d_final_hc_shard) {
@@ -14533,6 +14618,7 @@ int run_layer(const Options &opt,
                     "compose_final_ms_per_step\t%.6f\t"
                     "hc_current_input_gate\t%d\t"
                     "hc_current_input_peer_gather\t%d\t"
+                    "hc_current_input_nccl_allgather\t%d\t"
                     "hc_current_input_stream_sync\t%d\t"
                     "hc_current_input_ms_per_step\t%.6f\t"
                     "final_hc_carry_gate\t%d\tfinal_hc_ms_per_step\t%.6f\t"
@@ -14562,6 +14648,7 @@ int run_layer(const Options &opt,
                     decode_loop.compose_final_ms_per_step,
                     opt.tp_hc_current_input_gate ? 1 : 0,
                     opt.tp_hc_current_input_peer_gather_gate ? 1 : 0,
+                    opt.tp_hc_current_input_nccl_allgather_gate ? 1 : 0,
                     opt.tp_hc_current_input_stream_sync_gate ? 1 : 0,
                     decode_loop.hc_current_input_ms_per_step,
                     opt.final_hc_carry_gate ? 1 : 0,
@@ -15240,6 +15327,7 @@ int run_token_major_serving_loop(const Options &opt,
                 "sum_compose_final_ms\t%.6f\t"
                 "tp_hc_current_input_gate\t%d\t"
                 "tp_hc_current_input_peer_gather\t%d\t"
+                "tp_hc_current_input_nccl_allgather\t%d\t"
                 "tp_hc_current_input_stream_sync\t%d\t"
                 "sum_hc_current_input_ms\t%.6f\t"
                 "sum_hc_current_seed_ms\t%.6f\t"
@@ -15290,6 +15378,7 @@ int run_token_major_serving_loop(const Options &opt,
                 sum_compose_final_ms,
                 opt.tp_hc_current_input_gate ? 1 : 0,
                 opt.tp_hc_current_input_peer_gather_gate ? 1 : 0,
+                opt.tp_hc_current_input_nccl_allgather_gate ? 1 : 0,
                 opt.tp_hc_current_input_stream_sync_gate ? 1 : 0,
                 sum_hc_current_input_ms,
                 sum_hc_current_seed_ms,
@@ -17762,6 +17851,7 @@ int main(int argc, char **argv) {
                 "sum_compose_final_ms\t%.6f\t"
                 "tp_hc_current_input_gate\t%d\t"
                 "tp_hc_current_input_peer_gather\t%d\t"
+                "tp_hc_current_input_nccl_allgather\t%d\t"
                 "tp_hc_current_input_stream_sync\t%d\t"
                 "sum_hc_current_input_ms\t%.6f\t"
                 "wall_ms\t%.6f\tchecksum\t%llu\tPASS\n",
@@ -17783,6 +17873,7 @@ int main(int argc, char **argv) {
                 sum_compose_final_ms,
                 opt.tp_hc_current_input_gate ? 1 : 0,
                 opt.tp_hc_current_input_peer_gather_gate ? 1 : 0,
+                opt.tp_hc_current_input_nccl_allgather_gate ? 1 : 0,
                 opt.tp_hc_current_input_stream_sync_gate ? 1 : 0,
                 sum_hc_current_input_ms,
                 wall_ms, (unsigned long long)checksum);

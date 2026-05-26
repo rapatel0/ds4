@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-26
-last_updated_by: sprint-400
-revision: 413
+last_updated_by: sprint-401
+revision: 414
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -66,7 +66,8 @@ The performance program is intentionally isolated:
 | 8 | `--tp-hc-current-input-fused-fill-pack-gate` | Complete diagnostic | Rejected; direct remote-load fusion preserved first token but regressed decode and HC fill/pack sharply |
 | 9 | `tools/ds4-v100-tp8-layer-proxy --algo nccl` | Complete measurement | Promoted as the proxy path for true TP hidden all-reduce; serving defaults unchanged until a real TP dense/expert boundary exists |
 | 10 | `--true-ds4-attention-output-nccl-allgather-gate` | Complete diagnostic | Correct at 16 slots, but rejected for target 32-slot/256K serving because NCCL communicator overhead triggers OOM |
-| 11 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
+| 11 | `--tp-hc-current-input-nccl-allgather-gate` | Complete diagnostic | Correct at 16 slots, but rejected: target 32-slot/256K OOMs and smaller shape regresses HC gather/decode |
+| 12 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
 
 Promotion requires a same-binary V100 A/B at the real serving shape, unchanged
 first token/checksum, and improved GPU utilization or server decode tok/s.
@@ -218,7 +219,18 @@ The near-term implementation focus is therefore:
    overall (`29.467687` to `28.925690` generated decode tok/s). NCCL remains a
    strategic direction, but future NCCL work must amortize one shared
    communicator across broader TP hidden/expert boundaries and be admitted by
-   the memory planner before promotion.
+   the memory planner before promotion. Sprint 401 then tested NCCL on the
+   HC-current hidden-state allgather. This is a broader and more central
+   boundary than attention-output, but still not promotable. It is correct at
+   `16` slots / `256K` with first token `54639`, but the target `32` slot /
+   `256K` run again OOMs after communicator initialization; minimum free VRAM
+   falls from `1746 MiB` to `1114 MiB`. At `16` slots, HC-current gather
+   regresses from `5.532507` to `15.830067` ms and generated decode regresses
+   from `65.078267` to `61.918746` tok/s. The conclusion is sharper now:
+   NCCL should not be bolted onto narrow existing serving boundaries one at a
+   time. Future NCCL integration needs a memory-planned shared communicator and
+   a larger fused TP/expert boundary that removes enough staging and launch
+   work to pay for the communicator and layout conversion.
 8. Close the S-E follow-up with a narrow parity/precheck fix if we want to
    revisit fused gated-SiLU. Sprint 379 showed the current serving-shaped
    branch already has no standalone routed SwiGLU launch, the generic

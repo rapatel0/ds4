@@ -9,7 +9,26 @@ Current bottleneck reference:
 summarizes the measured bottlenecks, layer-by-layer hot paths, and experiments
 already tried.
 
-Latest NCCL status: Sprint 400 added a serving-facing default-off
+Latest NCCL status: Sprint 401 added a serving-facing default-off
+`--tp-hc-current-input-nccl-allgather-gate` for the TP/EP HC-current
+hidden-state boundary. The gate allgathers each rank's `[slots,512]` FP32
+current shard, converts NCCL's rank-major output back to slot-major
+`[slots,4096]`, and reuses the existing dense input and route-pack path. V100
+build passed. The first candidate exposed and fixed a device-context handoff:
+after NCCL, GPU0 control-stream kernels must reset the current CUDA device to
+GPU0. At the target `32` slot / `256K` shape, control completed with first
+token `54639`, generated decode `85.897762` tok/s, continuation decode
+`99.733266` tok/s, HC gather `6.986851` ms, and `1746 MiB` minimum free VRAM.
+The NCCL candidate then executed through real layers but failed on raw-SWA
+allocation with `1114 MiB` minimum free VRAM; the communicator overhead again
+costs about `+660 MiB/GPU`. A `16` slot / `256K` diagnostic proved correctness
+with first token `54639`, but regressed generated decode from `65.078267` to
+`61.918746` tok/s and HC gather from `5.532507` to `15.830067` ms. Decision:
+keep this gate diagnostic-only. Narrow NCCL serving boundaries are not enough;
+future NCCL work must be memory-planned as a shared topology resource and
+replace a broader fused TP/expert boundary.
+
+Previous NCCL status: Sprint 400 added a serving-facing default-off
 `--true-ds4-attention-output-nccl-allgather-gate` for the true DS4
 attention-output boundary. The gate replaces the peer-copy gather of
 `attn_output_a` shards with NCCL allgather and a rank-major-to-slot-major fill

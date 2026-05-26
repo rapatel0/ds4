@@ -325,6 +325,9 @@ def build_env(args, port):
             "DS4_V100_MAX_REQUESTS": str(max(args.max_requests, args.requests)),
             "DS4_V100_TP_EP_HC_PERSIST_STATE": "1",
             "DS4_V100_TP_EP_HC_CURRENT_INPUT_PEER_GATHER": "1" if args.hc_current_peer_gather else "0",
+            "DS4_V100_TP_EP_HC_CURRENT_INPUT_NCCL_ALLGATHER": "1"
+            if args.hc_current_nccl_allgather
+            else "0",
             "DS4_V100_TP_EP_HC_CURRENT_INPUT_STREAM_SYNC": "1" if args.hc_current_stream_sync else "0",
             "DS4_V100_TP_EP_HC_CURRENT_INPUT_FUSED_FILL_PACK": "1"
             if args.hc_current_fused_fill_pack
@@ -401,6 +404,8 @@ def variant_suffix(args):
     suffix = ""
     if args.hc_current_peer_gather:
         suffix += "-hc-peer-gather"
+    if getattr(args, "hc_current_nccl_allgather", False):
+        suffix += "-hc-nccl-allgather"
     if args.hc_current_stream_sync:
         suffix += "-hc-stream-sync"
     if getattr(args, "hc_current_fused_fill_pack", False):
@@ -550,6 +555,8 @@ def direct_command(args):
         cmd.append("--cuda-profiler-window")
     if args.hc_current_peer_gather:
         cmd.append("--tp-hc-current-input-peer-gather-gate")
+    if args.hc_current_nccl_allgather:
+        cmd.append("--tp-hc-current-input-nccl-allgather-gate")
     if args.hc_current_stream_sync:
         cmd.append("--tp-hc-current-input-stream-sync-gate")
     if args.hc_current_fused_fill_pack:
@@ -682,6 +689,7 @@ def add_tp_ep_line_summaries(summary, stdout):
                 "sum_pre_ep_attention_output_ms",
                 "sum_pre_ep_post_attention_ffn_input_ms",
                 "tp_hc_current_input_peer_gather",
+                "tp_hc_current_input_nccl_allgather",
                 "tp_hc_current_input_stream_sync",
                 "compact_moe_decode_gate",
                 "router_cublas_gate",
@@ -928,6 +936,7 @@ def main():
         default="chat",
     )
     parser.add_argument("--hc-current-peer-gather", action="store_true")
+    parser.add_argument("--hc-current-nccl-allgather", action="store_true")
     parser.add_argument("--hc-current-stream-sync", action="store_true")
     parser.add_argument("--hc-current-fused-fill-pack", action="store_true")
     parser.add_argument("--attention-output", action="store_true")
