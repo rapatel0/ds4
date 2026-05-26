@@ -9,7 +9,27 @@ Current bottleneck reference:
 summarizes the measured bottlenecks, layer-by-layer hot paths, and experiments
 already tried.
 
-Latest NCCL/serving status: Sprint 408 split lazy output-head peak memory from
+Latest NCCL/serving status: Sprint 409 made HC-current NCCL memory-admitted at
+the target `32` slot / `256K` shape by skipping the unused TP-runtime
+compressed-state arena. The arena previously allocated `1803550720 B/GPU` but
+was only allocated, reported, and freed in the current TP runtime; active
+compression state remains in `RankState` mirrors. With the skip enabled,
+`comp_state_bytes_per_gpu` reports `0`, `after_tp_runtime` min free improves
+from `22720 MiB` to `24440 MiB`, and `after_lazy_output_head_close` min free
+improves from `520-522 MiB` to `2240-2242 MiB`. Direct HC-current NCCL +
+lazy-output-head returned first token `54639`, generated decode `95.402649`
+tok/s, continuation decode `106.596995` tok/s, and `0` NCCL reserve failures.
+HTTP HC-current NCCL + lazy-output-head returned `32/32` HTTP 200 responses,
+first token `83480`, response-0 sequence `[83480, 79768]`, server generated
+decode `113.117381` tok/s, continuation decode `114.092661` tok/s,
+`2240 MiB` post-close free VRAM, and `0` NCCL reserve failures. A sampled HTTP
+repeat passed the readiness checker with GPU samples, resident KV, typed KV,
+compact MoE, checksums, `vram_failures=0`, and `2106 MiB` minimum free VRAM.
+Decision: promote `DS4_V100_TP_EP_TP_RUNTIME_SKIP_UNUSED_COMP_STATE=1` as the
+launcher/profile default; next NCCL work shifts from memory admission to
+throughput/default-selection.
+
+Previous NCCL/serving status: Sprint 408 split lazy output-head peak memory from
 post-close steady-state residency. The target `32` slot / `256K` HC-current
 NCCL path still serves correctly, but closing the temporary lazy output head
 only recovers `134-136 MiB` on the tightest GPU. Direct HC-current NCCL +

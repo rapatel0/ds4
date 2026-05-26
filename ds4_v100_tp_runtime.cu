@@ -743,6 +743,7 @@ extern "C" void ds4_v100_tp_runtime_default_config(ds4_v100_tp_runtime_config *c
     cfg->hidden = 4096;
     cfg->kv_dtype = DS4_V100_TP_KV_F8_E4M3_B128;
     cfg->scratch_bytes = 1536ull * 1024ull * 1024ull;
+    cfg->allocate_comp_state = 1;
 }
 
 extern "C" int ds4_v100_tp_runtime_open(ds4_v100_tp_runtime **out,
@@ -812,10 +813,13 @@ extern "C" int ds4_v100_tp_runtime_open(ds4_v100_tp_runtime **out,
             ds4_v100_tp_runtime_close(rt);
             return fail_cuda(err, err_len, "cudaSetDevice", rc);
         }
+        const uint64_t allocated_comp_per_gpu =
+            cfg->allocate_comp_state ? comp_per_gpu : 0;
         if ((rc = cudaMalloc(&g->hidden_in, hidden_bytes)) != cudaSuccess ||
             (rc = cudaMalloc(&g->hidden_out, hidden_bytes)) != cudaSuccess ||
             (rc = cudaMalloc(&g->kv, kv_per_gpu)) != cudaSuccess ||
-            (rc = cudaMalloc(&g->comp_state, comp_per_gpu)) != cudaSuccess ||
+            (allocated_comp_per_gpu != 0 &&
+             (rc = cudaMalloc(&g->comp_state, allocated_comp_per_gpu)) != cudaSuccess) ||
             (rc = cudaMalloc(&g->scratch, cfg->scratch_bytes)) != cudaSuccess) {
             ds4_v100_tp_runtime_close(rt);
             return fail_cuda(err, err_len, "cudaMalloc", rc);
@@ -827,7 +831,7 @@ extern "C" int ds4_v100_tp_runtime_open(ds4_v100_tp_runtime **out,
         }
         g->report.hidden_bytes = 2 * hidden_bytes;
         g->report.kv_bytes = kv_per_gpu;
-        g->report.comp_state_bytes = comp_per_gpu;
+        g->report.comp_state_bytes = allocated_comp_per_gpu;
         g->report.scratch_bytes = cfg->scratch_bytes;
         g->report.total_bytes =
             g->report.hidden_bytes + g->report.kv_bytes +

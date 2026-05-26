@@ -30,6 +30,7 @@ typedef struct {
     uint32_t hidden;
     ds4_v100_tp_kv_dtype kv_dtype;
     uint64_t scratch_bytes;
+    uint32_t allocate_comp_state;
 } ds4_v100_tp_runtime_config;
 
 typedef struct {

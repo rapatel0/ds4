@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-26
-last_updated_by: sprint-408
-revision: 421
+last_updated_by: sprint-409
+revision: 422
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -74,7 +74,8 @@ The performance program is intentionally isolated:
 | 16 | Exact attention compressed-KV state layout | Complete memory fix | Promoted; target 32-slot/256K HC-current NCCL now completes with first token 54639, but reserve still fails at 386 MiB free after lazy output-head |
 | 17 | HTTP lazy output-head | Complete prototype serving path | Promoted for prototype serving; 32/32 HTTP chat works at 32 slots/256K, HC-current NCCL also serves but still fails 1536 MiB reserve |
 | 18 | Post-close lazy output-head VRAM checkpoint | Complete diagnostic | Keep telemetry; closing lazy output head recovers only ~136 MiB and HC-current NCCL still fails reserve at 520-522 MiB free |
-| 19 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
+| 19 | Skip unused TP-runtime comp-state arena | Complete memory fix | Promoted; HC-current NCCL now passes target 32-slot/256K reserve with 2240-2242 MiB post-close free |
+| 20 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
 
 Promotion requires a same-binary V100 A/B at the real serving shape, unchanged
 first token/checksum, and improved GPU utilization or server decode tok/s.
@@ -161,6 +162,21 @@ The near-term implementation focus is therefore:
    output-head timing is not the primary remaining reserve lever. Keep
    HC-current NCCL diagnostic-only; the next memory implementation needs to
    reclaim persistent decode state and GPU0-heavy controls.
+   Sprint 409 removed the largest concrete unused allocation from the target
+   path: the TP-runtime compressed-state arena. That arena allocated
+   `1803550720 B/GPU` but was not used by any current TP-runtime row store/load
+   path. With `DS4_V100_TP_EP_TP_RUNTIME_SKIP_UNUSED_COMP_STATE=1`,
+   `comp_state_bytes_per_gpu` reports `0`, `after_hc_controls` min free rises
+   from `1248 MiB` to `2968 MiB`, and `after_lazy_output_head_close` rises
+   from `520-522 MiB` to `2240-2242 MiB`. Direct HC-current NCCL preserves
+   first token `54639` and passes the `1536 MiB` reserve. HTTP HC-current NCCL
+   returns `32/32` responses, first token `83480`, response-0 sequence
+   `[83480, 79768]`, `113.117381` server decode tok/s, and zero NCCL reserve
+   failures. A sampled HTTP repeat passed readiness with GPU samples, resident
+   KV, typed KV, compact MoE, checksums, and `vram_failures=0`. The launcher
+   and profile harness now default this skip on. HC-current NCCL is
+   memory-admitted; the next decision is whether its throughput/latency profile
+   is strong enough to promote the collective boundary itself.
 2. Use the Sprint 383 matrix as the current before/after performance baseline.
    At `32` configured slots, `256K`, `position=262080`, and `32` generated
    chat tokens/request, active requests `1,4,8,16,32` all pass with

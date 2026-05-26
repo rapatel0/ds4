@@ -651,6 +651,7 @@ struct Options {
     bool skip_predecode_probes = false;
     bool share_tp_runtime = false;
     bool tp_runtime_explicit = false;
+    bool tp_runtime_skip_unused_comp_state = false;
     bool share_expert_bindings = true;
     bool overlap_ep_dense = true;
     bool direct_remote_compose = false;
@@ -3733,6 +3734,8 @@ bool parse_args(int argc, char **argv, Options *opt) {
         } else if (std::strcmp(arg, "--local-tp-runtime") == 0) {
             opt->share_tp_runtime = false;
             opt->tp_runtime_explicit = true;
+        } else if (std::strcmp(arg, "--tp-runtime-skip-unused-comp-state-gate") == 0) {
+            opt->tp_runtime_skip_unused_comp_state = true;
         } else if (std::strcmp(arg, "--shared-expert-bindings") == 0) {
             opt->share_expert_bindings = true;
         } else if (std::strcmp(arg, "--local-expert-bindings") == 0) {
@@ -9758,6 +9761,7 @@ void fill_tp_runtime_config(const Options &opt, ds4_v100_tp_runtime_config *cfg)
         ? DS4_V100_TP_KV_F8_E5M2_B128
         : DS4_V100_TP_KV_F8_E4M3_B128;
     cfg->scratch_bytes = 1536ull * 1024ull * 1024ull;
+    cfg->allocate_comp_state = opt.tp_runtime_skip_unused_comp_state ? 0u : 1u;
     for (int i = 0; i < kGpus; ++i) cfg->devices[i] = opt.devices[i];
 }
 

@@ -359,6 +359,9 @@ def build_env(args, port):
             "DS4_V100_TP_EP_VRAM_REPORT": "1" if args.vram_report else "0",
             "DS4_V100_TP_EP_VRAM_MIN_FREE_MIB": str(args.vram_min_free_mib),
             "DS4_V100_TP_EP_NCCL_MIN_FREE_MIB": str(args.nccl_min_free_mib),
+            "DS4_V100_TP_EP_TP_RUNTIME_SKIP_UNUSED_COMP_STATE": "1"
+            if args.skip_tp_runtime_comp_state
+            else "0",
             "DS4_V100_RESERVE_MIB": "0",
             "DS4_V100_PORT": str(port),
             "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_HISTORY": "1",
@@ -555,6 +558,8 @@ def direct_command(args):
         cmd.extend(["--vram-min-free-mib", str(args.vram_min_free_mib)])
     if args.nccl_min_free_mib > 0:
         cmd.extend(["--nccl-min-free-mib", str(args.nccl_min_free_mib)])
+    if args.skip_tp_runtime_comp_state:
+        cmd.append("--tp-runtime-skip-unused-comp-state-gate")
     if args.fp8_e5m2_kv:
         cmd.append("--fp8-e5m2-kv-gate")
     if args.lazy_output_head:
@@ -977,6 +982,17 @@ def main():
     parser.add_argument("--fused-gated-silu", action="store_true")
     parser.add_argument("--routed-ffn-norm-input", action="store_true")
     parser.add_argument("--fp8-e5m2-kv", action="store_true")
+    parser.add_argument(
+        "--skip-tp-runtime-comp-state",
+        dest="skip_tp_runtime_comp_state",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--disable-skip-tp-runtime-comp-state",
+        dest="skip_tp_runtime_comp_state",
+        action="store_false",
+    )
     parser.add_argument("--lazy-output-head", action="store_true")
     parser.add_argument("--vram-report", action="store_true")
     parser.add_argument("--vram-min-free-mib", type=int, default=64)
