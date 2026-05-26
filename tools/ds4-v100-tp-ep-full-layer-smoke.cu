@@ -733,6 +733,7 @@ struct Options {
     bool cuda_profiler_window = false;
     uint32_t true_ds4_attention_raw_valid_rows = 1;
     uint64_t vram_min_free_mib = 0;
+    uint64_t nccl_min_free_mib = 0;
     bool vram_report = false;
 };
 
@@ -3472,9 +3473,16 @@ bool should_report_vram(const Options &opt) {
     return opt.vram_report || opt.vram_min_free_mib > 0;
 }
 
-int report_vram_checkpoint(const Options &opt, const char *label) {
-    if (!should_report_vram(opt)) return 0;
-    const uint64_t min_free_bytes = opt.vram_min_free_mib * kMiB;
+bool nccl_gate_active(const Options &opt) {
+    return opt.nccl_reduce_scatter_compose_gate ||
+           opt.tp_hc_current_input_nccl_allgather_gate ||
+           opt.true_ds4_attention_output_nccl_allgather_gate;
+}
+
+int report_vram_checkpoint_min_free(const Options &opt,
+                                    const char *label,
+                                    uint64_t min_free_mib_threshold) {
+    const uint64_t min_free_bytes = min_free_mib_threshold * kMiB;
     uint64_t min_free_mib = UINT64_MAX;
     uint64_t max_used_mib = 0;
     int failures = 0;
@@ -3489,7 +3497,8 @@ int report_vram_checkpoint(const Options &opt, const char *label) {
         const uint64_t total_mib = (uint64_t)total_b / kMiB;
         min_free_mib = std::min(min_free_mib, free_mib);
         max_used_mib = std::max(max_used_mib, used_mib);
-        const bool pass = opt.vram_min_free_mib == 0 || (uint64_t)free_b >= min_free_bytes;
+        const bool pass =
+            min_free_mib_threshold == 0 || (uint64_t)free_b >= min_free_bytes;
         if (!pass) failures++;
         std::printf("tp_ep_vram\tlabel\t%s\tgpu\t%d\tfree_mib\t%llu\t"
                     "used_mib\t%llu\ttotal_mib\t%llu\tmin_free_mib\t%llu\t%s\n",
@@ -3497,7 +3506,7 @@ int report_vram_checkpoint(const Options &opt, const char *label) {
                     (unsigned long long)free_mib,
                     (unsigned long long)used_mib,
                     (unsigned long long)total_mib,
-                    (unsigned long long)opt.vram_min_free_mib,
+                    (unsigned long long)min_free_mib_threshold,
                     pass ? "PASS" : "FAIL");
     }
     if (min_free_mib == UINT64_MAX) min_free_mib = 0;
@@ -3506,10 +3515,20 @@ int report_vram_checkpoint(const Options &opt, const char *label) {
                 label,
                 (unsigned long long)min_free_mib,
                 (unsigned long long)max_used_mib,
-                (unsigned long long)opt.vram_min_free_mib,
+                (unsigned long long)min_free_mib_threshold,
                 failures,
                 failures == 0 ? "PASS" : "FAIL");
     return failures == 0 ? 0 : 1;
+}
+
+int report_vram_checkpoint(const Options &opt, const char *label) {
+    if (!should_report_vram(opt)) return 0;
+    return report_vram_checkpoint_min_free(opt, label, opt.vram_min_free_mib);
+}
+
+int report_nccl_vram_checkpoint(const Options &opt, const char *label) {
+    if (!nccl_gate_active(opt) || opt.nccl_min_free_mib == 0) return 0;
+    return report_vram_checkpoint_min_free(opt, label, opt.nccl_min_free_mib);
 }
 
 int check_planned_vram_allocation(const Options &opt,
@@ -3569,6 +3588,7 @@ void usage(const char *argv0) {
                  "       [--serve-http] [--host ADDR] [--port N] [--max-requests N]\n"
                  "       [--microbatch-wait-us N]\n"
                  "       [--vram-report] [--vram-min-free-mib N]\n"
+                 "       [--nccl-min-free-mib N]\n"
                  "       [--output-head-gate] [--output-head-resident-gate]\n"
                  "       [--final-hc-carry-gate] [--tp-hc-final-expand-gate]\n"
                  "       [--tp-hc-current-input-gate]\n"
@@ -3776,6 +3796,9 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->vram_report = true;
         } else if (std::strcmp(arg, "--vram-min-free-mib") == 0) {
             if (!val || !parse_u64(val, &opt->vram_min_free_mib)) return false;
+            ++i;
+        } else if (std::strcmp(arg, "--nccl-min-free-mib") == 0) {
+            if (!val || !parse_u64(val, &opt->nccl_min_free_mib)) return false;
             ++i;
         } else if (std::strcmp(arg, "--output-head-gate") == 0) {
             opt->output_head_gate = true;
@@ -17422,6 +17445,18 @@ int main(int argc, char **argv) {
         }
         return 14;
     }
+    if (report_nccl_vram_checkpoint(opt, "nccl_after_rank_buffers") != 0) {
+        std::fprintf(stderr,
+                     "tp_ep_nccl_vram_admission_failed label=nccl_after_rank_buffers "
+                     "min_free_mib=%llu\n",
+                     (unsigned long long)opt.nccl_min_free_mib);
+        close_shared_rank_buffers(&shared_rank_buffers);
+        close_shared_api(&shared_api);
+        if (shared_dense_f16_cache) {
+            free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+        }
+        return 14;
+    }
 
     SharedTpRuntime shared_tp_runtime;
     if (opt.share_tp_runtime && open_shared_tp_runtime(opt, &shared_tp_runtime) != 0) {
@@ -17603,6 +17638,23 @@ int main(int argc, char **argv) {
                     (unsigned long long)shared_output_head.logits_bytes,
                     opt.tp_hc_final_expand_gate ? 0 : 1);
         if (report_vram_checkpoint(opt, "after_output_head") != 0) {
+            close_shared_output_head(opt, &shared_output_head);
+            close_shared_hc_controls(opt, &shared_hc_controls);
+            free_shared_dense_ops(&shared_dense_ops, opt);
+            close_shared_expert_bindings(&shared_expert_bindings);
+            close_shared_tp_runtime(&shared_tp_runtime);
+            close_shared_rank_buffers(&shared_rank_buffers);
+            close_shared_api(&shared_api);
+            if (shared_dense_f16_cache) {
+                free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+            }
+            return 14;
+        }
+        if (report_nccl_vram_checkpoint(opt, "nccl_after_output_head") != 0) {
+            std::fprintf(stderr,
+                         "tp_ep_nccl_vram_admission_failed label=nccl_after_output_head "
+                         "min_free_mib=%llu\n",
+                         (unsigned long long)opt.nccl_min_free_mib);
             close_shared_output_head(opt, &shared_output_head);
             close_shared_hc_controls(opt, &shared_hc_controls);
             free_shared_dense_ops(&shared_dense_ops, opt);

@@ -1,0 +1,99 @@
+tp_ep_vram	label	startup	gpu	0	free_mib	32182	used_mib	311	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	startup	gpu	1	free_mib	32182	used_mib	311	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	startup	gpu	2	free_mib	32182	used_mib	311	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	startup	gpu	3	free_mib	32182	used_mib	311	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	startup	gpu	4	free_mib	32182	used_mib	311	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	startup	gpu	5	free_mib	32182	used_mib	311	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	startup	gpu	6	free_mib	32182	used_mib	311	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	startup	gpu	7	free_mib	32182	used_mib	311	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram_summary	label	startup	min_free_mib	32182	max_used_mib	311	threshold_mib	64	failures	0	PASS
+tp_ep_vram_plan	label	dense_f16_cache_prealloc	gpu	0	free_mib	32182	planned_mib	1849	threshold_mib	64	total_mib	32494	PASS
+tp_ep_vram_plan	label	dense_f16_cache_prealloc	gpu	1	free_mib	32182	planned_mib	1849	threshold_mib	64	total_mib	32494	PASS
+tp_ep_vram_plan	label	dense_f16_cache_prealloc	gpu	2	free_mib	32182	planned_mib	1849	threshold_mib	64	total_mib	32494	PASS
+tp_ep_vram_plan	label	dense_f16_cache_prealloc	gpu	3	free_mib	32182	planned_mib	1849	threshold_mib	64	total_mib	32494	PASS
+tp_ep_vram_plan	label	dense_f16_cache_prealloc	gpu	4	free_mib	32182	planned_mib	1849	threshold_mib	64	total_mib	32494	PASS
+tp_ep_vram_plan	label	dense_f16_cache_prealloc	gpu	5	free_mib	32182	planned_mib	1849	threshold_mib	64	total_mib	32494	PASS
+tp_ep_vram_plan	label	dense_f16_cache_prealloc	gpu	6	free_mib	32182	planned_mib	1849	threshold_mib	64	total_mib	32494	PASS
+tp_ep_vram_plan	label	dense_f16_cache_prealloc	gpu	7	free_mib	32182	planned_mib	1849	threshold_mib	64	total_mib	32494	PASS
+tp_ep_all_layer_dense_f16_cache	rows	4096	source_bytes	8640413696	cache_bytes	14451998720	cache_aligned_bytes	14451998720	max_temp_bytes	132382720	cache_ms	6729.621988	PASS
+tp_ep_vram	label	after_dense_f16_cache	gpu	0	free_mib	30458	used_mib	2035	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_dense_f16_cache	gpu	1	free_mib	30458	used_mib	2035	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_dense_f16_cache	gpu	2	free_mib	30458	used_mib	2035	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_dense_f16_cache	gpu	3	free_mib	30458	used_mib	2035	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_dense_f16_cache	gpu	4	free_mib	30458	used_mib	2035	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_dense_f16_cache	gpu	5	free_mib	30458	used_mib	2035	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_dense_f16_cache	gpu	6	free_mib	30458	used_mib	2035	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_dense_f16_cache	gpu	7	free_mib	30458	used_mib	2035	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram_summary	label	after_dense_f16_cache	min_free_mib	30458	max_used_mib	2035	threshold_mib	64	failures	0	PASS
+tp_ep_all_layer_turbomind_api_shared	devices	8	PASS
+tp_ep_nccl	devices	8	compose_reduce_scatter	0	attention_output_allgather	0	hc_current_allgather	1	PASS
+tp_ep_all_layer_rank_buffers_shared	devices	8	core_bytes	44125216	PASS
+tp_ep_vram	label	after_rank_buffers	gpu	0	free_mib	29542	used_mib	2951	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_rank_buffers	gpu	1	free_mib	29514	used_mib	2979	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_rank_buffers	gpu	2	free_mib	29610	used_mib	2883	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_rank_buffers	gpu	3	free_mib	29606	used_mib	2887	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_rank_buffers	gpu	4	free_mib	29534	used_mib	2959	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_rank_buffers	gpu	5	free_mib	29518	used_mib	2975	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_rank_buffers	gpu	6	free_mib	29566	used_mib	2927	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_rank_buffers	gpu	7	free_mib	29590	used_mib	2903	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram_summary	label	after_rank_buffers	min_free_mib	29514	max_used_mib	2979	threshold_mib	64	failures	0	PASS
+tp_ep_vram	label	nccl_after_rank_buffers	gpu	0	free_mib	29542	used_mib	2951	total_mib	32494	min_free_mib	1536	PASS
+tp_ep_vram	label	nccl_after_rank_buffers	gpu	1	free_mib	29514	used_mib	2979	total_mib	32494	min_free_mib	1536	PASS
+tp_ep_vram	label	nccl_after_rank_buffers	gpu	2	free_mib	29610	used_mib	2883	total_mib	32494	min_free_mib	1536	PASS
+tp_ep_vram	label	nccl_after_rank_buffers	gpu	3	free_mib	29606	used_mib	2887	total_mib	32494	min_free_mib	1536	PASS
+tp_ep_vram	label	nccl_after_rank_buffers	gpu	4	free_mib	29534	used_mib	2959	total_mib	32494	min_free_mib	1536	PASS
+tp_ep_vram	label	nccl_after_rank_buffers	gpu	5	free_mib	29518	used_mib	2975	total_mib	32494	min_free_mib	1536	PASS
+tp_ep_vram	label	nccl_after_rank_buffers	gpu	6	free_mib	29566	used_mib	2927	total_mib	32494	min_free_mib	1536	PASS
+tp_ep_vram	label	nccl_after_rank_buffers	gpu	7	free_mib	29590	used_mib	2903	total_mib	32494	min_free_mib	1536	PASS
+tp_ep_vram_summary	label	nccl_after_rank_buffers	min_free_mib	29514	max_used_mib	2979	threshold_mib	1536	failures	0	PASS
+tp_ep_all_layer_tp_runtime_shared	devices	8	slots	32	ctx	262144	kv_bytes_per_gpu	3707940864	comp_state_bytes_per_gpu	1803550720	scratch_bytes_per_gpu	1610612736	total_bytes_per_gpu	7122628608	PASS
+tp_ep_vram	label	after_tp_runtime	gpu	0	free_mib	22748	used_mib	9745	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_tp_runtime	gpu	1	free_mib	22720	used_mib	9773	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_tp_runtime	gpu	2	free_mib	22816	used_mib	9677	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_tp_runtime	gpu	3	free_mib	22812	used_mib	9681	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_tp_runtime	gpu	4	free_mib	22740	used_mib	9753	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_tp_runtime	gpu	5	free_mib	22724	used_mib	9769	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_tp_runtime	gpu	6	free_mib	22772	used_mib	9721	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_tp_runtime	gpu	7	free_mib	22796	used_mib	9697	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram_summary	label	after_tp_runtime	min_free_mib	22720	max_used_mib	9773	threshold_mib	64	failures	0	PASS
+tp_ep_all_layer_expert_bindings_shared	layers	43	devices	8	bytes	147169738752	bytes_per_gpu	18396217344	PASS
+tp_ep_all_layer_dense_ops_shared	layers	43	devices	8	loaded_bytes	5795233792	PASS
+tp_ep_vram	label	after_dense_ops	gpu	0	free_mib	1620	used_mib	30873	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_dense_ops	gpu	1	free_mib	1592	used_mib	30901	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_dense_ops	gpu	2	free_mib	1688	used_mib	30805	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_dense_ops	gpu	3	free_mib	1684	used_mib	30809	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_dense_ops	gpu	4	free_mib	1612	used_mib	30881	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_dense_ops	gpu	5	free_mib	1596	used_mib	30897	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_dense_ops	gpu	6	free_mib	1644	used_mib	30849	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_dense_ops	gpu	7	free_mib	1668	used_mib	30825	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram_summary	label	after_dense_ops	min_free_mib	1592	max_used_mib	30901	threshold_mib	64	failures	0	PASS
+tp_ep_resident_serving_loop	layers	43	mode	direct_decode	PASS
+tp_ep_hc_final_expand_shared	layers	43	slots	32	control_bytes	332431688	PASS
+tp_ep_vram	label	after_hc_controls	gpu	0	free_mib	1248	used_mib	31245	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_hc_controls	gpu	1	free_mib	1592	used_mib	30901	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_hc_controls	gpu	2	free_mib	1688	used_mib	30805	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_hc_controls	gpu	3	free_mib	1684	used_mib	30809	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_hc_controls	gpu	4	free_mib	1612	used_mib	30881	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_hc_controls	gpu	5	free_mib	1596	used_mib	30897	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_hc_controls	gpu	6	free_mib	1644	used_mib	30849	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_hc_controls	gpu	7	free_mib	1668	used_mib	30825	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram_summary	label	after_hc_controls	min_free_mib	1248	max_used_mib	31245	threshold_mib	64	failures	0	PASS
+tp_ep_diagnostic_output_head_shared	slots	32	vocab	129280	rows_per_gpu	16160	output_weight_bytes	1059061760	logits_bytes	16547840	proxy_hc	0	PASS
+tp_ep_vram	label	after_output_head	gpu	0	free_mib	1114	used_mib	31379	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_output_head	gpu	1	free_mib	1462	used_mib	31031	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_output_head	gpu	2	free_mib	1558	used_mib	30935	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_output_head	gpu	3	free_mib	1554	used_mib	30939	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_output_head	gpu	4	free_mib	1482	used_mib	31011	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_output_head	gpu	5	free_mib	1466	used_mib	31027	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_output_head	gpu	6	free_mib	1514	used_mib	30979	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram	label	after_output_head	gpu	7	free_mib	1538	used_mib	30955	total_mib	32494	min_free_mib	64	PASS
+tp_ep_vram_summary	label	after_output_head	min_free_mib	1114	max_used_mib	31379	threshold_mib	64	failures	0	PASS
+tp_ep_vram	label	nccl_after_output_head	gpu	0	free_mib	1114	used_mib	31379	total_mib	32494	min_free_mib	1536	FAIL
+tp_ep_vram	label	nccl_after_output_head	gpu	1	free_mib	1462	used_mib	31031	total_mib	32494	min_free_mib	1536	FAIL
+tp_ep_vram	label	nccl_after_output_head	gpu	2	free_mib	1558	used_mib	30935	total_mib	32494	min_free_mib	1536	PASS
+tp_ep_vram	label	nccl_after_output_head	gpu	3	free_mib	1554	used_mib	30939	total_mib	32494	min_free_mib	1536	PASS
+tp_ep_vram	label	nccl_after_output_head	gpu	4	free_mib	1482	used_mib	31011	total_mib	32494	min_free_mib	1536	FAIL
+tp_ep_vram	label	nccl_after_output_head	gpu	5	free_mib	1466	used_mib	31027	total_mib	32494	min_free_mib	1536	FAIL
+tp_ep_vram	label	nccl_after_output_head	gpu	6	free_mib	1514	used_mib	30979	total_mib	32494	min_free_mib	1536	FAIL
+tp_ep_vram	label	nccl_after_output_head	gpu	7	free_mib	1538	used_mib	30955	total_mib	32494	min_free_mib	1536	PASS
+tp_ep_vram_summary	label	nccl_after_output_head	min_free_mib	1114	max_used_mib	31379	threshold_mib	1536	failures	5	FAIL

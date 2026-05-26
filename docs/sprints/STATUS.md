@@ -9,7 +9,26 @@ Current bottleneck reference:
 summarizes the measured bottlenecks, layer-by-layer hot paths, and experiments
 already tried.
 
-Latest NCCL status: Sprint 401 added a serving-facing default-off
+Latest NCCL status: Sprint 402 added a permanent NCCL-specific VRAM admission
+guard so doomed NCCL candidates fail before decode rather than later during
+raw-SWA allocation. The full-layer smoke now accepts `--nccl-min-free-mib`,
+the launcher exposes `DS4_V100_TP_EP_NCCL_MIN_FREE_MIB`, and the profile
+harness exposes `--nccl-min-free-mib`. The launcher defaults the guard to
+`1536 MiB` only when an NCCL serving gate is active and `0` otherwise. V100
+build passed. At `32` slots / `256K`, the non-NCCL control ignored the NCCL
+threshold and passed with first token `54639`, generated decode `93.773792`
+tok/s, continuation decode `104.390813` tok/s, and `1746 MiB` minimum free
+VRAM. The HC-current NCCL candidate at the same target shape failed early with
+return code `14` at `nccl_after_output_head`: `1114 MiB` minimum free against
+the `1536 MiB` threshold, with
+`tp_ep_nccl_vram_admission_failed label=nccl_after_output_head`. The smaller
+`16` slot / `256K` NCCL diagnostic remained admitted and correct with first
+token `54639`, generated decode `63.523008` tok/s, continuation decode
+`72.165002` tok/s, and `3820 MiB` minimum free VRAM. Decision: promote the
+guard as harness behavior; keep narrow NCCL serving gates default-off and
+diagnostic-only.
+
+Previous NCCL status: Sprint 401 added a serving-facing default-off
 `--tp-hc-current-input-nccl-allgather-gate` for the TP/EP HC-current
 hidden-state boundary. The gate allgathers each rank's `[slots,512]` FP32
 current shard, converts NCCL's rank-major output back to slot-major

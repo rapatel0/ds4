@@ -355,6 +355,7 @@ def build_env(args, port):
             "DS4_V100_TP_EP_FP8_E5M2_KV": "1" if args.fp8_e5m2_kv else "0",
             "DS4_V100_TP_EP_VRAM_REPORT": "1" if args.vram_report else "0",
             "DS4_V100_TP_EP_VRAM_MIN_FREE_MIB": str(args.vram_min_free_mib),
+            "DS4_V100_TP_EP_NCCL_MIN_FREE_MIB": str(args.nccl_min_free_mib),
             "DS4_V100_RESERVE_MIB": "0",
             "DS4_V100_PORT": str(port),
             "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_HISTORY": "1",
@@ -549,6 +550,8 @@ def direct_command(args):
         cmd.append("--vram-report")
     if args.vram_min_free_mib > 0:
         cmd.extend(["--vram-min-free-mib", str(args.vram_min_free_mib)])
+    if args.nccl_min_free_mib > 0:
+        cmd.extend(["--nccl-min-free-mib", str(args.nccl_min_free_mib)])
     if args.fp8_e5m2_kv:
         cmd.append("--fp8-e5m2-kv-gate")
     if "window" in args.tool:
@@ -971,6 +974,7 @@ def main():
     parser.add_argument("--fp8-e5m2-kv", action="store_true")
     parser.add_argument("--vram-report", action="store_true")
     parser.add_argument("--vram-min-free-mib", type=int, default=64)
+    parser.add_argument("--nccl-min-free-mib", type=int, default=1536)
     parser.add_argument("--port", type=int, default=18357)
     parser.add_argument("--readiness-seconds", type=int, default=600)
     parser.add_argument("--request-timeout-seconds", type=int, default=1200)
