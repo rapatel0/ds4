@@ -51,7 +51,6 @@ constexpr int kIndexerHeadDim = 128;
 constexpr int kIndexerHead = 64;
 constexpr int kIndexerTopK = 512;
 constexpr int kCompWidthMax = 2 * kHeadDim;
-constexpr int kCompStateRowsMax = 128;
 constexpr int kBoundedCompRows = 8;
 constexpr int kIndexCompWidth = 2 * kIndexerHeadDim;
 constexpr int kIndexCompStateRows = 8;
@@ -4371,6 +4370,16 @@ std::string layer_tensor_name(int layer, const char *suffix) {
 int ds4_layer_ratio(int layer) {
     if (layer < 2) return 0;
     return (layer % 2) == 0 ? 4 : 128;
+}
+
+int attn_comp_state_rows_for_ratio(int ratio) {
+    if (ratio == 4) return 2 * ratio;
+    return ratio > 0 ? ratio : 0;
+}
+
+int attn_comp_state_width_for_ratio(int ratio) {
+    if (ratio == 4) return 2 * kHeadDim;
+    return ratio > 0 ? kHeadDim : 0;
 }
 
 uint64_t f8_row_bytes(int cols) {
@@ -9859,6 +9868,8 @@ int ensure_compose_buffers(const Options &opt, RankState ranks[kGpus]) {
             CHECK_CUDA(cudaMalloc(&r.d_post_attn_shard, (size_t)shard_bytes));
         }
         if (opt.true_ds4_compressed_kv_gate && ratio != 0) {
+            const int comp_state_rows = attn_comp_state_rows_for_ratio(ratio);
+            const int comp_state_width = attn_comp_state_width_for_ratio(ratio);
             if (!r.d_attn_comp_kv_cur) {
                 CHECK_CUDA(cudaMalloc(&r.d_attn_comp_kv_cur,
                                       (size_t)opt.slots * kCompWidthMax * sizeof(float)));
@@ -9867,21 +9878,21 @@ int ensure_compose_buffers(const Options &opt, RankState ranks[kGpus]) {
             }
             if (!r.d_attn_comp_state_kv_layers[layer]) {
                 CHECK_CUDA(cudaMalloc(&r.d_attn_comp_state_kv_layers[layer],
-                                      (size_t)opt.slots * kCompStateRowsMax *
-                                          (size_t)kCompWidthMax * sizeof(float)));
+                                      (size_t)opt.slots * (size_t)comp_state_rows *
+                                          (size_t)comp_state_width * sizeof(float)));
                 CHECK_CUDA(cudaMalloc(&r.d_attn_comp_state_score_layers[layer],
-                                      (size_t)opt.slots * kCompStateRowsMax *
-                                          (size_t)kCompWidthMax * sizeof(float)));
+                                      (size_t)opt.slots * (size_t)comp_state_rows *
+                                          (size_t)comp_state_width * sizeof(float)));
                 CHECK_CUDA(cudaMalloc(&r.d_attn_comp_rows_layers[layer],
                                       (size_t)opt.slots * kBoundedCompRows *
                                           (size_t)kHeadDim * sizeof(float)));
                 CHECK_CUDA(cudaMemsetAsync(r.d_attn_comp_state_kv_layers[layer], 0,
-                                           (size_t)opt.slots * kCompStateRowsMax *
-                                               (size_t)kCompWidthMax * sizeof(float),
+                                           (size_t)opt.slots * (size_t)comp_state_rows *
+                                               (size_t)comp_state_width * sizeof(float),
                                            r.stream));
                 CHECK_CUDA(cudaMemsetAsync(r.d_attn_comp_state_score_layers[layer], 0,
-                                           (size_t)opt.slots * kCompStateRowsMax *
-                                               (size_t)kCompWidthMax * sizeof(float),
+                                           (size_t)opt.slots * (size_t)comp_state_rows *
+                                               (size_t)comp_state_width * sizeof(float),
                                            r.stream));
                 CHECK_CUDA(cudaMemsetAsync(r.d_attn_comp_rows_layers[layer], 0,
                                            (size_t)opt.slots * kBoundedCompRows *
@@ -10498,13 +10509,16 @@ int run_true_ds4_compressed_reference_diff_gate(const Options &opt,
     }
 
     const int block = 256;
-    const uint32_t state_rows = (uint32_t)(2 * ratio);
+    const uint32_t state_rows =
+        (uint32_t)attn_comp_state_rows_for_ratio(ratio);
+    const uint32_t state_width =
+        (uint32_t)attn_comp_state_width_for_ratio(ratio);
     const float comp_freq_scale = 1.0f / kRopeScaleFactor;
     const float comp_ext_factor = 1.0f;
     float comp_attn_factor = 1.0f;
     comp_attn_factor /= 1.0f + 0.1f * logf(1.0f / comp_freq_scale);
     const size_t attn_state_elems =
-        (size_t)opt.slots * state_rows * (size_t)comp_width;
+        (size_t)opt.slots * state_rows * (size_t)state_width;
     const size_t attn_row_elems = (size_t)opt.slots * kHeadDim;
     const size_t index_state_elems =
         (size_t)opt.slots * kIndexCompStateRows * (size_t)kIndexCompWidth;
@@ -10560,8 +10574,7 @@ int run_true_ds4_compressed_reference_diff_gate(const Options &opt,
         block>>>(d_attn_row_ref, r0.d_attn_comp_state_kv,
                  r0.d_attn_comp_state_score,
                  (uint32_t)opt.slots, (uint32_t)kHeadDim, (uint32_t)ratio,
-                 0u, 1u, (uint32_t)kCompStateRowsMax,
-                 (uint32_t)kCompWidthMax);
+                 0u, 1u, state_rows, state_width);
     compressor_norm_emit_slots_kernel<<<(unsigned int)opt.slots, 256>>>(
         d_attn_row_ref, hc->d_attn_compress_norm[layer], (uint32_t)opt.slots,
         (uint32_t)kHeadDim, 0u, 1u, 1.0e-6f);
@@ -10693,6 +10706,8 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
     }
 
     const int comp_width = ratio == 4 ? 2 * kHeadDim : kHeadDim;
+    const int comp_state_rows = attn_comp_state_rows_for_ratio(ratio);
+    const int comp_state_width = attn_comp_state_width_for_ratio(ratio);
     if (ops->attn_compress_kv.cols != kHidden ||
         ops->attn_compress_gate.cols != kHidden ||
         ops->attn_compress_kv.rows_per_gpu != comp_width / kGpus ||
@@ -10933,7 +10948,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             r.d_attn_comp_state_kv, r.d_attn_comp_state_score,
             hc->d_attn_compress_ape[layer], (uint32_t)opt.slots,
             (uint32_t)kHeadDim, (uint32_t)ratio, (uint32_t)opt.position,
-            (uint32_t)kCompStateRowsMax, (uint32_t)kCompWidthMax);
+            (uint32_t)comp_state_rows, (uint32_t)comp_state_width);
         if (emitted) {
             const uint32_t comp_row =
                 r.attn_comp_rows_written_layers[layer] %
@@ -10948,7 +10963,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                     r.d_attn_comp_state_score, hc->d_attn_compress_norm[layer],
                     (uint32_t)opt.slots, (uint32_t)kHeadDim, (uint32_t)ratio,
                     comp_row, (uint32_t)kBoundedCompRows,
-                    (uint32_t)kCompStateRowsMax, (uint32_t)kCompWidthMax,
+                    (uint32_t)comp_state_rows, (uint32_t)comp_state_width,
                     1.0e-6f, (uint32_t)kRotaryDim,
                     (uint32_t)(opt.position + 1ull - (uint64_t)ratio),
                     kRopeOrigCtx, kCompressRopeFreqBase, comp_freq_scale,
@@ -10961,7 +10976,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                     r.d_attn_comp_state_score, hc->d_attn_compress_norm[layer],
                     (uint32_t)opt.slots, (uint32_t)kHeadDim, (uint32_t)ratio,
                     comp_row, (uint32_t)kBoundedCompRows,
-                    (uint32_t)kCompStateRowsMax, (uint32_t)kCompWidthMax,
+                    (uint32_t)comp_state_rows, (uint32_t)comp_state_width,
                     1.0e-6f);
             } else {
                 compressor_pool_emit_slots_kernel<<<
@@ -10971,8 +10986,8 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                     r.d_attn_comp_rows, r.d_attn_comp_state_kv,
                     r.d_attn_comp_state_score, (uint32_t)opt.slots,
                     (uint32_t)kHeadDim, (uint32_t)ratio, comp_row,
-                    (uint32_t)kBoundedCompRows, (uint32_t)kCompStateRowsMax,
-                    (uint32_t)kCompWidthMax);
+                    (uint32_t)kBoundedCompRows, (uint32_t)comp_state_rows,
+                    (uint32_t)comp_state_width);
                 compressor_norm_emit_slots_kernel<<<(unsigned int)opt.slots, 256,
                                                     0, r.stream>>>(
                     r.d_attn_comp_rows, hc->d_attn_compress_norm[layer],
@@ -11727,7 +11742,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 block, 0, r.stream>>>(
                 r.d_attn_comp_state_kv, r.d_attn_comp_state_score,
                 (uint32_t)opt.slots, (uint32_t)comp_width,
-                (uint32_t)kCompStateRowsMax, (uint32_t)kCompWidthMax);
+                (uint32_t)comp_state_rows, (uint32_t)comp_state_width);
             if (opt.true_ds4_indexer_attention_gate && r.d_index_comp_state_kv &&
                 r.d_index_comp_state_score) {
                 compressor_shift_ratio4_slots_kernel<<<

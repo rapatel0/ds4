@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-26
-last_updated_by: sprint-405
-revision: 418
+last_updated_by: sprint-406
+revision: 419
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -71,7 +71,8 @@ The performance program is intentionally isolated:
 | 13 | `tools/ds4-v100-tp-ep-nccl-kv-matrix.py` | Complete measurement | FP8 E5M2 KV does not reclaim VRAM; target HC-current NCCL still fails at 1114 MiB free vs 1536 MiB reserve |
 | 14 | `tools/ds4-v100-tp-ep-vram-ledger.py` | Complete analysis tool | Promoted; next NCCL memory sprint must pair lazy output head with GPU0 HC-control residency reduction |
 | 15 | `--diagnostic-output-head-lazy-gate` | Complete diagnostic | Correct but not promotable; lazy output-head preserves first token but leaves only 68 MiB free in control and HC-current NCCL still OOMs before first-token completion |
-| 16 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
+| 16 | Exact attention compressed-KV state layout | Complete memory fix | Promoted; target 32-slot/256K HC-current NCCL now completes with first token 54639, but reserve still fails at 386 MiB free after lazy output-head |
+| 17 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
 
 Promotion requires a same-binary V100 A/B at the real serving shape, unchanged
 first token/checksum, and improved GPU utilization or server decode tok/s.
@@ -125,6 +126,17 @@ The near-term implementation focus is therefore:
    `after_hc_controls`. Keep lazy output-head diagnostic-only. The next memory
    implementation must reduce/stream GPU0 HC-control residency and compressed
    KV transients, not just move the output-head allocation later.
+   Sprint 406 corrected the largest compressed-KV transient waste: attention
+   compressed state now uses exact per-ratio geometry instead of allocating
+   every ratio layer as `128 x 1024` floats. Ratio-4 layers use `8 x 1024`;
+   ratio-128 layers use `128 x 512`. This raised non-NCCL lazy-output-head
+   free VRAM from `68 MiB` to `1018 MiB` and changed target HC-current NCCL
+   from layer-5 OOM into a completed first-token diagnostic with token
+   `54639`, generated decode `89.952595` tok/s, and continuation decode
+   `100.096637` tok/s. It still fails the production NCCL reserve after lazy
+   output-head: GPU0 has `386 MiB` free and all 8 GPUs are below `1536 MiB`.
+   The next implementation should make lazy/on-demand output-head compatible
+   with HTTP serving and continue peak-memory reduction before promoting NCCL.
 2. Use the Sprint 383 matrix as the current before/after performance baseline.
    At `32` configured slots, `256K`, `position=262080`, and `32` generated
    chat tokens/request, active requests `1,4,8,16,32` all pass with

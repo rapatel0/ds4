@@ -9,7 +9,23 @@ Current bottleneck reference:
 summarizes the measured bottlenecks, layer-by-layer hot paths, and experiments
 already tried.
 
-Latest NCCL status: Sprint 405 added a default-off lazy diagnostic output-head
+Latest NCCL status: Sprint 406 replaced the padded attention compressed-KV
+state layout with exact DS4 per-ratio geometry. Ratio-4 layers now allocate
+`8 x 1024` state and ratio-128 layers allocate `128 x 512` state instead of
+the old universal `128 x 1024` padded state. V100 build passed. At `32` slots
+/ `256K`, non-NCCL lazy-control preserved first token `54639`, completed with
+generated decode `78.447208` tok/s, continuation decode `77.220402` tok/s,
+and raised `after_lazy_output_head` free VRAM from Sprint 405's `68 MiB` to
+`1018 MiB`. The target HC-current NCCL + lazy-output-head case now completes
+instead of OOMing: first token `54639`, generated decode `89.952595` tok/s,
+continuation decode `100.096637` tok/s. It is still not production-admitted:
+after lazy output-head, GPU0 has only `386 MiB` free and all 8 GPUs fail the
+`1536 MiB` NCCL reserve. Decision: promote the compact compressed-KV state
+layout, keep HC-current NCCL diagnostic-only, and next make the output-head
+path lazy/resident-compatible for HTTP serving while continuing VRAM peak
+reduction.
+
+Previous NCCL status: Sprint 405 added a default-off lazy diagnostic output-head
 path: binary `--diagnostic-output-head-lazy-gate`, profile
 `--lazy-output-head`, and launcher
 `DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD_LAZY`. In direct `32` slot / `256K`
