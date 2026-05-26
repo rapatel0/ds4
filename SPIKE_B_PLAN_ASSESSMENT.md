@@ -3,13 +3,39 @@
 Reviewer: Spike A side. Scope: the revised 10-point Spike B plan (graph/NCCL
 capture-first), checked against the latest executed work (sprints 410–414).
 
-## Verdict: the PLAN is strong. The EXECUTION has drifted from it.
+## Verdict: the PLAN is strong, and EXECUTION has now turned toward it.
 
-The plan correctly targets the real lever and encodes the right discipline. But
-sprints 412–414 are NOT executing that plan yet — they are still per-transfer
-NCCL + slot/stat tuning on the ungraphed semantic path, which the plan itself
-(#4, #6, #9) says to stop. Realign execution to the plan: **attempt capture at
-slots=4 next, not more NCCL-on-ungraphed measurement.**
+The plan correctly targets the real lever and encodes the right discipline.
+Sprints 412–414 had drifted (per-transfer NCCL + slot/stat tuning on the
+ungraphed path — the #4/#6/#9 trap). The **latest in-flight work (uncommitted)
+has pivoted to the right thing**: capture-eligibility prep in the TP runtime.
+Remaining step is the actual capture+replay and a slots=4 probe — not yet done.
+
+## UPDATE — what changed since this assessment (in-flight, uncommitted)
+
+Working-tree changes in `ds4_v100_tp_runtime.{cu,h}` and the smoke file (no new
+commit yet) are building capture eligibility under `--decode-cudagraph-gate`:
+- `graph_event_order` — broad host `sync_all` waits replaced by cross-stream
+  CUDA **event joins** (`capture_join_events`: `cudaEventRecord` +
+  `cudaStreamWaitEvent(root_stream, …)`).
+- `capture_probe_active` flag + a `CaptureStream` abstraction — scaffolding for
+  an actual capture probe.
+- `if (!decode_cudagraph_gate && …)` guards skipping host-sync paths when the
+  gate is on; compose copy handled under the gate.
+
+**This is the correct direction — it directly addresses the drift critique.** Two
+caveats:
+1. It is still **prep, not capture**: I see no `cudaStreamBeginCapture` /
+   `cudaGraphInstantiate` / `cudaGraphLaunch` and no slots=4 probe result yet.
+   This is re-doing the sprint-376 event-ordering inside the TP runtime.
+2. **Do not judge this by throughput.** Sprint 376 already showed event-ordering
+   alone *lowers* throughput (enqueue overhead) with no payoff until capture+
+   replay lands (the plan's #9). Expect the same here — the win only appears
+   after `cudaGraphLaunch` works.
+
+Most imminent gap to get right *before* the first `BeginCapture`: **#1 NCCL
+warmup-before-capture** (below) — it will be the first failure the moment capture
+is attempted with NCCL collectives live.
 
 ## What the plan gets right (keep)
 
@@ -25,7 +51,7 @@ slots=4 next, not more NCCL-on-ungraphed measurement.**
   until capture works.
 - **Sound, measurable decision gate** (#10).
 
-## Where execution has drifted (fix now)
+## Where execution had drifted (412–414 — now being corrected by the in-flight work)
 
 Sprints 412–414, measured against the plan:
 - **412**: attention-output NCCL evaluated on the heavy *semantic* path → 21 tok/s
