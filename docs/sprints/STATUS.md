@@ -21,6 +21,19 @@ semantically equivalent to dense reduce-scatter. Decision: keep NCCL compose
 default-off and diagnostic-only; use NCCL later for true TP hidden/expert
 collectives, not current compact EP compose.
 
+Latest HC-current fusion status: Sprint 398 added a default-off
+`--tp-hc-current-input-fused-fill-pack-gate` /
+`DS4_V100_TP_EP_HC_CURRENT_INPUT_FUSED_FILL_PACK` path that fuses the
+HC-current post-router dense fills, half fills, current staging, and route pack
+into one kernel per rank for the compatible unscaled path. V100 build passed.
+Direct same-binary A/B at `32` slots / `256K` / `position=262080` /
+model-router compact-MoE preserved first token `54639` and `vram_failures=0`,
+but regressed generated decode from `87.759480` to `64.310075` tok/s and
+increased HC fill/pack from `28.140415` to `320.439853` ms over the 2-token
+all-layer run. Decision: reject as default and keep diagnostic-only. Direct
+peer/UVA remote loads from GPU0 are the wrong fusion shape for this boundary;
+future work should preserve local staging or fuse into downstream consumers.
+
 Previous NCCL status: Sprint 396 added `--algo nccl` to
 `tools/ds4-v100-tp8-collective-workbench` and linked it against NCCL
 `2.19.3`. All V100 modes passed correctness at `tokens=32` and `tokens=128`.

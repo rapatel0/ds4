@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-26
-last_updated_by: sprint-397
-revision: 410
+last_updated_by: sprint-398
+revision: 411
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -63,7 +63,8 @@ The performance program is intentionally isolated:
 | 5 | `--fused-gated-silu-gate` | Complete | Not promoted; generic epilogue changes token, DS4-clamped ABI is fast in EP-only isolation but resident serving A/B fails before the gate |
 | 6 | `--tp-experts-ab-gate` | Complete measurement | Do not integrate yet; TP8 fails correctness, TP4 is correct but reduction erases the win |
 | 7 | `--fp8-e5m2-kv-gate` | Complete diagnostic | Correct and promising in short A/B, but not promoted pending longer parity and VRAM margin |
-| 8 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
+| 8 | `--tp-hc-current-input-fused-fill-pack-gate` | Complete diagnostic | Rejected; direct remote-load fusion preserved first token but regressed decode and HC fill/pack sharply |
+| 9 | `--mtp-decode-gate` | Deferred multiplier | Add only after base TP/EP decode has stable metrology and launch strategy |
 
 Promotion requires a same-binary V100 A/B at the real serving shape, unchanged
 first token/checksum, and improved GPU utilization or server decode tok/s.
@@ -188,7 +189,15 @@ The near-term implementation focus is therefore:
    (`6.401091` ms vs `2.521989` ms), and the production compact route compose
    path correctly keeps NCCL inactive because it is route-indexed rather than
    a dense reduce-scatter. Keep NCCL diagnostic-only until a true TP hidden or
-   expert collective boundary exists.
+   expert collective boundary exists. Sprint 398 then tested a narrow
+   HC-current fill/pack fusion that replaced explicit peer-copy plus local
+   dense/half fills and route packing with one fused kernel per rank. It
+   preserved first token `54639` and VRAM admission at the `32` slot / `256K`
+   model-router compact-MoE shape, but generated decode regressed from
+   `87.759480` to `64.310075` tok/s and HC fill/pack grew from `28.140415` to
+   `320.439853` ms. This rejects direct peer/UVA remote-load fusion for this
+   boundary. Future HC-current work should preserve local staging or fuse into
+   downstream dense/expert consumers, not replace local reads with remote loads.
 8. Close the S-E follow-up with a narrow parity/precheck fix if we want to
    revisit fused gated-SiLU. Sprint 379 showed the current serving-shaped
    branch already has no standalone routed SwiGLU launch, the generic

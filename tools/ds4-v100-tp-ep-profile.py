@@ -326,6 +326,9 @@ def build_env(args, port):
             "DS4_V100_TP_EP_HC_PERSIST_STATE": "1",
             "DS4_V100_TP_EP_HC_CURRENT_INPUT_PEER_GATHER": "1" if args.hc_current_peer_gather else "0",
             "DS4_V100_TP_EP_HC_CURRENT_INPUT_STREAM_SYNC": "1" if args.hc_current_stream_sync else "0",
+            "DS4_V100_TP_EP_HC_CURRENT_INPUT_FUSED_FILL_PACK": "1"
+            if args.hc_current_fused_fill_pack
+            else "0",
             "DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD": "1",
             "DS4_V100_TP_EP_ASYNC_OUTPUT": "1" if args.async_output else "0",
             "DS4_V100_TP_EP_DECODE_CUDAGRAPH": "1" if args.decode_cudagraph else "0",
@@ -394,6 +397,8 @@ def variant_suffix(args):
         suffix += "-hc-peer-gather"
     if args.hc_current_stream_sync:
         suffix += "-hc-stream-sync"
+    if getattr(args, "hc_current_fused_fill_pack", False):
+        suffix += "-hc-fused-fill-pack"
     if getattr(args, "skip_compressed_store", False):
         suffix += "-skip-compressed-store"
     if getattr(args, "skip_indexer_store", False):
@@ -537,6 +542,8 @@ def direct_command(args):
         cmd.append("--tp-hc-current-input-peer-gather-gate")
     if args.hc_current_stream_sync:
         cmd.append("--tp-hc-current-input-stream-sync-gate")
+    if args.hc_current_fused_fill_pack:
+        cmd.append("--tp-hc-current-input-fused-fill-pack-gate")
     if args.skip_compressed_store:
         cmd.append("--true-ds4-attention-typed-kv-skip-compressed-store-gate")
     if args.skip_indexer_store:
@@ -908,6 +915,7 @@ def main():
     )
     parser.add_argument("--hc-current-peer-gather", action="store_true")
     parser.add_argument("--hc-current-stream-sync", action="store_true")
+    parser.add_argument("--hc-current-fused-fill-pack", action="store_true")
     parser.add_argument("--skip-compressed-store", action="store_true")
     parser.add_argument("--skip-indexer-store", action="store_true")
     parser.add_argument("--fused-compressed-input-fill", action="store_true")

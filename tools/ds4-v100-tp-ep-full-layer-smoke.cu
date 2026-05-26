@@ -682,6 +682,7 @@ struct Options {
     bool tp_hc_current_input_gate = false;
     bool tp_hc_current_input_peer_gather_gate = false;
     bool tp_hc_current_input_stream_sync_gate = false;
+    bool tp_hc_current_input_fused_fill_pack_gate = false;
     bool tp_hc_persist_state_gate = false;
     bool model_router_routes = false;
     bool router_cublas_gate = false;
@@ -2561,6 +2562,56 @@ __global__ void fill_dense_input_half_from_current_kernel(__half *dst,
                                                (uint32_t)(col % kHidden)]);
 }
 
+__global__ void hc_current_fused_fill_pack_kernel(
+    float *rank_current_full,
+    const float *state_current_full,
+    const float *dense_current_full,
+    const float *route_current_full,
+    float *attn_x,
+    uint32_t attn_cols,
+    float *shared_x,
+    uint32_t shared_cols,
+    __half *attn_x_half,
+    __half *shared_x_half,
+    __half *routes,
+    const int *route_slots,
+    int routes_n,
+    uint32_t slots,
+    uint64_t total) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= total) return;
+    const uint64_t full_elems = (uint64_t)slots * (uint64_t)kHidden;
+    if (i < full_elems) {
+        rank_current_full[i] = state_current_full[i];
+    }
+    const uint64_t attn_elems = (uint64_t)slots * (uint64_t)attn_cols;
+    if (i < attn_elems) {
+        const uint32_t slot = (uint32_t)(i / attn_cols);
+        const uint32_t col = (uint32_t)(i % attn_cols);
+        const float v =
+            dense_current_full[(uint64_t)slot * kHidden + (uint32_t)(col % kHidden)];
+        if (attn_x) attn_x[i] = v;
+        if (attn_x_half) attn_x_half[i] = f32_to_half_saturate(v);
+    }
+    const uint64_t shared_elems = (uint64_t)slots * (uint64_t)shared_cols;
+    if (i < shared_elems) {
+        const uint32_t slot = (uint32_t)(i / shared_cols);
+        const uint32_t col = (uint32_t)(i % shared_cols);
+        const float v =
+            dense_current_full[(uint64_t)slot * kHidden + (uint32_t)(col % kHidden)];
+        if (shared_x) shared_x[i] = v;
+        if (shared_x_half) shared_x_half[i] = f32_to_half_saturate(v);
+    }
+    const uint64_t route_elems = (uint64_t)routes_n * (uint64_t)kHidden;
+    if (i < route_elems) {
+        const int route = (int)(i / kHidden);
+        const int h = (int)(i % kHidden);
+        const int slot = route_slots[route];
+        routes[i] = f32_to_half_saturate(
+            route_current_full[(uint64_t)slot * kHidden + h]);
+    }
+}
+
 __global__ void fill_attn_compressed_inputs_half_kernel(__half *attn_kv,
                                                         __half *attn_gate,
                                                         const float *current_full,
@@ -3478,6 +3529,7 @@ void usage(const char *argv0) {
                  "       [--tp-hc-current-input-gate]\n"
                  "       [--tp-hc-current-input-peer-gather-gate]\n"
                  "       [--tp-hc-current-input-stream-sync-gate]\n"
+                 "       [--tp-hc-current-input-fused-fill-pack-gate]\n"
                  "       [--tp-hc-persist-state-gate] [--tp-kv-all-slots-gate]\n"
                  "       [--model-router-routes]\n"
                  "       [--routed-ffn-norm-input-gate]\n"
@@ -3707,6 +3759,11 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--tp-hc-current-input-stream-sync-gate") == 0) {
             opt->tp_hc_current_input_stream_sync_gate = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--tp-hc-current-input-fused-fill-pack-gate") == 0) {
+            opt->tp_hc_current_input_fused_fill_pack_gate = true;
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
@@ -5693,83 +5750,112 @@ int run_shared_hc_current_input(const Options &opt,
     }
     auto t_router_done = t_route_upload_done;
 
+    const bool fused_fill_pack =
+        opt.tp_hc_current_input_fused_fill_pack_gate &&
+        !peer_gather_current && !graph_event_order &&
+        !opt.reference_hc_reduce_gate &&
+        (!opt.routed_ffn_norm_input_gate || hc->d_ffn_normed);
     for (int rank = 0; rank < kGpus; ++rank) {
         RankState &r = ranks[rank];
         CHECK_CUDA(cudaSetDevice(r.device));
         const size_t full_bytes = (size_t)full_elems * sizeof(float);
-        if (!peer_gather_current) {
-            if (graph_event_order) {
+        const uint64_t attn_elems = (uint64_t)opt.slots * (uint64_t)attn_op.cols;
+        const uint64_t shared_elems = (uint64_t)opt.slots * (uint64_t)shared_op.cols;
+        const uint64_t route_elems = (uint64_t)r.routes * kHidden;
+        if (fused_fill_pack) {
+            const float *state_src =
+                (opt.routed_ffn_norm_input_gate && route_elems > 0)
+                    ? hc->d_ffn_normed
+                    : hc->d_current_full;
+            const float *route_src =
+                opt.routed_ffn_norm_input_gate ? hc->d_ffn_normed : hc->d_current_full;
+            const uint64_t total = std::max(
+                std::max(full_elems, attn_elems),
+                std::max(shared_elems, route_elems));
+            hc_current_fused_fill_pack_kernel<<<
+                (unsigned int)((total + block - 1) / block), block,
+                0, r.stream>>>(
+                r.d_current_full, state_src, hc->d_current_full, route_src,
+                attn_op.d_x[(size_t)rank], (uint32_t)attn_op.cols,
+                shared_op.d_x[(size_t)rank], (uint32_t)shared_op.cols,
+                attn_op.d_x_half[(size_t)rank],
+                shared_op.d_x_half[(size_t)rank],
+                route_elems > 0 ? r.d_a : nullptr,
+                route_elems > 0 ? r.d_route_slots : nullptr,
+                r.routes, (uint32_t)opt.slots, total);
+            CHECK_CUDA(cudaGetLastError());
+        } else {
+            if (!peer_gather_current) {
+                if (graph_event_order) {
                 copy_f32_kernel<<<
                     (unsigned int)((full_elems + block - 1) / block),
                     block, 0, r.stream>>>(
                     r.d_current_full, hc->d_current_full, full_elems);
                 CHECK_CUDA(cudaGetLastError());
-            } else if (rank == 0) {
-                CHECK_CUDA(cudaMemcpyAsync(r.d_current_full, hc->d_current_full,
-                                           full_bytes, cudaMemcpyDeviceToDevice, r.stream));
-            } else {
-                CHECK_CUDA(cudaMemcpyPeerAsync(r.d_current_full, r.device,
-                                               hc->d_current_full, opt.devices[0],
-                                               full_bytes, r.stream));
+                } else if (rank == 0) {
+                    CHECK_CUDA(cudaMemcpyAsync(r.d_current_full, hc->d_current_full,
+                                               full_bytes, cudaMemcpyDeviceToDevice, r.stream));
+                } else {
+                    CHECK_CUDA(cudaMemcpyPeerAsync(r.d_current_full, r.device,
+                                                   hc->d_current_full, opt.devices[0],
+                                                   full_bytes, r.stream));
+                }
             }
-        }
-        const uint64_t attn_elems = (uint64_t)opt.slots * (uint64_t)attn_op.cols;
-        const uint64_t shared_elems = (uint64_t)opt.slots * (uint64_t)shared_op.cols;
-        if (attn_op.d_x[(size_t)rank]) {
-            fill_dense_input_from_current_kernel<<<
-                (unsigned int)((attn_elems + block - 1) / block), block,
-                0, r.stream>>>(attn_op.d_x[(size_t)rank], r.d_current_full,
-                               (uint32_t)attn_op.cols, (uint32_t)opt.slots);
-        }
-        if (shared_op.d_x[(size_t)rank]) {
-            fill_dense_input_from_current_kernel<<<
-                (unsigned int)((shared_elems + block - 1) / block), block,
-                0, r.stream>>>(shared_op.d_x[(size_t)rank], r.d_current_full,
-                               (uint32_t)shared_op.cols, (uint32_t)opt.slots);
-        }
-        if (attn_op.d_x_half[(size_t)rank]) {
-            fill_dense_input_half_from_current_kernel<<<
-                (unsigned int)((attn_elems + block - 1) / block), block,
-                0, r.stream>>>(attn_op.d_x_half[(size_t)rank], r.d_current_full,
-                               (uint32_t)attn_op.cols, (uint32_t)opt.slots);
-        }
-        if (shared_op.d_x_half[(size_t)rank]) {
-            fill_dense_input_half_from_current_kernel<<<
-                (unsigned int)((shared_elems + block - 1) / block), block,
-                0, r.stream>>>(shared_op.d_x_half[(size_t)rank],
-                               r.d_current_full, (uint32_t)shared_op.cols,
-                               (uint32_t)opt.slots);
-        }
-        const uint64_t route_elems = (uint64_t)r.routes * kHidden;
-        if (opt.routed_ffn_norm_input_gate && route_elems > 0) {
-            if (graph_event_order) {
-                copy_f32_kernel<<<
-                    (unsigned int)((full_elems + block - 1) / block),
-                    block, 0, r.stream>>>(
-                    r.d_current_full, hc->d_ffn_normed, full_elems);
+            if (attn_op.d_x[(size_t)rank]) {
+                fill_dense_input_from_current_kernel<<<
+                    (unsigned int)((attn_elems + block - 1) / block), block,
+                    0, r.stream>>>(attn_op.d_x[(size_t)rank], r.d_current_full,
+                                   (uint32_t)attn_op.cols, (uint32_t)opt.slots);
+            }
+            if (shared_op.d_x[(size_t)rank]) {
+                fill_dense_input_from_current_kernel<<<
+                    (unsigned int)((shared_elems + block - 1) / block), block,
+                    0, r.stream>>>(shared_op.d_x[(size_t)rank], r.d_current_full,
+                                   (uint32_t)shared_op.cols, (uint32_t)opt.slots);
+            }
+            if (attn_op.d_x_half[(size_t)rank]) {
+                fill_dense_input_half_from_current_kernel<<<
+                    (unsigned int)((attn_elems + block - 1) / block), block,
+                    0, r.stream>>>(attn_op.d_x_half[(size_t)rank], r.d_current_full,
+                                   (uint32_t)attn_op.cols, (uint32_t)opt.slots);
+            }
+            if (shared_op.d_x_half[(size_t)rank]) {
+                fill_dense_input_half_from_current_kernel<<<
+                    (unsigned int)((shared_elems + block - 1) / block), block,
+                    0, r.stream>>>(shared_op.d_x_half[(size_t)rank],
+                                   r.d_current_full, (uint32_t)shared_op.cols,
+                                   (uint32_t)opt.slots);
+            }
+            if (opt.routed_ffn_norm_input_gate && route_elems > 0) {
+                if (graph_event_order) {
+                    copy_f32_kernel<<<
+                        (unsigned int)((full_elems + block - 1) / block),
+                        block, 0, r.stream>>>(
+                        r.d_current_full, hc->d_ffn_normed, full_elems);
+                    CHECK_CUDA(cudaGetLastError());
+                } else if (rank == 0) {
+                    CHECK_CUDA(cudaMemcpyAsync(r.d_current_full, hc->d_ffn_normed,
+                                               full_bytes, cudaMemcpyDeviceToDevice,
+                                               r.stream));
+                } else {
+                    CHECK_CUDA(cudaMemcpyPeerAsync(r.d_current_full, r.device,
+                                                   hc->d_ffn_normed, opt.devices[0],
+                                                   full_bytes, r.stream));
+                }
+            }
+            if (route_elems > 0) {
+                if (opt.reference_hc_reduce_gate) {
+                    pack_current_full_to_routes_scaled_kernel<<<
+                        (unsigned int)r.routes, 256, 0, r.stream>>>(
+                            r.d_a, r.d_route_inv_scale, r.d_current_full,
+                            r.d_route_slots, r.routes, kReferenceRouteInputTargetAbs);
+                } else {
+                    pack_current_full_to_routes_kernel<<<
+                        (unsigned int)((route_elems + block - 1) / block), block,
+                        0, r.stream>>>(r.d_a, r.d_current_full, r.d_route_slots, r.routes);
+                }
                 CHECK_CUDA(cudaGetLastError());
-            } else if (rank == 0) {
-                CHECK_CUDA(cudaMemcpyAsync(r.d_current_full, hc->d_ffn_normed,
-                                           full_bytes, cudaMemcpyDeviceToDevice,
-                                           r.stream));
-            } else {
-                CHECK_CUDA(cudaMemcpyPeerAsync(r.d_current_full, r.device,
-                                               hc->d_ffn_normed, opt.devices[0],
-                                               full_bytes, r.stream));
             }
-        }
-        if (route_elems > 0) {
-            if (opt.reference_hc_reduce_gate) {
-                pack_current_full_to_routes_scaled_kernel<<<
-                    (unsigned int)r.routes, 256, 0, r.stream>>>(
-                        r.d_a, r.d_route_inv_scale, r.d_current_full,
-                        r.d_route_slots, r.routes, kReferenceRouteInputTargetAbs);
-            } else {
-                pack_current_full_to_routes_kernel<<<
-                    (unsigned int)((route_elems + block - 1) / block), block,
-                    0, r.stream>>>(r.d_a, r.d_current_full, r.d_route_slots, r.routes);
-            }
-            CHECK_CUDA(cudaGetLastError());
         }
         if (should_log_reference_hc_window(opt) && r.d_route_inv_scale && r.routes > 0) {
             log_tensor_f32_stats("route_inv_scale", layer, rank,
