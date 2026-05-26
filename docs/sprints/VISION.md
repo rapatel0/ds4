@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-25
-last_updated_by: sprint-386
-revision: 399
+last_updated_by: sprint-387
+revision: 400
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -115,6 +115,13 @@ The near-term implementation focus is therefore:
    `6.796221` ms, though client aggregate tok/s moved from `42.427324` to
    `40.302457` in the single run. The remaining measured router cost is
    router dense/select, still about `27.8` ms per all-layer decode step.
+   Sprint 387 proved that router dense/select can be reduced locally with a
+   default-off cuBLAS SGEMM gate (`27.752540` to `4.959189` ms in the HTTP
+   `32` case), but the same-binary client topline regressed (`44.579314` to
+   `41.769369` tok/s) and server decode improved only about `1%`. Do not
+   promote isolated router cuBLAS as a default; use it as evidence that the
+   next useful boundary is broader fusion/scheduling around router, route
+   planning, and HC-current/input staging.
 5. Close the S-E follow-up with a narrow parity/precheck fix if we want to
    revisit fused gated-SiLU. Sprint 379 showed the current serving-shaped
    branch already has no standalone routed SwiGLU launch, the generic

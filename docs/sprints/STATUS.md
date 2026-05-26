@@ -63,6 +63,18 @@ result is a server-side decode/stage win rather than a proven full-stack HTTP
 topline win. The remaining measured real-router hot substage is router
 dense/select, still flat at about `27.8` ms in the HTTP `32` case.
 
+Latest router-kernel diagnostic: Sprint 387 added a default-off
+`--router-cublas-gate` / `DS4_V100_TP_EP_ROUTER_CUBLAS=1` path. Same-binary
+direct A/B preserved first token `54639`, reduced router dense/select from
+`33.591907` to `18.815270` ms, and improved generated decode from
+`76.179292` to `79.718036` tok/s. Same-binary HTTP `32` request chat A/B also
+preserved first token `83484` and reduced router dense/select from
+`27.752540` to `4.959189` ms, but server decode improved only from
+`94.952767` to `95.944290` tok/s while client generated tok/s regressed from
+`44.579314` to `41.769369`. Keep cuBLAS router dense diagnostic-only; the
+next promotion candidate needs to recover this local win inside a broader
+fusion/scheduling boundary.
+
 Latest throughput direction before memory hardening: Sprint 381 implemented
 `--fp8-e5m2-kv-gate` as a default-off typed-KV format diagnostic. The row
 layout stays block-128 with one E8M0 scale byte plus 128 FP8 payload bytes, so

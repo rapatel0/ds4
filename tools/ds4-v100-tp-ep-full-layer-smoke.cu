@@ -644,6 +644,7 @@ struct Options {
     bool tp_hc_current_input_stream_sync_gate = false;
     bool tp_hc_persist_state_gate = false;
     bool model_router_routes = false;
+    bool router_cublas_gate = false;
     bool routed_ffn_norm_input_gate = false;
     bool true_shared_ffn_gate = false;
     bool tp_kv_all_slots_gate = false;
@@ -3330,6 +3331,7 @@ void usage(const char *argv0) {
                  "       [--async-output-gate]\n"
                  "       [--decode-cudagraph-gate]\n"
                  "       [--batched-paged-attn-gate]\n"
+                 "       [--router-cublas-gate]\n"
                  "       [--diagnostic-output-head]\n",
                  argv0);
 }
@@ -3519,6 +3521,12 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--model-router-routes") == 0) {
+            opt->model_router_routes = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--router-cublas-gate") == 0) {
+            opt->router_cublas_gate = true;
             opt->model_router_routes = true;
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
@@ -4499,6 +4507,7 @@ struct SharedHcControls {
     float *d_router_weights = nullptr;
     uint32_t *d_router_tokens = nullptr;
     unsigned char *d_router_active = nullptr;
+    cublasHandle_t router_blas = nullptr;
     uint64_t control_bytes = 0;
 };
 
@@ -4587,6 +4596,12 @@ int open_shared_hc_controls(const Options &opt,
     out->slots = opt.slots;
     const uint64_t hc_elems = (uint64_t)opt.slots * kHcRows * (uint64_t)kHidden;
     CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    cublasStatus_t blas_status = cublasCreate(&out->router_blas);
+    if (blas_status != CUBLAS_STATUS_SUCCESS) {
+        std::fprintf(stderr, "router cublasCreate failed status=%d\n",
+                     (int)blas_status);
+        return 1;
+    }
     CHECK_CUDA(cudaMalloc(&out->d_hc, (size_t)hc_elems * sizeof(float)));
     CHECK_CUDA(cudaMalloc(&out->d_hc_norm, (size_t)hc_elems * sizeof(float)));
     CHECK_CUDA(cudaMalloc(&out->d_mix, (size_t)opt.slots * kHcMix * sizeof(float)));
@@ -4842,6 +4857,12 @@ int open_shared_hc_controls(const Options &opt,
 void close_shared_hc_controls(const Options &opt, SharedHcControls *out) {
     if (!out || !out->initialized) return;
     CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    if (out->router_blas) {
+        cublasStatus_t st = cublasDestroy(out->router_blas);
+        if (st != CUBLAS_STATUS_SUCCESS) {
+            std::fprintf(stderr, "router cublasDestroy failed status=%d\n", (int)st);
+        }
+    }
     for (int layer = 0; layer < 43; ++layer) {
         if (out->d_router_hash[layer]) CHECK_CUDA(cudaFree(out->d_router_hash[layer]));
         if (out->d_router_bias[layer]) CHECK_CUDA(cudaFree(out->d_router_bias[layer]));
@@ -4892,6 +4913,47 @@ int upload_model_router_route_plan(const Options &opt,
                                    const std::vector<int> &selected,
                                    const std::vector<float> &weights);
 int enqueue_dense_wait_after_rank_stream(RankState ranks[kGpus]);
+
+int run_model_router_dense_logits(const Options &opt,
+                                  SharedHcControls *hc,
+                                  int layer,
+                                  cudaStream_t stream) {
+    if (!hc || !hc->d_router_w[layer] || !hc->d_router_logits ||
+        !hc->d_ffn_normed) {
+        return 1;
+    }
+    if (!opt.router_cublas_gate) {
+        const dim3 router_grid((unsigned int)kGlobalExperts,
+                               (unsigned int)opt.slots, 1u);
+        f32_dense_colmajor_kernel<<<router_grid, 256, 0, stream>>>(
+            hc->d_router_logits, hc->d_router_w[layer], hc->d_ffn_normed,
+            (uint32_t)kGlobalExperts, (uint32_t)kHidden, (uint32_t)opt.slots);
+        CHECK_CUDA(cudaGetLastError());
+        return 0;
+    }
+    if (!hc->router_blas) return 2;
+    cublasStatus_t st = cublasSetStream(hc->router_blas, stream);
+    if (st != CUBLAS_STATUS_SUCCESS) {
+        std::fprintf(stderr, "router cublasSetStream failed status=%d\n", (int)st);
+        return 3;
+    }
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+    st = cublasSgemm(hc->router_blas,
+                     CUBLAS_OP_N, CUBLAS_OP_N,
+                     kGlobalExperts, opt.slots, kHidden,
+                     &alpha,
+                     hc->d_router_w[layer], kGlobalExperts,
+                     hc->d_ffn_normed, kHidden,
+                     &beta,
+                     hc->d_router_logits, kGlobalExperts);
+    if (st != CUBLAS_STATUS_SUCCESS) {
+        std::fprintf(stderr, "router cublasSgemm failed layer=%d status=%d\n",
+                     layer, (int)st);
+        return 4;
+    }
+    return 0;
+}
 
 int run_shared_hc_final_expand(const Options &opt,
                                SharedHcControls *hc,
@@ -5250,11 +5312,14 @@ int run_shared_hc_current_input(const Options &opt,
             !hc->d_router_selected || !hc->d_router_weights) {
             return 4;
         }
-        const dim3 router_grid((unsigned int)kGlobalExperts,
-                               (unsigned int)opt.slots, 1u);
-        f32_dense_colmajor_kernel<<<router_grid, 256, 0, control_stream>>>(
-            hc->d_router_logits, hc->d_router_w[layer], hc->d_ffn_normed,
-            (uint32_t)kGlobalExperts, (uint32_t)kHidden, (uint32_t)opt.slots);
+        const int router_dense_rc =
+            run_model_router_dense_logits(opt, hc, layer, control_stream);
+        if (router_dense_rc != 0) {
+            std::fprintf(stderr,
+                         "tp_ep_model_router_dense_failed\tlayer\t%d\trc\t%d\n",
+                         layer, router_dense_rc);
+            return 4;
+        }
         router_select_topk_rows_kernel<<<(unsigned int)opt.slots, 1, 0, control_stream>>>(
             hc->d_router_selected, hc->d_router_weights, hc->d_router_logits,
             hc->d_router_bias[layer], hc->d_router_hash[layer],
@@ -11530,11 +11595,14 @@ int run_true_ds4_post_attention_ffn_input(const Options &opt,
             !hc->d_router_selected || !hc->d_router_weights) {
             return 5;
         }
-        const dim3 router_grid((unsigned int)kGlobalExperts,
-                               (unsigned int)opt.slots, 1u);
-        f32_dense_colmajor_kernel<<<router_grid, 256>>>(
-            hc->d_router_logits, hc->d_router_w[layer], hc->d_ffn_normed,
-            (uint32_t)kGlobalExperts, (uint32_t)kHidden, (uint32_t)opt.slots);
+        const int router_dense_rc =
+            run_model_router_dense_logits(opt, hc, layer, (cudaStream_t)0);
+        if (router_dense_rc != 0) {
+            std::fprintf(stderr,
+                         "tp_ep_post_attention_router_dense_failed\tlayer\t%d\trc\t%d\n",
+                         layer, router_dense_rc);
+            return 5;
+        }
         router_select_topk_rows_kernel<<<(unsigned int)opt.slots, 1>>>(
             hc->d_router_selected, hc->d_router_weights, hc->d_router_logits,
             hc->d_router_bias[layer], hc->d_router_hash[layer],
@@ -14061,6 +14129,7 @@ int run_token_major_serving_loop(const Options &opt,
                 "multi_copy_streams\t%d\t"
                 "batched_paged_attn_gate\t%d\t"
                 "compact_moe_decode_gate\t%d\t"
+                "router_cublas_gate\t%d\t"
                 "fused_gated_silu_gate\t%d\t"
                 "routed_ffn_norm_input_gate\t%d\t"
                 "routed_gate_standalone_swiglu\t%d\t"
@@ -14107,6 +14176,7 @@ int run_token_major_serving_loop(const Options &opt,
                 opt.multi_copy_streams ? 1 : 0,
                 opt.batched_paged_attn_gate ? 1 : 0,
                 opt.compact_moe_decode_gate ? 1 : 0,
+                opt.router_cublas_gate ? 1 : 0,
                 opt.fused_gated_silu_gate ? 1 : 0,
                 opt.routed_ffn_norm_input_gate ? 1 : 0,
                 (opt.routed_ffn_norm_input_gate &&
