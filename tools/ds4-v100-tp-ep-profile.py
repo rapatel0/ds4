@@ -287,6 +287,7 @@ def build_env(args, port):
             else "1",
             "DS4_V100_TP_EP_MODEL_ROUTER_ROUTES": "1" if args.model_router_routes else "0",
             "DS4_V100_TP_EP_ROUTER_CUBLAS": "1" if args.router_cublas else "0",
+            "DS4_V100_TP_EP_GPU_ROUTE_PLAN": "1" if args.gpu_route_plan else "0",
             "DS4_V100_TP_EP_COMPACT_MOE_DECODE": "1" if args.compact_moe_decode else "0",
             "DS4_V100_TP_EP_FUSED_GATED_SILU": "1" if args.fused_gated_silu else "0",
             "DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT": "1" if args.routed_ffn_norm_input else "0",
@@ -372,6 +373,8 @@ def variant_suffix(args):
         suffix += "-model-router"
     if getattr(args, "router_cublas", False):
         suffix += "-router-cublas"
+    if getattr(args, "gpu_route_plan", False):
+        suffix += "-gpu-route-plan"
     if getattr(args, "disable_compact_route_compose", False):
         suffix += "-no-compact-route"
     if getattr(args, "compact_moe_decode", False):
@@ -445,6 +448,8 @@ def direct_command(args):
         cmd.append("--model-router-routes")
     if args.router_cublas:
         cmd.append("--router-cublas-gate")
+    if args.gpu_route_plan:
+        cmd.append("--gpu-route-plan-gate")
     if args.compact_moe_decode:
         cmd.append("--compact-moe-decode-gate")
     if args.fused_gated_silu:
@@ -590,6 +595,7 @@ def add_tp_ep_line_summaries(summary, stdout):
                 "tp_hc_current_input_stream_sync",
                 "compact_moe_decode_gate",
                 "router_cublas_gate",
+                "gpu_route_plan_gate",
                 "fused_gated_silu_gate",
                 "routed_ffn_norm_input_gate",
                 "routed_gate_standalone_swiglu",
@@ -843,6 +849,7 @@ def main():
     parser.add_argument("--batched-paged-attn", action="store_true")
     parser.add_argument("--model-router-routes", action="store_true")
     parser.add_argument("--router-cublas", action="store_true")
+    parser.add_argument("--gpu-route-plan", action="store_true")
     parser.add_argument("--disable-compact-route-compose", action="store_true")
     parser.add_argument("--compact-moe-decode", action="store_true")
     parser.add_argument("--fused-gated-silu", action="store_true")

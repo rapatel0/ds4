@@ -75,6 +75,21 @@ preserved first token `83484` and reduced router dense/select from
 next promotion candidate needs to recover this local win inside a broader
 fusion/scheduling boundary.
 
+Latest route-planner diagnostic: Sprint 388 added a default-off
+`--gpu-route-plan-gate` / `DS4_V100_TP_EP_GPU_ROUTE_PLAN=1` path that builds
+expert offsets, route slots, route weights, and compact compose maps on-device
+from GPU-selected experts. It preserves token parity but is rejected as a
+default. Direct first token stayed `54639`, but generated decode regressed
+from `76.179292` to `65.263520` tok/s and route-plan/upload time rose from
+`10.190194` to `20.049537` ms. HTTP `32` request chat first token stayed
+`83484`, but client tok/s regressed from `44.579314` to `39.283698` and
+server decode from `94.952767` to `87.652515`; route-plan/upload rose from
+`6.742906` to `14.474102` ms. The naive GPU planner removes router D2H but
+adds P2P replication, small kernels, synchronization, and route-total readback.
+Future route-boundary work should fuse planning with expert dispatch/compose
+or eliminate per-layer host involvement completely, not move the current CPU
+planner structure kernel-for-kernel onto GPUs.
+
 Latest throughput direction before memory hardening: Sprint 381 implemented
 `--fp8-e5m2-kv-gate` as a default-off typed-KV format diagnostic. The row
 layout stays block-128 with one E8M0 scale byte plus 128 FP8 payload bytes, so

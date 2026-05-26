@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-25
-last_updated_by: sprint-387
-revision: 400
+last_updated_by: sprint-388
+revision: 401
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -122,6 +122,14 @@ The near-term implementation focus is therefore:
    promote isolated router cuBLAS as a default; use it as evidence that the
    next useful boundary is broader fusion/scheduling around router, route
    planning, and HC-current/input staging.
+   Sprint 388 tested that broader boundary by moving compact route-plan
+   construction to GPUs. It preserved tokens but regressed direct decode
+   (`76.179292` to `65.263520` tok/s) and HTTP server decode (`94.952767` to
+   `87.652515` tok/s), because P2P replication, several tiny kernels,
+   synchronization, and route-total readback cost more than the removed D2H.
+   Future route work should fuse planning with expert dispatch/compose or
+   remove per-layer host involvement entirely; do not promote the naive GPU
+   planner.
 5. Close the S-E follow-up with a narrow parity/precheck fix if we want to
    revisit fused gated-SiLU. Sprint 379 showed the current serving-shaped
    branch already has no standalone routed SwiGLU launch, the generic
