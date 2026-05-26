@@ -252,6 +252,26 @@ struct RankState {
     cudaEvent_t stop = nullptr;
 };
 
+struct RoutePlanHostWorkspace {
+    bool initialized = false;
+    bool uploads_pending = false;
+    int slots = 0;
+    int top_k = 0;
+    int devices[kGpus] = {};
+    size_t route_capacity = 0;
+    size_t compact_plan_ints = 0;
+    int *h_selected = nullptr;
+    float *h_weights = nullptr;
+    int *h_offsets[kGpus] = {};
+    int *h_route_slots[kGpus] = {};
+    float *h_route_weights[kGpus] = {};
+    int *h_route_index_by_slot[kGpus] = {};
+    int *h_route_indices_by_slot[kGpus] = {};
+    int *h_route_count_by_slot[kGpus] = {};
+    int *h_compact_plan = nullptr;
+    cudaEvent_t upload_done[kGpus] = {};
+};
+
 struct GpuFamilyStats {
     uint64_t dense_rows = 0;
     uint64_t control_rows = 0;
@@ -651,6 +671,7 @@ struct Options {
     bool router_cublas_gate = false;
     bool router_hash_fast_gate = false;
     bool gpu_route_plan_gate = false;
+    bool route_plan_async_upload_gate = false;
     bool routed_ffn_norm_input_gate = false;
     bool true_shared_ffn_gate = false;
     bool tp_kv_all_slots_gate = false;
@@ -3481,6 +3502,7 @@ void usage(const char *argv0) {
                  "       [--router-cublas-gate]\n"
                  "       [--router-hash-fast-gate]\n"
                  "       [--gpu-route-plan-gate]\n"
+                 "       [--route-plan-async-upload-gate]\n"
                  "       [--diagnostic-output-head]\n",
                  argv0);
 }
@@ -3688,6 +3710,14 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--gpu-route-plan-gate") == 0) {
             opt->gpu_route_plan_gate = true;
+            opt->model_router_routes = true;
+            opt->compact_moe_decode_gate = true;
+            opt->compact_route_compose = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--route-plan-async-upload-gate") == 0) {
+            opt->route_plan_async_upload_gate = true;
             opt->model_router_routes = true;
             opt->compact_moe_decode_gate = true;
             opt->compact_route_compose = true;
@@ -4672,8 +4702,85 @@ struct SharedHcControls {
     uint32_t *d_router_tokens = nullptr;
     unsigned char *d_router_active = nullptr;
     cublasHandle_t router_blas = nullptr;
+    RoutePlanHostWorkspace route_plan_ws;
     uint64_t control_bytes = 0;
 };
+
+int init_route_plan_host_workspace(const Options &opt,
+                                   RoutePlanHostWorkspace *ws) {
+    if (!ws) return 1;
+    if (ws->initialized) return 0;
+    ws->slots = opt.slots;
+    ws->top_k = opt.top_k;
+    for (int rank = 0; rank < kGpus; ++rank) {
+        ws->devices[rank] = opt.devices[rank];
+    }
+    ws->route_capacity = (size_t)opt.slots * (size_t)opt.top_k;
+    ws->compact_plan_ints =
+        (size_t)kGpus * ((size_t)opt.slots * (size_t)opt.top_k +
+                         (size_t)opt.slots);
+    CHECK_CUDA(cudaHostAlloc(&ws->h_selected,
+                             ws->route_capacity * sizeof(int),
+                             cudaHostAllocDefault));
+    CHECK_CUDA(cudaHostAlloc(&ws->h_weights,
+                             ws->route_capacity * sizeof(float),
+                             cudaHostAllocDefault));
+    CHECK_CUDA(cudaHostAlloc(&ws->h_compact_plan,
+                             ws->compact_plan_ints * sizeof(int),
+                             cudaHostAllocDefault));
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaHostAlloc(&ws->h_offsets[rank],
+                                 (size_t)(kLocalExperts + 1) * sizeof(int),
+                                 cudaHostAllocDefault));
+        CHECK_CUDA(cudaHostAlloc(&ws->h_route_slots[rank],
+                                 ws->route_capacity * sizeof(int),
+                                 cudaHostAllocDefault));
+        CHECK_CUDA(cudaHostAlloc(&ws->h_route_weights[rank],
+                                 ws->route_capacity * sizeof(float),
+                                 cudaHostAllocDefault));
+        CHECK_CUDA(cudaHostAlloc(&ws->h_route_index_by_slot[rank],
+                                 (size_t)opt.slots * sizeof(int),
+                                 cudaHostAllocDefault));
+        CHECK_CUDA(cudaHostAlloc(&ws->h_route_indices_by_slot[rank],
+                                 ws->route_capacity * sizeof(int),
+                                 cudaHostAllocDefault));
+        CHECK_CUDA(cudaHostAlloc(&ws->h_route_count_by_slot[rank],
+                                 (size_t)opt.slots * sizeof(int),
+                                 cudaHostAllocDefault));
+        CHECK_CUDA(cudaSetDevice(opt.devices[rank]));
+        CHECK_CUDA(cudaEventCreateWithFlags(&ws->upload_done[rank],
+                                            cudaEventDisableTiming));
+    }
+    ws->initialized = true;
+    return 0;
+}
+
+void close_route_plan_host_workspace(RoutePlanHostWorkspace *ws) {
+    if (!ws || !ws->initialized) return;
+    if (ws->uploads_pending) {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            if (ws->upload_done[rank]) {
+                CHECK_CUDA(cudaSetDevice(ws->devices[rank]));
+                CHECK_CUDA(cudaEventSynchronize(ws->upload_done[rank]));
+            }
+        }
+        ws->uploads_pending = false;
+    }
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ws->devices[rank]));
+        if (ws->upload_done[rank]) CHECK_CUDA(cudaEventDestroy(ws->upload_done[rank]));
+        if (ws->h_route_count_by_slot[rank]) CHECK_CUDA(cudaFreeHost(ws->h_route_count_by_slot[rank]));
+        if (ws->h_route_indices_by_slot[rank]) CHECK_CUDA(cudaFreeHost(ws->h_route_indices_by_slot[rank]));
+        if (ws->h_route_index_by_slot[rank]) CHECK_CUDA(cudaFreeHost(ws->h_route_index_by_slot[rank]));
+        if (ws->h_route_weights[rank]) CHECK_CUDA(cudaFreeHost(ws->h_route_weights[rank]));
+        if (ws->h_route_slots[rank]) CHECK_CUDA(cudaFreeHost(ws->h_route_slots[rank]));
+        if (ws->h_offsets[rank]) CHECK_CUDA(cudaFreeHost(ws->h_offsets[rank]));
+    }
+    if (ws->h_compact_plan) CHECK_CUDA(cudaFreeHost(ws->h_compact_plan));
+    if (ws->h_weights) CHECK_CUDA(cudaFreeHost(ws->h_weights));
+    if (ws->h_selected) CHECK_CUDA(cudaFreeHost(ws->h_selected));
+    *ws = RoutePlanHostWorkspace{};
+}
 
 bool find_replicated_control_row(const std::vector<ContractRow> &rows,
                                  const char *tensor,
@@ -4811,6 +4918,11 @@ int open_shared_hc_controls(const Options &opt,
                           (size_t)opt.slots * sizeof(uint32_t)));
     CHECK_CUDA(cudaMemset(out->d_router_active, 1,
                           (size_t)opt.slots * sizeof(unsigned char)));
+    if (opt.route_plan_async_upload_gate &&
+        init_route_plan_host_workspace(opt, &out->route_plan_ws) != 0) {
+        return 1;
+    }
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
 
     for (int layer = 0; layer < 43; ++layer) {
         std::vector<float> attn_fn;
@@ -5020,6 +5132,7 @@ int open_shared_hc_controls(const Options &opt,
 
 void close_shared_hc_controls(const Options &opt, SharedHcControls *out) {
     if (!out || !out->initialized) return;
+    close_route_plan_host_workspace(&out->route_plan_ws);
     CHECK_CUDA(cudaSetDevice(opt.devices[0]));
     if (out->router_blas) {
         cublasStatus_t st = cublasDestroy(out->router_blas);
@@ -5076,6 +5189,11 @@ int upload_model_router_route_plan(const Options &opt,
                                    RankState ranks[kGpus],
                                    const std::vector<int> &selected,
                                    const std::vector<float> &weights);
+int upload_model_router_route_plan_async(const Options &opt,
+                                         RankState ranks[kGpus],
+                                         const int *selected,
+                                         const float *weights,
+                                         RoutePlanHostWorkspace *ws);
 int upload_model_router_route_plan_gpu(const Options &opt,
                                        SharedHcControls *hc,
                                        RankState ranks[kGpus]);
@@ -5511,6 +5629,22 @@ int run_shared_hc_current_input(const Options &opt,
         if (opt.gpu_route_plan_gate) {
             t_router_d2h_done = t_router_select_done;
             route_rc = upload_model_router_route_plan_gpu(opt, hc, ranks);
+        } else if (opt.route_plan_async_upload_gate) {
+            RoutePlanHostWorkspace *ws = &hc->route_plan_ws;
+            if (!ws->initialized) return 5;
+            const size_t route_elems = (size_t)opt.slots * (size_t)opt.top_k;
+            CHECK_CUDA(cudaMemcpyAsync(ws->h_selected, hc->d_router_selected,
+                                       route_elems * sizeof(int),
+                                       cudaMemcpyDeviceToHost,
+                                       control_stream));
+            CHECK_CUDA(cudaMemcpyAsync(ws->h_weights, hc->d_router_weights,
+                                       route_elems * sizeof(float),
+                                       cudaMemcpyDeviceToHost,
+                                       control_stream));
+            CHECK_CUDA(cudaStreamSynchronize(control_stream));
+            t_router_d2h_done = std::chrono::steady_clock::now();
+            route_rc = upload_model_router_route_plan_async(
+                opt, ranks, ws->h_selected, ws->h_weights, ws);
         } else {
             std::vector<int> selected((size_t)opt.slots * (size_t)opt.top_k);
             std::vector<float> weights((size_t)opt.slots * (size_t)opt.top_k);
@@ -8838,6 +8972,268 @@ int upload_model_router_route_plan(const Options &opt,
     return 0;
 }
 
+int upload_model_router_route_plan_async(const Options &opt,
+                                         RankState ranks[kGpus],
+                                         const int *selected,
+                                         const float *weights,
+                                         RoutePlanHostWorkspace *ws) {
+    if (!selected || !weights || !ws || !ws->initialized ||
+        ws->slots != opt.slots || ws->top_k != opt.top_k ||
+        ws->route_capacity < (size_t)opt.slots * (size_t)opt.top_k) {
+        return 1;
+    }
+    if (opt.routed_ffn_norm_input_gate) {
+        return 8;
+    }
+    if (ws->uploads_pending) {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            if (ws->upload_done[rank]) {
+                CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+                CHECK_CUDA(cudaEventSynchronize(ws->upload_done[rank]));
+            }
+        }
+        ws->uploads_pending = false;
+    }
+
+    const bool needs_single_route_index = !opt.compact_moe_decode_gate;
+    const bool needs_packed_compact_plan = opt.compact_moe_decode_gate;
+    std::vector<int> counts[kGpus];
+    std::vector<int> cursor[kGpus];
+    for (int rank = 0; rank < kGpus; ++rank) {
+        counts[rank].assign((size_t)kLocalExperts, 0);
+        std::fill(ws->h_route_indices_by_slot[rank],
+                  ws->h_route_indices_by_slot[rank] +
+                      (size_t)opt.slots * (size_t)opt.top_k,
+                  -1);
+        std::fill(ws->h_route_count_by_slot[rank],
+                  ws->h_route_count_by_slot[rank] + (size_t)opt.slots,
+                  0);
+        if (needs_single_route_index) {
+            std::fill(ws->h_route_index_by_slot[rank],
+                      ws->h_route_index_by_slot[rank] + (size_t)opt.slots,
+                      -1);
+        }
+    }
+
+    bool compact_duplicate = false;
+    for (int slot = 0; slot < opt.slots; ++slot) {
+        bool seen_rank[kGpus] = {};
+        for (int k = 0; k < opt.top_k; ++k) {
+            const int expert = selected[(size_t)slot * (size_t)opt.top_k + (size_t)k];
+            if (expert < 0) continue;
+            if (expert >= kGlobalExperts) return 2;
+            const int rank = expert / kLocalExperts;
+            const int local = expert % kLocalExperts;
+            counts[rank][(size_t)local]++;
+            if (seen_rank[rank]) compact_duplicate = true;
+            seen_rank[rank] = true;
+        }
+    }
+    if (opt.compact_route_compose && compact_duplicate &&
+        !opt.compact_moe_decode_gate) {
+        return 3;
+    }
+
+    for (int rank = 0; rank < kGpus; ++rank) {
+        int running = 0;
+        int active = 0;
+        int max_routes = 0;
+        for (int e = 0; e < kLocalExperts; ++e) {
+            ws->h_offsets[rank][e] = running;
+            running += counts[rank][(size_t)e];
+            if (counts[rank][(size_t)e] > 0) ++active;
+            max_routes = std::max(max_routes, counts[rank][(size_t)e]);
+        }
+        ws->h_offsets[rank][kLocalExperts] = running;
+        if (running > ranks[rank].route_capacity ||
+            (size_t)running > ws->route_capacity) {
+            return 4;
+        }
+        std::fill(ws->h_route_slots[rank],
+                  ws->h_route_slots[rank] + (size_t)running, -1);
+        std::fill(ws->h_route_weights[rank],
+                  ws->h_route_weights[rank] + (size_t)running, 0.0f);
+        cursor[rank].assign(ws->h_offsets[rank],
+                            ws->h_offsets[rank] + kLocalExperts + 1);
+    }
+
+    for (int slot = 0; slot < opt.slots; ++slot) {
+        for (int k = 0; k < opt.top_k; ++k) {
+            const size_t route_key = (size_t)slot * (size_t)opt.top_k + (size_t)k;
+            const int expert = selected[route_key];
+            if (expert < 0) continue;
+            const int rank = expert / kLocalExperts;
+            const int local = expert % kLocalExperts;
+            const int idx = cursor[rank][(size_t)local]++;
+            ws->h_route_slots[rank][idx] = slot;
+            const float w = weights[route_key];
+            if (!std::isfinite(w)) {
+                std::fprintf(stderr,
+                             "tp_ep_model_router_nonfinite_weight\trank\t%d\tslot\t%d\texpert\t%d\tk\t%d\n",
+                             rank, slot, expert, k);
+                return 5;
+            }
+            ws->h_route_weights[rank][idx] = w;
+            if (needs_single_route_index &&
+                ws->h_route_index_by_slot[rank][slot] < 0) {
+                ws->h_route_index_by_slot[rank][slot] = idx;
+            }
+            int &route_count = ws->h_route_count_by_slot[rank][slot];
+            if (route_count >= opt.top_k) return 6;
+            ws->h_route_indices_by_slot[rank]
+                [(size_t)slot * (size_t)opt.top_k + (size_t)route_count] = idx;
+            route_count++;
+        }
+    }
+
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        const int running = ws->h_offsets[rank][kLocalExperts];
+        int active = 0;
+        int max_routes = 0;
+        for (int e = 0; e < kLocalExperts; ++e) {
+            if (counts[rank][(size_t)e] > 0) ++active;
+            max_routes = std::max(max_routes, counts[rank][(size_t)e]);
+        }
+        r.routes = running;
+        r.active_experts = active;
+        r.max_routes_per_expert = max_routes;
+        CHECK_CUDA(cudaSetDevice(r.device));
+        CHECK_CUDA(cudaMemcpyAsync(r.d_offsets, ws->h_offsets[rank],
+                                   (size_t)(kLocalExperts + 1) * sizeof(int),
+                                   cudaMemcpyHostToDevice, r.stream));
+        if (running > 0) {
+            CHECK_CUDA(cudaMemcpyAsync(r.d_route_slots, ws->h_route_slots[rank],
+                                       (size_t)running * sizeof(int),
+                                       cudaMemcpyHostToDevice, r.stream));
+            CHECK_CUDA(cudaMemcpyAsync(r.d_route_weights, ws->h_route_weights[rank],
+                                       (size_t)running * sizeof(float),
+                                       cudaMemcpyHostToDevice, r.stream));
+        }
+    }
+
+    static bool route_stats_emitted[43] = {};
+    if (opt.model_router_routes && opt.layer >= 0 && opt.layer <= 5 &&
+        !route_stats_emitted[opt.layer]) {
+        route_stats_emitted[opt.layer] = true;
+        std::fprintf(stderr,
+                     "tp_ep_model_router_route_stats_async\tlayer\t%d\troutes\t%d,%d,%d,%d,%d,%d,%d,%d\tmax_routes_per_expert\t%d,%d,%d,%d,%d,%d,%d,%d\n",
+                     opt.layer,
+                     ranks[0].routes, ranks[1].routes, ranks[2].routes, ranks[3].routes,
+                     ranks[4].routes, ranks[5].routes, ranks[6].routes, ranks[7].routes,
+                     ranks[0].max_routes_per_expert, ranks[1].max_routes_per_expert,
+                     ranks[2].max_routes_per_expert, ranks[3].max_routes_per_expert,
+                     ranks[4].max_routes_per_expert, ranks[5].max_routes_per_expert,
+                     ranks[6].max_routes_per_expert, ranks[7].max_routes_per_expert);
+    }
+    if (opt.compact_moe_decode_gate && opt.model_router_routes) {
+        int duplicate_slots = 0;
+        int max_same_rank_routes = 0;
+        for (int slot = 0; slot < opt.slots; ++slot) {
+            for (int rank = 0; rank < kGpus; ++rank) {
+                const int c = ws->h_route_count_by_slot[rank][slot];
+                max_same_rank_routes = std::max(max_same_rank_routes, c);
+                if (c > 1) duplicate_slots++;
+            }
+        }
+        static bool compact_stats_emitted[43] = {};
+        if (opt.layer >= 0 && opt.layer < 43 && !compact_stats_emitted[opt.layer]) {
+            compact_stats_emitted[opt.layer] = true;
+            const uint64_t all_dest_bytes =
+                (uint64_t)kGpus * (uint64_t)kGpus * (uint64_t)opt.slots *
+                (uint64_t)(kHidden / kGpus) * sizeof(float);
+            const uint64_t total_routes =
+                (uint64_t)ranks[0].routes + (uint64_t)ranks[1].routes +
+                (uint64_t)ranks[2].routes + (uint64_t)ranks[3].routes +
+                (uint64_t)ranks[4].routes + (uint64_t)ranks[5].routes +
+                (uint64_t)ranks[6].routes + (uint64_t)ranks[7].routes;
+            const uint64_t compact_bytes =
+                (uint64_t)kGpus * total_routes * (uint64_t)(kHidden / kGpus) *
+                sizeof(float);
+            std::printf("tp_ep_compact_moe_route_stats_async\tlayer\t%d\t"
+                        "duplicate_slots\t%d\tmax_same_rank_routes\t%d\t"
+                        "all_dest_bytes\t%llu\tcompact_bytes\t%llu\t"
+                        "routes\t%d,%d,%d,%d,%d,%d,%d,%d\t"
+                        "active_experts\t%d,%d,%d,%d,%d,%d,%d,%d\t"
+                        "max_routes_per_expert\t%d,%d,%d,%d,%d,%d,%d,%d\n",
+                        opt.layer, duplicate_slots, max_same_rank_routes,
+                        (unsigned long long)all_dest_bytes,
+                        (unsigned long long)compact_bytes,
+                        ranks[0].routes, ranks[1].routes, ranks[2].routes, ranks[3].routes,
+                        ranks[4].routes, ranks[5].routes, ranks[6].routes, ranks[7].routes,
+                        ranks[0].active_experts, ranks[1].active_experts,
+                        ranks[2].active_experts, ranks[3].active_experts,
+                        ranks[4].active_experts, ranks[5].active_experts,
+                        ranks[6].active_experts, ranks[7].active_experts,
+                        ranks[0].max_routes_per_expert, ranks[1].max_routes_per_expert,
+                        ranks[2].max_routes_per_expert, ranks[3].max_routes_per_expert,
+                        ranks[4].max_routes_per_expert, ranks[5].max_routes_per_expert,
+                        ranks[6].max_routes_per_expert, ranks[7].max_routes_per_expert);
+        }
+    }
+
+    if (needs_packed_compact_plan) {
+        if (ws->compact_plan_ints <
+            (size_t)kGpus * ((size_t)opt.slots * (size_t)opt.top_k +
+                             (size_t)opt.slots)) {
+            return 7;
+        }
+        std::fill(ws->h_compact_plan,
+                  ws->h_compact_plan + ws->compact_plan_ints, -1);
+        const size_t compact_indices = (size_t)opt.slots * (size_t)opt.top_k;
+        const size_t compact_counts = (size_t)opt.slots;
+        for (int src = 0; src < kGpus; ++src) {
+            std::memcpy(ws->h_compact_plan + (size_t)src * compact_indices,
+                        ws->h_route_indices_by_slot[src],
+                        compact_indices * sizeof(int));
+            std::memcpy(ws->h_compact_plan + (size_t)kGpus * compact_indices +
+                            (size_t)src * compact_counts,
+                        ws->h_route_count_by_slot[src],
+                        compact_counts * sizeof(int));
+        }
+    }
+
+    for (int dst = 0; dst < kGpus; ++dst) {
+        CHECK_CUDA(cudaSetDevice(ranks[dst].device));
+        for (int src = 0; src < kGpus; ++src) {
+            if (needs_single_route_index) {
+                CHECK_CUDA(cudaMemcpyAsync(ranks[dst].d_route_index_by_slot[src],
+                                           ws->h_route_index_by_slot[src],
+                                           (size_t)opt.slots * sizeof(int),
+                                           cudaMemcpyHostToDevice,
+                                           ranks[dst].stream));
+            }
+            if (!needs_packed_compact_plan) {
+                CHECK_CUDA(cudaMemcpyAsync(ranks[dst].d_route_indices_by_slot[src],
+                                           ws->h_route_indices_by_slot[src],
+                                           (size_t)opt.slots *
+                                               (size_t)opt.top_k * sizeof(int),
+                                           cudaMemcpyHostToDevice,
+                                           ranks[dst].stream));
+                CHECK_CUDA(cudaMemcpyAsync(ranks[dst].d_route_count_by_slot[src],
+                                           ws->h_route_count_by_slot[src],
+                                           (size_t)opt.slots * sizeof(int),
+                                           cudaMemcpyHostToDevice,
+                                           ranks[dst].stream));
+            }
+        }
+        if (needs_packed_compact_plan) {
+            if (!ranks[dst].d_route_compact_plan ||
+                ranks[dst].route_compact_plan_ints < ws->compact_plan_ints) {
+                return 7;
+            }
+            CHECK_CUDA(cudaMemcpyAsync(ranks[dst].d_route_compact_plan,
+                                       ws->h_compact_plan,
+                                       ws->compact_plan_ints * sizeof(int),
+                                       cudaMemcpyHostToDevice,
+                                       ranks[dst].stream));
+        }
+        CHECK_CUDA(cudaEventRecord(ws->upload_done[dst], ranks[dst].stream));
+    }
+    ws->uploads_pending = true;
+    return 0;
+}
+
 int open_shared_rank_buffers(const Options &opt, SharedRankBuffers *shared) {
     shared->core_bytes = 0;
     for (int p = 0; p < kGpus; ++p) {
@@ -11988,6 +12384,19 @@ int run_true_ds4_post_attention_ffn_input(const Options &opt,
         int route_rc = 0;
         if (opt.gpu_route_plan_gate) {
             route_rc = upload_model_router_route_plan_gpu(opt, hc, ranks);
+        } else if (opt.route_plan_async_upload_gate) {
+            RoutePlanHostWorkspace *ws = &hc->route_plan_ws;
+            if (!ws->initialized) return 6;
+            const size_t route_elems = (size_t)opt.slots * (size_t)opt.top_k;
+            CHECK_CUDA(cudaMemcpyAsync(ws->h_selected, hc->d_router_selected,
+                                       route_elems * sizeof(int),
+                                       cudaMemcpyDeviceToHost, (cudaStream_t)0));
+            CHECK_CUDA(cudaMemcpyAsync(ws->h_weights, hc->d_router_weights,
+                                       route_elems * sizeof(float),
+                                       cudaMemcpyDeviceToHost, (cudaStream_t)0));
+            CHECK_CUDA(cudaStreamSynchronize((cudaStream_t)0));
+            route_rc = upload_model_router_route_plan_async(
+                opt, ranks, ws->h_selected, ws->h_weights, ws);
         } else {
             std::vector<int> selected((size_t)opt.slots * (size_t)opt.top_k);
             std::vector<float> weights((size_t)opt.slots * (size_t)opt.top_k);
@@ -14524,6 +14933,7 @@ int run_token_major_serving_loop(const Options &opt,
                 "router_cublas_gate\t%d\t"
                 "router_hash_fast_gate\t%d\t"
                 "gpu_route_plan_gate\t%d\t"
+                "route_plan_async_upload_gate\t%d\t"
                 "fused_gated_silu_gate\t%d\t"
                 "routed_ffn_norm_input_gate\t%d\t"
                 "routed_gate_standalone_swiglu\t%d\t"
@@ -14573,6 +14983,7 @@ int run_token_major_serving_loop(const Options &opt,
                 opt.router_cublas_gate ? 1 : 0,
                 opt.router_hash_fast_gate ? 1 : 0,
                 opt.gpu_route_plan_gate ? 1 : 0,
+                opt.route_plan_async_upload_gate ? 1 : 0,
                 opt.fused_gated_silu_gate ? 1 : 0,
                 opt.routed_ffn_norm_input_gate ? 1 : 0,
                 (opt.routed_ffn_norm_input_gate &&
@@ -15647,6 +16058,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "\"true_ds4_attention_typed_kv_stream_sync_gate\":%d,"
                           "\"fp8_e5m2_kv_gate\":%d,"
                           "\"router_hash_fast_gate\":%d,"
+                          "\"route_plan_async_upload_gate\":%d,"
                           "\"cache_slots_total\":%zu,"
                           "\"cache_slots_used\":%d,"
                           "\"cache_hits\":%llu,"
@@ -15695,6 +16107,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           base_opt.true_ds4_attention_typed_kv_stream_sync_gate ? 1 : 0,
                           base_opt.fp8_e5m2_kv_gate ? 1 : 0,
                           base_opt.router_hash_fast_gate ? 1 : 0,
+                          base_opt.route_plan_async_upload_gate ? 1 : 0,
                           sessions.slots.size(),
                           sessions.used(),
                           (unsigned long long)sessions.hits,
@@ -15763,6 +16176,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "ds4_v100_tp_ep_true_ds4_attention_typed_kv_stream_sync_gate %d\n"
                           "ds4_v100_tp_ep_fp8_e5m2_kv_gate %d\n"
                           "ds4_v100_tp_ep_router_hash_fast_gate %d\n"
+                          "ds4_v100_tp_ep_route_plan_async_upload_gate %d\n"
                           "ds4_v100_tp_ep_cache_slots_total %zu\n"
                           "ds4_v100_tp_ep_cache_slots_used %d\n"
                           "ds4_v100_tp_ep_cache_hits %llu\n"
@@ -15810,6 +16224,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                           base_opt.true_ds4_attention_typed_kv_stream_sync_gate ? 1 : 0,
                           base_opt.fp8_e5m2_kv_gate ? 1 : 0,
                           base_opt.router_hash_fast_gate ? 1 : 0,
+                          base_opt.route_plan_async_upload_gate ? 1 : 0,
                           sessions.slots.size(),
                           sessions.used(),
                           (unsigned long long)sessions.hits,
@@ -16341,6 +16756,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   "\"true_ds4_attention_typed_kv_stream_sync_gate\":%d,"
                                   "\"fp8_e5m2_kv_gate\":%d,"
                                   "\"router_hash_fast_gate\":%d,"
+                                  "\"route_plan_async_upload_gate\":%d,"
                                   "\"decode_slots\":%d,"
                                   "\"prompt_tokens\":%llu,"
                                   "\"generated_tokens\":%llu,"
@@ -16419,6 +16835,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   req_opt.true_ds4_attention_typed_kv_stream_sync_gate ? 1 : 0,
                                   req_opt.fp8_e5m2_kv_gate ? 1 : 0,
                                   req_opt.router_hash_fast_gate ? 1 : 0,
+                                  req_opt.route_plan_async_upload_gate ? 1 : 0,
                                   req_opt.slots,
                                   (unsigned long long)request_prompt_tokens,
                                   (unsigned long long)request_generated,

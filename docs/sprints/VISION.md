@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
-last_updated: 2026-05-25
-last_updated_by: sprint-394
-revision: 407
+last_updated: 2026-05-26
+last_updated_by: sprint-395
+revision: 408
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -167,10 +167,19 @@ The near-term implementation focus is therefore:
    the hash row. It preserved `32/32` HTTP response parity and readiness, but
    was not promotable: server decode moved only `106.900859` to `107.274556`
    tok/s, router select only `27.766750` to `27.683134` ms, and scaffold
-   decode regressed `289.821429` to `293.484520` ms. Future route work should
-   fuse planning with expert dispatch/compose or remove per-layer host
-   involvement entirely; do not promote the naive GPU planner or isolated
-   hash-select micro-optimization.
+   decode regressed `289.821429` to `293.484520` ms. Sprint 395 then cleaned
+   up the remaining CPU upload boundary with persistent pinned route-plan
+   buffers and stream-ordered async H2D uploads. This was promoted:
+   same-binary HTTP response parity passed `32/32`, readiness passed, server
+   decode improved from `104.834948` to `107.092211` tok/s, route upload
+   dropped from `6.785109` to `4.736281` ms, router D2H dropped from
+   `1.016605` to `0.562918` ms, and VRAM admission stayed clean with
+   `1746 MiB` minimum free. The route-upload cleanup is now done enough for
+   the current architecture. Future route work should fuse planning with
+   expert dispatch/compose or remove per-layer host involvement entirely; do
+   not promote the naive GPU planner or isolated hash-select micro-
+   optimization. The next requested focus is NCCL/collective work, because
+   average GPU utilization remains only about `9.3%` at the target shape.
 8. Close the S-E follow-up with a narrow parity/precheck fix if we want to
    revisit fused gated-SiLU. Sprint 379 showed the current serving-shaped
    branch already has no standalone routed SwiGLU launch, the generic

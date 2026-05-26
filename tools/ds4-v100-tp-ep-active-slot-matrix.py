@@ -45,6 +45,10 @@ def profile_case_dir(tool, hc_stream_sync, extra_profile_args=None):
             suffix += "-router-hash-fast"
         if arg == "--gpu-route-plan":
             suffix += "-gpu-route-plan"
+        if arg == "--route-plan-async-upload":
+            suffix += "-route-plan-async-upload"
+        if arg == "--disable-route-plan-async-upload":
+            suffix += "-no-route-plan-async-upload"
         if arg == "--compact-moe-decode":
             suffix += "-compact-moe"
         if arg == "--disable-compact-route-compose":

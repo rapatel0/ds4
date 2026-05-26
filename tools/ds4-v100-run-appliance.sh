@@ -161,6 +161,7 @@ fi
 : "${DS4_V100_TP_EP_ROUTER_CUBLAS:=0}"
 : "${DS4_V100_TP_EP_ROUTER_HASH_FAST:=0}"
 : "${DS4_V100_TP_EP_GPU_ROUTE_PLAN:=0}"
+: "${DS4_V100_TP_EP_ROUTE_PLAN_ASYNC_UPLOAD:=1}"
 : "${DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT:=0}"
 : "${DS4_V100_TP_EP_TRUE_SHARED_FFN:=0}"
 : "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_RESIDENCY:=0}"
@@ -826,6 +827,11 @@ case "$DS4_V100_TP_EP_GPU_ROUTE_PLAN" in
     1|true|on) DS4_V100_TP_EP_GPU_ROUTE_PLAN=1 ;;
     *) fail "DS4_V100_TP_EP_GPU_ROUTE_PLAN must be 0 or 1" ;;
 esac
+case "$DS4_V100_TP_EP_ROUTE_PLAN_ASYNC_UPLOAD" in
+    0|false|off) DS4_V100_TP_EP_ROUTE_PLAN_ASYNC_UPLOAD=0 ;;
+    1|true|on) DS4_V100_TP_EP_ROUTE_PLAN_ASYNC_UPLOAD=1 ;;
+    *) fail "DS4_V100_TP_EP_ROUTE_PLAN_ASYNC_UPLOAD must be 0 or 1" ;;
+esac
 if [ "$DS4_V100_TP_EP_ROUTER_CUBLAS" -eq 1 ]; then
     DS4_V100_TP_EP_MODEL_ROUTER_ROUTES=1
 fi
@@ -833,6 +839,11 @@ if [ "$DS4_V100_TP_EP_ROUTER_HASH_FAST" -eq 1 ]; then
     DS4_V100_TP_EP_MODEL_ROUTER_ROUTES=1
 fi
 if [ "$DS4_V100_TP_EP_GPU_ROUTE_PLAN" -eq 1 ]; then
+    DS4_V100_TP_EP_MODEL_ROUTER_ROUTES=1
+    DS4_V100_TP_EP_COMPACT_MOE_DECODE=1
+    DS4_V100_TP_EP_COMPACT_ROUTE_COMPOSE=1
+fi
+if [ "$DS4_V100_TP_EP_ROUTE_PLAN_ASYNC_UPLOAD" -eq 1 ]; then
     DS4_V100_TP_EP_MODEL_ROUTER_ROUTES=1
     DS4_V100_TP_EP_COMPACT_MOE_DECODE=1
     DS4_V100_TP_EP_COMPACT_ROUTE_COMPOSE=1
@@ -1356,6 +1367,9 @@ if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
     fi
     if [ "$DS4_V100_TP_EP_GPU_ROUTE_PLAN" -eq 1 ]; then
         cmd+=(--gpu-route-plan-gate)
+    fi
+    if [ "$DS4_V100_TP_EP_ROUTE_PLAN_ASYNC_UPLOAD" -eq 1 ]; then
+        cmd+=(--route-plan-async-upload-gate)
     fi
     if [ "$DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT" -eq 1 ]; then
         cmd+=(--routed-ffn-norm-input-gate)

@@ -337,6 +337,9 @@ def build_env(args, port):
             "DS4_V100_TP_EP_ROUTER_CUBLAS": "1" if args.router_cublas else "0",
             "DS4_V100_TP_EP_ROUTER_HASH_FAST": "1" if args.router_hash_fast else "0",
             "DS4_V100_TP_EP_GPU_ROUTE_PLAN": "1" if args.gpu_route_plan else "0",
+            "DS4_V100_TP_EP_ROUTE_PLAN_ASYNC_UPLOAD": "0"
+            if args.disable_route_plan_async_upload
+            else "1",
             "DS4_V100_TP_EP_COMPACT_MOE_DECODE": "1" if args.compact_moe_decode else "0",
             "DS4_V100_TP_EP_FUSED_GATED_SILU": "1" if args.fused_gated_silu else "0",
             "DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT": "1" if args.routed_ffn_norm_input else "0",
@@ -428,6 +431,10 @@ def variant_suffix(args):
         suffix += "-router-hash-fast"
     if getattr(args, "gpu_route_plan", False):
         suffix += "-gpu-route-plan"
+    if getattr(args, "route_plan_async_upload", False):
+        suffix += "-route-plan-async-upload"
+    if getattr(args, "disable_route_plan_async_upload", False):
+        suffix += "-no-route-plan-async-upload"
     if getattr(args, "disable_compact_route_compose", False):
         suffix += "-no-compact-route"
     if getattr(args, "compact_moe_decode", False):
@@ -505,6 +512,8 @@ def direct_command(args):
         cmd.append("--router-hash-fast-gate")
     if args.gpu_route_plan:
         cmd.append("--gpu-route-plan-gate")
+    if not args.disable_route_plan_async_upload:
+        cmd.append("--route-plan-async-upload-gate")
     if args.compact_moe_decode:
         cmd.append("--compact-moe-decode-gate")
     if args.fused_gated_silu:
@@ -652,6 +661,7 @@ def add_tp_ep_line_summaries(summary, stdout):
                 "router_cublas_gate",
                 "router_hash_fast_gate",
                 "gpu_route_plan_gate",
+                "route_plan_async_upload_gate",
                 "fused_gated_silu_gate",
                 "routed_ffn_norm_input_gate",
                 "routed_gate_standalone_swiglu",
@@ -913,6 +923,8 @@ def main():
     parser.add_argument("--router-cublas", action="store_true")
     parser.add_argument("--router-hash-fast", action="store_true")
     parser.add_argument("--gpu-route-plan", action="store_true")
+    parser.add_argument("--route-plan-async-upload", action="store_true")
+    parser.add_argument("--disable-route-plan-async-upload", action="store_true")
     parser.add_argument("--disable-compact-route-compose", action="store_true")
     parser.add_argument("--compact-moe-decode", action="store_true")
     parser.add_argument("--fused-gated-silu", action="store_true")
@@ -1108,6 +1120,7 @@ def main():
             "fp8_e5m2_kv_meta": first.get("fp8_e5m2_kv_gate"),
             "status_fp8_e5m2_kv": status_json.get("fp8_e5m2_kv_gate"),
             "status_router_hash_fast": status_json.get("router_hash_fast_gate"),
+            "status_route_plan_async_upload": status_json.get("route_plan_async_upload_gate"),
             "typed_raw_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_raw", server_text)),
             "typed_compressed_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_compressed", server_text)),
             "typed_indexer_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_indexer", server_text)),

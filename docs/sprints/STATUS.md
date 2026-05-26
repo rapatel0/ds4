@@ -1,6 +1,6 @@
 # DS4 V100 Appliance Status
 
-Last updated: 2026-05-25
+Last updated: 2026-05-26
 
 ## Topline
 
@@ -8,6 +8,21 @@ Current bottleneck reference:
 [`docs/architecture/DS4-V100-TP-EP-BOTTLENECKS.md`](../architecture/DS4-V100-TP-EP-BOTTLENECKS.md)
 summarizes the measured bottlenecks, layer-by-layer hot paths, and experiments
 already tried.
+
+Latest promoted TP/EP default: Sprint 395 promoted
+`DS4_V100_TP_EP_ROUTE_PLAN_ASYNC_UPLOAD=1` in the launcher/profile path. It
+keeps the existing CPU route-plan semantics but uses persistent pinned host
+buffers and stream-ordered async H2D uploads for route offsets, route slots,
+route weights, and the packed compact-MoE plan. Same-binary V100 HTTP A/B at
+`32` requests / `32` slots / `256K` / `position=262080` / `32` generated
+tokens preserved `32/32` response parity and readiness, kept summary first
+token `83484`, improved server decode from `104.834948` to `107.092211` tok/s,
+improved client generated throughput from `37.153198` to `37.239503` tok/s,
+reduced route upload from `6.785109` to `4.736281` ms, reduced router D2H from
+`1.016605` to `0.562918` ms, and kept `vram_failures=0` with `1746 MiB`
+minimum free VRAM. This is a small but valid boundary cleanup; the next focus
+returns to NCCL/collective work because average GPU utilization is still only
+about `9.3%`.
 
 Latest serving hardening status: Sprint 382 added permanent TP/EP VRAM
 admission telemetry for the target `32` slot / `256K` appliance shape. The
