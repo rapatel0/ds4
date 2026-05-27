@@ -103,6 +103,36 @@ slots** (16 is the current fit point), (b) **in-graph copy reduction** for more
 speed, (c) **parity re-attach** (still `skip_decode_checksum`), (d) serving-loop
 integration. All tractable engineering, not open questions.
 
+### sprint 419–427 — rank-major conversion executing (the per-slot lever), +1 open thread
+
+The team is working through the gather-to-device-0 sites exactly as scoped:
+- **420–421: rank-local attention-projection input → measured +13% decode**
+  (88.4 → 100.1 tok/s at 8 slots, client +9%). First concrete win from killing a
+  gather-to-0. Direction validated.
+- **422–426**: extended to rank-major FFN shared+routed inputs (consume the NCCL
+  all-gather'd rank-major hidden directly) and **rank-major router logits**
+  (compute local expert logits per-GPU, removing another gather). Split scratch
+  buffers (`d_*_full_rank_major`, ~2 MiB/GPU at 32 slots).
+- **425–427: a correctness divergence appeared under the persistent-graph +
+  async-route-plan regime.** Good discipline: they split the FFN gate into
+  shared/route diagnostics and added a **direct `__half` buffer parity audit**
+  (427) — which proved the rank-major half-input *values* are **byte-identical**
+  to legacy in the sync/eager regime (0 mismatches, checksum matches). So the
+  divergence is isolated to the **graph/async-route-plan path, not the values**.
+  Sprint 428 chases the graph/async route-metadata behavior.
+
+Reads as: the per-slot lever is delivering (the +13% is the first installment of
+the projected per-slot-term reduction), being extended methodically, with one
+**open correctness thread in the graph regime** — the exact "graph capture
+silently changes behavior" risk (my gap #5). Until it's resolved, the rank-major
+FFN/router wins can't be promoted *under graph replay* (where the 2.27× lives).
+
+**Still not done:** the kernel **spill / software-pipelining sanity check**
+(`-Xptxas -v` → registers/smem/spill; ncu → occupancy/stall-reasons) on the new
+shapes — flagged as the pre-MTP step, not yet picked up. The build still has no
+`-Xptxas -v` and no `__launch_bounds__`, so kernel spill on the changed shapes
+(head_dim-512 attn, rank-major consume kernels, HC) remains unverified.
+
 ## What the plan gets right (keep)
 
 - **No re-baselining** (#1, #3) — the ~97–108 tok/s / low-util numbers are trusted.
