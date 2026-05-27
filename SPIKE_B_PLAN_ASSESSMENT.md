@@ -160,6 +160,38 @@ graph replay into the HTTP serving path and measure served throughput with longe
 generation**; (b) the spill/pipelining check (still not done); (c) reach 28/32
 slots. The capability is proven; converting it to a served number is the gap.
 
+### sprint 452–463 — the reckoning: the graph win does NOT transfer to serving
+
+The init-time confound was addressed (463: **parallel expert load** — fans the
+per-GPU expert-pack loads out across all 8 GPUs instead of GPU0→GPU7 round-robin;
+a *startup* fix that explicitly did **not** move decode). With cleaner metrics,
+the honest served picture emerged — and it's sobering:
+
+- **Persistent graph replay is NOT promotable in the HTTP serving path** (459).
+  The usable served baseline is **graph-OFF** rank-major/NCCL.
+- **Graph mode in serving is broken, not just unhelpful**: graph event-order
+  (no-replay) runs at **~half speed AND fails response parity** (changes the first
+  token) across 460–462 (20 → ~9.4 tok/s). They fixed real event-order dependency
+  holes (461) but did not repair it.
+- So the headline **2.27× graph win (sprint 417) is stranded in the standalone
+  smoke — it does not exist in the path that serves users.** I over-credited that
+  benchmark number in prior updates; the serving reality is graph-off.
+
+**De-confounded served numbers (graph-off, the real deliverable):**
+- 8 slots: ~20 tok/s server decode, ~11% util.
+- **32 slots / 32 tokens / 256K: ~35.8 tok/s aggregate decode, ~12.5% avg util
+  (32% max), 32/32 responses, fits VRAM** (max used 30.7 GiB). So 32 slots now
+  *fits and serves* — the VRAM constraint is largely addressed — but per-slot is
+  ~1.1 tok/s and util stays ~12%.
+- Bottleneck (de-confounded request window): **EP/routed FFN 52% + HC-current
+  staging 43%** — attention is now minor.
+
+**Net:** the launch-bound problem PERSISTS in serving because graph replay won't
+promote there. The central lever is stranded in the benchmark, and 4 sprints of
+graph-in-serving attempts failed on correctness+speed. The throughput estimate
+must come down: the served path is ~12% util / ~36 tok/s at 32 slots, and the
+proven way to fix it (graphs) is blocked in the loop that matters.
+
 ## What the plan gets right (keep)
 
 - **No re-baselining** (#1, #3) — the ~97–108 tok/s / low-util numbers are trusted.
