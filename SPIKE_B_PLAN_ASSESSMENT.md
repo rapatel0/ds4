@@ -133,6 +133,33 @@ shapes — flagged as the pre-MTP step, not yet picked up. The build still has n
 `-Xptxas -v` and no `__launch_bounds__`, so kernel spill on the changed shapes
 (head_dim-512 attn, rank-major consume kernels, HC) remains unverified.
 
+### sprint 428–451 — rank-major wins are SMALL at the served shape (caution)
+
+The graph-regime divergence was worked through (451 response parity 16/16 clean;
+discipline held — 446 rejected a 1.056x candidate for parity 0/8). But two things
+temper the optimism:
+
+1. **Wins shrink at the correct served shape.** The promotable, correctness-clean
+   bundle (router + FFN rank-major) at **16 slots HTTP**: server decode
+   **27.2 → 28.1 tok/s (+3.4%)**, util 10.6 → 11.8%, parity clean (451). The
+   bigger wins seen earlier (444: ~2x, 41 tok/s, 27%/63% util) were at *reduced/
+   non-target* shapes, and attention-rank-local **cancels** the rank-major win at
+   the reduced shape (449), so it's held out. Net at target: small.
+2. **Served ≪ decode-benchmark, and util stays low.** Served HTTP at 16 slots is
+   ~28 tok/s with ~11% util — vs the 116 tok/s decode-only benchmark at 16 slots
+   (sprint 417, graph replay). That ~4x gap needs reconciling: HTTP/output-head
+   orchestration overhead, very short generation (4 tokens, setup not amortized),
+   and/or **the 2.27x graph-replay win is not yet integrated into the HTTP serving
+   path** (the served runs don't cite graph replay; 417 did). If so, the headline
+   graph win still lives only in the standalone smoke, not in serving.
+
+So the lever is real in isolation (+13% on attn-proj, 444's 2x at reduced shape)
+but is **not yet translating to served throughput** at the target shape, and util
+at the served target shape is still ~11%. The decisive open items: **(a) integrate
+graph replay into the HTTP serving path and measure served throughput with longer
+generation**; (b) the spill/pipelining check (still not done); (c) reach 28/32
+slots. The capability is proven; converting it to a served number is the gap.
+
 ## What the plan gets right (keep)
 
 - **No re-baselining** (#1, #3) — the ~97–108 tok/s / low-util numbers are trusted.
