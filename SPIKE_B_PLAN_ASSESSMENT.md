@@ -70,12 +70,38 @@ over only 4 steps; the decode/continuation figures are the steady-state proxy.
 
 **The risk has now shifted to its final form:** with launch overhead removed, the
 binding question is *what's inside the replayed graph* — kernel/collective
-efficiency. This is the secondary wall I flagged earlier: the heavy
-attention-output projection (~486 ms in sprint 412), collective time, and the
-head_dim-512 occupancy/spill question. **Next decisive measurement: Nsight/ncu on
-replay mode** to find the in-graph bottleneck, then optimize it. Also still open:
-the parity gate (probe used `skip_decode_checksum`), and VRAM headroom at useful
-slot counts.
+efficiency. Next decisive measurement: the clean eager-vs-graph A/B + profiling.
+
+### sprint 417–418 — the throughput win is MEASURED (the payoff landed)
+
+**417, clean A/B (8 slots, 256K, 8 steps, correct semantic path):**
+- eager: **37.6** generated decode tok/s (breakdown: hc-current 1359 ms, compressed-KV
+  547 ms, attn-projection 271 ms — the launch/copy-heavy prefix).
+- persistent graph: **85.3** tok/s → **2.27× over eager.** The "not a win yet" from
+  416 is superseded: with enough steps to amortize capture, graphs deliver a real,
+  measured speedup on the *correct* path.
+- + deferred-NCCL HC-current (memory fix so NCCL allocs after expert residency):
+  **89.6** tok/s (+5%).
+- **16 slots: 116.85 generated decode tok/s — current best**, and it *exceeds* the
+  old fast-but-less-correct path (~100 @ 32 slots). The correct path with graphs is
+  now faster than the old fast path was.
+- **32 slots: OOM** — all-resident experts + dense-F16 cache + KV don't fit; needs a
+  memory-layout change, not just smaller scratch.
+
+**418, peer-copy-in-graph rejected (confirms the constraint):** routing graph-mode
+copies through `cudaMemcpyPeerAsync` is rejected by capture ("operation not
+permitted when stream is capturing"). The graph-safe remote-read copy kernels are
+"one of the few graph-capturable ways to move those remote values" — so they are
+now a real *in-graph* replay cost. Correct next direction (not peer-copy): **reduce
+the captured copies** — keep tensors rank-local instead of gather-to-device-0-and-
+redistribute, NCCL where capture-safe, fused graph-safe kernels on rank-major
+layouts, drop redundant full-hidden materialization.
+
+**This validates the whole thesis end-to-end: capturable → operational → 2.27×
+faster.** The binding constraints are now (a) **VRAM/memory-layout to reach 32
+slots** (16 is the current fit point), (b) **in-graph copy reduction** for more
+speed, (c) **parity re-attach** (still `skip_decode_checksum`), (d) serving-loop
+integration. All tractable engineering, not open questions.
 
 ## What the plan gets right (keep)
 
