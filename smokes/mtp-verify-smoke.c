@@ -1,6 +1,6 @@
 #include "ds4.h"
 #include "ds4_gpu.h"
-#include "tools/mtp-forward-common.h"
+#include "engine/mtp_step.h"
 #include "engine/mtp_sidecar.h"
 #include "engine/scheduler.h"
 
@@ -596,9 +596,9 @@ int main(int argc, char **argv) {
     }
 
     const uint64_t embed_bytes =
-        (uint64_t)DS4_V100_MTP_FORWARD_N_EMBD * sizeof(float);
+        (uint64_t)DS4_MTP_STEP_N_EMBD * sizeof(float);
     const uint64_t hc_bytes =
-        (uint64_t)DS4_V100_MTP_FORWARD_HC_VALUES * sizeof(float);
+        (uint64_t)DS4_MTP_STEP_HC_VALUES * sizeof(float);
     committed_embed = (float *)malloc((size_t)embed_bytes);
     post_commit_hc = (float *)malloc((size_t)hc_bytes);
     if (!committed_embed || !post_commit_hc) {
@@ -608,7 +608,7 @@ int main(int argc, char **argv) {
     if (ds4_stage_scheduler_read_token_embedding_f32(scheds[0],
                                                           committed_token,
                                                           committed_embed,
-                                                          DS4_V100_MTP_FORWARD_N_EMBD,
+                                                          DS4_MTP_STEP_N_EMBD,
                                                           err,
                                                           sizeof(err)) != 0) {
         fprintf(stderr,

@@ -1,4 +1,4 @@
-#include "mtp-forward-common.h"
+#include "engine/mtp_step.h"
 
 #include <float.h>
 #include <inttypes.h>
@@ -8,14 +8,14 @@
 #include <string.h>
 
 enum {
-    MTPF_N_EMBD = DS4_V100_MTP_FORWARD_N_EMBD,
-    MTPF_N_HC = DS4_V100_MTP_FORWARD_N_HC,
-    MTPF_HC_DIM = DS4_V100_MTP_FORWARD_HC_VALUES,
+    MTPF_N_EMBD = DS4_MTP_STEP_N_EMBD,
+    MTPF_N_HC = DS4_MTP_STEP_N_HC,
+    MTPF_HC_DIM = DS4_MTP_STEP_HC_VALUES,
     MTPF_HC_MIX = 2 * MTPF_N_HC + MTPF_N_HC * MTPF_N_HC,
     MTPF_N_HEAD = 64,
     MTPF_HEAD_DIM = 512,
     MTPF_N_ROT = 64,
-    MTPF_RAW_CAP = DS4_V100_MTP_FORWARD_RAW_CAP,
+    MTPF_RAW_CAP = DS4_MTP_STEP_RAW_CAP,
     MTPF_Q_LORA = 1024,
     MTPF_OUT_GROUPS = 8,
     MTPF_OUT_GROUP_DIM = 4096,
@@ -535,7 +535,7 @@ int ds4_mtp_forward_run_host_next_hc(ds4_mtp_forward *fwd,
                                           char *err,
                                           size_t errlen) {
     if (!fwd || !embed || !prev_hc || !tokens || !out_logits ||
-        top_k == 0 || top_k > DS4_V100_MTP_FORWARD_MAX_TOPK) {
+        top_k == 0 || top_k > DS4_MTP_STEP_MAX_TOPK) {
         return mtpf_error(err, errlen, "invalid MTP forward run input");
     }
     if (next_hc && next_hc_values < MTPF_HC_DIM) {

@@ -1,5 +1,5 @@
-#ifndef DS4_V100_MTP_FORWARD_COMMON_H
-#define DS4_V100_MTP_FORWARD_COMMON_H
+#ifndef DS4_MTP_STEP_H
+#define DS4_MTP_STEP_H
 
 #include "ds4_gpu.h"
 #include "engine/context.h"
@@ -13,12 +13,12 @@ extern "C" {
 #endif
 
 enum {
-    DS4_V100_MTP_FORWARD_MAX_TOPK = 16,
-    DS4_V100_MTP_FORWARD_N_EMBD = 4096,
-    DS4_V100_MTP_FORWARD_N_HC = 4,
-    DS4_V100_MTP_FORWARD_HC_VALUES =
-        DS4_V100_MTP_FORWARD_N_EMBD * DS4_V100_MTP_FORWARD_N_HC,
-    DS4_V100_MTP_FORWARD_RAW_CAP = 128,
+    DS4_MTP_STEP_MAX_TOPK = 16,
+    DS4_MTP_STEP_N_EMBD = 4096,
+    DS4_MTP_STEP_N_HC = 4,
+    DS4_MTP_STEP_HC_VALUES =
+        DS4_MTP_STEP_N_EMBD * DS4_MTP_STEP_N_HC,
+    DS4_MTP_STEP_RAW_CAP = 128,
 };
 
 typedef struct ds4_mtp_forward ds4_mtp_forward;

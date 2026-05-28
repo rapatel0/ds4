@@ -1,7 +1,7 @@
 #include "engine/replay.h"
 #include "engine/context.h"
 #include "engine/mtp_sidecar.h"
-#include "mtp-forward-common.h"
+#include "engine/mtp_step.h"
 
 #include <errno.h>
 #include <arpa/inet.h>
@@ -105,8 +105,8 @@ typedef struct {
     uint32_t raw_row;
     uint32_t n_raw;
     uint32_t output_vocab;
-    uint32_t draft_tokens[DS4_V100_MTP_FORWARD_MAX_TOPK];
-    float draft_logits[DS4_V100_MTP_FORWARD_MAX_TOPK];
+    uint32_t draft_tokens[DS4_MTP_STEP_MAX_TOPK];
+    float draft_logits[DS4_MTP_STEP_MAX_TOPK];
     float target_logit;
     float draft_logit;
     double draft_ms;
@@ -905,10 +905,10 @@ static replay_cli_options parse_options(int argc, char **argv) {
             }
         } else if (!strcmp(arg, "--mtp-top-k")) {
             uint64_t v = parse_u64_arg(need_arg(&i, argc, argv, arg), arg);
-            if (v < 2 || v > DS4_V100_MTP_FORWARD_MAX_TOPK) {
+            if (v < 2 || v > DS4_MTP_STEP_MAX_TOPK) {
                 fprintf(stderr,
                         "ds4-v100-replay: --mtp-top-k must be in [2,%d]\n",
-                        DS4_V100_MTP_FORWARD_MAX_TOPK);
+                        DS4_MTP_STEP_MAX_TOPK);
                 exit(2);
             }
             opt.mtp_top_k = (uint32_t)v;
@@ -1190,7 +1190,7 @@ static void mtp_result_init(replay_mtp_result *r) {
     r->committed_token = UINT32_MAX;
     r->target_token = UINT32_MAX;
     r->draft_token = UINT32_MAX;
-    for (uint32_t i = 0; i < DS4_V100_MTP_FORWARD_MAX_TOPK; i++) {
+    for (uint32_t i = 0; i < DS4_MTP_STEP_MAX_TOPK; i++) {
         r->draft_tokens[i] = UINT32_MAX;
     }
 }
@@ -1338,12 +1338,12 @@ static int replay_mtp_service_draft(replay_mtp_service *svc,
     result->committed_pos = committed_pos;
     result->target_token = target_token;
     result->target_logit = target_logit;
-    float embed[DS4_V100_MTP_FORWARD_N_EMBD];
-    float hc[DS4_V100_MTP_FORWARD_HC_VALUES];
+    float embed[DS4_MTP_STEP_N_EMBD];
+    float hc[DS4_MTP_STEP_HC_VALUES];
     if (ds4_replay_read_token_embedding_f32(rt,
                                                  committed_token,
                                                  embed,
-                                                 DS4_V100_MTP_FORWARD_N_EMBD,
+                                                 DS4_MTP_STEP_N_EMBD,
                                                  err,
                                                  errlen) != 0 ||
         ds4_replay_read_output_hc_slot(rt,
@@ -1643,7 +1643,7 @@ static void print_mtp_json(FILE *fp, const replay_mtp_result *mtp) {
     json_escape(fp, mtp->reason, strlen(mtp->reason));
     fprintf(fp, "\",\"draft_topk\":[");
     const uint32_t n_top = mtp->attempted ? mtp->top_k : 0;
-    for (uint32_t i = 0; i < n_top && i < DS4_V100_MTP_FORWARD_MAX_TOPK; i++) {
+    for (uint32_t i = 0; i < n_top && i < DS4_MTP_STEP_MAX_TOPK; i++) {
         if (i) fprintf(fp, ",");
         fprintf(fp,
                 "{\"id\":%" PRIu32 ",\"logit\":%.9g}",
@@ -2287,16 +2287,16 @@ static int run_mtp_draft_block_smoke(replay_mtp_service *svc,
     uint32_t forced_tokens[DS4_V100_REPLAY_MAX_TOKENS];
     uint32_t positions[DS4_V100_REPLAY_MAX_TOKENS];
     float draft_logits[DS4_V100_REPLAY_MAX_TOKENS];
-    uint32_t top_tokens[DS4_V100_MTP_FORWARD_MAX_TOPK];
-    float top_logits[DS4_V100_MTP_FORWARD_MAX_TOPK];
+    uint32_t top_tokens[DS4_MTP_STEP_MAX_TOPK];
+    float top_logits[DS4_MTP_STEP_MAX_TOPK];
     memset(draft_tokens, 0xff, sizeof(draft_tokens));
     memset(forced_tokens, 0, sizeof(forced_tokens));
     memset(positions, 0, sizeof(positions));
     memset(draft_logits, 0, sizeof(draft_logits));
 
-    float embed[DS4_V100_MTP_FORWARD_N_EMBD];
-    float hc_a[DS4_V100_MTP_FORWARD_HC_VALUES];
-    float hc_b[DS4_V100_MTP_FORWARD_HC_VALUES];
+    float embed[DS4_MTP_STEP_N_EMBD];
+    float hc_a[DS4_MTP_STEP_HC_VALUES];
+    float hc_b[DS4_MTP_STEP_HC_VALUES];
     memset(embed, 0, sizeof(embed));
     memset(hc_a, 0, sizeof(hc_a));
     memset(hc_b, 0, sizeof(hc_b));
@@ -2394,7 +2394,7 @@ static int run_mtp_draft_block_smoke(replay_mtp_service *svc,
         if (ds4_replay_read_token_embedding_f32(rt,
                                                      current_token,
                                                      embed,
-                                                     DS4_V100_MTP_FORWARD_N_EMBD,
+                                                     DS4_MTP_STEP_N_EMBD,
                                                      err,
                                                      errlen)) {
             goto done;
@@ -2414,7 +2414,7 @@ static int run_mtp_draft_block_smoke(replay_mtp_service *svc,
             top_tokens,
             top_logits,
             next_hc,
-            DS4_V100_MTP_FORWARD_HC_VALUES,
+            DS4_MTP_STEP_HC_VALUES,
             &report,
             err,
             errlen);
@@ -2731,11 +2731,11 @@ static int run_mtp_block2_commit_smoke(replay_mtp_service *svc,
         memset(&target1, 0, sizeof(target1));
         uint32_t draft_tokens[2] = { UINT32_MAX, UINT32_MAX };
         float draft_logits[2] = { 0.0f, 0.0f };
-        uint32_t top_tokens[DS4_V100_MTP_FORWARD_MAX_TOPK];
-        float top_logits[DS4_V100_MTP_FORWARD_MAX_TOPK];
-        float embed[DS4_V100_MTP_FORWARD_N_EMBD];
-        float hc_a[DS4_V100_MTP_FORWARD_HC_VALUES];
-        float hc_b[DS4_V100_MTP_FORWARD_HC_VALUES];
+        uint32_t top_tokens[DS4_MTP_STEP_MAX_TOPK];
+        float top_logits[DS4_MTP_STEP_MAX_TOPK];
+        float embed[DS4_MTP_STEP_N_EMBD];
+        float hc_a[DS4_MTP_STEP_HC_VALUES];
+        float hc_b[DS4_MTP_STEP_HC_VALUES];
         memset(embed, 0, sizeof(embed));
         memset(hc_a, 0, sizeof(hc_a));
         memset(hc_b, 0, sizeof(hc_b));
@@ -2779,7 +2779,7 @@ static int run_mtp_block2_commit_smoke(replay_mtp_service *svc,
             if (ds4_replay_read_token_embedding_f32(rt,
                                                          current_token,
                                                          embed,
-                                                         DS4_V100_MTP_FORWARD_N_EMBD,
+                                                         DS4_MTP_STEP_N_EMBD,
                                                          err,
                                                          errlen)) {
                 ds4_replay_output_free(&target0);
@@ -2801,7 +2801,7 @@ static int run_mtp_block2_commit_smoke(replay_mtp_service *svc,
                 top_tokens,
                 top_logits,
                 next_hc,
-                DS4_V100_MTP_FORWARD_HC_VALUES,
+                DS4_MTP_STEP_HC_VALUES,
                 &report,
                 err,
                 errlen);

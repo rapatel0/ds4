@@ -21,6 +21,7 @@ V100_LAYER_EXECUTE_OBJS = engine/layer_execute.o $(V100_LAYER_STATE_OBJS)
 V100_SCHEDULER_OBJS = engine/scheduler.o $(V100_LAYER_EXECUTE_OBJS)
 V100_REPLAY_OBJS = engine/replay.o $(V100_SCHEDULER_OBJS)
 V100_MTP_SIDECAR_OBJS = engine/mtp_sidecar.o
+V100_MTP_STEP_OBJS = engine/mtp_step.o
 TP_EP_APPLIANCE_DEPS = engine/tp_runtime.cu engine/tp_runtime.h ds4.h $(CPU_CORE_OBJS) kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h kernels/v100/common.cuh kernels/v100/dense.cuh kernels/v100/hc_mix.cuh kernels/v100/hc_shards.cuh kernels/v100/norm.cuh kernels/v100/compose.cuh kernels/v100/router.cuh kernels/v100/diagnostics.cuh kernels/v100/fill_pack.cuh kernels/v100/attention.cuh engine/runtime_types.cuh engine/runtime_options.cuh engine/api.h engine/runtime_profiler.cu engine/runtime_pack.cu engine/output_head.cu engine/turbomind_bindings.cu engine/diagnostics_support.cu engine/runtime_resources.cu engine/appliance_runtime.cu engine/decode_loop.cu engine/hc_current.cu engine/hc_final.cu engine/attention_projection.cu engine/compressed_kv_step.cu engine/attention_read.cu engine/attention_output.cu engine/post_attention_ffn.cu engine/router_step.cu engine/router_plan.cu engine/ep_dense.cu engine/ep_executor.cu engine/ep_compose.cu engine/layer_decode.cu engine/layer_runner.cu engine/token_major_loop.cu appliance/options.h appliance/request_scheduler.cu appliance/http_server.cu appliance/entrypoint.cu
 
 ifeq ($(UNAME_S),Darwin)
@@ -358,13 +359,13 @@ tools/ds4-v100-mtp-logits-smoke.o: smokes/mtp-logits-smoke.c engine/mtp_sidecar.
 tools/ds4-v100-mtp-forward-smoke.o: smokes/mtp-forward-smoke.c smokes/mtp-attn-smoke.c smokes/mtp-ffn-smoke.c smokes/mtp-logits-smoke.c engine/mtp_sidecar.h engine/context.h ds4_source_formats.h ds4.h ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ smokes/mtp-forward-smoke.c
 
-tools/ds4-v100-mtp-forward-common.o: tools/mtp-forward-common.c tools/mtp-forward-common.h engine/mtp_sidecar.h engine/context.h ds4.h ds4_gpu.h
-	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/mtp-forward-common.c
+engine/mtp_step.o: engine/mtp_step.cu engine/mtp_step.h engine/mtp_sidecar.h engine/context.h ds4.h ds4_gpu.h
+	$(CC) $(CFLAGS) -x c -I. -D_FILE_OFFSET_BITS=64 -c -o $@ engine/mtp_step.cu
 
-tools/ds4-v100-mtp-verify-smoke.o: smokes/mtp-verify-smoke.c tools/mtp-forward-common.h ds4.h ds4_gpu.h engine/mtp_sidecar.h engine/scheduler.h engine/layer_execute.h engine/context.h
+tools/ds4-v100-mtp-verify-smoke.o: smokes/mtp-verify-smoke.c engine/mtp_step.h ds4.h ds4_gpu.h engine/mtp_sidecar.h engine/scheduler.h engine/layer_execute.h engine/context.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ smokes/mtp-verify-smoke.c
 
-tools/ds4-v100-replay.o: tools/replay.c engine/replay.h engine/context.h engine/mtp_sidecar.h tools/mtp-forward-common.h ds4.h ds4_gpu.h
+tools/ds4-v100-replay.o: tools/replay.c engine/replay.h engine/context.h engine/mtp_sidecar.h engine/mtp_step.h ds4.h ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/replay.c
 
 ifeq ($(UNAME_S),Darwin)
@@ -413,9 +414,9 @@ tools/ds4-v100-mtp-logits-smoke: tools/ds4-v100-mtp-logits-smoke.o $(V100_MTP_SI
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tools/ds4-v100-mtp-forward-smoke: tools/ds4-v100-mtp-forward-smoke.o $(V100_MTP_SIDECAR_OBJS) engine/context.o $(CPU_CORE_OBJS) $(TURBOMIND_PACK_OBJS) ds4_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
-tools/ds4-v100-mtp-verify-smoke: tools/ds4-v100-mtp-verify-smoke.o tools/ds4-v100-mtp-forward-common.o $(V100_MTP_SIDECAR_OBJS) ds4_cpu.o ds4_cuda.o $(V100_SCHEDULER_OBJS)
+tools/ds4-v100-mtp-verify-smoke: tools/ds4-v100-mtp-verify-smoke.o $(V100_MTP_STEP_OBJS) $(V100_MTP_SIDECAR_OBJS) ds4_cpu.o ds4_cuda.o $(V100_SCHEDULER_OBJS)
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
-tools/ds4-v100-replay: tools/ds4-v100-replay.o tools/ds4-v100-mtp-forward-common.o $(V100_MTP_SIDECAR_OBJS) ds4_cpu.o ds4_cuda.o $(V100_REPLAY_OBJS)
+tools/ds4-v100-replay: tools/ds4-v100-replay.o $(V100_MTP_STEP_OBJS) $(V100_MTP_SIDECAR_OBJS) ds4_cpu.o ds4_cuda.o $(V100_REPLAY_OBJS)
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 endif
 
