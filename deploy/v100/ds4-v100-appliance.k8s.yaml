@@ -45,7 +45,6 @@ data:
     DS4_V100_RESERVE_MIB=4096
     DS4_V100_MAX_REQUESTS=0
     DS4_V100_LOG_DIR=logs/v100-appliance
-    DS4_V100_SERVE_MODE=tp-ep
     DS4_V100_TP_EP_BIN=./tools/ds4-v100-tp-ep-full-layer-smoke
     DS4_V100_TP_EP_CONTRACT=/workspace/logs/sprint245-tp-ep-dense-f16-cache-contract/contract/tp-ep-pack-contract.tsv
     DS4_V100_TP_EP_TM_INDEX=
@@ -80,7 +79,7 @@ spec:
           workingDir: /workspace/ds4-sprint181
           command: ["/bin/bash", "-lc"]
           args:
-            - exec ./tools/ds4-v100-run-appliance.sh --env /etc/ds4-v100/appliance.env
+            - exec ./tools/ds4-v100-run-tp-ep-appliance.sh --env /etc/ds4-v100/appliance.env
           ports:
             - name: http
               containerPort: 18080

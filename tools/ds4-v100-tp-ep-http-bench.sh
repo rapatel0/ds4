@@ -12,7 +12,7 @@ contract="/workspace/logs/sprint245-tp-ep-dense-f16-cache-contract/contract/tp-e
 tm_index=""
 tp_ep_bin="./tools/ds4-v100-tp-ep-full-layer-smoke"
 turbomind_lib="/workspace/ds4-sprint181/build/turbomind-v100/libggml-turbomind.so"
-run_appliance="./tools/ds4-v100-run-appliance.sh"
+run_appliance="./tools/ds4-v100-run-tp-ep-appliance.sh"
 copy_event_compose="1"
 ep_return_fp16="0"
 compact_route_compose="1"
@@ -156,7 +156,6 @@ for tokens in "${token_values[@]}"; do
     server_log="$case_dir/server.log"
     server_err="$case_dir/server.err"
 
-    DS4_V100_SERVE_MODE=tp-ep \
     DS4_V100_TP_EP_BIN="$tp_ep_bin" \
     DS4_V100_APPLIANCE_DIR="$appliance_dir" \
     DS4_V100_TP_EP_CONTRACT="$contract" \

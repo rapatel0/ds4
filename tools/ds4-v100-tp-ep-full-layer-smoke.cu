@@ -594,8 +594,6 @@ struct RankState {
     uint64_t attn_comp_row_position_layers[43][kBoundedCompRows] = {};
     uint64_t attn_comp_row_loaded_position_layers[43][kBoundedCompRows] = {};
     bool attn_comp_row_loaded_layers[43][kBoundedCompRows] = {};
-    uint32_t batched_paged_attn_plan_logged_layers[43] = {};
-    uint32_t batched_paged_attn_plan_last_key_layers[43] = {};
     float *d_index_comp_kv_cur = nullptr;
     float *d_index_comp_score_cur = nullptr;
     float *d_index_comp_state_kv = nullptr;
@@ -1082,7 +1080,6 @@ struct Options {
     int microbatch_wait_us = 5000;
     bool output_head_gate = false;
     bool output_head_resident_gate = false;
-    bool async_output_gate = false;
     bool decode_cudagraph_gate = false;
     bool decode_cudagraph_replay_probe_gate = false;
     bool decode_cudagraph_persistent_replay_gate = false;
@@ -1091,7 +1088,6 @@ struct Options {
     const char *decode_cudagraph_stage_sync = nullptr;
     const char *decode_cudagraph_suffix_stage = nullptr;
     bool decode_stage_checksum_gate = false;
-    bool batched_paged_attn_gate = false;
     bool compact_moe_decode_gate = false;
     bool fused_gated_silu_gate = false;
     bool final_hc_carry_gate = false;
@@ -1317,132 +1313,6 @@ void sync_typed_kv_boundary(const Options &opt, RankState ranks[kGpus]) {
         } else {
             CHECK_CUDA(cudaDeviceSynchronize());
         }
-    }
-}
-
-int ds4_layer_ratio(int layer);
-
-struct BatchedPagedAttnPlan {
-    int layer = -1;
-    int ratio = 0;
-    uint32_t slots = 0;
-    uint64_t position = 0;
-    uint32_t raw_current_row = 0;
-    uint32_t raw_valid_rows = 0;
-    uint32_t visible_attn_rows = 0;
-    uint32_t selected_attn_rows = 0;
-    uint32_t visible_indexer_rows = 0;
-    uint32_t pending_attn_reloads = 0;
-    uint32_t pending_indexer_reloads = 0;
-    uint32_t legacy_history_load_calls = 0;
-    uint32_t batch_row_history_load_calls = 0;
-    uint32_t target_family_kernels = 0;
-};
-
-uint32_t count_pending_batched_attn_reloads(
-    const Options &opt, const RankState &r, int layer, bool indexer_rows,
-    uint32_t visible_rows) {
-    uint32_t pending = 0;
-    for (uint32_t row = 0; row < visible_rows; ++row) {
-        const uint64_t pos = indexer_rows
-            ? r.index_comp_row_position_layers[layer][row]
-            : r.attn_comp_row_position_layers[layer][row];
-        const bool loaded = indexer_rows
-            ? r.index_comp_row_loaded_layers[layer][row]
-            : r.attn_comp_row_loaded_layers[layer][row];
-        const uint64_t loaded_pos = indexer_rows
-            ? r.index_comp_row_loaded_position_layers[layer][row]
-            : r.attn_comp_row_loaded_position_layers[layer][row];
-        if (opt.true_ds4_attention_typed_kv_skip_current_load_gate &&
-            pos == opt.position) {
-            continue;
-        }
-        if (loaded && loaded_pos == pos) {
-            continue;
-        }
-        pending++;
-    }
-    return pending;
-}
-
-BatchedPagedAttnPlan build_batched_paged_attn_plan(
-    const Options &opt, const RankState ranks[kGpus], int layer) {
-    BatchedPagedAttnPlan plan;
-    plan.layer = layer;
-    plan.ratio = ds4_layer_ratio(layer);
-    plan.slots = (uint32_t)opt.slots;
-    plan.position = opt.position;
-    plan.raw_current_row = (uint32_t)(opt.position % kRawSwaRows);
-    plan.raw_valid_rows =
-        std::max(1u, std::min(opt.true_ds4_attention_raw_valid_rows,
-                              (uint32_t)kRawSwaRows));
-    if (opt.true_ds4_compressed_kv_gate && plan.ratio != 0) {
-        plan.visible_attn_rows =
-            std::min(ranks[0].attn_comp_rows_written_layers[layer],
-                     (uint32_t)kBoundedCompRows);
-        plan.selected_attn_rows =
-            plan.ratio == 4 && opt.true_ds4_indexer_attention_gate
-                ? std::min(plan.visible_attn_rows, (uint32_t)kBoundedCompRows)
-                : plan.visible_attn_rows;
-    }
-    if (opt.true_ds4_indexer_attention_gate && plan.ratio == 4 &&
-        plan.visible_attn_rows > 0) {
-        plan.visible_indexer_rows =
-            std::min(ranks[0].index_comp_rows_written_layers[layer],
-                     (uint32_t)kBoundedCompRows);
-    }
-    plan.pending_attn_reloads = count_pending_batched_attn_reloads(
-        opt, ranks[0], layer, false, plan.visible_attn_rows);
-    plan.pending_indexer_reloads = count_pending_batched_attn_reloads(
-        opt, ranks[0], layer, true, plan.visible_indexer_rows);
-    plan.legacy_history_load_calls =
-        (plan.pending_attn_reloads + plan.pending_indexer_reloads) *
-        (uint32_t)opt.slots;
-    plan.batch_row_history_load_calls =
-        plan.pending_attn_reloads + plan.pending_indexer_reloads;
-    plan.target_family_kernels =
-        (opt.true_ds4_attention_raw_read_gate ? 1u : 0u) +
-        (plan.visible_attn_rows > 0 ? 1u : 0u) +
-        (plan.visible_indexer_rows > 0 ? 1u : 0u);
-    return plan;
-}
-
-void maybe_log_batched_paged_attn_plan(const Options &opt,
-                                       RankState ranks[kGpus],
-                                       int layer) {
-    if (!opt.batched_paged_attn_gate || layer < 0 || layer >= 43) return;
-    const BatchedPagedAttnPlan plan =
-        build_batched_paged_attn_plan(opt, ranks, layer);
-    const uint32_t key =
-        (plan.visible_attn_rows & 0xffu) |
-        ((plan.visible_indexer_rows & 0xffu) << 8) |
-        ((plan.pending_attn_reloads & 0xffu) << 16) |
-        ((plan.pending_indexer_reloads & 0xffu) << 24);
-    const uint32_t logged =
-        ranks[0].batched_paged_attn_plan_logged_layers[layer];
-    if (logged > 0 &&
-        ranks[0].batched_paged_attn_plan_last_key_layers[layer] == key) {
-        return;
-    }
-    if (logged >= 8u) return;
-    std::printf("tp_ep_batched_paged_attn_plan\tlayer\t%d\tslots\t%u\t"
-                "ratio\t%d\tposition\t%llu\traw_current_row\t%u\t"
-                "raw_valid_rows\t%u\tvisible_attn_rows\t%u\t"
-                "selected_attn_rows\t%u\tvisible_indexer_rows\t%u\t"
-                "pending_attn_reloads\t%u\tpending_indexer_reloads\t%u\t"
-                "legacy_history_load_calls\t%u\tbatch_row_history_load_calls\t%u\t"
-                "target_family_kernels\t%u\tplan_sample\t%u\tPASS\n",
-                plan.layer, plan.slots, plan.ratio,
-                (unsigned long long)plan.position, plan.raw_current_row,
-                plan.raw_valid_rows, plan.visible_attn_rows,
-                plan.selected_attn_rows, plan.visible_indexer_rows,
-                plan.pending_attn_reloads, plan.pending_indexer_reloads,
-                plan.legacy_history_load_calls,
-                plan.batch_row_history_load_calls, plan.target_family_kernels,
-                logged + 1u);
-    for (int rank = 0; rank < kGpus; ++rank) {
-        ranks[rank].batched_paged_attn_plan_logged_layers[layer] = logged + 1u;
-        ranks[rank].batched_paged_attn_plan_last_key_layers[layer] = key;
     }
 }
 
@@ -5113,11 +4983,9 @@ void usage(const char *argv0) {
                  "       [--reference-hc-state-guard-gate]\n"
                  "       [--cuda-profiler-window] [--cuda-profiler-device N]\n"
                  "       [--cuda-profiler-all-devices]\n"
-                 "       [--async-output-gate]\n"
                  "       [--decode-cudagraph-gate]\n"
                  "       [--decode-cudagraph-replay-probe-gate]\n"
                  "       [--decode-cudagraph-persistent-replay-gate]\n"
-                 "       [--batched-paged-attn-gate]\n"
                  "       [--router-cublas-gate]\n"
                  "       [--router-hash-fast-gate]\n"
                  "       [--gpu-route-plan-gate]\n"
@@ -5312,10 +5180,6 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->output_head_gate = true;
         } else if (std::strcmp(arg, "--output-head-resident-gate") == 0) {
             opt->output_head_resident_gate = true;
-        } else if (std::strcmp(arg, "--async-output-gate") == 0) {
-            opt->async_output_gate = true;
-            opt->diagnostic_output_head = true;
-            opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--decode-cudagraph-gate") == 0) {
             opt->decode_cudagraph_gate = true;
         } else if (std::strcmp(arg, "--decode-cudagraph-replay-probe-gate") == 0) {
@@ -5348,9 +5212,6 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->decode_cudagraph_suffix_stage = stage;
         } else if (std::strcmp(arg, "--decode-stage-checksum-gate") == 0) {
             opt->decode_stage_checksum_gate = true;
-        } else if (std::strcmp(arg, "--batched-paged-attn-gate") == 0) {
-            opt->batched_paged_attn_gate = true;
-            opt->true_ds4_attention_typed_kv_batch_rows_gate = true;
         } else if (std::strcmp(arg, "--final-hc-carry-gate") == 0) {
             opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--tp-hc-final-expand-gate") == 0) {
@@ -8564,7 +8425,6 @@ struct OutputHeadRunResult {
     std::vector<float> logits;
     uint64_t checksum = 0;
     int finite_bad = 0;
-    bool async_output_gate = false;
     int device_sync_count = 0;
     int stream_sync_count = 0;
     int event_sync_count = 0;
@@ -9434,11 +9294,8 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
     const uint64_t embd_elems = (uint64_t)opt.slots * (uint64_t)kHidden;
     const uint64_t logits_elems =
         (uint64_t)opt.slots * (uint64_t)head->rows_per_gpu;
-    result->async_output_gate = opt.async_output_gate;
 
     if (opt.decode_cudagraph_gate) {
-        cudaStream_t output_stream =
-            opt.async_output_gate ? head->stream[0] : (cudaStream_t)0;
         if (opt.decode_cudagraph_output_sync_gate) {
             for (int rank = 0; rank < kGpus; ++rank) {
                 CHECK_CUDA(cudaSetDevice(ranks[rank].device));
@@ -9447,183 +9304,12 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
             }
         } else {
             const int wait_rc =
-                enqueue_control_wait_after_rank_streams(opt, ranks, output_stream);
+                enqueue_control_wait_after_rank_streams(opt, ranks, (cudaStream_t)0);
             if (wait_rc != 0) return wait_rc;
             const int dense_wait_rc =
-                enqueue_control_wait_after_dense_streams(opt, ranks, output_stream);
+                enqueue_control_wait_after_dense_streams(opt, ranks, (cudaStream_t)0);
             if (dense_wait_rc != 0) return dense_wait_rc;
         }
-    }
-
-    if (opt.async_output_gate) {
-        const auto gather_start = std::chrono::steady_clock::now();
-        CHECK_CUDA(cudaSetDevice(opt.devices[0]));
-        for (int rank = 0; rank < kGpus; ++rank) {
-            if (!ranks[rank].d_final_hc_shard) {
-                std::fprintf(stderr, "diagnostic output-head missing final HC shard rank=%d\n",
-                             rank);
-                return 2;
-            }
-            gather_hc_shard_to_full_kernel<<<
-                (unsigned int)((hc_shard_elems + 255) / 256), 256, 0,
-                head->stream[0]>>>(
-                head->d_hc, ranks[rank].d_final_hc_shard, rank,
-                (uint32_t)opt.slots);
-        }
-        CHECK_CUDA(cudaGetLastError());
-        const auto gather_stop = std::chrono::steady_clock::now();
-
-        const auto prep_start = std::chrono::steady_clock::now();
-        rms_norm_plain_rows_stable_kernel<<<(unsigned int)opt.slots, 256, 0,
-                                             head->stream[0]>>>(
-            head->d_hc_norm, head->d_hc, 4u * (uint32_t)kHidden,
-            (uint32_t)opt.slots, 1.0e-6f);
-        const dim3 head_grid(4u, (unsigned int)opt.slots, 1u);
-        f32_dense_kernel<<<head_grid, 256, 0, head->stream[0]>>>(
-            head->d_head_pre, head->d_head_fn, head->d_hc_norm, 4u,
-            4u * (uint32_t)kHidden, (uint32_t)opt.slots);
-        output_hc_weights_rows_kernel<<<
-            (unsigned int)(((uint64_t)opt.slots * 4ull + 255) / 256), 256, 0,
-            head->stream[0]>>>(
-            head->d_head_weights, head->d_head_pre, head->d_head_scale,
-            head->d_head_base, (uint32_t)opt.slots);
-        hc_weighted_sum_rows_kernel<<<
-            (unsigned int)((embd_elems + 255) / 256), 256, 0,
-            head->stream[0]>>>(
-            head->d_embd, head->d_hc, head->d_head_weights,
-            (uint32_t)opt.slots);
-        rms_norm_weight_rows_stable_kernel<<<(unsigned int)opt.slots, 256, 0,
-                                             head->stream[0]>>>(
-            head->d_embd_norm, head->d_embd, head->d_output_norm,
-            (uint32_t)kHidden, (uint32_t)opt.slots, 1.0e-6f);
-        CHECK_CUDA(cudaGetLastError());
-        CHECK_CUDA(cudaEventRecord(head->prep_ready, head->stream[0]));
-        const auto prep_stop = std::chrono::steady_clock::now();
-
-        const auto broadcast_start = std::chrono::steady_clock::now();
-        CHECK_CUDA(cudaEventSynchronize(head->prep_ready));
-        void *x_dsts[kGpus] = {};
-        for (int gpu = 0; gpu < kGpus; ++gpu) {
-            x_dsts[gpu] = head->d_x[gpu];
-        }
-        if (nccl_broadcast_bytes_from_rank0(
-                ranks, head->d_embd_norm, x_dsts,
-                (size_t)embd_elems * sizeof(float),
-                "shared_output_head_x_async") != 0) {
-            return 6;
-        }
-        for (int gpu = 0; gpu < kGpus; ++gpu) {
-            CHECK_CUDA(cudaSetDevice(ranks[gpu].device));
-            CHECK_CUDA(cudaStreamSynchronize(ranks[gpu].stream));
-            CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
-            CHECK_CUDA(cudaEventRecord(head->broadcast_ready[gpu],
-                                       head->stream[gpu]));
-        }
-        const auto broadcast_stop = std::chrono::steady_clock::now();
-
-        const auto projection_start_wall = std::chrono::steady_clock::now();
-        for (int gpu = 0; gpu < kGpus; ++gpu) {
-            CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
-            CHECK_CUDA(cudaStreamWaitEvent(head->stream[gpu],
-                                           head->broadcast_ready[gpu], 0));
-            const dim3 grid((unsigned int)head->rows_per_gpu,
-                            (unsigned int)opt.slots, 1u);
-            CHECK_CUDA(cudaEventRecord(head->projection_start[gpu],
-                                       head->stream[gpu]));
-            bf16_dense_kernel<<<grid, 256, 0, head->stream[gpu]>>>(
-                head->d_logits[gpu], head->d_w[gpu], head->d_x[gpu],
-                (uint32_t)head->rows_per_gpu, (uint32_t)kHidden,
-                (uint32_t)kHidden, (uint32_t)opt.slots);
-            CHECK_CUDA(cudaEventRecord(head->projection_stop[gpu],
-                                       head->stream[gpu]));
-            CHECK_CUDA(cudaGetLastError());
-        }
-
-        const auto top1_start = std::chrono::steady_clock::now();
-        result->tokens.assign((size_t)opt.slots, UINT32_MAX);
-        result->logits.assign((size_t)opt.slots,
-                              -std::numeric_limits<float>::max());
-        for (int gpu = 0; gpu < kGpus; ++gpu) {
-            CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
-            const int shard_index = head->output_rows[gpu].shard_index >= 0
-                ? head->output_rows[gpu].shard_index
-                : gpu;
-            shard_top1_kernel<<<(unsigned int)opt.slots, 256, 0,
-                                head->stream[gpu]>>>(
-                head->d_best_token[gpu], head->d_best_logit[gpu],
-                head->d_logits[gpu], (uint32_t)head->rows_per_gpu,
-                (uint32_t)(shard_index * head->rows_per_gpu),
-                (uint32_t)opt.slots);
-            CHECK_CUDA(cudaGetLastError());
-            CHECK_CUDA(cudaMemcpyAsync(head->h_best_token[gpu],
-                                       head->d_best_token[gpu],
-                                       (size_t)opt.slots * sizeof(uint32_t),
-                                       cudaMemcpyDeviceToHost,
-                                       head->stream[gpu]));
-            CHECK_CUDA(cudaMemcpyAsync(head->h_best_logit[gpu],
-                                       head->d_best_logit[gpu],
-                                       (size_t)opt.slots * sizeof(float),
-                                       cudaMemcpyDeviceToHost,
-                                       head->stream[gpu]));
-            CHECK_CUDA(cudaEventRecord(head->top1_done[gpu],
-                                       head->stream[gpu]));
-        }
-
-        for (int gpu = 0; gpu < kGpus; ++gpu) {
-            CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
-            CHECK_CUDA(cudaEventSynchronize(head->top1_done[gpu]));
-            result->event_sync_count++;
-            float kernel_ms = 0.0f;
-            CHECK_CUDA(cudaEventElapsedTime(&kernel_ms,
-                                            head->projection_start[gpu],
-                                            head->projection_stop[gpu]));
-            result->projection_kernel_worst_ms =
-                std::max(result->projection_kernel_worst_ms, (double)kernel_ms);
-            for (int slot = 0; slot < opt.slots; ++slot) {
-                const float logit = head->h_best_logit[gpu][(size_t)slot];
-                if (!std::isfinite(logit)) {
-                    result->finite_bad++;
-                    result->pass = false;
-                    continue;
-                }
-                if (logit > result->logits[(size_t)slot]) {
-                    result->logits[(size_t)slot] = logit;
-                    result->tokens[(size_t)slot] =
-                        head->h_best_token[gpu][(size_t)slot];
-                }
-            }
-        }
-        const auto projection_stop_wall = std::chrono::steady_clock::now();
-        const auto top1_stop = std::chrono::steady_clock::now();
-        const auto total_stop = std::chrono::steady_clock::now();
-
-        for (int slot = 0; slot < opt.slots; ++slot) {
-            if (result->tokens[(size_t)slot] >= (uint32_t)head->vocab ||
-                !std::isfinite(result->logits[(size_t)slot])) {
-                result->pass = false;
-            }
-            uint32_t bits = 0;
-            std::memcpy(&bits, &result->logits[(size_t)slot], sizeof(bits));
-            result->checksum ^= (uint64_t)result->tokens[(size_t)slot] * 1000003ull +
-                                (uint64_t)bits + (uint64_t)(slot + 1) * 7907ull;
-        }
-        if (result->checksum == 0 || result->finite_bad != 0) result->pass = false;
-
-        result->gather_ms =
-            std::chrono::duration<double, std::milli>(gather_stop - gather_start).count();
-        result->prep_ms =
-            std::chrono::duration<double, std::milli>(prep_stop - prep_start).count();
-        result->broadcast_ms =
-            std::chrono::duration<double, std::milli>(broadcast_stop - broadcast_start).count();
-        result->projection_ms =
-            std::chrono::duration<double, std::milli>(projection_stop_wall - projection_start_wall).count();
-        result->top1_ms =
-            std::chrono::duration<double, std::milli>(top1_stop - top1_start).count();
-        result->total_ms =
-            std::chrono::duration<double, std::milli>(total_stop - total_start).count();
-        (void)hc_elems;
-        (void)logits_elems;
-        return result->pass ? 0 : 5;
     }
 
     const auto gather_start = std::chrono::steady_clock::now();
@@ -17304,9 +16990,6 @@ int run_decode_loop(const Options &opt,
             log_rank_stage("attention_state");
             sync_after_decode_stage("attention_state");
         }
-        if (!persistent_suffix_only_active) {
-            maybe_log_batched_paged_attn_plan(opt, ranks, opt.layer);
-        }
         if (!persistent_suffix_only_active && opt.true_ds4_attention_typed_kv_history_gate) {
             const auto t_stage = std::chrono::steady_clock::now();
             const int history_rc = run_true_ds4_attention_typed_kv_history_load(
@@ -20115,7 +19798,6 @@ int run_token_major_serving_loop(const Options &opt,
                 "direct_remote_compose\t%d\tsource_copy_schedule\t%d\t"
                 "skip_self_compose_copy\t%d\t"
                 "multi_copy_streams\t%d\t"
-                "batched_paged_attn_gate\t%d\t"
                 "compact_moe_decode_gate\t%d\t"
                 "router_cublas_gate\t%d\t"
                 "router_hash_fast_gate\t%d\t"
@@ -20197,7 +19879,6 @@ int run_token_major_serving_loop(const Options &opt,
                 opt.source_copy_schedule ? 1 : 0,
                 opt.skip_self_compose_copy ? 1 : 0,
                 opt.multi_copy_streams ? 1 : 0,
-                opt.batched_paged_attn_gate ? 1 : 0,
                 opt.compact_moe_decode_gate ? 1 : 0,
                 opt.router_cublas_gate ? 1 : 0,
                 opt.router_hash_fast_gate ? 1 : 0,
@@ -20361,7 +20042,7 @@ int run_token_major_serving_loop(const Options &opt,
                         "proxy_hc\t%d\ttotal_ms\t%.6f\tgather_ms\t%.6f\t"
                         "prep_ms\t%.6f\tbroadcast_ms\t%.6f\tprojection_ms\t%.6f\t"
                         "projection_kernel_worst_ms\t%.6f\ttop1_ms\t%.6f\t"
-                        "async_output_gate\t%d\tdevice_sync_count\t%d\t"
+                        "device_sync_count\t%d\t"
                         "stream_sync_count\t%d\tevent_sync_count\t%d\t"
                         "first_token\t%u\tfirst_logit\t%.9f\tfinite_bad\t%d\t"
                         "checksum\t%llu\t%s\n",
@@ -20371,7 +20052,6 @@ int run_token_major_serving_loop(const Options &opt,
                         head_result.gather_ms, head_result.prep_ms,
                         head_result.broadcast_ms, head_result.projection_ms,
                         head_result.projection_kernel_worst_ms, head_result.top1_ms,
-                        head_result.async_output_gate ? 1 : 0,
                         head_result.device_sync_count,
                         head_result.stream_sync_count,
                         head_result.event_sync_count,

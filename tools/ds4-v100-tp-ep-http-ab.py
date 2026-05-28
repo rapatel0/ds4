@@ -76,7 +76,7 @@ def run_case(args, name, port, typed, skip_stores=None, typed_quiet=False,
 
     with open(case_dir / "command.txt", "wb") as out:
         subprocess.run(
-            ["./tools/ds4-v100-run-appliance.sh", "--print-command"],
+            ["./tools/ds4-v100-run-tp-ep-appliance.sh", "--print-command"],
             cwd=args.repo_dir,
             env=env,
             stdout=out,
@@ -87,7 +87,7 @@ def run_case(args, name, port, typed, skip_stores=None, typed_quiet=False,
     server_out = open(case_dir / "server.out", "wb")
     server_err = open(case_dir / "server.err", "wb")
     proc = subprocess.Popen(
-        ["./tools/ds4-v100-run-appliance.sh"],
+        ["./tools/ds4-v100-run-tp-ep-appliance.sh"],
         cwd=args.repo_dir,
         env=env,
         stdout=server_out,

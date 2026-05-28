@@ -110,7 +110,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -n "$log_dir" ] || { usage >&2; exit 2; }
-[ -x ./tools/ds4-v100-run-appliance.sh ] || fail "missing ./tools/ds4-v100-run-appliance.sh"
+[ -x ./tools/ds4-v100-run-pp-appliance.sh ] || fail "missing ./tools/ds4-v100-run-pp-appliance.sh"
 [ -x ./tools/ds4-v100-replay ] || fail "missing ./tools/ds4-v100-replay"
 [ -f "$model" ] || fail "missing model $model"
 if [ -n "$appliance_dir" ]; then
@@ -232,9 +232,8 @@ fi
     export DS4_V100_RESERVE_MIB="$reserve_mib"
     export DS4_V100_MAX_REQUESTS=$((requests + warmup_requests + 64))
     export DS4_V100_LOG_DIR="$log_dir/runtime"
-    export DS4_V100_SERVE_MODE=base
     export DS4_V100_MTP_SERVING=off
-    exec ./tools/ds4-v100-run-appliance.sh
+    exec ./tools/ds4-v100-run-pp-appliance.sh
 ) >"$server_log" 2>&1 &
 server_pid="$!"
 

@@ -1188,7 +1188,6 @@ def build_env(args, port, case_dir=None):
             "DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD_LAZY": "1"
             if args.lazy_output_head
             else "0",
-            "DS4_V100_TP_EP_ASYNC_OUTPUT": "1" if args.async_output else "0",
             "DS4_V100_TP_EP_DECODE_CUDAGRAPH": "1" if args.decode_cudagraph else "0",
             "DS4_V100_TP_EP_DECODE_CUDAGRAPH_OUTPUT_SYNC": "1"
             if args.decode_cudagraph_output_sync
@@ -1206,7 +1205,6 @@ def build_env(args, port, case_dir=None):
             "DS4_V100_TP_EP_DECODE_STAGE_CHECKSUM": "1"
             if args.decode_stage_checksum
             else "0",
-            "DS4_V100_TP_EP_BATCHED_PAGED_ATTN": "1" if args.batched_paged_attn else "0",
             "DS4_V100_TP_EP_COMPACT_ROUTE_COMPOSE": "0"
             if args.disable_compact_route_compose
             else "1",
@@ -1360,8 +1358,6 @@ def variant_suffix(args):
         suffix += "-fused-compressed-attn-input-fill"
     if getattr(args, "attention_projection_rank_local_input", False):
         suffix += "-attn-proj-rank-local"
-    if getattr(args, "async_output", False):
-        suffix += "-async-output"
     if getattr(args, "decode_cudagraph", False):
         suffix += "-decode-cudagraph"
     if getattr(args, "persistent_decode_cudagraph", False):
@@ -1381,8 +1377,6 @@ def variant_suffix(args):
         suffix += f"-profdev{args.cuda_profiler_device}"
     if getattr(args, "cuda_profiler_all_devices", False):
         suffix += "-prof-all-devices"
-    if getattr(args, "batched_paged_attn", False):
-        suffix += "-batched-paged-attn"
     if getattr(args, "model_router_routes", False):
         suffix += "-model-router"
     if getattr(args, "router_cublas", False):
@@ -1482,8 +1476,6 @@ def direct_command(args):
     ]
     if args.resident_profile_layer is not None:
         cmd.extend(["--resident-profile-layer", str(args.resident_profile_layer)])
-    if args.async_output:
-        cmd.append("--async-output-gate")
     if args.decode_cudagraph:
         cmd.append("--decode-cudagraph-gate")
     if args.decode_cudagraph_output_sync:
@@ -1505,8 +1497,6 @@ def direct_command(args):
         cmd.extend(["--cuda-profiler-device", str(args.cuda_profiler_device)])
     if args.cuda_profiler_all_devices:
         cmd.append("--cuda-profiler-all-devices")
-    if args.batched_paged_attn:
-        cmd.append("--batched-paged-attn-gate")
     if not args.disable_compact_route_compose:
         cmd.append("--compact-route-compose")
     if args.model_router_routes:
@@ -2220,7 +2210,6 @@ def main():
     parser.add_argument("--disable-skip-compressed-dense-stats", action="store_true")
     parser.add_argument("--fused-compressed-attn-input-fill", action="store_true")
     parser.add_argument("--disable-fused-compressed-pool-norm", action="store_true")
-    parser.add_argument("--async-output", action="store_true")
     parser.add_argument("--decode-cudagraph", action="store_true")
     parser.add_argument("--decode-cudagraph-output-sync", action="store_true")
     parser.add_argument("--decode-cudagraph-hc-current-sync", action="store_true")
@@ -2230,7 +2219,6 @@ def main():
     parser.add_argument("--decode-stage-checksum", action="store_true")
     parser.add_argument("--tp-runtime-scratch-mib", type=int, default=1024)
     parser.add_argument("--defer-nccl-init", action="store_true")
-    parser.add_argument("--batched-paged-attn", action="store_true")
     parser.add_argument("--model-router-routes", action="store_true")
     parser.add_argument("--router-cublas", action="store_true")
     parser.add_argument("--router-hash-fast", action="store_true")
@@ -2387,7 +2375,7 @@ def main():
 
     with open(case_dir / "command.txt", "wb") as out:
         subprocess.run(
-            ["./tools/ds4-v100-run-appliance.sh", "--print-command"],
+            ["./tools/ds4-v100-run-tp-ep-appliance.sh", "--print-command"],
             cwd=args.repo_dir,
             env=env,
             stdout=out,
@@ -2395,7 +2383,7 @@ def main():
             check=True,
         )
 
-    cmd = profiler_prefix(args, case_dir) + ["./tools/ds4-v100-run-appliance.sh"]
+    cmd = profiler_prefix(args, case_dir) + ["./tools/ds4-v100-run-tp-ep-appliance.sh"]
     (case_dir / "profile-command.txt").write_text(" ".join(cmd) + "\n")
     lifecycle = LifecycleEvents(case_dir / "lifecycle.csv")
     lifecycle.mark(

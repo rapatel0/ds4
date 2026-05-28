@@ -190,7 +190,7 @@ record_256k32_admission() {
     DS4_V100_APPLIANCE_DIR="$appliance_dir" \
     DS4_V100_LOG_DIR="$case_dir/runtime" \
     DS4_V100_PORT=18699 \
-    bash ./tools/ds4-v100-run-appliance.sh \
+    bash ./tools/ds4-v100-run-pp-appliance.sh \
         >"$case_dir/stdout.log" 2>"$case_dir/stderr.log" || rc=$?
     echo "$rc" >"$case_dir/exit_code.txt"
     if [ "$rc" -eq 0 ]; then

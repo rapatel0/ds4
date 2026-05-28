@@ -196,7 +196,7 @@ case "$startup_warmup" in
     *) fail "--startup-warmup must be auto, 0, or 1" ;;
 esac
 
-[ -x ./tools/ds4-v100-run-appliance.sh ] || fail "missing executable ./tools/ds4-v100-run-appliance.sh"
+[ -x ./tools/ds4-v100-run-pp-appliance.sh ] || fail "missing executable ./tools/ds4-v100-run-pp-appliance.sh"
 [ -x ./tools/ds4-v100-replay ] || fail "missing executable ./tools/ds4-v100-replay"
 [ -f "$prompt_file" ] || fail "missing prompt file $prompt_file"
 if [ -n "$appliance_dir" ]; then
@@ -258,16 +258,15 @@ DS4_V100_REQUIRE_GPUS=$require_gpus
 DS4_V100_RESERVE_MIB=$reserve_mib
 DS4_V100_MAX_REQUESTS=$max_requests
 DS4_V100_LOG_DIR=$work_dir/runtime
-DS4_V100_SERVE_MODE=base
 DS4_V100_MTP_SERVING=off
 EOF
 
-if ! ./tools/ds4-v100-run-appliance.sh --env "$env_path" --check >"$launcher_check_log" 2>&1; then
+if ! ./tools/ds4-v100-run-pp-appliance.sh --env "$env_path" --check >"$launcher_check_log" 2>&1; then
     cat "$launcher_check_log" >&2
     fail "launcher config check failed"
 fi
 
-./tools/ds4-v100-run-appliance.sh --env "$env_path" >"$server_log" 2>&1 &
+./tools/ds4-v100-run-pp-appliance.sh --env "$env_path" >"$server_log" 2>&1 &
 server_pid=$!
 
 for _ in $(seq 1 420); do

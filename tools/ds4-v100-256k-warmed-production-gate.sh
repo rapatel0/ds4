@@ -11,7 +11,7 @@ warmup_requests="0"
 port="19420"
 log_dir="/workspace/logs/sprint219-256k-32slot-warmed-gate"
 soak_bin="./tools/ds4-v100-appliance-soak.sh"
-launcher_bin="./tools/ds4-v100-run-appliance.sh"
+launcher_bin="./tools/ds4-v100-run-pp-appliance.sh"
 
 usage() {
     cat <<'USAGE'

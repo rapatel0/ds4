@@ -12,7 +12,7 @@ warmup_requests="0"
 port_base="19100"
 log_dir="/workspace/logs/sprint217-256k-32slot-gate"
 bench_bin="./tools/ds4-v100-sustained-decode-bench.sh"
-launcher_bin="./tools/ds4-v100-run-appliance.sh"
+launcher_bin="./tools/ds4-v100-run-pp-appliance.sh"
 memory_promote_max_mib="30000"
 
 usage() {

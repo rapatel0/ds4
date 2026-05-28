@@ -31,12 +31,8 @@ def profile_case_dir(tool, hc_stream_sync, extra_profile_args=None):
     if hc_stream_sync:
         suffix += "-hc-stream-sync"
     for arg in extra_profile_args or []:
-        if arg == "--async-output":
-            suffix += "-async-output"
         if arg == "--decode-cudagraph":
             suffix += "-decode-cudagraph"
-        if arg == "--batched-paged-attn":
-            suffix += "-batched-paged-attn"
         if arg == "--model-router-routes":
             suffix += "-model-router"
         if arg == "--router-cublas":

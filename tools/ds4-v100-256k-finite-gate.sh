@@ -12,7 +12,7 @@ requests="18"
 host="127.0.0.1"
 port="19220"
 log_dir="/workspace/logs/sprint218-256k-finite-source"
-launcher_bin="./tools/ds4-v100-run-appliance.sh"
+launcher_bin="./tools/ds4-v100-run-pp-appliance.sh"
 replay_bin="./tools/ds4-v100-replay"
 sample_seconds="1"
 layer_checks="${DS4_V100_DEBUG_HC_FINITE_LAYER_CHECKS:-1}"
@@ -201,7 +201,6 @@ fi
     export DS4_V100_RESERVE_MIB="${DS4_V100_RESERVE_MIB:-2048}"
     export DS4_V100_MAX_REQUESTS=$((requests + 8))
     export DS4_V100_LOG_DIR="$log_dir/runtime"
-    export DS4_V100_SERVE_MODE=base
     export DS4_V100_MTP_SERVING=off
     exec "$launcher_bin"
 ) >"$server_log" 2>&1 &
