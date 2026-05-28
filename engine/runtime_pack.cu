@@ -54,7 +54,7 @@ int read_exact_at(const std::string &path, uint64_t offset, void *dst, size_t by
 constexpr uint64_t kMiB = 1024ull * 1024ull;
 
 bool should_report_vram(const Options &opt) {
-    return opt.vram_report || opt.vram_min_free_mib > 0;
+    return opt.vram_min_free_mib > 0;
 }
 
 bool nccl_gate_active(const Options &opt) {
@@ -1648,4 +1648,3 @@ cudaEvent_t graph_dense_done_event(RankState &r, int slot) {
     cudaEvent_t ev = r.graph_dense_done[slot % kGraphOrderEventSlots];
     return ev ? ev : r.dense_done;
 }
-

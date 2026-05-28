@@ -50,8 +50,6 @@ struct Options {
     int port = 18082;
     int max_requests = 0;
     int microbatch_wait_us = 5000;
-    bool output_head_gate = false;
-    bool output_head_resident_gate = false;
     bool decode_cudagraph_gate = false;
     bool decode_cudagraph_replay_probe_gate = false;
     bool decode_cudagraph_persistent_replay_gate = false;
@@ -140,12 +138,7 @@ struct Options {
     bool true_ds4_compressed_kv_fused_pool_norm_gate = true;
     bool true_ds4_compressed_kv_fused_pool_norm_rope_round_gate = false;
     bool true_ds4_compressed_reference_diff_gate = false;
-    bool cuda_profiler_window = false;
-    bool cuda_profiler_all_devices = false;
-    int cuda_profiler_device = -1;
     uint32_t true_ds4_attention_raw_valid_rows = 1;
     uint64_t vram_min_free_mib = 0;
     uint64_t nccl_min_free_mib = 0;
-    bool vram_report = false;
 };
-

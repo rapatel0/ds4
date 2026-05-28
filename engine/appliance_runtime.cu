@@ -11,32 +11,6 @@ int run_tp_ep_appliance(Options opt) {
         return 14;
     }
 
-    if (opt.output_head_gate) {
-        std::vector<ContractRow> all_rows;
-        LayerStats all_stats;
-        if (parse_contract(opt.contract_path, -1, &all_rows, &all_stats) != 0 ||
-            all_stats.bad_rows != 0) {
-            std::fprintf(stderr, "output-head gate contract parse failed bad_rows=%llu\n",
-                         (unsigned long long)all_stats.bad_rows);
-            return 2;
-        }
-        OutputHeadGateStats output_head_stats;
-        return run_output_head_gate(opt, all_rows, &output_head_stats);
-    }
-
-    if (opt.output_head_resident_gate) {
-        std::vector<ContractRow> all_rows;
-        LayerStats all_stats;
-        if (parse_contract(opt.contract_path, -1, &all_rows, &all_stats) != 0 ||
-            all_stats.bad_rows != 0) {
-            std::fprintf(stderr, "resident output-head gate contract parse failed bad_rows=%llu\n",
-                         (unsigned long long)all_stats.bad_rows);
-            return 2;
-        }
-        OutputHeadResidentGateStats output_head_stats;
-        return run_output_head_resident_gate(opt, all_rows, &output_head_stats);
-    }
-
     if (!opt.all_layers) {
         return run_layer(opt, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
     }

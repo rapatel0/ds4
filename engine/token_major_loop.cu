@@ -75,7 +75,6 @@ int run_token_major_serving_loop(const Options &opt,
             shared_rank_buffers->ranks[rank].hc_initialized = false;
         }
     }
-    TpEpProfilerWindowGuard profiler_guard(opt);
     const auto start = std::chrono::steady_clock::now();
     for (int step = 0; step < opt.decode_steps; ++step) {
         const auto step_start = std::chrono::steady_clock::now();
@@ -796,4 +795,3 @@ int run_token_major_serving_loop(const Options &opt,
     }
     return 0;
 }
-
