@@ -132,6 +132,52 @@ out.
     (A3) — pending promotion under tolerance gate. Rename or tag with the
     docket item number from `TEMP_POST_SWEEP_DOCKET.md`.
 
+### Repo-root clutter → archive or delete (not behavior-affecting)
+
+These don't touch the serving binary, so they don't need the bit-exact gate
+validation per commit. They still go after the snapshot. One bulk commit per
+category is fine.
+
+15. **`TEMP_STATUS_REPORT_*.md` archival.** 189 files at the repo root,
+    numbered 001 through 480. Keep the **last 5** at root for active
+    reference (currently 476–480); move the rest to
+    `docs/sprints/archive/status-reports/` in one commit.
+    ```bash
+    mkdir -p docs/sprints/archive/status-reports
+    for n in $(seq 1 475); do
+      f=$(printf "TEMP_STATUS_REPORT_%03d.md" "$n")
+      [ -f "$f" ] && git mv "$f" docs/sprints/archive/status-reports/
+    done
+    ```
+    Use `git mv` to preserve history. Commit message:
+    `Archive TEMP_STATUS_REPORT_001..475 to docs/sprints/archive/`.
+16. **Superseded `TEMP_<topic>.md` archival.** Classify each:
+
+    | Keep at root | Archive to `docs/sprints/archive/` |
+    |---|---|
+    | `TEMP_PARITY_POLICY.md` (active policy) | `TEMP_HC_ALLREDUCE_PROMPT.md` (sprint 478, A2 implemented) |
+    | `TEMP_POST_SWEEP_DOCKET.md` (active queue) | `TEMP_HC_ALLREDUCE_STEER.md` (same sprint) |
+    | `TEMP_CODE_CLEANUP_PROMPT.md` (this sprint's spec) | `TEMP_SYS_TRANSPORT_SWEEP.md` (sprint 479 completed) |
+    | `TEMP_PATTERN_A_PROMOTION_PROMPT.md` (queued for next sprint) | `TEMP_NCCL_BROADCAST_REDUCTION_AUDIT.md` (audit done) |
+    | `TEMP_REPO_REVIEW.md` (current reference, until folded into docs/) | `TEMP_THROUGHPUT_PROMPT.md` (older planning) |
+    | `TEMP_A6_RANK_LOCAL_NORM_PROMPT.md` (folded into cleanup — keep until cleanup lands) | `TEMP_GRAPH_PRIOR_INSIGHTS.md` (older) |
+    |  | `TEMP_SPIKE_A_VLLM_PORT.md` (paused program) |
+    |  | `TEMP_SPIKE_B_C_CAPTURE.md` (older planning) |
+    |  | `TEMP_CURRENT_REPORT.md` (verify — if stale, archive) |
+
+    `git mv` the archived ones in one commit. Commit message:
+    `Archive superseded TEMP_<topic>.md docs to docs/sprints/archive/`.
+17. **Orphan smoke binary.** `tools/ds4-source-oracle-vector.c` (and the
+    co-located `.o`) does not appear in the Makefile or any shell harness.
+    Verify with `grep -rE "ds4-source-oracle-vector" .` (excluding the file
+    itself and any build artifacts); if confirmed orphan, delete in one
+    commit. Commit message:
+    `Delete orphan tools/ds4-source-oracle-vector.{c,o}`.
+
+    If during code cleanup additional smoke binaries surface as unreferenced
+    (no entry in `Makefile`, `tools/*.sh`, or `deploy/`), apply the same
+    audit-then-delete pattern, one commit each.
+
 ## Methodology — including the rewrite-from-scratch option
 
 Per flag:
@@ -167,28 +213,37 @@ that meaningfully, that's a win in itself.
 ## Order
 
 1. **Step 0 (snapshot + push).** Required first.
-2. **Item #1 (A6 PATH 4 revive).** Small, well-understood change; lands a
+2. **Items #15–#17 (repo-root clutter).** Move first — they don't touch
+   the serving binary, they make the repo immediately less noisy, and they
+   give the executor a clean working surface for the code cleanup that
+   follows. One bulk commit per item.
+3. **Item #1 (A6 PATH 4 revive).** Small, well-understood change; lands a
    real win and serves as a forcing function for the surrounding cleanup
-   (items #2, #6, #7).
-3. **Items #3–#5 (transport dead-branch deletion).** Lowest-risk pure
+   (items #2, #6, #7). First code commit under the strict parity gate.
+4. **Items #3–#5 (transport dead-branch deletion).** Lowest-risk pure
    deletion; reclaims the most lines.
-4. **Items #6–#7 (A6 sibling deletion).** Cleans up after #1.
-5. **Items #8 + #10 (parity-gate and diagnostic deletion).**
-6. **Items #11 + #12–#13 (diagnostic isolation, knob documentation).**
-7. **Item #14 (tag the surviving experimental gates).**
-8. **(Optional)** rewrite-from-scratch of any function/region still tangled
+5. **Items #6–#7 (A6 sibling deletion).** Cleans up after #1.
+6. **Items #8 + #10 (parity-gate and diagnostic deletion).**
+7. **Items #11 + #12–#13 (diagnostic isolation, knob documentation).**
+8. **Item #14 (tag the surviving experimental gates).**
+9. **(Optional)** rewrite-from-scratch of any function/region still tangled
    after the above. Most-tangled candidates: attention-projection prefix
    (~13440–13550), HC-current step (~7240–7560), EP compose (~12860–12914).
 
 ## Gate
 
-**Bit-exact selected-token parity 256/256** at the reference shape after every
-commit, plus zero `peer_copy_sys_bytes`. Strict. No tolerance. The whole point
-of cleanup is no behavior change in the promoted serving binary.
+For **code commits** (items #1–#14 and the rewrite option): **bit-exact
+selected-token parity 256/256** at the reference shape after every commit,
+plus zero `peer_copy_sys_bytes`. Strict. No tolerance. The whole point of
+cleanup is no behavior change in the promoted serving binary. If a parity
+miss appears, a branch you classified as dead is actually reachable. Back
+out, reclassify, try again. Do not relax the gate to accommodate a surprise.
 
-If a parity miss appears, a branch you classified as dead is actually
-reachable. Back out the commit, reclassify, try again. Do not relax the gate
-to accommodate a surprise.
+For **repo-clutter commits** (items #15–#17): no parity validation required
+since the serving binary is unchanged. Verify the build still succeeds and
+the moved markdown files resolve (no internal links broken). For the orphan
+binary deletion, verify with `grep -r` that nothing references it before
+removal.
 
 ## Out of scope
 
@@ -212,6 +267,17 @@ to accommodate a surprise.
 4. Flags older than 5 sprints that aren't config knobs are technical debt by
    definition and accumulate on a rolling cleanup target list reviewed each
    sprint.
+5. **TEMP_STATUS_REPORT retention.** Only the **last 5 sprints' reports**
+   live at the repo root. The end-of-sprint commit moves the previously-fifth-
+   newest report to `docs/sprints/archive/status-reports/`, preserving a
+   rolling window.
+6. **TEMP_<topic>.md retention.** A `TEMP_<topic>.md` is in-flight only while
+   the sprint it specifies is open. When the sprint completes (or is
+   superseded), the next sprint's first commit archives it to
+   `docs/sprints/archive/` or folds it into a permanent doc under `docs/`.
+7. **New `tools/*.cu` or `tools/*.c`** must be referenced by the `Makefile`
+   or a shell harness in its introduction commit. Orphans found in later
+   audits are deleted, no preservation.
 
 ## Reporting
 
@@ -230,6 +296,10 @@ End-of-sprint summary:
   HC-current step, EP compose) before / after.
 - Inventory of surviving flags by bucket.
 - Any function/file rewritten from scratch, with the diff strategy noted.
+- **Root markdown count before / after** (target: TEMP_STATUS_REPORT_*.md
+  reduced from 189 to 5; TEMP_<topic>.md reduced from 15 to ~6 active ones).
+- **`tools/*.cu` orphan audit result** — list any newly-discovered orphans
+  beyond the known `ds4-source-oracle-vector.{c,o}`.
 
 ## One-line summary
 
