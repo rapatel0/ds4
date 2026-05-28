@@ -1086,7 +1086,6 @@ struct Options {
     bool decode_cudagraph_gate = false;
     bool decode_cudagraph_replay_probe_gate = false;
     bool decode_cudagraph_persistent_replay_gate = false;
-    bool decode_cudagraph_peer_copy_gate = false;
     bool decode_cudagraph_output_sync_gate = false;
     bool decode_cudagraph_hc_current_sync_gate = false;
     const char *decode_cudagraph_stage_sync = nullptr;
@@ -5326,9 +5325,6 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->decode_cudagraph_gate = true;
             opt->decode_cudagraph_replay_probe_gate = true;
             opt->decode_cudagraph_persistent_replay_gate = true;
-        } else if (std::strcmp(arg, "--decode-cudagraph-peer-copy-gate") == 0) {
-            opt->decode_cudagraph_gate = true;
-            opt->decode_cudagraph_peer_copy_gate = true;
         } else if (std::strcmp(arg, "--decode-cudagraph-output-sync-gate") == 0) {
             opt->decode_cudagraph_gate = true;
             opt->decode_cudagraph_output_sync_gate = true;
@@ -5873,14 +5869,6 @@ bool parse_args(int argc, char **argv, Options *opt) {
         } else {
             return false;
         }
-    }
-    if (opt->decode_cudagraph_peer_copy_gate) {
-        std::fprintf(stderr,
-                     "--decode-cudagraph-peer-copy-gate has been retired: "
-                     "direct peer-copy graph diagnostics are no longer "
-                     "available in the TP/EP serving binary; use the default "
-                     "NCCL/copy-kernel graph path for no-SYS validation\n");
-        return false;
     }
     return opt->pack_dir && opt->contract_path && opt->tm_index_path &&
            opt->top_k <= kPackedLocalExperts && opt->layer >= 0 &&
@@ -20133,7 +20121,6 @@ int run_token_major_serving_loop(const Options &opt,
                 "router_hash_fast_gate\t%d\t"
                 "gpu_route_plan_gate\t%d\t"
                 "route_plan_async_upload_gate\t%d\t"
-                "decode_cudagraph_peer_copy\t%d\t"
                 "fused_gated_silu_gate\t%d\t"
                 "routed_ffn_norm_input_gate\t%d\t"
                 "routed_ffn_rank_major_input_gate\t%d\t"
@@ -20216,7 +20203,6 @@ int run_token_major_serving_loop(const Options &opt,
                 opt.router_hash_fast_gate ? 1 : 0,
                 opt.gpu_route_plan_gate ? 1 : 0,
                 opt.route_plan_async_upload_gate ? 1 : 0,
-                opt.decode_cudagraph_peer_copy_gate ? 1 : 0,
                 opt.fused_gated_silu_gate ? 1 : 0,
                 opt.routed_ffn_norm_input_gate ? 1 : 0,
                 opt.routed_ffn_rank_major_input_gate ? 1 : 0,
