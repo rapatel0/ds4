@@ -142,13 +142,13 @@ engine/context.o: engine/context.c engine/context.h ds4_pack.h ds4_turbomind_pac
 engine/layer_state.o: engine/layer_state.c engine/layer_state.h engine/context.h ds4_gpu.h ds4_source_formats.h
 	$(CC) $(CFLAGS) -I. -c -o $@ engine/layer_state.c
 
-engine/layer_execute.o: engine/layer_execute.c engine/layer_execute.h engine/layer_state.h ds4_gpu.h
+engine/layer_execute.o: engine/layer_execute.c engine/layer_execute_core.inc engine/layer_execute_attention.inc engine/layer_execute_ffn.inc engine/layer_execute.h engine/layer_state.h ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -c -o $@ engine/layer_execute.c
 
-engine/scheduler.o: engine/scheduler.c engine/scheduler.h engine/layer_execute.h engine/layer_state.h engine/context.h ds4_pack.h ds4_gpu.h
+engine/scheduler.o: engine/scheduler.c engine/scheduler_core.inc engine/scheduler_snapshot_decode.inc engine/scheduler.h engine/layer_execute.h engine/layer_state.h engine/context.h ds4_pack.h ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -c -o $@ engine/scheduler.c
 
-engine/replay.o: engine/replay.c engine/replay.h engine/scheduler.h ds4.h ds4_gpu.h
+engine/replay.o: engine/replay.c engine/replay_core.inc engine/replay_step_pipeline.inc engine/replay.h engine/scheduler.h ds4.h ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ engine/replay.c
 
 engine/mtp.o: engine/mtp.c engine/mtp.h ds4.h ds4_gpu.h
