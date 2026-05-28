@@ -172,29 +172,29 @@ ds4_eval.o: ds4_eval.c ds4.h
 ds4_test.o: tests/ds4_test.c ds4_server.c ds4.h rax.h
 	$(CC) $(CFLAGS) -Wno-unused-function -c -o $@ tests/ds4_test.c
 
-tools/ds4-v100-plan: tools/ds4-v100-plan.c
-	$(CC) $(CFLAGS) -D_FILE_OFFSET_BITS=64 -o $@ tools/ds4-v100-plan.c $(LDLIBS)
+tools/ds4-v100-plan: tools/plan.c
+	$(CC) $(CFLAGS) -D_FILE_OFFSET_BITS=64 -o $@ tools/plan.c $(LDLIBS)
 
-tools/ds4-v100-plan-tp: tools/ds4-v100-plan-tp.c
-	$(CC) $(CFLAGS) -o $@ tools/ds4-v100-plan-tp.c $(LDLIBS)
+tools/ds4-v100-plan-tp: tools/plan-tp.c
+	$(CC) $(CFLAGS) -o $@ tools/plan-tp.c $(LDLIBS)
 
-tools/ds4-v100-tp-ep-pack-contract: tools/ds4-v100-tp-ep-pack-contract.c
-	$(CC) $(CFLAGS) -o $@ tools/ds4-v100-tp-ep-pack-contract.c $(LDLIBS)
+tools/ds4-v100-tp-ep-pack-contract: tools/tp-ep-pack-contract.c
+	$(CC) $(CFLAGS) -o $@ tools/tp-ep-pack-contract.c $(LDLIBS)
 
-tools/ds4-v100-tp-ep-int8-candidates: tools/ds4-v100-tp-ep-int8-candidates.c
-	$(CC) $(CFLAGS) -o $@ tools/ds4-v100-tp-ep-int8-candidates.c $(LDLIBS)
+tools/ds4-v100-tp-ep-int8-candidates: tools/tp-ep-int8-candidates.c
+	$(CC) $(CFLAGS) -o $@ tools/tp-ep-int8-candidates.c $(LDLIBS)
 
 tools/ds4-v100-tp-ep-layer-descriptor-smoke: smokes/tp-ep-layer-descriptor-smoke.c
 	$(CC) $(CFLAGS) -o $@ smokes/tp-ep-layer-descriptor-smoke.c $(LDLIBS)
 
-tools/ds4-v100-tp-estimate: tools/ds4-v100-tp-estimate.c
-	$(CC) $(CFLAGS) -o $@ tools/ds4-v100-tp-estimate.c $(LDLIBS)
+tools/ds4-v100-tp-estimate: tools/tp-estimate.c
+	$(CC) $(CFLAGS) -o $@ tools/tp-estimate.c $(LDLIBS)
 
 tools/ds4-v100-tp8-kv-shard-smoke: smokes/tp8-kv-shard-smoke.c
 	$(CC) $(CFLAGS) -o $@ smokes/tp8-kv-shard-smoke.c $(LDLIBS)
 
-tools/ds4-v100-pack: tools/ds4-v100-pack.c
-	$(CC) $(CFLAGS) -D_FILE_OFFSET_BITS=64 -o $@ tools/ds4-v100-pack.c $(LDLIBS)
+tools/ds4-v100-pack: tools/pack.c
+	$(CC) $(CFLAGS) -D_FILE_OFFSET_BITS=64 -o $@ tools/pack.c $(LDLIBS)
 
 ifeq ($(UNAME_S),Darwin)
 tools/ds4-v100-turbomind-pack:
@@ -252,14 +252,14 @@ tools/ds4-v100-tp-kv-arena-smoke:
 	@echo "tools/ds4-v100-tp-kv-arena-smoke requires a CUDA build"
 	@exit 2
 else
-tools/ds4-v100-turbomind-pack.o: tools/ds4-v100-turbomind-pack.cu ds4_pack.h ds4_source_formats.h kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h
-	$(NVCC) $(NVCCFLAGS) $(TURBOMIND_ADAPTER_CUDAFLAGS) -I. -c -o $@ tools/ds4-v100-turbomind-pack.cu
+tools/ds4-v100-turbomind-pack.o: tools/turbomind-pack.cu ds4_pack.h ds4_source_formats.h kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h
+	$(NVCC) $(NVCCFLAGS) $(TURBOMIND_ADAPTER_CUDAFLAGS) -I. -c -o $@ tools/turbomind-pack.cu
 
 tools/ds4-v100-turbomind-pack: tools/ds4-v100-turbomind-pack.o ds4_pack.o ds4_source_formats.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 
-tools/ds4-v100-appliance-pack.o: tools/ds4-v100-appliance-pack.cu ds4_pack.h ds4_source_formats.h kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h
-	$(NVCC) $(NVCCFLAGS) $(TURBOMIND_ADAPTER_CUDAFLAGS) -I. -c -o $@ tools/ds4-v100-appliance-pack.cu
+tools/ds4-v100-appliance-pack.o: tools/appliance-pack.cu ds4_pack.h ds4_source_formats.h kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h
+	$(NVCC) $(NVCCFLAGS) $(TURBOMIND_ADAPTER_CUDAFLAGS) -I. -c -o $@ tools/appliance-pack.cu
 
 tools/ds4-v100-appliance-pack: tools/ds4-v100-appliance-pack.o ds4_pack.o ds4_source_formats.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
@@ -267,7 +267,7 @@ tools/ds4-v100-appliance-pack: tools/ds4-v100-appliance-pack.o ds4_pack.o ds4_so
 tools/ds4-v100-tp4-collective-smoke: smokes/tp4-collective-smoke.cu
 	$(NVCC) $(NVCCFLAGS) -I. -o $@ $< $(CUDA_LDLIBS) -lnccl
 
-tools/ds4-v100-tp4-layer-proxy: tools/ds4-v100-tp4-layer-proxy.cu
+tools/ds4-v100-tp4-layer-proxy: tools/tp4-layer-proxy.cu
 	$(NVCC) $(NVCCFLAGS) -I. -o $@ $< $(CUDA_LDLIBS) -lnccl
 
 tools/ds4-v100-tp8-collective-smoke: smokes/tp8-collective-smoke.cu
@@ -276,7 +276,7 @@ tools/ds4-v100-tp8-collective-smoke: smokes/tp8-collective-smoke.cu
 tools/ds4-v100-tp8-collective-workbench: smokes/tp8-collective-workbench.cu
 	$(NVCC) $(NVCCFLAGS) -I. -o $@ $< $(CUDA_LDLIBS) -lnccl
 
-tools/ds4-v100-tp8-layer-proxy: tools/ds4-v100-tp8-layer-proxy.cu
+tools/ds4-v100-tp8-layer-proxy: tools/tp8-layer-proxy.cu
 	$(NVCC) $(NVCCFLAGS) -I. -o $@ $< $(CUDA_LDLIBS) -lnccl
 
 tools/ds4-v100-tp-runtime-smoke: smokes/tp-runtime-smoke.cu engine/tp_runtime.cu engine/tp_runtime.h
@@ -316,8 +316,8 @@ tools/ds4-v100-tp-kv-arena-smoke: smokes/tp-kv-arena-smoke.cu
 	$(NVCC) $(NVCCFLAGS) --std=c++17 -I. -o $@ $< $(CUDA_LDLIBS)
 endif
 
-tools/ds4-v100-turbomind-admit.o: tools/ds4-v100-turbomind-admit.c ds4_pack.h ds4_turbomind_pack.h
-	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-turbomind-admit.c
+tools/ds4-v100-turbomind-admit.o: tools/turbomind-admit.c ds4_pack.h ds4_turbomind_pack.h
+	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/turbomind-admit.c
 
 tools/ds4-v100-turbomind-admit: tools/ds4-v100-turbomind-admit.o ds4_pack.o ds4_turbomind_pack.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
@@ -358,14 +358,14 @@ tools/ds4-v100-mtp-logits-smoke.o: smokes/mtp-logits-smoke.c engine/mtp_sidecar.
 tools/ds4-v100-mtp-forward-smoke.o: smokes/mtp-forward-smoke.c smokes/mtp-attn-smoke.c smokes/mtp-ffn-smoke.c smokes/mtp-logits-smoke.c engine/mtp_sidecar.h engine/context.h ds4_source_formats.h ds4.h ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ smokes/mtp-forward-smoke.c
 
-tools/ds4-v100-mtp-forward-common.o: tools/ds4-v100-mtp-forward-common.c tools/ds4-v100-mtp-forward-common.h engine/mtp_sidecar.h engine/context.h ds4.h ds4_gpu.h
-	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-mtp-forward-common.c
+tools/ds4-v100-mtp-forward-common.o: tools/mtp-forward-common.c tools/mtp-forward-common.h engine/mtp_sidecar.h engine/context.h ds4.h ds4_gpu.h
+	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/mtp-forward-common.c
 
-tools/ds4-v100-mtp-verify-smoke.o: smokes/mtp-verify-smoke.c tools/ds4-v100-mtp-forward-common.h ds4.h ds4_gpu.h engine/mtp_sidecar.h engine/scheduler.h engine/layer_execute.h engine/context.h
+tools/ds4-v100-mtp-verify-smoke.o: smokes/mtp-verify-smoke.c tools/mtp-forward-common.h ds4.h ds4_gpu.h engine/mtp_sidecar.h engine/scheduler.h engine/layer_execute.h engine/context.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ smokes/mtp-verify-smoke.c
 
-tools/ds4-v100-replay.o: tools/ds4-v100-replay.c engine/replay.h engine/context.h engine/mtp_sidecar.h tools/ds4-v100-mtp-forward-common.h ds4.h ds4_gpu.h
-	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-replay.c
+tools/ds4-v100-replay.o: tools/replay.c engine/replay.h engine/context.h engine/mtp_sidecar.h tools/mtp-forward-common.h ds4.h ds4_gpu.h
+	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/replay.c
 
 ifeq ($(UNAME_S),Darwin)
 tools/ds4-v100-residency-smoke: tools/ds4-v100-residency-smoke.o ds4_pack.o ds4_gpu_arena_stub.o

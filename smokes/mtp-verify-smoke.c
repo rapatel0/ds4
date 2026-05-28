@@ -1,6 +1,6 @@
 #include "ds4.h"
 #include "ds4_gpu.h"
-#include "tools/ds4-v100-mtp-forward-common.h"
+#include "tools/mtp-forward-common.h"
 #include "engine/mtp_sidecar.h"
 #include "engine/scheduler.h"
 

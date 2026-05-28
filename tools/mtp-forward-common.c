@@ -1,4 +1,4 @@
-#include "ds4-v100-mtp-forward-common.h"
+#include "mtp-forward-common.h"
 
 #include <float.h>
 #include <inttypes.h>

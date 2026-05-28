@@ -1,7 +1,7 @@
 #include "engine/replay.h"
 #include "engine/context.h"
 #include "engine/mtp_sidecar.h"
-#include "ds4-v100-mtp-forward-common.h"
+#include "mtp-forward-common.h"
 
 #include <errno.h>
 #include <arpa/inet.h>
