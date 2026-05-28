@@ -1,3 +1,43 @@
+__global__ void shard_top1_kernel(uint32_t *out_token,
+                                  float *out_logit,
+                                  const float *logits,
+                                  uint32_t rows,
+                                  uint32_t shard_base,
+                                  uint32_t slots) {
+    const uint32_t slot = blockIdx.x;
+    if (slot >= slots) return;
+    const float *row = logits + (uint64_t)slot * rows;
+    float best = -3.4028234663852886e+38F;
+    uint32_t best_idx = 0;
+    for (uint32_t i = threadIdx.x; i < rows; i += blockDim.x) {
+        const float v = row[i];
+        if (v > best) {
+            best = v;
+            best_idx = i;
+        }
+    }
+    __shared__ float s_val[256];
+    __shared__ uint32_t s_idx[256];
+    s_val[threadIdx.x] = best;
+    s_idx[threadIdx.x] = best_idx;
+    __syncthreads();
+    for (uint32_t stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            const float other = s_val[threadIdx.x + stride];
+            const uint32_t other_idx = s_idx[threadIdx.x + stride];
+            if (other > s_val[threadIdx.x]) {
+                s_val[threadIdx.x] = other;
+                s_idx[threadIdx.x] = other_idx;
+            }
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0u) {
+        out_token[slot] = shard_base + s_idx[0];
+        out_logit[slot] = s_val[0];
+    }
+}
+
 __global__ void f32_dense_colmajor_kernel(float *out,
                                           const float *weights,
                                           const float *x,
