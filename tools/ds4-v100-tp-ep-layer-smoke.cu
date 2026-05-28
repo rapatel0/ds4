@@ -1,6 +1,6 @@
 #define _FILE_OFFSET_BITS 64
 
-#include "ds4_v100_tp_runtime.h"
+#include "engine/tp_runtime.h"
 #include "kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h"
 
 #include <cuda_fp16.h>

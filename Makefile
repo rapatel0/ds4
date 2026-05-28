@@ -21,7 +21,7 @@ V100_LAYER_EXECUTE_OBJS = ds4_v100_layer_execute.o $(V100_LAYER_STATE_OBJS)
 V100_SCHEDULER_OBJS = ds4_v100_scheduler.o $(V100_LAYER_EXECUTE_OBJS)
 V100_REPLAY_OBJS = ds4_v100_replay.o $(V100_SCHEDULER_OBJS)
 V100_MTP_OBJS = ds4_v100_mtp.o
-TP_EP_APPLIANCE_DEPS = ds4_v100_tp_runtime.cu ds4_v100_tp_runtime.h ds4.h $(CPU_CORE_OBJS) kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h kernels/v100/common.cuh kernels/v100/dense.cuh kernels/v100/hc_mix.cuh kernels/v100/hc_shards.cuh kernels/v100/norm.cuh kernels/v100/compose.cuh kernels/v100/router.cuh kernels/v100/diagnostics.cuh kernels/v100/fill_pack.cuh kernels/v100/attention.cuh engine/runtime_types.cuh engine/runtime_options.cuh engine/runtime_profiler.cu engine/runtime_pack.cu engine/output_head.cu engine/turbomind_bindings.cu engine/diagnostics_support.cu engine/runtime_resources.cu engine/appliance_runtime.cu engine/decode_loop.cu engine/hc_current.cu engine/hc_final.cu engine/attention_projection.cu engine/compressed_kv_step.cu engine/attention_read.cu engine/attention_output.cu engine/post_attention_ffn.cu engine/router_step.cu engine/router_plan.cu engine/ep_dense.cu engine/ep_executor.cu engine/ep_compose.cu engine/layer_decode.cu engine/layer_runner.cu engine/token_major_loop.cu appliance/options.cu appliance/http_server.cu appliance/entrypoint.cu
+TP_EP_APPLIANCE_DEPS = engine/tp_runtime.cu engine/tp_runtime.h ds4.h $(CPU_CORE_OBJS) kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h kernels/v100/common.cuh kernels/v100/dense.cuh kernels/v100/hc_mix.cuh kernels/v100/hc_shards.cuh kernels/v100/norm.cuh kernels/v100/compose.cuh kernels/v100/router.cuh kernels/v100/diagnostics.cuh kernels/v100/fill_pack.cuh kernels/v100/attention.cuh engine/runtime_types.cuh engine/runtime_options.cuh engine/runtime_profiler.cu engine/runtime_pack.cu engine/output_head.cu engine/turbomind_bindings.cu engine/diagnostics_support.cu engine/runtime_resources.cu engine/appliance_runtime.cu engine/decode_loop.cu engine/hc_current.cu engine/hc_final.cu engine/attention_projection.cu engine/compressed_kv_step.cu engine/attention_read.cu engine/attention_output.cu engine/post_attention_ffn.cu engine/router_step.cu engine/router_plan.cu engine/ep_dense.cu engine/ep_executor.cu engine/ep_compose.cu engine/layer_decode.cu engine/layer_runner.cu engine/token_major_loop.cu appliance/options.cu appliance/http_server.cu appliance/entrypoint.cu
 
 ifeq ($(UNAME_S),Darwin)
 METAL_LDLIBS := $(LDLIBS) -framework Foundation -framework Metal
@@ -279,8 +279,8 @@ tools/ds4-v100-tp8-collective-workbench: tools/ds4-v100-tp8-collective-workbench
 tools/ds4-v100-tp8-layer-proxy: tools/ds4-v100-tp8-layer-proxy.cu
 	$(NVCC) $(NVCCFLAGS) -I. -o $@ $< $(CUDA_LDLIBS) -lnccl
 
-tools/ds4-v100-tp-runtime-smoke: tools/ds4-v100-tp-runtime-smoke.cu ds4_v100_tp_runtime.cu ds4_v100_tp_runtime.h
-	$(NVCC) $(NVCCFLAGS) -I. -o $@ tools/ds4-v100-tp-runtime-smoke.cu ds4_v100_tp_runtime.cu $(CUDA_LDLIBS)
+tools/ds4-v100-tp-runtime-smoke: tools/ds4-v100-tp-runtime-smoke.cu engine/tp_runtime.cu engine/tp_runtime.h
+	$(NVCC) $(NVCCFLAGS) -I. -o $@ tools/ds4-v100-tp-runtime-smoke.cu engine/tp_runtime.cu $(CUDA_LDLIBS)
 
 tools/ds4-v100-tp8-layer-smoke: tools/ds4-v100-tp8-layer-smoke.cu
 	$(NVCC) $(NVCCFLAGS) -I. -o $@ $< $(CUDA_LDLIBS) -lnccl
@@ -294,11 +294,11 @@ tools/ds4-v100-tp8-turbomind-ffn-smoke: tools/ds4-v100-tp8-turbomind-ffn-smoke.c
 tools/ds4-v100-tp-ep-expert-smoke: tools/ds4-v100-tp-ep-expert-smoke.cu kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h
 	$(NVCC) $(NVCCFLAGS) --std=c++17 -I. -o $@ $< $(CUDA_LDLIBS)
 
-tools/ds4-v100-tp-ep-layer-smoke: tools/ds4-v100-tp-ep-layer-smoke.cu ds4_v100_tp_runtime.cu ds4_v100_tp_runtime.h kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h
-	$(NVCC) $(NVCCFLAGS) --std=c++17 -I. -o $@ tools/ds4-v100-tp-ep-layer-smoke.cu ds4_v100_tp_runtime.cu $(CUDA_LDLIBS)
+tools/ds4-v100-tp-ep-layer-smoke: tools/ds4-v100-tp-ep-layer-smoke.cu engine/tp_runtime.cu engine/tp_runtime.h kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h
+	$(NVCC) $(NVCCFLAGS) --std=c++17 -I. -o $@ tools/ds4-v100-tp-ep-layer-smoke.cu engine/tp_runtime.cu $(CUDA_LDLIBS)
 
 appliance/ds4-v100-tp-ep-appliance: appliance/main.cu $(TP_EP_APPLIANCE_DEPS)
-	$(NVCC) $(NVCCFLAGS) --std=c++17 -I. -o $@ appliance/main.cu ds4_v100_tp_runtime.cu $(CPU_CORE_OBJS) $(CUDA_LDLIBS) -lnccl
+	$(NVCC) $(NVCCFLAGS) --std=c++17 -I. -o $@ appliance/main.cu engine/tp_runtime.cu $(CPU_CORE_OBJS) $(CUDA_LDLIBS) -lnccl
 
 tools/ds4-v100-tp-ep-dense-cache-smoke: tools/ds4-v100-tp-ep-dense-cache-smoke.cu
 	$(NVCC) $(NVCCFLAGS) --std=c++17 -I. -o $@ $< $(CUDA_LDLIBS)
