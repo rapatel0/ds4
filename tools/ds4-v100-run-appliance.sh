@@ -1689,11 +1689,7 @@ if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
         --tm-index "$DS4_V100_TP_EP_TM_INDEX"
         --lib "$DS4_V100_TURBOMIND_LIB"
         --slots "$DS4_V100_SLOTS"
-        --top-k "$DS4_V100_TP_EP_TOP_K"
-        --kv-slot "$DS4_V100_TP_EP_KV_SLOT"
         --position "$DS4_V100_TP_EP_POSITION"
-        --warmup 0
-        --iters 1
         --decode-steps "$DS4_V100_TOKENS"
         --host "$DS4_V100_HOST"
         --port "$DS4_V100_PORT"
@@ -1702,37 +1698,11 @@ if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
     if [ -n "$DS4_V100_TP_EP_TOKENIZER_MODEL" ]; then
         cmd+=(--tokenizer-model "$DS4_V100_TP_EP_TOKENIZER_MODEL")
     fi
-    if [ "$DS4_V100_TP_EP_VRAM_REPORT" -eq 1 ]; then
-        cmd+=(--vram-report)
-    fi
     if [ "$DS4_V100_TP_EP_VRAM_MIN_FREE_MIB" -gt 0 ]; then
         cmd+=(--vram-min-free-mib "$DS4_V100_TP_EP_VRAM_MIN_FREE_MIB")
     fi
     if [ "$DS4_V100_TP_EP_NCCL_MIN_FREE_MIB" -gt 0 ]; then
         cmd+=(--nccl-min-free-mib "$DS4_V100_TP_EP_NCCL_MIN_FREE_MIB")
-    fi
-    if [ "$cuda_profiler_window" -eq 1 ]; then
-        cmd+=(--cuda-profiler-window)
-    fi
-    if [ "$DS4_V100_TP_EP_DECODE_CUDAGRAPH_PERSISTENT" -eq 1 ]; then
-        cmd+=(--decode-cudagraph-persistent-replay-gate)
-    elif [ "$DS4_V100_TP_EP_DECODE_CUDAGRAPH" -eq 1 ]; then
-        cmd+=(--decode-cudagraph-gate)
-    fi
-    if [ "$DS4_V100_TP_EP_DECODE_CUDAGRAPH_OUTPUT_SYNC" -eq 1 ]; then
-        cmd+=(--decode-cudagraph-output-sync-gate)
-    fi
-    if [ "$DS4_V100_TP_EP_DECODE_CUDAGRAPH_HC_CURRENT_SYNC" -eq 1 ]; then
-        cmd+=(--decode-cudagraph-hc-current-sync-gate)
-    fi
-    if [ -n "$DS4_V100_TP_EP_DECODE_CUDAGRAPH_STAGE_SYNC" ]; then
-        cmd+=(--decode-cudagraph-stage-sync-gate "$DS4_V100_TP_EP_DECODE_CUDAGRAPH_STAGE_SYNC")
-    fi
-    if [ -n "$DS4_V100_TP_EP_DECODE_CUDAGRAPH_SUFFIX_STAGE" ]; then
-        cmd+=(--decode-cudagraph-suffix-stage-gate "$DS4_V100_TP_EP_DECODE_CUDAGRAPH_SUFFIX_STAGE")
-    fi
-    if [ "$DS4_V100_TP_EP_DECODE_STAGE_CHECKSUM" -eq 1 ]; then
-        cmd+=(--decode-stage-checksum-gate)
     fi
     if [ -n "$DS4_V100_TP_EP_EXTRA_ARGS" ]; then
         while IFS= read -r extra_arg; do

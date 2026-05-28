@@ -95,11 +95,7 @@ result_json="$case_dir/result.json"
     --tm-index "$tm_index" \
     --lib "$lib" \
     --slots "$slots" \
-    --top-k "$top_k" \
-    --kv-slot "$kv_slot" \
     --position "$position" \
-    --warmup 0 \
-    --iters 1 \
     --decode-steps "$tokens" \
     --serving-bench >"$stdout_log" 2>"$stderr_log"
 

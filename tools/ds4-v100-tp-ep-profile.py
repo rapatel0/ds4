@@ -1498,7 +1498,6 @@ def variant_suffix(args):
 
 
 def direct_command(args):
-    kv_slot = min(7, max(0, args.slots - 1))
     cmd = [
         "./appliance/ds4-v100-tp-ep-appliance",
         "--pack-dir", args.pack_dir,
@@ -1506,149 +1505,16 @@ def direct_command(args):
         "--tm-index", str(pathlib.Path(args.pack_dir) / "turbomind-pack-index.tsv"),
         "--lib", args.turbomind_lib,
         "--slots", str(args.slots),
-        "--top-k", "6",
-        "--kv-slot", str(kv_slot),
         "--position", str(args.position),
-        "--warmup", "0",
-        "--iters", "1",
         "--decode-steps", str(args.tokens),
         "--serving-bench",
     ]
-    if args.resident_profile_layer is not None:
-        cmd.extend(["--resident-profile-layer", str(args.resident_profile_layer)])
-    if args.decode_cudagraph:
-        cmd.append("--decode-cudagraph-gate")
-    if args.decode_cudagraph_output_sync:
-        cmd.append("--decode-cudagraph-output-sync-gate")
-    if args.decode_cudagraph_hc_current_sync:
-        cmd.append("--decode-cudagraph-hc-current-sync-gate")
-    if args.decode_cudagraph_stage_sync:
-        cmd.extend(["--decode-cudagraph-stage-sync-gate", args.decode_cudagraph_stage_sync])
-    if args.persistent_decode_cudagraph:
-        cmd.append("--decode-cudagraph-persistent-replay-gate")
-    if args.decode_cudagraph_suffix_stage:
-        cmd.extend([
-            "--decode-cudagraph-suffix-stage-gate",
-            args.decode_cudagraph_suffix_stage,
-        ])
-    if args.decode_stage_checksum:
-        cmd.append("--decode-stage-checksum-gate")
-    if args.cuda_profiler_device is not None:
-        cmd.extend(["--cuda-profiler-device", str(args.cuda_profiler_device)])
-    if args.cuda_profiler_all_devices:
-        cmd.append("--cuda-profiler-all-devices")
-    if not args.disable_compact_route_compose:
-        cmd.append("--compact-route-compose")
-    if args.model_router_routes:
-        cmd.append("--model-router-routes")
-    if args.router_cublas:
-        cmd.append("--router-cublas-gate")
-    if args.router_hash_fast:
-        cmd.append("--router-hash-fast-gate")
-    if args.gpu_route_plan:
-        cmd.append("--gpu-route-plan-gate")
-    if not args.disable_route_plan_async_upload:
-        cmd.append("--route-plan-async-upload-gate")
-    if args.compact_moe_decode:
-        cmd.append("--compact-moe-decode-gate")
-    if args.parallel_expert_load:
-        cmd.append("--parallel-expert-load-gate")
-    if args.nccl_reduce_scatter_compose:
-        cmd.append("--nccl-reduce-scatter-compose-gate")
-    if args.fused_gated_silu:
-        cmd.append("--fused-gated-silu-gate")
-    if args.routed_ffn_norm_input:
-        cmd.append("--routed-ffn-norm-input-gate")
-    if args.routed_ffn_rank_major_input:
-        cmd.append("--routed-ffn-rank-major-input-gate")
-    if args.model_router_rank_major_logits:
-        cmd.append("--model-router-rank-major-logits-gate")
-    if args.model_router_allreduce_logits:
-        cmd.append("--model-router-allreduce-logits-gate")
-    if args.post_attention_fixed_capacity_route_plan:
-        cmd.append("--post-attention-fixed-capacity-route-plan-gate")
-    if args.post_attention_route_reuse_audit:
-        cmd.append("--post-attention-route-reuse-audit-gate")
-    if args.post_attention_device_actual_route_sync:
-        cmd.append("--post-attention-device-actual-route-sync-gate")
-    if args.post_attention_slot_major_ffn_norm:
-        cmd.append("--post-attention-slot-major-ffn-norm-gate")
-    if args.post_attention_skip_slot_major_ffn_norm:
-        cmd.append("--post-attention-skip-slot-major-ffn-norm-gate")
-    if args.post_attention_masked_compact_copy:
-        cmd.append("--post-attention-masked-compact-copy-gate")
-    if args.vram_report:
-        cmd.append("--vram-report")
     if args.vram_min_free_mib > 0:
         cmd.extend(["--vram-min-free-mib", str(args.vram_min_free_mib)])
     if args.nccl_min_free_mib > 0:
         cmd.extend(["--nccl-min-free-mib", str(args.nccl_min_free_mib)])
-    if args.skip_tp_runtime_comp_state:
-        cmd.append("--tp-runtime-skip-unused-comp-state-gate")
-    cmd.extend(["--tp-runtime-scratch-mib", str(args.tp_runtime_scratch_mib)])
-    if args.defer_nccl_init:
-        cmd.append("--defer-nccl-init-gate")
-    if args.fp8_e5m2_kv:
-        cmd.append("--fp8-e5m2-kv-gate")
-    if args.lazy_output_head:
-        cmd.append("--diagnostic-output-head-lazy-gate")
-    if "window" in args.tool:
-        cmd.append("--cuda-profiler-window")
-    if args.hc_current_peer_gather:
-        cmd.append("--tp-hc-current-input-peer-gather-gate")
-    if args.hc_current_nccl_allgather:
-        cmd.append("--tp-hc-current-input-nccl-allgather-gate")
-    if args.hc_current_allreduce:
-        cmd.append("--tp-hc-current-allreduce-gate")
-    if args.hc_current_full_parity:
-        cmd.append("--tp-hc-current-full-parity-gate")
-    if args.hc_current_stream_sync:
-        cmd.append("--tp-hc-current-input-stream-sync-gate")
-    if args.hc_current_fused_fill_pack:
-        cmd.append("--tp-hc-current-input-fused-fill-pack-gate")
-    if args.tp_peer_accounting:
-        cmd.append("--tp-peer-accounting-gate")
-    if args.tp_peer_reject_sys:
-        cmd.append("--tp-peer-reject-sys-gate")
-    if args.attention_projection_rank_local_input:
-        cmd.append("--true-ds4-attention-projection-rank-local-input-gate")
-    if args.attention_projection_rank_major_input:
-        cmd.append("--true-ds4-attention-projection-rank-major-input-gate")
-    if args.attention_output:
-        cmd.append("--true-ds4-attention-output-gate")
-    if args.attention_output_nccl_allgather:
-        cmd.append("--true-ds4-attention-output-nccl-allgather-gate")
-    if args.post_attention_ffn_input:
-        cmd.append("--true-ds4-post-attention-ffn-input-gate")
-    if args.semantic_skip_stats and (
-        args.attention_output
-        or args.attention_output_nccl_allgather
-        or args.post_attention_ffn_input
-    ):
-        cmd.append("--true-ds4-semantic-skip-stats-gate")
-    if args.skip_compressed_store:
-        cmd.append("--true-ds4-attention-typed-kv-skip-compressed-store-gate")
-    if args.skip_indexer_store:
-        cmd.append("--true-ds4-attention-typed-kv-skip-indexer-store-gate")
-    if args.fused_compressed_input_fill:
-        cmd.append("--true-ds4-compressed-kv-fused-input-fill-gate")
-    if args.fused_compressed_rope_round:
-        cmd.append("--true-ds4-compressed-kv-fused-rope-round-gate")
-    if args.fused_compressed_pool_norm:
-        cmd.append("--true-ds4-compressed-kv-fused-pool-norm-gate")
-    if args.fused_compressed_pool_norm_rope_round:
-        cmd.append("--true-ds4-compressed-kv-fused-pool-norm-rope-round-gate")
-    if args.direct_compressed_input_fill:
-        cmd.append("--true-ds4-compressed-kv-direct-input-fill-gate")
-    if args.compressed_dense_event_wait or not args.disable_compressed_dense_event_wait:
-        cmd.append("--true-ds4-compressed-kv-dense-event-wait-gate")
-    if args.skip_compressed_dense_stats or not args.disable_skip_compressed_dense_stats:
-        cmd.append("--true-ds4-compressed-kv-skip-dense-stats-gate")
-    if args.fused_compressed_attn_input_fill:
-        cmd.append("--true-ds4-compressed-kv-fused-attn-input-fill-gate")
     cmd.extend(args.server_arg)
     return cmd
-
 
 def parse_tab_line(line):
     parts = line.strip().split("\t")
