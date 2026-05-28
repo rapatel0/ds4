@@ -137,3 +137,20 @@ for this sprint.
 - How many cleanup buckets can be safely grouped per commit given the cost of
   the strict gate?
 - Which remaining diagnostics, if any, have an active owner after Sprint 480?
+
+## Execution Notes
+
+- Snapshot commit `e65614cb` was pushed and tagged `pre-cleanup-snapshot` before
+  destructive cleanup began.
+- A6 PATH 4 revive was attempted but not promoted. The control baseline reached
+  `256/256` HTTP 200 with the in-pod harness, but reported
+  `peer_copy_sys_bytes=8`; the A6 candidate returned `0/256` HTTP 200 after
+  readiness. The A6 diff was backed out before continuing cleanup.
+- Root cleanup landed in two commits:
+  - `14c773f2`: archived old numbered status reports.
+  - `d01917a6`: archived superseded root topic docs.
+- `tools/ds4-source-oracle-vector.{c,o}` was retained after audit because it is
+  still referenced by `Makefile` and `tools/ds4-v100-gate.sh`.
+- Code cleanup landed in `df9250e8`, removing the retired
+  `--decode-cudagraph-peer-copy-gate` option/status plumbing. V100 build passed
+  afterward.
