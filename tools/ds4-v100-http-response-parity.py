@@ -94,7 +94,7 @@ def choice_token_ids(body: dict[str, Any]) -> list[int] | None:
 
 def ds4_meta(body: dict[str, Any]) -> dict[str, Any]:
     meta = body.get("ds4_v100")
-    return meta if isinstance(meta, dict) else {}
+    return meta if isinstance(meta, dict) else body
 
 
 def generated_sequence(body: dict[str, Any]) -> list[int] | None:

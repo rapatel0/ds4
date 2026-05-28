@@ -8,7 +8,13 @@
 // state into and out of a routed-only overlay.
 
 #define DS4_TP_SPLIT_4GPU_NO_MAIN
+#include <nccl.h>
 #include "test_tp_split_4gpu.cpp"
+
+#define CHECK_NCCL(x) do { ncclResult_t err__ = (x); if (err__ != ncclSuccess) { \
+    fprintf(stderr, "NCCL error at %s:%d: %s\n", __FILE__, __LINE__, ncclGetErrorString(err__)); \
+    std::exit(1); \
+} } while (0)
 
 namespace {
 
@@ -32,6 +38,7 @@ __global__ void add_half_inplace_kernel(__half * dst, const __half * src, size_t
 }
 
 enum class ResidentReduceAlgo {
+    Nccl,
     Root,
     RootAsync,
     Doubling,
@@ -52,18 +59,26 @@ static int resident_env_int(const char *name, int fallback, int lo, int hi) {
 
 static ResidentReduceAlgo resident_reduce_algo_from_env() {
     const char *v = std::getenv("DS4_TP4_RESIDENT_ALGO");
-    if (!v || !v[0] || std::strcmp(v, "root") == 0) return ResidentReduceAlgo::Root;
+    if (!v || !v[0] || std::strcmp(v, "nccl") == 0) return ResidentReduceAlgo::Nccl;
+    if (std::strcmp(v, "root") == 0) return ResidentReduceAlgo::Root;
     if (std::strcmp(v, "root_async") == 0) return ResidentReduceAlgo::RootAsync;
     if (std::strcmp(v, "doubling") == 0) return ResidentReduceAlgo::Doubling;
     if (std::strcmp(v, "doubling_async") == 0) return ResidentReduceAlgo::DoublingAsync;
     fprintf(stderr, "[tp4_resident] ignoring invalid DS4_TP4_RESIDENT_ALGO=%s\n", v);
-    return ResidentReduceAlgo::Root;
+    return ResidentReduceAlgo::Nccl;
 }
 
 static const char * resident_reduce_algo_name(ResidentReduceAlgo algo) {
+    if (algo == ResidentReduceAlgo::Nccl) return "nccl";
     if (algo == ResidentReduceAlgo::RootAsync) return "root_async";
     if (algo == ResidentReduceAlgo::DoublingAsync) return "doubling_async";
     return algo == ResidentReduceAlgo::Doubling ? "doubling" : "root";
+}
+
+static bool resident_manual_peer_baseline_allowed() {
+    const char *v = std::getenv("DS4_ALLOW_MANUAL_PEER_BASELINE");
+    return v && (std::strcmp(v, "1") == 0 || std::strcmp(v, "true") == 0 ||
+                 std::strcmp(v, "yes") == 0);
 }
 
 static void sync_devices(const std::array<int, kParts> & devices) {
@@ -93,7 +108,8 @@ static int run_tp4_resident_layers(std::array<DeviceSide, kParts> & sides,
                                    int total_tokens,
                                    int layers,
                                    std::array<__half *, kParts> & reduce_recv,
-                                   ResidentReduceAlgo algo) {
+                                   ResidentReduceAlgo algo,
+                                   ncclComm_t comms[kParts]) {
     const size_t elems = (size_t) total_tokens * kHidden;
     const size_t bytes = elems * sizeof(__half);
     constexpr int threads = 256;
@@ -109,7 +125,19 @@ static int run_tp4_resident_layers(std::array<DeviceSide, kParts> & sides,
             CHECK_CUDA(cudaStreamSynchronize(sides[p].stream));
         }
 
-        if (algo == ResidentReduceAlgo::Root) {
+        if (algo == ResidentReduceAlgo::Nccl) {
+            CHECK_NCCL(ncclGroupStart());
+            for (int p = 0; p < kParts; ++p) {
+                CHECK_CUDA(cudaSetDevice(devices[p]));
+                CHECK_NCCL(ncclAllReduce(sides[p].d_down, sides[p].d_A, elems,
+                                         ncclHalf, ncclSum, comms[p], sides[p].stream));
+            }
+            CHECK_NCCL(ncclGroupEnd());
+            for (int p = 0; p < kParts; ++p) {
+                CHECK_CUDA(cudaSetDevice(devices[p]));
+                CHECK_CUDA(cudaStreamSynchronize(sides[p].stream));
+            }
+        } else if (algo == ResidentReduceAlgo::Root) {
             for (int p = 1; p < kParts; ++p) {
                 CHECK_CUDA(cudaMemcpyPeer(reduce_recv[p], devices[0],
                                           sides[p].d_down, devices[p],
@@ -307,6 +335,13 @@ static int run_resident_case(void * lib, const Case & c) {
     const int bench_iters = resident_env_int("DS4_TP4_RESIDENT_BENCH_ITERS", 10, 1, 10000);
     const bool verbose = resident_env_int("DS4_TP4_RESIDENT_VERBOSE", 0, 0, 1) != 0;
     const ResidentReduceAlgo algo = resident_reduce_algo_from_env();
+    if (algo != ResidentReduceAlgo::Nccl && !resident_manual_peer_baseline_allowed()) {
+        fprintf(stderr,
+                "[tp4_resident] manual peer-copy baseline algorithms require "
+                "DS4_ALLOW_MANUAL_PEER_BASELINE=1; default or set "
+                "DS4_TP4_RESIDENT_ALGO=nccl for promotion evidence\n");
+        return 2;
+    }
 
     int dev_count = 0;
     CHECK_CUDA(cudaGetDeviceCount(&dev_count));
@@ -320,6 +355,10 @@ static int run_resident_case(void * lib, const Case & c) {
         if (api.init(devices[p]) != 0) return 3;
     }
     enable_peer_all(devices);
+    ncclComm_t comms[kParts] = {};
+    if (algo == ResidentReduceAlgo::Nccl) {
+        CHECK_NCCL(ncclCommInitAll(comms, kParts, devices.data()));
+    }
 
     const std::vector<int> active{0, 1, 2, 3, 4, 5};
     const int total_tokens = (int) active.size() * c.tokens_per_active;
@@ -434,7 +473,7 @@ static int run_resident_case(void * lib, const Case & c) {
                                   cudaMemcpyHostToDevice));
         }
         if (run_tp4_resident_layers(sides, api, devices, total_tokens, layers,
-                                    reduce_recv, algo) != 0) {
+                                    reduce_recv, algo, comms) != 0) {
             return 7;
         }
     }
@@ -464,7 +503,7 @@ static int run_resident_case(void * lib, const Case & c) {
         sync_devices(devices);
         const auto start = std::chrono::steady_clock::now();
         if (run_tp4_resident_layers(sides, api, devices, total_tokens, layers,
-                                    reduce_recv, algo) != 0) {
+                                    reduce_recv, algo, comms) != 0) {
             return 9;
         }
         sync_devices(devices);
@@ -483,7 +522,7 @@ static int run_resident_case(void * lib, const Case & c) {
                               cudaMemcpyHostToDevice));
     }
     if (run_tp4_resident_layers(sides, api, devices, total_tokens, layers,
-                                reduce_recv, algo) != 0) {
+                                reduce_recv, algo, comms) != 0) {
         return 11;
     }
 
@@ -538,6 +577,12 @@ static int run_resident_case(void * lib, const Case & c) {
         if (!reduce_recv[p]) continue;
         CHECK_CUDA(cudaSetDevice((algo == ResidentReduceAlgo::Root || algo == ResidentReduceAlgo::RootAsync) ? devices[0] : devices[p]));
         CHECK_CUDA(cudaFree(reduce_recv[p]));
+    }
+    if (algo == ResidentReduceAlgo::Nccl) {
+        for (int p = 0; p < kParts; ++p) {
+            CHECK_CUDA(cudaSetDevice(devices[p]));
+            CHECK_NCCL(ncclCommDestroy(comms[p]));
+        }
     }
 
     api.shutdown();

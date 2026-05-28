@@ -86,6 +86,7 @@ fi
 : "${DS4_V100_ASYNC_FFN_WAVEFRONT_CHUNK:=2}"
 : "${DS4_V100_ASYNC_FFN_WAVEFRONT_VERBOSE:=0}"
 : "${DS4_V100_STARTUP_WARMUP:=auto}"
+: "${DS4_V100_CUDA_LIB_DIR:=auto}"
 : "${DS4_V100_CUDA_PROFILER_WINDOW:=0}"
 : "${DS4_V100_CUDA_TENSOR_POOL:=auto}"
 : "${DS4_V100_CUDA_TENSOR_POOL_MAX_MIB:=2048}"
@@ -146,30 +147,51 @@ fi
 : "${DS4_V100_TP_EP_COPY_EVENT_COMPOSE:=1}"
 : "${DS4_V100_TP_EP_RETURN_FP16:=0}"
 : "${DS4_V100_TP_EP_COMPACT_ROUTE_COMPOSE:=1}"
-: "${DS4_V100_TP_EP_COMPACT_MOE_DECODE:=0}"
-: "${DS4_V100_TP_EP_NCCL_REDUCE_SCATTER_COMPOSE:=0}"
+: "${DS4_V100_TP_EP_COMPACT_MOE_DECODE:=1}"
+: "${DS4_V100_TP_EP_NCCL_REDUCE_SCATTER_COMPOSE:=auto}"
 : "${DS4_V100_TP_EP_FUSED_GATED_SILU:=0}"
-: "${DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD:=0}"
-: "${DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD_LAZY:=0}"
+: "${DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD:=1}"
+: "${DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD_LAZY:=1}"
 : "${DS4_V100_TP_EP_ASYNC_OUTPUT:=0}"
 : "${DS4_V100_TP_EP_DECODE_CUDAGRAPH:=0}"
+: "${DS4_V100_TP_EP_DECODE_CUDAGRAPH_OUTPUT_SYNC:=0}"
+: "${DS4_V100_TP_EP_DECODE_CUDAGRAPH_HC_CURRENT_SYNC:=0}"
+: "${DS4_V100_TP_EP_DECODE_CUDAGRAPH_STAGE_SYNC:=}"
+if [ "${DS4_V100_TP_EP_DECODE_CUDAGRAPH_SUFFIX_STAGE+x}" != x ]; then
+    DS4_V100_TP_EP_DECODE_CUDAGRAPH_SUFFIX_STAGE=
+fi
+: "${DS4_V100_TP_EP_DECODE_CUDAGRAPH_PERSISTENT:=0}"
+: "${DS4_V100_TP_EP_DECODE_STAGE_CHECKSUM:=0}"
 : "${DS4_V100_TP_EP_BATCHED_PAGED_ATTN:=0}"
-: "${DS4_V100_TP_EP_HC_FINAL_EXPAND:=0}"
-: "${DS4_V100_TP_EP_HC_CURRENT_INPUT:=0}"
+: "${DS4_V100_TP_EP_HC_FINAL_EXPAND:=1}"
+: "${DS4_V100_TP_EP_HC_CURRENT_INPUT:=1}"
 : "${DS4_V100_TP_EP_HC_CURRENT_INPUT_PEER_GATHER:=0}"
 : "${DS4_V100_TP_EP_HC_CURRENT_INPUT_NCCL_ALLGATHER:=1}"
+: "${DS4_V100_TP_EP_HC_CURRENT_ALLREDUCE:=1}"
+: "${DS4_V100_TP_EP_HC_CURRENT_FULL_PARITY:=0}"
 : "${DS4_V100_TP_EP_HC_CURRENT_INPUT_STREAM_SYNC:=1}"
 : "${DS4_V100_TP_EP_HC_CURRENT_INPUT_FUSED_FILL_PACK:=0}"
-: "${DS4_V100_TP_EP_HC_PERSIST_STATE:=0}"
-: "${DS4_V100_TP_EP_MODEL_ROUTER_ROUTES:=0}"
+: "${DS4_V100_TP_EP_PEER_ACCOUNTING:=0}"
+: "${DS4_V100_TP_EP_PEER_REJECT_SYS:=0}"
+: "${DS4_V100_TP_EP_HC_PERSIST_STATE:=1}"
+: "${DS4_V100_TP_EP_MODEL_ROUTER_ROUTES:=1}"
 : "${DS4_V100_TP_EP_ROUTER_CUBLAS:=0}"
 : "${DS4_V100_TP_EP_ROUTER_HASH_FAST:=0}"
-: "${DS4_V100_TP_EP_GPU_ROUTE_PLAN:=0}"
+: "${DS4_V100_TP_EP_GPU_ROUTE_PLAN:=1}"
 : "${DS4_V100_TP_EP_ROUTE_PLAN_ASYNC_UPLOAD:=1}"
-: "${DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT:=0}"
-: "${DS4_V100_TP_EP_TRUE_SHARED_FFN:=0}"
+: "${DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT:=1}"
+: "${DS4_V100_TP_EP_ROUTED_FFN_RANK_MAJOR_INPUT:=0}"
+: "${DS4_V100_TP_EP_MODEL_ROUTER_RANK_MAJOR_LOGITS:=0}"
+: "${DS4_V100_TP_EP_MODEL_ROUTER_ALLREDUCE_LOGITS:=1}"
+: "${DS4_V100_TP_EP_POST_ATTENTION_FIXED_CAPACITY_ROUTE_PLAN:=1}"
+: "${DS4_V100_TP_EP_POST_ATTENTION_DEVICE_ACTUAL_ROUTE_SYNC:=0}"
+: "${DS4_V100_TP_EP_POST_ATTENTION_SLOT_MAJOR_FFN_NORM:=0}"
+: "${DS4_V100_TP_EP_POST_ATTENTION_SKIP_SLOT_MAJOR_FFN_NORM:=0}"
+: "${DS4_V100_TP_EP_POST_ATTENTION_MASKED_COMPACT_COPY:=0}"
+: "${DS4_V100_TP_EP_TRUE_SHARED_FFN:=1}"
 : "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_RESIDENCY:=0}"
 : "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_PROJECTION:=0}"
+: "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_PROJECTION_RANK_LOCAL_INPUT:=0}"
 : "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_STATE:=0}"
 : "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_ROPE:=0}"
 : "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_SATURATION_AUDIT:=0}"
@@ -180,18 +202,25 @@ fi
 : "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_OUTPUT_NCCL_ALLGATHER:=0}"
 : "${DS4_V100_TP_EP_TRUE_DS4_POST_ATTENTION_FFN_INPUT:=0}"
 : "${DS4_V100_TP_EP_TRUE_DS4_SEMANTIC_SKIP_STATS:=auto}"
-: "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_RAW:=0}"
-: "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_COMPRESSED:=0}"
-: "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_INDEXER:=0}"
-: "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_HISTORY:=0}"
-: "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_SKIP_CURRENT_LOAD:=0}"
+: "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_RAW:=1}"
+: "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_COMPRESSED:=1}"
+: "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_INDEXER:=1}"
+: "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_HISTORY:=1}"
+: "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_SKIP_CURRENT_LOAD:=1}"
 : "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_SKIP_RAW_STORE:=0}"
 : "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_SKIP_COMPRESSED_STORE:=0}"
 : "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_SKIP_INDEXER_STORE:=0}"
-: "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_QUIET:=0}"
-: "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_BATCH_ROWS:=0}"
-: "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_STREAM_SYNC:=0}"
+: "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_QUIET:=1}"
+: "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_BATCH_ROWS:=1}"
+: "${DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_STREAM_SYNC:=1}"
 : "${DS4_V100_TP_EP_TP_RUNTIME_SKIP_UNUSED_COMP_STATE:=1}"
+: "${DS4_V100_TP_EP_TP_RUNTIME_SCRATCH_MIB:=1024}"
+: "${DS4_V100_TP_EP_DEFER_NCCL_INIT:=1}"
+: "${DS4_V100_NCCL_TOPOLOGY_POLICY:=no-sys}"
+: "${DS4_V100_NCCL_NO_SYS_RING:=0 3 2 1 5 7 6 4}"
+: "${DS4_V100_NCCL_ALLOW_VISIBLE_REMAP:=0}"
+: "${DS4_V100_NCCL_ALGO:=auto}"
+: "${DS4_V100_NCCL_PROTO:=auto}"
 : "${DS4_V100_TP_EP_FP8_E5M2_KV:=0}"
 : "${DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_DIRECT_INPUT_FILL:=0}"
 : "${DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_DENSE_EVENT_WAIT:=1}"
@@ -208,6 +237,7 @@ fi
 : "${DS4_V100_TP_EP_VRAM_MIN_FREE_MIB:=64}"
 : "${DS4_V100_TP_EP_NCCL_MIN_FREE_MIB:=}"
 : "${DS4_V100_TP_EP_VERBOSE:=0}"
+: "${DS4_V100_TP_EP_PARALLEL_EXPERT_LOAD:=1}"
 : "${DS4_V100_TP_EP_BIN:=./tools/ds4-v100-tp-ep-full-layer-smoke}"
 : "${DS4_V100_TP_EP_CONTRACT:=/workspace/logs/sprint245-tp-ep-dense-f16-cache-contract/contract/tp-ep-pack-contract.tsv}"
 : "${DS4_V100_TP_EP_TM_INDEX:=}"
@@ -225,6 +255,7 @@ fi
 : "${DS4_V100_EXPERIMENTAL_CTX_SLOT_CAP:=}"
 : "${DS4_V100_MAX_REQUESTS:=0}"
 : "${DS4_V100_LOG_DIR:=logs/v100-appliance}"
+: "${DS4_LOCK_FILE:=$DS4_V100_LOG_DIR/ds4.lock}"
 : "${DS4_V100_SERVE_MODE:=base}"
 : "${DS4_V100_MTP_SERVING:=off}"
 : "${DS4_V100_MTP_TOP_K:=5}"
@@ -401,11 +432,7 @@ if [ "$DS4_V100_CTX" -gt 524288 ]; then
 elif [ "$DS4_V100_CTX" -gt 262144 ]; then
     ctx_slot_cap=14
 elif [ "$DS4_V100_CTX" -gt 131072 ]; then
-    if [ "$ctx_cap_startup_warmup" -eq 1 ]; then
-        ctx_slot_cap=32
-    else
-        ctx_slot_cap=16
-    fi
+    ctx_slot_cap=32
 elif [ "$DS4_V100_CTX" -gt 65536 ]; then
     ctx_slot_cap=32
 elif [ "$DS4_V100_CTX" -gt 32768 ]; then
@@ -493,6 +520,23 @@ case "$DS4_V100_STARTUP_WARMUP" in
     0|false|off) startup_warmup=0 ;;
     1|true|on) startup_warmup=1 ;;
     *) fail "DS4_V100_STARTUP_WARMUP must be auto, 0, or 1" ;;
+esac
+cuda_lib_dir=""
+case "$DS4_V100_CUDA_LIB_DIR" in
+    auto)
+        if [ -d /localpool/ds4/cuda-12.2-link/lib64 ]; then
+            cuda_lib_dir=/localpool/ds4/cuda-12.2-link/lib64
+        elif [ -n "${CUDA_HOME:-}" ] && [ -d "$CUDA_HOME/lib64" ]; then
+            cuda_lib_dir="$CUDA_HOME/lib64"
+        fi
+        ;;
+    "")
+        cuda_lib_dir=""
+        ;;
+    *)
+        [ -d "$DS4_V100_CUDA_LIB_DIR" ] || fail "DS4_V100_CUDA_LIB_DIR does not exist: $DS4_V100_CUDA_LIB_DIR"
+        cuda_lib_dir="$DS4_V100_CUDA_LIB_DIR"
+        ;;
 esac
 case "$DS4_V100_CUDA_PROFILER_WINDOW" in
     0|false|off) cuda_profiler_window=0 ;;
@@ -745,6 +789,42 @@ case "$DS4_V100_TP_EP_DECODE_CUDAGRAPH" in
     1|true|on) DS4_V100_TP_EP_DECODE_CUDAGRAPH=1 ;;
     *) fail "DS4_V100_TP_EP_DECODE_CUDAGRAPH must be 0 or 1" ;;
 esac
+case "$DS4_V100_TP_EP_DECODE_CUDAGRAPH_OUTPUT_SYNC" in
+    0|false|off) DS4_V100_TP_EP_DECODE_CUDAGRAPH_OUTPUT_SYNC=0 ;;
+    1|true|on) DS4_V100_TP_EP_DECODE_CUDAGRAPH_OUTPUT_SYNC=1 ;;
+    *) fail "DS4_V100_TP_EP_DECODE_CUDAGRAPH_OUTPUT_SYNC must be 0 or 1" ;;
+esac
+case "$DS4_V100_TP_EP_DECODE_CUDAGRAPH_HC_CURRENT_SYNC" in
+    0|false|off) DS4_V100_TP_EP_DECODE_CUDAGRAPH_HC_CURRENT_SYNC=0 ;;
+    1|true|on) DS4_V100_TP_EP_DECODE_CUDAGRAPH_HC_CURRENT_SYNC=1 ;;
+    *) fail "DS4_V100_TP_EP_DECODE_CUDAGRAPH_HC_CURRENT_SYNC must be 0 or 1" ;;
+esac
+case "$DS4_V100_TP_EP_DECODE_CUDAGRAPH_PERSISTENT" in
+    0|false|off) DS4_V100_TP_EP_DECODE_CUDAGRAPH_PERSISTENT=0 ;;
+    1|true|on) DS4_V100_TP_EP_DECODE_CUDAGRAPH_PERSISTENT=1 ;;
+    *) fail "DS4_V100_TP_EP_DECODE_CUDAGRAPH_PERSISTENT must be 0 or 1" ;;
+esac
+case "$DS4_V100_TP_EP_DECODE_STAGE_CHECKSUM" in
+    0|false|off) DS4_V100_TP_EP_DECODE_STAGE_CHECKSUM=0 ;;
+    1|true|on) DS4_V100_TP_EP_DECODE_STAGE_CHECKSUM=1 ;;
+    *) fail "DS4_V100_TP_EP_DECODE_STAGE_CHECKSUM must be 0 or 1" ;;
+esac
+if [ "$DS4_V100_TP_EP_DECODE_CUDAGRAPH_PERSISTENT" -eq 1 ]; then
+    DS4_V100_TP_EP_DECODE_CUDAGRAPH=1
+fi
+if [ "$DS4_V100_TP_EP_DECODE_CUDAGRAPH_HC_CURRENT_SYNC" -eq 1 ]; then
+    DS4_V100_TP_EP_DECODE_CUDAGRAPH=1
+fi
+if [ -n "$DS4_V100_TP_EP_DECODE_CUDAGRAPH_STAGE_SYNC" ]; then
+    DS4_V100_TP_EP_DECODE_CUDAGRAPH=1
+fi
+case "$DS4_V100_TP_EP_DECODE_CUDAGRAPH_SUFFIX_STAGE" in
+    ""|routed_ffn|dense|compose|final_hc|compose_eager_final_hc) ;;
+    *) fail "DS4_V100_TP_EP_DECODE_CUDAGRAPH_SUFFIX_STAGE must be empty, routed_ffn, dense, compose, final_hc, or compose_eager_final_hc" ;;
+esac
+if [ -n "$DS4_V100_TP_EP_DECODE_CUDAGRAPH_SUFFIX_STAGE" ]; then
+    DS4_V100_TP_EP_DECODE_CUDAGRAPH=1
+fi
 case "$DS4_V100_TP_EP_BATCHED_PAGED_ATTN" in
     0|false|off) DS4_V100_TP_EP_BATCHED_PAGED_ATTN=0 ;;
     1|true|on) DS4_V100_TP_EP_BATCHED_PAGED_ATTN=1 ;;
@@ -781,7 +861,8 @@ fi
 case "$DS4_V100_TP_EP_NCCL_REDUCE_SCATTER_COMPOSE" in
     0|false|off) DS4_V100_TP_EP_NCCL_REDUCE_SCATTER_COMPOSE=0 ;;
     1|true|on) DS4_V100_TP_EP_NCCL_REDUCE_SCATTER_COMPOSE=1 ;;
-    *) fail "DS4_V100_TP_EP_NCCL_REDUCE_SCATTER_COMPOSE must be 0 or 1" ;;
+    auto) DS4_V100_TP_EP_NCCL_REDUCE_SCATTER_COMPOSE=auto ;;
+    *) fail "DS4_V100_TP_EP_NCCL_REDUCE_SCATTER_COMPOSE must be 0, 1, or auto" ;;
 esac
 case "$DS4_V100_TP_EP_FUSED_GATED_SILU" in
     0|false|off) DS4_V100_TP_EP_FUSED_GATED_SILU=0 ;;
@@ -831,6 +912,19 @@ case "$DS4_V100_TP_EP_HC_CURRENT_INPUT_FUSED_FILL_PACK" in
     1|true|on) DS4_V100_TP_EP_HC_CURRENT_INPUT_FUSED_FILL_PACK=1 ;;
     *) fail "DS4_V100_TP_EP_HC_CURRENT_INPUT_FUSED_FILL_PACK must be 0 or 1" ;;
 esac
+case "$DS4_V100_TP_EP_PEER_ACCOUNTING" in
+    0|false|off) DS4_V100_TP_EP_PEER_ACCOUNTING=0 ;;
+    1|true|on) DS4_V100_TP_EP_PEER_ACCOUNTING=1 ;;
+    *) fail "DS4_V100_TP_EP_PEER_ACCOUNTING must be 0 or 1" ;;
+esac
+case "$DS4_V100_TP_EP_PEER_REJECT_SYS" in
+    0|false|off) DS4_V100_TP_EP_PEER_REJECT_SYS=0 ;;
+    1|true|on) DS4_V100_TP_EP_PEER_REJECT_SYS=1 ;;
+    *) fail "DS4_V100_TP_EP_PEER_REJECT_SYS must be 0 or 1" ;;
+esac
+if [ "$DS4_V100_TP_EP_PEER_REJECT_SYS" -eq 1 ]; then
+    DS4_V100_TP_EP_PEER_ACCOUNTING=1
+fi
 if [ "$DS4_V100_TP_EP_HC_CURRENT_INPUT_PEER_GATHER" -eq 1 ]; then
     DS4_V100_TP_EP_HC_CURRENT_INPUT=1
 fi
@@ -876,6 +970,11 @@ case "$DS4_V100_TP_EP_ROUTE_PLAN_ASYNC_UPLOAD" in
     1|true|on) DS4_V100_TP_EP_ROUTE_PLAN_ASYNC_UPLOAD=1 ;;
     *) fail "DS4_V100_TP_EP_ROUTE_PLAN_ASYNC_UPLOAD must be 0 or 1" ;;
 esac
+case "$DS4_V100_TP_EP_PARALLEL_EXPERT_LOAD" in
+    0|false|off) DS4_V100_TP_EP_PARALLEL_EXPERT_LOAD=0 ;;
+    1|true|on) DS4_V100_TP_EP_PARALLEL_EXPERT_LOAD=1 ;;
+    *) fail "DS4_V100_TP_EP_PARALLEL_EXPERT_LOAD must be 0 or 1" ;;
+esac
 if [ "$DS4_V100_TP_EP_ROUTER_CUBLAS" -eq 1 ]; then
     DS4_V100_TP_EP_MODEL_ROUTER_ROUTES=1
 fi
@@ -910,6 +1009,47 @@ if [ "$DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT" -eq 1 ]; then
     DS4_V100_TP_EP_HC_CURRENT_INPUT=1
     DS4_V100_TP_EP_HC_FINAL_EXPAND=1
 fi
+case "$DS4_V100_TP_EP_ROUTED_FFN_RANK_MAJOR_INPUT" in
+    0|false|off) DS4_V100_TP_EP_ROUTED_FFN_RANK_MAJOR_INPUT=0 ;;
+    1|true|on) DS4_V100_TP_EP_ROUTED_FFN_RANK_MAJOR_INPUT=1 ;;
+    *) fail "DS4_V100_TP_EP_ROUTED_FFN_RANK_MAJOR_INPUT must be 0 or 1" ;;
+esac
+if [ "$DS4_V100_TP_EP_ROUTED_FFN_RANK_MAJOR_INPUT" -eq 1 ]; then
+    DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT=1
+    DS4_V100_TP_EP_HC_CURRENT_INPUT=1
+    DS4_V100_TP_EP_HC_CURRENT_INPUT_NCCL_ALLGATHER=1
+    DS4_V100_TP_EP_HC_FINAL_EXPAND=1
+    DS4_V100_TP_EP_TRUE_DS4_POST_ATTENTION_FFN_INPUT=1
+fi
+case "$DS4_V100_TP_EP_MODEL_ROUTER_RANK_MAJOR_LOGITS" in
+    0|false|off) DS4_V100_TP_EP_MODEL_ROUTER_RANK_MAJOR_LOGITS=0 ;;
+    1|true|on) DS4_V100_TP_EP_MODEL_ROUTER_RANK_MAJOR_LOGITS=1 ;;
+    *) fail "DS4_V100_TP_EP_MODEL_ROUTER_RANK_MAJOR_LOGITS must be 0 or 1" ;;
+esac
+case "$DS4_V100_TP_EP_MODEL_ROUTER_ALLREDUCE_LOGITS" in
+    0|false|off) DS4_V100_TP_EP_MODEL_ROUTER_ALLREDUCE_LOGITS=0 ;;
+    1|true|on) DS4_V100_TP_EP_MODEL_ROUTER_ALLREDUCE_LOGITS=1 ;;
+    *) fail "DS4_V100_TP_EP_MODEL_ROUTER_ALLREDUCE_LOGITS must be 0 or 1" ;;
+esac
+if [ "$DS4_V100_TP_EP_MODEL_ROUTER_RANK_MAJOR_LOGITS" -eq 1 ] && \
+   [ "$DS4_V100_TP_EP_MODEL_ROUTER_ALLREDUCE_LOGITS" -eq 1 ]; then
+    fail "DS4_V100_TP_EP_MODEL_ROUTER_RANK_MAJOR_LOGITS and DS4_V100_TP_EP_MODEL_ROUTER_ALLREDUCE_LOGITS are mutually exclusive"
+fi
+if [ "$DS4_V100_TP_EP_MODEL_ROUTER_RANK_MAJOR_LOGITS" -eq 1 ]; then
+    DS4_V100_TP_EP_MODEL_ROUTER_ROUTES=1
+    DS4_V100_TP_EP_ROUTED_FFN_RANK_MAJOR_INPUT=1
+    DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT=1
+    DS4_V100_TP_EP_HC_CURRENT_INPUT=1
+    DS4_V100_TP_EP_HC_CURRENT_INPUT_NCCL_ALLGATHER=1
+    DS4_V100_TP_EP_HC_FINAL_EXPAND=1
+    DS4_V100_TP_EP_POST_ATTENTION_FIXED_CAPACITY_ROUTE_PLAN=1
+    DS4_V100_TP_EP_TRUE_DS4_POST_ATTENTION_FFN_INPUT=1
+fi
+if [ "$DS4_V100_TP_EP_MODEL_ROUTER_ALLREDUCE_LOGITS" -eq 1 ]; then
+    DS4_V100_TP_EP_MODEL_ROUTER_ROUTES=1
+    DS4_V100_TP_EP_HC_CURRENT_INPUT=1
+    DS4_V100_TP_EP_HC_FINAL_EXPAND=1
+fi
 case "$DS4_V100_TP_EP_TRUE_SHARED_FFN" in
     0|false|off) DS4_V100_TP_EP_TRUE_SHARED_FFN=0 ;;
     1|true|on) DS4_V100_TP_EP_TRUE_SHARED_FFN=1 ;;
@@ -934,6 +1074,17 @@ case "$DS4_V100_TP_EP_TRUE_DS4_ATTENTION_PROJECTION" in
     *) fail "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_PROJECTION must be 0 or 1" ;;
 esac
 if [ "$DS4_V100_TP_EP_TRUE_DS4_ATTENTION_PROJECTION" -eq 1 ]; then
+    DS4_V100_TP_EP_TRUE_DS4_ATTENTION_RESIDENCY=1
+    DS4_V100_TP_EP_HC_CURRENT_INPUT=1
+    DS4_V100_TP_EP_HC_FINAL_EXPAND=1
+fi
+case "$DS4_V100_TP_EP_TRUE_DS4_ATTENTION_PROJECTION_RANK_LOCAL_INPUT" in
+    0|false|off) DS4_V100_TP_EP_TRUE_DS4_ATTENTION_PROJECTION_RANK_LOCAL_INPUT=0 ;;
+    1|true|on) DS4_V100_TP_EP_TRUE_DS4_ATTENTION_PROJECTION_RANK_LOCAL_INPUT=1 ;;
+    *) fail "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_PROJECTION_RANK_LOCAL_INPUT must be 0 or 1" ;;
+esac
+if [ "$DS4_V100_TP_EP_TRUE_DS4_ATTENTION_PROJECTION_RANK_LOCAL_INPUT" -eq 1 ]; then
+    DS4_V100_TP_EP_TRUE_DS4_ATTENTION_PROJECTION=1
     DS4_V100_TP_EP_TRUE_DS4_ATTENTION_RESIDENCY=1
     DS4_V100_TP_EP_HC_CURRENT_INPUT=1
     DS4_V100_TP_EP_HC_FINAL_EXPAND=1
@@ -1039,6 +1190,53 @@ case "$DS4_V100_TP_EP_TRUE_DS4_POST_ATTENTION_FFN_INPUT" in
     1|true|on) DS4_V100_TP_EP_TRUE_DS4_POST_ATTENTION_FFN_INPUT=1 ;;
     *) fail "DS4_V100_TP_EP_TRUE_DS4_POST_ATTENTION_FFN_INPUT must be 0 or 1" ;;
 esac
+case "$DS4_V100_TP_EP_POST_ATTENTION_FIXED_CAPACITY_ROUTE_PLAN" in
+    0|false|off) DS4_V100_TP_EP_POST_ATTENTION_FIXED_CAPACITY_ROUTE_PLAN=0 ;;
+    1|true|on) DS4_V100_TP_EP_POST_ATTENTION_FIXED_CAPACITY_ROUTE_PLAN=1 ;;
+    *) fail "DS4_V100_TP_EP_POST_ATTENTION_FIXED_CAPACITY_ROUTE_PLAN must be 0 or 1" ;;
+esac
+case "$DS4_V100_TP_EP_POST_ATTENTION_DEVICE_ACTUAL_ROUTE_SYNC" in
+    0|false|off) DS4_V100_TP_EP_POST_ATTENTION_DEVICE_ACTUAL_ROUTE_SYNC=0 ;;
+    1|true|on) DS4_V100_TP_EP_POST_ATTENTION_DEVICE_ACTUAL_ROUTE_SYNC=1 ;;
+    *) fail "DS4_V100_TP_EP_POST_ATTENTION_DEVICE_ACTUAL_ROUTE_SYNC must be 0 or 1" ;;
+esac
+case "$DS4_V100_TP_EP_POST_ATTENTION_SLOT_MAJOR_FFN_NORM" in
+    0|false|off) DS4_V100_TP_EP_POST_ATTENTION_SLOT_MAJOR_FFN_NORM=0 ;;
+    1|true|on) DS4_V100_TP_EP_POST_ATTENTION_SLOT_MAJOR_FFN_NORM=1 ;;
+    *) fail "DS4_V100_TP_EP_POST_ATTENTION_SLOT_MAJOR_FFN_NORM must be 0 or 1" ;;
+esac
+case "$DS4_V100_TP_EP_POST_ATTENTION_SKIP_SLOT_MAJOR_FFN_NORM" in
+    0|false|off) DS4_V100_TP_EP_POST_ATTENTION_SKIP_SLOT_MAJOR_FFN_NORM=0 ;;
+    1|true|on) DS4_V100_TP_EP_POST_ATTENTION_SKIP_SLOT_MAJOR_FFN_NORM=1 ;;
+    *) fail "DS4_V100_TP_EP_POST_ATTENTION_SKIP_SLOT_MAJOR_FFN_NORM must be 0 or 1" ;;
+esac
+case "$DS4_V100_TP_EP_POST_ATTENTION_MASKED_COMPACT_COPY" in
+    0|false|off) DS4_V100_TP_EP_POST_ATTENTION_MASKED_COMPACT_COPY=0 ;;
+    1|true|on) DS4_V100_TP_EP_POST_ATTENTION_MASKED_COMPACT_COPY=1 ;;
+    *) fail "DS4_V100_TP_EP_POST_ATTENTION_MASKED_COMPACT_COPY must be 0 or 1" ;;
+esac
+if [ "$DS4_V100_TP_EP_POST_ATTENTION_DEVICE_ACTUAL_ROUTE_SYNC" -eq 1 ]; then
+    DS4_V100_TP_EP_POST_ATTENTION_FIXED_CAPACITY_ROUTE_PLAN=1
+fi
+if [ "$DS4_V100_TP_EP_POST_ATTENTION_MASKED_COMPACT_COPY" -eq 1 ]; then
+    DS4_V100_TP_EP_POST_ATTENTION_FIXED_CAPACITY_ROUTE_PLAN=1
+fi
+if [ "$DS4_V100_TP_EP_POST_ATTENTION_FIXED_CAPACITY_ROUTE_PLAN" -eq 1 ]; then
+    DS4_V100_TP_EP_TRUE_DS4_POST_ATTENTION_FFN_INPUT=1
+    DS4_V100_TP_EP_MODEL_ROUTER_ROUTES=1
+    DS4_V100_TP_EP_COMPACT_MOE_DECODE=1
+    DS4_V100_TP_EP_COMPACT_ROUTE_COMPOSE=1
+    DS4_V100_TP_EP_HC_CURRENT_INPUT=1
+    DS4_V100_TP_EP_HC_FINAL_EXPAND=1
+fi
+if [ "$DS4_V100_TP_EP_NCCL_REDUCE_SCATTER_COMPOSE" = auto ]; then
+    if [ "$DS4_V100_TP_EP_COMPACT_ROUTE_COMPOSE" -eq 0 ] &&
+       [ "$DS4_V100_TP_EP_RETURN_FP16" -eq 0 ]; then
+        DS4_V100_TP_EP_NCCL_REDUCE_SCATTER_COMPOSE=1
+    else
+        DS4_V100_TP_EP_NCCL_REDUCE_SCATTER_COMPOSE=0
+    fi
+fi
 if [ "$DS4_V100_TP_EP_TRUE_DS4_POST_ATTENTION_FFN_INPUT" -eq 1 ]; then
     DS4_V100_TP_EP_TRUE_DS4_ATTENTION_OUTPUT=1
     DS4_V100_TP_EP_TRUE_DS4_ATTENTION_RAW_WINDOW=1
@@ -1126,6 +1324,50 @@ case "$DS4_V100_TP_EP_TP_RUNTIME_SKIP_UNUSED_COMP_STATE" in
     1|true|on) DS4_V100_TP_EP_TP_RUNTIME_SKIP_UNUSED_COMP_STATE=1 ;;
     *) fail "DS4_V100_TP_EP_TP_RUNTIME_SKIP_UNUSED_COMP_STATE must be 0 or 1" ;;
 esac
+is_uint "$DS4_V100_TP_EP_TP_RUNTIME_SCRATCH_MIB" || fail "DS4_V100_TP_EP_TP_RUNTIME_SCRATCH_MIB must be an integer"
+[ "$DS4_V100_TP_EP_TP_RUNTIME_SCRATCH_MIB" -ge 64 ] &&
+    [ "$DS4_V100_TP_EP_TP_RUNTIME_SCRATCH_MIB" -le 4096 ] ||
+    fail "DS4_V100_TP_EP_TP_RUNTIME_SCRATCH_MIB must be between 64 and 4096"
+case "$DS4_V100_TP_EP_DEFER_NCCL_INIT" in
+    0|false|off) DS4_V100_TP_EP_DEFER_NCCL_INIT=0 ;;
+    1|true|on) DS4_V100_TP_EP_DEFER_NCCL_INIT=1 ;;
+    *) fail "DS4_V100_TP_EP_DEFER_NCCL_INIT must be 0 or 1" ;;
+esac
+case "$DS4_V100_NCCL_TOPOLOGY_POLICY" in
+    no-sys|off) ;;
+    *) fail "DS4_V100_NCCL_TOPOLOGY_POLICY must be no-sys or off" ;;
+esac
+case "$DS4_V100_NCCL_ALLOW_VISIBLE_REMAP" in
+    0|false|off) DS4_V100_NCCL_ALLOW_VISIBLE_REMAP=0 ;;
+    1|true|on) DS4_V100_NCCL_ALLOW_VISIBLE_REMAP=1 ;;
+    *) fail "DS4_V100_NCCL_ALLOW_VISIBLE_REMAP must be 0 or 1" ;;
+esac
+case "$DS4_V100_NCCL_ALGO" in
+    auto|Ring|Tree|CollNetDirect|CollNetChain|NVLS|NVLSTree|PAT) ;;
+    *) fail "DS4_V100_NCCL_ALGO must be auto or a valid NCCL_ALGO value" ;;
+esac
+case "$DS4_V100_NCCL_PROTO" in
+    auto|LL|LL128|Simple) ;;
+    *) fail "DS4_V100_NCCL_PROTO must be auto, LL, LL128, or Simple" ;;
+esac
+if [ "$DS4_V100_NCCL_TOPOLOGY_POLICY" = "no-sys" ]; then
+    if [ "$DS4_V100_CUDA_VISIBLE_DEVICES" != "0,1,2,3,4,5,6,7" ] &&
+       [ "$DS4_V100_NCCL_ALLOW_VISIBLE_REMAP" -ne 1 ]; then
+        fail "DS4_V100_NCCL_TOPOLOGY_POLICY=no-sys requires DS4_V100_CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7; set DS4_V100_NCCL_ALLOW_VISIBLE_REMAP=1 only for diagnostics"
+    fi
+    NCCL_RINGS="$DS4_V100_NCCL_NO_SYS_RING"
+    NCCL_P2P_LEVEL=NVL
+fi
+if [ "$DS4_V100_NCCL_ALGO" != "auto" ]; then
+    NCCL_ALGO="$DS4_V100_NCCL_ALGO"
+else
+    unset NCCL_ALGO
+fi
+if [ "$DS4_V100_NCCL_PROTO" != "auto" ]; then
+    NCCL_PROTO="$DS4_V100_NCCL_PROTO"
+else
+    unset NCCL_PROTO
+fi
 if [ "$DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_HISTORY" -eq 1 ]; then
     DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_INDEXER=1
     DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_COMPRESSED=1
@@ -1292,6 +1534,24 @@ case "$DS4_V100_TP_EP_REFERENCE_HC_STATE_GUARD" in
     1|true|on) DS4_V100_TP_EP_REFERENCE_HC_STATE_GUARD=1 ;;
     *) fail "DS4_V100_TP_EP_REFERENCE_HC_STATE_GUARD must be 0 or 1" ;;
 esac
+case "$DS4_V100_TP_EP_HC_CURRENT_ALLREDUCE" in
+    0|false|off) DS4_V100_TP_EP_HC_CURRENT_ALLREDUCE=0 ;;
+    1|true|on) DS4_V100_TP_EP_HC_CURRENT_ALLREDUCE=1 ;;
+    *) fail "DS4_V100_TP_EP_HC_CURRENT_ALLREDUCE must be 0 or 1" ;;
+esac
+case "$DS4_V100_TP_EP_HC_CURRENT_FULL_PARITY" in
+    0|false|off) DS4_V100_TP_EP_HC_CURRENT_FULL_PARITY=0 ;;
+    1|true|on) DS4_V100_TP_EP_HC_CURRENT_FULL_PARITY=1 ;;
+    *) fail "DS4_V100_TP_EP_HC_CURRENT_FULL_PARITY must be 0 or 1" ;;
+esac
+if [ "$DS4_V100_TP_EP_HC_CURRENT_FULL_PARITY" -eq 1 ]; then
+    DS4_V100_TP_EP_HC_CURRENT_INPUT=1
+    DS4_V100_TP_EP_HC_FINAL_EXPAND=1
+fi
+if [ "$DS4_V100_TP_EP_HC_CURRENT_ALLREDUCE" -eq 1 ]; then
+    DS4_V100_TP_EP_HC_CURRENT_INPUT=1
+    DS4_V100_TP_EP_HC_FINAL_EXPAND=1
+fi
 if [ "$DS4_V100_TP_EP_REFERENCE_HC_STATE_GUARD" -eq 1 ]; then
     DS4_V100_TP_EP_REFERENCE_HC_REDUCE=1
 fi
@@ -1313,6 +1573,7 @@ is_uint "$DS4_V100_TP_EP_VRAM_MIN_FREE_MIB" || fail "DS4_V100_TP_EP_VRAM_MIN_FRE
 tp_ep_nccl_gate_active=0
 if [ "$DS4_V100_TP_EP_NCCL_REDUCE_SCATTER_COMPOSE" -eq 1 ] ||
    [ "$DS4_V100_TP_EP_HC_CURRENT_INPUT_NCCL_ALLGATHER" -eq 1 ] ||
+   [ "$DS4_V100_TP_EP_HC_CURRENT_ALLREDUCE" -eq 1 ] ||
    [ "$DS4_V100_TP_EP_TRUE_DS4_ATTENTION_OUTPUT_NCCL_ALLGATHER" -eq 1 ]; then
     tp_ep_nccl_gate_active=1
 fi
@@ -1458,6 +1719,9 @@ if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
     if [ "$DS4_V100_TP_EP_COMPACT_MOE_DECODE" -eq 1 ]; then
         cmd+=(--compact-moe-decode-gate)
     fi
+    if [ "$DS4_V100_TP_EP_PARALLEL_EXPERT_LOAD" -eq 1 ]; then
+        cmd+=(--parallel-expert-load-gate)
+    fi
     if [ "$DS4_V100_TP_EP_NCCL_REDUCE_SCATTER_COMPOSE" -eq 1 ]; then
         cmd+=(--nccl-reduce-scatter-compose-gate)
     fi
@@ -1476,6 +1740,12 @@ if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
     if [ "$DS4_V100_TP_EP_HC_CURRENT_INPUT_NCCL_ALLGATHER" -eq 1 ]; then
         cmd+=(--tp-hc-current-input-nccl-allgather-gate)
     fi
+    if [ "$DS4_V100_TP_EP_HC_CURRENT_ALLREDUCE" -eq 1 ]; then
+        cmd+=(--tp-hc-current-allreduce-gate)
+    fi
+    if [ "$DS4_V100_TP_EP_HC_CURRENT_FULL_PARITY" -eq 1 ]; then
+        cmd+=(--tp-hc-current-full-parity-gate)
+    fi
     if [ "$DS4_V100_TP_EP_HC_CURRENT_INPUT_STREAM_SYNC" -eq 1 ]; then
         cmd+=(--tp-hc-current-input-stream-sync-gate)
     fi
@@ -1484,6 +1754,12 @@ if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
     fi
     if [ "$DS4_V100_TP_EP_HC_PERSIST_STATE" -eq 1 ]; then
         cmd+=(--tp-hc-persist-state-gate)
+    fi
+    if [ "$DS4_V100_TP_EP_PEER_ACCOUNTING" -eq 1 ]; then
+        cmd+=(--tp-peer-accounting-gate)
+    fi
+    if [ "$DS4_V100_TP_EP_PEER_REJECT_SYS" -eq 1 ]; then
+        cmd+=(--tp-peer-reject-sys-gate)
     fi
     if [ "$DS4_V100_TP_EP_MODEL_ROUTER_ROUTES" -eq 1 ]; then
         cmd+=(--model-router-routes)
@@ -1503,6 +1779,30 @@ if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
     if [ "$DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT" -eq 1 ]; then
         cmd+=(--routed-ffn-norm-input-gate)
     fi
+    if [ "$DS4_V100_TP_EP_ROUTED_FFN_RANK_MAJOR_INPUT" -eq 1 ]; then
+        cmd+=(--routed-ffn-rank-major-input-gate)
+    fi
+    if [ "$DS4_V100_TP_EP_MODEL_ROUTER_RANK_MAJOR_LOGITS" -eq 1 ]; then
+        cmd+=(--model-router-rank-major-logits-gate)
+    fi
+    if [ "$DS4_V100_TP_EP_MODEL_ROUTER_ALLREDUCE_LOGITS" -eq 1 ]; then
+        cmd+=(--model-router-allreduce-logits-gate)
+    fi
+    if [ "$DS4_V100_TP_EP_POST_ATTENTION_FIXED_CAPACITY_ROUTE_PLAN" -eq 1 ]; then
+        cmd+=(--post-attention-fixed-capacity-route-plan-gate)
+    fi
+    if [ "$DS4_V100_TP_EP_POST_ATTENTION_DEVICE_ACTUAL_ROUTE_SYNC" -eq 1 ]; then
+        cmd+=(--post-attention-device-actual-route-sync-gate)
+    fi
+    if [ "$DS4_V100_TP_EP_POST_ATTENTION_SLOT_MAJOR_FFN_NORM" -eq 1 ]; then
+        cmd+=(--post-attention-slot-major-ffn-norm-gate)
+    fi
+    if [ "$DS4_V100_TP_EP_POST_ATTENTION_SKIP_SLOT_MAJOR_FFN_NORM" -eq 1 ]; then
+        cmd+=(--post-attention-skip-slot-major-ffn-norm-gate)
+    fi
+    if [ "$DS4_V100_TP_EP_POST_ATTENTION_MASKED_COMPACT_COPY" -eq 1 ]; then
+        cmd+=(--post-attention-masked-compact-copy-gate)
+    fi
     if [ "$DS4_V100_TP_EP_TRUE_SHARED_FFN" -eq 1 ]; then
         cmd+=(--true-shared-ffn-gate)
     fi
@@ -1511,6 +1811,9 @@ if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
     fi
     if [ "$DS4_V100_TP_EP_TRUE_DS4_ATTENTION_PROJECTION" -eq 1 ]; then
         cmd+=(--true-ds4-attention-projection-gate)
+    fi
+    if [ "$DS4_V100_TP_EP_TRUE_DS4_ATTENTION_PROJECTION_RANK_LOCAL_INPUT" -eq 1 ]; then
+        cmd+=(--true-ds4-attention-projection-rank-local-input-gate)
     fi
     if [ "$DS4_V100_TP_EP_TRUE_DS4_ATTENTION_STATE" -eq 1 ]; then
         cmd+=(--true-ds4-attention-state-gate)
@@ -1578,6 +1881,10 @@ if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
     if [ "$DS4_V100_TP_EP_TP_RUNTIME_SKIP_UNUSED_COMP_STATE" -eq 1 ]; then
         cmd+=(--tp-runtime-skip-unused-comp-state-gate)
     fi
+    cmd+=(--tp-runtime-scratch-mib "$DS4_V100_TP_EP_TP_RUNTIME_SCRATCH_MIB")
+    if [ "$DS4_V100_TP_EP_DEFER_NCCL_INIT" -eq 1 ]; then
+        cmd+=(--defer-nccl-init-gate)
+    fi
     if [ "$DS4_V100_TP_EP_VRAM_REPORT" -eq 1 ]; then
         cmd+=(--vram-report)
     fi
@@ -1635,8 +1942,25 @@ if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
     if [ "$DS4_V100_TP_EP_ASYNC_OUTPUT" -eq 1 ]; then
         cmd+=(--async-output-gate)
     fi
-    if [ "$DS4_V100_TP_EP_DECODE_CUDAGRAPH" -eq 1 ]; then
+    if [ "$DS4_V100_TP_EP_DECODE_CUDAGRAPH_PERSISTENT" -eq 1 ]; then
+        cmd+=(--decode-cudagraph-persistent-replay-gate)
+    elif [ "$DS4_V100_TP_EP_DECODE_CUDAGRAPH" -eq 1 ]; then
         cmd+=(--decode-cudagraph-gate)
+    fi
+    if [ "$DS4_V100_TP_EP_DECODE_CUDAGRAPH_OUTPUT_SYNC" -eq 1 ]; then
+        cmd+=(--decode-cudagraph-output-sync-gate)
+    fi
+    if [ "$DS4_V100_TP_EP_DECODE_CUDAGRAPH_HC_CURRENT_SYNC" -eq 1 ]; then
+        cmd+=(--decode-cudagraph-hc-current-sync-gate)
+    fi
+    if [ -n "$DS4_V100_TP_EP_DECODE_CUDAGRAPH_STAGE_SYNC" ]; then
+        cmd+=(--decode-cudagraph-stage-sync-gate "$DS4_V100_TP_EP_DECODE_CUDAGRAPH_STAGE_SYNC")
+    fi
+    if [ -n "$DS4_V100_TP_EP_DECODE_CUDAGRAPH_SUFFIX_STAGE" ]; then
+        cmd+=(--decode-cudagraph-suffix-stage-gate "$DS4_V100_TP_EP_DECODE_CUDAGRAPH_SUFFIX_STAGE")
+    fi
+    if [ "$DS4_V100_TP_EP_DECODE_STAGE_CHECKSUM" -eq 1 ]; then
+        cmd+=(--decode-stage-checksum-gate)
     fi
     if [ "$DS4_V100_TP_EP_BATCHED_PAGED_ATTN" -eq 1 ]; then
         cmd+=(--batched-paged-attn-gate)
@@ -1698,7 +2022,8 @@ print_resolved() {
 }
 
 if [ "$mode" = "check" ]; then
-    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff async_slot_chunk=${DS4_V100_ASYNC_SLOT_CHUNK:-default} async_ffn_wavefront=$DS4_V100_ASYNC_FFN_WAVEFRONT async_ffn_wavefront_chunk=$DS4_V100_ASYNC_FFN_WAVEFRONT_CHUNK async_ffn_wavefront_verbose=$DS4_V100_ASYNC_FFN_WAVEFRONT_VERBOSE startup_warmup=$startup_warmup cuda_profiler_window=$cuda_profiler_window cuda_tensor_pool=$cuda_tensor_pool cuda_tensor_pool_max_mib=$DS4_V100_CUDA_TENSOR_POOL_MAX_MIB cuda_f8_rowpair=$DS4_V100_CUDA_F8_ROWPAIR cuda_f8_row4=$DS4_V100_CUDA_F8_ROW4 cuda_f8_warp_scale=$DS4_V100_CUDA_F8_WARP_SCALE cuda_f8_grouped_ds4_fast=$DS4_V100_CUDA_F8_GROUPED_DS4_FAST cuda_f8_hmma_shared_down=$DS4_V100_CUDA_F8_HMMA_SHARED_DOWN cuda_f8_hmma_pair_swiglu=$DS4_V100_CUDA_F8_HMMA_PAIR_SWIGLU cuda_f8_hmma_attn_batch=$DS4_V100_CUDA_F8_HMMA_ATTN_BATCH cuda_f8_hmma_grouped_attn_o_batch=$DS4_V100_CUDA_F8_HMMA_GROUPED_ATTN_O_BATCH cuda_f8_hmma_grouped_attn_o_single=$DS4_V100_CUDA_F8_HMMA_GROUPED_ATTN_O_SINGLE cuda_f8_hmma_single=$DS4_V100_CUDA_F8_HMMA_SINGLE cuda_f8_pair_swiglu_single=$DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE cuda_f8_pair_swiglu_single_rows2=$DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE_ROWS2 f8_shared_down_add=$DS4_V100_F8_SHARED_DOWN_ADD batch_attn_proj=$DS4_V100_ENABLE_BATCH_ATTN_PROJ batch_attn_output_a=$DS4_V100_BATCH_ATTN_OUTPUT_A batch_attn_output_b=$DS4_V100_BATCH_ATTN_OUTPUT_B batch_shared_f8=$DS4_V100_BATCH_SHARED_F8 ffn_direct_delta=$DS4_V100_FFN_DIRECT_DELTA disable_grouped_attn_output_a=$DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A single_slot_attn_scratch=$DS4_V100_SINGLE_SLOT_ATTN_SCRATCH single_slot_attn_output_a_hmma=$DS4_V100_SINGLE_SLOT_ATTN_OUTPUT_A_HMMA appliance_dir=${DS4_V100_APPLIANCE_DIR:-none} turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN disable_turbomind_total_tokens=$DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS turbomind_route_validate_sync=$DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC turbomind_small_route_build=$DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD turbomind_route_row_reduce=$DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE turbomind_route_row_reduce_h2=$DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE_H2 turbomind_indexed_a=$DS4_V100_TURBOMIND_INDEXED_A turbomind_fused_gate_up=$DS4_V100_TURBOMIND_FUSED_GATE_UP turbomind_gated_silu=$DS4_V100_TURBOMIND_GATED_SILU turbomind_compact_schedule=$DS4_V100_TURBOMIND_COMPACT_SCHEDULE turbomind_compact_no_host_sync=$DS4_V100_TURBOMIND_COMPACT_NO_HOST_SYNC turbomind_routed_executor=$DS4_V100_TURBOMIND_ROUTED_EXECUTOR turbomind_routed_executor_verbose=$DS4_V100_TURBOMIND_ROUTED_EXECUTOR_VERBOSE turbomind_gate_up_probe=$DS4_V100_TURBOMIND_GATE_UP_PROBE turbomind_down_probe=$DS4_V100_TURBOMIND_DOWN_PROBE turbomind_down_reduce_epilogue=$DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE turbomind_dispatch_policy=$DS4_V100_TURBOMIND_DISPATCH_POLICY turbomind_allow_unsafe_measure=$DS4_V100_TURBOMIND_ALLOW_UNSAFE_MEASURE turbomind_group_pipeline=$DS4_V100_TURBOMIND_GROUP_PIPELINE turbomind_group_pipeline_streams=$DS4_V100_TURBOMIND_GROUP_PIPELINE_STREAMS turbomind_group_pipeline_auto_groups=$DS4_V100_TURBOMIND_GROUP_PIPELINE_AUTO_GROUPS turbomind_graph=$DS4_V100_TURBOMIND_GRAPH turbomind_graph_verbose=$DS4_V100_TURBOMIND_GRAPH_VERBOSE turbomind_profile=$DS4_V100_TURBOMIND_PROFILE tp_ep_routed_ffn=$DS4_V100_TP_EP_ROUTED_FFN tp_ep_layer_first=${DS4_V100_TP_EP_LAYER_FIRST:-none} tp_ep_layer_count=$DS4_V100_TP_EP_LAYER_COUNT tp_ep_peer=${DS4_V100_TP_EP_PEER:-auto} tp_ep_async_input=$DS4_V100_TP_EP_ASYNC_INPUT tp_ep_parallel_halves=$DS4_V100_TP_EP_PARALLEL_HALVES tp_ep_copy_event_compose=$DS4_V100_TP_EP_COPY_EVENT_COMPOSE tp_ep_return_fp16=$DS4_V100_TP_EP_RETURN_FP16 tp_ep_compact_route_compose=$DS4_V100_TP_EP_COMPACT_ROUTE_COMPOSE tp_ep_compact_moe_decode=$DS4_V100_TP_EP_COMPACT_MOE_DECODE tp_ep_nccl_reduce_scatter_compose=$DS4_V100_TP_EP_NCCL_REDUCE_SCATTER_COMPOSE tp_ep_hc_final_expand=$DS4_V100_TP_EP_HC_FINAL_EXPAND tp_ep_hc_current_input=$DS4_V100_TP_EP_HC_CURRENT_INPUT tp_ep_model_router_routes=$DS4_V100_TP_EP_MODEL_ROUTER_ROUTES tp_ep_router_cublas=$DS4_V100_TP_EP_ROUTER_CUBLAS tp_ep_gpu_route_plan=$DS4_V100_TP_EP_GPU_ROUTE_PLAN tp_ep_routed_ffn_norm_input=$DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT tp_ep_true_shared_ffn=$DS4_V100_TP_EP_TRUE_SHARED_FFN tp_ep_verbose=$DS4_V100_TP_EP_VERBOSE"
+    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff async_slot_chunk=${DS4_V100_ASYNC_SLOT_CHUNK:-default} async_ffn_wavefront=$DS4_V100_ASYNC_FFN_WAVEFRONT async_ffn_wavefront_chunk=$DS4_V100_ASYNC_FFN_WAVEFRONT_CHUNK async_ffn_wavefront_verbose=$DS4_V100_ASYNC_FFN_WAVEFRONT_VERBOSE startup_warmup=$startup_warmup cuda_profiler_window=$cuda_profiler_window cuda_tensor_pool=$cuda_tensor_pool cuda_tensor_pool_max_mib=$DS4_V100_CUDA_TENSOR_POOL_MAX_MIB cuda_f8_rowpair=$DS4_V100_CUDA_F8_ROWPAIR cuda_f8_row4=$DS4_V100_CUDA_F8_ROW4 cuda_f8_warp_scale=$DS4_V100_CUDA_F8_WARP_SCALE cuda_f8_grouped_ds4_fast=$DS4_V100_CUDA_F8_GROUPED_DS4_FAST cuda_f8_hmma_shared_down=$DS4_V100_CUDA_F8_HMMA_SHARED_DOWN cuda_f8_hmma_pair_swiglu=$DS4_V100_CUDA_F8_HMMA_PAIR_SWIGLU cuda_f8_hmma_attn_batch=$DS4_V100_CUDA_F8_HMMA_ATTN_BATCH cuda_f8_hmma_grouped_attn_o_batch=$DS4_V100_CUDA_F8_HMMA_GROUPED_ATTN_O_BATCH cuda_f8_hmma_grouped_attn_o_single=$DS4_V100_CUDA_F8_HMMA_GROUPED_ATTN_O_SINGLE cuda_f8_hmma_single=$DS4_V100_CUDA_F8_HMMA_SINGLE cuda_f8_pair_swiglu_single=$DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE cuda_f8_pair_swiglu_single_rows2=$DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE_ROWS2 f8_shared_down_add=$DS4_V100_F8_SHARED_DOWN_ADD batch_attn_proj=$DS4_V100_ENABLE_BATCH_ATTN_PROJ batch_attn_output_a=$DS4_V100_BATCH_ATTN_OUTPUT_A batch_attn_output_b=$DS4_V100_BATCH_ATTN_OUTPUT_B batch_shared_f8=$DS4_V100_BATCH_SHARED_F8 ffn_direct_delta=$DS4_V100_FFN_DIRECT_DELTA disable_grouped_attn_output_a=$DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A single_slot_attn_scratch=$DS4_V100_SINGLE_SLOT_ATTN_SCRATCH single_slot_attn_output_a_hmma=$DS4_V100_SINGLE_SLOT_ATTN_OUTPUT_A_HMMA appliance_dir=${DS4_V100_APPLIANCE_DIR:-none} turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN disable_turbomind_total_tokens=$DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS turbomind_route_validate_sync=$DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC turbomind_small_route_build=$DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD turbomind_route_row_reduce=$DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE turbomind_route_row_reduce_h2=$DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE_H2 turbomind_indexed_a=$DS4_V100_TURBOMIND_INDEXED_A turbomind_fused_gate_up=$DS4_V100_TURBOMIND_FUSED_GATE_UP turbomind_gated_silu=$DS4_V100_TURBOMIND_GATED_SILU turbomind_compact_schedule=$DS4_V100_TURBOMIND_COMPACT_SCHEDULE turbomind_compact_no_host_sync=$DS4_V100_TURBOMIND_COMPACT_NO_HOST_SYNC turbomind_routed_executor=$DS4_V100_TURBOMIND_ROUTED_EXECUTOR turbomind_routed_executor_verbose=$DS4_V100_TURBOMIND_ROUTED_EXECUTOR_VERBOSE turbomind_gate_up_probe=$DS4_V100_TURBOMIND_GATE_UP_PROBE turbomind_down_probe=$DS4_V100_TURBOMIND_DOWN_PROBE turbomind_down_reduce_epilogue=$DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE turbomind_dispatch_policy=$DS4_V100_TURBOMIND_DISPATCH_POLICY turbomind_allow_unsafe_measure=$DS4_V100_TURBOMIND_ALLOW_UNSAFE_MEASURE turbomind_group_pipeline=$DS4_V100_TURBOMIND_GROUP_PIPELINE turbomind_group_pipeline_streams=$DS4_V100_TURBOMIND_GROUP_PIPELINE_STREAMS turbomind_group_pipeline_auto_groups=$DS4_V100_TURBOMIND_GROUP_PIPELINE_AUTO_GROUPS turbomind_graph=$DS4_V100_TURBOMIND_GRAPH turbomind_graph_verbose=$DS4_V100_TURBOMIND_GRAPH_VERBOSE turbomind_profile=$DS4_V100_TURBOMIND_PROFILE tp_ep_routed_ffn=$DS4_V100_TP_EP_ROUTED_FFN tp_ep_layer_first=${DS4_V100_TP_EP_LAYER_FIRST:-none} tp_ep_layer_count=$DS4_V100_TP_EP_LAYER_COUNT tp_ep_peer=${DS4_V100_TP_EP_PEER:-auto} tp_ep_peer_accounting=$DS4_V100_TP_EP_PEER_ACCOUNTING tp_ep_peer_reject_sys=$DS4_V100_TP_EP_PEER_REJECT_SYS tp_ep_async_input=$DS4_V100_TP_EP_ASYNC_INPUT tp_ep_parallel_halves=$DS4_V100_TP_EP_PARALLEL_HALVES tp_ep_parallel_expert_load=$DS4_V100_TP_EP_PARALLEL_EXPERT_LOAD tp_ep_copy_event_compose=$DS4_V100_TP_EP_COPY_EVENT_COMPOSE tp_ep_return_fp16=$DS4_V100_TP_EP_RETURN_FP16 tp_ep_compact_route_compose=$DS4_V100_TP_EP_COMPACT_ROUTE_COMPOSE tp_ep_compact_moe_decode=$DS4_V100_TP_EP_COMPACT_MOE_DECODE tp_ep_nccl_reduce_scatter_compose=$DS4_V100_TP_EP_NCCL_REDUCE_SCATTER_COMPOSE tp_ep_hc_final_expand=$DS4_V100_TP_EP_HC_FINAL_EXPAND tp_ep_hc_current_input=$DS4_V100_TP_EP_HC_CURRENT_INPUT tp_ep_model_router_routes=$DS4_V100_TP_EP_MODEL_ROUTER_ROUTES tp_ep_router_cublas=$DS4_V100_TP_EP_ROUTER_CUBLAS tp_ep_gpu_route_plan=$DS4_V100_TP_EP_GPU_ROUTE_PLAN tp_ep_routed_ffn_norm_input=$DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT tp_ep_true_shared_ffn=$DS4_V100_TP_EP_TRUE_SHARED_FFN tp_ep_verbose=$DS4_V100_TP_EP_VERBOSE"
+    echo "ds4-v100-run-appliance: nccl topology policy=$DS4_V100_NCCL_TOPOLOGY_POLICY cuda_visible_devices=$DS4_V100_CUDA_VISIBLE_DEVICES nccl_algo=${NCCL_ALGO:-auto} nccl_proto=${NCCL_PROTO:-auto} nccl_rings=${NCCL_RINGS:-} nccl_p2p_level=${NCCL_P2P_LEVEL:-}"
     exit 0
 fi
 if [ "$mode" = "print" ]; then
@@ -1791,6 +2116,12 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_TP_EP_ASYNC_INPUT=$DS4_V100_TP_EP_ASYNC_INPUT"
     echo "DS4_V100_TP_EP_ASYNC_OUTPUT=$DS4_V100_TP_EP_ASYNC_OUTPUT"
     echo "DS4_V100_TP_EP_DECODE_CUDAGRAPH=$DS4_V100_TP_EP_DECODE_CUDAGRAPH"
+    echo "DS4_V100_TP_EP_DECODE_CUDAGRAPH_OUTPUT_SYNC=$DS4_V100_TP_EP_DECODE_CUDAGRAPH_OUTPUT_SYNC"
+    echo "DS4_V100_TP_EP_DECODE_CUDAGRAPH_HC_CURRENT_SYNC=$DS4_V100_TP_EP_DECODE_CUDAGRAPH_HC_CURRENT_SYNC"
+    echo "DS4_V100_TP_EP_DECODE_CUDAGRAPH_STAGE_SYNC=$DS4_V100_TP_EP_DECODE_CUDAGRAPH_STAGE_SYNC"
+    echo "DS4_V100_TP_EP_DECODE_CUDAGRAPH_SUFFIX_STAGE=$DS4_V100_TP_EP_DECODE_CUDAGRAPH_SUFFIX_STAGE"
+    echo "DS4_V100_TP_EP_DECODE_CUDAGRAPH_PERSISTENT=$DS4_V100_TP_EP_DECODE_CUDAGRAPH_PERSISTENT"
+    echo "DS4_V100_TP_EP_DECODE_STAGE_CHECKSUM=$DS4_V100_TP_EP_DECODE_STAGE_CHECKSUM"
     echo "DS4_V100_TP_EP_BATCHED_PAGED_ATTN=$DS4_V100_TP_EP_BATCHED_PAGED_ATTN"
     echo "DS4_V100_TP_EP_PARALLEL_HALVES=$DS4_V100_TP_EP_PARALLEL_HALVES"
     echo "DS4_V100_TP_EP_COPY_EVENT_COMPOSE=$DS4_V100_TP_EP_COPY_EVENT_COMPOSE"
@@ -1805,19 +2136,43 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_TP_EP_HC_CURRENT_INPUT=$DS4_V100_TP_EP_HC_CURRENT_INPUT"
     echo "DS4_V100_TP_EP_HC_CURRENT_INPUT_PEER_GATHER=$DS4_V100_TP_EP_HC_CURRENT_INPUT_PEER_GATHER"
     echo "DS4_V100_TP_EP_HC_CURRENT_INPUT_NCCL_ALLGATHER=$DS4_V100_TP_EP_HC_CURRENT_INPUT_NCCL_ALLGATHER"
+    echo "DS4_V100_TP_EP_HC_CURRENT_ALLREDUCE=$DS4_V100_TP_EP_HC_CURRENT_ALLREDUCE"
+    echo "DS4_V100_TP_EP_HC_CURRENT_FULL_PARITY=$DS4_V100_TP_EP_HC_CURRENT_FULL_PARITY"
     echo "DS4_V100_TP_EP_HC_CURRENT_INPUT_STREAM_SYNC=$DS4_V100_TP_EP_HC_CURRENT_INPUT_STREAM_SYNC"
     echo "DS4_V100_TP_EP_HC_CURRENT_INPUT_FUSED_FILL_PACK=$DS4_V100_TP_EP_HC_CURRENT_INPUT_FUSED_FILL_PACK"
+    echo "DS4_V100_TP_EP_PEER_ACCOUNTING=$DS4_V100_TP_EP_PEER_ACCOUNTING"
+    echo "DS4_V100_TP_EP_PEER_REJECT_SYS=$DS4_V100_TP_EP_PEER_REJECT_SYS"
     echo "DS4_V100_TP_EP_HC_PERSIST_STATE=$DS4_V100_TP_EP_HC_PERSIST_STATE"
     echo "DS4_V100_TP_EP_MODEL_ROUTER_ROUTES=$DS4_V100_TP_EP_MODEL_ROUTER_ROUTES"
     echo "DS4_V100_TP_EP_ROUTER_CUBLAS=$DS4_V100_TP_EP_ROUTER_CUBLAS"
     echo "DS4_V100_TP_EP_ROUTER_HASH_FAST=$DS4_V100_TP_EP_ROUTER_HASH_FAST"
     echo "DS4_V100_TP_EP_GPU_ROUTE_PLAN=$DS4_V100_TP_EP_GPU_ROUTE_PLAN"
     echo "DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT=$DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT"
+    echo "DS4_V100_TP_EP_ROUTED_FFN_RANK_MAJOR_INPUT=$DS4_V100_TP_EP_ROUTED_FFN_RANK_MAJOR_INPUT"
+    echo "DS4_V100_TP_EP_MODEL_ROUTER_RANK_MAJOR_LOGITS=$DS4_V100_TP_EP_MODEL_ROUTER_RANK_MAJOR_LOGITS"
+    echo "DS4_V100_TP_EP_MODEL_ROUTER_ALLREDUCE_LOGITS=$DS4_V100_TP_EP_MODEL_ROUTER_ALLREDUCE_LOGITS"
+    echo "DS4_V100_TP_EP_POST_ATTENTION_FIXED_CAPACITY_ROUTE_PLAN=$DS4_V100_TP_EP_POST_ATTENTION_FIXED_CAPACITY_ROUTE_PLAN"
+    echo "DS4_V100_TP_EP_POST_ATTENTION_DEVICE_ACTUAL_ROUTE_SYNC=$DS4_V100_TP_EP_POST_ATTENTION_DEVICE_ACTUAL_ROUTE_SYNC"
+    echo "DS4_V100_TP_EP_POST_ATTENTION_SLOT_MAJOR_FFN_NORM=$DS4_V100_TP_EP_POST_ATTENTION_SLOT_MAJOR_FFN_NORM"
+    echo "DS4_V100_TP_EP_POST_ATTENTION_SKIP_SLOT_MAJOR_FFN_NORM=$DS4_V100_TP_EP_POST_ATTENTION_SKIP_SLOT_MAJOR_FFN_NORM"
+    echo "DS4_V100_TP_EP_POST_ATTENTION_MASKED_COMPACT_COPY=$DS4_V100_TP_EP_POST_ATTENTION_MASKED_COMPACT_COPY"
     echo "DS4_V100_TP_EP_TRUE_SHARED_FFN=$DS4_V100_TP_EP_TRUE_SHARED_FFN"
     echo "DS4_V100_TP_EP_REFERENCE_HC_REDUCE=$DS4_V100_TP_EP_REFERENCE_HC_REDUCE"
     echo "DS4_V100_TP_EP_REFERENCE_HC_STATE_GUARD=$DS4_V100_TP_EP_REFERENCE_HC_STATE_GUARD"
     echo "DS4_V100_TP_EP_KV_ALL_SLOTS=$DS4_V100_TP_EP_KV_ALL_SLOTS"
+    echo "DS4_V100_TP_EP_TP_RUNTIME_SCRATCH_MIB=$DS4_V100_TP_EP_TP_RUNTIME_SCRATCH_MIB"
+    echo "DS4_V100_TP_EP_DEFER_NCCL_INIT=$DS4_V100_TP_EP_DEFER_NCCL_INIT"
+    echo "DS4_V100_NCCL_TOPOLOGY_POLICY=$DS4_V100_NCCL_TOPOLOGY_POLICY"
+    echo "DS4_V100_NCCL_NO_SYS_RING=$DS4_V100_NCCL_NO_SYS_RING"
+    echo "DS4_V100_NCCL_ALLOW_VISIBLE_REMAP=$DS4_V100_NCCL_ALLOW_VISIBLE_REMAP"
+    echo "DS4_V100_NCCL_ALGO=$DS4_V100_NCCL_ALGO"
+    echo "DS4_V100_NCCL_PROTO=$DS4_V100_NCCL_PROTO"
+    echo "NCCL_ALGO=${NCCL_ALGO:-auto}"
+    echo "NCCL_PROTO=${NCCL_PROTO:-auto}"
+    echo "NCCL_RINGS=${NCCL_RINGS:-}"
+    echo "NCCL_P2P_LEVEL=${NCCL_P2P_LEVEL:-}"
     echo "DS4_V100_TP_EP_FP8_E5M2_KV=$DS4_V100_TP_EP_FP8_E5M2_KV"
+    echo "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_PROJECTION_RANK_LOCAL_INPUT=$DS4_V100_TP_EP_TRUE_DS4_ATTENTION_PROJECTION_RANK_LOCAL_INPUT"
     echo "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_OUTPUT=$DS4_V100_TP_EP_TRUE_DS4_ATTENTION_OUTPUT"
     echo "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_OUTPUT_NCCL_ALLGATHER=$DS4_V100_TP_EP_TRUE_DS4_ATTENTION_OUTPUT_NCCL_ALLGATHER"
     echo "DS4_V100_TP_EP_TRUE_DS4_POST_ATTENTION_FFN_INPUT=$DS4_V100_TP_EP_TRUE_DS4_POST_ATTENTION_FFN_INPUT"
@@ -1837,16 +2192,22 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_PORT=$DS4_V100_PORT"
     echo "DS4_V100_ALLOW_NONLOCAL_HOST=$DS4_V100_ALLOW_NONLOCAL_HOST"
     echo "DS4_V100_CUDA_VISIBLE_DEVICES=$DS4_V100_CUDA_VISIBLE_DEVICES"
+    echo "DS4_V100_CUDA_LIB_DIR=$DS4_V100_CUDA_LIB_DIR"
+    echo "DS4_V100_CUDA_LIB_DIR_RESOLVED=$cuda_lib_dir"
     echo "DS4_V100_REQUIRE_GPUS=$DS4_V100_REQUIRE_GPUS"
-    echo "DS4_V100_RESERVE_MIB=$DS4_V100_RESERVE_MIB"
-    echo "DS4_V100_SERVE_MODE=$DS4_V100_SERVE_MODE"
-    echo "DS4_V100_MTP_SERVING=$DS4_V100_MTP_SERVING"
-    echo "DS4_V100_MTP_TOP_K=$DS4_V100_MTP_TOP_K"
+	    echo "DS4_V100_RESERVE_MIB=$DS4_V100_RESERVE_MIB"
+	    echo "DS4_LOCK_FILE=$DS4_LOCK_FILE"
+	    echo "DS4_V100_SERVE_MODE=$DS4_V100_SERVE_MODE"
+	    echo "DS4_V100_MTP_SERVING=$DS4_V100_MTP_SERVING"
+	    echo "DS4_V100_MTP_TOP_K=$DS4_V100_MTP_TOP_K"
     echo "DS4_V100_MTP_GPU=$DS4_V100_MTP_GPU"
 } >"$DS4_V100_LOG_DIR/startup.env"
 print_resolved >"$DS4_V100_LOG_DIR/command.txt"
 
 export CUDA_VISIBLE_DEVICES="$DS4_V100_CUDA_VISIBLE_DEVICES"
+if [ -n "$cuda_lib_dir" ]; then
+    export LD_LIBRARY_PATH="$cuda_lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
 export DS4_V100_ASYNC_SLOT_CHUNK
 export DS4_V100_ASYNC_FFN_WAVEFRONT
 export DS4_V100_ASYNC_FFN_WAVEFRONT_CHUNK
@@ -1889,6 +2250,12 @@ export DS4_V100_TP_EP_SHARD_DIR
 export DS4_V100_TP_EP_ASYNC_INPUT
 export DS4_V100_TP_EP_ASYNC_OUTPUT
 export DS4_V100_TP_EP_DECODE_CUDAGRAPH
+export DS4_V100_TP_EP_DECODE_CUDAGRAPH_OUTPUT_SYNC
+export DS4_V100_TP_EP_DECODE_CUDAGRAPH_HC_CURRENT_SYNC
+export DS4_V100_TP_EP_DECODE_CUDAGRAPH_STAGE_SYNC
+export DS4_V100_TP_EP_DECODE_CUDAGRAPH_SUFFIX_STAGE
+export DS4_V100_TP_EP_DECODE_CUDAGRAPH_PERSISTENT
+export DS4_V100_TP_EP_DECODE_STAGE_CHECKSUM
 export DS4_V100_TP_EP_BATCHED_PAGED_ATTN
 export DS4_V100_TP_EP_PARALLEL_HALVES
 export DS4_V100_TP_EP_COPY_EVENT_COMPOSE
@@ -1903,14 +2270,26 @@ export DS4_V100_TP_EP_HC_FINAL_EXPAND
 export DS4_V100_TP_EP_HC_CURRENT_INPUT
 export DS4_V100_TP_EP_HC_CURRENT_INPUT_PEER_GATHER
 export DS4_V100_TP_EP_HC_CURRENT_INPUT_NCCL_ALLGATHER
+export DS4_V100_TP_EP_HC_CURRENT_ALLREDUCE
+export DS4_V100_TP_EP_HC_CURRENT_FULL_PARITY
 export DS4_V100_TP_EP_HC_CURRENT_INPUT_STREAM_SYNC
 export DS4_V100_TP_EP_HC_CURRENT_INPUT_FUSED_FILL_PACK
+export DS4_V100_TP_EP_PEER_ACCOUNTING
+export DS4_V100_TP_EP_PEER_REJECT_SYS
 export DS4_V100_TP_EP_HC_PERSIST_STATE
 export DS4_V100_TP_EP_MODEL_ROUTER_ROUTES
 export DS4_V100_TP_EP_ROUTER_CUBLAS
 export DS4_V100_TP_EP_ROUTER_HASH_FAST
 export DS4_V100_TP_EP_GPU_ROUTE_PLAN
 export DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT
+export DS4_V100_TP_EP_ROUTED_FFN_RANK_MAJOR_INPUT
+export DS4_V100_TP_EP_MODEL_ROUTER_RANK_MAJOR_LOGITS
+export DS4_V100_TP_EP_MODEL_ROUTER_ALLREDUCE_LOGITS
+export DS4_V100_TP_EP_POST_ATTENTION_FIXED_CAPACITY_ROUTE_PLAN
+export DS4_V100_TP_EP_POST_ATTENTION_DEVICE_ACTUAL_ROUTE_SYNC
+export DS4_V100_TP_EP_POST_ATTENTION_SLOT_MAJOR_FFN_NORM
+export DS4_V100_TP_EP_POST_ATTENTION_SKIP_SLOT_MAJOR_FFN_NORM
+export DS4_V100_TP_EP_POST_ATTENTION_MASKED_COMPACT_COPY
 export DS4_V100_TP_EP_TRUE_SHARED_FFN
 export DS4_V100_TP_EP_TRUE_DS4_ATTENTION_OUTPUT
 export DS4_V100_TP_EP_TRUE_DS4_ATTENTION_OUTPUT_NCCL_ALLGATHER
@@ -1919,11 +2298,23 @@ export DS4_V100_TP_EP_TRUE_DS4_SEMANTIC_SKIP_STATS
 export DS4_V100_TP_EP_REFERENCE_HC_REDUCE
 export DS4_V100_TP_EP_REFERENCE_HC_STATE_GUARD
 export DS4_V100_TP_EP_KV_ALL_SLOTS
+export DS4_V100_TP_EP_TP_RUNTIME_SCRATCH_MIB
+export DS4_V100_TP_EP_DEFER_NCCL_INIT
+export DS4_V100_NCCL_TOPOLOGY_POLICY
+export DS4_V100_NCCL_NO_SYS_RING
+export DS4_V100_NCCL_ALLOW_VISIBLE_REMAP
+export DS4_V100_NCCL_ALGO
+export DS4_V100_NCCL_PROTO
+export NCCL_ALGO
+export NCCL_PROTO
+export NCCL_RINGS
+export NCCL_P2P_LEVEL
 export DS4_V100_TP_EP_FP8_E5M2_KV
 export DS4_V100_TP_EP_VRAM_REPORT
 export DS4_V100_TP_EP_VRAM_MIN_FREE_MIB
 export DS4_V100_TP_EP_NCCL_MIN_FREE_MIB
 export DS4_V100_TP_EP_VERBOSE
+export DS4_LOCK_FILE
 export DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE
 export DS4_CUDA_F8_PAIR_SWIGLU_SINGLE_ROWS2="$DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE_ROWS2"
 export DS4_V100_F8_SHARED_DOWN_ADD

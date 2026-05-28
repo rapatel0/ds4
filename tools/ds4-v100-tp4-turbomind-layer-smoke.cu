@@ -1,6 +1,7 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <dlfcn.h>
+#include <nccl.h>
 
 #include <algorithm>
 #include <chrono>
@@ -37,6 +38,21 @@ constexpr int kDType = GGML_TM_DTYPE_MXFP4;
             std::exit(2);                                                                         \
         }                                                                                         \
     } while (0)
+
+#define CHECK_NCCL(expr)                                                                          \
+    do {                                                                                          \
+        ncclResult_t err__ = (expr);                                                              \
+        if (err__ != ncclSuccess) {                                                               \
+            std::fprintf(stderr, "nccl error %s:%d: %s\n", __FILE__, __LINE__,                  \
+                         ncclGetErrorString(err__));                                              \
+            std::exit(2);                                                                         \
+        }                                                                                         \
+    } while (0)
+
+enum class ReduceAlgo {
+    Manual,
+    Nccl,
+};
 
 typedef int (*pfn_init)(int);
 typedef void (*pfn_shutdown)(void);
@@ -85,6 +101,8 @@ struct Options {
     int tokens_per_active = 32;
     int warmup = 5;
     int iters = 50;
+    ReduceAlgo reduce_algo = ReduceAlgo::Nccl;
+    bool allow_manual_peer_baseline = false;
 };
 
 struct Api {
@@ -159,7 +177,9 @@ bool parse_devices(const char * text, int devices[kParticipants]) {
 void usage(const char * argv0) {
     std::fprintf(stderr,
                  "usage: %s [--lib PATH] [--devices 0,1,2,3]\n"
-                 "       [--tokens-per-active N] [--warmup N] [--iters N]\n",
+                 "       [--tokens-per-active N] [--warmup N] [--iters N]\n"
+                 "       [--reduce-algo nccl|manual]\n"
+                 "       [--allow-manual-peer-baseline]\n",
                  argv0);
 }
 
@@ -196,6 +216,21 @@ bool parse_args(int argc, char ** argv, Options * opt) {
                 return false;
             }
             ++i;
+        } else if (std::strcmp(arg, "--reduce-algo") == 0) {
+            if (!val) {
+                return false;
+            }
+            if (std::strcmp(val, "nccl") == 0) {
+                opt->reduce_algo = ReduceAlgo::Nccl;
+            } else if (std::strcmp(val, "manual") == 0) {
+                opt->reduce_algo = ReduceAlgo::Manual;
+            } else {
+                std::fprintf(stderr, "invalid --reduce-algo; expected nccl or manual\n");
+                return false;
+            }
+            ++i;
+        } else if (std::strcmp(arg, "--allow-manual-peer-baseline") == 0) {
+            opt->allow_manual_peer_baseline = true;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -416,8 +451,9 @@ void sync_device_or_die(int device, const char * label) {
 }
 
 double run_reduce_to_root(const Options & opt, DeviceSide sides[kParticipants],
-                          float * d_sum, __half ** d_recv, int total_routes,
-                          bool keep_result) {
+                          float * d_sum, __half ** d_recv, __half ** d_reduce_recv,
+                          __half * d_reduce_half, ncclComm_t comms[kParticipants],
+                          int total_routes, bool keep_result) {
     const size_t elems = (size_t) total_routes * kHidden;
     const size_t bytes = elems * sizeof(__half);
     const int root = opt.devices[0];
@@ -425,17 +461,50 @@ double run_reduce_to_root(const Options & opt, DeviceSide sides[kParticipants],
     const int grid = (int) ((elems + block - 1) / block);
     const auto start = std::chrono::steady_clock::now();
 
-    CHECK_CUDA(cudaSetDevice(root));
-    (void) cudaGetLastError();
-    copy_half_to_float_kernel<<<grid, block, 0, 0>>>(d_sum, sides[0].d_down, elems);
-    CHECK_CUDA(cudaGetLastError());
-    CHECK_CUDA(cudaDeviceSynchronize());
-    for (int p = 1; p < kParticipants; ++p) {
-        CHECK_CUDA(cudaMemcpyPeer(d_recv[p], root, sides[p].d_down, opt.devices[p], bytes));
-        add_half_to_float_kernel<<<grid, block, 0, 0>>>(d_sum, d_recv[p], elems);
+    if (opt.reduce_algo == ReduceAlgo::Nccl) {
+        CHECK_CUDA(cudaSetDevice(root));
+        (void) cudaGetLastError();
+        copy_half_to_float_kernel<<<grid, block, 0, 0>>>(d_sum, sides[0].d_down, elems);
         CHECK_CUDA(cudaGetLastError());
+        CHECK_CUDA(cudaDeviceSynchronize());
+        for (int src = 1; src < kParticipants; ++src) {
+            CHECK_NCCL(ncclGroupStart());
+            for (int rank = 0; rank < kParticipants; ++rank) {
+                CHECK_CUDA(cudaSetDevice(opt.devices[rank]));
+                __half * buf = nullptr;
+                if (rank == 0) {
+                    buf = d_recv[src];
+                } else if (rank == src) {
+                    buf = sides[src].d_down;
+                } else {
+                    buf = d_reduce_recv[rank];
+                }
+                CHECK_NCCL(ncclBroadcast(buf, buf, elems, ncclHalf, src, comms[rank],
+                                         sides[rank].stream));
+            }
+            CHECK_NCCL(ncclGroupEnd());
+            for (int rank = 0; rank < kParticipants; ++rank) {
+                CHECK_CUDA(cudaSetDevice(opt.devices[rank]));
+                CHECK_CUDA(cudaStreamSynchronize(sides[rank].stream));
+            }
+            CHECK_CUDA(cudaSetDevice(root));
+            add_half_to_float_kernel<<<grid, block, 0, 0>>>(d_sum, d_recv[src], elems);
+            CHECK_CUDA(cudaGetLastError());
+            CHECK_CUDA(cudaDeviceSynchronize());
+        }
+    } else {
+        CHECK_CUDA(cudaSetDevice(root));
+        (void) cudaGetLastError();
+        copy_half_to_float_kernel<<<grid, block, 0, 0>>>(d_sum, sides[0].d_down, elems);
+        CHECK_CUDA(cudaGetLastError());
+        CHECK_CUDA(cudaDeviceSynchronize());
+        for (int p = 1; p < kParticipants; ++p) {
+            CHECK_CUDA(cudaMemcpyPeer(d_recv[p], root, sides[p].d_down, opt.devices[p], bytes));
+            add_half_to_float_kernel<<<grid, block, 0, 0>>>(d_sum, d_recv[p], elems);
+            CHECK_CUDA(cudaGetLastError());
+        }
+        CHECK_CUDA(cudaDeviceSynchronize());
     }
-    CHECK_CUDA(cudaDeviceSynchronize());
     const auto stop = std::chrono::steady_clock::now();
     if (!keep_result) {
         CHECK_CUDA(cudaMemset(d_sum, 0, elems * sizeof(float)));
@@ -523,6 +592,13 @@ int main(int argc, char ** argv) {
     Options opt;
     if (!parse_args(argc, argv, &opt)) {
         usage(argv[0]);
+        return 2;
+    }
+    if (opt.reduce_algo != ReduceAlgo::Nccl && !opt.allow_manual_peer_baseline) {
+        std::fprintf(stderr,
+                     "manual peer-copy baseline reductions require "
+                     "--allow-manual-peer-baseline; default or use --reduce-algo nccl for "
+                     "promotion evidence\n");
         return 2;
     }
 
@@ -654,12 +730,23 @@ int main(int argc, char ** argv) {
     }
 
     float * d_sum = nullptr;
+    __half * d_reduce_half = nullptr;
     __half * d_recv[kParticipants] = {};
+    __half * d_reduce_recv[kParticipants] = {};
     CHECK_CUDA(cudaSetDevice(opt.devices[0]));
     CHECK_CUDA(cudaMalloc(&d_sum, out_elems * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&d_reduce_half, out_bytes));
     CHECK_CUDA(cudaMemset(d_sum, 0, out_elems * sizeof(float)));
+    CHECK_CUDA(cudaMemset(d_reduce_half, 0, out_bytes));
     for (int p = 1; p < kParticipants; ++p) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[0]));
         CHECK_CUDA(cudaMalloc(&d_recv[p], out_bytes));
+        CHECK_CUDA(cudaSetDevice(opt.devices[p]));
+        CHECK_CUDA(cudaMalloc(&d_reduce_recv[p], out_bytes));
+    }
+    ncclComm_t comms[kParticipants] = {};
+    if (opt.reduce_algo == ReduceAlgo::Nccl) {
+        CHECK_NCCL(ncclCommInitAll(comms, kParticipants, opt.devices));
     }
 
     for (int i = 0; i < opt.warmup; ++i) {
@@ -671,7 +758,8 @@ int main(int argc, char ** argv) {
             std::snprintf(label, sizeof(label), "tp4 shard warmup p=%d", p);
             sync_device_or_die(sides[p].device, label);
         }
-        (void) run_reduce_to_root(opt, sides, d_sum, d_recv, total_routes, false);
+        (void) run_reduce_to_root(opt, sides, d_sum, d_recv, d_reduce_recv, d_reduce_half, comms,
+                                  total_routes, false);
     }
 
     cudaEvent_t tp_start[kParticipants] = {};
@@ -704,14 +792,17 @@ int main(int argc, char ** argv) {
 
     double reduce_ms = 0.0;
     for (int i = 0; i < opt.iters; ++i) {
-        reduce_ms += run_reduce_to_root(opt, sides, d_sum, d_recv, total_routes, false);
+        reduce_ms += run_reduce_to_root(opt, sides, d_sum, d_recv, d_reduce_recv, d_reduce_half,
+                                        comms,
+                                        total_routes, false);
     }
     reduce_ms /= (double) opt.iters;
     const int correctness = compare_tp_sum_host(opt, full, sides, total_routes);
     const double total_tp_ms = tp_compute_ms + reduce_ms;
     const double input_mib = (double) a_bytes / (1024.0 * 1024.0);
     const double output_mib = (double) out_bytes / (1024.0 * 1024.0);
-    std::printf("ds4-v100-tp4-turbomind-layer-smoke devices=");
+    std::printf("ds4-v100-tp4-turbomind-layer-smoke reduce_algo=%s devices=",
+                opt.reduce_algo == ReduceAlgo::Nccl ? "nccl" : "manual");
     for (int p = 0; p < kParticipants; ++p) {
         std::printf("%s%d", p ? "," : "", opt.devices[p]);
     }
@@ -726,8 +817,18 @@ int main(int argc, char ** argv) {
 
     CHECK_CUDA(cudaSetDevice(opt.devices[0]));
     CHECK_CUDA(cudaFree(d_sum));
+    CHECK_CUDA(cudaFree(d_reduce_half));
     for (int p = 1; p < kParticipants; ++p) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[p]));
+        CHECK_CUDA(cudaFree(d_reduce_recv[p]));
+        CHECK_CUDA(cudaSetDevice(opt.devices[0]));
         CHECK_CUDA(cudaFree(d_recv[p]));
+    }
+    if (opt.reduce_algo == ReduceAlgo::Nccl) {
+        for (int p = 0; p < kParticipants; ++p) {
+            CHECK_CUDA(cudaSetDevice(opt.devices[p]));
+            CHECK_NCCL(ncclCommDestroy(comms[p]));
+        }
     }
     CHECK_CUDA(cudaEventDestroy(full_start));
     CHECK_CUDA(cudaEventDestroy(full_stop));

@@ -165,6 +165,19 @@ int ds4_v100_tp_runtime_kv_rows_store_f32_device(
     char *err,
     size_t err_len);
 
+int ds4_v100_tp_runtime_kv_rows_store_f32_device_streams(
+    ds4_v100_tp_runtime *rt,
+    int layer,
+    uint32_t first_slot,
+    uint32_t slot_count,
+    uint64_t position,
+    ds4_v100_tp_kv_row_kind kind,
+    const void *src_by_gpu[DS4_V100_TP_MAX_GPUS],
+    uint64_t src_stride_floats,
+    void *const stream_by_gpu[DS4_V100_TP_MAX_GPUS],
+    char *err,
+    size_t err_len);
+
 int ds4_v100_tp_runtime_kv_rows_load_f32_device(
     ds4_v100_tp_runtime *rt,
     int layer,
@@ -174,6 +187,19 @@ int ds4_v100_tp_runtime_kv_rows_load_f32_device(
     ds4_v100_tp_kv_row_kind kind,
     void *dst_by_gpu[DS4_V100_TP_MAX_GPUS],
     uint64_t dst_stride_floats,
+    char *err,
+    size_t err_len);
+
+int ds4_v100_tp_runtime_kv_rows_load_f32_device_streams(
+    ds4_v100_tp_runtime *rt,
+    int layer,
+    uint32_t first_slot,
+    uint32_t slot_count,
+    uint64_t position,
+    ds4_v100_tp_kv_row_kind kind,
+    void *dst_by_gpu[DS4_V100_TP_MAX_GPUS],
+    uint64_t dst_stride_floats,
+    void *const stream_by_gpu[DS4_V100_TP_MAX_GPUS],
     char *err,
     size_t err_len);
 

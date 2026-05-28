@@ -1324,7 +1324,7 @@ extern "C" int ds4_v100_tp_runtime_kv_row_load_f32_device(
     return 0;
 }
 
-extern "C" int ds4_v100_tp_runtime_kv_rows_store_f32_device(
+static int kv_rows_store_f32_device_impl(
     ds4_v100_tp_runtime *rt,
     int layer,
     uint32_t first_slot,
@@ -1333,6 +1333,7 @@ extern "C" int ds4_v100_tp_runtime_kv_rows_store_f32_device(
     ds4_v100_tp_kv_row_kind kind,
     const void *src_by_gpu[kGpus],
     uint64_t src_stride_floats,
+    void *const stream_by_gpu[kGpus],
     char *err,
     size_t err_len) {
     if (!rt || !src_by_gpu || slot_count == 0 || src_stride_floats == 0) {
@@ -1365,7 +1366,8 @@ extern "C" int ds4_v100_tp_runtime_kv_rows_store_f32_device(
         if (rc != cudaSuccess) return fail_cuda(err, err_len, "cudaSetDevice", rc);
         const uint64_t total = (uint64_t)slot_count * view.row_bytes[i];
         const int grid = (int)((total + block - 1) / block);
-        store_f32_device_to_f8_kv_rows_kernel<<<grid, block>>>(
+        cudaStream_t stream = stream_by_gpu ? (cudaStream_t)stream_by_gpu[i] : (cudaStream_t)0;
+        store_f32_device_to_f8_kv_rows_kernel<<<grid, block, 0, stream>>>(
             (unsigned char *)g->kv, view.offset[i], rt->kv_slot_stride,
             view.row_bytes[i], i, (const float *)src_by_gpu[i],
             src_stride_floats, view.logical_cols, view.logical_row_bytes,
@@ -1378,7 +1380,40 @@ extern "C" int ds4_v100_tp_runtime_kv_rows_store_f32_device(
     return 0;
 }
 
-extern "C" int ds4_v100_tp_runtime_kv_rows_load_f32_device(
+extern "C" int ds4_v100_tp_runtime_kv_rows_store_f32_device(
+    ds4_v100_tp_runtime *rt,
+    int layer,
+    uint32_t first_slot,
+    uint32_t slot_count,
+    uint64_t position,
+    ds4_v100_tp_kv_row_kind kind,
+    const void *src_by_gpu[kGpus],
+    uint64_t src_stride_floats,
+    char *err,
+    size_t err_len) {
+    return kv_rows_store_f32_device_impl(
+        rt, layer, first_slot, slot_count, position, kind, src_by_gpu,
+        src_stride_floats, nullptr, err, err_len);
+}
+
+extern "C" int ds4_v100_tp_runtime_kv_rows_store_f32_device_streams(
+    ds4_v100_tp_runtime *rt,
+    int layer,
+    uint32_t first_slot,
+    uint32_t slot_count,
+    uint64_t position,
+    ds4_v100_tp_kv_row_kind kind,
+    const void *src_by_gpu[kGpus],
+    uint64_t src_stride_floats,
+    void *const stream_by_gpu[kGpus],
+    char *err,
+    size_t err_len) {
+    return kv_rows_store_f32_device_impl(
+        rt, layer, first_slot, slot_count, position, kind, src_by_gpu,
+        src_stride_floats, stream_by_gpu, err, err_len);
+}
+
+static int kv_rows_load_f32_device_impl(
     ds4_v100_tp_runtime *rt,
     int layer,
     uint32_t first_slot,
@@ -1387,6 +1422,7 @@ extern "C" int ds4_v100_tp_runtime_kv_rows_load_f32_device(
     ds4_v100_tp_kv_row_kind kind,
     void *dst_by_gpu[kGpus],
     uint64_t dst_stride_floats,
+    void *const stream_by_gpu[kGpus],
     char *err,
     size_t err_len) {
     if (!rt || !dst_by_gpu || slot_count == 0 || dst_stride_floats == 0) {
@@ -1424,7 +1460,8 @@ extern "C" int ds4_v100_tp_runtime_kv_rows_load_f32_device(
         gpu_state *g = &rt->gpu[i];
         cudaError_t rc = cudaSetDevice(g->device);
         if (rc != cudaSuccess) return fail_cuda(err, err_len, "cudaSetDevice", rc);
-        load_f8_kv_rows_to_f32_device_kernel<<<grid, block>>>(
+        cudaStream_t stream = stream_by_gpu ? (cudaStream_t)stream_by_gpu[i] : (cudaStream_t)0;
+        load_f8_kv_rows_to_f32_device_kernel<<<grid, block, 0, stream>>>(
             (float *)dst_by_gpu[i], dst_stride_floats, view.logical_cols,
             view.row_bytes[0], rt->kv_slot_stride, slot_count,
             p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7],
@@ -1435,6 +1472,39 @@ extern "C" int ds4_v100_tp_runtime_kv_rows_load_f32_device(
         }
     }
     return 0;
+}
+
+extern "C" int ds4_v100_tp_runtime_kv_rows_load_f32_device(
+    ds4_v100_tp_runtime *rt,
+    int layer,
+    uint32_t first_slot,
+    uint32_t slot_count,
+    uint64_t position,
+    ds4_v100_tp_kv_row_kind kind,
+    void *dst_by_gpu[kGpus],
+    uint64_t dst_stride_floats,
+    char *err,
+    size_t err_len) {
+    return kv_rows_load_f32_device_impl(
+        rt, layer, first_slot, slot_count, position, kind, dst_by_gpu,
+        dst_stride_floats, nullptr, err, err_len);
+}
+
+extern "C" int ds4_v100_tp_runtime_kv_rows_load_f32_device_streams(
+    ds4_v100_tp_runtime *rt,
+    int layer,
+    uint32_t first_slot,
+    uint32_t slot_count,
+    uint64_t position,
+    ds4_v100_tp_kv_row_kind kind,
+    void *dst_by_gpu[kGpus],
+    uint64_t dst_stride_floats,
+    void *const stream_by_gpu[kGpus],
+    char *err,
+    size_t err_len) {
+    return kv_rows_load_f32_device_impl(
+        rt, layer, first_slot, slot_count, position, kind, dst_by_gpu,
+        dst_stride_floats, stream_by_gpu, err, err_len);
 }
 
 extern "C" int ds4_v100_tp_runtime_kv_row_device_roundtrip_f32(

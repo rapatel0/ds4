@@ -1,6 +1,7 @@
 #include <cublas_v2.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#include <nccl.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -40,6 +41,21 @@ constexpr int kIndexerHeadDim = 128;
         }                                                                                         \
     } while (0)
 
+#define NCCL_CHECK(expr)                                                                          \
+    do {                                                                                          \
+        ncclResult_t err__ = (expr);                                                              \
+        if (err__ != ncclSuccess) {                                                               \
+            std::fprintf(stderr, "nccl error %s:%d: %s\n", __FILE__, __LINE__,                  \
+                         ncclGetErrorString(err__));                                              \
+            std::exit(2);                                                                         \
+        }                                                                                         \
+    } while (0)
+
+enum class Algorithm {
+    Doubling,
+    Nccl,
+};
+
 enum class KvDType {
     F16,
     F8E4M3B128,
@@ -56,6 +72,8 @@ struct Options {
     int ratio = 4;
     int warmup = 3;
     int iters = 20;
+    Algorithm algo = Algorithm::Nccl;
+    bool allow_manual_peer_baseline = false;
     KvDType kv_dtype = KvDType::F8E4M3B128;
 };
 
@@ -209,12 +227,21 @@ const char * kv_dtype_name(KvDType dtype) {
     return "unknown";
 }
 
+const char * algo_name(Algorithm algo) {
+    switch (algo) {
+    case Algorithm::Doubling: return "doubling";
+    case Algorithm::Nccl: return "nccl";
+    }
+    return "unknown";
+}
+
 void usage(const char * argv0) {
     std::fprintf(stderr,
                  "usage: %s [--devices 0,1,2,3,4,5,6,7] [--tokens N]\n"
                  "       [--hidden N] [--mid-shard N] [--ctx N] [--slots N]\n"
                  "       [--ratio 4|128] [--kv-dtype f8|q8|f16]\n"
-                 "       [--warmup N] [--iters N]\n",
+                 "       [--warmup N] [--iters N] [--algo nccl|doubling]\n"
+                 "       [--allow-manual-peer-baseline]\n",
                  argv0);
 }
 
@@ -277,6 +304,22 @@ bool parse_args(int argc, char ** argv, Options * opt) {
                 return false;
             }
             ++i;
+        } else if (std::strcmp(arg, "--algo") == 0) {
+            if (val == nullptr) {
+                std::fprintf(stderr, "invalid --algo value\n");
+                return false;
+            }
+            if (std::strcmp(val, "nccl") == 0) {
+                opt->algo = Algorithm::Nccl;
+            } else if (std::strcmp(val, "doubling") == 0) {
+                opt->algo = Algorithm::Doubling;
+            } else {
+                std::fprintf(stderr, "invalid --algo value; expected nccl or doubling\n");
+                return false;
+            }
+            ++i;
+        } else if (std::strcmp(arg, "--allow-manual-peer-baseline") == 0) {
+            opt->allow_manual_peer_baseline = true;
         } else if (std::strcmp(arg, "--kv-dtype") == 0) {
             if (val == nullptr) {
                 std::fprintf(stderr, "invalid --kv-dtype value\n");
@@ -378,6 +421,19 @@ void run_doubling_collective(const Options & opt, half ** inputs, half ** output
     }
 }
 
+void run_nccl_allreduce(const Options & opt, half ** inputs, half ** outputs,
+                        cudaStream_t streams[kParticipants], ncclComm_t comms[kParticipants],
+                        size_t elems) {
+    NCCL_CHECK(ncclGroupStart());
+    for (int p = 0; p < kParticipants; ++p) {
+        CUDA_CHECK(cudaSetDevice(opt.devices[p]));
+        NCCL_CHECK(ncclAllReduce(inputs[p], outputs[p], elems, ncclHalf, ncclSum,
+                                 comms[p], streams[p]));
+    }
+    NCCL_CHECK(ncclGroupEnd());
+    sync_streams(opt, streams);
+}
+
 void init_tensor(const Options & opt, int p, half * ptr, size_t elems, float scale, float bias,
                  cudaStream_t stream) {
     const int block = 256;
@@ -401,7 +457,8 @@ Timings run_one_layer(const Options & opt, cublasHandle_t handles[kParticipants]
                       cudaStream_t streams[kParticipants], half ** x, half ** gate_w,
                       half ** up_w, half ** down_w, half ** gate, half ** up,
                       half ** mid, half ** partial, half ** reduced, half ** recv,
-                      size_t hidden_elems, size_t mid_elems, size_t hidden_bytes) {
+                      ncclComm_t comms[kParticipants], size_t hidden_elems,
+                      size_t mid_elems, size_t hidden_bytes) {
     Timings t = {};
     const auto total_start = std::chrono::steady_clock::now();
 
@@ -436,7 +493,12 @@ Timings run_one_layer(const Options & opt, cublasHandle_t handles[kParticipants]
     const auto down_stop = std::chrono::steady_clock::now();
 
     const auto reduce_start = std::chrono::steady_clock::now();
-    run_doubling_collective(opt, partial, reduced, recv, streams, hidden_elems, hidden_bytes);
+    if (opt.algo == Algorithm::Nccl) {
+        run_nccl_allreduce(opt, partial, reduced, streams, comms, hidden_elems);
+    } else {
+        run_doubling_collective(opt, partial, reduced, recv, streams, hidden_elems,
+                                hidden_bytes);
+    }
     const auto reduce_stop = std::chrono::steady_clock::now();
 
     const auto total_stop = std::chrono::steady_clock::now();
@@ -477,6 +539,13 @@ int main(int argc, char ** argv) {
     Options opt;
     if (!parse_args(argc, argv, &opt)) {
         usage(argv[0]);
+        return 2;
+    }
+    if (opt.algo != Algorithm::Nccl && !opt.allow_manual_peer_baseline) {
+        std::fprintf(stderr,
+                     "manual peer-copy baseline algorithms require "
+                     "--allow-manual-peer-baseline; default or use --algo nccl for "
+                     "promotion evidence\n");
         return 2;
     }
 
@@ -540,10 +609,15 @@ int main(int argc, char ** argv) {
         CUDA_CHECK(cudaMemsetAsync(kv_shards[p], 29 + p, kv_plan.shard_bytes, streams[p]));
     }
     sync_streams(opt, streams);
+    ncclComm_t comms[kParticipants] = {};
+    if (opt.algo == Algorithm::Nccl) {
+        NCCL_CHECK(ncclCommInitAll(comms, kParticipants, opt.devices));
+    }
 
     for (int i = 0; i < opt.warmup; ++i) {
         (void) run_one_layer(opt, handles, streams, x, gate_w, up_w, down_w, gate, up, mid,
-                             partial, reduced, recv, hidden_elems, mid_elems, hidden_bytes);
+                             partial, reduced, recv, comms, hidden_elems, mid_elems,
+                             hidden_bytes);
     }
 
     Timings sum = {};
@@ -551,8 +625,8 @@ int main(int argc, char ** argv) {
     double max_ms = 0.0;
     for (int i = 0; i < opt.iters; ++i) {
         Timings t = run_one_layer(opt, handles, streams, x, gate_w, up_w, down_w, gate, up,
-                                  mid, partial, reduced, recv, hidden_elems, mid_elems,
-                                  hidden_bytes);
+                                  mid, partial, reduced, recv, comms, hidden_elems,
+                                  mid_elems, hidden_bytes);
         sum.gate_up_ms += t.gate_up_ms;
         sum.act_ms += t.act_ms;
         sum.down_ms += t.down_ms;
@@ -577,7 +651,7 @@ int main(int argc, char ** argv) {
     const double wire_bytes = (double) hidden_bytes * (double) kParticipants * 3.0;
     const double effective_wire_gbps = wire_bytes / (avg_reduce / 1000.0) / 1.0e9;
 
-    std::printf("ds4-v100-tp8-real-layer-smoke devices=");
+    std::printf("ds4-v100-tp8-real-layer-smoke algo=%s devices=", algo_name(opt.algo));
     for (int p = 0; p < kParticipants; ++p) {
         std::printf("%s%d", p ? "," : "", opt.devices[p]);
     }
@@ -596,6 +670,12 @@ int main(int argc, char ** argv) {
     std::printf("verify cross_device_max_abs=%.9f %s\n", max_abs,
                 max_abs <= 1.0e-5f ? "ok" : "FAIL");
 
+    if (opt.algo == Algorithm::Nccl) {
+        for (int p = 0; p < kParticipants; ++p) {
+            CUDA_CHECK(cudaSetDevice(opt.devices[p]));
+            NCCL_CHECK(ncclCommDestroy(comms[p]));
+        }
+    }
     for (int p = 0; p < kParticipants; ++p) {
         CUDA_CHECK(cudaSetDevice(opt.devices[p]));
         CUBLAS_CHECK(cublasDestroy(handles[p]));

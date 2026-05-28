@@ -1,5 +1,6 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#include <nccl.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -29,9 +30,20 @@ constexpr int kIndexerHeadDim = 128;
         }                                                                                         \
     } while (0)
 
+#define NCCL_CHECK(expr)                                                                          \
+    do {                                                                                          \
+        ncclResult_t err__ = (expr);                                                              \
+        if (err__ != ncclSuccess) {                                                               \
+            std::fprintf(stderr, "nccl error %s:%d: %s\n", __FILE__, __LINE__,                  \
+                         ncclGetErrorString(err__));                                              \
+            std::exit(2);                                                                         \
+        }                                                                                         \
+    } while (0)
+
 enum class Algorithm {
     Root,
     Doubling,
+    Nccl,
 };
 
 enum class KvDType {
@@ -51,7 +63,8 @@ struct Options {
     int warmup = 3;
     int iters = 20;
     int root_index = 0;
-    Algorithm algo = Algorithm::Doubling;
+    Algorithm algo = Algorithm::Nccl;
+    bool allow_manual_peer_baseline = false;
     KvDType kv_dtype = KvDType::F8E4M3B128;
 };
 
@@ -208,6 +221,7 @@ const char * algo_name(Algorithm algo) {
     switch (algo) {
     case Algorithm::Root: return "root";
     case Algorithm::Doubling: return "doubling";
+    case Algorithm::Nccl: return "nccl";
     }
     return "unknown";
 }
@@ -227,7 +241,7 @@ void usage(const char * argv0) {
                  "       [--hidden N] [--ctx N] [--slots N] [--ratio 4|128]\n"
                  "       [--kv-dtype f8|q8|f16] [--compute-repeats N]\n"
                  "       [--warmup N] [--iters N] [--root-index 0..7]\n"
-                 "       [--algo root|doubling]\n",
+                 "       [--algo root|doubling|nccl] [--allow-manual-peer-baseline]\n",
                  argv0);
 }
 
@@ -306,11 +320,16 @@ bool parse_args(int argc, char ** argv, Options * opt) {
                 opt->algo = Algorithm::Root;
             } else if (std::strcmp(val, "doubling") == 0) {
                 opt->algo = Algorithm::Doubling;
+            } else if (std::strcmp(val, "nccl") == 0) {
+                opt->algo = Algorithm::Nccl;
             } else {
-                std::fprintf(stderr, "invalid --algo value; expected root or doubling\n");
+                std::fprintf(stderr,
+                             "invalid --algo value; expected root, doubling, or nccl\n");
                 return false;
             }
             ++i;
+        } else if (std::strcmp(arg, "--allow-manual-peer-baseline") == 0) {
+            opt->allow_manual_peer_baseline = true;
         } else if (std::strcmp(arg, "--kv-dtype") == 0) {
             if (val == nullptr) {
                 std::fprintf(stderr, "invalid --kv-dtype value\n");
@@ -449,11 +468,26 @@ void run_doubling_collective(const Options & opt, half ** inputs, half ** output
     }
 }
 
+void run_nccl_allreduce(const Options & opt, half ** inputs, half ** outputs,
+                        cudaStream_t streams[kParticipants], ncclComm_t comms[kParticipants],
+                        size_t elems) {
+    NCCL_CHECK(ncclGroupStart());
+    for (int p = 0; p < kParticipants; ++p) {
+        CUDA_CHECK(cudaSetDevice(opt.devices[p]));
+        NCCL_CHECK(ncclAllReduce(inputs[p], outputs[p], elems, ncclHalf, ncclSum,
+                                 comms[p], streams[p]));
+    }
+    NCCL_CHECK(ncclGroupEnd());
+    sync_streams(opt, streams);
+}
+
 void run_selected_collective(const Options & opt, half ** inputs, half ** outputs,
                              half * staging, half ** recv, cudaStream_t root_stream,
                              cudaStream_t streams[kParticipants], size_t elems,
-                             size_t bytes) {
-    if (opt.algo == Algorithm::Doubling) {
+                             size_t bytes, ncclComm_t comms[kParticipants]) {
+    if (opt.algo == Algorithm::Nccl) {
+        run_nccl_allreduce(opt, inputs, outputs, streams, comms, elems);
+    } else if (opt.algo == Algorithm::Doubling) {
         run_doubling_collective(opt, inputs, outputs, recv, streams, elems, bytes);
     } else {
         run_root_collective(opt, inputs, outputs, staging, root_stream, elems, bytes);
@@ -486,7 +520,8 @@ struct Timings {
 Timings run_one_layer(const Options & opt, half ** buf0, half ** buf1, half ** recv,
                       unsigned char ** kv_shards, const KvPlan & kv_plan, half * staging,
                       cudaStream_t root_stream, cudaStream_t streams[kParticipants],
-                      size_t elems, size_t bytes, bool timed) {
+                      ncclComm_t comms[kParticipants], size_t elems, size_t bytes,
+                      bool timed) {
     Timings t = {};
     half ** cur = buf0;
     half ** next = buf1;
@@ -499,7 +534,7 @@ Timings run_one_layer(const Options & opt, half ** buf0, half ** buf1, half ** r
 
         const auto reduce_start = std::chrono::steady_clock::now();
         run_selected_collective(opt, next, cur, staging, recv, root_stream, streams, elems,
-                                bytes);
+                                bytes, comms);
         const auto reduce_stop = std::chrono::steady_clock::now();
 
         if (timed) {
@@ -548,6 +583,13 @@ int main(int argc, char ** argv) {
         usage(argv[0]);
         return 2;
     }
+    if (opt.algo != Algorithm::Nccl && !opt.allow_manual_peer_baseline) {
+        std::fprintf(stderr,
+                     "manual peer-copy baseline algorithms require "
+                     "--allow-manual-peer-baseline; default or use --algo nccl for "
+                     "promotion evidence\n");
+        return 2;
+    }
 
     enable_peer_access_or_die(opt);
     const KvPlan kv_plan = make_kv_plan(opt);
@@ -586,11 +628,15 @@ int main(int argc, char ** argv) {
         CUDA_CHECK(cudaSetDevice(opt.devices[p]));
         CUDA_CHECK(cudaStreamCreate(&streams[p]));
     }
+    ncclComm_t comms[kParticipants] = {};
+    if (opt.algo == Algorithm::Nccl) {
+        NCCL_CHECK(ncclCommInitAll(comms, kParticipants, opt.devices));
+    }
 
     half ** final_buf = nullptr;
     for (int i = 0; i < opt.warmup; ++i) {
         Timings t = run_one_layer(opt, buf0, buf1, recv, kv_shards, kv_plan, staging,
-                                  root_stream, streams, elems, bytes, false);
+                                  root_stream, streams, comms, elems, bytes, false);
         final_buf = t.final_buf;
     }
 
@@ -602,7 +648,7 @@ int main(int argc, char ** argv) {
 
     for (int i = 0; i < opt.iters; ++i) {
         Timings t = run_one_layer(opt, buf0, buf1, recv, kv_shards, kv_plan, staging,
-                                  root_stream, streams, elems, bytes, true);
+                                  root_stream, streams, comms, elems, bytes, true);
         final_buf = t.final_buf;
         total_ms += t.total_ms;
         compute_ms += t.compute_ms;
@@ -641,6 +687,12 @@ int main(int argc, char ** argv) {
     std::printf("verify cross_device_max_abs=%.9f %s\n", max_abs,
                 max_abs <= 1.0e-5f ? "ok" : "FAIL");
 
+    if (opt.algo == Algorithm::Nccl) {
+        for (int p = 0; p < kParticipants; ++p) {
+            CUDA_CHECK(cudaSetDevice(opt.devices[p]));
+            NCCL_CHECK(ncclCommDestroy(comms[p]));
+        }
+    }
     for (int p = 0; p < kParticipants; ++p) {
         CUDA_CHECK(cudaSetDevice(opt.devices[p]));
         CUDA_CHECK(cudaStreamDestroy(streams[p]));

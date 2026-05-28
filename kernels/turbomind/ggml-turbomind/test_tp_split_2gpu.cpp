@@ -8,6 +8,7 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <dlfcn.h>
+#include <nccl.h>
 
 #include <algorithm>
 #include <chrono>
@@ -23,6 +24,11 @@
 
 #define CHECK_CUDA(x) do { cudaError_t e = (x); if (e != cudaSuccess) { \
     fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(e)); \
+    std::exit(1); \
+} } while (0)
+
+#define CHECK_NCCL(x) do { ncclResult_t e = (x); if (e != ncclSuccess) { \
+    fprintf(stderr, "NCCL error at %s:%d: %s\n", __FILE__, __LINE__, ncclGetErrorString(e)); \
     std::exit(1); \
 } } while (0)
 
@@ -71,6 +77,11 @@ struct DeviceSide {
     cudaStream_t stream = nullptr;
 };
 
+enum class SplitTransport {
+    Nccl,
+    Peer,
+};
+
 static int env_int(const char *name, int fallback, int lo, int hi) {
     const char *v = std::getenv(name);
     if (!v || !v[0]) return fallback;
@@ -81,6 +92,24 @@ static int env_int(const char *name, int fallback, int lo, int hi) {
         return fallback;
     }
     return (int)parsed;
+}
+
+static bool manual_peer_baseline_allowed() {
+    const char *v = std::getenv("DS4_ALLOW_MANUAL_PEER_BASELINE");
+    return v && (std::strcmp(v, "1") == 0 || std::strcmp(v, "true") == 0 ||
+                 std::strcmp(v, "yes") == 0);
+}
+
+static SplitTransport split_transport_from_env() {
+    const char *v = std::getenv("DS4_TP_SPLIT_TRANSPORT");
+    if (!v || !v[0] || std::strcmp(v, "nccl") == 0) return SplitTransport::Nccl;
+    if (std::strcmp(v, "peer") == 0) return SplitTransport::Peer;
+    fprintf(stderr, "[tp_split_2gpu] ignoring invalid DS4_TP_SPLIT_TRANSPORT=%s\n", v);
+    return SplitTransport::Nccl;
+}
+
+static const char * split_transport_name(SplitTransport transport) {
+    return transport == SplitTransport::Nccl ? "nccl" : "peer";
 }
 
 static std::vector<Case> parse_cases_from_env() {
@@ -312,6 +341,45 @@ static double elapsed_ms(cudaEvent_t start, cudaEvent_t stop) {
     return (double)ms;
 }
 
+static void nccl_broadcast_input_2(ncclComm_t comms[2],
+                                   const int devices[2],
+                                   __half *send0,
+                                   __half *recv0,
+                                   __half *recv1,
+                                   size_t bytes,
+                                   cudaStream_t stream0,
+                                   cudaStream_t stream1) {
+    CHECK_NCCL(ncclGroupStart());
+    CHECK_CUDA(cudaSetDevice(devices[0]));
+    CHECK_NCCL(ncclBroadcast(send0, recv0, bytes, ncclChar, 0, comms[0], stream0));
+    CHECK_CUDA(cudaSetDevice(devices[1]));
+    CHECK_NCCL(ncclBroadcast(recv1, recv1, bytes, ncclChar, 0, comms[1], stream1));
+    CHECK_NCCL(ncclGroupEnd());
+    CHECK_CUDA(cudaSetDevice(devices[0]));
+    CHECK_CUDA(cudaStreamSynchronize(stream0));
+    CHECK_CUDA(cudaSetDevice(devices[1]));
+    CHECK_CUDA(cudaStreamSynchronize(stream1));
+}
+
+static void nccl_gather_output_2(ncclComm_t comms[2],
+                                 const int devices[2],
+                                 __half *dst0,
+                                 __half *src1,
+                                 size_t bytes,
+                                 cudaStream_t stream0,
+                                 cudaStream_t stream1) {
+    CHECK_NCCL(ncclGroupStart());
+    CHECK_CUDA(cudaSetDevice(devices[0]));
+    CHECK_NCCL(ncclRecv(dst0, bytes, ncclChar, 1, comms[0], stream0));
+    CHECK_CUDA(cudaSetDevice(devices[1]));
+    CHECK_NCCL(ncclSend(src1, bytes, ncclChar, 0, comms[1], stream1));
+    CHECK_NCCL(ncclGroupEnd());
+    CHECK_CUDA(cudaSetDevice(devices[0]));
+    CHECK_CUDA(cudaStreamSynchronize(stream0));
+    CHECK_CUDA(cudaSetDevice(devices[1]));
+    CHECK_CUDA(cudaStreamSynchronize(stream1));
+}
+
 static int compare_tp_sum(const std::vector<__half> & full,
                           const std::vector<__half> & half0,
                           const std::vector<__half> & half1,
@@ -387,6 +455,14 @@ static int run_case(void * lib, const Case & c) {
     const int dev1 = env_int("DS4_TP_SPLIT_GPU1", 3, 0, 31);
     const int warmup_iters = env_int("DS4_TP_SPLIT_WARMUP_ITERS", 5, 0, 1000);
     const int bench_iters = env_int("DS4_TP_SPLIT_BENCH_ITERS", 50, 1, 10000);
+    const SplitTransport transport = split_transport_from_env();
+    if (transport == SplitTransport::Peer && !manual_peer_baseline_allowed()) {
+        fprintf(stderr,
+                "[tp_split_2gpu] manual peer-copy baseline transport requires "
+                "DS4_ALLOW_MANUAL_PEER_BASELINE=1; default or set "
+                "DS4_TP_SPLIT_TRANSPORT=nccl for the NCCL path\n");
+        return 2;
+    }
 
     int dev_count = 0;
     CHECK_CUDA(cudaGetDeviceCount(&dev_count));
@@ -399,7 +475,14 @@ static int run_case(void * lib, const Case & c) {
     if (in(dev0) != 0) return 3;
     CHECK_CUDA(cudaSetDevice(dev1));
     if (in(dev1) != 0) return 3;
-    enable_peer_pair(dev0, dev1);
+    if (transport == SplitTransport::Peer) {
+        enable_peer_pair(dev0, dev1);
+    }
+    const int nccl_devices[2] = {dev0, dev1};
+    ncclComm_t comms[2] = {nullptr, nullptr};
+    if (transport == SplitTransport::Nccl) {
+        CHECK_NCCL(ncclCommInitAll(comms, 2, nccl_devices));
+    }
 
     constexpr int ggml_type = GGML_TM_DTYPE_MXFP4;
     constexpr int group_size = 32;
@@ -490,7 +573,12 @@ static int run_case(void * lib, const Case & c) {
     }
     CHECK_CUDA(cudaSetDevice(dev0));
     CHECK_CUDA(cudaMemcpy(s0.d_A, h_A.data(), h_A.size() * sizeof(__half), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpyPeer(s1.d_A, dev1, full.d_A, dev0, h_A.size() * sizeof(__half)));
+    if (transport == SplitTransport::Nccl) {
+        nccl_broadcast_input_2(comms, nccl_devices, full.d_A, s0.d_A, s1.d_A,
+                               h_A.size() * sizeof(__half), s0.stream, s1.stream);
+    } else {
+        CHECK_CUDA(cudaMemcpyPeer(s1.d_A, dev1, full.d_A, dev0, h_A.size() * sizeof(__half)));
+    }
 
     if (pack_fixture_set(dev0, pb, pw, ggml_type, fused_half_N, hidden, group_size,
                          num_experts, active, gated_half0, s0.gated) != 0 ||
@@ -569,8 +657,13 @@ static int run_case(void * lib, const Case & c) {
     const size_t out_bytes = (size_t) total_tokens * hidden * sizeof(__half);
     const auto wall_start = std::chrono::steady_clock::now();
     for (int i = 0; i < bench_iters; ++i) {
-        CHECK_CUDA(cudaSetDevice(dev1));
-        CHECK_CUDA(cudaMemcpyPeer(s1.d_A, dev1, full.d_A, dev0, a_bytes));
+        if (transport == SplitTransport::Nccl) {
+            nccl_broadcast_input_2(comms, nccl_devices, full.d_A, s0.d_A, s1.d_A,
+                                   a_bytes, s0.stream, s1.stream);
+        } else {
+            CHECK_CUDA(cudaSetDevice(dev1));
+            CHECK_CUDA(cudaMemcpyPeer(s1.d_A, dev1, full.d_A, dev0, a_bytes));
+        }
         int rc = run_side(s0, mmgs, mmgt, total_tokens, num_experts, fused_half_N, hidden, mid_half, group_size);
         if (rc != 0) return 9;
         rc = run_side(s1, mmgs, mmgt, total_tokens, num_experts, fused_half_N, hidden, mid_half, group_size);
@@ -579,8 +672,13 @@ static int run_case(void * lib, const Case & c) {
         CHECK_CUDA(cudaStreamSynchronize(s0.stream));
         CHECK_CUDA(cudaSetDevice(dev1));
         CHECK_CUDA(cudaStreamSynchronize(s1.stream));
-        CHECK_CUDA(cudaSetDevice(dev0));
-        CHECK_CUDA(cudaMemcpyPeer(d_recv, dev0, s1.d_down, dev1, out_bytes));
+        if (transport == SplitTransport::Nccl) {
+            nccl_gather_output_2(comms, nccl_devices, d_recv, s1.d_down,
+                                 out_bytes, s0.stream, s1.stream);
+        } else {
+            CHECK_CUDA(cudaSetDevice(dev0));
+            CHECK_CUDA(cudaMemcpyPeer(d_recv, dev0, s1.d_down, dev1, out_bytes));
+        }
     }
     const auto wall_stop = std::chrono::steady_clock::now();
     const double total_copy_ms =
@@ -589,11 +687,12 @@ static int run_case(void * lib, const Case & c) {
     const double a_mib = (double)a_bytes / (1024.0 * 1024.0);
     const double out_mib = (double)out_bytes / (1024.0 * 1024.0);
     fprintf(stderr,
-            "[tp_split_2gpu tpa=%d] gpu_pair=%d,%d routes=%d full_ms=%.4f half0_ms=%.4f half1_ms=%.4f concurrent_compute_ms=%.4f compute_speedup=%.3fx total_with_copy_ms=%.4f total_with_copy_speedup=%.3fx input_payload_mib=%.2f output_payload_mib=%.2f\n",
+            "[tp_split_2gpu tpa=%d] gpu_pair=%d,%d routes=%d transport=%s full_ms=%.4f half0_ms=%.4f half1_ms=%.4f concurrent_compute_ms=%.4f compute_speedup=%.3fx total_with_copy_ms=%.4f total_with_copy_speedup=%.3fx input_payload_mib=%.2f output_payload_mib=%.2f\n",
             c.tokens_per_active,
             dev0,
             dev1,
             total_tokens,
+            split_transport_name(transport),
             full_ms,
             s0_ms,
             s1_ms,
@@ -633,6 +732,12 @@ static int run_case(void * lib, const Case & c) {
         if (side->d_gated) CHECK_CUDA(cudaFree(side->d_gated));
         if (side->d_down) CHECK_CUDA(cudaFree(side->d_down));
         if (side->stream) CHECK_CUDA(cudaStreamDestroy(side->stream));
+    }
+    if (transport == SplitTransport::Nccl) {
+        CHECK_CUDA(cudaSetDevice(dev0));
+        CHECK_NCCL(ncclCommDestroy(comms[0]));
+        CHECK_CUDA(cudaSetDevice(dev1));
+        CHECK_NCCL(ncclCommDestroy(comms[1]));
     }
 
     sh();

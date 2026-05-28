@@ -267,13 +267,13 @@ tools/ds4-v100-appliance-pack: tools/ds4-v100-appliance-pack.o ds4_pack.o ds4_so
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 
 tools/ds4-v100-tp4-collective-smoke: tools/ds4-v100-tp4-collective-smoke.cu
-	$(NVCC) $(NVCCFLAGS) -I. -o $@ $< $(CUDA_LDLIBS)
+	$(NVCC) $(NVCCFLAGS) -I. -o $@ $< $(CUDA_LDLIBS) -lnccl
 
 tools/ds4-v100-tp4-layer-proxy: tools/ds4-v100-tp4-layer-proxy.cu
-	$(NVCC) $(NVCCFLAGS) -I. -o $@ $< $(CUDA_LDLIBS)
+	$(NVCC) $(NVCCFLAGS) -I. -o $@ $< $(CUDA_LDLIBS) -lnccl
 
 tools/ds4-v100-tp8-collective-smoke: tools/ds4-v100-tp8-collective-smoke.cu
-	$(NVCC) $(NVCCFLAGS) -I. -o $@ $< $(CUDA_LDLIBS)
+	$(NVCC) $(NVCCFLAGS) -I. -o $@ $< $(CUDA_LDLIBS) -lnccl
 
 tools/ds4-v100-tp8-collective-workbench: tools/ds4-v100-tp8-collective-workbench.cu
 	$(NVCC) $(NVCCFLAGS) -I. -o $@ $< $(CUDA_LDLIBS) -lnccl
@@ -285,13 +285,13 @@ tools/ds4-v100-tp-runtime-smoke: tools/ds4-v100-tp-runtime-smoke.cu ds4_v100_tp_
 	$(NVCC) $(NVCCFLAGS) -I. -o $@ tools/ds4-v100-tp-runtime-smoke.cu ds4_v100_tp_runtime.cu $(CUDA_LDLIBS)
 
 tools/ds4-v100-tp8-layer-smoke: tools/ds4-v100-tp8-layer-smoke.cu
-	$(NVCC) $(NVCCFLAGS) -I. -o $@ $< $(CUDA_LDLIBS)
+	$(NVCC) $(NVCCFLAGS) -I. -o $@ $< $(CUDA_LDLIBS) -lnccl
 
 tools/ds4-v100-tp8-real-layer-smoke: tools/ds4-v100-tp8-real-layer-smoke.cu
-	$(NVCC) $(NVCCFLAGS) -I. -o $@ $< $(CUDA_LDLIBS)
+	$(NVCC) $(NVCCFLAGS) -I. -o $@ $< $(CUDA_LDLIBS) -lnccl
 
 tools/ds4-v100-tp8-turbomind-ffn-smoke: tools/ds4-v100-tp8-turbomind-ffn-smoke.cu
-	$(NVCC) $(NVCCFLAGS) --std=c++17 -I. -o $@ $< $(CUDA_LDLIBS)
+	$(NVCC) $(NVCCFLAGS) --std=c++17 -I. -o $@ $< $(CUDA_LDLIBS) -lnccl
 
 tools/ds4-v100-tp-ep-expert-smoke: tools/ds4-v100-tp-ep-expert-smoke.cu kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h
 	$(NVCC) $(NVCCFLAGS) --std=c++17 -I. -o $@ $< $(CUDA_LDLIBS)
@@ -309,7 +309,7 @@ tools/ds4-v100-tp-ep-int8-compressor-workbench: tools/ds4-v100-tp-ep-int8-compre
 	$(NVCC) $(NVCCFLAGS) $(TCGRID_CUDAFLAGS) -I. -o $@ $< $(CUDA_LDLIBS)
 
 tools/ds4-v100-tp4-turbomind-layer-smoke: tools/ds4-v100-tp4-turbomind-layer-smoke.cu
-	$(NVCC) $(NVCCFLAGS) --std=c++17 -I. -o $@ $< $(CUDA_LDLIBS)
+	$(NVCC) $(NVCCFLAGS) --std=c++17 -I. -o $@ $< $(CUDA_LDLIBS) -lnccl
 
 tools/ds4-v100-routed-ffn-tile-workbench: tools/ds4-v100-routed-ffn-tile-workbench.cu kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h
 	$(NVCC) $(NVCCFLAGS) --std=c++17 -I. -o $@ $< $(CUDA_LDLIBS)

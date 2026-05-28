@@ -9,6 +9,7 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <dlfcn.h>
+#include <nccl.h>
 
 #include <algorithm>
 #include <array>
@@ -25,6 +26,11 @@
 
 #define CHECK_CUDA(x) do { cudaError_t err__ = (x); if (err__ != cudaSuccess) { \
     fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err__)); \
+    std::exit(1); \
+} } while (0)
+
+#define CHECK_NCCL_SPLIT(x) do { ncclResult_t err__ = (x); if (err__ != ncclSuccess) { \
+    fprintf(stderr, "NCCL error at %s:%d: %s\n", __FILE__, __LINE__, ncclGetErrorString(err__)); \
     std::exit(1); \
 } } while (0)
 
@@ -94,6 +100,11 @@ struct Api {
     pfn_mul_mat_grouped_gated_silu_total_tokens mmgs = nullptr;
 };
 
+enum class SplitTransport {
+    Nccl,
+    Peer,
+};
+
 static int env_int(const char *name, int fallback, int lo, int hi) {
     const char *v = std::getenv(name);
     if (!v || !v[0]) return fallback;
@@ -104,6 +115,24 @@ static int env_int(const char *name, int fallback, int lo, int hi) {
         return fallback;
     }
     return (int)parsed;
+}
+
+static bool manual_peer_baseline_allowed() {
+    const char *v = std::getenv("DS4_ALLOW_MANUAL_PEER_BASELINE");
+    return v && (std::strcmp(v, "1") == 0 || std::strcmp(v, "true") == 0 ||
+                 std::strcmp(v, "yes") == 0);
+}
+
+static SplitTransport split_transport_from_env() {
+    const char *v = std::getenv("DS4_TP_SPLIT_TRANSPORT");
+    if (!v || !v[0] || std::strcmp(v, "nccl") == 0) return SplitTransport::Nccl;
+    if (std::strcmp(v, "peer") == 0) return SplitTransport::Peer;
+    fprintf(stderr, "[tp_split_4gpu] ignoring invalid DS4_TP_SPLIT_TRANSPORT=%s\n", v);
+    return SplitTransport::Nccl;
+}
+
+static const char * split_transport_name(SplitTransport transport) {
+    return transport == SplitTransport::Nccl ? "nccl" : "peer";
 }
 
 static std::vector<Case> parse_cases_from_env() {
@@ -173,6 +202,52 @@ static std::array<int, kParts> parse_devices_from_env() {
         }
     }
     return devices;
+}
+
+static void nccl_broadcast_input_4(ncclComm_t comms[kParts],
+                                   const std::array<int, kParts> & devices,
+                                   __half *send0,
+                                   std::array<DeviceSide, kParts> & sides,
+                                   size_t bytes) {
+    CHECK_NCCL_SPLIT(ncclGroupStart());
+    for (int p = 0; p < kParts; ++p) {
+        CHECK_CUDA(cudaSetDevice(devices[p]));
+        CHECK_NCCL_SPLIT(ncclBroadcast(p == 0 ? send0 : sides[p].d_A,
+                                       sides[p].d_A,
+                                       bytes,
+                                       ncclChar,
+                                       0,
+                                       comms[p],
+                                       sides[p].stream));
+    }
+    CHECK_NCCL_SPLIT(ncclGroupEnd());
+    for (int p = 0; p < kParts; ++p) {
+        CHECK_CUDA(cudaSetDevice(devices[p]));
+        CHECK_CUDA(cudaStreamSynchronize(sides[p].stream));
+    }
+}
+
+static void nccl_gather_outputs_4(ncclComm_t comms[kParts],
+                                  const std::array<int, kParts> & devices,
+                                  std::array<DeviceSide, kParts> & sides,
+                                  std::array<__half *, kParts> & d_recv,
+                                  size_t bytes) {
+    CHECK_NCCL_SPLIT(ncclGroupStart());
+    CHECK_CUDA(cudaSetDevice(devices[0]));
+    for (int p = 1; p < kParts; ++p) {
+        CHECK_NCCL_SPLIT(ncclRecv(d_recv[p], bytes, ncclChar, p,
+                                  comms[0], sides[0].stream));
+    }
+    for (int p = 1; p < kParts; ++p) {
+        CHECK_CUDA(cudaSetDevice(devices[p]));
+        CHECK_NCCL_SPLIT(ncclSend(sides[p].d_down, bytes, ncclChar, 0,
+                                  comms[p], sides[p].stream));
+    }
+    CHECK_NCCL_SPLIT(ncclGroupEnd());
+    for (int p = 0; p < kParts; ++p) {
+        CHECK_CUDA(cudaSetDevice(devices[p]));
+        CHECK_CUDA(cudaStreamSynchronize(sides[p].stream));
+    }
 }
 
 static void make_mxfp4_fixture(std::vector<block_mxfp4> & blocks, int N, int K, uint32_t seed) {
@@ -451,12 +526,21 @@ static int run_case(void * lib, const Case & c) {
     const int warmup_iters = env_int("DS4_TP_SPLIT_WARMUP_ITERS", 5, 0, 1000);
     const int bench_iters = env_int("DS4_TP_SPLIT_BENCH_ITERS", 50, 1, 10000);
     const bool verbose = env_int("DS4_TP_SPLIT_VERBOSE", 0, 0, 1) != 0;
+    const SplitTransport transport = split_transport_from_env();
+    if (transport == SplitTransport::Peer && !manual_peer_baseline_allowed()) {
+        fprintf(stderr,
+                "[tp_split_4gpu] manual peer-copy baseline transport requires "
+                "DS4_ALLOW_MANUAL_PEER_BASELINE=1; default or set "
+                "DS4_TP_SPLIT_TRANSPORT=nccl for the NCCL path\n");
+        return 2;
+    }
 
     if (verbose) {
         fprintf(stderr,
-                "[tp_split_4gpu] start tpa=%d gpus=%d,%d,%d,%d warmup=%d iters=%d\n",
+                "[tp_split_4gpu] start tpa=%d gpus=%d,%d,%d,%d transport=%s warmup=%d iters=%d\n",
                 c.tokens_per_active,
                 devices[0], devices[1], devices[2], devices[3],
+                split_transport_name(transport),
                 warmup_iters, bench_iters);
         fflush(stderr);
     }
@@ -472,7 +556,13 @@ static int run_case(void * lib, const Case & c) {
         CHECK_CUDA(cudaSetDevice(devices[p]));
         if (api.init(devices[p]) != 0) return 3;
     }
-    enable_peer_all(devices);
+    if (transport == SplitTransport::Peer) {
+        enable_peer_all(devices);
+    }
+    ncclComm_t comms[kParts] = {};
+    if (transport == SplitTransport::Nccl) {
+        CHECK_NCCL_SPLIT(ncclCommInitAll(comms, kParts, devices.data()));
+    }
     if (verbose) {
         fprintf(stderr, "[tp_split_4gpu] initialized tpa=%d\n", c.tokens_per_active);
         fflush(stderr);
@@ -560,9 +650,13 @@ static int run_case(void * lib, const Case & c) {
         CHECK_CUDA(cudaMalloc(&sides[p].d_down, (size_t) total_tokens * kHidden * sizeof(__half)));
         if (p == 0) {
             CHECK_CUDA(cudaMemcpy(sides[p].d_A, h_A.data(), h_A.size() * sizeof(__half), cudaMemcpyHostToDevice));
-        } else {
+        } else if (transport == SplitTransport::Peer) {
             CHECK_CUDA(cudaMemcpyPeer(sides[p].d_A, sides[p].device, full.d_A, full.device,
                                       h_A.size() * sizeof(__half)));
+        }
+        if (p + 1 == kParts && transport == SplitTransport::Nccl) {
+            nccl_broadcast_input_4(comms, devices, full.d_A, sides,
+                                   h_A.size() * sizeof(__half));
         }
         if (pack_fixture_set(sides[p].device, api, kFusedPartN, kHidden,
                              active, gated_part[p], sides[p].gated) != 0 ||
@@ -656,9 +750,13 @@ static int run_case(void * lib, const Case & c) {
     const size_t out_bytes = (size_t) total_tokens * kHidden * sizeof(__half);
     const auto wall_start = std::chrono::steady_clock::now();
     for (int i = 0; i < bench_iters; ++i) {
-        for (int p = 1; p < kParts; ++p) {
-            CHECK_CUDA(cudaMemcpyPeer(sides[p].d_A, sides[p].device, full.d_A, full.device,
-                                      a_bytes));
+        if (transport == SplitTransport::Nccl) {
+            nccl_broadcast_input_4(comms, devices, full.d_A, sides, a_bytes);
+        } else {
+            for (int p = 1; p < kParts; ++p) {
+                CHECK_CUDA(cudaMemcpyPeer(sides[p].d_A, sides[p].device, full.d_A, full.device,
+                                          a_bytes));
+            }
         }
         for (int p = 0; p < kParts; ++p) {
             if (run_side(sides[p], api, total_tokens, kFusedPartN, kMidPart) != 0) return 9;
@@ -667,9 +765,13 @@ static int run_case(void * lib, const Case & c) {
             CHECK_CUDA(cudaSetDevice(sides[p].device));
             CHECK_CUDA(cudaStreamSynchronize(sides[p].stream));
         }
-        for (int p = 1; p < kParts; ++p) {
-            CHECK_CUDA(cudaMemcpyPeer(d_recv[p], full.device, sides[p].d_down,
-                                      sides[p].device, out_bytes));
+        if (transport == SplitTransport::Nccl) {
+            nccl_gather_outputs_4(comms, devices, sides, d_recv, out_bytes);
+        } else {
+            for (int p = 1; p < kParts; ++p) {
+                CHECK_CUDA(cudaMemcpyPeer(d_recv[p], full.device, sides[p].d_down,
+                                          sides[p].device, out_bytes));
+            }
         }
     }
     const auto wall_stop = std::chrono::steady_clock::now();
@@ -684,10 +786,11 @@ static int run_case(void * lib, const Case & c) {
     const double a_mib = (double)a_bytes * (double)(kParts - 1) / (1024.0 * 1024.0);
     const double out_mib = (double)out_bytes * (double)(kParts - 1) / (1024.0 * 1024.0);
     fprintf(stderr,
-            "[tp_split_4gpu tpa=%d] gpus=%d,%d,%d,%d routes=%d full_ms=%.4f part_ms=%.4f,%.4f,%.4f,%.4f concurrent_compute_ms=%.4f compute_speedup=%.3fx total_with_copy_ms=%.4f total_with_copy_speedup=%.3fx input_payload_mib=%.2f output_payload_mib=%.2f\n",
+            "[tp_split_4gpu tpa=%d] gpus=%d,%d,%d,%d routes=%d transport=%s full_ms=%.4f part_ms=%.4f,%.4f,%.4f,%.4f concurrent_compute_ms=%.4f compute_speedup=%.3fx total_with_copy_ms=%.4f total_with_copy_speedup=%.3fx input_payload_mib=%.2f output_payload_mib=%.2f\n",
             c.tokens_per_active,
             devices[0], devices[1], devices[2], devices[3],
             total_tokens,
+            split_transport_name(transport),
             full_ms,
             part_ms[0], part_ms[1], part_ms[2], part_ms[3],
             concurrent_compute_ms,
@@ -741,6 +844,12 @@ static int run_case(void * lib, const Case & c) {
         if (side.d_gated) CHECK_CUDA(cudaFree(side.d_gated));
         if (side.d_down) CHECK_CUDA(cudaFree(side.d_down));
         if (side.stream) CHECK_CUDA(cudaStreamDestroy(side.stream));
+    }
+    if (transport == SplitTransport::Nccl) {
+        for (int p = 0; p < kParts; ++p) {
+            CHECK_CUDA(cudaSetDevice(devices[p]));
+            CHECK_NCCL_SPLIT(ncclCommDestroy(comms[p]));
+        }
     }
 
     api.shutdown();

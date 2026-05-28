@@ -74,7 +74,7 @@ def ds4_meta(response: ResponseArtifact) -> dict[str, Any]:
     if not response.body:
         return {}
     meta = response.body.get("ds4_v100")
-    return meta if isinstance(meta, dict) else {}
+    return meta if isinstance(meta, dict) else response.body
 
 
 def generated_sequence(meta: dict[str, Any]) -> list[int] | None:

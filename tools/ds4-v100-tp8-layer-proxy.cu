@@ -88,7 +88,8 @@ struct Options {
     int warmup = 3;
     int iters = 20;
     int root_index = 0;
-    Algorithm algo = Algorithm::Doubling;
+    Algorithm algo = Algorithm::Nccl;
+    bool allow_manual_peer_baseline = false;
 };
 
 bool parse_int(const char * text, int * out) {
@@ -148,7 +149,8 @@ void usage(const char * argv0) {
                  "usage: %s [--devices 0,1,2,3,4,5,6,7] [--tokens N] [--hidden N]\n"
                  "       [--layers N] [--collectives-per-layer N]\n"
                  "       [--local-op-repeats N] [--warmup N] [--iters N]\n"
-                 "       [--root-index 0..7] [--algo root|doubling|nccl]\n",
+                 "       [--root-index 0..7] [--algo root|doubling|nccl]\n"
+                 "       [--allow-manual-peer-baseline]\n",
                  argv0);
 }
 
@@ -229,6 +231,8 @@ bool parse_args(int argc, char ** argv, Options * opt) {
                 return false;
             }
             ++i;
+        } else if (std::strcmp(arg, "--allow-manual-peer-baseline") == 0) {
+            opt->allow_manual_peer_baseline = true;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
@@ -447,6 +451,13 @@ int main(int argc, char ** argv) {
     Options opt;
     if (!parse_args(argc, argv, &opt)) {
         usage(argv[0]);
+        return 2;
+    }
+    if (opt.algo != Algorithm::Nccl && !opt.allow_manual_peer_baseline) {
+        std::fprintf(stderr,
+                     "manual peer-copy baseline algorithms require "
+                     "--allow-manual-peer-baseline; default or use --algo nccl for "
+                     "promotion evidence\n");
         return 2;
     }
 
