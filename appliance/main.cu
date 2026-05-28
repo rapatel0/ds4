@@ -46,7 +46,7 @@ namespace {
 #include "engine/runtime_types.cuh"
 #include "engine/runtime_options.cuh"
 
-#include "appliance/options.cu"
+#include "appliance/options.h"
 #include "engine/runtime_profiler.cu"
 
 #include "kernels/v100/common.cuh"
@@ -82,6 +82,7 @@ namespace {
 
 } // namespace
 
+#include "engine/api.h"
 #include "engine/layer_decode.cu"
 #include "engine/layer_runner.cu"
 #include "engine/token_major_loop.cu"
