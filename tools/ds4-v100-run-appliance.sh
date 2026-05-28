@@ -1852,7 +1852,10 @@ if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
     if [ "$DS4_V100_TP_EP_TRUE_DS4_POST_ATTENTION_FFN_INPUT" -eq 1 ]; then
         cmd+=(--true-ds4-post-attention-ffn-input-gate)
     fi
-    if [ "$DS4_V100_TP_EP_TRUE_DS4_SEMANTIC_SKIP_STATS" -eq 1 ]; then
+    if [ "$DS4_V100_TP_EP_TRUE_DS4_SEMANTIC_SKIP_STATS" -eq 1 ] &&
+       { [ "$DS4_V100_TP_EP_TRUE_DS4_ATTENTION_OUTPUT" -eq 1 ] ||
+         [ "$DS4_V100_TP_EP_TRUE_DS4_ATTENTION_OUTPUT_NCCL_ALLGATHER" -eq 1 ] ||
+         [ "$DS4_V100_TP_EP_TRUE_DS4_POST_ATTENTION_FFN_INPUT" -eq 1 ]; }; then
         cmd+=(--true-ds4-semantic-skip-stats-gate)
     fi
     if [ "$DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_RAW" -eq 1 ]; then

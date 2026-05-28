@@ -1331,7 +1331,14 @@ def build_env(args, port, case_dir=None):
             if args.post_attention_ffn_input
             else "0",
             "DS4_V100_TP_EP_TRUE_DS4_SEMANTIC_SKIP_STATS": "1"
-            if args.semantic_skip_stats
+            if (
+                args.semantic_skip_stats
+                and (
+                    args.attention_output
+                    or args.attention_output_nccl_allgather
+                    or args.post_attention_ffn_input
+                )
+            )
             else "0",
             "DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_INPUT_FILL": "1"
             if args.fused_compressed_input_fill
