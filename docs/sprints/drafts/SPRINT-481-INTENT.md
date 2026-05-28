@@ -2,7 +2,7 @@
 
 ## Seed Prompt
 
-`TEMP_CODE_CLEANUP_PROMPT.md`
+`docs/sprints/archive/TEMP_CODE_CLEANUP_PROMPT.md`
 
 Snapshot and push the current state, then aggressively delete dead feature-gate
 branches in `tools/ds4-v100-tp-ep-full-layer-smoke.cu`, revive the verified A6

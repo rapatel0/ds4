@@ -4,7 +4,7 @@
 
 Replace the first HC-current GPU0-centered reduction with a TP-native path:
 rank-local partials, tiny NCCL all-reduces, and rank-local split/weighted-sum.
-This implements the first step from `TEMP_HC_ALLREDUCE_PROMPT.md`, starting
+This implements the first step from `docs/sprints/archive/TEMP_HC_ALLREDUCE_PROMPT.md`, starting
 with A2, because peer-copy accounting showed NCCL itself has zero SYS graph
 edges while GPU0 broadcasts account for direct SYS traffic.
 
@@ -52,7 +52,7 @@ edges while GPU0 broadcasts account for direct SYS traffic.
 
 - Local build compiles.
 - Remote pod build compiles with `sm_70`.
-- Correctness passes under `TEMP_PARITY_POLICY.md`:
+- Correctness passes under `docs/sprints/archive/TEMP_PARITY_POLICY.md`:
   - any path that changes reduction order uses the tolerance/teacher-forced
     gate, even if it is part of A6/A4a,
   - pure transport-only paths stay bit-exact at the 32-slot / 256K reference
@@ -75,7 +75,7 @@ edges while GPU0 broadcasts account for direct SYS traffic.
 ## Outcome
 
 Status: A2 implemented and promoted into the appliance defaults. Under
-`TEMP_PARITY_POLICY.md`, the old free-running exact sequence mismatch is not a
+`docs/sprints/archive/TEMP_PARITY_POLICY.md`, the old free-running exact sequence mismatch is not a
 rejection because A2 reorders floating-point reductions.
 
 Build:
@@ -100,7 +100,7 @@ Reference A/B:
 - Candidate completed 256/256 HTTP 200.
 - Old free-running response parity: 0/256 full generated-token sequences
   matched.
-- Per `TEMP_PARITY_POLICY.md`, this is not by itself a rejection for A2 because
+- Per `docs/sprints/archive/TEMP_PARITY_POLICY.md`, this is not by itself a rejection for A2 because
   A2 reorders floating-point reductions.
 
 Topline performance from the A2 tolerance-candidate run:

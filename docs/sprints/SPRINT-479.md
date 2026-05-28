@@ -60,7 +60,7 @@ rank stream, grouped with `ncclGroupStart/End` when issuing across ranks.
 
 - `tools/ds4-v100-tp-ep-full-layer-smoke.cu`: primary implementation.
 - `docs/sprints/SPRINT-479.md`: sprint record and outcomes.
-- `TEMP_STATUS_REPORT_479.md`: short handoff/status report.
+- `docs/sprints/archive/status-reports/TEMP_STATUS_REPORT_479.md`: short handoff/status report.
 - `docs/sprints/VISION.md`: final outcome row after validation.
 
 ## Definition Of Done

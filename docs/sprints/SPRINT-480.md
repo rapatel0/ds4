@@ -2,7 +2,7 @@
 
 ## Objective
 
-Apply the relaxed arithmetic-change policy from `TEMP_PARITY_POLICY.md` to the
+Apply the relaxed arithmetic-change policy from `docs/sprints/archive/TEMP_PARITY_POLICY.md` to the
 existing Pattern-A evidence and promote only the candidates whose existing
 artifacts satisfy the agreement gate.
 

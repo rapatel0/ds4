@@ -21,7 +21,7 @@ snapshot commit and tag.
 
 ## Architecture
 
-Use the six buckets from `TEMP_CODE_CLEANUP_PROMPT.md`:
+Use the six buckets from `docs/sprints/archive/TEMP_CODE_CLEANUP_PROMPT.md`:
 
 - Promoted: delete the flag and dead else branch.
 - Rejected terminal: delete the flag and dead if branch.
@@ -39,7 +39,7 @@ Use the six buckets from `TEMP_CODE_CLEANUP_PROMPT.md`:
 - Commit: `Pre-cleanup snapshot: state before TEMP_CODE_CLEANUP_PROMPT`.
 - Push to `origin/claude-takeover`.
 - Tag the commit `pre-cleanup-snapshot` and push the tag.
-- Record the SHA in `TEMP_STATUS_REPORT_481.md`.
+- Record the SHA in `docs/sprints/archive/status-reports/TEMP_STATUS_REPORT_481.md`.
 
 ### Phase 1 - A6 PATH 4 Revive
 
@@ -81,7 +81,7 @@ Use the six buckets from `TEMP_CODE_CLEANUP_PROMPT.md`:
 - Count flags and file lines before/after.
 - Document every surviving flag by bucket with one-line justification.
 - Add going-forward flag discipline to `docs/sprints/VISION.md`.
-- Write `TEMP_STATUS_REPORT_481.md`.
+- Write `docs/sprints/archive/status-reports/TEMP_STATUS_REPORT_481.md`.
 
 ## Files Summary
 
@@ -94,7 +94,7 @@ Use the six buckets from `TEMP_CODE_CLEANUP_PROMPT.md`:
 - `tools/ds4-v100-tp-ep-nccl-http-ab.py`: remove deleted A/B options and
   summary fields.
 - `docs/sprints/VISION.md`: record cleanup discipline and sprint result.
-- `TEMP_STATUS_REPORT_481.md`: sprint execution report.
+- `docs/sprints/archive/status-reports/TEMP_STATUS_REPORT_481.md`: sprint execution report.
 
 ## Definition Of Done
 
