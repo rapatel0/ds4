@@ -450,18 +450,15 @@ static int profile_mark(double *last_ms, double *bucket_ms);
 
 static bool tp2_async_input_enabled(void) {
     return env_flag_enabled("DS4_V100_TP2_ASYNC_INPUT") ||
-           env_flag_enabled("DS4_V100_TP_ROUTED_FFN_ASYNC_INPUT") ||
-           env_flag_enabled("DS4_V100_TP_EP_ASYNC_INPUT");
+           env_flag_enabled("DS4_V100_TP_ROUTED_FFN_ASYNC_INPUT");
 }
 
 static bool tp2_verbose_enabled(void) {
-    return env_flag_enabled("DS4_V100_TP2_VERBOSE") ||
-           env_flag_enabled("DS4_V100_TP_EP_VERBOSE");
+    return env_flag_enabled("DS4_V100_TP2_VERBOSE");
 }
 
 static bool tp2_parallel_halves_enabled(void) {
-    return env_flag_enabled("DS4_V100_TP2_PARALLEL_HALVES") ||
-           env_flag_enabled("DS4_V100_TP_EP_PARALLEL_HALVES");
+    return env_flag_enabled("DS4_V100_TP2_PARALLEL_HALVES");
 }
 
 static bool tp2_routed_enabled(const ds4_layer_state *state,

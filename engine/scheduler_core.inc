@@ -627,7 +627,6 @@ static int scheduler_load_tp2_env(ds4_stage_scheduler *sched,
         layer_env = scheduler_first_env("DS4_V100_TP_ROUTED_FFN_LAYER", "DS4_V100_TP2_LAYER");
     }
     const bool enabled =
-        scheduler_env_enabled("DS4_V100_TP_EP_ROUTED_FFN") ||
         scheduler_env_enabled("DS4_V100_TP_ROUTED_FFN") ||
         scheduler_env_enabled("DS4_V100_TP2_ROUTED_FFN") ||
         (layer_env && strcmp(layer_env, "-1") != 0);
