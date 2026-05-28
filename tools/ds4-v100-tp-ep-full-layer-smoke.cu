@@ -1133,6 +1133,7 @@ struct Options {
     bool true_ds4_attention_projection_gate = false;
     bool true_ds4_attention_projection_direct_input_fill_gate = false;
     bool true_ds4_attention_projection_rank_local_input_gate = false;
+    bool true_ds4_attention_projection_rank_major_input_gate = false;
     bool true_ds4_attention_projection_input_parity_gate = false;
     bool true_ds4_attention_state_gate = false;
     bool true_ds4_attention_rope_gate = false;
@@ -4951,6 +4952,7 @@ void usage(const char *argv0) {
                  "       [--true-ds4-attention-residency-gate]\n"
                  "       [--true-ds4-attention-projection-gate]\n"
                  "       [--true-ds4-attention-projection-rank-local-input-gate]\n"
+                 "       [--true-ds4-attention-projection-rank-major-input-gate]\n"
                  "       [--true-ds4-attention-projection-input-parity-gate]\n"
                  "       [--true-ds4-attention-state-gate]\n"
                  "       [--true-ds4-attention-rope-gate]\n"
@@ -5448,6 +5450,14 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->tp_hc_current_input_gate = true;
             opt->tp_hc_final_expand_gate = true;
             opt->final_hc_carry_gate = true;
+        } else if (std::strcmp(arg, "--true-ds4-attention-projection-rank-major-input-gate") == 0) {
+            opt->true_ds4_attention_projection_rank_major_input_gate = true;
+            opt->true_ds4_attention_projection_gate = true;
+            opt->true_ds4_attention_residency_gate = true;
+            opt->tp_hc_current_input_gate = true;
+            opt->tp_hc_current_input_nccl_allgather_gate = true;
+            opt->tp_hc_final_expand_gate = true;
+            opt->final_hc_carry_gate = true;
         } else if (std::strcmp(arg, "--true-ds4-attention-projection-input-parity-gate") == 0) {
             opt->true_ds4_attention_projection_input_parity_gate = true;
             opt->true_ds4_attention_projection_gate = true;
@@ -5754,6 +5764,9 @@ bool parse_args(int argc, char **argv, Options *opt) {
             opt->true_ds4_attention_projection_gate) &&
            (!opt->true_ds4_attention_projection_rank_local_input_gate ||
             opt->true_ds4_attention_projection_gate) &&
+           (!opt->true_ds4_attention_projection_rank_major_input_gate ||
+            (opt->true_ds4_attention_projection_gate &&
+             opt->tp_hc_current_input_nccl_allgather_gate)) &&
            (!opt->true_ds4_attention_state_gate ||
             opt->true_ds4_attention_projection_gate) &&
            (!opt->true_ds4_attention_rope_gate ||
@@ -7141,7 +7154,8 @@ int open_shared_hc_controls(const Options &opt,
                               attn_norm_weight.size() * sizeof(float),
                               cudaMemcpyHostToDevice));
         out->d_attn_norm_weight_rank[layer][0] = out->d_attn_norm_weight[layer];
-        if (opt.true_ds4_attention_projection_rank_local_input_gate) {
+        if (opt.true_ds4_attention_projection_rank_local_input_gate ||
+            opt.true_ds4_attention_projection_rank_major_input_gate) {
             for (int rank = 1; rank < kGpus; ++rank) {
                 CHECK_CUDA(cudaSetDevice(opt.devices[rank]));
                 CHECK_CUDA(cudaMalloc(&out->d_attn_norm_weight_rank[layer][rank],
@@ -13117,13 +13131,16 @@ int run_true_ds4_attention_projection_prefix(const Options &opt,
     const bool graph_event_order = opt.decode_cudagraph_gate;
     const bool direct_input_fill =
         opt.true_ds4_attention_projection_direct_input_fill_gate;
+    const bool rank_major_input =
+        opt.true_ds4_attention_projection_rank_major_input_gate &&
+        opt.tp_hc_current_input_nccl_allgather_gate;
     const bool rank_local_input =
-        opt.true_ds4_attention_projection_rank_local_input_gate;
-    const bool rank_major_input = false;
+        opt.true_ds4_attention_projection_rank_local_input_gate ||
+        rank_major_input;
     const bool gathered_current_full =
         opt.tp_hc_current_input_peer_gather_gate ||
         opt.tp_hc_current_input_nccl_allgather_gate;
-    const bool broadcast_normed_current = !direct_input_fill;
+    const bool broadcast_normed_current = !direct_input_fill && !rank_major_input;
     float *attention_current_full = hc->d_current_full;
     if (gathered_current_full && ranks[0].d_current_full) {
         attention_current_full = ranks[0].d_current_full;
@@ -19844,6 +19861,7 @@ int run_token_major_serving_loop(const Options &opt,
                 "sum_hc_current_fill_pack_ms\t%.6f\t"
                 "sum_pre_ep_hc_current_ms\t%.6f\t"
                 "attention_projection_rank_local_input_gate\t%d\t"
+                "attention_projection_rank_major_input_gate\t%d\t"
                 "sum_pre_ep_attention_projection_ms\t%.6f\t"
                 "sum_pre_ep_compressed_kv_ms\t%.6f\t"
                 "sum_pre_ep_attention_state_ms\t%.6f\t"
@@ -19925,6 +19943,7 @@ int run_token_major_serving_loop(const Options &opt,
                 sum_hc_current_fill_pack_ms,
                 sum_pre_ep_hc_current_ms,
                 opt.true_ds4_attention_projection_rank_local_input_gate ? 1 : 0,
+                opt.true_ds4_attention_projection_rank_major_input_gate ? 1 : 0,
                 sum_pre_ep_attention_projection_ms,
                 sum_pre_ep_compressed_kv_ms,
                 sum_pre_ep_attention_state_ms,

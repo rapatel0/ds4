@@ -109,6 +109,65 @@ def profiler_log_pattern(case_dir, stem):
     return str(case_dir / f"{stem}.%p.csv")
 
 
+def tail_text(path, max_bytes=8192):
+    try:
+        with open(path, "rb") as src:
+            src.seek(0, os.SEEK_END)
+            size = src.tell()
+            src.seek(max(0, size - max_bytes), os.SEEK_SET)
+            return src.read().decode("utf-8", errors="replace")
+    except FileNotFoundError:
+        return ""
+
+
+def write_failure_summary(case_dir, exc, proc=None):
+    if proc is not None:
+        try:
+            proc.poll()
+        except Exception:
+            pass
+    summary = {
+        "schema": "ds4_v100_tp_ep_profile_failure.v1",
+        "error": str(exc),
+        "server_returncode": proc.returncode if proc is not None else None,
+        "server_out_tail": tail_text(case_dir / "server.out"),
+        "server_err_tail": tail_text(case_dir / "server.err"),
+        "lifecycle_tail": tail_text(case_dir / "lifecycle.csv", max_bytes=4096),
+        "command_path": str(case_dir / "command.txt"),
+        "profile_command_path": str(case_dir / "profile-command.txt"),
+        "nccl_env_path": str(case_dir / "nccl-env.txt"),
+    }
+    (case_dir / "failure-summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    lines = [
+        "# TP/EP Profile Failure",
+        "",
+        f"- error: `{summary['error']}`",
+        f"- server_returncode: `{summary['server_returncode']}`",
+        f"- command: `{summary['command_path']}`",
+        f"- profile_command: `{summary['profile_command_path']}`",
+        f"- nccl_env: `{summary['nccl_env_path']}`",
+        "",
+        "## Server stderr tail",
+        "",
+        "```",
+        summary["server_err_tail"],
+        "```",
+        "",
+        "## Server stdout tail",
+        "",
+        "```",
+        summary["server_out_tail"],
+        "```",
+    ]
+    (case_dir / "failure-summary.md").write_text(
+        "\n".join(lines) + "\n",
+        encoding="utf-8",
+    )
+
+
 def http_get(base, path, timeout=10):
     req = urllib.request.Request(base + path, method="GET")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -1292,6 +1351,9 @@ def build_env(args, port, case_dir=None):
             "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_PROJECTION_RANK_LOCAL_INPUT": "1"
             if args.attention_projection_rank_local_input
             else "0",
+            "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_PROJECTION_RANK_MAJOR_INPUT": "1"
+            if args.attention_projection_rank_major_input
+            else "0",
             "DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_SKIP_DENSE_STATS": "1"
             if not args.disable_skip_compressed_dense_stats
             else "0",
@@ -1358,6 +1420,8 @@ def variant_suffix(args):
         suffix += "-fused-compressed-attn-input-fill"
     if getattr(args, "attention_projection_rank_local_input", False):
         suffix += "-attn-proj-rank-local"
+    if getattr(args, "attention_projection_rank_major_input", False):
+        suffix += "-attn-proj-rank-major"
     if getattr(args, "decode_cudagraph", False):
         suffix += "-decode-cudagraph"
     if getattr(args, "persistent_decode_cudagraph", False):
@@ -1572,6 +1636,8 @@ def direct_command(args):
         cmd.append("--tp-peer-reject-sys-gate")
     if args.attention_projection_rank_local_input:
         cmd.append("--true-ds4-attention-projection-rank-local-input-gate")
+    if args.attention_projection_rank_major_input:
+        cmd.append("--true-ds4-attention-projection-rank-major-input-gate")
     if args.attention_output:
         cmd.append("--true-ds4-attention-output-gate")
     if args.attention_output_nccl_allgather:
@@ -1736,6 +1802,7 @@ def add_tp_ep_line_summaries(summary, stdout):
                 "fused_gated_silu_gate",
                 "routed_ffn_norm_input_gate",
                 "attention_projection_rank_local_input_gate",
+                "attention_projection_rank_major_input_gate",
                 "routed_ffn_rank_major_input_gate",
                 "model_router_rank_major_logits_gate",
                 "model_router_allreduce_logits_gate",
@@ -2182,6 +2249,7 @@ def main():
     parser.add_argument("--tp-peer-accounting", action="store_true")
     parser.add_argument("--tp-peer-reject-sys", action="store_true")
     parser.add_argument("--attention-projection-rank-local-input", action="store_true")
+    parser.add_argument("--attention-projection-rank-major-input", action="store_true")
     parser.add_argument("--resident-profile-layer", type=int)
     parser.add_argument("--attention-output", action="store_true")
     parser.add_argument("--attention-output-nccl-allgather", action="store_true")
@@ -2566,6 +2634,15 @@ def main():
         (case_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
         lifecycle.mark("summary_written")
         print(json.dumps(summary, sort_keys=True), flush=True)
+    except Exception as exc:
+        try:
+            server_out.flush()
+            server_err.flush()
+        except Exception:
+            pass
+        lifecycle.mark("failure", str(exc))
+        write_failure_summary(case_dir, exc, proc)
+        raise
     finally:
         gpu_sampler.__exit__(None, None, None)
         try:
