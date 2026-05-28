@@ -216,7 +216,7 @@ def ds4_server_pids_for_port(port):
             continue
         if pid == os.getpid():
             continue
-        if "ds4-v100-tp-ep-full-layer-smoke" not in args or "--serve-http" not in args:
+        if "ds4-v100-tp-ep-appliance" not in args or "--serve-http" not in args:
             continue
         try:
             argv = shlex.split(args)
@@ -1500,7 +1500,7 @@ def variant_suffix(args):
 def direct_command(args):
     kv_slot = min(7, max(0, args.slots - 1))
     cmd = [
-        "./tools/ds4-v100-tp-ep-full-layer-smoke",
+        "./appliance/ds4-v100-tp-ep-appliance",
         "--pack-dir", args.pack_dir,
         "--contract", args.contract,
         "--tm-index", str(pathlib.Path(args.pack_dir) / "turbomind-pack-index.tsv"),

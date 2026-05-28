@@ -5,7 +5,7 @@ pack_dir="/workspace/packs/ds4-appliance-full-tm-gated-s181"
 contract="/workspace/logs/sprint245-tp-ep-dense-f16-cache-contract/contract/tp-ep-pack-contract.tsv"
 tm_index="/workspace/packs/ds4-appliance-full-tm-gated-s181/turbomind-pack-index.tsv"
 lib="/workspace/ds4-sprint181/build/turbomind-v100/libggml-turbomind.so"
-bench_bin="./tools/ds4-v100-tp-ep-full-layer-smoke"
+bench_bin="./appliance/ds4-v100-tp-ep-appliance"
 log_dir=""
 slots="32"
 tokens="32"
@@ -23,7 +23,7 @@ generated/continuation throughput artifacts. This is a tool-level resident
 serving harness, not the HTTP replay server.
 
 Options:
-  --bench-bin FILE      TP/EP full-layer smoke binary
+  --bench-bin FILE      TP/EP appliance binary
   --pack-dir DIR        TP/EP appliance pack dir
   --contract FILE       TP/EP pack contract TSV
   --tm-index FILE       TurboMind pack index TSV

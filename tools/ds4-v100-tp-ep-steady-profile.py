@@ -25,7 +25,7 @@ from typing import Any
 
 
 DS4_PROCESS_PATTERNS = (
-    "ds4-v100-tp-ep-full-layer-smoke",
+    "ds4-v100-tp-ep-appliance",
     "ds4-v100-tp-ep-profile.py",
     "ds4-v100-tp-ep-nccl-http-ab.py",
     "dcgmi dmon",

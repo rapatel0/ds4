@@ -10,7 +10,7 @@ ctx="262144"
 appliance_dir="/workspace/packs/ds4-appliance-full-tm-gated-s181"
 contract="/workspace/logs/sprint245-tp-ep-dense-f16-cache-contract/contract/tp-ep-pack-contract.tsv"
 tm_index=""
-tp_ep_bin="./tools/ds4-v100-tp-ep-full-layer-smoke"
+tp_ep_bin="./appliance/ds4-v100-tp-ep-appliance"
 turbomind_lib="/workspace/ds4-sprint181/build/turbomind-v100/libggml-turbomind.so"
 run_appliance="./tools/ds4-v100-run-tp-ep-appliance.sh"
 copy_event_compose="1"
@@ -42,7 +42,7 @@ Options:
   --appliance-dir DIR production appliance pack
   --contract FILE     TP/EP pack contract TSV
   --tm-index FILE     TurboMind pack index; default appliance dir index
-  --tp-ep-bin FILE    TP/EP HTTP server binary
+  --tp-ep-bin FILE    TP/EP appliance binary
   --turbomind-lib FILE
   --run-appliance FILE
   --copy-event-compose
