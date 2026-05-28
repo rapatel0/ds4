@@ -4,6 +4,7 @@ set -eu
 env_file=""
 mode="run"
 allow_missing=0
+original_args=("$@")
 
 usage() {
     cat <<'USAGE'
@@ -65,6 +66,12 @@ if [ -n "$env_file" ]; then
     # shellcheck disable=SC1090
     . "$env_file"
     set +a
+fi
+
+script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+if [ "${DS4_V100_SERVE_MODE_LOCK:-}" = "tp-ep" ] ||
+   [ "${DS4_V100_SERVE_MODE:-}" = "tp-ep" ]; then
+    exec "$script_dir/ds4-v100-run-tp-ep-appliance.sh" "${original_args[@]}"
 fi
 
 : "${DS4_V100_BIN:=./tools/ds4-v100-replay}"
