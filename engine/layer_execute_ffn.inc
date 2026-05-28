@@ -1,8 +1,8 @@
-static int execute_ffn_delta(const ds4_v100_layer_state *state,
-                             const ds4_v100_layer_execute_config *cfg,
+static int execute_ffn_delta(const ds4_layer_state *state,
+                             const ds4_layer_execute_config *cfg,
                              const ds4_gpu_tensor *ffn_input,
                              ds4_gpu_tensor *ffn_delta,
-                             ds4_v100_layer_execute_report *report,
+                             ds4_layer_execute_report *report,
                              char *err,
                              size_t errlen) {
     const bool hash_mode = state->router_kind == DS4_V100_ROUTER_HASH && state->has_hash_router;
@@ -139,7 +139,7 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
         const bool use_tp2 = tp2_routed_enabled(state, cfg, 1, use_fused_gate_up);
         if (use_tp2) {
             used_tp2 = true;
-            ds4_v100_layer_execute_report tp2_report;
+            ds4_layer_execute_report tp2_report;
             memset(&tp2_report, 0, sizeof(tp2_report));
             tm_rc = execute_turbomind_tp2_routed(state,
                                                  cfg,
@@ -196,8 +196,8 @@ static int execute_ffn_delta(const ds4_v100_layer_state *state,
             goto done;
         }
     } else {
-        ds4_v100_route_matrices route0;
-        if (ds4_v100_layer_state_route_matrices(state, 0, &route0, err, errlen)) {
+        ds4_route_matrices route0;
+        if (ds4_layer_state_route_matrices(state, 0, &route0, err, errlen)) {
             goto done;
         }
         if (route0.gate.bytes != route0.up.bytes ||
@@ -338,12 +338,12 @@ done:
     return rc;
 }
 
-static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
-                                   const ds4_v100_layer_execute_config *cfgs,
+static int execute_ffn_delta_batch(const ds4_layer_state *state,
+                                   const ds4_layer_execute_config *cfgs,
                                    const ds4_gpu_tensor *const *ffn_inputs,
                                    ds4_gpu_tensor *const *ffn_deltas,
                                    uint32_t n_slots,
-                                   ds4_v100_layer_execute_report *reports,
+                                   ds4_layer_execute_report *reports,
                                    char *err,
                                    size_t errlen) {
     if (!state || !cfgs || !ffn_inputs || !ffn_deltas ||
@@ -565,7 +565,7 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
         ffn_outputs_match_scratch_delta(cfgs[0].batch_scratch, ffn_deltas, n_slots) &&
         cfgs[0].batch_scratch->ffn_norm_batch &&
         cfgs[0].batch_scratch->ffn_delta_batch;
-    ds4_v100_layer_execute_report tp2_report;
+    ds4_layer_execute_report tp2_report;
     memset(&tp2_report, 0, sizeof(tp2_report));
     if (use_direct_delta) {
         if (!use_fused_gate_up && !has_turbomind_separate_gate_up(state)) {
@@ -711,8 +711,8 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
             goto done;
         }
     } else {
-        ds4_v100_route_matrices route0;
-        if (ds4_v100_layer_state_route_matrices(state, 0, &route0, err, errlen)) {
+        ds4_route_matrices route0;
+        if (ds4_layer_state_route_matrices(state, 0, &route0, err, errlen)) {
             goto done;
         }
         if (route0.gate.bytes != route0.up.bytes ||
@@ -888,7 +888,7 @@ static int execute_ffn_delta_batch(const ds4_v100_layer_state *state,
 fill_reports:
     if (reports) {
         for (uint32_t slot = 0; slot < n_slots; slot++) {
-            ds4_v100_layer_execute_report *report = &reports[slot];
+            ds4_layer_execute_report *report = &reports[slot];
             memset(report, 0, sizeof(*report));
             report->routes = routes;
             report->turbomind_routed = state->has_turbomind_routed ? 1u : 0u;
@@ -932,12 +932,12 @@ done:
     return rc;
 }
 
-int ds4_v100_layer_execute_decode(
-        const ds4_v100_layer_state          *state,
-        const ds4_v100_layer_execute_config *cfg,
+int ds4_layer_execute_decode(
+        const ds4_layer_state          *state,
+        const ds4_layer_execute_config *cfg,
         const ds4_gpu_tensor                *hidden,
         ds4_gpu_tensor                      *next_hidden,
-        ds4_v100_layer_execute_report       *report,
+        ds4_layer_execute_report       *report,
         char                                *err,
         size_t                               errlen) {
     if (!hidden || !next_hidden) return exec_error(err, errlen, "missing hidden tensor");
@@ -984,12 +984,12 @@ done:
     return rc;
 }
 
-int ds4_v100_layer_execute_hc_decode(
-        const ds4_v100_layer_state          *state,
-        const ds4_v100_layer_execute_config *cfg,
+int ds4_layer_execute_hc_decode(
+        const ds4_layer_state          *state,
+        const ds4_layer_execute_config *cfg,
         const ds4_gpu_tensor                *hidden_hc,
         ds4_gpu_tensor                      *next_hidden_hc,
-        ds4_v100_layer_execute_report       *report,
+        ds4_layer_execute_report       *report,
         char                                *err,
         size_t                               errlen) {
     if (!hidden_hc || !next_hidden_hc) return exec_error(err, errlen, "missing HC tensor");
@@ -1195,7 +1195,7 @@ int ds4_v100_layer_execute_hc_decode(
     }
 
     if (cfg->checkpoint_fn) {
-        ds4_v100_layer_execute_checkpoint cp = {
+        ds4_layer_execute_checkpoint cp = {
             .layer = cfg->checkpoint_layer,
             .kind = DS4_V100_HC_CHECKPOINT_AFTER_ATTN,
             .hc = after_attn_hc,
@@ -1222,13 +1222,13 @@ done:
     return rc;
 }
 
-int ds4_v100_layer_execute_hc_prepare_ffn(
-        const ds4_v100_layer_state          *state,
-        const ds4_v100_layer_execute_config *cfg,
+int ds4_layer_execute_hc_prepare_ffn(
+        const ds4_layer_state          *state,
+        const ds4_layer_execute_config *cfg,
         const ds4_gpu_tensor                *hidden_hc,
         ds4_gpu_tensor                      *next_hidden_hc,
         uint32_t                             scratch_slot,
-        ds4_v100_layer_prepared_ffn         *prepared,
+        ds4_layer_prepared_ffn         *prepared,
         char                                *err,
         size_t                               errlen) {
     if (!hidden_hc || !next_hidden_hc || !prepared) {
@@ -1348,7 +1348,7 @@ int ds4_v100_layer_execute_hc_prepare_ffn(
         return 1;
     }
 
-    *prepared = (ds4_v100_layer_prepared_ffn) {
+    *prepared = (ds4_layer_prepared_ffn) {
         .scratch_slot = scratch_slot,
         .hidden_hc = hidden_hc,
         .next_hidden_hc = next_hidden_hc,
@@ -1360,12 +1360,12 @@ int ds4_v100_layer_execute_hc_prepare_ffn(
     return 0;
 }
 
-int ds4_v100_layer_execute_hc_finish_ffn_batch(
-        const ds4_v100_layer_state           *state,
-        const ds4_v100_layer_execute_config  *cfgs,
-        ds4_v100_layer_prepared_ffn          *prepared,
+int ds4_layer_execute_hc_finish_ffn_batch(
+        const ds4_layer_state           *state,
+        const ds4_layer_execute_config  *cfgs,
+        ds4_layer_prepared_ffn          *prepared,
         uint32_t                              n_slots,
-        ds4_v100_layer_execute_report        *reports,
+        ds4_layer_execute_report        *reports,
         char                                 *err,
         size_t                                errlen) {
     if (!state || !cfgs || !prepared || n_slots == 0 ||
@@ -1409,13 +1409,13 @@ int ds4_v100_layer_execute_hc_finish_ffn_batch(
     return 0;
 }
 
-int ds4_v100_layer_execute_hc_decode_batch(
-        const ds4_v100_layer_state           *state,
-        const ds4_v100_layer_execute_config  *cfgs,
+int ds4_layer_execute_hc_decode_batch(
+        const ds4_layer_state           *state,
+        const ds4_layer_execute_config  *cfgs,
         const ds4_gpu_tensor *const          *hidden_hc,
         ds4_gpu_tensor *const                *next_hidden_hc,
         uint32_t                              n_slots,
-        ds4_v100_layer_execute_report        *reports,
+        ds4_layer_execute_report        *reports,
         char                                 *err,
         size_t                                errlen) {
     if (!state || !cfgs || !hidden_hc || !next_hidden_hc ||
@@ -1423,7 +1423,7 @@ int ds4_v100_layer_execute_hc_decode_batch(
         return exec_error(err, errlen, "invalid HC batch inputs");
     }
     if (n_slots == 1) {
-        return ds4_v100_layer_execute_hc_decode(state,
+        return ds4_layer_execute_hc_decode(state,
                                                 &cfgs[0],
                                                 hidden_hc[0],
                                                 next_hidden_hc[0],
@@ -1434,7 +1434,7 @@ int ds4_v100_layer_execute_hc_decode_batch(
     for (uint32_t slot = 0; slot < n_slots; slot++) {
         if (cfgs[slot].checkpoint_fn) {
             for (uint32_t i = 0; i < n_slots; i++) {
-                if (ds4_v100_layer_execute_hc_decode(state,
+                if (ds4_layer_execute_hc_decode(state,
                                                      &cfgs[i],
                                                      hidden_hc[i],
                                                      next_hidden_hc[i],

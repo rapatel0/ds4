@@ -507,7 +507,7 @@ def main() -> int:
         summary_path = case_dir / "summary.json"
         profile_summary = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else {}
         out = {
-            "schema": "ds4_v100_tp_ep_steady_profile.v1",
+            "schema": "ds4_tp_ep_steady_profile.v1",
             "artifact_dir": str(args.artifact_dir),
             "case_dir": str(case_dir),
             "profile_returncode": profile_rc,

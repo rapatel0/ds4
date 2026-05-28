@@ -356,24 +356,24 @@ static int q4k_reference(float *out,
     return 0;
 }
 
-static int run_q4k(ds4_v100_mtp_sidecar *sidecar,
+static int run_q4k(ds4_mtp_sidecar *sidecar,
                    double max_abs_tol,
                    FILE *report) {
     char err[512] = {0};
     ds4_gpu_q4_k_expert_view gate_view;
     ds4_gpu_q4_k_expert_view up_view;
     ds4_gpu_q4_k_expert_view down_view;
-    if (ds4_v100_mtp_sidecar_q4_k_expert_view(sidecar,
+    if (ds4_mtp_sidecar_q4_k_expert_view(sidecar,
                                                "mtp.0.ffn_gate_exps.weight",
                                                &gate_view,
                                                err,
                                                sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_q4_k_expert_view(sidecar,
+        ds4_mtp_sidecar_q4_k_expert_view(sidecar,
                                                "mtp.0.ffn_up_exps.weight",
                                                &up_view,
                                                err,
                                                sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_q4_k_expert_view(sidecar,
+        ds4_mtp_sidecar_q4_k_expert_view(sidecar,
                                                "mtp.0.ffn_down_exps.weight",
                                                &down_view,
                                                err,
@@ -393,11 +393,11 @@ static int run_q4k(ds4_v100_mtp_sidecar *sidecar,
     }
 
     const ds4_mtp_sidecar_tensor_info *gate_tensor =
-        ds4_v100_mtp_sidecar_tensor(sidecar, "mtp.0.ffn_gate_exps.weight");
+        ds4_mtp_sidecar_tensor(sidecar, "mtp.0.ffn_gate_exps.weight");
     const ds4_mtp_sidecar_tensor_info *up_tensor =
-        ds4_v100_mtp_sidecar_tensor(sidecar, "mtp.0.ffn_up_exps.weight");
+        ds4_mtp_sidecar_tensor(sidecar, "mtp.0.ffn_up_exps.weight");
     const ds4_mtp_sidecar_tensor_info *down_tensor =
-        ds4_v100_mtp_sidecar_tensor(sidecar, "mtp.0.ffn_down_exps.weight");
+        ds4_mtp_sidecar_tensor(sidecar, "mtp.0.ffn_down_exps.weight");
 
     const uint32_t in_dim = gate_view.cols;
     const uint32_t mid_dim = gate_view.rows;
@@ -449,7 +449,7 @@ static int run_q4k(ds4_v100_mtp_sidecar *sidecar,
 
     double t0 = now_ms();
     if (ds4_gpu_arena_q4_k_routed_moe_one_f32(
-                ds4_v100_mtp_sidecar_arena(sidecar),
+                ds4_mtp_sidecar_arena(sidecar),
                 &gate_view,
                 &up_view,
                 &down_view,
@@ -475,7 +475,7 @@ static int run_q4k(ds4_v100_mtp_sidecar *sidecar,
 
     double t2 = now_ms();
     if (q4k_reference(ref,
-                      (const unsigned char *)ds4_v100_mtp_sidecar_map(sidecar),
+                      (const unsigned char *)ds4_mtp_sidecar_map(sidecar),
                       gate_tensor,
                       up_tensor,
                       down_tensor,
@@ -592,7 +592,7 @@ int main(int argc, char **argv) {
 
     int rc = 1;
     char err[512] = {0};
-    ds4_v100_mtp_sidecar *sidecar = NULL;
+    ds4_mtp_sidecar *sidecar = NULL;
     int device_count = ds4_gpu_device_count();
     fprintf(report, "visible_devices\t%d\n", device_count);
     fprintf(report, "target_gpu\t%d\n", opt.gpu);
@@ -623,12 +623,12 @@ int main(int argc, char **argv) {
         goto done;
     }
 
-    ds4_v100_mtp_sidecar_options sidecar_opts;
-    ds4_v100_mtp_sidecar_options_init(&sidecar_opts);
+    ds4_mtp_sidecar_options sidecar_opts;
+    ds4_mtp_sidecar_options_init(&sidecar_opts);
     sidecar_opts.mtp_path = opt.mtp_model;
     sidecar_opts.gpu = opt.gpu;
     sidecar_opts.require_device_arena = true;
-    if (ds4_v100_mtp_sidecar_open(&sidecar, &sidecar_opts, report, err, sizeof(err)) != 0) {
+    if (ds4_mtp_sidecar_open(&sidecar, &sidecar_opts, report, err, sizeof(err)) != 0) {
         fprintf(stderr,
                 "ds4-v100-mtp-q4k-smoke: %s\n",
                 err[0] ? err : "MTP sidecar open failed");
@@ -637,7 +637,7 @@ int main(int argc, char **argv) {
 
     uint64_t reserve_bytes = (uint64_t)opt.reserve_mib * 1024ull * 1024ull;
     uint64_t free_after =
-        ds4_gpu_arena_free_after_upload_bytes(ds4_v100_mtp_sidecar_arena(sidecar));
+        ds4_gpu_arena_free_after_upload_bytes(ds4_mtp_sidecar_arena(sidecar));
     fprintf(report, "reserve_bytes\t%" PRIu64 "\n", reserve_bytes);
     if (free_after < reserve_bytes) {
         fprintf(stderr,
@@ -656,7 +656,7 @@ int main(int argc, char **argv) {
     rc = 0;
 
 done:
-    ds4_v100_mtp_sidecar_close(sidecar);
+    ds4_mtp_sidecar_close(sidecar);
     if (report && report != stdout) fclose(report);
     return rc;
 }

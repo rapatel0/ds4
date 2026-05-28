@@ -195,8 +195,8 @@ int main(int argc, char **argv) {
         check(ds4_gpu_set_model_fd(model.fd), "model fd");
     }
 
-    ds4_v100_stage_scheduler_options opts;
-    ds4_v100_stage_scheduler_options_init(&opts);
+    ds4_stage_scheduler_options opts;
+    ds4_stage_scheduler_options_init(&opts);
     opts.pack_index_path = index;
     opts.turbomind_pack_index_path = tm_index;
     opts.shard_dir = shard_dir;
@@ -207,14 +207,14 @@ int main(int argc, char **argv) {
     opts.kv_ctx_tokens = ctx;
 
     char err[512] = {0};
-    ds4_v100_stage_scheduler *sched = NULL;
-    if (ds4_v100_stage_scheduler_open(&sched, &opts, err, sizeof(err))) {
+    ds4_stage_scheduler *sched = NULL;
+    if (ds4_stage_scheduler_open(&sched, &opts, err, sizeof(err))) {
         fprintf(stderr, "cuda_v100_stage_scheduler_smoke: %s\n", err);
         unmap_model_file(&model);
         return 1;
     }
 
-    ds4_v100_stage_scheduler_report reports[DS4_V100_SCHED_MAX_SLOTS];
+    ds4_stage_scheduler_report reports[DS4_V100_SCHED_MAX_SLOTS];
     memset(reports, 0, sizeof(reports));
     const uint32_t n_slots = (uint32_t)slots;
     uint32_t batch_tokens[DS4_V100_SCHED_MAX_SLOTS];
@@ -225,7 +225,7 @@ int main(int argc, char **argv) {
     }
     err[0] = '\0';
     if (n_slots == 1) {
-        check(ds4_v100_stage_scheduler_decode_token(sched,
+        check(ds4_stage_scheduler_decode_token(sched,
                                                     (uint32_t)token,
                                                     (uint32_t)position,
                                                     &reports[0],
@@ -233,7 +233,7 @@ int main(int argc, char **argv) {
                                                     sizeof(err)) == 0,
               err[0] ? err : "stage scheduler decode token");
     } else {
-        check(ds4_v100_stage_scheduler_decode_token_batch(sched,
+        check(ds4_stage_scheduler_decode_token_batch(sched,
                                                           batch_tokens,
                                                           batch_positions,
                                                           n_slots,
@@ -247,7 +247,7 @@ int main(int argc, char **argv) {
     float *hc = (float *)calloc((size_t)hc_values, sizeof(float));
     check(hc != NULL, "host HC allocation");
     if (hc) {
-        check(ds4_v100_stage_scheduler_read_hc(sched,
+        check(ds4_stage_scheduler_read_hc(sched,
                                                hc,
                                                hc_values * sizeof(float)) != 0,
               "stage scheduler HC read");
@@ -289,7 +289,7 @@ int main(int argc, char **argv) {
            failures ? "FAIL" : "ok");
 
     free(hc);
-    ds4_v100_stage_scheduler_close(sched);
+    ds4_stage_scheduler_close(sched);
     unmap_model_file(&model);
     return failures ? 1 : 0;
 }

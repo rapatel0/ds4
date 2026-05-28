@@ -25,13 +25,13 @@ typedef struct {
     uint64_t relay_f32_bytes;
     void *kv_arena;
     uint64_t kv_arena_bytes;
-} ds4_v100_cuda_stage;
+} ds4_cuda_stage;
 
-struct ds4_v100_cuda_context {
-    ds4_v100_context *host;
+struct ds4_cuda_context {
+    ds4_context *host;
     int n_stages;
     uint64_t relay_max_active_slots;
-    ds4_v100_cuda_stage stages[DS4_V100_EXPECTED_GPUS];
+    ds4_cuda_stage stages[DS4_V100_EXPECTED_GPUS];
     bool peer_access[DS4_V100_EXPECTED_GPUS][DS4_V100_EXPECTED_GPUS];
 };
 
@@ -55,7 +55,7 @@ static int cublas_v100_ok(cublasStatus_t rc, const char *what, char *err, size_t
     return cuda_v100_error(err, errlen, "%s: cublas status %d", what, (int)rc);
 }
 
-int ds4_v100_cuda_collect_device_facts(ds4_v100_device_fact *facts,
+int ds4_cuda_collect_device_facts(ds4_device_fact *facts,
                                        int fact_cap,
                                        int *out_count,
                                        char *err,
@@ -105,7 +105,7 @@ int ds4_v100_cuda_collect_device_facts(ds4_v100_device_fact *facts,
     return 0;
 }
 
-static void stage_free(ds4_v100_cuda_stage *s) {
+static void stage_free(ds4_cuda_stage *s) {
     if (!s) return;
     if (s->gpu >= 0) (void)cudaSetDevice(s->gpu);
     if (s->kv_arena) (void)cudaFree(s->kv_arena);
@@ -121,8 +121,8 @@ static void stage_free(ds4_v100_cuda_stage *s) {
     s->gpu = -1;
 }
 
-static int stage_alloc(ds4_v100_cuda_stage *s,
-                       const ds4_v100_stage_info *info,
+static int stage_alloc(ds4_cuda_stage *s,
+                       const ds4_stage_info *info,
                        bool enable_f32_debug,
                        char *err,
                        size_t errlen) {
@@ -167,24 +167,24 @@ static int stage_alloc(ds4_v100_cuda_stage *s,
     return 0;
 }
 
-int ds4_v100_cuda_context_open(ds4_v100_cuda_context **out,
-                               const ds4_v100_context_options *opts,
+int ds4_cuda_context_open(ds4_cuda_context **out,
+                               const ds4_context_options *opts,
                                char *err,
                                size_t errlen) {
     if (!out) return cuda_v100_error(err, errlen, "missing CUDA context output");
     *out = NULL;
 
-    ds4_v100_device_fact facts[DS4_V100_EXPECTED_GPUS];
+    ds4_device_fact facts[DS4_V100_EXPECTED_GPUS];
     int n_facts = 0;
-    if (ds4_v100_cuda_collect_device_facts(facts, DS4_V100_EXPECTED_GPUS,
+    if (ds4_cuda_collect_device_facts(facts, DS4_V100_EXPECTED_GPUS,
                                            &n_facts, err, errlen)) {
         return 1;
     }
     if (n_facts <= 0) return cuda_v100_error(err, errlen, "no CUDA devices visible");
 
-    ds4_v100_context_options local;
+    ds4_context_options local;
     if (opts) local = *opts;
-    else ds4_v100_context_options_init(&local);
+    else ds4_context_options_init(&local);
     if (local.expected_gpus <= 0) local.expected_gpus = n_facts;
     if (local.expected_gpus > n_facts) {
         return cuda_v100_error(err, errlen, "requested %d GPUs but only %d visible",
@@ -193,15 +193,15 @@ int ds4_v100_cuda_context_open(ds4_v100_cuda_context **out,
     local.device_facts = facts;
     local.n_device_facts = n_facts;
 
-    ds4_v100_cuda_context *ctx =
-        (ds4_v100_cuda_context *)calloc(1, sizeof(*ctx));
+    ds4_cuda_context *ctx =
+        (ds4_cuda_context *)calloc(1, sizeof(*ctx));
     if (!ctx) return cuda_v100_error(err, errlen, "out of memory allocating CUDA context");
     for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) ctx->stages[i].gpu = -1;
     ctx->n_stages = local.expected_gpus;
     ctx->relay_max_active_slots = local.relay_max_active_slots;
 
-    if (ds4_v100_context_open(&ctx->host, &local, err, errlen)) {
-        ds4_v100_cuda_context_close(ctx);
+    if (ds4_context_open(&ctx->host, &local, err, errlen)) {
+        ds4_cuda_context_close(ctx);
         return 1;
     }
     for (int i = 0; i < n_facts && i < DS4_V100_EXPECTED_GPUS; i++) {
@@ -223,10 +223,10 @@ int ds4_v100_cuda_context_open(ds4_v100_cuda_context **out,
         }
     }
     for (int i = 0; i < ctx->n_stages; i++) {
-        const ds4_v100_stage_info *info = ds4_v100_context_stage(ctx->host, i);
+        const ds4_stage_info *info = ds4_context_stage(ctx->host, i);
         if (!info || stage_alloc(&ctx->stages[i], info, local.enable_f32_debug_relay,
                                  err, errlen)) {
-            ds4_v100_cuda_context_close(ctx);
+            ds4_cuda_context_close(ctx);
             return 1;
         }
     }
@@ -234,26 +234,26 @@ int ds4_v100_cuda_context_open(ds4_v100_cuda_context **out,
     return 0;
 }
 
-void ds4_v100_cuda_context_close(ds4_v100_cuda_context *ctx) {
+void ds4_cuda_context_close(ds4_cuda_context *ctx) {
     if (!ctx) return;
     for (int i = 0; i < ctx->n_stages; i++) stage_free(&ctx->stages[i]);
-    ds4_v100_context_close(ctx->host);
+    ds4_context_close(ctx->host);
     free(ctx);
 }
 
-int ds4_v100_cuda_context_layer_kv_view(ds4_v100_cuda_context *ctx,
+int ds4_cuda_context_layer_kv_view(ds4_cuda_context *ctx,
                                         int layer_id,
-                                        ds4_v100_cuda_layer_kv_view *out,
+                                        ds4_cuda_layer_kv_view *out,
                                         char *err,
                                         size_t errlen) {
     if (!ctx || !out) return cuda_v100_error(err, errlen, "missing CUDA KV view output");
-    const ds4_v100_layer_info *layer = ds4_v100_context_layer(ctx->host, layer_id);
+    const ds4_layer_info *layer = ds4_context_layer(ctx->host, layer_id);
     if (!layer) return cuda_v100_error(err, errlen, "invalid layer id %d", layer_id);
     if (layer->stage_id < 0 || layer->stage_id >= ctx->n_stages) {
         return cuda_v100_error(err, errlen, "layer %d has invalid stage %d",
                                layer_id, layer->stage_id);
     }
-    ds4_v100_cuda_stage *stage = &ctx->stages[layer->stage_id];
+    ds4_cuda_stage *stage = &ctx->stages[layer->stage_id];
     if (!stage->kv_arena || stage->kv_arena_bytes == 0) {
         return cuda_v100_error(err, errlen, "stage %d has no allocated KV arena",
                                layer->stage_id);
@@ -277,7 +277,7 @@ static uint64_t max_u64(uint64_t a, uint64_t b) {
 
 __global__ static void v100_context_prefill_kv_update_kernel(
         unsigned char *arena,
-        ds4_v100_layer_kv_view view,
+        ds4_layer_kv_view view,
         uint32_t ratio,
         uint32_t slot,
         uint32_t slots,
@@ -346,7 +346,7 @@ __global__ static void v100_context_prefill_kv_update_kernel(
     (void)slots;
 }
 
-static int infer_layer_slots_and_comp_rows(const ds4_v100_layer_kv_view *view,
+static int infer_layer_slots_and_comp_rows(const ds4_layer_kv_view *view,
                                            uint64_t *out_slots,
                                            uint64_t *out_comp_rows) {
     const uint64_t raw_per_slot =
@@ -396,17 +396,17 @@ static int require_same_device_f32_row(const void *ptr,
     return 0;
 }
 
-int ds4_v100_cuda_context_prefill_kv_update_f16(
-        ds4_v100_cuda_context                    *ctx,
+int ds4_cuda_context_prefill_kv_update_f16(
+        ds4_cuda_context                    *ctx,
         int                                      layer_id,
-        const ds4_v100_cuda_prefill_kv_update   *update,
+        const ds4_cuda_prefill_kv_update   *update,
         char                                    *err,
         size_t                                   errlen) {
     if (!ctx || !update || !update->attn_row_f32) {
         return cuda_v100_error(err, errlen, "missing prefill KV update input");
     }
 
-    const ds4_v100_layer_info *layer = ds4_v100_context_layer(ctx->host, layer_id);
+    const ds4_layer_info *layer = ds4_context_layer(ctx->host, layer_id);
     if (!layer) return cuda_v100_error(err, errlen, "invalid layer id %d", layer_id);
     if (layer->layer_class != DS4_V100_LAYER_RATIO_4 &&
         layer->layer_class != DS4_V100_LAYER_RATIO_128) {
@@ -416,13 +416,13 @@ int ds4_v100_cuda_context_prefill_kv_update_f16(
         return cuda_v100_error(err, errlen, "layer %d has invalid stage %d",
                                layer_id, layer->stage_id);
     }
-    ds4_v100_cuda_stage *stage = &ctx->stages[layer->stage_id];
+    ds4_cuda_stage *stage = &ctx->stages[layer->stage_id];
     if (!stage->kv_arena || stage->kv_arena_bytes == 0) {
         return cuda_v100_error(err, errlen, "stage %d has no allocated KV arena",
                                layer->stage_id);
     }
 
-    const ds4_v100_layer_kv_view *view = &layer->kv_view;
+    const ds4_layer_kv_view *view = &layer->kv_view;
     uint64_t slots = 0;
     uint64_t comp_rows = 0;
     if (infer_layer_slots_and_comp_rows(view, &slots, &comp_rows)) {
@@ -510,17 +510,17 @@ int ds4_v100_cuda_context_prefill_kv_update_f16(
     return ok ? 0 : 1;
 }
 
-int ds4_v100_cuda_context_prefill_kv_update_f16_device(
-        ds4_v100_cuda_context                           *ctx,
+int ds4_cuda_context_prefill_kv_update_f16_device(
+        ds4_cuda_context                           *ctx,
         int                                             layer_id,
-        const ds4_v100_cuda_prefill_kv_update_device   *update,
+        const ds4_cuda_prefill_kv_update_device   *update,
         char                                           *err,
         size_t                                          errlen) {
     if (!ctx || !update || !update->attn_row_device_f32) {
         return cuda_v100_error(err, errlen, "missing device prefill KV update input");
     }
 
-    const ds4_v100_layer_info *layer = ds4_v100_context_layer(ctx->host, layer_id);
+    const ds4_layer_info *layer = ds4_context_layer(ctx->host, layer_id);
     if (!layer) return cuda_v100_error(err, errlen, "invalid layer id %d", layer_id);
     if (layer->layer_class != DS4_V100_LAYER_RATIO_4 &&
         layer->layer_class != DS4_V100_LAYER_RATIO_128) {
@@ -530,13 +530,13 @@ int ds4_v100_cuda_context_prefill_kv_update_f16_device(
         return cuda_v100_error(err, errlen, "layer %d has invalid stage %d",
                                layer_id, layer->stage_id);
     }
-    ds4_v100_cuda_stage *stage = &ctx->stages[layer->stage_id];
+    ds4_cuda_stage *stage = &ctx->stages[layer->stage_id];
     if (!stage->kv_arena || stage->kv_arena_bytes == 0) {
         return cuda_v100_error(err, errlen, "stage %d has no allocated KV arena",
                                layer->stage_id);
     }
 
-    const ds4_v100_layer_kv_view *view = &layer->kv_view;
+    const ds4_layer_kv_view *view = &layer->kv_view;
     uint64_t slots = 0;
     uint64_t comp_rows = 0;
     if (infer_layer_slots_and_comp_rows(view, &slots, &comp_rows)) {
@@ -611,7 +611,7 @@ int ds4_v100_cuda_context_prefill_kv_update_f16_device(
            cuda_v100_ok(cudaDeviceSynchronize(), "device prefill KV update sync", err, errlen);
 }
 
-int ds4_v100_cuda_context_read_kv_arena(ds4_v100_cuda_context *ctx,
+int ds4_cuda_context_read_kv_arena(ds4_cuda_context *ctx,
                                         int stage_id,
                                         uint64_t offset,
                                         void *dst,
@@ -622,7 +622,7 @@ int ds4_v100_cuda_context_read_kv_arena(ds4_v100_cuda_context *ctx,
     if (stage_id < 0 || stage_id >= ctx->n_stages) {
         return cuda_v100_error(err, errlen, "invalid stage id %d", stage_id);
     }
-    ds4_v100_cuda_stage *stage = &ctx->stages[stage_id];
+    ds4_cuda_stage *stage = &ctx->stages[stage_id];
     if (!stage->kv_arena || offset > stage->kv_arena_bytes ||
         bytes > stage->kv_arena_bytes - offset) {
         return cuda_v100_error(err, errlen, "KV arena read range is out of bounds");
@@ -637,15 +637,15 @@ int ds4_v100_cuda_context_read_kv_arena(ds4_v100_cuda_context *ctx,
     return 0;
 }
 
-static uint64_t relay_bytes(ds4_v100_relay_dtype dtype, uint64_t active_slots) {
+static uint64_t relay_bytes(ds4_relay_dtype dtype, uint64_t active_slots) {
     const uint64_t elem = dtype == DS4_V100_RELAY_F16 ? 2ull : 4ull;
     return active_slots * DS4_V100_HC_ROWS * DS4_V100_HC_COLS * elem;
 }
 
-int ds4_v100_cuda_context_relay_smoke(ds4_v100_cuda_context *ctx,
+int ds4_cuda_context_relay_smoke(ds4_cuda_context *ctx,
                                       int src_stage,
                                       int dst_stage,
-                                      ds4_v100_relay_dtype dtype,
+                                      ds4_relay_dtype dtype,
                                       uint64_t active_slots,
                                       char *err,
                                       size_t errlen) {
@@ -657,8 +657,8 @@ int ds4_v100_cuda_context_relay_smoke(ds4_v100_cuda_context *ctx,
     if (active_slots == 0 || active_slots > ctx->relay_max_active_slots) {
         return cuda_v100_error(err, errlen, "active_slots outside relay capacity");
     }
-    ds4_v100_cuda_stage *src = &ctx->stages[src_stage];
-    ds4_v100_cuda_stage *dst = &ctx->stages[dst_stage];
+    ds4_cuda_stage *src = &ctx->stages[src_stage];
+    ds4_cuda_stage *dst = &ctx->stages[dst_stage];
     uint64_t bytes = relay_bytes(dtype, active_slots);
     void *src_ptr = NULL;
     void *dst_ptr = NULL;

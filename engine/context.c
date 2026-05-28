@@ -11,35 +11,35 @@
 
 typedef struct {
     const ds4_pack_entry *entry;
-    ds4_v100_policy policy;
-} ds4_v100_tensor_desc;
+    ds4_policy policy;
+} ds4_tensor_desc;
 
 typedef struct {
     const ds4_tm_pack_entry *entry;
-    ds4_v100_policy policy;
-} ds4_v100_tm_tensor_desc;
+    ds4_policy policy;
+} ds4_tm_tensor_desc;
 
-struct ds4_v100_context {
-    ds4_v100_context_options opts;
+struct ds4_context {
+    ds4_context_options opts;
     ds4_pack *pack;
     ds4_tm_pack *tm_pack;
-    ds4_v100_stage_info stages[DS4_V100_EXPECTED_GPUS];
-    ds4_v100_tensor_desc *descs;
-    ds4_v100_tm_tensor_desc *tm_descs;
+    ds4_stage_info stages[DS4_V100_EXPECTED_GPUS];
+    ds4_tensor_desc *descs;
+    ds4_tm_tensor_desc *tm_descs;
     uint64_t n_descs;
     uint64_t cap_descs;
     uint64_t n_tm_descs;
     uint64_t cap_tm_descs;
     uint64_t exec_counts[DS4_V100_EXEC_COUNT];
     bool has_token_embedding;
-    ds4_v100_layer_info layers[DS4_V100_N_LAYERS];
+    ds4_layer_info layers[DS4_V100_N_LAYERS];
 };
 
 typedef struct {
-    ds4_v100_context *ctx;
+    ds4_context *ctx;
     char *err;
     size_t errlen;
-} ds4_v100_bind_state;
+} ds4_bind_state;
 
 static int v100_error(char *err, size_t errlen, const char *fmt, ...) {
     if (err && errlen) {
@@ -75,7 +75,7 @@ static bool contains_ci(const char *s, const char *needle) {
     return false;
 }
 
-void ds4_v100_context_options_init(ds4_v100_context_options *opts) {
+void ds4_context_options_init(ds4_context_options *opts) {
     if (!opts) return;
     memset(opts, 0, sizeof(*opts));
     opts->expected_gpus = DS4_V100_EXPECTED_GPUS;
@@ -85,7 +85,7 @@ void ds4_v100_context_options_init(ds4_v100_context_options *opts) {
     opts->kv_active_slots = 1;
 }
 
-ds4_v100_source_dtype ds4_v100_source_dtype_parse(const char *s) {
+ds4_source_dtype ds4_source_dtype_parse(const char *s) {
     if (str_eq_ci(s, "bf16")) return DS4_V100_SOURCE_BF16;
     if (str_eq_ci(s, "f32")) return DS4_V100_SOURCE_F32;
     if (str_eq_ci(s, "i32")) return DS4_V100_SOURCE_I32;
@@ -95,7 +95,7 @@ ds4_v100_source_dtype ds4_v100_source_dtype_parse(const char *s) {
     return DS4_V100_SOURCE_UNKNOWN;
 }
 
-const char *ds4_v100_source_dtype_name(ds4_v100_source_dtype dtype) {
+const char *ds4_source_dtype_name(ds4_source_dtype dtype) {
     switch (dtype) {
     case DS4_V100_SOURCE_BF16: return "bf16";
     case DS4_V100_SOURCE_F32: return "f32";
@@ -108,10 +108,10 @@ const char *ds4_v100_source_dtype_name(ds4_v100_source_dtype dtype) {
     }
 }
 
-ds4_v100_tensor_family ds4_v100_tensor_family_infer(const char *source_dtype,
+ds4_tensor_family ds4_tensor_family_infer(const char *source_dtype,
                                                     const char *runtime_layout,
                                                     const char *kernel_family) {
-    ds4_v100_source_dtype dtype = ds4_v100_source_dtype_parse(source_dtype);
+    ds4_source_dtype dtype = ds4_source_dtype_parse(source_dtype);
     if (contains_ci(kernel_family, "hc_control")) return DS4_V100_FAMILY_HC_CONTROL;
     if (contains_ci(kernel_family, "kv")) return DS4_V100_FAMILY_KV_CACHE;
     if (dtype == DS4_V100_SOURCE_F8_E4M3_B128 ||
@@ -129,7 +129,7 @@ ds4_v100_tensor_family ds4_v100_tensor_family_infer(const char *source_dtype,
     return DS4_V100_FAMILY_UNKNOWN;
 }
 
-const char *ds4_v100_tensor_family_name(ds4_v100_tensor_family family) {
+const char *ds4_tensor_family_name(ds4_tensor_family family) {
     switch (family) {
     case DS4_V100_FAMILY_BF16_GLOBAL: return "bf16_global";
     case DS4_V100_FAMILY_F32_CONTROL: return "f32_control";
@@ -142,7 +142,7 @@ const char *ds4_v100_tensor_family_name(ds4_v100_tensor_family family) {
     }
 }
 
-const char *ds4_v100_exec_kind_name(ds4_v100_exec_kind kind) {
+const char *ds4_exec_kind_name(ds4_exec_kind kind) {
     switch (kind) {
     case DS4_V100_EXEC_F32_CONTROL: return "f32_control";
     case DS4_V100_EXEC_F16_HMMA: return "f16_hmma_after_convert";
@@ -154,13 +154,13 @@ const char *ds4_v100_exec_kind_name(ds4_v100_exec_kind kind) {
     }
 }
 
-ds4_v100_layer_class ds4_v100_layer_class_for_layer(int layer_id) {
+ds4_layer_class ds4_layer_class_for_layer(int layer_id) {
     if (layer_id < 0 || layer_id >= DS4_V100_N_LAYERS) return DS4_V100_LAYER_SWA_ONLY;
     if (layer_id <= 1) return DS4_V100_LAYER_SWA_ONLY;
     return (layer_id % 2) == 0 ? DS4_V100_LAYER_RATIO_4 : DS4_V100_LAYER_RATIO_128;
 }
 
-const char *ds4_v100_layer_class_name(ds4_v100_layer_class layer_class) {
+const char *ds4_layer_class_name(ds4_layer_class layer_class) {
     switch (layer_class) {
     case DS4_V100_LAYER_SWA_ONLY: return "swa_only";
     case DS4_V100_LAYER_RATIO_4: return "ratio_4";
@@ -187,16 +187,16 @@ static uint64_t align_up_u64(uint64_t v, uint64_t align) {
     return (v + mask) & ~mask;
 }
 
-ds4_v100_kv_budget ds4_v100_kv_budget_for_layer(int layer_id,
+ds4_kv_budget ds4_kv_budget_for_layer(int layer_id,
                                                 uint64_t ctx_tokens,
                                                 uint64_t active_slots) {
-    ds4_v100_kv_budget b;
+    ds4_kv_budget b;
     memset(&b, 0, sizeof(b));
     if (layer_id < 0 || layer_id >= DS4_V100_N_LAYERS || ctx_tokens == 0 || active_slots == 0) {
         return b;
     }
 
-    const ds4_v100_layer_class layer_class = ds4_v100_layer_class_for_layer(layer_id);
+    const ds4_layer_class layer_class = ds4_layer_class_for_layer(layer_id);
     const uint64_t elem_bytes = 2;
     const uint64_t raw_per_slot =
         (uint64_t)DS4_V100_SWA_ROWS * DS4_V100_HEAD_DIM * elem_bytes;
@@ -240,7 +240,7 @@ static void kv_state_split_for_layer(int layer_id,
     if (indexer_kv) *indexer_kv = 0;
     if (indexer_score) *indexer_score = 0;
 
-    const ds4_v100_layer_class layer_class = ds4_v100_layer_class_for_layer(layer_id);
+    const ds4_layer_class layer_class = ds4_layer_class_for_layer(layer_id);
     if (layer_class == DS4_V100_LAYER_RATIO_4) {
         const uint64_t attn =
             (2ull * DS4_V100_HEAD_DIM) * (2ull * 4ull) * sizeof(float);
@@ -257,17 +257,17 @@ static void kv_state_split_for_layer(int layer_id,
     }
 }
 
-int ds4_v100_classify_or_die(const char *source_dtype,
+int ds4_classify_or_die(const char *source_dtype,
                              const char *runtime_layout,
                              const char *kernel_family,
-                             ds4_v100_policy *out,
+                             ds4_policy *out,
                              char *err,
                              size_t errlen) {
-    ds4_v100_source_dtype dtype = ds4_v100_source_dtype_parse(source_dtype);
-    ds4_v100_tensor_family family =
-        ds4_v100_tensor_family_infer(source_dtype, runtime_layout, kernel_family);
+    ds4_source_dtype dtype = ds4_source_dtype_parse(source_dtype);
+    ds4_tensor_family family =
+        ds4_tensor_family_infer(source_dtype, runtime_layout, kernel_family);
 
-    ds4_v100_policy p;
+    ds4_policy p;
     memset(&p, 0, sizeof(p));
     p.source_dtype = dtype;
     p.family = family;
@@ -324,7 +324,7 @@ int ds4_v100_classify_or_die(const char *source_dtype,
     return 0;
 }
 
-int ds4_v100_stage_for_layer(int layer_id) {
+int ds4_stage_for_layer(int layer_id) {
     if (layer_id < 0 || layer_id >= DS4_V100_N_LAYERS) return -1;
     if (layer_id <= 5) return 0;
     if (layer_id <= 11) return 1;
@@ -336,11 +336,11 @@ int ds4_v100_stage_for_layer(int layer_id) {
     return 7;
 }
 
-static void init_stage_map(ds4_v100_context *ctx) {
+static void init_stage_map(ds4_context *ctx) {
     static const int begins[DS4_V100_EXPECTED_GPUS] = {0, 6, 12, 18, 24, 30, 35, 40};
     static const int ends[DS4_V100_EXPECTED_GPUS] = {5, 11, 17, 23, 29, 34, 39, 42};
     for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
-        ds4_v100_stage_info *s = &ctx->stages[i];
+        ds4_stage_info *s = &ctx->stages[i];
         s->stage_id = i;
         s->gpu = i;
         s->layer_begin = begins[i];
@@ -363,12 +363,12 @@ static void init_stage_map(ds4_v100_context *ctx) {
     }
     for (int layer = 0; layer < DS4_V100_N_LAYERS; layer++) {
         ctx->layers[layer].layer_id = layer;
-        ctx->layers[layer].stage_id = ds4_v100_stage_for_layer(layer);
-        ctx->layers[layer].layer_class = ds4_v100_layer_class_for_layer(layer);
+        ctx->layers[layer].stage_id = ds4_stage_for_layer(layer);
+        ctx->layers[layer].layer_class = ds4_layer_class_for_layer(layer);
     }
 }
 
-static void apply_derived_kv_plan(ds4_v100_context *ctx) {
+static void apply_derived_kv_plan(ds4_context *ctx) {
     if (!ctx || ctx->opts.kv_ctx_tokens == 0) return;
     const uint64_t slots = ctx->opts.kv_active_slots;
     for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
@@ -380,9 +380,9 @@ static void apply_derived_kv_plan(ds4_v100_context *ctx) {
         ctx->stages[i].kv_compression_state_bytes = 0;
     }
     for (int layer = 0; layer < DS4_V100_N_LAYERS; layer++) {
-        ds4_v100_layer_info *li = &ctx->layers[layer];
-        li->kv_budget = ds4_v100_kv_budget_for_layer(layer, ctx->opts.kv_ctx_tokens, slots);
-        ds4_v100_stage_info *stage = &ctx->stages[li->stage_id];
+        ds4_layer_info *li = &ctx->layers[layer];
+        li->kv_budget = ds4_kv_budget_for_layer(layer, ctx->opts.kv_ctx_tokens, slots);
+        ds4_stage_info *stage = &ctx->stages[li->stage_id];
         stage->kv_raw_swa_bytes =
             sat_add_u64(stage->kv_raw_swa_bytes, li->kv_budget.raw_swa_bytes);
         stage->kv_compressed_attn_bytes =
@@ -395,8 +395,8 @@ static void apply_derived_kv_plan(ds4_v100_context *ctx) {
             sat_add_u64(stage->planned_kv_bytes, li->kv_budget.total_bytes);
     }
     for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
-        ds4_v100_stage_info *stage = &ctx->stages[i];
-        ds4_v100_kv_arena_plan *arena = &stage->kv_arena;
+        ds4_stage_info *stage = &ctx->stages[i];
+        ds4_kv_arena_plan *arena = &stage->kv_arena;
         uint64_t off = 0;
 
         arena->raw_swa_offset = off;
@@ -424,9 +424,9 @@ static void apply_derived_kv_plan(ds4_v100_context *ctx) {
     uint64_t state_cursor[DS4_V100_EXPECTED_GPUS] = {0};
 
     for (int layer = 0; layer < DS4_V100_N_LAYERS; layer++) {
-        ds4_v100_layer_info *li = &ctx->layers[layer];
-        ds4_v100_stage_info *stage = &ctx->stages[li->stage_id];
-        ds4_v100_layer_kv_view *view = &li->kv_view;
+        ds4_layer_info *li = &ctx->layers[layer];
+        ds4_stage_info *stage = &ctx->stages[li->stage_id];
+        ds4_layer_kv_view *view = &li->kv_view;
         memset(view, 0, sizeof(*view));
 
         view->raw_swa_offset = sat_add_u64(stage->kv_arena.raw_swa_offset,
@@ -484,13 +484,13 @@ static void apply_derived_kv_plan(ds4_v100_context *ctx) {
     }
 }
 
-static uint64_t checked_stage_used(const ds4_v100_stage_info *s) {
+static uint64_t checked_stage_used(const ds4_stage_info *s) {
     return s->arena_bytes + s->scratch_bytes + s->relay_f16_bytes +
            s->relay_f32_debug_bytes + s->planned_kv_bytes +
            s->output_head_reserve_bytes + s->mtp_reserve_bytes;
 }
 
-static int validate_topology(ds4_v100_context *ctx, char *err, size_t errlen) {
+static int validate_topology(ds4_context *ctx, char *err, size_t errlen) {
     if (!ctx->opts.require_production_topology) return 0;
     if (ctx->opts.expected_gpus != DS4_V100_EXPECTED_GPUS) {
         return v100_error(err, errlen, "production topology requires %d GPUs",
@@ -502,7 +502,7 @@ static int validate_topology(ds4_v100_context *ctx, char *err, size_t errlen) {
                           DS4_V100_EXPECTED_GPUS);
     }
     for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
-        const ds4_v100_device_fact *f = &ctx->opts.device_facts[i];
+        const ds4_device_fact *f = &ctx->opts.device_facts[i];
         if (f->visible_id != i) {
             return v100_error(err, errlen, "device fact %d has visible id %d", i, f->visible_id);
         }
@@ -566,7 +566,7 @@ static int parse_shape_elements(const char *shape, uint64_t *out) {
 static int expected_bytes_for_entry(const ds4_pack_entry *e, uint64_t *out) {
     uint64_t elements = 0;
     if (parse_shape_elements(e->source_shape, &elements)) return 1;
-    ds4_v100_source_dtype dtype = ds4_v100_source_dtype_parse(e->source_dtype);
+    ds4_source_dtype dtype = ds4_source_dtype_parse(e->source_dtype);
     switch (dtype) {
     case DS4_V100_SOURCE_BF16:
         if (elements > UINT64_MAX / 2) return 1;
@@ -593,16 +593,16 @@ static int expected_bytes_for_entry(const ds4_pack_entry *e, uint64_t *out) {
     }
 }
 
-static int append_desc(ds4_v100_context *ctx, const ds4_pack_entry *entry,
-                       const ds4_v100_policy *policy,
+static int append_desc(ds4_context *ctx, const ds4_pack_entry *entry,
+                       const ds4_policy *policy,
                        char *err, size_t errlen) {
     if (ctx->n_descs == ctx->cap_descs) {
         uint64_t next = ctx->cap_descs ? ctx->cap_descs * 2 : 256;
         if (next < ctx->cap_descs || next > SIZE_MAX / sizeof(ctx->descs[0])) {
             return v100_error(err, errlen, "too many V100 descriptors");
         }
-        ds4_v100_tensor_desc *p =
-            (ds4_v100_tensor_desc *)realloc(ctx->descs, (size_t)next * sizeof(ctx->descs[0]));
+        ds4_tensor_desc *p =
+            (ds4_tensor_desc *)realloc(ctx->descs, (size_t)next * sizeof(ctx->descs[0]));
         if (!p) return v100_error(err, errlen, "out of memory growing V100 descriptors");
         ctx->descs = p;
         ctx->cap_descs = next;
@@ -614,9 +614,9 @@ static int append_desc(ds4_v100_context *ctx, const ds4_pack_entry *entry,
     return 0;
 }
 
-static int append_tm_desc(ds4_v100_context *ctx,
+static int append_tm_desc(ds4_context *ctx,
                           const ds4_tm_pack_entry *entry,
-                          const ds4_v100_policy *policy,
+                          const ds4_policy *policy,
                           char *err,
                           size_t errlen) {
     if (ctx->n_tm_descs == ctx->cap_tm_descs) {
@@ -624,8 +624,8 @@ static int append_tm_desc(ds4_v100_context *ctx,
         if (next < ctx->cap_tm_descs || next > SIZE_MAX / sizeof(ctx->tm_descs[0])) {
             return v100_error(err, errlen, "too many V100 TurboMind descriptors");
         }
-        ds4_v100_tm_tensor_desc *p =
-            (ds4_v100_tm_tensor_desc *)realloc(ctx->tm_descs,
+        ds4_tm_tensor_desc *p =
+            (ds4_tm_tensor_desc *)realloc(ctx->tm_descs,
                                                (size_t)next * sizeof(ctx->tm_descs[0]));
         if (!p) return v100_error(err, errlen, "out of memory growing V100 TurboMind descriptors");
         ctx->tm_descs = p;
@@ -639,8 +639,8 @@ static int append_tm_desc(ds4_v100_context *ctx,
 }
 
 static int bind_pack_entry(const ds4_pack_entry *e, void *ud) {
-    ds4_v100_bind_state *state = (ds4_v100_bind_state *)ud;
-    ds4_v100_context *ctx = state->ctx;
+    ds4_bind_state *state = (ds4_bind_state *)ud;
+    ds4_context *ctx = state->ctx;
     int max_gpu = ctx->opts.expected_gpus > 0 ? ctx->opts.expected_gpus : DS4_V100_EXPECTED_GPUS;
     if (e->owning_gpu < 0 || e->owning_gpu >= max_gpu) {
         return v100_error(state->err, state->errlen, "%s has invalid owning GPU %d",
@@ -650,11 +650,11 @@ static int bind_pack_entry(const ds4_pack_entry *e, void *ud) {
         return v100_error(state->err, state->errlen, "%s has invalid layer id %d",
                           e->semantic_tensor_id, e->layer_id);
     }
-    if (e->layer_id >= 0 && ds4_v100_stage_for_layer(e->layer_id) != e->owning_gpu) {
+    if (e->layer_id >= 0 && ds4_stage_for_layer(e->layer_id) != e->owning_gpu) {
         return v100_error(state->err, state->errlen,
                           "%s owner gpu %d does not match layer %d stage %d",
                           e->semantic_tensor_id, e->owning_gpu, e->layer_id,
-                          ds4_v100_stage_for_layer(e->layer_id));
+                          ds4_stage_for_layer(e->layer_id));
     }
 
     uint64_t expected = 0;
@@ -669,12 +669,12 @@ static int bind_pack_entry(const ds4_pack_entry *e, void *ud) {
                           e->semantic_tensor_id, expected, e->byte_length);
     }
 
-    ds4_v100_policy policy;
-    if (ds4_v100_classify_or_die(e->source_dtype, e->runtime_layout,
+    ds4_policy policy;
+    if (ds4_classify_or_die(e->source_dtype, e->runtime_layout,
                                  e->kernel_family, &policy, state->err, state->errlen)) {
         return 1;
     }
-    ds4_v100_stage_info *stage = &ctx->stages[e->owning_gpu];
+    ds4_stage_info *stage = &ctx->stages[e->owning_gpu];
     uint64_t arena_bytes = ds4_pack_arena_bytes(ctx->pack, e->owning_gpu);
     if (e->shard_offset > arena_bytes || e->byte_length > arena_bytes - e->shard_offset) {
         return v100_error(state->err, state->errlen,
@@ -683,7 +683,7 @@ static int bind_pack_entry(const ds4_pack_entry *e, void *ud) {
     }
     stage->tensor_count++;
     if (e->layer_id >= 0) {
-        ds4_v100_layer_info *li = &ctx->layers[e->layer_id];
+        ds4_layer_info *li = &ctx->layers[e->layer_id];
         li->tensor_count++;
         switch (policy.family) {
         case DS4_V100_FAMILY_F32_CONTROL: li->has_f32_control = true; break;
@@ -701,13 +701,13 @@ static int bind_pack_entry(const ds4_pack_entry *e, void *ud) {
     return append_desc(ctx, e, &policy, state->err, state->errlen);
 }
 
-static int bind_pack(ds4_v100_context *ctx, char *err, size_t errlen) {
+static int bind_pack(ds4_context *ctx, char *err, size_t errlen) {
     if (!ctx->opts.pack_index_path || !ctx->opts.pack_index_path[0]) return 0;
     if (ds4_pack_open(&ctx->pack, ctx->opts.pack_index_path, err, errlen)) return 1;
     for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
         ctx->stages[i].arena_bytes = ds4_pack_arena_bytes(ctx->pack, i);
     }
-    ds4_v100_bind_state state = { ctx, err, errlen };
+    ds4_bind_state state = { ctx, err, errlen };
     return ds4_pack_for_each(ctx->pack, bind_pack_entry, &state);
 }
 
@@ -732,8 +732,8 @@ static bool is_tp_routed_expert_id(const char *id) {
 }
 
 static int bind_tm_pack_entry(const ds4_tm_pack_entry *e, void *ud) {
-    ds4_v100_bind_state *state = (ds4_v100_bind_state *)ud;
-    ds4_v100_context *ctx = state->ctx;
+    ds4_bind_state *state = (ds4_bind_state *)ud;
+    ds4_context *ctx = state->ctx;
     int max_gpu = ctx->opts.expected_gpus > 0 ? ctx->opts.expected_gpus : DS4_V100_EXPECTED_GPUS;
     if (e->owning_gpu < 0 || e->owning_gpu >= max_gpu) {
         return v100_error(state->err, state->errlen, "%s has invalid TurboMind owning GPU %d",
@@ -744,11 +744,11 @@ static int bind_tm_pack_entry(const ds4_tm_pack_entry *e, void *ud) {
                           e->semantic_tensor_id, e->layer_id);
     }
     if (!is_tp_routed_expert_id(e->semantic_tensor_id) &&
-        ds4_v100_stage_for_layer(e->layer_id) != e->owning_gpu) {
+        ds4_stage_for_layer(e->layer_id) != e->owning_gpu) {
         return v100_error(state->err, state->errlen,
                           "%s TurboMind owner gpu %d does not match layer %d stage %d",
                           e->semantic_tensor_id, e->owning_gpu, e->layer_id,
-                          ds4_v100_stage_for_layer(e->layer_id));
+                          ds4_stage_for_layer(e->layer_id));
     }
     if (!is_routed_expert_id(e->semantic_tensor_id)) {
         return v100_error(state->err, state->errlen,
@@ -772,12 +772,12 @@ static int bind_tm_pack_entry(const ds4_tm_pack_entry *e, void *ud) {
                           e->semantic_tensor_id);
     }
 
-    ds4_v100_policy policy;
-    if (ds4_v100_classify_or_die(e->source_dtype, e->runtime_layout,
+    ds4_policy policy;
+    if (ds4_classify_or_die(e->source_dtype, e->runtime_layout,
                                  e->kernel_family, &policy, state->err, state->errlen)) {
         return 1;
     }
-    ds4_v100_stage_info *stage = &ctx->stages[e->owning_gpu];
+    ds4_stage_info *stage = &ctx->stages[e->owning_gpu];
     uint64_t weight_end =
         e->weight_offset + (uint64_t)e->experts_packed * e->weight_bytes_per_expert;
     uint64_t scale_end =
@@ -791,13 +791,13 @@ static int bind_tm_pack_entry(const ds4_tm_pack_entry *e, void *ud) {
     if (scale_end > stage->arena_bytes) stage->arena_bytes = scale_end;
     stage->tensor_count++;
 
-    ds4_v100_layer_info *li = &ctx->layers[e->layer_id];
+    ds4_layer_info *li = &ctx->layers[e->layer_id];
     li->tensor_count++;
     li->has_mxfp4_expert = true;
     return append_tm_desc(ctx, e, &policy, state->err, state->errlen);
 }
 
-static int bind_tm_pack(ds4_v100_context *ctx, char *err, size_t errlen) {
+static int bind_tm_pack(ds4_context *ctx, char *err, size_t errlen) {
     if (!ctx->opts.turbomind_pack_index_path ||
         !ctx->opts.turbomind_pack_index_path[0]) {
         return 0;
@@ -805,14 +805,14 @@ static int bind_tm_pack(ds4_v100_context *ctx, char *err, size_t errlen) {
     if (ds4_tm_pack_open(&ctx->tm_pack, ctx->opts.turbomind_pack_index_path, err, errlen)) {
         return 1;
     }
-    ds4_v100_bind_state state = { ctx, err, errlen };
+    ds4_bind_state state = { ctx, err, errlen };
     return ds4_tm_pack_for_each(ctx->tm_pack, bind_tm_pack_entry, &state);
 }
 
-static int validate_memory_budget(ds4_v100_context *ctx, char *err, size_t errlen) {
+static int validate_memory_budget(ds4_context *ctx, char *err, size_t errlen) {
     if (!ctx->opts.require_production_topology) return 0;
     for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
-        const ds4_v100_stage_info *s = &ctx->stages[i];
+        const ds4_stage_info *s = &ctx->stages[i];
         uint64_t used = checked_stage_used(s);
         if (used > s->device_total_bytes ||
             s->reserve_bytes > s->device_total_bytes - used) {
@@ -824,15 +824,15 @@ static int validate_memory_budget(ds4_v100_context *ctx, char *err, size_t errle
     return 0;
 }
 
-int ds4_v100_context_open(ds4_v100_context **out,
-                          const ds4_v100_context_options *opts,
+int ds4_context_open(ds4_context **out,
+                          const ds4_context_options *opts,
                           char *err,
                           size_t errlen) {
     if (!out) return v100_error(err, errlen, "missing output context pointer");
     *out = NULL;
-    ds4_v100_context_options local;
+    ds4_context_options local;
     if (opts) local = *opts;
-    else ds4_v100_context_options_init(&local);
+    else ds4_context_options_init(&local);
     if (local.expected_gpus <= 0 || local.expected_gpus > DS4_V100_EXPECTED_GPUS) {
         return v100_error(err, errlen, "expected_gpus must be 1..%d", DS4_V100_EXPECTED_GPUS);
     }
@@ -847,7 +847,7 @@ int ds4_v100_context_open(ds4_v100_context **out,
                           "planned_kv_bytes_per_gpu cannot be combined with derived kv_ctx_tokens");
     }
 
-    ds4_v100_context *ctx = (ds4_v100_context *)calloc(1, sizeof(*ctx));
+    ds4_context *ctx = (ds4_context *)calloc(1, sizeof(*ctx));
     if (!ctx) return v100_error(err, errlen, "out of memory allocating V100 context");
     ctx->opts = local;
     init_stage_map(ctx);
@@ -856,14 +856,14 @@ int ds4_v100_context_open(ds4_v100_context **out,
         bind_pack(ctx, err, errlen) ||
         bind_tm_pack(ctx, err, errlen) ||
         validate_memory_budget(ctx, err, errlen)) {
-        ds4_v100_context_close(ctx);
+        ds4_context_close(ctx);
         return 1;
     }
     *out = ctx;
     return 0;
 }
 
-void ds4_v100_context_close(ds4_v100_context *ctx) {
+void ds4_context_close(ds4_context *ctx) {
     if (!ctx) return;
     ds4_tm_pack_close(ctx->tm_pack);
     ds4_pack_close(ctx->pack);
@@ -872,38 +872,38 @@ void ds4_v100_context_close(ds4_v100_context *ctx) {
     free(ctx);
 }
 
-int ds4_v100_context_stage_count(const ds4_v100_context *ctx) {
+int ds4_context_stage_count(const ds4_context *ctx) {
     return ctx ? ctx->opts.expected_gpus : 0;
 }
 
-const ds4_v100_stage_info *ds4_v100_context_stage(const ds4_v100_context *ctx,
+const ds4_stage_info *ds4_context_stage(const ds4_context *ctx,
                                                   int stage_id) {
     if (!ctx || stage_id < 0 || stage_id >= ctx->opts.expected_gpus) return NULL;
     return &ctx->stages[stage_id];
 }
 
-const ds4_v100_layer_info *ds4_v100_context_layer(const ds4_v100_context *ctx,
+const ds4_layer_info *ds4_context_layer(const ds4_context *ctx,
                                                   int layer_id) {
     if (!ctx || layer_id < 0 || layer_id >= DS4_V100_N_LAYERS) return NULL;
     return &ctx->layers[layer_id];
 }
 
-uint64_t ds4_v100_context_tensor_count(const ds4_v100_context *ctx) {
+uint64_t ds4_context_tensor_count(const ds4_context *ctx) {
     return ctx ? ctx->n_descs + ctx->n_tm_descs : 0;
 }
 
-uint64_t ds4_v100_context_exec_count(const ds4_v100_context *ctx,
-                                     ds4_v100_exec_kind kind) {
+uint64_t ds4_context_exec_count(const ds4_context *ctx,
+                                     ds4_exec_kind kind) {
     if (!ctx || kind < 0 || kind >= DS4_V100_EXEC_COUNT) return 0;
     return ctx->exec_counts[kind];
 }
 
-bool ds4_v100_context_has_token_embedding(const ds4_v100_context *ctx) {
+bool ds4_context_has_token_embedding(const ds4_context *ctx) {
     return ctx && ctx->has_token_embedding;
 }
 
-static int fill_binding(const ds4_v100_tensor_desc *desc,
-                        ds4_v100_tensor_binding *out,
+static int fill_binding(const ds4_tensor_desc *desc,
+                        ds4_tensor_binding *out,
                         char *err,
                         size_t errlen) {
     if (!desc || !desc->entry || !out) {
@@ -936,8 +936,8 @@ static int fill_binding(const ds4_v100_tensor_desc *desc,
     return 0;
 }
 
-static int fill_tm_binding(const ds4_v100_tm_tensor_desc *desc,
-                           ds4_v100_turbomind_binding *out,
+static int fill_tm_binding(const ds4_tm_tensor_desc *desc,
+                           ds4_turbomind_binding *out,
                            char *err,
                            size_t errlen) {
     if (!desc || !desc->entry || !out) {
@@ -981,9 +981,9 @@ static int fill_tm_binding(const ds4_v100_tm_tensor_desc *desc,
     return 0;
 }
 
-int ds4_v100_context_lookup_tensor_binding(const ds4_v100_context *ctx,
+int ds4_context_lookup_tensor_binding(const ds4_context *ctx,
                                            const char *semantic_tensor_id,
-                                           ds4_v100_tensor_binding *out,
+                                           ds4_tensor_binding *out,
                                            char *err,
                                            size_t errlen) {
     if (!ctx) return v100_error(err, errlen, "missing V100 context");
@@ -992,7 +992,7 @@ int ds4_v100_context_lookup_tensor_binding(const ds4_v100_context *ctx,
     }
     if (!out) return v100_error(err, errlen, "missing tensor binding output");
     for (uint64_t i = 0; i < ctx->n_descs; i++) {
-        const ds4_v100_tensor_desc *desc = &ctx->descs[i];
+        const ds4_tensor_desc *desc = &ctx->descs[i];
         if (desc->entry && !strcmp(desc->entry->semantic_tensor_id, semantic_tensor_id)) {
             return fill_binding(desc, out, err, errlen);
         }
@@ -1000,9 +1000,9 @@ int ds4_v100_context_lookup_tensor_binding(const ds4_v100_context *ctx,
     return v100_error(err, errlen, "missing tensor descriptor %s", semantic_tensor_id);
 }
 
-int ds4_v100_context_lookup_turbomind_binding(const ds4_v100_context *ctx,
+int ds4_context_lookup_turbomind_binding(const ds4_context *ctx,
                                               const char *semantic_tensor_id,
-                                              ds4_v100_turbomind_binding *out,
+                                              ds4_turbomind_binding *out,
                                               char *err,
                                               size_t errlen) {
     if (!ctx) return v100_error(err, errlen, "missing V100 context");
@@ -1011,7 +1011,7 @@ int ds4_v100_context_lookup_turbomind_binding(const ds4_v100_context *ctx,
     }
     if (!out) return v100_error(err, errlen, "missing TurboMind binding output");
     for (uint64_t i = 0; i < ctx->n_tm_descs; i++) {
-        const ds4_v100_tm_tensor_desc *desc = &ctx->tm_descs[i];
+        const ds4_tm_tensor_desc *desc = &ctx->tm_descs[i];
         if (desc->entry && !strcmp(desc->entry->semantic_tensor_id, semantic_tensor_id)) {
             return fill_tm_binding(desc, out, err, errlen);
         }
@@ -1020,10 +1020,10 @@ int ds4_v100_context_lookup_turbomind_binding(const ds4_v100_context *ctx,
                       semantic_tensor_id);
 }
 
-int ds4_v100_context_require_layer_tensor_binding(const ds4_v100_context *ctx,
+int ds4_context_require_layer_tensor_binding(const ds4_context *ctx,
                                                   int layer_id,
                                                   const char *tensor_suffix,
-                                                  ds4_v100_tensor_binding *out,
+                                                  ds4_tensor_binding *out,
                                                   char *err,
                                                   size_t errlen) {
     if (layer_id < 0 || layer_id >= DS4_V100_N_LAYERS) {
@@ -1037,13 +1037,13 @@ int ds4_v100_context_require_layer_tensor_binding(const ds4_v100_context *ctx,
     if (n < 0 || (size_t)n >= sizeof(id)) {
         return v100_error(err, errlen, "layer tensor id too long");
     }
-    return ds4_v100_context_lookup_tensor_binding(ctx, id, out, err, errlen);
+    return ds4_context_lookup_tensor_binding(ctx, id, out, err, errlen);
 }
 
-int ds4_v100_context_require_layer_turbomind_binding(const ds4_v100_context *ctx,
+int ds4_context_require_layer_turbomind_binding(const ds4_context *ctx,
                                                      int layer_id,
                                                      const char *tensor_suffix,
-                                                     ds4_v100_turbomind_binding *out,
+                                                     ds4_turbomind_binding *out,
                                                      char *err,
                                                      size_t errlen) {
     if (layer_id < 0 || layer_id >= DS4_V100_N_LAYERS) {
@@ -1057,28 +1057,28 @@ int ds4_v100_context_require_layer_turbomind_binding(const ds4_v100_context *ctx
     if (n < 0 || (size_t)n >= sizeof(id)) {
         return v100_error(err, errlen, "layer tensor id too long");
     }
-    return ds4_v100_context_lookup_turbomind_binding(ctx, id, out, err, errlen);
+    return ds4_context_lookup_turbomind_binding(ctx, id, out, err, errlen);
 }
 
-int ds4_v100_context_output_head_binding(const ds4_v100_context *ctx,
-                                         ds4_v100_tensor_binding *out,
+int ds4_context_output_head_binding(const ds4_context *ctx,
+                                         ds4_tensor_binding *out,
                                          char *err,
                                          size_t errlen) {
-    return ds4_v100_context_lookup_tensor_binding(ctx, "output.weight", out, err, errlen);
+    return ds4_context_lookup_tensor_binding(ctx, "output.weight", out, err, errlen);
 }
 
-int ds4_v100_context_validate_layer_skeleton(const ds4_v100_context *ctx,
+int ds4_context_validate_layer_skeleton(const ds4_context *ctx,
                                              FILE *report,
                                              char *err,
                                              size_t errlen) {
     if (!ctx) return v100_error(err, errlen, "missing V100 context");
-    const uint64_t total_descs = ds4_v100_context_tensor_count(ctx);
+    const uint64_t total_descs = ds4_context_tensor_count(ctx);
     if (report) {
         fprintf(report, "layer\tstage\tclass\tkv_bytes\ttensors\tf32_control\tfp8_dense\tmxfp4_expert\thc_control\tstatus\n");
     }
     for (int layer = 0; layer < DS4_V100_N_LAYERS; layer++) {
-        const ds4_v100_layer_info *li = &ctx->layers[layer];
-        int expect_stage = ds4_v100_stage_for_layer(layer);
+        const ds4_layer_info *li = &ctx->layers[layer];
+        int expect_stage = ds4_stage_for_layer(layer);
         const char *status = "OK";
         if (li->stage_id != expect_stage) status = "BAD_STAGE";
         else if (total_descs > 0 && li->tensor_count == 0) status = "MISSING_LAYER_DESCRIPTORS";
@@ -1089,7 +1089,7 @@ int ds4_v100_context_validate_layer_skeleton(const ds4_v100_context *ctx,
         if (report) {
             fprintf(report, "%d\t%d\t%s\t%" PRIu64 "\t%" PRIu64 "\t%d\t%d\t%d\t%d\t%s\n",
                     layer, li->stage_id,
-                    ds4_v100_layer_class_name(li->layer_class),
+                    ds4_layer_class_name(li->layer_class),
                     li->kv_budget.total_bytes,
                     li->tensor_count,
                     li->has_f32_control ? 1 : 0,
@@ -1109,21 +1109,21 @@ int ds4_v100_context_validate_layer_skeleton(const ds4_v100_context *ctx,
     return 0;
 }
 
-void ds4_v100_context_print_report(const ds4_v100_context *ctx, FILE *fp) {
+void ds4_context_print_report(const ds4_context *ctx, FILE *fp) {
     if (!ctx || !fp) return;
-    fprintf(fp, "ds4_v100_context_report\n");
+    fprintf(fp, "ds4_context_report\n");
     fprintf(fp, "expected_gpus\t%d\n", ctx->opts.expected_gpus);
     fprintf(fp, "mode\t%d\n", (int)ctx->opts.mode);
     fprintf(fp, "policy\tbf16_fp8_fp4_are_not_native_v100_tensor_core_formats\n");
     fprintf(fp, "policy\tproduction_dense_gemm_target_fp16_hmma_with_fp32_accumulation\n");
     fprintf(fp, "kv_ctx_tokens\t%" PRIu64 "\n", ctx->opts.kv_ctx_tokens);
     fprintf(fp, "kv_active_slots\t%" PRIu64 "\n", ctx->opts.kv_active_slots);
-    fprintf(fp, "tensor_count\t%" PRIu64 "\n", ds4_v100_context_tensor_count(ctx));
+    fprintf(fp, "tensor_count\t%" PRIu64 "\n", ds4_context_tensor_count(ctx));
     fprintf(fp, "pack_tensor_count\t%" PRIu64 "\n", ctx->n_descs);
     fprintf(fp, "turbomind_tensor_count\t%" PRIu64 "\n", ctx->n_tm_descs);
     for (int k = 0; k < DS4_V100_EXEC_COUNT; k++) {
         fprintf(fp, "exec_count\t%s\t%" PRIu64 "\n",
-                ds4_v100_exec_kind_name((ds4_v100_exec_kind)k),
+                ds4_exec_kind_name((ds4_exec_kind)k),
                 ctx->exec_counts[k]);
     }
     int class_counts[3] = {0, 0, 0};
@@ -1131,17 +1131,17 @@ void ds4_v100_context_print_report(const ds4_v100_context *ctx, FILE *fp) {
         class_counts[ctx->layers[layer].layer_class]++;
     }
     fprintf(fp, "layer_class_count\t%s\t%d\n",
-            ds4_v100_layer_class_name(DS4_V100_LAYER_SWA_ONLY),
+            ds4_layer_class_name(DS4_V100_LAYER_SWA_ONLY),
             class_counts[DS4_V100_LAYER_SWA_ONLY]);
     fprintf(fp, "layer_class_count\t%s\t%d\n",
-            ds4_v100_layer_class_name(DS4_V100_LAYER_RATIO_4),
+            ds4_layer_class_name(DS4_V100_LAYER_RATIO_4),
             class_counts[DS4_V100_LAYER_RATIO_4]);
     fprintf(fp, "layer_class_count\t%s\t%d\n",
-            ds4_v100_layer_class_name(DS4_V100_LAYER_RATIO_128),
+            ds4_layer_class_name(DS4_V100_LAYER_RATIO_128),
             class_counts[DS4_V100_LAYER_RATIO_128]);
     fprintf(fp, "stage\tgpu\tlayers\tarena_bytes\tscratch_bytes\trelay_f16_bytes\trelay_f32_debug_bytes\tkv_arena_bytes\tkv_raw_swa_offset\tkv_raw_swa_bytes\tkv_compressed_attn_offset\tkv_compressed_attn_bytes\tkv_indexer_offset\tkv_indexer_bytes\tkv_compression_state_offset\tkv_compression_state_bytes\tplanned_kv_bytes\treserve_bytes\tdevice_total_bytes\n");
     for (int i = 0; i < ctx->opts.expected_gpus; i++) {
-        const ds4_v100_stage_info *s = &ctx->stages[i];
+        const ds4_stage_info *s = &ctx->stages[i];
         fprintf(fp, "%d\t%d\t%d-%d\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\n",
                 s->stage_id, s->gpu, s->layer_begin, s->layer_end,
                 s->arena_bytes, s->scratch_bytes, s->relay_f16_bytes,
@@ -1155,10 +1155,10 @@ void ds4_v100_context_print_report(const ds4_v100_context *ctx, FILE *fp) {
     }
     fprintf(fp, "layer_kv_view\tlayer\tstage\tclass\traw_swa_offset\traw_swa_bytes\tcompressed_attn_offset\tcompressed_attn_bytes\tindexer_kv_offset\tindexer_kv_bytes\tattn_state_kv_offset\tattn_state_kv_bytes\tattn_state_score_offset\tattn_state_score_bytes\tindexer_state_kv_offset\tindexer_state_kv_bytes\tindexer_state_score_offset\tindexer_state_score_bytes\ttotal_bytes\n");
     for (int layer = 0; layer < DS4_V100_N_LAYERS; layer++) {
-        const ds4_v100_layer_info *li = &ctx->layers[layer];
-        const ds4_v100_layer_kv_view *v = &li->kv_view;
+        const ds4_layer_info *li = &ctx->layers[layer];
+        const ds4_layer_kv_view *v = &li->kv_view;
         fprintf(fp, "layer_kv_view\t%d\t%d\t%s\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\t%" PRIu64 "\n",
-                layer, li->stage_id, ds4_v100_layer_class_name(li->layer_class),
+                layer, li->stage_id, ds4_layer_class_name(li->layer_class),
                 v->raw_swa_offset, v->raw_swa_bytes,
                 v->compressed_attn_offset, v->compressed_attn_bytes,
                 v->indexer_kv_offset, v->indexer_kv_bytes,

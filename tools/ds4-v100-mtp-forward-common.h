@@ -21,7 +21,7 @@ enum {
     DS4_V100_MTP_FORWARD_RAW_CAP = 128,
 };
 
-typedef struct ds4_v100_mtp_forward ds4_v100_mtp_forward;
+typedef struct ds4_mtp_forward ds4_mtp_forward;
 
 typedef struct {
     uint32_t raw_row;
@@ -32,29 +32,29 @@ typedef struct {
     uint64_t scratch_device_bytes;
     uint64_t scratch_host_bytes;
     uint64_t run_count;
-} ds4_v100_mtp_forward_report;
+} ds4_mtp_forward_report;
 
-int ds4_v100_mtp_forward_open(ds4_v100_mtp_forward **out,
-                              ds4_v100_mtp_sidecar *sidecar,
+int ds4_mtp_forward_open(ds4_mtp_forward **out,
+                              ds4_mtp_sidecar *sidecar,
                               const void *base_model,
                               uint64_t base_model_size,
-                              const ds4_v100_tensor_binding *output_weight,
+                              const ds4_tensor_binding *output_weight,
                               int gpu,
                               char *err,
                               size_t errlen);
 
-int ds4_v100_mtp_forward_run_host(ds4_v100_mtp_forward *fwd,
+int ds4_mtp_forward_run_host(ds4_mtp_forward *fwd,
                                   const float *embed,
                                   const float *prev_hc,
                                   uint32_t position,
                                   uint32_t top_k,
                                   uint32_t *tokens,
                                   float *logits,
-                                  ds4_v100_mtp_forward_report *report,
+                                  ds4_mtp_forward_report *report,
                                   char *err,
                                   size_t errlen);
 
-int ds4_v100_mtp_forward_run_host_next_hc(ds4_v100_mtp_forward *fwd,
+int ds4_mtp_forward_run_host_next_hc(ds4_mtp_forward *fwd,
                                           const float *embed,
                                           const float *prev_hc,
                                           uint32_t position,
@@ -63,11 +63,11 @@ int ds4_v100_mtp_forward_run_host_next_hc(ds4_v100_mtp_forward *fwd,
                                           float *logits,
                                           float *next_hc,
                                           uint64_t next_hc_values,
-                                          ds4_v100_mtp_forward_report *report,
+                                          ds4_mtp_forward_report *report,
                                           char *err,
                                           size_t errlen);
 
-void ds4_v100_mtp_forward_close(ds4_v100_mtp_forward *fwd);
+void ds4_mtp_forward_close(ds4_mtp_forward *fwd);
 
 #ifdef __cplusplus
 }

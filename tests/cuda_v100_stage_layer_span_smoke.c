@@ -88,10 +88,10 @@ static void unmap_model_file(model_map *m) {
     m->fd = -1;
 }
 
-static void close_scheds(ds4_v100_stage_scheduler **scheds, int n) {
+static void close_scheds(ds4_stage_scheduler **scheds, int n) {
     if (!scheds) return;
     for (int i = n - 1; i >= 0; i--) {
-        ds4_v100_stage_scheduler_close(scheds[i]);
+        ds4_stage_scheduler_close(scheds[i]);
         scheds[i] = NULL;
     }
 }
@@ -109,7 +109,7 @@ static int stage_range(int stage_id, int *first, int *last) {
     int f = -1;
     int l = -1;
     for (int layer = 0; layer < DS4_V100_N_LAYERS; layer++) {
-        if (ds4_v100_stage_for_layer(layer) != stage_id) continue;
+        if (ds4_stage_for_layer(layer) != stage_id) continue;
         if (f < 0) f = layer;
         l = layer;
     }
@@ -119,7 +119,7 @@ static int stage_range(int stage_id, int *first, int *last) {
     return 0;
 }
 
-static void check_report(const ds4_v100_stage_scheduler_report *r,
+static void check_report(const ds4_stage_scheduler_report *r,
                          int first_layer,
                          int last_layer,
                          const char *label) {
@@ -132,15 +132,15 @@ static void check_report(const ds4_v100_stage_scheduler_report *r,
     check(r && r->layers_executed == (uint32_t)(last_layer - first_layer + 1), msg);
 }
 
-static int open_two_stages(ds4_v100_stage_scheduler **scheds,
+static int open_two_stages(ds4_stage_scheduler **scheds,
                            const char *index,
                            const char *turbomind_index,
                            const char *shard_dir,
                            const model_map *model,
                            char *err,
                            size_t errlen) {
-    ds4_v100_stage_scheduler_options opts;
-    ds4_v100_stage_scheduler_options_init(&opts);
+    ds4_stage_scheduler_options opts;
+    ds4_stage_scheduler_options_init(&opts);
     opts.pack_index_path = index;
     opts.turbomind_pack_index_path = turbomind_index;
     opts.shard_dir = shard_dir;
@@ -151,7 +151,7 @@ static int open_two_stages(ds4_v100_stage_scheduler **scheds,
     opts.index_comp_cap = 64;
     for (int i = 0; i < 2; i++) {
         opts.stage_id = i;
-        if (ds4_v100_stage_scheduler_open(&scheds[i], &opts, err, errlen)) {
+        if (ds4_stage_scheduler_open(&scheds[i], &opts, err, errlen)) {
             return 1;
         }
     }
@@ -221,8 +221,8 @@ int main(int argc, char **argv) {
     if (map_model_file(model_path, &model)) return 1;
     check(ds4_gpu_set_model_fd(model.fd), "model fd");
 
-    ds4_v100_stage_scheduler *full[2] = {0};
-    ds4_v100_stage_scheduler *seg[2] = {0};
+    ds4_stage_scheduler *full[2] = {0};
+    ds4_stage_scheduler *seg[2] = {0};
     char err[512] = {0};
 
     const uint64_t hc_values = (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS;
@@ -239,7 +239,7 @@ int main(int argc, char **argv) {
 
     const uint32_t tokens[2] = { token0, token1 };
     const uint32_t positions[2] = { position0, position1 };
-    ds4_v100_stage_scheduler_report reports[2];
+    ds4_stage_scheduler_report reports[2];
 
     if (open_two_stages(full, index, turbomind_index, shard_dir, &model, err, sizeof(err))) {
         fprintf(stderr,
@@ -251,7 +251,7 @@ int main(int argc, char **argv) {
 
     memset(reports, 0, sizeof(reports));
     err[0] = '\0';
-    check(ds4_v100_stage_scheduler_decode_token_batch(full[0],
+    check(ds4_stage_scheduler_decode_token_batch(full[0],
                                                       tokens,
                                                       positions,
                                                       2,
@@ -262,7 +262,7 @@ int main(int argc, char **argv) {
     check_report(&reports[0], s0_first, s0_last, "full stage0 slot0");
     check(ds4_gpu_synchronize(), "full stage0 synchronize");
     err[0] = '\0';
-    check(ds4_v100_stage_scheduler_handoff_batch(full[1],
+    check(ds4_stage_scheduler_handoff_batch(full[1],
                                                  full[0],
                                                  2,
                                                  err,
@@ -270,7 +270,7 @@ int main(int argc, char **argv) {
           err[0] ? err : "full handoff");
     memset(reports, 0, sizeof(reports));
     err[0] = '\0';
-    check(ds4_v100_stage_scheduler_decode_hc_batch(full[1],
+    check(ds4_stage_scheduler_decode_hc_batch(full[1],
                                                    tokens,
                                                    positions,
                                                    2,
@@ -280,15 +280,15 @@ int main(int argc, char **argv) {
           err[0] ? err : "full stage1 decode");
     check_report(&reports[0], s1_first, s1_last, "full stage1 slot0");
     check(ds4_gpu_synchronize(), "full stage1 synchronize");
-    check(ds4_v100_stage_scheduler_read_hc_slot(full[1], 0, full0, hc_bytes),
+    check(ds4_stage_scheduler_read_hc_slot(full[1], 0, full0, hc_bytes),
           "full slot0 read");
-    check(ds4_v100_stage_scheduler_read_hc_slot(full[1], 1, full1, hc_bytes),
+    check(ds4_stage_scheduler_read_hc_slot(full[1], 1, full1, hc_bytes),
           "full slot1 read");
     err[0] = '\0';
-    check(ds4_v100_stage_scheduler_reset(full[0], err, sizeof(err)) == 0,
+    check(ds4_stage_scheduler_reset(full[0], err, sizeof(err)) == 0,
           err[0] ? err : "reset stage0");
     err[0] = '\0';
-    check(ds4_v100_stage_scheduler_reset(full[1], err, sizeof(err)) == 0,
+    check(ds4_stage_scheduler_reset(full[1], err, sizeof(err)) == 0,
           err[0] ? err : "reset stage1");
     check(ds4_gpu_synchronize(), "post-reset synchronize");
     seg[0] = full[0];
@@ -299,7 +299,7 @@ int main(int argc, char **argv) {
     if (getenv("DS4_V100_STAGE_LAYER_SPAN_SECOND_FULL")) {
         memset(reports, 0, sizeof(reports));
         err[0] = '\0';
-        check(ds4_v100_stage_scheduler_decode_token_batch(seg[0],
+        check(ds4_stage_scheduler_decode_token_batch(seg[0],
                                                           tokens,
                                                           positions,
                                                           2,
@@ -309,7 +309,7 @@ int main(int argc, char **argv) {
               err[0] ? err : "second full stage0 decode");
         check(ds4_gpu_synchronize(), "second full stage0 synchronize");
         err[0] = '\0';
-        check(ds4_v100_stage_scheduler_handoff_batch(seg[1],
+        check(ds4_stage_scheduler_handoff_batch(seg[1],
                                                      seg[0],
                                                      2,
                                                      err,
@@ -317,7 +317,7 @@ int main(int argc, char **argv) {
               err[0] ? err : "second full handoff");
         memset(reports, 0, sizeof(reports));
         err[0] = '\0';
-        check(ds4_v100_stage_scheduler_decode_hc_batch(seg[1],
+        check(ds4_stage_scheduler_decode_hc_batch(seg[1],
                                                        tokens,
                                                        positions,
                                                        2,
@@ -331,7 +331,7 @@ int main(int argc, char **argv) {
 
     memset(reports, 0, sizeof(reports));
     err[0] = '\0';
-    check(ds4_v100_stage_scheduler_decode_token_layer_span(seg[0],
+    check(ds4_stage_scheduler_decode_token_layer_span(seg[0],
                                                            0,
                                                            tokens,
                                                            positions,
@@ -346,7 +346,7 @@ int main(int argc, char **argv) {
     if (s0_mid < s0_last) {
         memset(reports, 0, sizeof(reports));
         err[0] = '\0';
-        check(ds4_v100_stage_scheduler_decode_hc_layer_span(seg[0],
+        check(ds4_stage_scheduler_decode_hc_layer_span(seg[0],
                                                             0,
                                                             tokens,
                                                             positions,
@@ -361,7 +361,7 @@ int main(int argc, char **argv) {
     }
     check(ds4_gpu_synchronize(), "segmented stage0 synchronize");
     err[0] = '\0';
-    check(ds4_v100_stage_scheduler_handoff_batch(seg[1],
+    check(ds4_stage_scheduler_handoff_batch(seg[1],
                                                  seg[0],
                                                  2,
                                                  err,
@@ -370,7 +370,7 @@ int main(int argc, char **argv) {
 
     memset(reports, 0, sizeof(reports));
     err[0] = '\0';
-    check(ds4_v100_stage_scheduler_decode_hc_layer_span(seg[1],
+    check(ds4_stage_scheduler_decode_hc_layer_span(seg[1],
                                                         0,
                                                         tokens,
                                                         positions,
@@ -385,7 +385,7 @@ int main(int argc, char **argv) {
     if (s1_mid < s1_last) {
         memset(reports, 0, sizeof(reports));
         err[0] = '\0';
-        check(ds4_v100_stage_scheduler_decode_hc_layer_span(seg[1],
+        check(ds4_stage_scheduler_decode_hc_layer_span(seg[1],
                                                             0,
                                                             tokens,
                                                             positions,
@@ -401,9 +401,9 @@ int main(int argc, char **argv) {
     check(ds4_gpu_synchronize(), "segmented stage1 synchronize");
 
 read_segmented:
-    check(ds4_v100_stage_scheduler_read_hc_slot(seg[1], 0, seg0, hc_bytes),
+    check(ds4_stage_scheduler_read_hc_slot(seg[1], 0, seg0, hc_bytes),
           "segmented slot0 read");
-    check(ds4_v100_stage_scheduler_read_hc_slot(seg[1], 1, seg1, hc_bytes),
+    check(ds4_stage_scheduler_read_hc_slot(seg[1], 1, seg1, hc_bytes),
           "segmented slot1 read");
 
     const double max0 = max_abs_diff(full0, seg0, hc_values);

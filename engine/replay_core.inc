@@ -1,32 +1,32 @@
 typedef struct replay_pipeline_runtime replay_pipeline_runtime;
 typedef struct replay_mailbox_runtime replay_mailbox_runtime;
 
-struct ds4_v100_replay {
+struct ds4_replay {
     ds4_engine *tokenizer;
     const unsigned char *model_map;
     uint64_t model_size;
     int model_fd;
-    ds4_v100_stage_scheduler *scheds[DS4_V100_EXPECTED_GPUS];
+    ds4_stage_scheduler *scheds[DS4_V100_EXPECTED_GPUS];
     ds4_gpu_event *stage_ready[DS4_V100_EXPECTED_GPUS][DS4_V100_SCHED_MAX_SLOTS];
     replay_pipeline_runtime *pipeline;
     replay_mailbox_runtime *mailbox;
-    ds4_v100_replay_options opts;
+    ds4_replay_options opts;
     double open_ms[DS4_V100_EXPECTED_GPUS];
     double open_total_ms;
     bool used;
 };
 
-struct ds4_v100_replay_snapshot {
-    ds4_v100_stage_scheduler_snapshot *stages[DS4_V100_EXPECTED_GPUS];
+struct ds4_replay_snapshot {
+    ds4_stage_scheduler_snapshot *stages[DS4_V100_EXPECTED_GPUS];
     uint64_t bytes;
 };
 
 static void replay_pipeline_runtime_close(replay_pipeline_runtime *p);
-static int replay_pipeline_runtime_open(ds4_v100_replay *rt, char *err, size_t errlen);
+static int replay_pipeline_runtime_open(ds4_replay *rt, char *err, size_t errlen);
 static void replay_mailbox_runtime_close(replay_mailbox_runtime *m);
-static int replay_mailbox_runtime_open(ds4_v100_replay *rt, char *err, size_t errlen);
-static int replay_open_stage_ready_events(ds4_v100_replay *rt, char *err, size_t errlen);
-static void replay_close_stage_ready_events(ds4_v100_replay *rt);
+static int replay_mailbox_runtime_open(ds4_replay *rt, char *err, size_t errlen);
+static int replay_open_stage_ready_events(ds4_replay *rt, char *err, size_t errlen);
+static void replay_close_stage_ready_events(ds4_replay *rt);
 
 static double replay_now_ms(void) {
     struct timeval tv;
@@ -44,9 +44,9 @@ static int replay_errorf(char *err, size_t errlen, const char *fmt, const char *
     return 1;
 }
 
-static void replay_init_counters(ds4_v100_replay *rt,
+static void replay_init_counters(ds4_replay *rt,
                                  uint32_t prompt_tokens,
-                                 ds4_v100_replay_counters *c) {
+                                 ds4_replay_counters *c) {
     if (!rt || !c) return;
     memset(c, 0, sizeof(*c));
     c->prompt_tokens = prompt_tokens;
@@ -54,7 +54,7 @@ static void replay_init_counters(ds4_v100_replay *rt,
     for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) c->open_ms[i] = rt->open_ms[i];
 }
 
-static int map_model_file(ds4_v100_replay *rt, const char *path, char *err, size_t errlen) {
+static int map_model_file(ds4_replay *rt, const char *path, char *err, size_t errlen) {
     rt->model_fd = open(path, O_RDONLY);
     if (rt->model_fd < 0) {
         if (err && errlen) {
@@ -79,7 +79,7 @@ static int map_model_file(ds4_v100_replay *rt, const char *path, char *err, size
     return 0;
 }
 
-void ds4_v100_replay_options_init(ds4_v100_replay_options *opts) {
+void ds4_replay_options_init(ds4_replay_options *opts) {
     if (!opts) return;
     memset(opts, 0, sizeof(*opts));
     opts->kv_ctx_tokens = 1048576;
@@ -95,8 +95,8 @@ void ds4_v100_replay_options_init(ds4_v100_replay_options *opts) {
     opts->async_pipeline_mode = DS4_V100_REPLAY_ASYNC_PIPELINE_OFF;
 }
 
-static ds4_v100_replay_async_pipeline_mode
-replay_async_pipeline_mode(const ds4_v100_replay_options *opts) {
+static ds4_replay_async_pipeline_mode
+replay_async_pipeline_mode(const ds4_replay_options *opts) {
     if (!opts) return DS4_V100_REPLAY_ASYNC_PIPELINE_OFF;
     if (opts->async_pipeline_mode != DS4_V100_REPLAY_ASYNC_PIPELINE_OFF) {
         return opts->async_pipeline_mode;
@@ -106,8 +106,8 @@ replay_async_pipeline_mode(const ds4_v100_replay_options *opts) {
         : DS4_V100_REPLAY_ASYNC_PIPELINE_OFF;
 }
 
-void ds4_v100_replay_open_counters(const ds4_v100_replay *rt,
-                                   ds4_v100_replay_counters *out) {
+void ds4_replay_open_counters(const ds4_replay *rt,
+                                   ds4_replay_counters *out) {
     if (!rt || !out) return;
     memset(out, 0, sizeof(*out));
     out->open_total_ms = rt->open_total_ms;
@@ -116,21 +116,21 @@ void ds4_v100_replay_open_counters(const ds4_v100_replay *rt,
     }
 }
 
-const void *ds4_v100_replay_model_map(const ds4_v100_replay *rt) {
+const void *ds4_replay_model_map(const ds4_replay *rt) {
     return rt ? rt->model_map : NULL;
 }
 
-uint64_t ds4_v100_replay_model_size(const ds4_v100_replay *rt) {
+uint64_t ds4_replay_model_size(const ds4_replay *rt) {
     return rt ? rt->model_size : 0;
 }
 
-void ds4_v100_replay_close(ds4_v100_replay *rt) {
+void ds4_replay_close(ds4_replay *rt) {
     if (!rt) return;
     replay_pipeline_runtime_close(rt->pipeline);
     replay_mailbox_runtime_close(rt->mailbox);
     replay_close_stage_ready_events(rt);
     for (int i = DS4_V100_EXPECTED_GPUS - 1; i >= 0; i--) {
-        ds4_v100_stage_scheduler_close(rt->scheds[i]);
+        ds4_stage_scheduler_close(rt->scheds[i]);
     }
     if (rt->model_map) munmap((void *)rt->model_map, (size_t)rt->model_size);
     if (rt->model_fd >= 0) close(rt->model_fd);
@@ -138,18 +138,18 @@ void ds4_v100_replay_close(ds4_v100_replay *rt) {
     free(rt);
 }
 
-int ds4_v100_replay_reset(ds4_v100_replay *rt, char *err, size_t errlen) {
+int ds4_replay_reset(ds4_replay *rt, char *err, size_t errlen) {
     if (!rt) return replay_error(err, errlen, "missing V100 replay reset input");
     for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
-        if (ds4_v100_stage_scheduler_reset(rt->scheds[i], err, errlen)) return 1;
+        if (ds4_stage_scheduler_reset(rt->scheds[i], err, errlen)) return 1;
     }
     rt->used = false;
     return 0;
 }
 
 typedef struct {
-    ds4_v100_stage_scheduler_options opts;
-    ds4_v100_stage_scheduler *sched;
+    ds4_stage_scheduler_options opts;
+    ds4_stage_scheduler *sched;
     double open_ms;
     int rc;
     char err[512];
@@ -159,7 +159,7 @@ static void *replay_open_worker_main(void *arg) {
     replay_open_worker *w = (replay_open_worker *)arg;
     if (!w) return NULL;
     const double t0 = replay_now_ms();
-    w->rc = ds4_v100_stage_scheduler_open(&w->sched,
+    w->rc = ds4_stage_scheduler_open(&w->sched,
                                           &w->opts,
                                           w->err,
                                           sizeof(w->err));
@@ -167,15 +167,15 @@ static void *replay_open_worker_main(void *arg) {
     return NULL;
 }
 
-static int replay_open_stages_serial(ds4_v100_replay *rt,
-                                     const ds4_v100_stage_scheduler_options *base,
+static int replay_open_stages_serial(ds4_replay *rt,
+                                     const ds4_stage_scheduler_options *base,
                                      char *err,
                                      size_t errlen) {
     for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
-        ds4_v100_stage_scheduler_options sopts = *base;
+        ds4_stage_scheduler_options sopts = *base;
         sopts.stage_id = stage;
         const double t0 = replay_now_ms();
-        if (ds4_v100_stage_scheduler_open(&rt->scheds[stage], &sopts, err, errlen)) {
+        if (ds4_stage_scheduler_open(&rt->scheds[stage], &sopts, err, errlen)) {
             return 1;
         }
         rt->open_ms[stage] = replay_now_ms() - t0;
@@ -183,8 +183,8 @@ static int replay_open_stages_serial(ds4_v100_replay *rt,
     return 0;
 }
 
-static int replay_open_stages_parallel(ds4_v100_replay *rt,
-                                       const ds4_v100_stage_scheduler_options *base,
+static int replay_open_stages_parallel(ds4_replay *rt,
+                                       const ds4_stage_scheduler_options *base,
                                        char *err,
                                        size_t errlen) {
     replay_open_worker workers[DS4_V100_EXPECTED_GPUS];
@@ -232,7 +232,7 @@ static int replay_open_stages_parallel(ds4_v100_replay *rt,
                      workers[first_failed].err[0] ? workers[first_failed].err : "unknown error");
         }
         for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
-            ds4_v100_stage_scheduler_close(workers[stage].sched);
+            ds4_stage_scheduler_close(workers[stage].sched);
         }
         return 1;
     }
@@ -245,7 +245,7 @@ static int replay_open_stages_parallel(ds4_v100_replay *rt,
     return 0;
 }
 
-static void replay_close_stage_ready_events(ds4_v100_replay *rt) {
+static void replay_close_stage_ready_events(ds4_replay *rt) {
     if (!rt) return;
     for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
         for (uint32_t slot = 0; slot < DS4_V100_SCHED_MAX_SLOTS; slot++) {
@@ -255,7 +255,7 @@ static void replay_close_stage_ready_events(ds4_v100_replay *rt) {
     }
 }
 
-static int replay_open_stage_ready_events(ds4_v100_replay *rt, char *err, size_t errlen) {
+static int replay_open_stage_ready_events(ds4_replay *rt, char *err, size_t errlen) {
     if (!rt || !rt->opts.async_event_handoff ||
         replay_async_pipeline_mode(&rt->opts) != DS4_V100_REPLAY_ASYNC_PIPELINE_PER_STEP) {
         return 0;
@@ -275,8 +275,8 @@ static int replay_open_stage_ready_events(ds4_v100_replay *rt, char *err, size_t
     return 0;
 }
 
-int ds4_v100_replay_open(ds4_v100_replay **out,
-                         const ds4_v100_replay_options *opts,
+int ds4_replay_open(ds4_replay **out,
+                         const ds4_replay_options *opts,
                          char *err,
                          size_t errlen) {
     if (!out) return replay_error(err, errlen, "missing V100 replay output");
@@ -296,7 +296,7 @@ int ds4_v100_replay_open(ds4_v100_replay **out,
         return 1;
     }
 
-    ds4_v100_replay *rt = (ds4_v100_replay *)calloc(1, sizeof(*rt));
+    ds4_replay *rt = (ds4_replay *)calloc(1, sizeof(*rt));
     if (!rt) return replay_error(err, errlen, "failed to allocate V100 replay");
     rt->model_fd = -1;
     rt->opts = *opts;
@@ -309,20 +309,20 @@ int ds4_v100_replay_open(ds4_v100_replay **out,
     eopts.inspect_only = true;
     eopts.n_threads = 1;
     if (ds4_engine_open(&rt->tokenizer, &eopts) != 0) {
-        ds4_v100_replay_close(rt);
+        ds4_replay_close(rt);
         return replay_errorf(err, errlen, "tokenizer engine open failed for %s", opts->model_path);
     }
     if (map_model_file(rt, opts->model_path, err, errlen)) {
-        ds4_v100_replay_close(rt);
+        ds4_replay_close(rt);
         return 1;
     }
     if (!ds4_gpu_set_model_fd(rt->model_fd)) {
-        ds4_v100_replay_close(rt);
+        ds4_replay_close(rt);
         return replay_error(err, errlen, "failed to register V100 replay model fd");
     }
 
-    ds4_v100_stage_scheduler_options sopts;
-    ds4_v100_stage_scheduler_options_init(&sopts);
+    ds4_stage_scheduler_options sopts;
+    ds4_stage_scheduler_options_init(&sopts);
     sopts.pack_index_path = opts->pack_index_path;
     sopts.turbomind_pack_index_path = opts->turbomind_pack_index_path;
     sopts.shard_dir = opts->shard_dir;
@@ -342,23 +342,23 @@ int ds4_v100_replay_open(ds4_v100_replay **out,
         if (!opts->serial_open && err && errlen && err[0] == '\0') {
             snprintf(err, errlen, "parallel stage open failed");
         }
-        ds4_v100_replay_close(rt);
+        ds4_replay_close(rt);
         return 1;
     }
     if (replay_open_stage_ready_events(rt, err, errlen)) {
-        ds4_v100_replay_close(rt);
+        ds4_replay_close(rt);
         return 1;
     }
     switch (replay_async_pipeline_mode(opts)) {
     case DS4_V100_REPLAY_ASYNC_PIPELINE_PERSISTENT:
         if (replay_pipeline_runtime_open(rt, err, errlen)) {
-            ds4_v100_replay_close(rt);
+            ds4_replay_close(rt);
             return 1;
         }
         break;
     case DS4_V100_REPLAY_ASYNC_PIPELINE_MAILBOX:
         if (replay_mailbox_runtime_open(rt, err, errlen)) {
-            ds4_v100_replay_close(rt);
+            ds4_replay_close(rt);
             return 1;
         }
         break;
@@ -372,7 +372,7 @@ int ds4_v100_replay_open(ds4_v100_replay **out,
     return 0;
 }
 
-void ds4_v100_replay_encode_prompt(ds4_v100_replay *rt,
+void ds4_replay_encode_prompt(ds4_replay *rt,
                                    const char *system,
                                    const char *prompt,
                                    ds4_think_mode think_mode,
@@ -385,9 +385,9 @@ void ds4_v100_replay_encode_prompt(ds4_v100_replay *rt,
                            out);
 }
 
-static void counters_add_report(ds4_v100_replay_counters *c,
+static void counters_add_report(ds4_replay_counters *c,
                                 int stage,
-                                const ds4_v100_stage_scheduler_report *r) {
+                                const ds4_stage_scheduler_report *r) {
     if (!c || !r || stage < 0 || stage >= DS4_V100_EXPECTED_GPUS) return;
     if (c->arena_bytes[stage] == 0) {
         c->uploaded_tensors += r->uploaded_tensors;
@@ -408,7 +408,7 @@ static void counters_add_report(ds4_v100_replay_counters *c,
     c->stage_profile_total_ms[stage] += r->timing_total_ms;
 }
 
-static int replay_handoff_slot_span(ds4_v100_replay *rt,
+static int replay_handoff_slot_span(ds4_replay *rt,
                                     int stage,
                                     uint32_t slot_start,
                                     uint32_t n_slots,
@@ -418,14 +418,14 @@ static int replay_handoff_slot_span(ds4_v100_replay *rt,
         return replay_error(err, errlen, "missing replay handoff endpoint");
     }
     if (rt->opts.async_handoff) {
-        return ds4_v100_stage_scheduler_handoff_slot_span_async(rt->scheds[stage],
+        return ds4_stage_scheduler_handoff_slot_span_async(rt->scheds[stage],
                                                                rt->scheds[stage - 1],
                                                                slot_start,
                                                                n_slots,
                                                                err,
                                                                errlen);
     }
-    return ds4_v100_stage_scheduler_handoff_slot_span(rt->scheds[stage],
+    return ds4_stage_scheduler_handoff_slot_span(rt->scheds[stage],
                                                      rt->scheds[stage - 1],
                                                      slot_start,
                                                      n_slots,
@@ -433,7 +433,7 @@ static int replay_handoff_slot_span(ds4_v100_replay *rt,
                                                      errlen);
 }
 
-static int replay_handoff_slot_span_after_event(ds4_v100_replay *rt,
+static int replay_handoff_slot_span_after_event(ds4_replay *rt,
                                                 int stage,
                                                 uint32_t slot_start,
                                                 uint32_t n_slots,
@@ -444,7 +444,7 @@ static int replay_handoff_slot_span_after_event(ds4_v100_replay *rt,
     if (!rt || stage <= 0 || stage >= DS4_V100_EXPECTED_GPUS) {
         return replay_error(err, errlen, "missing replay event handoff endpoint");
     }
-    return ds4_v100_stage_scheduler_handoff_slot_span_after_event_async(
+    return ds4_stage_scheduler_handoff_slot_span_after_event_async(
         rt->scheds[stage],
         rt->scheds[stage - 1],
         slot_start,
@@ -454,17 +454,17 @@ static int replay_handoff_slot_span_after_event(ds4_v100_replay *rt,
         errlen);
 }
 
-static int replay_feed_token(ds4_v100_replay *rt,
+static int replay_feed_token(ds4_replay *rt,
                              uint32_t token,
                              uint32_t position,
-                             ds4_v100_replay_counters *counters,
+                             ds4_replay_counters *counters,
                              double *bucket_ms,
                              char *err,
                              size_t errlen) {
-    ds4_v100_stage_scheduler_report report;
+    ds4_stage_scheduler_report report;
     memset(&report, 0, sizeof(report));
     double t0 = replay_now_ms();
-    if (ds4_v100_stage_scheduler_decode_token(rt->scheds[0],
+    if (ds4_stage_scheduler_decode_token(rt->scheds[0],
                                               token,
                                               position,
                                               &report,
@@ -489,7 +489,7 @@ static int replay_feed_token(ds4_v100_replay *rt,
 
         memset(&report, 0, sizeof(report));
         t0 = replay_now_ms();
-        if (ds4_v100_stage_scheduler_decode_hc(rt->scheds[stage],
+        if (ds4_stage_scheduler_decode_hc(rt->scheds[stage],
                                                token,
                                                position,
                                                &report,
@@ -506,15 +506,15 @@ static int replay_feed_token(ds4_v100_replay *rt,
     return 0;
 }
 
-static int replay_select_token(ds4_v100_replay *rt,
-                               ds4_v100_replay_output *out,
-                               ds4_v100_replay_counters *counters,
+static int replay_select_token(ds4_replay *rt,
+                               ds4_replay_output *out,
+                               ds4_replay_counters *counters,
                                char *err,
                                size_t errlen) {
     uint32_t token = UINT32_MAX;
     float logit = 0.0f;
     double t0 = replay_now_ms();
-    if (ds4_v100_stage_scheduler_select_token(rt->scheds[DS4_V100_EXPECTED_GPUS - 1],
+    if (ds4_stage_scheduler_select_token(rt->scheds[DS4_V100_EXPECTED_GPUS - 1],
                                               &token,
                                               &logit,
                                               err,
@@ -538,18 +538,18 @@ typedef struct {
     uint32_t prompt_len;
 } replay_batch_slot_plan;
 
-static int replay_feed_token_batch(ds4_v100_replay *rt,
+static int replay_feed_token_batch(ds4_replay *rt,
                                    const uint32_t *tokens,
                                    const uint32_t *positions,
                                    uint32_t n_slots,
-                                   ds4_v100_replay_counters *counters,
+                                   ds4_replay_counters *counters,
                                    double *bucket_ms,
                                    char *err,
                                    size_t errlen) {
-    ds4_v100_stage_scheduler_report reports[DS4_V100_SCHED_MAX_SLOTS];
+    ds4_stage_scheduler_report reports[DS4_V100_SCHED_MAX_SLOTS];
     memset(reports, 0, sizeof(reports));
     double t0 = replay_now_ms();
-    if (ds4_v100_stage_scheduler_decode_token_batch(rt->scheds[0],
+    if (ds4_stage_scheduler_decode_token_batch(rt->scheds[0],
                                                     tokens,
                                                     positions,
                                                     n_slots,
@@ -575,7 +575,7 @@ static int replay_feed_token_batch(ds4_v100_replay *rt,
 
         memset(reports, 0, sizeof(reports));
         t0 = replay_now_ms();
-        if (ds4_v100_stage_scheduler_decode_hc_batch(rt->scheds[stage],
+        if (ds4_stage_scheduler_decode_hc_batch(rt->scheds[stage],
                                                      tokens,
                                                      positions,
                                                      n_slots,
@@ -605,11 +605,11 @@ static int replay_sync_all_stages(char *err, size_t errlen) {
     return 0;
 }
 
-static int replay_feed_token_batch_wavefront(ds4_v100_replay *rt,
+static int replay_feed_token_batch_wavefront(ds4_replay *rt,
                                              const uint32_t *tokens,
                                              const uint32_t *positions,
                                              uint32_t n_slots,
-                                             ds4_v100_replay_counters *counters,
+                                             ds4_replay_counters *counters,
                                              double *bucket_ms,
                                              char *err,
                                              size_t errlen) {
@@ -627,12 +627,12 @@ static int replay_feed_token_batch_wavefront(ds4_v100_replay *rt,
 
         for (int stage = stage_hi; stage >= stage_lo; stage--) {
             const uint32_t slot = diag - (uint32_t)stage;
-            ds4_v100_stage_scheduler_report report;
+            ds4_stage_scheduler_report report;
             memset(&report, 0, sizeof(report));
             const double t0 = replay_now_ms();
 
             if (stage == 0) {
-                if (ds4_v100_stage_scheduler_decode_token_slot_span(rt->scheds[0],
+                if (ds4_stage_scheduler_decode_token_slot_span(rt->scheds[0],
                                                                      slot,
                                                                      &tokens[slot],
                                                                      &positions[slot],
@@ -649,7 +649,7 @@ static int replay_feed_token_batch_wavefront(ds4_v100_replay *rt,
                                              1,
                                              err,
                                              errlen) ||
-                    ds4_v100_stage_scheduler_decode_hc_slot_span(rt->scheds[stage],
+                    ds4_stage_scheduler_decode_hc_slot_span(rt->scheds[stage],
                                                                  slot,
                                                                  &tokens[slot],
                                                                  &positions[slot],
@@ -679,7 +679,7 @@ typedef struct {
 } replay_pipeline_worker;
 
 struct replay_pipeline_runtime {
-    ds4_v100_replay *rt;
+    ds4_replay *rt;
     pthread_mutex_t mu;
     pthread_cond_t cv;
     pthread_t threads[DS4_V100_EXPECTED_GPUS];
@@ -695,7 +695,7 @@ struct replay_pipeline_runtime {
     uint32_t n_slots;
     bool done[DS4_V100_EXPECTED_GPUS][DS4_V100_SCHED_MAX_SLOTS];
     char err[512];
-    ds4_v100_stage_scheduler_report reports[DS4_V100_EXPECTED_GPUS][DS4_V100_SCHED_MAX_SLOTS];
+    ds4_stage_scheduler_report reports[DS4_V100_EXPECTED_GPUS][DS4_V100_SCHED_MAX_SLOTS];
     double stage_decode_ms[DS4_V100_EXPECTED_GPUS];
     double handoff_ms[DS4_V100_EXPECTED_GPUS - 1];
     double worker_wait_ms[DS4_V100_EXPECTED_GPUS];
@@ -793,11 +793,11 @@ static void *replay_pipeline_worker_main(void *arg) {
                 break;
             }
 
-            ds4_v100_stage_scheduler_report report;
+            ds4_stage_scheduler_report report;
             memset(&report, 0, sizeof(report));
             double t0 = replay_now_ms();
             if (stage == 0) {
-                if (ds4_v100_stage_scheduler_decode_token_slot_span(
+                if (ds4_stage_scheduler_decode_token_slot_span(
                         p->rt->scheds[0],
                         slot,
                         &p->tokens[slot],
@@ -821,7 +821,7 @@ static void *replay_pipeline_worker_main(void *arg) {
                 }
                 p->handoff_ms[stage - 1] += replay_now_ms() - t0;
                 t0 = replay_now_ms();
-                if (ds4_v100_stage_scheduler_decode_hc_slot_span(
+                if (ds4_stage_scheduler_decode_hc_slot_span(
                         p->rt->scheds[stage],
                         slot,
                         &p->tokens[slot],
@@ -850,7 +850,7 @@ static void *replay_pipeline_worker_main(void *arg) {
     return NULL;
 }
 
-static int replay_pipeline_runtime_open(ds4_v100_replay *rt, char *err, size_t errlen) {
+static int replay_pipeline_runtime_open(ds4_replay *rt, char *err, size_t errlen) {
     if (!rt) return replay_error(err, errlen, "missing async pipeline runtime input");
     if (rt->pipeline) return 0;
 
@@ -901,7 +901,7 @@ static int replay_pipeline_runtime_dispatch(replay_pipeline_runtime *p,
                                             const uint32_t *tokens,
                                             const uint32_t *positions,
                                             uint32_t n_slots,
-                                            ds4_v100_replay_counters *counters,
+                                            ds4_replay_counters *counters,
                                             double *bucket_ms,
                                             char *err,
                                             size_t errlen) {
@@ -980,7 +980,7 @@ typedef struct {
 } replay_mailbox_worker;
 
 struct replay_mailbox_runtime {
-    ds4_v100_replay *rt;
+    ds4_replay *rt;
     pthread_mutex_t mu;
     pthread_cond_t stage_cv[DS4_V100_EXPECTED_GPUS];
     pthread_cond_t host_cv;
@@ -997,7 +997,7 @@ struct replay_mailbox_runtime {
     uint64_t done_generation[DS4_V100_EXPECTED_GPUS][DS4_V100_SCHED_MAX_SLOTS];
     uint32_t done_count[DS4_V100_EXPECTED_GPUS];
     char err[512];
-    ds4_v100_stage_scheduler_report reports[DS4_V100_EXPECTED_GPUS][DS4_V100_SCHED_MAX_SLOTS];
+    ds4_stage_scheduler_report reports[DS4_V100_EXPECTED_GPUS][DS4_V100_SCHED_MAX_SLOTS];
     double stage_decode_ms[DS4_V100_EXPECTED_GPUS];
     double handoff_ms[DS4_V100_EXPECTED_GPUS - 1];
     double worker_wait_ms[DS4_V100_EXPECTED_GPUS];
@@ -1096,11 +1096,11 @@ static void *replay_mailbox_worker_main(void *arg) {
                 break;
             }
 
-            ds4_v100_stage_scheduler_report report;
+            ds4_stage_scheduler_report report;
             memset(&report, 0, sizeof(report));
             double t0 = replay_now_ms();
             if (stage == 0) {
-                if (ds4_v100_stage_scheduler_decode_token_slot_span(
+                if (ds4_stage_scheduler_decode_token_slot_span(
                         m->rt->scheds[0],
                         slot,
                         &m->tokens[slot],
@@ -1124,7 +1124,7 @@ static void *replay_mailbox_worker_main(void *arg) {
                 }
                 m->handoff_ms[stage - 1] += replay_now_ms() - t0;
                 t0 = replay_now_ms();
-                if (ds4_v100_stage_scheduler_decode_hc_slot_span(
+                if (ds4_stage_scheduler_decode_hc_slot_span(
                         m->rt->scheds[stage],
                         slot,
                         &m->tokens[slot],
@@ -1151,7 +1151,7 @@ static void *replay_mailbox_worker_main(void *arg) {
     return NULL;
 }
 
-static int replay_mailbox_runtime_open(ds4_v100_replay *rt, char *err, size_t errlen) {
+static int replay_mailbox_runtime_open(ds4_replay *rt, char *err, size_t errlen) {
     if (!rt) return replay_error(err, errlen, "missing async mailbox runtime input");
     if (rt->mailbox) return 0;
 
@@ -1208,7 +1208,7 @@ static int replay_mailbox_runtime_dispatch(replay_mailbox_runtime *m,
                                            const uint32_t *tokens,
                                            const uint32_t *positions,
                                            uint32_t n_slots,
-                                           ds4_v100_replay_counters *counters,
+                                           ds4_replay_counters *counters,
                                            double *bucket_ms,
                                            char *err,
                                            size_t errlen) {
@@ -1285,7 +1285,7 @@ static int replay_mailbox_runtime_dispatch(replay_mailbox_runtime *m,
 }
 
 typedef struct {
-    ds4_v100_replay *rt;
+    ds4_replay *rt;
     const uint32_t *tokens;
     const uint32_t *positions;
     uint32_t n_slots;
@@ -1295,7 +1295,7 @@ typedef struct {
     bool done[DS4_V100_EXPECTED_GPUS][DS4_V100_SCHED_MAX_SLOTS];
     bool failed;
     char err[512];
-    ds4_v100_stage_scheduler_report reports[DS4_V100_EXPECTED_GPUS][DS4_V100_SCHED_MAX_SLOTS];
+    ds4_stage_scheduler_report reports[DS4_V100_EXPECTED_GPUS][DS4_V100_SCHED_MAX_SLOTS];
     double stage_decode_ms[DS4_V100_EXPECTED_GPUS];
     double handoff_ms[DS4_V100_EXPECTED_GPUS - 1];
     double worker_wait_ms[DS4_V100_EXPECTED_GPUS];

@@ -1,7 +1,7 @@
 int run_true_ds4_attention_typed_kv_history_load(const Options &opt,
                                                  SharedHcControls *hc,
                                                  RankState ranks[kGpus],
-                                                 ds4_v100_tp_runtime *rt,
+                                                 ds4_tp_runtime *rt,
                                                  int layer) {
     if (!opt.true_ds4_attention_typed_kv_history_gate) return 0;
     if (!rt || layer < 0 || layer >= 43) return 1;
@@ -38,12 +38,12 @@ int run_true_ds4_attention_typed_kv_history_load(const Options &opt,
                     : nullptr;
             }
             const int load_rc = opt.decode_cudagraph_gate
-                ? ds4_v100_tp_runtime_kv_rows_load_f32_device_streams(
+                ? ds4_tp_runtime_kv_rows_load_f32_device_streams(
                       rt, layer, 0, (uint32_t)opt.slots, pos,
                       DS4_V100_TP_KV_ROW_ATTN, dst,
                       (uint64_t)kBoundedCompRows * (uint64_t)kHeadDim,
                       streams, err, sizeof(err))
-                : ds4_v100_tp_runtime_kv_rows_load_f32_device(
+                : ds4_tp_runtime_kv_rows_load_f32_device(
                       rt, layer, 0, (uint32_t)opt.slots, pos,
                       DS4_V100_TP_KV_ROW_ATTN, dst,
                       (uint64_t)kBoundedCompRows * (uint64_t)kHeadDim,
@@ -64,7 +64,7 @@ int run_true_ds4_attention_typed_kv_history_load(const Options &opt,
                 for (int rank = 0; rank < kGpus; ++rank) {
                     dst[rank] = ranks[rank].d_attn_comp_rows + row_offset;
                 }
-                if (ds4_v100_tp_runtime_kv_row_load_f32_device(
+                if (ds4_tp_runtime_kv_row_load_f32_device(
                         rt, layer, slot, pos, DS4_V100_TP_KV_ROW_ATTN, dst, err,
                         sizeof(err)) != 0) {
                     std::fprintf(stderr,
@@ -119,12 +119,12 @@ int run_true_ds4_attention_typed_kv_history_load(const Options &opt,
                         : nullptr;
                 }
                 const int load_rc = opt.decode_cudagraph_gate
-                    ? ds4_v100_tp_runtime_kv_rows_load_f32_device_streams(
+                    ? ds4_tp_runtime_kv_rows_load_f32_device_streams(
                           rt, layer, 0, (uint32_t)opt.slots, pos,
                           DS4_V100_TP_KV_ROW_INDEXER, dst,
                           (uint64_t)kBoundedCompRows * (uint64_t)kIndexerHeadDim,
                           streams, err, sizeof(err))
-                    : ds4_v100_tp_runtime_kv_rows_load_f32_device(
+                    : ds4_tp_runtime_kv_rows_load_f32_device(
                           rt, layer, 0, (uint32_t)opt.slots, pos,
                           DS4_V100_TP_KV_ROW_INDEXER, dst,
                           (uint64_t)kBoundedCompRows * (uint64_t)kIndexerHeadDim,
@@ -145,7 +145,7 @@ int run_true_ds4_attention_typed_kv_history_load(const Options &opt,
                     for (int rank = 0; rank < kGpus; ++rank) {
                         dst[rank] = ranks[rank].d_index_comp_rows + row_offset;
                     }
-                    if (ds4_v100_tp_runtime_kv_row_load_f32_device(
+                    if (ds4_tp_runtime_kv_row_load_f32_device(
                             rt, layer, slot, pos, DS4_V100_TP_KV_ROW_INDEXER, dst,
                             err, sizeof(err)) != 0) {
                         std::fprintf(stderr,

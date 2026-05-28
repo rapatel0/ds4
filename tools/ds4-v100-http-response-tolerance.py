@@ -174,7 +174,7 @@ def compare(args: argparse.Namespace) -> dict[str, Any]:
         and sequence_ok
     )
     return {
-        "schema": "ds4_v100_http_response_tolerance.v1",
+        "schema": "ds4_http_response_tolerance.v1",
         "control_dir": str(args.control_dir),
         "candidate_dir": str(args.candidate_dir),
         "control_count": len(control_files),

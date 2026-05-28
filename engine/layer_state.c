@@ -16,7 +16,7 @@ static int state_error(char *err, size_t errlen, const char *fmt, ...) {
     return 1;
 }
 
-const char *ds4_v100_router_kind_name(ds4_v100_router_kind kind) {
+const char *ds4_router_kind_name(ds4_router_kind kind) {
     switch (kind) {
     case DS4_V100_ROUTER_HASH: return "hash";
     case DS4_V100_ROUTER_BIAS: return "bias";
@@ -25,41 +25,41 @@ const char *ds4_v100_router_kind_name(ds4_v100_router_kind kind) {
     }
 }
 
-static int dtype_is(const ds4_v100_tensor_binding *b, const char *dtype) {
+static int dtype_is(const ds4_tensor_binding *b, const char *dtype) {
     return b && b->source_dtype && strcmp(b->source_dtype, dtype) == 0;
 }
 
-static int bind_required(const ds4_v100_context *ctx,
+static int bind_required(const ds4_context *ctx,
                          int layer_id,
                          const char *suffix,
-                         ds4_v100_tensor_binding *out,
+                         ds4_tensor_binding *out,
                          char *err,
                          size_t errlen) {
-    if (ds4_v100_context_require_layer_tensor_binding(ctx, layer_id, suffix, out, err, errlen)) {
+    if (ds4_context_require_layer_tensor_binding(ctx, layer_id, suffix, out, err, errlen)) {
         return 1;
     }
     return 0;
 }
 
-static int bind_optional(const ds4_v100_context *ctx,
+static int bind_optional(const ds4_context *ctx,
                          int layer_id,
                          const char *suffix,
-                         ds4_v100_tensor_binding *out) {
+                         ds4_tensor_binding *out) {
     char err[256];
     memset(out, 0, sizeof(*out));
-    return ds4_v100_context_require_layer_tensor_binding(
+    return ds4_context_require_layer_tensor_binding(
         ctx, layer_id, suffix, out, err, sizeof(err)) == 0;
 }
 
-static int make_f32_matrix(const ds4_v100_tensor_binding *b,
-                           ds4_v100_bound_matrix *out,
+static int make_f32_matrix(const ds4_tensor_binding *b,
+                           ds4_bound_matrix *out,
                            const char *label,
                            char *err,
                            size_t errlen) {
     if (!b || !out || b->n_shape_dims != 2 || !dtype_is(b, "f32")) {
         return state_error(err, errlen, "%s must be a 2D f32 tensor", label);
     }
-    ds4_v100_tensor_binding binding = *b;
+    ds4_tensor_binding binding = *b;
     memset(out, 0, sizeof(*out));
     out->binding = binding;
     out->cols = (uint32_t)binding.shape[0];
@@ -77,15 +77,15 @@ static int make_f32_matrix(const ds4_v100_tensor_binding *b,
     return 0;
 }
 
-static int make_f8_matrix(const ds4_v100_tensor_binding *b,
-                          ds4_v100_bound_matrix *out,
+static int make_f8_matrix(const ds4_tensor_binding *b,
+                          ds4_bound_matrix *out,
                           const char *label,
                           char *err,
                           size_t errlen) {
     if (!b || !out || b->n_shape_dims != 2 || !dtype_is(b, "f8_e4m3_b128")) {
         return state_error(err, errlen, "%s must be a 2D f8_e4m3_b128 tensor", label);
     }
-    ds4_v100_tensor_binding binding = *b;
+    ds4_tensor_binding binding = *b;
     memset(out, 0, sizeof(*out));
     out->binding = binding;
     out->cols = (uint32_t)binding.shape[0];
@@ -103,15 +103,15 @@ static int make_f8_matrix(const ds4_v100_tensor_binding *b,
     return 0;
 }
 
-static int make_bf16_matrix(const ds4_v100_tensor_binding *b,
-                            ds4_v100_bound_matrix *out,
+static int make_bf16_matrix(const ds4_tensor_binding *b,
+                            ds4_bound_matrix *out,
                             const char *label,
                             char *err,
                             size_t errlen) {
     if (!b || !out || b->n_shape_dims != 2 || !dtype_is(b, "bf16")) {
         return state_error(err, errlen, "%s must be a 2D bf16 tensor", label);
     }
-    ds4_v100_tensor_binding binding = *b;
+    ds4_tensor_binding binding = *b;
     memset(out, 0, sizeof(*out));
     out->binding = binding;
     out->cols = (uint32_t)binding.shape[0];
@@ -129,16 +129,16 @@ static int make_bf16_matrix(const ds4_v100_tensor_binding *b,
     return 0;
 }
 
-static int make_mxfp4_expert_matrix(const ds4_v100_tensor_binding *b,
+static int make_mxfp4_expert_matrix(const ds4_tensor_binding *b,
                                     uint32_t expert,
-                                    ds4_v100_bound_matrix *out,
+                                    ds4_bound_matrix *out,
                                     const char *label,
                                     char *err,
                                     size_t errlen) {
     if (!b || !out || b->n_shape_dims != 3 || !dtype_is(b, "mxfp4")) {
         return state_error(err, errlen, "%s must be a 3D mxfp4 expert tensor", label);
     }
-    ds4_v100_tensor_binding binding = *b;
+    ds4_tensor_binding binding = *b;
     if (expert >= binding.shape[2]) {
         return state_error(err, errlen,
                            "%s expert %u outside expert count %" PRIu64,
@@ -161,7 +161,7 @@ static int make_mxfp4_expert_matrix(const ds4_v100_tensor_binding *b,
 }
 
 static ds4_gpu_turbomind_mxfp4_matrix_view tm_gpu_view(
-        const ds4_v100_turbomind_binding *b) {
+        const ds4_turbomind_binding *b) {
     ds4_gpu_turbomind_mxfp4_matrix_view v;
     memset(&v, 0, sizeof(v));
     if (!b) return v;
@@ -183,8 +183,8 @@ static ds4_gpu_turbomind_mxfp4_matrix_view tm_gpu_view(
     return v;
 }
 
-static int make_turbomind_routed_binding(const ds4_v100_turbomind_binding *b,
-                                         ds4_v100_tensor_binding *out,
+static int make_turbomind_routed_binding(const ds4_turbomind_binding *b,
+                                         ds4_tensor_binding *out,
                                          const char *label,
                                          char *err,
                                          size_t errlen) {
@@ -222,8 +222,8 @@ static int make_turbomind_routed_binding(const ds4_v100_turbomind_binding *b,
 }
 
 static int make_turbomind_fused_gate_up_synthetic_binding(
-        const ds4_v100_turbomind_binding *b,
-        ds4_v100_tensor_binding *out,
+        const ds4_turbomind_binding *b,
+        ds4_tensor_binding *out,
         const char *label,
         char *err,
         size_t errlen) {
@@ -237,41 +237,41 @@ static int make_turbomind_fused_gate_up_synthetic_binding(
     return 0;
 }
 
-static int bind_routed_expert_tensors(ds4_v100_layer_state *out,
-                                      const ds4_v100_context *ctx,
+static int bind_routed_expert_tensors(ds4_layer_state *out,
+                                      const ds4_context *ctx,
                                       int layer_id,
                                       char *err,
                                       size_t errlen) {
     char tm_err[256];
     memset(tm_err, 0, sizeof(tm_err));
-    int g = ds4_v100_context_require_layer_turbomind_binding(
+    int g = ds4_context_require_layer_turbomind_binding(
         ctx, layer_id, "ffn_gate_exps.weight", &out->turbomind_gate_binding,
         tm_err, sizeof(tm_err));
-    int u = ds4_v100_context_require_layer_turbomind_binding(
+    int u = ds4_context_require_layer_turbomind_binding(
         ctx, layer_id, "ffn_up_exps.weight", &out->turbomind_up_binding,
         tm_err, sizeof(tm_err));
-    int gu = ds4_v100_context_require_layer_turbomind_binding(
+    int gu = ds4_context_require_layer_turbomind_binding(
         ctx, layer_id, "ffn_gate_up_exps.weight", &out->turbomind_gate_up_binding,
         tm_err, sizeof(tm_err));
-    int d = ds4_v100_context_require_layer_turbomind_binding(
+    int d = ds4_context_require_layer_turbomind_binding(
         ctx, layer_id, "ffn_down_exps.weight", &out->turbomind_down_binding,
         tm_err, sizeof(tm_err));
-    ds4_v100_turbomind_binding tp_gu[2];
-    ds4_v100_turbomind_binding tp_d[2];
+    ds4_turbomind_binding tp_gu[2];
+    ds4_turbomind_binding tp_d[2];
     memset(tp_gu, 0, sizeof(tp_gu));
     memset(tp_d, 0, sizeof(tp_d));
     char tp_err[256];
     memset(tp_err, 0, sizeof(tp_err));
-    const int tp_gu0 = ds4_v100_context_require_layer_turbomind_binding(
+    const int tp_gu0 = ds4_context_require_layer_turbomind_binding(
         ctx, layer_id, "ffn_gate_up_exps.tp0.weight", &tp_gu[0],
         tp_err, sizeof(tp_err));
-    const int tp_gu1 = ds4_v100_context_require_layer_turbomind_binding(
+    const int tp_gu1 = ds4_context_require_layer_turbomind_binding(
         ctx, layer_id, "ffn_gate_up_exps.tp1.weight", &tp_gu[1],
         tp_err, sizeof(tp_err));
-    const int tp_d0 = ds4_v100_context_require_layer_turbomind_binding(
+    const int tp_d0 = ds4_context_require_layer_turbomind_binding(
         ctx, layer_id, "ffn_down_exps.tp0.weight", &tp_d[0],
         tp_err, sizeof(tp_err));
-    const int tp_d1 = ds4_v100_context_require_layer_turbomind_binding(
+    const int tp_d1 = ds4_context_require_layer_turbomind_binding(
         ctx, layer_id, "ffn_down_exps.tp1.weight", &tp_d[1],
         tp_err, sizeof(tp_err));
     const bool has_full_tp2 = !tp_gu0 && !tp_gu1 && !tp_d0 && !tp_d1;
@@ -293,8 +293,8 @@ static int bind_routed_expert_tensors(ds4_v100_layer_state *out,
         }
         out->has_turbomind_routed = true;
         out->has_turbomind_fused_gate_up = has_fused_gate_up;
-        ds4_v100_tensor_binding fused_gate_binding;
-        ds4_v100_tensor_binding fused_up_binding;
+        ds4_tensor_binding fused_gate_binding;
+        ds4_tensor_binding fused_up_binding;
         memset(&fused_gate_binding, 0, sizeof(fused_gate_binding));
         memset(&fused_up_binding, 0, sizeof(fused_up_binding));
         if (has_fused_gate_up) {
@@ -352,8 +352,8 @@ static int bind_routed_expert_tensors(ds4_v100_layer_state *out,
                          &out->routed_down_binding, err, errlen);
 }
 
-static int check_same_owner(const ds4_v100_layer_state *state,
-                            const ds4_v100_tensor_binding *b,
+static int check_same_owner(const ds4_layer_state *state,
+                            const ds4_tensor_binding *b,
                             const char *label,
                             char *err,
                             size_t errlen) {
@@ -367,7 +367,7 @@ static int check_same_owner(const ds4_v100_layer_state *state,
     return 0;
 }
 
-static int validate_router_binding(ds4_v100_layer_state *state,
+static int validate_router_binding(ds4_layer_state *state,
                                    char *err,
                                    size_t errlen) {
     if (state->router.rows != 256 || state->router.cols == 0) {
@@ -401,8 +401,8 @@ static int validate_router_binding(ds4_v100_layer_state *state,
     return state_error(err, errlen, "layer has neither hash nor bias router metadata");
 }
 
-int ds4_v100_layer_state_init(ds4_v100_layer_state *out,
-                              const ds4_v100_context *ctx,
+int ds4_layer_state_init(ds4_layer_state *out,
+                              const ds4_context *ctx,
                               int layer_id,
                               char *err,
                               size_t errlen) {
@@ -410,9 +410,9 @@ int ds4_v100_layer_state_init(ds4_v100_layer_state *out,
     memset(out, 0, sizeof(*out));
     if (!ctx) return state_error(err, errlen, "missing V100 context");
 
-    const ds4_v100_layer_info *li = ds4_v100_context_layer(ctx, layer_id);
+    const ds4_layer_info *li = ds4_context_layer(ctx, layer_id);
     if (!li) return state_error(err, errlen, "invalid layer %d", layer_id);
-    const ds4_v100_stage_info *stage = ds4_v100_context_stage(ctx, li->stage_id);
+    const ds4_stage_info *stage = ds4_context_stage(ctx, li->stage_id);
     if (!stage) return state_error(err, errlen, "missing stage for layer %d", layer_id);
 
     out->layer_id = layer_id;
@@ -470,9 +470,9 @@ int ds4_v100_layer_state_init(ds4_v100_layer_state *out,
     out->indexer_compressor_width = out->compress_ratio == 4u ? 2u * DS4_V100_INDEXER_HEAD_DIM : 0u;
 
     if (out->compress_ratio != 0) {
-        ds4_v100_tensor_binding comp_ape;
-        ds4_v100_tensor_binding comp_kv;
-        ds4_v100_tensor_binding comp_gate;
+        ds4_tensor_binding comp_ape;
+        ds4_tensor_binding comp_kv;
+        ds4_tensor_binding comp_gate;
         if (bind_required(ctx, layer_id, "attn_compress_ape", &comp_ape, err, errlen) ||
             bind_required(ctx, layer_id, "attn_compress_kv.weight", &comp_kv, err, errlen) ||
             bind_required(ctx, layer_id, "attn_compress_gate.weight", &comp_gate, err, errlen) ||
@@ -492,11 +492,11 @@ int ds4_v100_layer_state_init(ds4_v100_layer_state *out,
     }
 
     if (out->compress_ratio == 4u) {
-        ds4_v100_tensor_binding index_q_b;
-        ds4_v100_tensor_binding index_proj;
-        ds4_v100_tensor_binding index_ape;
-        ds4_v100_tensor_binding index_kv;
-        ds4_v100_tensor_binding index_gate;
+        ds4_tensor_binding index_q_b;
+        ds4_tensor_binding index_proj;
+        ds4_tensor_binding index_ape;
+        ds4_tensor_binding index_kv;
+        ds4_tensor_binding index_gate;
         if (bind_required(ctx, layer_id, "indexer.attn_q_b.weight", &index_q_b, err, errlen) ||
             bind_required(ctx, layer_id, "indexer.proj.weight", &index_proj, err, errlen) ||
             bind_required(ctx, layer_id, "indexer.compress_ape", &index_ape, err, errlen) ||
@@ -521,7 +521,7 @@ int ds4_v100_layer_state_init(ds4_v100_layer_state *out,
         }
     }
 
-    const ds4_v100_tensor_binding *owned[] = {
+    const ds4_tensor_binding *owned[] = {
         &out->routed_gate_binding,
         &out->routed_up_binding,
         &out->routed_down_binding,
@@ -691,9 +691,9 @@ int ds4_v100_layer_state_init(ds4_v100_layer_state *out,
     return 0;
 }
 
-int ds4_v100_layer_state_route_matrices(const ds4_v100_layer_state *state,
+int ds4_layer_state_route_matrices(const ds4_layer_state *state,
                                         uint32_t expert,
-                                        ds4_v100_route_matrices *out,
+                                        ds4_route_matrices *out,
                                         char *err,
                                         size_t errlen) {
     if (!state || !out) return state_error(err, errlen, "missing route matrix output");
@@ -720,13 +720,13 @@ int ds4_v100_layer_state_route_matrices(const ds4_v100_layer_state *state,
     return 0;
 }
 
-uint64_t ds4_v100_bound_matrix_arena_offset(const ds4_v100_bound_matrix *matrix) {
+uint64_t ds4_bound_matrix_arena_offset(const ds4_bound_matrix *matrix) {
     if (!matrix) return 0;
     return matrix->binding.shard_offset + matrix->rel;
 }
 
-static int grow_span_for_matrix(const ds4_v100_bound_matrix *matrix, uint64_t *span) {
-    const uint64_t start = ds4_v100_bound_matrix_arena_offset(matrix);
+static int grow_span_for_matrix(const ds4_bound_matrix *matrix, uint64_t *span) {
+    const uint64_t start = ds4_bound_matrix_arena_offset(matrix);
     if (matrix->bytes > UINT64_MAX - start) return 1;
     const uint64_t end = start + matrix->bytes;
     if (end > *span) *span = end;
@@ -746,7 +746,7 @@ static int grow_span_for_turbomind_view(const ds4_gpu_turbomind_mxfp4_matrix_vie
     return 0;
 }
 
-int ds4_v100_layer_state_ffn_arena_span(const ds4_v100_layer_state *state,
+int ds4_layer_state_ffn_arena_span(const ds4_layer_state *state,
                                         const int32_t *selected_experts,
                                         uint32_t n_selected,
                                         uint64_t *out_bytes,
@@ -789,8 +789,8 @@ int ds4_v100_layer_state_ffn_arena_span(const ds4_v100_layer_state *state,
             return state_error(err, errlen, "selected expert %d outside routed expert count",
                                selected_experts[i]);
         }
-        ds4_v100_route_matrices route;
-        if (ds4_v100_layer_state_route_matrices(state,
+        ds4_route_matrices route;
+        if (ds4_layer_state_route_matrices(state,
                                                 (uint32_t)selected_experts[i],
                                                 &route,
                                                 err,
@@ -807,7 +807,7 @@ int ds4_v100_layer_state_ffn_arena_span(const ds4_v100_layer_state *state,
     return 0;
 }
 
-int ds4_v100_layer_state_attention_arena_span(const ds4_v100_layer_state *state,
+int ds4_layer_state_attention_arena_span(const ds4_layer_state *state,
                                               uint64_t *out_bytes,
                                               char *err,
                                               size_t errlen) {
@@ -838,7 +838,7 @@ int ds4_v100_layer_state_attention_arena_span(const ds4_v100_layer_state *state,
     return 0;
 }
 
-int ds4_v100_bound_matrix_source_view(const ds4_v100_bound_matrix *matrix,
+int ds4_bound_matrix_source_view(const ds4_bound_matrix *matrix,
                                       ds4_gpu_source_row_view *out,
                                       char *err,
                                       size_t errlen) {
@@ -847,7 +847,7 @@ int ds4_v100_bound_matrix_source_view(const ds4_v100_bound_matrix *matrix,
         return state_error(err, errlen, "invalid bound matrix dimensions");
     }
     memset(out, 0, sizeof(*out));
-    out->arena_offset = ds4_v100_bound_matrix_arena_offset(matrix);
+    out->arena_offset = ds4_bound_matrix_arena_offset(matrix);
     out->byte_length = matrix->bytes;
     out->rows = matrix->rows;
     out->cols = matrix->cols;
@@ -855,7 +855,7 @@ int ds4_v100_bound_matrix_source_view(const ds4_v100_bound_matrix *matrix,
     return 0;
 }
 
-int ds4_v100_bound_matrix_bf16_view(const ds4_v100_bound_matrix *matrix,
+int ds4_bound_matrix_bf16_view(const ds4_bound_matrix *matrix,
                                     ds4_gpu_bf16_matrix_view *out,
                                     char *err,
                                     size_t errlen) {
@@ -867,7 +867,7 @@ int ds4_v100_bound_matrix_bf16_view(const ds4_v100_bound_matrix *matrix,
         return state_error(err, errlen, "invalid bf16 matrix dimensions");
     }
     memset(out, 0, sizeof(*out));
-    out->arena_offset = ds4_v100_bound_matrix_arena_offset(matrix);
+    out->arena_offset = ds4_bound_matrix_arena_offset(matrix);
     out->byte_length = matrix->bytes;
     out->rows = matrix->rows;
     out->cols = matrix->cols;

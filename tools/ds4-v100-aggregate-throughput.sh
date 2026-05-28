@@ -458,7 +458,7 @@ prompt_tok_s = (stats["prompt_token_total"] / elapsed_s) if elapsed_s > 0 else 0
 continuation_tok_s = (stats["continuation_token_total"] / elapsed_s) if elapsed_s > 0 else 0.0
 
 summary = {
-    "schema": "ds4_v100_aggregate_throughput_case.v1",
+    "schema": "ds4_aggregate_throughput_case.v1",
     "host": host,
     "port": port,
     "mode": mode,
@@ -601,7 +601,7 @@ for p in paths:
     with open(p, "r", encoding="utf-8") as f:
         rows.append(json.load(f))
 summary = {
-    "schema": "ds4_v100_aggregate_throughput.v1",
+    "schema": "ds4_aggregate_throughput.v1",
     "cases": rows,
 }
 with open(out, "w", encoding="utf-8") as f:

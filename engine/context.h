@@ -22,13 +22,13 @@ extern "C" {
 #define DS4_V100_DEFAULT_RESERVE_BYTES (2ull * 1024ull * 1024ull * 1024ull)
 #define DS4_V100_MAX_SHAPE_DIMS 4
 
-typedef struct ds4_v100_context ds4_v100_context;
+typedef struct ds4_context ds4_context;
 
 typedef enum {
     DS4_V100_INIT_PROBE_ONLY = 0,
     DS4_V100_INIT_USE_EXISTING_ARENAS = 1,
     DS4_V100_INIT_FULL_RESIDENT = 2,
-} ds4_v100_init_mode;
+} ds4_init_mode;
 
 typedef enum {
     DS4_V100_SOURCE_UNKNOWN = 0,
@@ -38,7 +38,7 @@ typedef enum {
     DS4_V100_SOURCE_F8_E4M3_B128,
     DS4_V100_SOURCE_MXFP4,
     DS4_V100_SOURCE_FP4,
-} ds4_v100_source_dtype;
+} ds4_source_dtype;
 
 typedef enum {
     DS4_V100_FAMILY_UNKNOWN = 0,
@@ -48,7 +48,7 @@ typedef enum {
     DS4_V100_FAMILY_MXFP4_EXPERT,
     DS4_V100_FAMILY_HC_CONTROL,
     DS4_V100_FAMILY_KV_CACHE,
-} ds4_v100_tensor_family;
+} ds4_tensor_family;
 
 typedef enum {
     DS4_V100_EXEC_F32_CONTROL = 0,
@@ -57,13 +57,13 @@ typedef enum {
     DS4_V100_EXEC_DIAGNOSTIC_ONLY,
     DS4_V100_EXEC_UNSUPPORTED,
     DS4_V100_EXEC_COUNT,
-} ds4_v100_exec_kind;
+} ds4_exec_kind;
 
 typedef enum {
     DS4_V100_LAYER_SWA_ONLY = 0,
     DS4_V100_LAYER_RATIO_4 = 1,
     DS4_V100_LAYER_RATIO_128 = 2,
-} ds4_v100_layer_class;
+} ds4_layer_class;
 
 typedef struct {
     uint64_t raw_swa_bytes;
@@ -71,7 +71,7 @@ typedef struct {
     uint64_t indexer_kv_bytes;
     uint64_t compression_state_bytes;
     uint64_t total_bytes;
-} ds4_v100_kv_budget;
+} ds4_kv_budget;
 
 typedef struct {
     uint64_t raw_swa_offset;
@@ -83,7 +83,7 @@ typedef struct {
     uint64_t compression_state_offset;
     uint64_t compression_state_bytes;
     uint64_t total_bytes;
-} ds4_v100_kv_arena_plan;
+} ds4_kv_arena_plan;
 
 typedef struct {
     uint64_t raw_swa_offset;
@@ -101,15 +101,15 @@ typedef struct {
     uint64_t indexer_state_score_offset;
     uint64_t indexer_state_score_bytes;
     uint64_t total_bytes;
-} ds4_v100_layer_kv_view;
+} ds4_layer_kv_view;
 
 typedef struct {
-    ds4_v100_source_dtype source_dtype;
-    ds4_v100_tensor_family family;
-    ds4_v100_exec_kind exec_kind;
+    ds4_source_dtype source_dtype;
+    ds4_tensor_family family;
+    ds4_exec_kind exec_kind;
     const char *conversion_stub;
     const char *forbidden_claim;
-} ds4_v100_policy;
+} ds4_policy;
 
 typedef struct {
     int visible_id;
@@ -119,7 +119,7 @@ typedef struct {
     char pci_bus_id[32];
     char uuid[64];
     bool peer_access[DS4_V100_EXPECTED_GPUS];
-} ds4_v100_device_fact;
+} ds4_device_fact;
 
 typedef struct {
     int stage_id;
@@ -134,7 +134,7 @@ typedef struct {
     uint64_t relay_f16_bytes;
     uint64_t relay_f32_debug_bytes;
     uint64_t planned_kv_bytes;
-    ds4_v100_kv_arena_plan kv_arena;
+    ds4_kv_arena_plan kv_arena;
     uint64_t kv_raw_swa_bytes;
     uint64_t kv_compressed_attn_bytes;
     uint64_t kv_indexer_bytes;
@@ -143,20 +143,20 @@ typedef struct {
     uint64_t mtp_reserve_bytes;
     uint64_t reserve_bytes;
     uint64_t device_total_bytes;
-} ds4_v100_stage_info;
+} ds4_stage_info;
 
 typedef struct {
     int layer_id;
     int stage_id;
-    ds4_v100_layer_class layer_class;
-    ds4_v100_kv_budget kv_budget;
-    ds4_v100_layer_kv_view kv_view;
+    ds4_layer_class layer_class;
+    ds4_kv_budget kv_budget;
+    ds4_layer_kv_view kv_view;
     uint64_t tensor_count;
     bool has_f32_control;
     bool has_fp8_dense;
     bool has_mxfp4_expert;
     bool has_hc_control;
-} ds4_v100_layer_info;
+} ds4_layer_info;
 
 typedef struct {
     const char *semantic_tensor_id;
@@ -172,10 +172,10 @@ typedef struct {
     uint64_t source_offset;
     uint64_t byte_length;
     uint64_t shard_offset;
-    ds4_v100_policy policy;
+    ds4_policy policy;
     uint32_t n_shape_dims;
     uint64_t shape[DS4_V100_MAX_SHAPE_DIMS];
-} ds4_v100_tensor_binding;
+} ds4_tensor_binding;
 
 typedef struct {
     const char *semantic_tensor_id;
@@ -202,16 +202,16 @@ typedef struct {
     uint64_t source_shard_offset;
     uint64_t source_byte_length;
     int tm_abi_version;
-    ds4_v100_policy policy;
+    ds4_policy policy;
     uint32_t n_shape_dims;
     uint64_t shape[DS4_V100_MAX_SHAPE_DIMS];
-} ds4_v100_turbomind_binding;
+} ds4_turbomind_binding;
 
 typedef struct {
     const char *pack_index_path;
     const char *turbomind_pack_index_path;
     int expected_gpus;
-    ds4_v100_init_mode mode;
+    ds4_init_mode mode;
     bool require_production_topology;
     bool enable_f32_debug_relay;
     uint64_t scratch_bytes_per_gpu;
@@ -222,81 +222,81 @@ typedef struct {
     uint64_t kv_active_slots;
     uint64_t output_head_reserve_bytes;
     uint64_t mtp_reserve_bytes;
-    const ds4_v100_device_fact *device_facts;
+    const ds4_device_fact *device_facts;
     int n_device_facts;
-} ds4_v100_context_options;
+} ds4_context_options;
 
-void ds4_v100_context_options_init(ds4_v100_context_options *opts);
+void ds4_context_options_init(ds4_context_options *opts);
 
-ds4_v100_source_dtype ds4_v100_source_dtype_parse(const char *s);
-const char *ds4_v100_source_dtype_name(ds4_v100_source_dtype dtype);
-ds4_v100_tensor_family ds4_v100_tensor_family_infer(const char *source_dtype,
+ds4_source_dtype ds4_source_dtype_parse(const char *s);
+const char *ds4_source_dtype_name(ds4_source_dtype dtype);
+ds4_tensor_family ds4_tensor_family_infer(const char *source_dtype,
                                                     const char *runtime_layout,
                                                     const char *kernel_family);
-const char *ds4_v100_tensor_family_name(ds4_v100_tensor_family family);
-const char *ds4_v100_exec_kind_name(ds4_v100_exec_kind kind);
-ds4_v100_layer_class ds4_v100_layer_class_for_layer(int layer_id);
-const char *ds4_v100_layer_class_name(ds4_v100_layer_class layer_class);
-ds4_v100_kv_budget ds4_v100_kv_budget_for_layer(int layer_id,
+const char *ds4_tensor_family_name(ds4_tensor_family family);
+const char *ds4_exec_kind_name(ds4_exec_kind kind);
+ds4_layer_class ds4_layer_class_for_layer(int layer_id);
+const char *ds4_layer_class_name(ds4_layer_class layer_class);
+ds4_kv_budget ds4_kv_budget_for_layer(int layer_id,
                                                 uint64_t ctx_tokens,
                                                 uint64_t active_slots);
 
-int ds4_v100_classify_or_die(const char *source_dtype,
+int ds4_classify_or_die(const char *source_dtype,
                              const char *runtime_layout,
                              const char *kernel_family,
-                             ds4_v100_policy *out,
+                             ds4_policy *out,
                              char *err,
                              size_t errlen);
 
-int ds4_v100_stage_for_layer(int layer_id);
-int ds4_v100_context_open(ds4_v100_context **out,
-                          const ds4_v100_context_options *opts,
+int ds4_stage_for_layer(int layer_id);
+int ds4_context_open(ds4_context **out,
+                          const ds4_context_options *opts,
                           char *err,
                           size_t errlen);
-void ds4_v100_context_close(ds4_v100_context *ctx);
+void ds4_context_close(ds4_context *ctx);
 
-int ds4_v100_context_stage_count(const ds4_v100_context *ctx);
-const ds4_v100_stage_info *ds4_v100_context_stage(const ds4_v100_context *ctx,
+int ds4_context_stage_count(const ds4_context *ctx);
+const ds4_stage_info *ds4_context_stage(const ds4_context *ctx,
                                                   int stage_id);
-const ds4_v100_layer_info *ds4_v100_context_layer(const ds4_v100_context *ctx,
+const ds4_layer_info *ds4_context_layer(const ds4_context *ctx,
                                                   int layer_id);
-uint64_t ds4_v100_context_tensor_count(const ds4_v100_context *ctx);
-uint64_t ds4_v100_context_exec_count(const ds4_v100_context *ctx,
-                                     ds4_v100_exec_kind kind);
-bool ds4_v100_context_has_token_embedding(const ds4_v100_context *ctx);
-int ds4_v100_context_lookup_tensor_binding(const ds4_v100_context *ctx,
+uint64_t ds4_context_tensor_count(const ds4_context *ctx);
+uint64_t ds4_context_exec_count(const ds4_context *ctx,
+                                     ds4_exec_kind kind);
+bool ds4_context_has_token_embedding(const ds4_context *ctx);
+int ds4_context_lookup_tensor_binding(const ds4_context *ctx,
                                            const char *semantic_tensor_id,
-                                           ds4_v100_tensor_binding *out,
+                                           ds4_tensor_binding *out,
                                            char *err,
                                            size_t errlen);
-int ds4_v100_context_require_layer_tensor_binding(const ds4_v100_context *ctx,
+int ds4_context_require_layer_tensor_binding(const ds4_context *ctx,
                                                   int layer_id,
                                                   const char *tensor_suffix,
-                                                  ds4_v100_tensor_binding *out,
+                                                  ds4_tensor_binding *out,
                                                   char *err,
                                                   size_t errlen);
-int ds4_v100_context_lookup_turbomind_binding(const ds4_v100_context *ctx,
+int ds4_context_lookup_turbomind_binding(const ds4_context *ctx,
                                               const char *semantic_tensor_id,
-                                              ds4_v100_turbomind_binding *out,
+                                              ds4_turbomind_binding *out,
                                               char *err,
                                               size_t errlen);
-int ds4_v100_context_require_layer_turbomind_binding(const ds4_v100_context *ctx,
+int ds4_context_require_layer_turbomind_binding(const ds4_context *ctx,
                                                      int layer_id,
                                                      const char *tensor_suffix,
-                                                     ds4_v100_turbomind_binding *out,
+                                                     ds4_turbomind_binding *out,
                                                      char *err,
                                                      size_t errlen);
-int ds4_v100_context_output_head_binding(const ds4_v100_context *ctx,
-                                         ds4_v100_tensor_binding *out,
+int ds4_context_output_head_binding(const ds4_context *ctx,
+                                         ds4_tensor_binding *out,
                                          char *err,
                                          size_t errlen);
-int ds4_v100_context_validate_layer_skeleton(const ds4_v100_context *ctx,
+int ds4_context_validate_layer_skeleton(const ds4_context *ctx,
                                              FILE *report,
                                              char *err,
                                              size_t errlen);
-void ds4_v100_context_print_report(const ds4_v100_context *ctx, FILE *fp);
+void ds4_context_print_report(const ds4_context *ctx, FILE *fp);
 
-typedef struct ds4_v100_cuda_context ds4_v100_cuda_context;
+typedef struct ds4_cuda_context ds4_cuda_context;
 
 typedef struct {
     int layer_id;
@@ -304,8 +304,8 @@ typedef struct {
     int gpu;
     void *kv_arena_base;
     uint64_t kv_arena_bytes;
-    ds4_v100_layer_kv_view view;
-} ds4_v100_cuda_layer_kv_view;
+    ds4_layer_kv_view view;
+} ds4_cuda_layer_kv_view;
 
 typedef struct {
     uint32_t slot;
@@ -313,7 +313,7 @@ typedef struct {
     uint32_t comp_row;
     const float *attn_row_f32;
     const float *indexer_row_f32;
-} ds4_v100_cuda_prefill_kv_update;
+} ds4_cuda_prefill_kv_update;
 
 typedef struct {
     uint32_t slot;
@@ -321,51 +321,51 @@ typedef struct {
     uint32_t comp_row;
     const void *attn_row_device_f32;
     const void *indexer_row_device_f32;
-} ds4_v100_cuda_prefill_kv_update_device;
+} ds4_cuda_prefill_kv_update_device;
 
 typedef enum {
     DS4_V100_RELAY_F16 = 0,
     DS4_V100_RELAY_F32_DEBUG = 1,
-} ds4_v100_relay_dtype;
+} ds4_relay_dtype;
 
-int ds4_v100_cuda_collect_device_facts(ds4_v100_device_fact *facts,
+int ds4_cuda_collect_device_facts(ds4_device_fact *facts,
                                        int fact_cap,
                                        int *out_count,
                                        char *err,
                                        size_t errlen);
-int ds4_v100_cuda_context_open(ds4_v100_cuda_context **out,
-                               const ds4_v100_context_options *opts,
+int ds4_cuda_context_open(ds4_cuda_context **out,
+                               const ds4_context_options *opts,
                                char *err,
                                size_t errlen);
-void ds4_v100_cuda_context_close(ds4_v100_cuda_context *ctx);
-int ds4_v100_cuda_context_layer_kv_view(ds4_v100_cuda_context *ctx,
+void ds4_cuda_context_close(ds4_cuda_context *ctx);
+int ds4_cuda_context_layer_kv_view(ds4_cuda_context *ctx,
                                         int layer_id,
-                                        ds4_v100_cuda_layer_kv_view *out,
+                                        ds4_cuda_layer_kv_view *out,
                                         char *err,
                                         size_t errlen);
-int ds4_v100_cuda_context_prefill_kv_update_f16(
-        ds4_v100_cuda_context                    *ctx,
+int ds4_cuda_context_prefill_kv_update_f16(
+        ds4_cuda_context                    *ctx,
         int                                      layer_id,
-        const ds4_v100_cuda_prefill_kv_update   *update,
+        const ds4_cuda_prefill_kv_update   *update,
         char                                    *err,
         size_t                                   errlen);
-int ds4_v100_cuda_context_prefill_kv_update_f16_device(
-        ds4_v100_cuda_context                           *ctx,
+int ds4_cuda_context_prefill_kv_update_f16_device(
+        ds4_cuda_context                           *ctx,
         int                                             layer_id,
-        const ds4_v100_cuda_prefill_kv_update_device   *update,
+        const ds4_cuda_prefill_kv_update_device   *update,
         char                                           *err,
         size_t                                          errlen);
-int ds4_v100_cuda_context_read_kv_arena(ds4_v100_cuda_context *ctx,
+int ds4_cuda_context_read_kv_arena(ds4_cuda_context *ctx,
                                         int stage_id,
                                         uint64_t offset,
                                         void *dst,
                                         uint64_t bytes,
                                         char *err,
                                         size_t errlen);
-int ds4_v100_cuda_context_relay_smoke(ds4_v100_cuda_context *ctx,
+int ds4_cuda_context_relay_smoke(ds4_cuda_context *ctx,
                                       int src_stage,
                                       int dst_stage,
-                                      ds4_v100_relay_dtype dtype,
+                                      ds4_relay_dtype dtype,
                                       uint64_t active_slots,
                                       char *err,
                                       size_t errlen);

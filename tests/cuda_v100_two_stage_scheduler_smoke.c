@@ -142,34 +142,34 @@ int main(int argc, char **argv) {
     if (map_model_file(model_path, &model)) return 1;
     check(ds4_gpu_set_model_fd(model.fd), "model fd");
 
-    ds4_v100_stage_scheduler_options opts0;
-    ds4_v100_stage_scheduler_options_init(&opts0);
+    ds4_stage_scheduler_options opts0;
+    ds4_stage_scheduler_options_init(&opts0);
     opts0.pack_index_path = index;
     opts0.model_map = model.ptr;
     opts0.model_size = model.size;
     opts0.stage_id = 0;
 
-    ds4_v100_stage_scheduler_options opts1 = opts0;
+    ds4_stage_scheduler_options opts1 = opts0;
     opts1.stage_id = 1;
 
     char err[512] = {0};
-    ds4_v100_stage_scheduler *stage0 = NULL;
-    ds4_v100_stage_scheduler *stage1 = NULL;
-    if (ds4_v100_stage_scheduler_open(&stage0, &opts0, err, sizeof(err)) ||
-        ds4_v100_stage_scheduler_open(&stage1, &opts1, err, sizeof(err))) {
+    ds4_stage_scheduler *stage0 = NULL;
+    ds4_stage_scheduler *stage1 = NULL;
+    if (ds4_stage_scheduler_open(&stage0, &opts0, err, sizeof(err)) ||
+        ds4_stage_scheduler_open(&stage1, &opts1, err, sizeof(err))) {
         fprintf(stderr, "cuda_v100_two_stage_scheduler_smoke: %s\n", err);
-        ds4_v100_stage_scheduler_close(stage1);
-        ds4_v100_stage_scheduler_close(stage0);
+        ds4_stage_scheduler_close(stage1);
+        ds4_stage_scheduler_close(stage0);
         unmap_model_file(&model);
         return 1;
     }
 
-    ds4_v100_stage_scheduler_report report0;
-    ds4_v100_stage_scheduler_report report1;
+    ds4_stage_scheduler_report report0;
+    ds4_stage_scheduler_report report1;
     memset(&report0, 0, sizeof(report0));
     memset(&report1, 0, sizeof(report1));
     err[0] = '\0';
-    check(ds4_v100_stage_scheduler_decode_token(stage0,
+    check(ds4_stage_scheduler_decode_token(stage0,
                                                 (uint32_t)token,
                                                 (uint32_t)position,
                                                 &report0,
@@ -177,10 +177,10 @@ int main(int argc, char **argv) {
                                                 sizeof(err)) == 0,
           err[0] ? err : "stage 0 decode");
     err[0] = '\0';
-    check(ds4_v100_stage_scheduler_handoff(stage1, stage0, err, sizeof(err)) == 0,
+    check(ds4_stage_scheduler_handoff(stage1, stage0, err, sizeof(err)) == 0,
           err[0] ? err : "stage 0 to stage 1 handoff");
     err[0] = '\0';
-    check(ds4_v100_stage_scheduler_decode_hc(stage1,
+    check(ds4_stage_scheduler_decode_hc(stage1,
                                              (uint32_t)token,
                                              (uint32_t)position,
                                              &report1,
@@ -192,7 +192,7 @@ int main(int argc, char **argv) {
     float *hc = (float *)calloc((size_t)hc_values, sizeof(float));
     check(hc != NULL, "host HC allocation");
     if (hc) {
-        check(ds4_v100_stage_scheduler_read_hc(stage1,
+        check(ds4_stage_scheduler_read_hc(stage1,
                                                hc,
                                                hc_values * sizeof(float)) != 0,
               "stage 1 HC read");
@@ -217,8 +217,8 @@ int main(int argc, char **argv) {
            failures ? "FAIL" : "ok");
 
     free(hc);
-    ds4_v100_stage_scheduler_close(stage1);
-    ds4_v100_stage_scheduler_close(stage0);
+    ds4_stage_scheduler_close(stage1);
+    ds4_stage_scheduler_close(stage0);
     unmap_model_file(&model);
     return failures ? 1 : 0;
 }

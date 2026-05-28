@@ -161,7 +161,7 @@ def main():
     with open(json_path, "w", encoding="utf-8") as out:
         json.dump(
             {
-                "schema": "ds4_v100_tp_ep_active_slot_matrix.v1",
+                "schema": "ds4_tp_ep_active_slot_matrix.v1",
                 "ctx": args.ctx,
                 "slots": args.slots,
                 "tokens": args.tokens,

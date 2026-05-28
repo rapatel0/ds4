@@ -87,10 +87,10 @@ static void unmap_model_file(model_map *m) {
     m->fd = -1;
 }
 
-static void close_scheds(ds4_v100_stage_scheduler **scheds, int n) {
+static void close_scheds(ds4_stage_scheduler **scheds, int n) {
     if (!scheds) return;
     for (int i = n - 1; i >= 0; i--) {
-        ds4_v100_stage_scheduler_close(scheds[i]);
+        ds4_stage_scheduler_close(scheds[i]);
         scheds[i] = NULL;
     }
 }
@@ -104,13 +104,13 @@ static double max_abs_diff(const float *a, const float *b, uint64_t n) {
     return out;
 }
 
-static int open_two_stages(ds4_v100_stage_scheduler **scheds,
+static int open_two_stages(ds4_stage_scheduler **scheds,
                            const char *index,
                            const model_map *model,
                            char *err,
                            size_t errlen) {
-    ds4_v100_stage_scheduler_options opts;
-    ds4_v100_stage_scheduler_options_init(&opts);
+    ds4_stage_scheduler_options opts;
+    ds4_stage_scheduler_options_init(&opts);
     opts.pack_index_path = index;
     opts.model_map = model->ptr;
     opts.model_size = model->size;
@@ -119,7 +119,7 @@ static int open_two_stages(ds4_v100_stage_scheduler **scheds,
     opts.index_comp_cap = 64;
     for (int i = 0; i < 2; i++) {
         opts.stage_id = i;
-        if (ds4_v100_stage_scheduler_open(&scheds[i], &opts, err, errlen)) {
+        if (ds4_stage_scheduler_open(&scheds[i], &opts, err, errlen)) {
             return 1;
         }
     }
@@ -174,8 +174,8 @@ int main(int argc, char **argv) {
     if (map_model_file(model_path, &model)) return 1;
     check(ds4_gpu_set_model_fd(model.fd), "model fd");
 
-    ds4_v100_stage_scheduler *serial[2] = {0};
-    ds4_v100_stage_scheduler *wave[2] = {0};
+    ds4_stage_scheduler *serial[2] = {0};
+    ds4_stage_scheduler *wave[2] = {0};
     char err[512] = {0};
 
     const uint64_t hc_values = (uint64_t)DS4_V100_HC_ROWS * DS4_V100_HC_COLS;
@@ -200,10 +200,10 @@ int main(int argc, char **argv) {
 
     const uint32_t tokens[2] = { token0, token1 };
     const uint32_t positions[2] = { position0, position1 };
-    ds4_v100_stage_scheduler_report reports[2];
+    ds4_stage_scheduler_report reports[2];
     memset(reports, 0, sizeof(reports));
     err[0] = '\0';
-    check(ds4_v100_stage_scheduler_decode_token_batch(serial[0],
+    check(ds4_stage_scheduler_decode_token_batch(serial[0],
                                                       tokens,
                                                       positions,
                                                       2,
@@ -213,14 +213,14 @@ int main(int argc, char **argv) {
           err[0] ? err : "serial stage0 decode");
     check(ds4_gpu_synchronize(), "serial stage0 synchronize");
     err[0] = '\0';
-    check(ds4_v100_stage_scheduler_handoff_batch(serial[1],
+    check(ds4_stage_scheduler_handoff_batch(serial[1],
                                                  serial[0],
                                                  2,
                                                  err,
                                                  sizeof(err)) == 0,
           err[0] ? err : "serial handoff");
     err[0] = '\0';
-    check(ds4_v100_stage_scheduler_decode_hc_batch(serial[1],
+    check(ds4_stage_scheduler_decode_hc_batch(serial[1],
                                                    tokens,
                                                    positions,
                                                    2,
@@ -229,9 +229,9 @@ int main(int argc, char **argv) {
                                                    sizeof(err)) == 0,
           err[0] ? err : "serial stage1 decode");
     check(ds4_gpu_synchronize(), "serial stage1 synchronize");
-    check(ds4_v100_stage_scheduler_read_hc_slot(serial[1], 0, serial0, hc_bytes),
+    check(ds4_stage_scheduler_read_hc_slot(serial[1], 0, serial0, hc_bytes),
           "serial slot0 read");
-    check(ds4_v100_stage_scheduler_read_hc_slot(serial[1], 1, serial1, hc_bytes),
+    check(ds4_stage_scheduler_read_hc_slot(serial[1], 1, serial1, hc_bytes),
           "serial slot1 read");
     close_scheds(serial, 2);
 
@@ -249,7 +249,7 @@ int main(int argc, char **argv) {
     const uint32_t pos1_arr[1] = { position1 };
 
     err[0] = '\0';
-    check(ds4_v100_stage_scheduler_decode_token_slot_span(wave[0],
+    check(ds4_stage_scheduler_decode_token_slot_span(wave[0],
                                                           0,
                                                           token0_arr,
                                                           pos0_arr,
@@ -260,7 +260,7 @@ int main(int argc, char **argv) {
           err[0] ? err : "wave slot0 stage0 decode");
     check(ds4_gpu_synchronize(), "wave slot0 stage0 synchronize");
     err[0] = '\0';
-    check(ds4_v100_stage_scheduler_handoff_slot_span(wave[1],
+    check(ds4_stage_scheduler_handoff_slot_span(wave[1],
                                                      wave[0],
                                                      0,
                                                      1,
@@ -269,7 +269,7 @@ int main(int argc, char **argv) {
           err[0] ? err : "wave slot0 handoff");
 
     err[0] = '\0';
-    check(ds4_v100_stage_scheduler_decode_hc_slot_span(wave[1],
+    check(ds4_stage_scheduler_decode_hc_slot_span(wave[1],
                                                        0,
                                                        token0_arr,
                                                        pos0_arr,
@@ -281,7 +281,7 @@ int main(int argc, char **argv) {
     check(ds4_gpu_synchronize(), "wave slot0 stage1 synchronize");
 
     err[0] = '\0';
-    int rc = ds4_v100_stage_scheduler_decode_token_slot_span(wave[0],
+    int rc = ds4_stage_scheduler_decode_token_slot_span(wave[0],
                                                              1,
                                                              token1_arr,
                                                              pos1_arr,
@@ -293,7 +293,7 @@ int main(int argc, char **argv) {
     check(ds4_gpu_synchronize(), "wave slot1 stage0 synchronize");
 
     err[0] = '\0';
-    check(ds4_v100_stage_scheduler_handoff_slot_span(wave[1],
+    check(ds4_stage_scheduler_handoff_slot_span(wave[1],
                                                      wave[0],
                                                      1,
                                                      1,
@@ -301,7 +301,7 @@ int main(int argc, char **argv) {
                                                      sizeof(err)) == 0,
           err[0] ? err : "wave slot1 handoff");
     err[0] = '\0';
-    rc = ds4_v100_stage_scheduler_decode_hc_slot_span(wave[1],
+    rc = ds4_stage_scheduler_decode_hc_slot_span(wave[1],
                                                       1,
                                                       token1_arr,
                                                       pos1_arr,
@@ -311,9 +311,9 @@ int main(int argc, char **argv) {
                                                       sizeof(err));
     check(rc == 0, err[0] ? err : "wave slot1 stage1 decode");
     check(ds4_gpu_synchronize(), "wave slot1 stage1 synchronize");
-    check(ds4_v100_stage_scheduler_read_hc_slot(wave[1], 0, wave0, hc_bytes),
+    check(ds4_stage_scheduler_read_hc_slot(wave[1], 0, wave0, hc_bytes),
           "wave slot0 read");
-    check(ds4_v100_stage_scheduler_read_hc_slot(wave[1], 1, wave1, hc_bytes),
+    check(ds4_stage_scheduler_read_hc_slot(wave[1], 1, wave1, hc_bytes),
           "wave slot1 read");
 
     const double max0 = max_abs_diff(serial0, wave0, hc_values);

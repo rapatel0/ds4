@@ -343,7 +343,7 @@ def main() -> int:
         decision = "true-attention-post-attention-serving-blocked"
 
     result = {
-        "schema": "ds4_v100_tp_ep_true_attn_http_ab.v1",
+        "schema": "ds4_tp_ep_true_attn_http_ab.v1",
         "shape": {
             "ctx": args.ctx,
             "slots": args.slots,

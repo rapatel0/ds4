@@ -575,7 +575,7 @@ static void print_planner_json(const options *opt) {
     compute_plan_worst(opt, opt->ctx, opt->slots, &worst, &worst_gpu, &fits);
 
     printf("{");
-    printf("\"schema\":\"ds4_v100_planner_envelope.v1\",");
+    printf("\"schema\":\"ds4_planner_envelope.v1\",");
     printf("\"architecture\":\"docs/architecture/DS4-V100-LAYOUT.md\",");
     printf("\"source_stance\":\"dense_fp8_routed_mxfp4_bf16_embedding_output_f16_kv_first\",");
     printf("\"vram_bytes_per_gpu\":%" PRIu64 ",", opt->device_total_bytes);

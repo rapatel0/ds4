@@ -305,7 +305,7 @@ static void print_json_string(const char *s) {
 }
 
 static void print_json(const options *opt, const estimate *est, size_t n) {
-    printf("{\"schema\":\"ds4_v100_tp_ep_estimate.v1\",");
+    printf("{\"schema\":\"ds4_tp_ep_estimate.v1\",");
     printf("\"ctx\":%" PRIu64 ",\"slots\":%u,\"active_microbatch\":%u,"
            "\"nvlink_gbps\":%.3f,\"collectives_per_layer\":%u,",
            opt->ctx,

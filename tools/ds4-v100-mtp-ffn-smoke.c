@@ -646,23 +646,23 @@ static double compare_outputs(const float *got,
     return max_abs;
 }
 
-static const unsigned char *tensor_bytes(const ds4_v100_mtp_sidecar *sidecar,
+static const unsigned char *tensor_bytes(const ds4_mtp_sidecar *sidecar,
                                          const char *name,
                                          const ds4_mtp_sidecar_tensor_info **info_out) {
     const ds4_mtp_sidecar_tensor_info *t =
-        ds4_v100_mtp_sidecar_tensor(sidecar, name);
+        ds4_mtp_sidecar_tensor(sidecar, name);
     if (info_out) *info_out = t;
     if (!t) return NULL;
-    return (const unsigned char *)ds4_v100_mtp_sidecar_map(sidecar) + t->source_offset;
+    return (const unsigned char *)ds4_mtp_sidecar_map(sidecar) + t->source_offset;
 }
 
-static int run_ffn(ds4_v100_mtp_sidecar *sidecar,
+static int run_ffn(ds4_mtp_sidecar *sidecar,
                    double max_abs_tol,
                    double route_tol,
                    FILE *report) {
     char err[512] = {0};
-    const unsigned char *map = (const unsigned char *)ds4_v100_mtp_sidecar_map(sidecar);
-    ds4_gpu_arena *arena = ds4_v100_mtp_sidecar_arena(sidecar);
+    const unsigned char *map = (const unsigned char *)ds4_mtp_sidecar_map(sidecar);
+    ds4_gpu_arena *arena = ds4_mtp_sidecar_arena(sidecar);
 
     ds4_gpu_source_row_view hc_fn_view;
     ds4_gpu_source_row_view hc_scale_view;
@@ -677,62 +677,62 @@ static int run_ffn(ds4_v100_mtp_sidecar *sidecar,
     ds4_gpu_q4_k_expert_view q4_up_view;
     ds4_gpu_q4_k_expert_view q4_down_view;
 
-    if (ds4_v100_mtp_sidecar_f32_matrix_view(sidecar,
+    if (ds4_mtp_sidecar_f32_matrix_view(sidecar,
                                              "mtp.0.hc_ffn_fn.weight",
                                              &hc_fn_view,
                                              err,
                                              sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_f32_vector_view(sidecar,
+        ds4_mtp_sidecar_f32_vector_view(sidecar,
                                              "mtp.0.hc_ffn_scale.weight",
                                              &hc_scale_view,
                                              err,
                                              sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_f32_vector_view(sidecar,
+        ds4_mtp_sidecar_f32_vector_view(sidecar,
                                              "mtp.0.hc_ffn_base.weight",
                                              &hc_base_view,
                                              err,
                                              sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_f32_vector_view(sidecar,
+        ds4_mtp_sidecar_f32_vector_view(sidecar,
                                              "mtp.0.ffn_norm.weight",
                                              &ffn_norm_view,
                                              err,
                                              sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_f32_matrix_view(sidecar,
+        ds4_mtp_sidecar_f32_matrix_view(sidecar,
                                              "mtp.0.ffn_gate_inp.weight",
                                              &router_view,
                                              err,
                                              sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_f32_vector_view(sidecar,
+        ds4_mtp_sidecar_f32_vector_view(sidecar,
                                              "mtp.0.exp_probs_b.bias",
                                              &bias_view,
                                              err,
                                              sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_q8_0_view(sidecar,
+        ds4_mtp_sidecar_q8_0_view(sidecar,
                                        "mtp.0.ffn_gate_shexp.weight",
                                        &shared_gate_view,
                                        err,
                                        sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_q8_0_view(sidecar,
+        ds4_mtp_sidecar_q8_0_view(sidecar,
                                        "mtp.0.ffn_up_shexp.weight",
                                        &shared_up_view,
                                        err,
                                        sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_q8_0_view(sidecar,
+        ds4_mtp_sidecar_q8_0_view(sidecar,
                                        "mtp.0.ffn_down_shexp.weight",
                                        &shared_down_view,
                                        err,
                                        sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_q4_k_expert_view(sidecar,
+        ds4_mtp_sidecar_q4_k_expert_view(sidecar,
                                                "mtp.0.ffn_gate_exps.weight",
                                                &q4_gate_view,
                                                err,
                                                sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_q4_k_expert_view(sidecar,
+        ds4_mtp_sidecar_q4_k_expert_view(sidecar,
                                                "mtp.0.ffn_up_exps.weight",
                                                &q4_up_view,
                                                err,
                                                sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_q4_k_expert_view(sidecar,
+        ds4_mtp_sidecar_q4_k_expert_view(sidecar,
                                                "mtp.0.ffn_down_exps.weight",
                                                &q4_down_view,
                                                err,
@@ -1246,7 +1246,7 @@ int main(int argc, char **argv) {
 
     int rc = 1;
     char err[512] = {0};
-    ds4_v100_mtp_sidecar *sidecar = NULL;
+    ds4_mtp_sidecar *sidecar = NULL;
     int device_count = ds4_gpu_device_count();
     fprintf(report, "visible_devices\t%d\n", device_count);
     fprintf(report, "target_gpu\t%d\n", opt.gpu);
@@ -1278,12 +1278,12 @@ int main(int argc, char **argv) {
         goto done;
     }
 
-    ds4_v100_mtp_sidecar_options sidecar_opts;
-    ds4_v100_mtp_sidecar_options_init(&sidecar_opts);
+    ds4_mtp_sidecar_options sidecar_opts;
+    ds4_mtp_sidecar_options_init(&sidecar_opts);
     sidecar_opts.mtp_path = opt.mtp_model;
     sidecar_opts.gpu = opt.gpu;
     sidecar_opts.require_device_arena = true;
-    if (ds4_v100_mtp_sidecar_open(&sidecar, &sidecar_opts, report, err, sizeof(err)) != 0) {
+    if (ds4_mtp_sidecar_open(&sidecar, &sidecar_opts, report, err, sizeof(err)) != 0) {
         fprintf(stderr,
                 "ds4-v100-mtp-ffn-smoke: %s\n",
                 err[0] ? err : "MTP sidecar open failed");
@@ -1292,7 +1292,7 @@ int main(int argc, char **argv) {
 
     uint64_t reserve_bytes = (uint64_t)opt.reserve_mib * 1024ull * 1024ull;
     uint64_t free_after =
-        ds4_gpu_arena_free_after_upload_bytes(ds4_v100_mtp_sidecar_arena(sidecar));
+        ds4_gpu_arena_free_after_upload_bytes(ds4_mtp_sidecar_arena(sidecar));
     fprintf(report, "reserve_bytes\t%" PRIu64 "\n", reserve_bytes);
     if (free_after < reserve_bytes) {
         fprintf(stderr,
@@ -1311,7 +1311,7 @@ int main(int argc, char **argv) {
     rc = 0;
 
 done:
-    ds4_v100_mtp_sidecar_close(sidecar);
+    ds4_mtp_sidecar_close(sidecar);
     if (report && report != stdout) fclose(report);
     return rc;
 }

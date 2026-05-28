@@ -335,7 +335,7 @@ elif status_other and not first_hc:
     decision = "failed_without_hc_nonfinite"
 
 summary = {
-    "schema": "ds4_v100_256k_finite_gate.v1",
+    "schema": "ds4_256k_finite_gate.v1",
     "ctx": int(ctx),
     "slots": int(slots),
     "active_microbatch": int(slots),

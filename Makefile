@@ -409,9 +409,9 @@ tools/ds4-v100-mtp-ffn-smoke: tools/ds4-v100-mtp-ffn-smoke.o $(V100_MTP_OBJS) $(
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tools/ds4-v100-mtp-attn-smoke: tools/ds4-v100-mtp-attn-smoke.o $(V100_MTP_OBJS) $(CPU_CORE_OBJS) ds4_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
-tools/ds4-v100-mtp-logits-smoke: tools/ds4-v100-mtp-logits-smoke.o $(V100_MTP_OBJS) engine/context.o $(CPU_CORE_OBJS) ds4_cuda.o
+tools/ds4-v100-mtp-logits-smoke: tools/ds4-v100-mtp-logits-smoke.o $(V100_MTP_OBJS) engine/context.o $(CPU_CORE_OBJS) $(TURBOMIND_PACK_OBJS) ds4_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
-tools/ds4-v100-mtp-forward-smoke: tools/ds4-v100-mtp-forward-smoke.o $(V100_MTP_OBJS) engine/context.o $(CPU_CORE_OBJS) ds4_cuda.o
+tools/ds4-v100-mtp-forward-smoke: tools/ds4-v100-mtp-forward-smoke.o $(V100_MTP_OBJS) engine/context.o $(CPU_CORE_OBJS) $(TURBOMIND_PACK_OBJS) ds4_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tools/ds4-v100-mtp-verify-smoke: tools/ds4-v100-mtp-verify-smoke.o tools/ds4-v100-mtp-forward-common.o $(V100_MTP_OBJS) ds4_cpu.o ds4_cuda.o $(V100_SCHEDULER_OBJS)
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)

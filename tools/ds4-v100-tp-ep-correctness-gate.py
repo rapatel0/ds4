@@ -321,7 +321,7 @@ def write_summary(args: argparse.Namespace, checks: list[dict[str, Any]],
                   parity_json: dict[str, Any] | None = None) -> bool:
     passed = all(bool(item["ok"]) for item in checks)
     summary = {
-        "schema": "ds4_v100_tp_ep_correctness_gate.v1",
+        "schema": "ds4_tp_ep_correctness_gate.v1",
         "passed": passed,
         "mode": args.mode,
         "artifact_dir": str(args.artifact_dir),

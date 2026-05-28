@@ -17,7 +17,7 @@ static void usage(const char *argv0) {
                  argv0);
 }
 
-static bool parse_kv(const char *s, ds4_v100_tp_kv_dtype *out) {
+static bool parse_kv(const char *s, ds4_tp_kv_dtype *out) {
     if (std::strcmp(s, "f16") == 0) *out = DS4_V100_TP_KV_F16;
     else if (std::strcmp(s, "f8") == 0 || std::strcmp(s, "f8_e4m3_b128") == 0)
         *out = DS4_V100_TP_KV_F8_E4M3_B128;
@@ -30,12 +30,12 @@ static bool parse_kv(const char *s, ds4_v100_tp_kv_dtype *out) {
 }
 
 int main(int argc, char **argv) {
-    ds4_v100_tp_runtime_config cfg;
-    ds4_v100_tp_runtime_default_config(&cfg);
+    ds4_tp_runtime_config cfg;
+    ds4_tp_runtime_default_config(&cfg);
     bool dense_kv_slice = false;
     bool typed_kv_row = false;
     bool device_kv_row = false;
-    ds4_v100_tp_kv_row_kind row_kind = DS4_V100_TP_KV_ROW_ATTN;
+    ds4_tp_kv_row_kind row_kind = DS4_V100_TP_KV_ROW_ATTN;
     int layer = 2;
     uint32_t slot = 0;
     unsigned long long position = 0;
@@ -110,18 +110,18 @@ int main(int argc, char **argv) {
     }
 
     char err[512] = {0};
-    ds4_v100_tp_runtime *rt = nullptr;
-    if (ds4_v100_tp_runtime_open(&rt, &cfg, err, sizeof(err)) != 0) {
+    ds4_tp_runtime *rt = nullptr;
+    if (ds4_tp_runtime_open(&rt, &cfg, err, sizeof(err)) != 0) {
         std::fprintf(stderr, "tp_runtime_open_failed\t%s\n", err);
         return 1;
     }
 
     if (dense_kv_slice) {
-        ds4_v100_tp_dense_kv_result result;
-        if (ds4_v100_tp_runtime_dense_kv_slice(rt, layer, slot, position, indexer,
+        ds4_tp_dense_kv_result result;
+        if (ds4_tp_runtime_dense_kv_slice(rt, layer, slot, position, indexer,
                                                &result, err, sizeof(err)) != 0) {
             std::fprintf(stderr, "tp_runtime_dense_kv_slice_failed\t%s\n", err);
-            ds4_v100_tp_runtime_close(rt);
+            ds4_tp_runtime_close(rt);
             return 1;
         }
         std::printf("tp_dense_kv_slice\tctx=%llu\tslots=%u\thidden=%u\t"
@@ -142,17 +142,17 @@ int main(int argc, char **argv) {
                         (unsigned long long)result.indexer_offset[gpu],
                         (unsigned long long)result.indexer_row_bytes[gpu]);
         }
-        ds4_v100_tp_runtime_close(rt);
+        ds4_tp_runtime_close(rt);
         return result.max_abs <= 0.0 ? 0 : 1;
     }
 
     if (typed_kv_row) {
-        ds4_v100_tp_kv_row_roundtrip_result result;
-        if (ds4_v100_tp_runtime_kv_row_roundtrip_f32(rt, layer, slot, position,
+        ds4_tp_kv_row_roundtrip_result result;
+        if (ds4_tp_runtime_kv_row_roundtrip_f32(rt, layer, slot, position,
                                                      row_kind, &result, err,
                                                      sizeof(err)) != 0) {
             std::fprintf(stderr, "tp_runtime_typed_kv_row_failed\t%s\n", err);
-            ds4_v100_tp_runtime_close(rt);
+            ds4_tp_runtime_close(rt);
             return 1;
         }
         const char *kind_name =
@@ -184,16 +184,16 @@ int main(int argc, char **argv) {
                         (unsigned long long)result.view.offset[gpu],
                         (unsigned long long)result.view.row_bytes[gpu]);
         }
-        ds4_v100_tp_runtime_close(rt);
+        ds4_tp_runtime_close(rt);
         return result.bad_values == 0 && result.max_abs == 0.0 ? 0 : 1;
     }
 
     if (device_kv_row) {
-        ds4_v100_tp_kv_device_roundtrip_result result;
-        if (ds4_v100_tp_runtime_kv_row_device_roundtrip_f32(
+        ds4_tp_kv_device_roundtrip_result result;
+        if (ds4_tp_runtime_kv_row_device_roundtrip_f32(
                 rt, layer, slot, position, row_kind, &result, err, sizeof(err)) != 0) {
             std::fprintf(stderr, "tp_runtime_device_kv_row_failed\t%s\n", err);
-            ds4_v100_tp_runtime_close(rt);
+            ds4_tp_runtime_close(rt);
             return 1;
         }
         const char *kind_name =
@@ -221,25 +221,25 @@ int main(int argc, char **argv) {
                         (unsigned long long)result.view.offset[gpu],
                         (unsigned long long)result.view.row_bytes[gpu]);
         }
-        ds4_v100_tp_runtime_close(rt);
+        ds4_tp_runtime_close(rt);
         return result.bad_values == 0 && result.max_abs == 0.0 ? 0 : 1;
     }
 
     double max_abs = 0.0;
-    if (ds4_v100_tp_runtime_fixture(rt, &max_abs, err, sizeof(err)) != 0) {
+    if (ds4_tp_runtime_fixture(rt, &max_abs, err, sizeof(err)) != 0) {
         std::fprintf(stderr, "tp_runtime_fixture_failed\t%s\n", err);
-        ds4_v100_tp_runtime_close(rt);
+        ds4_tp_runtime_close(rt);
         return 1;
     }
 
-    ds4_v100_tp_runtime_report report;
-    ds4_v100_tp_runtime_get_report(rt, &report);
+    ds4_tp_runtime_report report;
+    ds4_tp_runtime_get_report(rt, &report);
     std::printf("tp_runtime_smoke\tctx=%llu\tslots=%u\thidden=%u\t"
                 "scratch_bytes=%llu\tfixture_max_abs=%.9f\n",
                 (unsigned long long)cfg.ctx, cfg.slots, cfg.hidden,
                 (unsigned long long)cfg.scratch_bytes, max_abs);
     for (int gpu = 0; gpu < DS4_V100_TP_MAX_GPUS; ++gpu) {
-        const ds4_v100_tp_gpu_report *g = &report.gpu[gpu];
+        const ds4_tp_gpu_report *g = &report.gpu[gpu];
         std::printf("gpu\t%d\thidden_bytes\t%llu\tkv_bytes\t%llu\t"
                     "comp_state_bytes\t%llu\tscratch_bytes\t%llu\ttotal_bytes\t%llu\n",
                     gpu,
@@ -249,6 +249,6 @@ int main(int argc, char **argv) {
                     (unsigned long long)g->scratch_bytes,
                     (unsigned long long)g->total_bytes);
     }
-    ds4_v100_tp_runtime_close(rt);
+    ds4_tp_runtime_close(rt);
     return max_abs <= 1.0e-5 ? 0 : 1;
 }

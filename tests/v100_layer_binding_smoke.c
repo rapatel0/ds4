@@ -30,7 +30,7 @@ static int parse_int(const char *s, const char *name) {
     return (int)v;
 }
 
-static void expect_shape(const ds4_v100_tensor_binding *b,
+static void expect_shape(const ds4_tensor_binding *b,
                          uint32_t n,
                          uint64_t a,
                          uint64_t c,
@@ -42,9 +42,9 @@ static void expect_shape(const ds4_v100_tensor_binding *b,
     if (n > 2) check(b->shape[2] == d, label);
 }
 
-static void expect_binding(const ds4_v100_tensor_binding *b,
+static void expect_binding(const ds4_tensor_binding *b,
                            const char *dtype,
-                           ds4_v100_exec_kind exec_kind,
+                           ds4_exec_kind exec_kind,
                            int layer,
                            int gpu,
                            const char *label) {
@@ -79,48 +79,48 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    ds4_v100_context_options opts;
-    ds4_v100_context_options_init(&opts);
+    ds4_context_options opts;
+    ds4_context_options_init(&opts);
     opts.pack_index_path = index;
     opts.kv_ctx_tokens = 1048576;
     opts.kv_active_slots = 1;
 
     char err[512] = {0};
-    ds4_v100_context *ctx = NULL;
-    check(ds4_v100_context_open(&ctx, &opts, err, sizeof(err)) == 0, "context open");
+    ds4_context *ctx = NULL;
+    check(ds4_context_open(&ctx, &opts, err, sizeof(err)) == 0, "context open");
     if (!ctx) {
         fprintf(stderr, "v100_layer_binding_smoke: %s\n", err);
         return 1;
     }
 
-    const int gpu = ds4_v100_stage_for_layer(layer);
-    ds4_v100_tensor_binding gate;
-    ds4_v100_tensor_binding up;
-    ds4_v100_tensor_binding down;
-    ds4_v100_tensor_binding shared_gate;
-    ds4_v100_tensor_binding shared_up;
-    ds4_v100_tensor_binding shared_down;
-    ds4_v100_tensor_binding router;
-    ds4_v100_tensor_binding hc;
-    ds4_v100_tensor_binding head;
+    const int gpu = ds4_stage_for_layer(layer);
+    ds4_tensor_binding gate;
+    ds4_tensor_binding up;
+    ds4_tensor_binding down;
+    ds4_tensor_binding shared_gate;
+    ds4_tensor_binding shared_up;
+    ds4_tensor_binding shared_down;
+    ds4_tensor_binding router;
+    ds4_tensor_binding hc;
+    ds4_tensor_binding head;
 
-    check(ds4_v100_context_require_layer_tensor_binding(ctx, layer, "ffn_gate_exps.weight", &gate, err, sizeof(err)) == 0,
+    check(ds4_context_require_layer_tensor_binding(ctx, layer, "ffn_gate_exps.weight", &gate, err, sizeof(err)) == 0,
           "gate expert binding");
-    check(ds4_v100_context_require_layer_tensor_binding(ctx, layer, "ffn_up_exps.weight", &up, err, sizeof(err)) == 0,
+    check(ds4_context_require_layer_tensor_binding(ctx, layer, "ffn_up_exps.weight", &up, err, sizeof(err)) == 0,
           "up expert binding");
-    check(ds4_v100_context_require_layer_tensor_binding(ctx, layer, "ffn_down_exps.weight", &down, err, sizeof(err)) == 0,
+    check(ds4_context_require_layer_tensor_binding(ctx, layer, "ffn_down_exps.weight", &down, err, sizeof(err)) == 0,
           "down expert binding");
-    check(ds4_v100_context_require_layer_tensor_binding(ctx, layer, "ffn_gate_shexp.weight", &shared_gate, err, sizeof(err)) == 0,
+    check(ds4_context_require_layer_tensor_binding(ctx, layer, "ffn_gate_shexp.weight", &shared_gate, err, sizeof(err)) == 0,
           "shared gate binding");
-    check(ds4_v100_context_require_layer_tensor_binding(ctx, layer, "ffn_up_shexp.weight", &shared_up, err, sizeof(err)) == 0,
+    check(ds4_context_require_layer_tensor_binding(ctx, layer, "ffn_up_shexp.weight", &shared_up, err, sizeof(err)) == 0,
           "shared up binding");
-    check(ds4_v100_context_require_layer_tensor_binding(ctx, layer, "ffn_down_shexp.weight", &shared_down, err, sizeof(err)) == 0,
+    check(ds4_context_require_layer_tensor_binding(ctx, layer, "ffn_down_shexp.weight", &shared_down, err, sizeof(err)) == 0,
           "shared down binding");
-    check(ds4_v100_context_require_layer_tensor_binding(ctx, layer, layer <= 2 ? "ffn_gate_tid2eid" : "exp_probs_b", &router, err, sizeof(err)) == 0,
+    check(ds4_context_require_layer_tensor_binding(ctx, layer, layer <= 2 ? "ffn_gate_tid2eid" : "exp_probs_b", &router, err, sizeof(err)) == 0,
           "router binding");
-    check(ds4_v100_context_require_layer_tensor_binding(ctx, layer, "hc_ffn_fn", &hc, err, sizeof(err)) == 0,
+    check(ds4_context_require_layer_tensor_binding(ctx, layer, "hc_ffn_fn", &hc, err, sizeof(err)) == 0,
           "hc binding");
-    check(ds4_v100_context_output_head_binding(ctx, &head, err, sizeof(err)) == 0,
+    check(ds4_context_output_head_binding(ctx, &head, err, sizeof(err)) == 0,
           "output head binding");
 
     expect_binding(&gate, "mxfp4", DS4_V100_EXEC_LOWBIT_KERNEL, layer, gpu, "gate expert policy");
@@ -151,10 +151,10 @@ int main(int argc, char **argv) {
           up.shard_offset != down.shard_offset,
           "routed descriptor spans are distinct");
 
-    ds4_v100_tensor_binding missing;
-    check(ds4_v100_context_require_layer_tensor_binding(ctx, layer, "missing.weight", &missing, err, sizeof(err)) != 0,
+    ds4_tensor_binding missing;
+    check(ds4_context_require_layer_tensor_binding(ctx, layer, "missing.weight", &missing, err, sizeof(err)) != 0,
           "missing tensor should fail");
-    check(ds4_v100_context_require_layer_tensor_binding(ctx, -1, "ffn_gate_exps.weight", &missing, err, sizeof(err)) != 0,
+    check(ds4_context_require_layer_tensor_binding(ctx, -1, "ffn_gate_exps.weight", &missing, err, sizeof(err)) != 0,
           "bad layer should fail");
 
     printf("v100_layer_binding_smoke: layer=%d gpu=%d routed_expert_bytes=%" PRIu64 " shared_row_bytes=%" PRIu64 " ok\n",
@@ -162,6 +162,6 @@ int main(int argc, char **argv) {
            gpu,
            routed_expert,
            shared_row);
-    ds4_v100_context_close(ctx);
+    ds4_context_close(ctx);
     return failures ? 1 : 0;
 }

@@ -107,8 +107,8 @@ typedef struct {
     uint64_t host_bytes;
 } mtpf_scratch;
 
-struct ds4_v100_mtp_forward {
-    ds4_v100_mtp_sidecar *sidecar;
+struct ds4_mtp_forward {
+    ds4_mtp_sidecar *sidecar;
     ds4_gpu_arena *output_arena;
     ds4_gpu_bf16_matrix_view output_view;
     mtpf_views views;
@@ -176,7 +176,7 @@ static void topk_from_logits(const float *all_logits,
     }
 }
 
-static int output_bf16_view_from_binding(const ds4_v100_tensor_binding *b,
+static int output_bf16_view_from_binding(const ds4_tensor_binding *b,
                                          ds4_gpu_bf16_matrix_view *out,
                                          char *err,
                                          size_t errlen) {
@@ -198,18 +198,18 @@ static int output_bf16_view_from_binding(const ds4_v100_tensor_binding *b,
     return 0;
 }
 
-static int bind_views(ds4_v100_mtp_sidecar *sidecar,
+static int bind_views(ds4_mtp_sidecar *sidecar,
                       mtpf_views *v,
                       char *err,
                       size_t errlen) {
 #define BIND_F32_VEC(name, field) \
-    do { if (ds4_v100_mtp_sidecar_f32_vector_view(sidecar, name, &v->field, err, errlen) != 0) return 1; } while (0)
+    do { if (ds4_mtp_sidecar_f32_vector_view(sidecar, name, &v->field, err, errlen) != 0) return 1; } while (0)
 #define BIND_F32_MAT(name, field) \
-    do { if (ds4_v100_mtp_sidecar_f32_matrix_view(sidecar, name, &v->field, err, errlen) != 0) return 1; } while (0)
+    do { if (ds4_mtp_sidecar_f32_matrix_view(sidecar, name, &v->field, err, errlen) != 0) return 1; } while (0)
 #define BIND_Q8(name, field) \
-    do { if (ds4_v100_mtp_sidecar_q8_0_view(sidecar, name, &v->field, err, errlen) != 0) return 1; } while (0)
+    do { if (ds4_mtp_sidecar_q8_0_view(sidecar, name, &v->field, err, errlen) != 0) return 1; } while (0)
 #define BIND_Q4(name, field) \
-    do { if (ds4_v100_mtp_sidecar_q4_k_expert_view(sidecar, name, &v->field, err, errlen) != 0) return 1; } while (0)
+    do { if (ds4_mtp_sidecar_q4_k_expert_view(sidecar, name, &v->field, err, errlen) != 0) return 1; } while (0)
     BIND_F32_VEC("mtp.0.enorm.weight", enorm);
     BIND_F32_VEC("mtp.0.hnorm.weight", hnorm);
     BIND_Q8("mtp.0.e_proj.weight", e_proj);
@@ -298,11 +298,11 @@ static int bind_views(ds4_v100_mtp_sidecar *sidecar,
     return 0;
 }
 
-static int grouped_output_arena(ds4_v100_mtp_forward *fwd,
+static int grouped_output_arena(ds4_mtp_forward *fwd,
                                 const ds4_gpu_tensor *heads,
                                 ds4_gpu_tensor *low,
                                 ds4_gpu_tensor *out) {
-    ds4_gpu_arena *arena = ds4_v100_mtp_sidecar_arena(fwd->sidecar);
+    ds4_gpu_arena *arena = ds4_mtp_sidecar_arena(fwd->sidecar);
     if (!arena || !heads || !low || !out) return 1;
     if (!ds4_gpu_tensor_fill_f32(low, 0.0f, MTPF_OUT_LOW_DIM)) return 1;
     for (uint32_t g = 0; g < MTPF_OUT_GROUPS; g++) {
@@ -391,7 +391,7 @@ static void mtpf_scratch_free(mtpf_scratch *s) {
     memset(s, 0, sizeof(*s));
 }
 
-static int mtpf_scratch_alloc(ds4_v100_mtp_forward *fwd,
+static int mtpf_scratch_alloc(ds4_mtp_forward *fwd,
                               char *err,
                               size_t errlen) {
     if (!fwd) return mtpf_error(err, errlen, "missing MTP forward scratch owner");
@@ -475,11 +475,11 @@ static int mtpf_scratch_alloc(ds4_v100_mtp_forward *fwd,
     return 0;
 }
 
-int ds4_v100_mtp_forward_open(ds4_v100_mtp_forward **out,
-                              ds4_v100_mtp_sidecar *sidecar,
+int ds4_mtp_forward_open(ds4_mtp_forward **out,
+                              ds4_mtp_sidecar *sidecar,
                               const void *base_model,
                               uint64_t base_model_size,
-                              const ds4_v100_tensor_binding *output_weight,
+                              const ds4_tensor_binding *output_weight,
                               int gpu,
                               char *err,
                               size_t errlen) {
@@ -492,14 +492,14 @@ int ds4_v100_mtp_forward_open(ds4_v100_mtp_forward **out,
         output_weight->byte_length > base_model_size - output_weight->source_offset) {
         return mtpf_error(err, errlen, "output.weight outside model map");
     }
-    ds4_v100_mtp_forward *fwd =
-        (ds4_v100_mtp_forward *)calloc(1, sizeof(*fwd));
+    ds4_mtp_forward *fwd =
+        (ds4_mtp_forward *)calloc(1, sizeof(*fwd));
     if (!fwd) return mtpf_error(err, errlen, "failed to allocate MTP forward");
     fwd->sidecar = sidecar;
     fwd->gpu = gpu;
     if (output_bf16_view_from_binding(output_weight, &fwd->output_view, err, errlen) ||
         bind_views(sidecar, &fwd->views, err, errlen)) {
-        ds4_v100_mtp_forward_close(fwd);
+        ds4_mtp_forward_close(fwd);
         return 1;
     }
     if (ds4_gpu_arena_open(&fwd->output_arena, gpu, output_weight->byte_length) != 0 ||
@@ -508,21 +508,21 @@ int ds4_v100_mtp_forward_open(ds4_v100_mtp_forward **out,
                              0,
                              (const unsigned char *)base_model + output_weight->source_offset,
                              output_weight->byte_length) != 0) {
-        ds4_v100_mtp_forward_close(fwd);
+        ds4_mtp_forward_close(fwd);
         return mtpf_error(err, errlen, "output.weight upload failed");
     }
     fwd->output_weight_bytes = output_weight->byte_length;
     fwd->free_after_output_upload_bytes =
         ds4_gpu_arena_free_after_upload_bytes(fwd->output_arena);
     if (mtpf_scratch_alloc(fwd, err, errlen)) {
-        ds4_v100_mtp_forward_close(fwd);
+        ds4_mtp_forward_close(fwd);
         return 1;
     }
     *out = fwd;
     return 0;
 }
 
-int ds4_v100_mtp_forward_run_host_next_hc(ds4_v100_mtp_forward *fwd,
+int ds4_mtp_forward_run_host_next_hc(ds4_mtp_forward *fwd,
                                           const float *embed,
                                           const float *prev_hc,
                                           uint32_t position,
@@ -531,7 +531,7 @@ int ds4_v100_mtp_forward_run_host_next_hc(ds4_v100_mtp_forward *fwd,
                                           float *out_logits,
                                           float *next_hc,
                                           uint64_t next_hc_values,
-                                          ds4_v100_mtp_forward_report *report,
+                                          ds4_mtp_forward_report *report,
                                           char *err,
                                           size_t errlen) {
     if (!fwd || !embed || !prev_hc || !tokens || !out_logits ||
@@ -544,7 +544,7 @@ int ds4_v100_mtp_forward_run_host_next_hc(ds4_v100_mtp_forward *fwd,
     if (!ds4_gpu_set_device(fwd->gpu)) {
         return mtpf_error(err, errlen, "failed to set MTP forward device");
     }
-    ds4_gpu_arena *arena = ds4_v100_mtp_sidecar_arena(fwd->sidecar);
+    ds4_gpu_arena *arena = ds4_mtp_sidecar_arena(fwd->sidecar);
     if (!arena) return mtpf_error(err, errlen, "missing MTP sidecar arena");
 
     const uint64_t embd_bytes = (uint64_t)MTPF_N_EMBD * sizeof(float);
@@ -671,17 +671,17 @@ done:
     return rc;
 }
 
-int ds4_v100_mtp_forward_run_host(ds4_v100_mtp_forward *fwd,
+int ds4_mtp_forward_run_host(ds4_mtp_forward *fwd,
                                   const float *embed,
                                   const float *prev_hc,
                                   uint32_t position,
                                   uint32_t top_k,
                                   uint32_t *tokens,
                                   float *out_logits,
-                                  ds4_v100_mtp_forward_report *report,
+                                  ds4_mtp_forward_report *report,
                                   char *err,
                                   size_t errlen) {
-    return ds4_v100_mtp_forward_run_host_next_hc(fwd,
+    return ds4_mtp_forward_run_host_next_hc(fwd,
                                                  embed,
                                                  prev_hc,
                                                  position,
@@ -695,7 +695,7 @@ int ds4_v100_mtp_forward_run_host(ds4_v100_mtp_forward *fwd,
                                                  errlen);
 }
 
-void ds4_v100_mtp_forward_close(ds4_v100_mtp_forward *fwd) {
+void ds4_mtp_forward_close(ds4_mtp_forward *fwd) {
     if (!fwd) return;
     mtpf_scratch_free(&fwd->scratch);
     ds4_gpu_arena_close(fwd->output_arena);

@@ -12,15 +12,15 @@
 extern "C" {
 #endif
 
-typedef struct ds4_v100_replay ds4_v100_replay;
-typedef struct ds4_v100_replay_snapshot ds4_v100_replay_snapshot;
+typedef struct ds4_replay ds4_replay;
+typedef struct ds4_replay_snapshot ds4_replay_snapshot;
 
 typedef enum {
     DS4_V100_REPLAY_ASYNC_PIPELINE_OFF = 0,
     DS4_V100_REPLAY_ASYNC_PIPELINE_PERSISTENT = 1,
     DS4_V100_REPLAY_ASYNC_PIPELINE_PER_STEP = 2,
     DS4_V100_REPLAY_ASYNC_PIPELINE_MAILBOX = 3,
-} ds4_v100_replay_async_pipeline_mode;
+} ds4_replay_async_pipeline_mode;
 
 typedef struct {
     const char *model_path;
@@ -38,16 +38,16 @@ typedef struct {
     bool async_pipeline_decode;
     bool async_handoff;
     bool async_event_handoff;
-    ds4_v100_replay_async_pipeline_mode async_pipeline_mode;
+    ds4_replay_async_pipeline_mode async_pipeline_mode;
     bool suppress_router_readback;
-} ds4_v100_replay_options;
+} ds4_replay_options;
 
 typedef struct {
     uint32_t token;
     float logit;
     char *text;
     size_t text_len;
-} ds4_v100_replay_output;
+} ds4_replay_output;
 
 typedef struct {
     uint32_t prompt_tokens;
@@ -84,7 +84,7 @@ typedef struct {
     double output_head_ms;
     double token_text_ms;
     double total_ms;
-} ds4_v100_replay_counters;
+} ds4_replay_counters;
 
 typedef struct {
     uint32_t target_forwards;
@@ -94,136 +94,136 @@ typedef struct {
     uint32_t speculative_saves;
     uint64_t snapshot_bytes;
     double verify_ms;
-} ds4_v100_replay_target_block_report;
+} ds4_replay_target_block_report;
 
-void ds4_v100_replay_options_init(ds4_v100_replay_options *opts);
+void ds4_replay_options_init(ds4_replay_options *opts);
 
-int ds4_v100_replay_open(ds4_v100_replay **out,
-                         const ds4_v100_replay_options *opts,
+int ds4_replay_open(ds4_replay **out,
+                         const ds4_replay_options *opts,
                          char *err,
                          size_t errlen);
 
-void ds4_v100_replay_open_counters(const ds4_v100_replay *rt,
-                                   ds4_v100_replay_counters *out);
+void ds4_replay_open_counters(const ds4_replay *rt,
+                                   ds4_replay_counters *out);
 
-const void *ds4_v100_replay_model_map(const ds4_v100_replay *rt);
+const void *ds4_replay_model_map(const ds4_replay *rt);
 
-uint64_t ds4_v100_replay_model_size(const ds4_v100_replay *rt);
+uint64_t ds4_replay_model_size(const ds4_replay *rt);
 
-void ds4_v100_replay_close(ds4_v100_replay *rt);
+void ds4_replay_close(ds4_replay *rt);
 
-int ds4_v100_replay_reset(ds4_v100_replay *rt, char *err, size_t errlen);
+int ds4_replay_reset(ds4_replay *rt, char *err, size_t errlen);
 
-void ds4_v100_replay_encode_prompt(ds4_v100_replay *rt,
+void ds4_replay_encode_prompt(ds4_replay *rt,
                                    const char *system,
                                    const char *prompt,
                                    ds4_think_mode think_mode,
                                    ds4_tokens *out);
 
-int ds4_v100_replay_generate(ds4_v100_replay *rt,
+int ds4_replay_generate(ds4_replay *rt,
                              const ds4_tokens *prompt,
                              uint32_t max_tokens,
-                             ds4_v100_replay_output *outputs,
+                             ds4_replay_output *outputs,
                              uint32_t output_cap,
                              uint32_t *out_count,
-                             ds4_v100_replay_counters *counters,
+                             ds4_replay_counters *counters,
                              char *err,
                              size_t errlen);
 
-int ds4_v100_replay_generate_batch(ds4_v100_replay *rt,
+int ds4_replay_generate_batch(ds4_replay *rt,
                                    const ds4_tokens *prompts,
                                    uint32_t n_prompts,
                                    uint32_t max_tokens,
-                                   ds4_v100_replay_output *outputs,
+                                   ds4_replay_output *outputs,
                                    uint32_t output_stride,
                                    uint32_t *out_counts,
-                                   ds4_v100_replay_counters *counters,
+                                   ds4_replay_counters *counters,
                                    char *err,
                                    size_t errlen);
 
-int ds4_v100_replay_generate_first_token_batch(
-    ds4_v100_replay *rt,
+int ds4_replay_generate_first_token_batch(
+    ds4_replay *rt,
     const ds4_tokens *prompts,
     uint32_t n_prompts,
-    ds4_v100_replay_output *outputs,
-    ds4_v100_replay_counters *counters,
+    ds4_replay_output *outputs,
+    ds4_replay_counters *counters,
     char *err,
     size_t errlen);
 
-int ds4_v100_replay_begin_generation(ds4_v100_replay *rt,
+int ds4_replay_begin_generation(ds4_replay *rt,
                                       uint32_t prompt_tokens,
-                                      ds4_v100_replay_counters *counters,
+                                      ds4_replay_counters *counters,
                                       char *err,
                                       size_t errlen);
 
-int ds4_v100_replay_feed_token_at_position(ds4_v100_replay *rt,
+int ds4_replay_feed_token_at_position(ds4_replay *rt,
                                             uint32_t token,
                                             uint32_t position,
-                                            ds4_v100_replay_counters *counters,
+                                            ds4_replay_counters *counters,
                                             double *bucket_ms,
                                             char *err,
                                             size_t errlen);
 
-int ds4_v100_replay_select_current_token(ds4_v100_replay *rt,
-                                          ds4_v100_replay_output *out,
-                                          ds4_v100_replay_counters *counters,
+int ds4_replay_select_current_token(ds4_replay *rt,
+                                          ds4_replay_output *out,
+                                          ds4_replay_counters *counters,
                                           char *err,
                                           size_t errlen);
 
-int ds4_v100_replay_snapshot_create(ds4_v100_replay *rt,
-                                    ds4_v100_replay_snapshot **out,
+int ds4_replay_snapshot_create(ds4_replay *rt,
+                                    ds4_replay_snapshot **out,
                                     char *err,
                                     size_t errlen);
 
-int ds4_v100_replay_snapshot_restore(ds4_v100_replay *rt,
-                                     const ds4_v100_replay_snapshot *snapshot,
+int ds4_replay_snapshot_restore(ds4_replay *rt,
+                                     const ds4_replay_snapshot *snapshot,
                                      char *err,
                                      size_t errlen);
 
-uint64_t ds4_v100_replay_snapshot_bytes(
-    const ds4_v100_replay_snapshot *snapshot);
+uint64_t ds4_replay_snapshot_bytes(
+    const ds4_replay_snapshot *snapshot);
 
-void ds4_v100_replay_snapshot_free(ds4_v100_replay_snapshot *snapshot);
+void ds4_replay_snapshot_free(ds4_replay_snapshot *snapshot);
 
-int ds4_v100_replay_verify_token_block(
-    ds4_v100_replay *rt,
+int ds4_replay_verify_token_block(
+    ds4_replay *rt,
     const uint32_t *tokens,
     const uint32_t *positions,
     uint32_t n_tokens,
     uint32_t accepted_prefix_len,
-    ds4_v100_replay_output *outputs,
+    ds4_replay_output *outputs,
     uint32_t output_cap,
-    ds4_v100_replay_target_block_report *report,
-    ds4_v100_replay_counters *counters,
+    ds4_replay_target_block_report *report,
+    ds4_replay_counters *counters,
     char *err,
     size_t errlen);
 
-void ds4_v100_replay_finish_generation(ds4_v100_replay *rt,
+void ds4_replay_finish_generation(ds4_replay *rt,
                                         uint32_t generated_tokens,
                                         double total_ms,
-                                        ds4_v100_replay_counters *counters);
+                                        ds4_replay_counters *counters);
 
-int ds4_v100_replay_read_token_embedding_f32(ds4_v100_replay *rt,
+int ds4_replay_read_token_embedding_f32(ds4_replay *rt,
                                              uint32_t token,
                                              float *dst,
                                              uint64_t dst_values,
                                              char *err,
                                              size_t errlen);
 
-int ds4_v100_replay_read_output_hc(ds4_v100_replay *rt,
+int ds4_replay_read_output_hc(ds4_replay *rt,
                                     float *dst,
                                     uint64_t bytes,
                                     char *err,
                                     size_t errlen);
 
-int ds4_v100_replay_read_output_hc_slot(ds4_v100_replay *rt,
+int ds4_replay_read_output_hc_slot(ds4_replay *rt,
                                         uint32_t slot,
                                         float *dst,
                                         uint64_t bytes,
                                         char *err,
                                         size_t errlen);
 
-void ds4_v100_replay_output_free(ds4_v100_replay_output *out);
+void ds4_replay_output_free(ds4_replay_output *out);
 
 #ifdef __cplusplus
 }

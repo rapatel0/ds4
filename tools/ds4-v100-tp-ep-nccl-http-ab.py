@@ -933,7 +933,7 @@ def main() -> int:
         decision = "keep-diagnostic-throughput-flat-or-slower"
 
     result = {
-        "schema": "ds4_v100_tp_ep_nccl_http_ab.v1",
+        "schema": "ds4_tp_ep_nccl_http_ab.v1",
         "shape": {
             "ctx": args.ctx,
             "slots": args.slots,

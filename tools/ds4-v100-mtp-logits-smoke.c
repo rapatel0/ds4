@@ -250,13 +250,13 @@ static void cpu_hc_weighted_sum(float *out, const float *hc, const float *weight
     }
 }
 
-static const void *tensor_bytes(const ds4_v100_mtp_sidecar *sidecar,
+static const void *tensor_bytes(const ds4_mtp_sidecar *sidecar,
                                 const char *name,
                                 uint64_t bytes) {
     const ds4_mtp_sidecar_tensor_info *t =
-        ds4_v100_mtp_sidecar_tensor(sidecar, name);
-    const unsigned char *map = (const unsigned char *)ds4_v100_mtp_sidecar_map(sidecar);
-    uint64_t size = ds4_v100_mtp_sidecar_size(sidecar);
+        ds4_mtp_sidecar_tensor(sidecar, name);
+    const unsigned char *map = (const unsigned char *)ds4_mtp_sidecar_map(sidecar);
+    uint64_t size = ds4_mtp_sidecar_size(sidecar);
     if (!t || !map || t->source_offset > size || bytes > size - t->source_offset ||
         bytes > t->byte_length) {
         return NULL;
@@ -264,7 +264,7 @@ static const void *tensor_bytes(const ds4_v100_mtp_sidecar *sidecar,
     return map + t->source_offset;
 }
 
-static int output_bf16_view_from_binding(const ds4_v100_tensor_binding *b,
+static int output_bf16_view_from_binding(const ds4_tensor_binding *b,
                                          ds4_gpu_bf16_matrix_view *out,
                                          char *err,
                                          size_t errlen) {
@@ -291,8 +291,8 @@ static int output_bf16_view_from_binding(const ds4_v100_tensor_binding *b,
 }
 
 static int cpu_mtp_logits_topk(const model_map *base,
-                               const ds4_v100_mtp_sidecar *sidecar,
-                               const ds4_v100_tensor_binding *output_weight,
+                               const ds4_mtp_sidecar *sidecar,
+                               const ds4_tensor_binding *output_weight,
                                const float *hc,
                                uint32_t top_k,
                                uint32_t *tokens,
@@ -425,8 +425,8 @@ int main(int argc, char **argv) {
     model_map base_map;
     memset(&base_map, 0, sizeof(base_map));
     base_map.fd = -1;
-    ds4_v100_context *ctx = NULL;
-    ds4_v100_mtp_sidecar *sidecar = NULL;
+    ds4_context *ctx = NULL;
+    ds4_mtp_sidecar *sidecar = NULL;
     ds4_gpu_arena *output_arena = NULL;
     ds4_gpu_tensor *hc_d = NULL;
     ds4_gpu_tensor *hc_norm_d = NULL;
@@ -453,16 +453,16 @@ int main(int argc, char **argv) {
 
     if (map_model_file(opt.model, &base_map) != 0) goto done;
 
-    ds4_v100_context_options ctx_opts;
-    ds4_v100_context_options_init(&ctx_opts);
+    ds4_context_options ctx_opts;
+    ds4_context_options_init(&ctx_opts);
     ctx_opts.pack_index_path = opt.pack_index;
-    if (ds4_v100_context_open(&ctx, &ctx_opts, err, sizeof(err)) != 0) {
+    if (ds4_context_open(&ctx, &ctx_opts, err, sizeof(err)) != 0) {
         fprintf(stderr, "ds4-v100-mtp-logits-smoke: %s\n", err);
         goto done;
     }
 
-    ds4_v100_tensor_binding output_weight;
-    if (ds4_v100_context_output_head_binding(ctx, &output_weight, err, sizeof(err)) != 0) {
+    ds4_tensor_binding output_weight;
+    if (ds4_context_output_head_binding(ctx, &output_weight, err, sizeof(err)) != 0) {
         fprintf(stderr, "ds4-v100-mtp-logits-smoke: %s\n", err);
         goto done;
     }
@@ -495,12 +495,12 @@ int main(int argc, char **argv) {
         goto done;
     }
 
-    ds4_v100_mtp_sidecar_options mtp_opts;
-    ds4_v100_mtp_sidecar_options_init(&mtp_opts);
+    ds4_mtp_sidecar_options mtp_opts;
+    ds4_mtp_sidecar_options_init(&mtp_opts);
     mtp_opts.mtp_path = opt.mtp_model;
     mtp_opts.gpu = opt.gpu;
     mtp_opts.require_device_arena = true;
-    if (ds4_v100_mtp_sidecar_open(&sidecar, &mtp_opts, report, err, sizeof(err)) != 0) {
+    if (ds4_mtp_sidecar_open(&sidecar, &mtp_opts, report, err, sizeof(err)) != 0) {
         fprintf(stderr,
                 "ds4-v100-mtp-logits-smoke: %s\n",
                 err[0] ? err : "failed to open MTP sidecar");
@@ -511,22 +511,22 @@ int main(int argc, char **argv) {
     ds4_gpu_source_row_view hc_scale_view;
     ds4_gpu_source_row_view hc_base_view;
     ds4_gpu_source_row_view norm_view;
-    if (ds4_v100_mtp_sidecar_f32_matrix_view(sidecar,
+    if (ds4_mtp_sidecar_f32_matrix_view(sidecar,
                                              "mtp.0.hc_head_fn.weight",
                                              &hc_fn_view,
                                              err,
                                              sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_f32_vector_view(sidecar,
+        ds4_mtp_sidecar_f32_vector_view(sidecar,
                                              "mtp.0.hc_head_scale.weight",
                                              &hc_scale_view,
                                              err,
                                              sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_f32_vector_view(sidecar,
+        ds4_mtp_sidecar_f32_vector_view(sidecar,
                                              "mtp.0.hc_head_base.weight",
                                              &hc_base_view,
                                              err,
                                              sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_f32_vector_view(sidecar,
+        ds4_mtp_sidecar_f32_vector_view(sidecar,
                                              "mtp.0.norm.weight",
                                              &norm_view,
                                              err,
@@ -621,11 +621,11 @@ int main(int argc, char **argv) {
                                        hc_d,
                                        MTP_LOGITS_HC_DIM,
                                        MTP_LOGITS_RMS_EPS) ||
-        ds4_gpu_arena_f32_matmul_f32(ds4_v100_mtp_sidecar_arena(sidecar),
+        ds4_gpu_arena_f32_matmul_f32(ds4_mtp_sidecar_arena(sidecar),
                                      &hc_fn_view,
                                      hc_norm_d,
                                      head_pre_d) != 0 ||
-        ds4_gpu_arena_output_hc_weights_tensor(ds4_v100_mtp_sidecar_arena(sidecar),
+        ds4_gpu_arena_output_hc_weights_tensor(ds4_mtp_sidecar_arena(sidecar),
                                                &hc_scale_view,
                                                &hc_base_view,
                                                head_weights_d,
@@ -637,7 +637,7 @@ int main(int argc, char **argv) {
                                         head_weights_d,
                                         MTP_LOGITS_N_EMBD,
                                         MTP_LOGITS_N_HC) ||
-        ds4_gpu_arena_f32_rms_norm_f32(ds4_v100_mtp_sidecar_arena(sidecar),
+        ds4_gpu_arena_f32_rms_norm_f32(ds4_mtp_sidecar_arena(sidecar),
                                        &norm_view,
                                        embd_d,
                                        norm_d,
@@ -705,8 +705,8 @@ done:
     ds4_gpu_tensor_free(hc_norm_d);
     ds4_gpu_tensor_free(hc_d);
     ds4_gpu_arena_close(output_arena);
-    ds4_v100_mtp_sidecar_close(sidecar);
-    ds4_v100_context_close(ctx);
+    ds4_mtp_sidecar_close(sidecar);
+    ds4_context_close(ctx);
     unmap_model_file(&base_map);
     free(gpu_logits);
     free(cpu_logits);

@@ -868,8 +868,8 @@ struct SharedRankBuffers {
 };
 
 struct SharedTpRuntime {
-    ds4_v100_tp_runtime *rt = nullptr;
-    ds4_v100_tp_runtime_report report = {};
+    ds4_tp_runtime *rt = nullptr;
+    ds4_tp_runtime_report report = {};
     bool initialized = false;
 };
 

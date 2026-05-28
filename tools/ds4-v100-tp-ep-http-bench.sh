@@ -370,7 +370,7 @@ gpu_util_avg = sum(gpu_utils) / len(gpu_utils) if gpu_utils else 0.0
 gpu_util_max = max(gpu_utils) if gpu_utils else 0.0
 gpu_mem_used_max = max(gpu_mem_used) if gpu_mem_used else 0.0
 row = {
-    "schema": "ds4_v100_tp_ep_sustained_http_case.v4",
+    "schema": "ds4_tp_ep_sustained_http_case.v4",
     "backend": "tp_ep_launcher_http",
     "endpoint": endpoint,
     "tokens_per_request": int(tokens),
@@ -435,7 +435,7 @@ for path in sys.argv[2:]:
     with open(path, "r", encoding="utf-8") as f:
         cases.append(json.load(f))
 with open(summary_path, "w", encoding="utf-8") as f:
-    json.dump({"schema": "ds4_v100_tp_ep_sustained_http.v4", "cases": cases}, f, sort_keys=True)
+    json.dump({"schema": "ds4_tp_ep_sustained_http.v4", "cases": cases}, f, sort_keys=True)
     f.write("\n")
 PY
 

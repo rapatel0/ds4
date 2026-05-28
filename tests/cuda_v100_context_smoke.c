@@ -125,8 +125,8 @@ static int expect_state_sample(const char *label,
     return 0;
 }
 
-static int read_f16_row(ds4_v100_cuda_context *ctx,
-                        const ds4_v100_cuda_layer_kv_view *view,
+static int read_f16_row(ds4_cuda_context *ctx,
+                        const ds4_cuda_layer_kv_view *view,
                         uint64_t base_offset,
                         uint64_t row,
                         uint32_t dim,
@@ -134,7 +134,7 @@ static int read_f16_row(ds4_v100_cuda_context *ctx,
                         char *err,
                         size_t errlen) {
     const uint64_t off = base_offset + row * dim * sizeof(uint16_t);
-    return ds4_v100_cuda_context_read_kv_arena(ctx, view->stage_id, off, out,
+    return ds4_cuda_context_read_kv_arena(ctx, view->stage_id, off, out,
                                                (uint64_t)dim * sizeof(uint16_t),
                                                err, errlen);
 }
@@ -179,9 +179,9 @@ int main(int argc, char **argv) {
     }
 
     char err[512];
-    ds4_v100_device_fact facts[DS4_V100_EXPECTED_GPUS];
+    ds4_device_fact facts[DS4_V100_EXPECTED_GPUS];
     int n = 0;
-    if (ds4_v100_cuda_collect_device_facts(facts, DS4_V100_EXPECTED_GPUS,
+    if (ds4_cuda_collect_device_facts(facts, DS4_V100_EXPECTED_GPUS,
                                            &n, err, sizeof(err))) {
         fprintf(stderr, "cuda_v100_context_smoke: %s\n", err);
         return 1;
@@ -191,8 +191,8 @@ int main(int argc, char **argv) {
         return 1;
     }
     int stages = requested_stages ? requested_stages : (production ? DS4_V100_EXPECTED_GPUS : (n >= 2 ? 2 : 1));
-    ds4_v100_context_options opts;
-    ds4_v100_context_options_init(&opts);
+    ds4_context_options opts;
+    ds4_context_options_init(&opts);
     opts.expected_gpus = stages;
     opts.pack_index_path = pack_index;
     opts.relay_max_active_slots = 1;
@@ -206,16 +206,16 @@ int main(int argc, char **argv) {
     opts.output_head_reserve_bytes = output_head_mib * 1048576ull;
     opts.mtp_reserve_bytes = mtp_mib * 1048576ull;
 
-    ds4_v100_cuda_context *ctx = NULL;
-    if (ds4_v100_cuda_context_open(&ctx, &opts, err, sizeof(err))) {
+    ds4_cuda_context *ctx = NULL;
+    if (ds4_cuda_context_open(&ctx, &opts, err, sizeof(err))) {
         fprintf(stderr, "cuda_v100_context_smoke: %s\n", err);
         return 1;
     }
     if (kv_ctx) {
-        ds4_v100_cuda_layer_kv_view view;
-        if (ds4_v100_cuda_context_layer_kv_view(ctx, 2, &view, err, sizeof(err))) {
+        ds4_cuda_layer_kv_view view;
+        if (ds4_cuda_context_layer_kv_view(ctx, 2, &view, err, sizeof(err))) {
             fprintf(stderr, "cuda_v100_context_smoke: %s\n", err);
-            ds4_v100_cuda_context_close(ctx);
+            ds4_cuda_context_close(ctx);
             return 1;
         }
         printf("kv_view\tlayer\t%d\tstage\t%d\tgpu\t%d\tarena_bytes\t%llu\tview_total\t%llu\traw_offset\t%llu\tcomp_offset\t%llu\tstate_offset\t%llu\n",
@@ -236,17 +236,17 @@ int main(int argc, char **argv) {
             }
         }
 
-        ds4_v100_cuda_prefill_kv_update update = {
+        ds4_cuda_prefill_kv_update update = {
             .slot = 0,
             .raw_row = 9,
             .comp_row = 5,
             .attn_row_f32 = attn_row,
             .indexer_row_f32 = indexer_row,
         };
-        if (ds4_v100_cuda_context_prefill_kv_update_f16(ctx, 2, &update,
+        if (ds4_cuda_context_prefill_kv_update_f16(ctx, 2, &update,
                                                         err, sizeof(err))) {
             fprintf(stderr, "cuda_v100_context_smoke: %s\n", err);
-            ds4_v100_cuda_context_close(ctx);
+            ds4_cuda_context_close(ctx);
             return 1;
         }
         const uint64_t ratio4_comp_rows =
@@ -263,7 +263,7 @@ int main(int argc, char **argv) {
             expect_f16_row("stage ratio4 comp", half_row, attn_row,
                            DS4_V100_HEAD_DIM)) {
             if (err[0]) fprintf(stderr, "cuda_v100_context_smoke: %s\n", err);
-            ds4_v100_cuda_context_close(ctx);
+            ds4_cuda_context_close(ctx);
             return 1;
         }
         (void)ratio4_comp_rows;
@@ -275,7 +275,7 @@ int main(int argc, char **argv) {
             expect_f16_row("stage ratio4 indexer", index_half, indexer_row,
                            DS4_V100_INDEXER_HEAD_DIM)) {
             if (err[0]) fprintf(stderr, "cuda_v100_context_smoke: %s\n", err);
-            ds4_v100_cuda_context_close(ctx);
+            ds4_cuda_context_close(ctx);
             return 1;
         }
 
@@ -284,10 +284,10 @@ int main(int argc, char **argv) {
         float *state = (float *)malloc((size_t)view.view.attn_state_kv_bytes);
         if (!state) {
             fprintf(stderr, "cuda_v100_context_smoke: state alloc failed\n");
-            ds4_v100_cuda_context_close(ctx);
+            ds4_cuda_context_close(ctx);
             return 1;
         }
-        if (ds4_v100_cuda_context_read_kv_arena(ctx, view.stage_id,
+        if (ds4_cuda_context_read_kv_arena(ctx, view.stage_id,
                                                 view.view.attn_state_kv_offset,
                                                 state,
                                                 view.view.attn_state_kv_bytes,
@@ -296,25 +296,25 @@ int main(int argc, char **argv) {
                                 attn_row, DS4_V100_HEAD_DIM, 0.125f, 0.001f, 4)) {
             if (err[0]) fprintf(stderr, "cuda_v100_context_smoke: %s\n", err);
             free(state);
-            ds4_v100_cuda_context_close(ctx);
+            ds4_cuda_context_close(ctx);
             return 1;
         }
         free(state);
 
-        ds4_v100_cuda_layer_kv_view ratio128_view;
-        if (ds4_v100_cuda_context_layer_kv_view(ctx, 3, &ratio128_view,
+        ds4_cuda_layer_kv_view ratio128_view;
+        if (ds4_cuda_context_layer_kv_view(ctx, 3, &ratio128_view,
                                                 err, sizeof(err))) {
             fprintf(stderr, "cuda_v100_context_smoke: %s\n", err);
-            ds4_v100_cuda_context_close(ctx);
+            ds4_cuda_context_close(ctx);
             return 1;
         }
         update.raw_row = 11;
         update.comp_row = 2;
         update.indexer_row_f32 = NULL;
-        if (ds4_v100_cuda_context_prefill_kv_update_f16(ctx, 3, &update,
+        if (ds4_cuda_context_prefill_kv_update_f16(ctx, 3, &update,
                                                         err, sizeof(err))) {
             fprintf(stderr, "cuda_v100_context_smoke: %s\n", err);
-            ds4_v100_cuda_context_close(ctx);
+            ds4_cuda_context_close(ctx);
             return 1;
         }
         if (read_f16_row(ctx, &ratio128_view, ratio128_view.view.raw_swa_offset,
@@ -329,15 +329,15 @@ int main(int argc, char **argv) {
             expect_f16_row("stage ratio128 comp", half_row, attn_row,
                            DS4_V100_HEAD_DIM)) {
             if (err[0]) fprintf(stderr, "cuda_v100_context_smoke: %s\n", err);
-            ds4_v100_cuda_context_close(ctx);
+            ds4_cuda_context_close(ctx);
             return 1;
         }
 
         update.indexer_row_f32 = NULL;
-        if (!ds4_v100_cuda_context_prefill_kv_update_f16(ctx, 2, &update,
+        if (!ds4_cuda_context_prefill_kv_update_f16(ctx, 2, &update,
                                                          err, sizeof(err))) {
             fprintf(stderr, "cuda_v100_context_smoke: accepted missing ratio4 indexer row\n");
-            ds4_v100_cuda_context_close(ctx);
+            ds4_cuda_context_close(ctx);
             return 1;
         }
         printf("kv_update\tlayers\t2,3\tstatus\tok\n");
@@ -357,7 +357,7 @@ int main(int argc, char **argv) {
         for (int j = 0; j < n; j++) printf("\t%d", facts[i].peer_access[j] ? 1 : 0);
         printf("\n");
     }
-    ds4_v100_cuda_context_close(ctx);
+    ds4_cuda_context_close(ctx);
     puts("cuda_v100_context_smoke: ok");
     return 0;
 }

@@ -127,7 +127,7 @@ def write_failure_summary(case_dir, exc, proc=None):
         except Exception:
             pass
     summary = {
-        "schema": "ds4_v100_tp_ep_profile_failure.v1",
+        "schema": "ds4_tp_ep_profile_failure.v1",
         "error": str(exc),
         "server_returncode": proc.returncode if proc is not None else None,
         "server_out_tail": tail_text(case_dir / "server.out"),

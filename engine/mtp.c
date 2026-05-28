@@ -18,7 +18,7 @@ enum {
     DS4_V100_MTP_SPOT_BYTES = 32,
 };
 
-struct ds4_v100_mtp_sidecar {
+struct ds4_mtp_sidecar {
     ds4_mtp_sidecar_info info;
     int fd;
     const unsigned char *map;
@@ -45,7 +45,7 @@ static int mtp_errorf(char *err, size_t errlen, const char *fmt, ...) {
     return 1;
 }
 
-void ds4_v100_mtp_sidecar_options_init(ds4_v100_mtp_sidecar_options *opts) {
+void ds4_mtp_sidecar_options_init(ds4_mtp_sidecar_options *opts) {
     if (!opts) return;
     memset(opts, 0, sizeof(*opts));
     opts->gpu = 7;
@@ -66,7 +66,7 @@ static uint64_t file_size_or_error(int fd, const char *path, char *err, size_t e
     return (uint64_t)st.st_size;
 }
 
-static int map_sidecar(ds4_v100_mtp_sidecar *s,
+static int map_sidecar(ds4_mtp_sidecar *s,
                        const char *path,
                        char *err,
                        size_t errlen) {
@@ -89,7 +89,7 @@ static int map_sidecar(ds4_v100_mtp_sidecar *s,
     return 0;
 }
 
-static int validate_ranges(const ds4_v100_mtp_sidecar *s, char *err, size_t errlen) {
+static int validate_ranges(const ds4_mtp_sidecar *s, char *err, size_t errlen) {
     if (s->size != s->info.file_bytes) {
         return mtp_errorf(err,
                           errlen,
@@ -111,7 +111,7 @@ static int validate_ranges(const ds4_v100_mtp_sidecar *s, char *err, size_t errl
     return 0;
 }
 
-static int upload_tensor(ds4_v100_mtp_sidecar *s,
+static int upload_tensor(ds4_mtp_sidecar *s,
                          const ds4_mtp_sidecar_tensor_info *t,
                          unsigned char *chunk,
                          uint64_t chunk_bytes,
@@ -132,7 +132,7 @@ static int upload_tensor(ds4_v100_mtp_sidecar *s,
     return 0;
 }
 
-static int spot_check_range(ds4_v100_mtp_sidecar *s,
+static int spot_check_range(ds4_mtp_sidecar *s,
                             const ds4_mtp_sidecar_tensor_info *t,
                             uint64_t rel,
                             uint64_t bytes,
@@ -150,7 +150,7 @@ static int spot_check_range(ds4_v100_mtp_sidecar *s,
     return 0;
 }
 
-static int spot_check_tensor(ds4_v100_mtp_sidecar *s,
+static int spot_check_tensor(ds4_mtp_sidecar *s,
                              const ds4_mtp_sidecar_tensor_info *t,
                              char *err,
                              size_t errlen) {
@@ -165,8 +165,8 @@ static int spot_check_tensor(ds4_v100_mtp_sidecar *s,
     return 0;
 }
 
-int ds4_v100_mtp_sidecar_open(ds4_v100_mtp_sidecar **out,
-                              const ds4_v100_mtp_sidecar_options *opts,
+int ds4_mtp_sidecar_open(ds4_mtp_sidecar **out,
+                              const ds4_mtp_sidecar_options *opts,
                               FILE *report,
                               char *err,
                               size_t errlen) {
@@ -178,7 +178,7 @@ int ds4_v100_mtp_sidecar_open(ds4_v100_mtp_sidecar **out,
     }
     if (opts->gpu < 0) return mtp_error(err, errlen, "invalid MTP sidecar gpu");
 
-    ds4_v100_mtp_sidecar *s = (ds4_v100_mtp_sidecar *)calloc(1, sizeof(*s));
+    ds4_mtp_sidecar *s = (ds4_mtp_sidecar *)calloc(1, sizeof(*s));
     if (!s) return mtp_error(err, errlen, "failed to allocate MTP sidecar");
     s->fd = -1;
     s->gpu = opts->gpu;
@@ -240,11 +240,11 @@ int ds4_v100_mtp_sidecar_open(ds4_v100_mtp_sidecar **out,
 
 done:
     free(chunk);
-    ds4_v100_mtp_sidecar_close(s);
+    ds4_mtp_sidecar_close(s);
     return rc;
 }
 
-void ds4_v100_mtp_sidecar_close(ds4_v100_mtp_sidecar *sidecar) {
+void ds4_mtp_sidecar_close(ds4_mtp_sidecar *sidecar) {
     if (!sidecar) return;
     ds4_gpu_arena_close(sidecar->arena);
     if (sidecar->map) munmap((void *)sidecar->map, (size_t)sidecar->size);
@@ -252,13 +252,13 @@ void ds4_v100_mtp_sidecar_close(ds4_v100_mtp_sidecar *sidecar) {
     free(sidecar);
 }
 
-const ds4_mtp_sidecar_info *ds4_v100_mtp_sidecar_info(
-        const ds4_v100_mtp_sidecar *sidecar) {
+const ds4_mtp_sidecar_info *ds4_mtp_sidecar_get_info(
+        const ds4_mtp_sidecar *sidecar) {
     return sidecar ? &sidecar->info : NULL;
 }
 
-const ds4_mtp_sidecar_tensor_info *ds4_v100_mtp_sidecar_tensor(
-        const ds4_v100_mtp_sidecar *sidecar,
+const ds4_mtp_sidecar_tensor_info *ds4_mtp_sidecar_tensor(
+        const ds4_mtp_sidecar *sidecar,
         const char *name) {
     if (!sidecar || !name) return NULL;
     for (uint32_t i = 0; i < DS4_MTP_SIDECAR_TENSOR_COUNT; i++) {
@@ -268,16 +268,16 @@ const ds4_mtp_sidecar_tensor_info *ds4_v100_mtp_sidecar_tensor(
     return NULL;
 }
 
-const void *ds4_v100_mtp_sidecar_map(const ds4_v100_mtp_sidecar *sidecar) {
+const void *ds4_mtp_sidecar_map(const ds4_mtp_sidecar *sidecar) {
     return sidecar ? sidecar->map : NULL;
 }
 
-uint64_t ds4_v100_mtp_sidecar_size(const ds4_v100_mtp_sidecar *sidecar) {
+uint64_t ds4_mtp_sidecar_size(const ds4_mtp_sidecar *sidecar) {
     return sidecar ? sidecar->size : 0;
 }
 
-int ds4_v100_mtp_sidecar_q8_0_view(
-        const ds4_v100_mtp_sidecar *sidecar,
+int ds4_mtp_sidecar_q8_0_view(
+        const ds4_mtp_sidecar *sidecar,
         const char *name,
         ds4_gpu_source_row_view *out,
         char *err,
@@ -287,7 +287,7 @@ int ds4_v100_mtp_sidecar_q8_0_view(
         return mtp_error(err, errlen, "missing MTP Q8_0 view argument");
     }
     const ds4_mtp_sidecar_tensor_info *t =
-        ds4_v100_mtp_sidecar_tensor(sidecar, name);
+        ds4_mtp_sidecar_tensor(sidecar, name);
     if (!t) {
         return mtp_errorf(err, errlen, "missing MTP tensor %s", name);
     }
@@ -336,8 +336,8 @@ int ds4_v100_mtp_sidecar_q8_0_view(
     return 0;
 }
 
-int ds4_v100_mtp_sidecar_f32_vector_view(
-        const ds4_v100_mtp_sidecar *sidecar,
+int ds4_mtp_sidecar_f32_vector_view(
+        const ds4_mtp_sidecar *sidecar,
         const char *name,
         ds4_gpu_source_row_view *out,
         char *err,
@@ -347,7 +347,7 @@ int ds4_v100_mtp_sidecar_f32_vector_view(
         return mtp_error(err, errlen, "missing MTP F32 view argument");
     }
     const ds4_mtp_sidecar_tensor_info *t =
-        ds4_v100_mtp_sidecar_tensor(sidecar, name);
+        ds4_mtp_sidecar_tensor(sidecar, name);
     if (!t) {
         return mtp_errorf(err, errlen, "missing MTP tensor %s", name);
     }
@@ -392,8 +392,8 @@ int ds4_v100_mtp_sidecar_f32_vector_view(
     return 0;
 }
 
-int ds4_v100_mtp_sidecar_f32_matrix_view(
-        const ds4_v100_mtp_sidecar *sidecar,
+int ds4_mtp_sidecar_f32_matrix_view(
+        const ds4_mtp_sidecar *sidecar,
         const char *name,
         ds4_gpu_source_row_view *out,
         char *err,
@@ -403,7 +403,7 @@ int ds4_v100_mtp_sidecar_f32_matrix_view(
         return mtp_error(err, errlen, "missing MTP F32 matrix view argument");
     }
     const ds4_mtp_sidecar_tensor_info *t =
-        ds4_v100_mtp_sidecar_tensor(sidecar, name);
+        ds4_mtp_sidecar_tensor(sidecar, name);
     if (!t) {
         return mtp_errorf(err, errlen, "missing MTP tensor %s", name);
     }
@@ -453,8 +453,8 @@ int ds4_v100_mtp_sidecar_f32_matrix_view(
     return 0;
 }
 
-int ds4_v100_mtp_sidecar_q4_k_expert_view(
-        const ds4_v100_mtp_sidecar *sidecar,
+int ds4_mtp_sidecar_q4_k_expert_view(
+        const ds4_mtp_sidecar *sidecar,
         const char *name,
         ds4_gpu_q4_k_expert_view *out,
         char *err,
@@ -464,7 +464,7 @@ int ds4_v100_mtp_sidecar_q4_k_expert_view(
         return mtp_error(err, errlen, "missing MTP Q4_K expert view argument");
     }
     const ds4_mtp_sidecar_tensor_info *t =
-        ds4_v100_mtp_sidecar_tensor(sidecar, name);
+        ds4_mtp_sidecar_tensor(sidecar, name);
     if (!t) {
         return mtp_errorf(err, errlen, "missing MTP tensor %s", name);
     }
@@ -526,18 +526,18 @@ int ds4_v100_mtp_sidecar_q4_k_expert_view(
     return 0;
 }
 
-ds4_gpu_arena *ds4_v100_mtp_sidecar_arena(ds4_v100_mtp_sidecar *sidecar) {
+ds4_gpu_arena *ds4_mtp_sidecar_arena(ds4_mtp_sidecar *sidecar) {
     return sidecar ? sidecar->arena : NULL;
 }
 
-uint64_t ds4_v100_mtp_sidecar_uploaded_bytes(const ds4_v100_mtp_sidecar *sidecar) {
+uint64_t ds4_mtp_sidecar_uploaded_bytes(const ds4_mtp_sidecar *sidecar) {
     return sidecar ? sidecar->uploaded_bytes : 0;
 }
 
-uint64_t ds4_v100_mtp_sidecar_spot_checks(const ds4_v100_mtp_sidecar *sidecar) {
+uint64_t ds4_mtp_sidecar_spot_checks(const ds4_mtp_sidecar *sidecar) {
     return sidecar ? sidecar->spot_checks : 0;
 }
 
-int ds4_v100_mtp_sidecar_gpu(const ds4_v100_mtp_sidecar *sidecar) {
+int ds4_mtp_sidecar_gpu(const ds4_mtp_sidecar *sidecar) {
     return sidecar ? sidecar->gpu : -1;
 }

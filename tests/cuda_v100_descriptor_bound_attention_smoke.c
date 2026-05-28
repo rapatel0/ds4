@@ -94,8 +94,8 @@ static void fill_hidden(float *hidden, uint32_t n) {
 }
 
 static const uint8_t *matrix_host_ptr(const model_map *model,
-                                      const ds4_v100_bound_matrix *m) {
-    const ds4_v100_tensor_binding *b = &m->binding;
+                                      const ds4_bound_matrix *m) {
+    const ds4_tensor_binding *b = &m->binding;
     if (b->source_offset + m->rel > model->size ||
         m->bytes > model->size - b->source_offset - m->rel) {
         return NULL;
@@ -105,7 +105,7 @@ static const uint8_t *matrix_host_ptr(const model_map *model,
 
 static int upload_matrix(ds4_gpu_arena *arena,
                          const model_map *model,
-                         const ds4_v100_bound_matrix *m,
+                         const ds4_bound_matrix *m,
                          unsigned char **scratch,
                          uint64_t *scratch_bytes) {
     const uint8_t *src = matrix_host_ptr(model, m);
@@ -118,12 +118,12 @@ static int upload_matrix(ds4_gpu_arena *arena,
     }
     memcpy(*scratch, src, (size_t)m->bytes);
     return ds4_gpu_arena_upload(arena,
-                                ds4_v100_bound_matrix_arena_offset(m),
+                                ds4_bound_matrix_arena_offset(m),
                                 *scratch,
                                 m->bytes);
 }
 
-static void cpu_f8_matmul(const ds4_v100_bound_matrix *m,
+static void cpu_f8_matmul(const ds4_bound_matrix *m,
                           const model_map *model,
                           const float *x,
                           float *out) {
@@ -147,7 +147,7 @@ static void cpu_f8_matmul(const ds4_v100_bound_matrix *m,
 static void cpu_rms_norm_weight(float *out,
                                 const float *x,
                                 const model_map *model,
-                                const ds4_v100_tensor_binding *weight,
+                                const ds4_tensor_binding *weight,
                                 uint32_t n,
                                 float eps) {
     if (!weight || weight->source_offset > model->size ||
@@ -166,11 +166,11 @@ static void cpu_add(float *out, const float *a, const float *b, uint32_t n) {
     for (uint32_t i = 0; i < n; i++) out[i] = a[i] + b[i];
 }
 
-static ds4_gpu_source_row_view source_view(const ds4_v100_bound_matrix *m) {
+static ds4_gpu_source_row_view source_view(const ds4_bound_matrix *m) {
     ds4_gpu_source_row_view v;
     char err[128];
     err[0] = '\0';
-    if (ds4_v100_bound_matrix_source_view(m, &v, err, sizeof(err))) {
+    if (ds4_bound_matrix_source_view(m, &v, err, sizeof(err))) {
         fprintf(stderr, "cuda_v100_descriptor_bound_attention_smoke: %s\n", err);
         failures++;
         memset(&v, 0, sizeof(v));
@@ -239,23 +239,23 @@ int main(int argc, char **argv) {
     model_map model;
     if (map_model_file(model_path, &model)) return 1;
 
-    ds4_v100_context_options opts;
-    ds4_v100_context_options_init(&opts);
+    ds4_context_options opts;
+    ds4_context_options_init(&opts);
     opts.pack_index_path = index;
     opts.kv_ctx_tokens = 1048576;
     opts.kv_active_slots = 1;
 
     char err[512] = {0};
-    ds4_v100_context *ctx = NULL;
-    if (ds4_v100_context_open(&ctx, &opts, err, sizeof(err))) {
+    ds4_context *ctx = NULL;
+    if (ds4_context_open(&ctx, &opts, err, sizeof(err))) {
         fprintf(stderr, "cuda_v100_descriptor_bound_attention_smoke: %s\n", err);
         unmap_model_file(&model);
         return 1;
     }
-    ds4_v100_layer_state state;
-    if (ds4_v100_layer_state_init(&state, ctx, layer, err, sizeof(err))) {
+    ds4_layer_state state;
+    if (ds4_layer_state_init(&state, ctx, layer, err, sizeof(err))) {
         fprintf(stderr, "cuda_v100_descriptor_bound_attention_smoke: %s\n", err);
-        ds4_v100_context_close(ctx);
+        ds4_context_close(ctx);
         unmap_model_file(&model);
         return 1;
     }
@@ -266,7 +266,7 @@ int main(int argc, char **argv) {
     const uint32_t kv_width = state.kv_latent_width;
     const uint32_t out_rank = state.attention_output_rank;
     uint64_t arena_bytes = 0;
-    check(ds4_v100_layer_state_attention_arena_span(&state,
+    check(ds4_layer_state_attention_arena_span(&state,
                                                     &arena_bytes,
                                                     err,
                                                     sizeof(err)) == 0,
@@ -304,7 +304,7 @@ int main(int argc, char **argv) {
     check(arena && ds4_gpu_arena_is_device_memory(arena), "arena is device memory");
     unsigned char *scratch = NULL;
     uint64_t scratch_bytes = 0;
-    const ds4_v100_bound_matrix *mats[] = {
+    const ds4_bound_matrix *mats[] = {
         &state.attn_q_a,
         &state.attn_q_b,
         &state.attn_kv_latent,
@@ -428,7 +428,7 @@ int main(int argc, char **argv) {
     free(q_a);
     free(attn_norm);
     free(hidden_x);
-    ds4_v100_context_close(ctx);
+    ds4_context_close(ctx);
     unmap_model_file(&model);
     return failures ? 1 : 0;
 }

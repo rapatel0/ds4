@@ -403,7 +403,7 @@ def main() -> int:
 
     fail = [check for check in checks if not check["ok"]]
     output = {
-        "schema": "ds4_v100_http_readiness.v1",
+        "schema": "ds4_http_readiness.v1",
         "case_dir": str(case_dir),
         "summary": str(summary_path),
         "status": str(status_path),

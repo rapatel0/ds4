@@ -155,7 +155,7 @@ slots = int(slots)
 tokens = int(tokens)
 
 summary = {
-    "schema": "ds4_v100_256k_32slot_gate.v1",
+    "schema": "ds4_256k_32slot_gate.v1",
     "launcher_check_exit_code": check_rc,
     "bench_exit_code": bench_rc,
     "memory_promote_max_mib": mem_limit,

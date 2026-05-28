@@ -379,8 +379,8 @@ void close_shared_rank_buffers(SharedRankBuffers *shared) {
     *shared = SharedRankBuffers{};
 }
 
-void fill_tp_runtime_config(const Options &opt, ds4_v100_tp_runtime_config *cfg) {
-    ds4_v100_tp_runtime_default_config(cfg);
+void fill_tp_runtime_config(const Options &opt, ds4_tp_runtime_config *cfg) {
+    ds4_tp_runtime_default_config(cfg);
     cfg->slots = (uint32_t)opt.slots;
     cfg->ctx = 262144;
     cfg->kv_dtype = opt.fp8_e5m2_kv_gate
@@ -392,22 +392,22 @@ void fill_tp_runtime_config(const Options &opt, ds4_v100_tp_runtime_config *cfg)
 }
 
 int open_shared_tp_runtime(const Options &opt, SharedTpRuntime *shared) {
-    ds4_v100_tp_runtime_config cfg;
+    ds4_tp_runtime_config cfg;
     fill_tp_runtime_config(opt, &cfg);
     char err[512] = {0};
-    if (ds4_v100_tp_runtime_open(&shared->rt, &cfg, err, sizeof(err)) != 0) {
+    if (ds4_tp_runtime_open(&shared->rt, &cfg, err, sizeof(err)) != 0) {
         std::fprintf(stderr, "tp_runtime_open_failed\t%s\n", err);
         *shared = SharedTpRuntime{};
         return 1;
     }
-    ds4_v100_tp_runtime_get_report(shared->rt, &shared->report);
+    ds4_tp_runtime_get_report(shared->rt, &shared->report);
     shared->initialized = true;
     return 0;
 }
 
 void close_shared_tp_runtime(SharedTpRuntime *shared) {
     if (!shared || !shared->rt) return;
-    ds4_v100_tp_runtime_close(shared->rt);
+    ds4_tp_runtime_close(shared->rt);
     *shared = SharedTpRuntime{};
 }
 

@@ -193,8 +193,8 @@ int main(int argc, char **argv) {
         check(ds4_gpu_set_model_fd(model.fd), "model fd");
     }
 
-    ds4_v100_stage_scheduler *scheds[DS4_V100_EXPECTED_GPUS];
-    ds4_v100_stage_scheduler_report reports[DS4_V100_EXPECTED_GPUS];
+    ds4_stage_scheduler *scheds[DS4_V100_EXPECTED_GPUS];
+    ds4_stage_scheduler_report reports[DS4_V100_EXPECTED_GPUS];
     memset(scheds, 0, sizeof(scheds));
     memset(reports, 0, sizeof(reports));
     uint32_t layers_executed = 0;
@@ -203,8 +203,8 @@ int main(int argc, char **argv) {
     uint64_t uploaded_tensors = 0;
     const uint32_t n_slots = (uint32_t)slots;
 
-    ds4_v100_stage_scheduler_options opts;
-    ds4_v100_stage_scheduler_options_init(&opts);
+    ds4_stage_scheduler_options opts;
+    ds4_stage_scheduler_options_init(&opts);
     opts.pack_index_path = index;
     opts.turbomind_pack_index_path = tm_index;
     opts.shard_dir = shard_dir;
@@ -216,7 +216,7 @@ int main(int argc, char **argv) {
     char err[512] = {0};
     for (int i = 0; i < stages; i++) {
         opts.stage_id = i;
-        if (ds4_v100_stage_scheduler_open(&scheds[i], &opts, err, sizeof(err))) {
+        if (ds4_stage_scheduler_open(&scheds[i], &opts, err, sizeof(err))) {
             fprintf(stderr,
                     "cuda_v100_full_scheduler_smoke: open stage %d failed: %s\n",
                     i,
@@ -226,7 +226,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    ds4_v100_stage_scheduler_report batch_reports[DS4_V100_SCHED_MAX_SLOTS];
+    ds4_stage_scheduler_report batch_reports[DS4_V100_SCHED_MAX_SLOTS];
     uint32_t batch_tokens[DS4_V100_SCHED_MAX_SLOTS];
     uint32_t batch_positions[DS4_V100_SCHED_MAX_SLOTS];
     for (uint32_t i = 0; i < n_slots; i++) {
@@ -237,7 +237,7 @@ int main(int argc, char **argv) {
     err[0] = '\0';
     memset(batch_reports, 0, sizeof(batch_reports));
     if (n_slots == 1) {
-        check(ds4_v100_stage_scheduler_decode_token(scheds[0],
+        check(ds4_stage_scheduler_decode_token(scheds[0],
                                                     (uint32_t)token,
                                                     (uint32_t)position,
                                                     &reports[0],
@@ -245,7 +245,7 @@ int main(int argc, char **argv) {
                                                     sizeof(err)) == 0,
               err[0] ? err : "stage 0 decode");
     } else {
-        check(ds4_v100_stage_scheduler_decode_token_batch(scheds[0],
+        check(ds4_stage_scheduler_decode_token_batch(scheds[0],
                                                           batch_tokens,
                                                           batch_positions,
                                                           n_slots,
@@ -259,10 +259,10 @@ int main(int argc, char **argv) {
     for (int i = 1; i < stages && failures == 0; i++) {
         err[0] = '\0';
         if (n_slots == 1) {
-            check(ds4_v100_stage_scheduler_handoff(scheds[i], scheds[i - 1], err, sizeof(err)) == 0,
+            check(ds4_stage_scheduler_handoff(scheds[i], scheds[i - 1], err, sizeof(err)) == 0,
                   err[0] ? err : "stage handoff");
         } else {
-            check(ds4_v100_stage_scheduler_handoff_batch(scheds[i],
+            check(ds4_stage_scheduler_handoff_batch(scheds[i],
                                                          scheds[i - 1],
                                                          n_slots,
                                                          err,
@@ -271,7 +271,7 @@ int main(int argc, char **argv) {
         }
         err[0] = '\0';
         if (n_slots == 1) {
-            check(ds4_v100_stage_scheduler_decode_hc(scheds[i],
+            check(ds4_stage_scheduler_decode_hc(scheds[i],
                                                      (uint32_t)token,
                                                      (uint32_t)position,
                                                      &reports[i],
@@ -280,7 +280,7 @@ int main(int argc, char **argv) {
                   err[0] ? err : "stage decode");
         } else {
             memset(batch_reports, 0, sizeof(batch_reports));
-            check(ds4_v100_stage_scheduler_decode_hc_batch(scheds[i],
+            check(ds4_stage_scheduler_decode_hc_batch(scheds[i],
                                                            batch_tokens,
                                                            batch_positions,
                                                            n_slots,
@@ -320,7 +320,7 @@ int main(int argc, char **argv) {
     float *hc = (float *)calloc((size_t)hc_values, sizeof(float));
     check(hc != NULL, "host HC allocation");
     if (hc && stages > 0) {
-        check(ds4_v100_stage_scheduler_read_hc(scheds[stages - 1],
+        check(ds4_stage_scheduler_read_hc(scheds[stages - 1],
                                                hc,
                                                hc_values * sizeof(float)) != 0,
               "final HC read");
@@ -346,7 +346,7 @@ cleanup:
            reports[stages - 1].last_layer_report.selected_experts[0],
            failures ? "FAIL" : "ok");
 
-    for (int i = stages - 1; i >= 0; i--) ds4_v100_stage_scheduler_close(scheds[i]);
+    for (int i = stages - 1; i >= 0; i--) ds4_stage_scheduler_close(scheds[i]);
     unmap_model_file(&model);
     return failures ? 1 : 0;
 }

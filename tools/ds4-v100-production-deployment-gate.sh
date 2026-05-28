@@ -345,17 +345,17 @@ fi
 initial_served="$(sed -n 's/.*"served_requests":\([0-9][0-9]*\).*/\1/p' "$status_json" | sed -n '1p')"
 
 http_get "/metrics" "$metrics_http" "$metrics_txt"
-grep -q '^ds4_v100_readiness_level 2$' "$metrics_txt" || fail "metrics missing readiness level"
-grep -q "^ds4_v100_ctx_tokens $ctx$" "$metrics_txt" || fail "metrics ctx_tokens mismatch"
-grep -q '^ds4_v100_mtp_enabled 0$' "$metrics_txt" || fail "metrics should report mtp disabled"
-grep -q "^ds4_v100_configured_slots $slots$" "$metrics_txt" || fail "metrics missing configured_slots=$slots"
-grep -q "^ds4_v100_active_microbatch $active_microbatch$" "$metrics_txt" || fail "metrics missing active_microbatch=$active_microbatch"
-grep -q '^ds4_v100_warmed_ready 1$' "$metrics_txt" || fail "metrics missing warmed_ready=1"
+grep -q '^ds4_readiness_level 2$' "$metrics_txt" || fail "metrics missing readiness level"
+grep -q "^ds4_ctx_tokens $ctx$" "$metrics_txt" || fail "metrics ctx_tokens mismatch"
+grep -q '^ds4_mtp_enabled 0$' "$metrics_txt" || fail "metrics should report mtp disabled"
+grep -q "^ds4_configured_slots $slots$" "$metrics_txt" || fail "metrics missing configured_slots=$slots"
+grep -q "^ds4_active_microbatch $active_microbatch$" "$metrics_txt" || fail "metrics missing active_microbatch=$active_microbatch"
+grep -q '^ds4_warmed_ready 1$' "$metrics_txt" || fail "metrics missing warmed_ready=1"
 if [ "$warmup_required_shape" -eq 1 ]; then
-    grep -q '^ds4_v100_startup_warmup_enabled 1$' "$metrics_txt" || fail "metrics missing startup_warmup_enabled=1"
-    grep -q '^ds4_v100_warmup_required 1$' "$metrics_txt" || fail "metrics missing warmup_required=1"
+    grep -q '^ds4_startup_warmup_enabled 1$' "$metrics_txt" || fail "metrics missing startup_warmup_enabled=1"
+    grep -q '^ds4_warmup_required 1$' "$metrics_txt" || fail "metrics missing warmup_required=1"
 else
-    grep -q '^ds4_v100_warmup_required 0$' "$metrics_txt" || fail "metrics missing warmup_required=0"
+    grep -q '^ds4_warmup_required 0$' "$metrics_txt" || fail "metrics missing warmup_required=0"
 fi
 
 awk -v tokens="$tokens" '

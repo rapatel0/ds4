@@ -150,11 +150,11 @@ static void cpu_hc_weighted_sum(float *out, const float *hc, const float *weight
 }
 
 static void cpu_output_topk(const model_map *model,
-                            const ds4_v100_tensor_binding *hc_head_fn,
-                            const ds4_v100_tensor_binding *hc_head_scale,
-                            const ds4_v100_tensor_binding *hc_head_base,
-                            const ds4_v100_tensor_binding *output_norm,
-                            const ds4_v100_tensor_binding *output_weight,
+                            const ds4_tensor_binding *hc_head_fn,
+                            const ds4_tensor_binding *hc_head_scale,
+                            const ds4_tensor_binding *hc_head_base,
+                            const ds4_tensor_binding *output_norm,
+                            const ds4_tensor_binding *output_weight,
                             const float *hc,
                             uint32_t *tokens,
                             float *logits) {
@@ -245,43 +245,43 @@ int main(int argc, char **argv) {
     check(ds4_gpu_set_model_fd(model.fd), "model fd");
 
     char err[512] = {0};
-    ds4_v100_context_options ctx_opts;
-    ds4_v100_context_options_init(&ctx_opts);
+    ds4_context_options ctx_opts;
+    ds4_context_options_init(&ctx_opts);
     ctx_opts.pack_index_path = index;
-    ds4_v100_context *ctx = NULL;
-    if (ds4_v100_context_open(&ctx, &ctx_opts, err, sizeof(err))) {
+    ds4_context *ctx = NULL;
+    if (ds4_context_open(&ctx, &ctx_opts, err, sizeof(err))) {
         fprintf(stderr, "cuda_v100_output_head_parity_smoke: %s\n", err);
         unmap_model_file(&model);
         return 1;
     }
 
-    ds4_v100_tensor_binding hc_head_fn;
-    ds4_v100_tensor_binding hc_head_scale;
-    ds4_v100_tensor_binding hc_head_base;
-    ds4_v100_tensor_binding output_norm;
-    ds4_v100_tensor_binding output_weight;
-    if (ds4_v100_context_lookup_tensor_binding(ctx, "hc_head_fn", &hc_head_fn, err, sizeof(err)) ||
-        ds4_v100_context_lookup_tensor_binding(ctx, "hc_head_scale", &hc_head_scale, err, sizeof(err)) ||
-        ds4_v100_context_lookup_tensor_binding(ctx, "hc_head_base", &hc_head_base, err, sizeof(err)) ||
-        ds4_v100_context_lookup_tensor_binding(ctx, "output_norm.weight", &output_norm, err, sizeof(err)) ||
-        ds4_v100_context_output_head_binding(ctx, &output_weight, err, sizeof(err))) {
+    ds4_tensor_binding hc_head_fn;
+    ds4_tensor_binding hc_head_scale;
+    ds4_tensor_binding hc_head_base;
+    ds4_tensor_binding output_norm;
+    ds4_tensor_binding output_weight;
+    if (ds4_context_lookup_tensor_binding(ctx, "hc_head_fn", &hc_head_fn, err, sizeof(err)) ||
+        ds4_context_lookup_tensor_binding(ctx, "hc_head_scale", &hc_head_scale, err, sizeof(err)) ||
+        ds4_context_lookup_tensor_binding(ctx, "hc_head_base", &hc_head_base, err, sizeof(err)) ||
+        ds4_context_lookup_tensor_binding(ctx, "output_norm.weight", &output_norm, err, sizeof(err)) ||
+        ds4_context_output_head_binding(ctx, &output_weight, err, sizeof(err))) {
         fprintf(stderr, "cuda_v100_output_head_parity_smoke: %s\n", err);
-        ds4_v100_context_close(ctx);
+        ds4_context_close(ctx);
         unmap_model_file(&model);
         return 1;
     }
 
-    ds4_v100_stage_scheduler_options opts;
-    ds4_v100_stage_scheduler_options_init(&opts);
+    ds4_stage_scheduler_options opts;
+    ds4_stage_scheduler_options_init(&opts);
     opts.pack_index_path = index;
     opts.model_map = model.ptr;
     opts.model_size = model.size;
     opts.stage_id = DS4_V100_EXPECTED_GPUS - 1;
 
-    ds4_v100_stage_scheduler *sched = NULL;
-    if (ds4_v100_stage_scheduler_open(&sched, &opts, err, sizeof(err))) {
+    ds4_stage_scheduler *sched = NULL;
+    if (ds4_stage_scheduler_open(&sched, &opts, err, sizeof(err))) {
         fprintf(stderr, "cuda_v100_output_head_parity_smoke: %s\n", err);
-        ds4_v100_context_close(ctx);
+        ds4_context_close(ctx);
         unmap_model_file(&model);
         return 1;
     }
@@ -309,12 +309,12 @@ int main(int argc, char **argv) {
                         hc,
                         cpu_tokens,
                         cpu_logits);
-        check(ds4_v100_stage_scheduler_write_hc(sched,
+        check(ds4_stage_scheduler_write_hc(sched,
                                                 hc,
                                                 hc_values * sizeof(float)) != 0,
               "scheduler HC write");
         err[0] = '\0';
-        check(ds4_v100_stage_scheduler_select_topk(sched,
+        check(ds4_stage_scheduler_select_topk(sched,
                                                    gpu_tokens,
                                                    gpu_logits,
                                                    TOPK,
@@ -352,8 +352,8 @@ int main(int argc, char **argv) {
            failures ? "FAIL" : "ok");
 
     free(hc);
-    ds4_v100_stage_scheduler_close(sched);
-    ds4_v100_context_close(ctx);
+    ds4_stage_scheduler_close(sched);
+    ds4_context_close(ctx);
     unmap_model_file(&model);
     return failures ? 1 : 0;
 }

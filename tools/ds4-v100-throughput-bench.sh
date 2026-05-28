@@ -218,7 +218,7 @@ fi
 } >"$report"
 
 cat >"$summary_json" <<EOF
-{"schema":"ds4_v100_throughput_optimization.v1","model_path":"$model","pack_index_path":"$pack_index","ctx_tokens":$ctx,"requested_tokens":$tokens,"serial_open_ms":$serial_open_ms,"serial_open_stage_ms":$serial_open_stage,"parallel_open_ms":$parallel_open_ms,"parallel_open_stage_ms":$parallel_open_stage,"speedup":$speedup,"min_speedup":$min_speedup,"replay_open_ms":${replay_open_ms:-0},"prompt_replay_ms":${prompt_replay_ms:-0},"continuation_decode_ms":${continuation_decode_ms:-0},"continuation_tokens_per_second":${continuation_tps:-0},"generated_tokens_per_second":${generated_tps:-0},"first_token_hex":"$first_hex","expected_token_hex":"$expected_lower","optimization_claimed":$([ "$verdict" = "PASS" ] && echo true || echo false),"verdict":"$verdict"}
+{"schema":"ds4_throughput_optimization.v1","model_path":"$model","pack_index_path":"$pack_index","ctx_tokens":$ctx,"requested_tokens":$tokens,"serial_open_ms":$serial_open_ms,"serial_open_stage_ms":$serial_open_stage,"parallel_open_ms":$parallel_open_ms,"parallel_open_stage_ms":$parallel_open_stage,"speedup":$speedup,"min_speedup":$min_speedup,"replay_open_ms":${replay_open_ms:-0},"prompt_replay_ms":${prompt_replay_ms:-0},"continuation_decode_ms":${continuation_decode_ms:-0},"continuation_tokens_per_second":${continuation_tps:-0},"generated_tokens_per_second":${generated_tps:-0},"first_token_hex":"$first_hex","expected_token_hex":"$expected_lower","optimization_claimed":$([ "$verdict" = "PASS" ] && echo true || echo false),"verdict":"$verdict"}
 EOF
 
 cat "$report"

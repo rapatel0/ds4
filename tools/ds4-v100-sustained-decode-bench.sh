@@ -700,7 +700,7 @@ timing_avg = {
 }
 
 summary = {
-    "schema": "ds4_v100_sustained_decode_case.v1",
+    "schema": "ds4_sustained_decode_case.v1",
     "host": host,
     "port": port,
     "requests": n_requests,
@@ -1195,7 +1195,7 @@ for p in paths:
     with open(p, "r", encoding="utf-8") as f:
         rows.append(json.load(f))
 summary = {
-    "schema": "ds4_v100_sustained_decode.v1",
+    "schema": "ds4_sustained_decode.v1",
     "mtp_serving": mtp_serving,
     "mtp_top_k": mtp_top_k,
     "async_handoff": async_handoff,

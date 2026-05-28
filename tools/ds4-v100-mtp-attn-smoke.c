@@ -269,10 +269,10 @@ static void fill_hc_state(float *x) {
 }
 
 static const ds4_mtp_sidecar_tensor_info *need_tensor(
-        const ds4_v100_mtp_sidecar *sidecar,
+        const ds4_mtp_sidecar *sidecar,
         const char *name) {
     const ds4_mtp_sidecar_tensor_info *t =
-        ds4_v100_mtp_sidecar_tensor(sidecar, name);
+        ds4_mtp_sidecar_tensor(sidecar, name);
     if (!t) {
         fprintf(stderr, "ds4-v100-mtp-attn-smoke: missing MTP tensor %s\n", name);
     }
@@ -401,11 +401,11 @@ static int compare_device_to_host(const char *label,
     return 0;
 }
 
-static const unsigned char *tensor_bytes(const ds4_v100_mtp_sidecar *sidecar,
+static const unsigned char *tensor_bytes(const ds4_mtp_sidecar *sidecar,
                                          const char *name) {
     const ds4_mtp_sidecar_tensor_info *t = need_tensor(sidecar, name);
     if (!t) return NULL;
-    return (const unsigned char *)ds4_v100_mtp_sidecar_map(sidecar) + t->source_offset;
+    return (const unsigned char *)ds4_mtp_sidecar_map(sidecar) + t->source_offset;
 }
 
 static float sigmoid_host(float x) {
@@ -638,13 +638,13 @@ static int raw_row_visible(uint32_t raw_start, uint32_t n_raw, uint32_t row) {
     return 0;
 }
 
-static int grouped_output_arena(ds4_v100_mtp_sidecar *sidecar,
+static int grouped_output_arena(ds4_mtp_sidecar *sidecar,
                                 const ds4_gpu_source_row_view *out_a,
                                 const ds4_gpu_source_row_view *out_b,
                                 const ds4_gpu_tensor *heads,
                                 ds4_gpu_tensor *low,
                                 ds4_gpu_tensor *out) {
-    ds4_gpu_arena *arena = ds4_v100_mtp_sidecar_arena(sidecar);
+    ds4_gpu_arena *arena = ds4_mtp_sidecar_arena(sidecar);
     if (!arena || !out_a || !out_b || !heads || !low || !out) return 1;
     if (out_a->rows != MTP_ATTN_OUT_LOW_DIM ||
         out_a->cols != MTP_ATTN_OUT_GROUP_DIM ||
@@ -687,11 +687,11 @@ static int grouped_output_arena(ds4_v100_mtp_sidecar *sidecar,
     return ds4_gpu_arena_q8_0_matmul_f32(arena, out_b, low, out, 1);
 }
 
-static int run_integrated_attention(ds4_v100_mtp_sidecar *sidecar,
+static int run_integrated_attention(ds4_mtp_sidecar *sidecar,
                                     double max_abs_tol,
                                     FILE *report) {
     char err[512] = {0};
-    ds4_gpu_arena *arena = ds4_v100_mtp_sidecar_arena(sidecar);
+    ds4_gpu_arena *arena = ds4_mtp_sidecar_arena(sidecar);
 
     ds4_gpu_source_row_view hc_fn_view;
     ds4_gpu_source_row_view hc_scale_view;
@@ -706,62 +706,62 @@ static int run_integrated_attention(ds4_v100_mtp_sidecar *sidecar,
     ds4_gpu_source_row_view out_a_view;
     ds4_gpu_source_row_view out_b_view;
 
-    if (ds4_v100_mtp_sidecar_f32_matrix_view(sidecar,
+    if (ds4_mtp_sidecar_f32_matrix_view(sidecar,
                                              "mtp.0.hc_attn_fn.weight",
                                              &hc_fn_view,
                                              err,
                                              sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_f32_vector_view(sidecar,
+        ds4_mtp_sidecar_f32_vector_view(sidecar,
                                              "mtp.0.hc_attn_scale.weight",
                                              &hc_scale_view,
                                              err,
                                              sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_f32_vector_view(sidecar,
+        ds4_mtp_sidecar_f32_vector_view(sidecar,
                                              "mtp.0.hc_attn_base.weight",
                                              &hc_base_view,
                                              err,
                                              sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_f32_vector_view(sidecar,
+        ds4_mtp_sidecar_f32_vector_view(sidecar,
                                              "mtp.0.attn_norm.weight",
                                              &attn_norm_view,
                                              err,
                                              sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_q8_0_view(sidecar,
+        ds4_mtp_sidecar_q8_0_view(sidecar,
                                        "mtp.0.attn_q_a.weight",
                                        &q_a_view,
                                        err,
                                        sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_f32_vector_view(sidecar,
+        ds4_mtp_sidecar_f32_vector_view(sidecar,
                                              "mtp.0.attn_q_a_norm.weight",
                                              &q_a_norm_view,
                                              err,
                                              sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_q8_0_view(sidecar,
+        ds4_mtp_sidecar_q8_0_view(sidecar,
                                        "mtp.0.attn_q_b.weight",
                                        &q_b_view,
                                        err,
                                        sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_q8_0_view(sidecar,
+        ds4_mtp_sidecar_q8_0_view(sidecar,
                                        "mtp.0.attn_kv.weight",
                                        &kv_view,
                                        err,
                                        sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_f32_vector_view(sidecar,
+        ds4_mtp_sidecar_f32_vector_view(sidecar,
                                              "mtp.0.attn_kv_a_norm.weight",
                                              &kv_norm_view,
                                              err,
                                              sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_f32_vector_view(sidecar,
+        ds4_mtp_sidecar_f32_vector_view(sidecar,
                                              "mtp.0.attn_sinks.weight",
                                              &sinks_view,
                                              err,
                                              sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_q8_0_view(sidecar,
+        ds4_mtp_sidecar_q8_0_view(sidecar,
                                        "mtp.0.attn_output_a.weight",
                                        &out_a_view,
                                        err,
                                        sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_q8_0_view(sidecar,
+        ds4_mtp_sidecar_q8_0_view(sidecar,
                                        "mtp.0.attn_output_b.weight",
                                        &out_b_view,
                                        err,
@@ -1174,12 +1174,12 @@ done:
     return rc;
 }
 
-static int run_attention(ds4_v100_mtp_sidecar *sidecar,
+static int run_attention(ds4_mtp_sidecar *sidecar,
                          double max_abs_tol,
                          FILE *report) {
     char err[512] = {0};
     ds4_gpu_source_row_view sinks_view;
-    if (ds4_v100_mtp_sidecar_f32_vector_view(sidecar,
+    if (ds4_mtp_sidecar_f32_vector_view(sidecar,
                                              "mtp.0.attn_sinks.weight",
                                              &sinks_view,
                                              err,
@@ -1195,9 +1195,9 @@ static int run_attention(ds4_v100_mtp_sidecar *sidecar,
     }
 
     const ds4_mtp_sidecar_tensor_info *sinks_tensor =
-        ds4_v100_mtp_sidecar_tensor(sidecar, "mtp.0.attn_sinks.weight");
+        ds4_mtp_sidecar_tensor(sidecar, "mtp.0.attn_sinks.weight");
     const float *sinks = (const float *)(
-            (const unsigned char *)ds4_v100_mtp_sidecar_map(sidecar) +
+            (const unsigned char *)ds4_mtp_sidecar_map(sidecar) +
             sinks_tensor->source_offset);
 
     const uint64_t heads_values = (uint64_t)MTP_ATTN_N_HEAD * MTP_ATTN_HEAD_DIM;
@@ -1278,7 +1278,7 @@ static int run_attention(ds4_v100_mtp_sidecar *sidecar,
             : MTP_ATTN_RAW_CAP;
         const uint32_t raw_start = (pos + 1u - n_raw) % MTP_ATTN_RAW_CAP;
         if (ds4_gpu_arena_attention_decode_heads_tensor(
-                    ds4_v100_mtp_sidecar_arena(sidecar),
+                    ds4_mtp_sidecar_arena(sidecar),
                     &sinks_view,
                     heads_t,
                     q_t,
@@ -1393,7 +1393,7 @@ int main(int argc, char **argv) {
 
     int rc = 1;
     char err[512] = {0};
-    ds4_v100_mtp_sidecar *sidecar = NULL;
+    ds4_mtp_sidecar *sidecar = NULL;
     int device_count = ds4_gpu_device_count();
     fprintf(report, "visible_devices\t%d\n", device_count);
     fprintf(report, "target_gpu\t%d\n", opt.gpu);
@@ -1425,12 +1425,12 @@ int main(int argc, char **argv) {
         goto done;
     }
 
-    ds4_v100_mtp_sidecar_options sidecar_opts;
-    ds4_v100_mtp_sidecar_options_init(&sidecar_opts);
+    ds4_mtp_sidecar_options sidecar_opts;
+    ds4_mtp_sidecar_options_init(&sidecar_opts);
     sidecar_opts.mtp_path = opt.mtp_model;
     sidecar_opts.gpu = opt.gpu;
     sidecar_opts.require_device_arena = true;
-    if (ds4_v100_mtp_sidecar_open(&sidecar, &sidecar_opts, report, err, sizeof(err)) != 0) {
+    if (ds4_mtp_sidecar_open(&sidecar, &sidecar_opts, report, err, sizeof(err)) != 0) {
         fprintf(stderr,
                 "ds4-v100-mtp-attn-smoke: %s\n",
                 err[0] ? err : "MTP sidecar open failed");
@@ -1439,7 +1439,7 @@ int main(int argc, char **argv) {
 
     uint64_t reserve_bytes = (uint64_t)opt.reserve_mib * 1024ull * 1024ull;
     uint64_t free_after =
-        ds4_gpu_arena_free_after_upload_bytes(ds4_v100_mtp_sidecar_arena(sidecar));
+        ds4_gpu_arena_free_after_upload_bytes(ds4_mtp_sidecar_arena(sidecar));
     fprintf(report, "reserve_bytes\t%" PRIu64 "\n", reserve_bytes);
     if (free_after < reserve_bytes) {
         fprintf(stderr,
@@ -1460,7 +1460,7 @@ int main(int argc, char **argv) {
     rc = 0;
 
 done:
-    ds4_v100_mtp_sidecar_close(sidecar);
+    ds4_mtp_sidecar_close(sidecar);
     if (report && report != stdout) fclose(report);
     return rc;
 }

@@ -261,13 +261,13 @@ static int matmul_q8_0_host(float *out,
     return 0;
 }
 
-static unsigned char *copy_sidecar_tensor(ds4_v100_mtp_sidecar *sidecar,
+static unsigned char *copy_sidecar_tensor(ds4_mtp_sidecar *sidecar,
                                           const ds4_mtp_sidecar_tensor_info *tensor) {
     if (!sidecar || !tensor || tensor->byte_length > SIZE_MAX) return NULL;
     unsigned char *copy = (unsigned char *)malloc((size_t)tensor->byte_length);
     if (!copy) return NULL;
     memcpy(copy,
-           (const unsigned char *)ds4_v100_mtp_sidecar_map(sidecar) + tensor->source_offset,
+           (const unsigned char *)ds4_mtp_sidecar_map(sidecar) + tensor->source_offset,
            (size_t)tensor->byte_length);
     return copy;
 }
@@ -322,7 +322,7 @@ static int compare_tensor_pair(const char *label,
     return 0;
 }
 
-static int run_projection(ds4_v100_mtp_sidecar *sidecar,
+static int run_projection(ds4_mtp_sidecar *sidecar,
                           const char *name,
                           uint64_t n_tok,
                           uint32_t salt,
@@ -330,7 +330,7 @@ static int run_projection(ds4_v100_mtp_sidecar *sidecar,
                           FILE *report) {
     char err[512] = {0};
     ds4_gpu_source_row_view view;
-    if (ds4_v100_mtp_sidecar_q8_0_view(sidecar, name, &view, err, sizeof(err)) != 0) {
+    if (ds4_mtp_sidecar_q8_0_view(sidecar, name, &view, err, sizeof(err)) != 0) {
         fprintf(stderr,
                 "ds4-v100-mtp-prefix-smoke: %s\n",
                 err[0] ? err : "failed to bind Q8_0 view");
@@ -338,7 +338,7 @@ static int run_projection(ds4_v100_mtp_sidecar *sidecar,
     }
 
     const ds4_mtp_sidecar_tensor_info *tensor =
-        ds4_v100_mtp_sidecar_tensor(sidecar, name);
+        ds4_mtp_sidecar_tensor(sidecar, name);
     const uint64_t x_values = n_tok * (uint64_t)view.cols;
     const uint64_t y_values = n_tok * (uint64_t)view.rows;
     unsigned char *weight_copy = (unsigned char *)malloc((size_t)tensor->byte_length);
@@ -357,7 +357,7 @@ static int run_projection(ds4_v100_mtp_sidecar *sidecar,
         return 1;
     }
     memcpy(weight_copy,
-           (const unsigned char *)ds4_v100_mtp_sidecar_map(sidecar) + tensor->source_offset,
+           (const unsigned char *)ds4_mtp_sidecar_map(sidecar) + tensor->source_offset,
            (size_t)tensor->byte_length);
     fill_activation(x, n_tok, view.cols, salt);
 
@@ -377,7 +377,7 @@ static int run_projection(ds4_v100_mtp_sidecar *sidecar,
     }
 
     double t0 = now_ms();
-    if (ds4_gpu_arena_q8_0_matmul_f32(ds4_v100_mtp_sidecar_arena(sidecar),
+    if (ds4_gpu_arena_q8_0_matmul_f32(ds4_mtp_sidecar_arena(sidecar),
                                       &view,
                                       x_t,
                                       arena_t,
@@ -453,7 +453,7 @@ done:
     return rc;
 }
 
-static int run_prefix_chain(ds4_v100_mtp_sidecar *sidecar,
+static int run_prefix_chain(ds4_mtp_sidecar *sidecar,
                             double max_abs_tol,
                             FILE *report) {
     char err[512] = {0};
@@ -462,22 +462,22 @@ static int run_prefix_chain(ds4_v100_mtp_sidecar *sidecar,
     ds4_gpu_source_row_view e_proj_view;
     ds4_gpu_source_row_view h_proj_view;
 
-    if (ds4_v100_mtp_sidecar_f32_vector_view(sidecar,
+    if (ds4_mtp_sidecar_f32_vector_view(sidecar,
                                              "mtp.0.enorm.weight",
                                              &enorm_view,
                                              err,
                                              sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_f32_vector_view(sidecar,
+        ds4_mtp_sidecar_f32_vector_view(sidecar,
                                              "mtp.0.hnorm.weight",
                                              &hnorm_view,
                                              err,
                                              sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_q8_0_view(sidecar,
+        ds4_mtp_sidecar_q8_0_view(sidecar,
                                        "mtp.0.e_proj.weight",
                                        &e_proj_view,
                                        err,
                                        sizeof(err)) != 0 ||
-        ds4_v100_mtp_sidecar_q8_0_view(sidecar,
+        ds4_mtp_sidecar_q8_0_view(sidecar,
                                        "mtp.0.h_proj.weight",
                                        &h_proj_view,
                                        err,
@@ -499,13 +499,13 @@ static int run_prefix_chain(ds4_v100_mtp_sidecar *sidecar,
     }
 
     const ds4_mtp_sidecar_tensor_info *enorm_tensor =
-        ds4_v100_mtp_sidecar_tensor(sidecar, "mtp.0.enorm.weight");
+        ds4_mtp_sidecar_tensor(sidecar, "mtp.0.enorm.weight");
     const ds4_mtp_sidecar_tensor_info *hnorm_tensor =
-        ds4_v100_mtp_sidecar_tensor(sidecar, "mtp.0.hnorm.weight");
+        ds4_mtp_sidecar_tensor(sidecar, "mtp.0.hnorm.weight");
     const ds4_mtp_sidecar_tensor_info *e_proj_tensor =
-        ds4_v100_mtp_sidecar_tensor(sidecar, "mtp.0.e_proj.weight");
+        ds4_mtp_sidecar_tensor(sidecar, "mtp.0.e_proj.weight");
     const ds4_mtp_sidecar_tensor_info *h_proj_tensor =
-        ds4_v100_mtp_sidecar_tensor(sidecar, "mtp.0.h_proj.weight");
+        ds4_mtp_sidecar_tensor(sidecar, "mtp.0.h_proj.weight");
     unsigned char *enorm_copy = copy_sidecar_tensor(sidecar, enorm_tensor);
     unsigned char *hnorm_copy = copy_sidecar_tensor(sidecar, hnorm_tensor);
     unsigned char *e_proj_copy = copy_sidecar_tensor(sidecar, e_proj_tensor);
@@ -622,14 +622,14 @@ static int run_prefix_chain(ds4_v100_mtp_sidecar *sidecar,
     }
 
     double t0 = now_ms();
-    if (ds4_gpu_arena_f32_rms_norm_f32(ds4_v100_mtp_sidecar_arena(sidecar),
+    if (ds4_gpu_arena_f32_rms_norm_f32(ds4_mtp_sidecar_arena(sidecar),
                                        &enorm_view,
                                        embed_t,
                                        arena_enorm,
                                        n_embd,
                                        1,
                                        MTP_PREFIX_RMS_EPS) != 0 ||
-        ds4_gpu_arena_q8_0_matmul_f32(ds4_v100_mtp_sidecar_arena(sidecar),
+        ds4_gpu_arena_q8_0_matmul_f32(ds4_mtp_sidecar_arena(sidecar),
                                       &e_proj_view,
                                       arena_enorm,
                                       arena_eproj,
@@ -638,14 +638,14 @@ static int run_prefix_chain(ds4_v100_mtp_sidecar *sidecar,
                                   arena_eproj,
                                   n_embd,
                                   MTP_PREFIX_HC_ROWS) ||
-        ds4_gpu_arena_f32_rms_norm_f32(ds4_v100_mtp_sidecar_arena(sidecar),
+        ds4_gpu_arena_f32_rms_norm_f32(ds4_mtp_sidecar_arena(sidecar),
                                        &hnorm_view,
                                        prev_hc_t,
                                        arena_hnorm,
                                        n_embd,
                                        MTP_PREFIX_HC_ROWS,
                                        MTP_PREFIX_RMS_EPS) != 0 ||
-        ds4_gpu_arena_q8_0_matmul_f32(ds4_v100_mtp_sidecar_arena(sidecar),
+        ds4_gpu_arena_q8_0_matmul_f32(ds4_mtp_sidecar_arena(sidecar),
                                       &h_proj_view,
                                       arena_hnorm,
                                       arena_hproj,
@@ -730,7 +730,7 @@ int main(int argc, char **argv) {
 
     int rc = 1;
     char err[512] = {0};
-    ds4_v100_mtp_sidecar *sidecar = NULL;
+    ds4_mtp_sidecar *sidecar = NULL;
     int device_count = ds4_gpu_device_count();
     fprintf(report, "visible_devices\t%d\n", device_count);
     fprintf(report, "target_gpu\t%d\n", opt.gpu);
@@ -764,12 +764,12 @@ int main(int argc, char **argv) {
     setenv("DS4_CUDA_NO_Q8_F16_CACHE", "1", 0);
     setenv("DS4_CUDA_NO_Q8_F32_CACHE", "1", 0);
 
-    ds4_v100_mtp_sidecar_options sidecar_opts;
-    ds4_v100_mtp_sidecar_options_init(&sidecar_opts);
+    ds4_mtp_sidecar_options sidecar_opts;
+    ds4_mtp_sidecar_options_init(&sidecar_opts);
     sidecar_opts.mtp_path = opt.mtp_model;
     sidecar_opts.gpu = opt.gpu;
     sidecar_opts.require_device_arena = true;
-    if (ds4_v100_mtp_sidecar_open(&sidecar, &sidecar_opts, report, err, sizeof(err)) != 0) {
+    if (ds4_mtp_sidecar_open(&sidecar, &sidecar_opts, report, err, sizeof(err)) != 0) {
         fprintf(stderr,
                 "ds4-v100-mtp-prefix-smoke: %s\n",
                 err[0] ? err : "MTP sidecar open failed");
@@ -778,7 +778,7 @@ int main(int argc, char **argv) {
 
     uint64_t reserve_bytes = (uint64_t)opt.reserve_mib * 1024ull * 1024ull;
     uint64_t free_after =
-        ds4_gpu_arena_free_after_upload_bytes(ds4_v100_mtp_sidecar_arena(sidecar));
+        ds4_gpu_arena_free_after_upload_bytes(ds4_mtp_sidecar_arena(sidecar));
     fprintf(report, "reserve_bytes\t%" PRIu64 "\n", reserve_bytes);
     if (free_after < reserve_bytes) {
         fprintf(stderr,
@@ -817,7 +817,7 @@ int main(int argc, char **argv) {
     rc = 0;
 
 done:
-    ds4_v100_mtp_sidecar_close(sidecar);
+    ds4_mtp_sidecar_close(sidecar);
     if (report && report != stdout) fclose(report);
     return rc;
 }

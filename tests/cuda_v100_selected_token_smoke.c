@@ -258,7 +258,7 @@ int main(int argc, char **argv) {
     }
     check(ds4_gpu_set_model_fd(model.fd), "model fd");
 
-    ds4_v100_stage_scheduler *scheds[DS4_V100_EXPECTED_GPUS];
+    ds4_stage_scheduler *scheds[DS4_V100_EXPECTED_GPUS];
     memset(scheds, 0, sizeof(scheds));
     uint32_t selected = UINT32_MAX;
     float selected_logit = 0.0f;
@@ -269,8 +269,8 @@ int main(int argc, char **argv) {
         top_logits[i] = 0.0f;
     }
 
-    ds4_v100_stage_scheduler_options opts;
-    ds4_v100_stage_scheduler_options_init(&opts);
+    ds4_stage_scheduler_options opts;
+    ds4_stage_scheduler_options_init(&opts);
     opts.pack_index_path = index;
     opts.turbomind_pack_index_path = tm_index;
     opts.shard_dir = shard_dir;
@@ -284,7 +284,7 @@ int main(int argc, char **argv) {
     char err[512] = {0};
     for (int i = 0; i < DS4_V100_EXPECTED_GPUS; i++) {
         opts.stage_id = i;
-        if (ds4_v100_stage_scheduler_open(&scheds[i], &opts, err, sizeof(err))) {
+        if (ds4_stage_scheduler_open(&scheds[i], &opts, err, sizeof(err))) {
             fprintf(stderr,
                     "cuda_v100_selected_token_smoke: open stage %d failed: %s\n",
                     i,
@@ -299,9 +299,9 @@ int main(int argc, char **argv) {
             check(0, "negative prompt token");
             break;
         }
-        ds4_v100_stage_scheduler_report report;
+        ds4_stage_scheduler_report report;
         err[0] = '\0';
-        check(ds4_v100_stage_scheduler_decode_token(scheds[0],
+        check(ds4_stage_scheduler_decode_token(scheds[0],
                                                     (uint32_t)prompt.v[pos],
                                                     (uint32_t)pos,
                                                     &report,
@@ -310,13 +310,13 @@ int main(int argc, char **argv) {
               err[0] ? err : "stage 0 prompt decode");
         for (int stage = 1; stage < DS4_V100_EXPECTED_GPUS && failures == 0; stage++) {
             err[0] = '\0';
-            check(ds4_v100_stage_scheduler_handoff(scheds[stage],
+            check(ds4_stage_scheduler_handoff(scheds[stage],
                                                    scheds[stage - 1],
                                                    err,
                                                    sizeof(err)) == 0,
                   err[0] ? err : "stage handoff");
             err[0] = '\0';
-            check(ds4_v100_stage_scheduler_decode_hc(scheds[stage],
+            check(ds4_stage_scheduler_decode_hc(scheds[stage],
                                                      (uint32_t)prompt.v[pos],
                                                      (uint32_t)pos,
                                                      &report,
@@ -328,7 +328,7 @@ int main(int argc, char **argv) {
 
     if (failures == 0) {
         err[0] = '\0';
-        check(ds4_v100_stage_scheduler_select_topk(scheds[DS4_V100_EXPECTED_GPUS - 1],
+        check(ds4_stage_scheduler_select_topk(scheds[DS4_V100_EXPECTED_GPUS - 1],
                                                    top_tokens,
                                                    top_logits,
                                                    top_k,
@@ -380,7 +380,7 @@ cleanup:
     printf(" %s\n", failures ? "FAIL" : "ok");
 
     for (int i = DS4_V100_EXPECTED_GPUS - 1; i >= 0; i--) {
-        ds4_v100_stage_scheduler_close(scheds[i]);
+        ds4_stage_scheduler_close(scheds[i]);
     }
     unmap_model_file(&model);
     ds4_tokens_free(&prompt);

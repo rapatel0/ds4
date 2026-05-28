@@ -96,7 +96,7 @@ int main(int argc, char **argv) {
 
     int rc = 1;
     char err[512] = {0};
-    ds4_v100_mtp_sidecar *sidecar = NULL;
+    ds4_mtp_sidecar *sidecar = NULL;
     int device_count = ds4_gpu_device_count();
     fprintf(report, "visible_devices\t%d\n", device_count);
     fprintf(report, "target_gpu\t%d\n", opt.gpu);
@@ -118,12 +118,12 @@ int main(int argc, char **argv) {
         goto done;
     }
 
-    ds4_v100_mtp_sidecar_options sidecar_opts;
-    ds4_v100_mtp_sidecar_options_init(&sidecar_opts);
+    ds4_mtp_sidecar_options sidecar_opts;
+    ds4_mtp_sidecar_options_init(&sidecar_opts);
     sidecar_opts.mtp_path = opt.mtp_model;
     sidecar_opts.gpu = opt.gpu;
     sidecar_opts.require_device_arena = !opt.allow_host_stub;
-    if (ds4_v100_mtp_sidecar_open(&sidecar, &sidecar_opts, report, err, sizeof(err)) != 0) {
+    if (ds4_mtp_sidecar_open(&sidecar, &sidecar_opts, report, err, sizeof(err)) != 0) {
         fprintf(stderr,
                 "ds4-v100-mtp-residency-smoke: %s\n",
                 err[0] ? err : "MTP sidecar residency failed");
@@ -133,7 +133,7 @@ int main(int argc, char **argv) {
     if (device_count > 0) {
         uint64_t reserve_bytes = (uint64_t)opt.reserve_mib * 1024ull * 1024ull;
         uint64_t free_after =
-            ds4_gpu_arena_free_after_upload_bytes(ds4_v100_mtp_sidecar_arena(sidecar));
+            ds4_gpu_arena_free_after_upload_bytes(ds4_mtp_sidecar_arena(sidecar));
         fprintf(report, "reserve_bytes\t%" PRIu64 "\n", reserve_bytes);
         if (free_after < reserve_bytes) {
             fprintf(stderr,
@@ -153,7 +153,7 @@ int main(int argc, char **argv) {
     rc = 0;
 
 done:
-    ds4_v100_mtp_sidecar_close(sidecar);
+    ds4_mtp_sidecar_close(sidecar);
     if (report && report != stdout) fclose(report);
     return rc;
 }

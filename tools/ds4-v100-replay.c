@@ -76,7 +76,7 @@ typedef struct {
     bool startup_warmup;
     bool cuda_profiler_window;
     bool synthetic_prompt_token_set;
-    ds4_v100_replay_async_pipeline_mode async_pipeline_mode;
+    ds4_replay_async_pipeline_mode async_pipeline_mode;
 } replay_cli_options;
 
 typedef struct {
@@ -132,8 +132,8 @@ typedef struct {
     uint64_t rejected;
     uint64_t skipped;
     uint64_t committed;
-    ds4_v100_mtp_sidecar *sidecar;
-    ds4_v100_mtp_forward *forward;
+    ds4_mtp_sidecar *sidecar;
+    ds4_mtp_forward *forward;
     uint64_t sidecar_uploaded_bytes;
     uint64_t sidecar_arena_bytes;
     uint64_t output_weight_bytes;
@@ -157,7 +157,7 @@ typedef struct replay_pending_generation replay_pending_generation;
 
 typedef struct {
     const replay_cli_options *opt;
-    ds4_v100_replay *rt;
+    ds4_replay *rt;
     replay_mtp_service *mtp;
     pthread_mutex_t generation_mu;
     pthread_mutex_t queue_mu;
@@ -184,9 +184,9 @@ struct replay_pending_generation {
     replay_pending_generation *next;
     ds4_tokens prompt_tokens;
     uint32_t tokens;
-    ds4_v100_replay_output outputs[DS4_V100_REPLAY_MAX_TOKENS];
+    ds4_replay_output outputs[DS4_V100_REPLAY_MAX_TOKENS];
     uint32_t n_outputs;
-    ds4_v100_replay_counters counters;
+    ds4_replay_counters counters;
     replay_mtp_result mtp_result;
     int rc;
     char err[512];
@@ -201,27 +201,27 @@ typedef struct {
 
 static void mtp_result_init(replay_mtp_result *r);
 static int replay_generate_mtp_commit_one_slot(replay_mtp_service *svc,
-                                               ds4_v100_replay *rt,
+                                               ds4_replay *rt,
                                                const ds4_tokens *prompt,
                                                uint32_t max_tokens,
-                                               ds4_v100_replay_output *outputs,
+                                               ds4_replay_output *outputs,
                                                uint32_t output_cap,
                                                uint32_t *out_count,
-                                               ds4_v100_replay_counters *counters,
+                                               ds4_replay_counters *counters,
                                                replay_mtp_result *mtp_result,
                                                char *err,
                                                size_t errlen);
 static int replay_mtp_service_run_slot(replay_mtp_service *svc,
-                                       ds4_v100_replay *rt,
+                                       ds4_replay *rt,
                                        uint32_t hc_slot,
-                                       const ds4_v100_replay_output *outputs,
+                                       const ds4_replay_output *outputs,
                                        uint32_t n_outputs,
-                                       const ds4_v100_replay_counters *counters,
+                                       const ds4_replay_counters *counters,
                                        replay_mtp_result *result,
                                        char *err,
                                        size_t errlen);
-static int replay_output_copy(ds4_v100_replay_output *dst,
-                              const ds4_v100_replay_output *src,
+static int replay_output_copy(ds4_replay_output *dst,
+                              const ds4_replay_output *src,
                               char *err,
                               size_t errlen);
 
@@ -242,7 +242,7 @@ static const char *mtp_serving_mode_name(replay_mtp_serving_mode mode) {
     }
 }
 
-static const char *async_pipeline_mode_name(ds4_v100_replay_async_pipeline_mode mode) {
+static const char *async_pipeline_mode_name(ds4_replay_async_pipeline_mode mode) {
     switch (mode) {
     case DS4_V100_REPLAY_ASYNC_PIPELINE_PERSISTENT:
         return "persistent";
@@ -452,7 +452,7 @@ static int process_pending_generation_batch(replay_server_state *state) {
 
     if (can_batch) {
         ds4_tokens prompts[DS4_V100_SCHED_MAX_SLOTS];
-        ds4_v100_replay_output batch_outputs[DS4_V100_SCHED_MAX_SLOTS *
+        ds4_replay_output batch_outputs[DS4_V100_SCHED_MAX_SLOTS *
                                              DS4_V100_REPLAY_MAX_TOKENS];
         uint32_t batch_counts[DS4_V100_SCHED_MAX_SLOTS];
         memset(prompts, 0, sizeof(prompts));
@@ -461,11 +461,11 @@ static int process_pending_generation_batch(replay_server_state *state) {
         for (uint32_t i = 0; i < batch.count; i++) prompts[i] = batch.items[i]->prompt_tokens;
 
         char err[512] = {0};
-        ds4_v100_replay_counters counters;
+        ds4_replay_counters counters;
         memset(&counters, 0, sizeof(counters));
-        int rc = ds4_v100_replay_reset(state->rt, err, sizeof(err));
+        int rc = ds4_replay_reset(state->rt, err, sizeof(err));
         if (!rc) {
-            rc = ds4_v100_replay_generate_batch(state->rt,
+            rc = ds4_replay_generate_batch(state->rt,
                                                 prompts,
                                                 batch.count,
                                                 batch_tokens,
@@ -524,7 +524,7 @@ static int process_pending_generation_batch(replay_server_state *state) {
         if (rc) {
             for (uint32_t i = 0; i < batch.count; i++) {
                 for (uint32_t j = 0; j < batch_tokens; j++) {
-                    ds4_v100_replay_output_free(
+                    ds4_replay_output_free(
                         &batch_outputs[(uint64_t)i * DS4_V100_REPLAY_MAX_TOKENS + j]);
                 }
             }
@@ -537,9 +537,9 @@ static int process_pending_generation_batch(replay_server_state *state) {
         replay_pending_generation *req = batch.items[i];
         if (!req) continue;
         char err[512] = {0};
-        ds4_v100_replay_counters counters;
+        ds4_replay_counters counters;
         memset(&counters, 0, sizeof(counters));
-        int rc = ds4_v100_replay_reset(state->rt, err, sizeof(err));
+        int rc = ds4_replay_reset(state->rt, err, sizeof(err));
         if (!rc) {
             if (mtp_enabled && state->opt->mtp_serving == REPLAY_MTP_SERVING_COMMIT) {
                 rc = replay_generate_mtp_commit_one_slot(state->mtp,
@@ -555,7 +555,7 @@ static int process_pending_generation_batch(replay_server_state *state) {
                                                          sizeof(err));
                 req->mtp_result_ready = rc == 0;
             } else {
-                rc = ds4_v100_replay_generate(state->rt,
+                rc = ds4_replay_generate(state->rt,
                                               &req->prompt_tokens,
                                               req->tokens,
                                               req->outputs,
@@ -1204,8 +1204,8 @@ static void mtp_result_set_service(replay_mtp_service *svc, replay_mtp_result *r
     result->output_weight_bytes = svc->output_weight_bytes;
 }
 
-static int replay_output_copy(ds4_v100_replay_output *dst,
-                              const ds4_v100_replay_output *src,
+static int replay_output_copy(ds4_replay_output *dst,
+                              const ds4_replay_output *src,
                               char *err,
                               size_t errlen) {
     if (!dst || !src) {
@@ -1230,15 +1230,15 @@ static int replay_output_copy(ds4_v100_replay_output *dst,
 
 static void replay_mtp_service_close(replay_mtp_service *svc) {
     if (!svc) return;
-    ds4_v100_mtp_forward_close(svc->forward);
-    ds4_v100_mtp_sidecar_close(svc->sidecar);
+    ds4_mtp_forward_close(svc->forward);
+    ds4_mtp_sidecar_close(svc->sidecar);
     if (svc->mu_ready) pthread_mutex_destroy(&svc->mu);
     free(svc);
 }
 
 static int replay_mtp_service_open(replay_mtp_service **out,
                                    const replay_cli_options *opt,
-                                   ds4_v100_replay *rt,
+                                   ds4_replay *rt,
                                    char *err,
                                    size_t errlen) {
     if (out) *out = NULL;
@@ -1265,17 +1265,17 @@ static int replay_mtp_service_open(replay_mtp_service **out,
     }
     svc->mu_ready = true;
 
-    ds4_v100_mtp_sidecar_options mtp_opts;
-    ds4_v100_mtp_sidecar_options_init(&mtp_opts);
+    ds4_mtp_sidecar_options mtp_opts;
+    ds4_mtp_sidecar_options_init(&mtp_opts);
     mtp_opts.mtp_path = opt->mtp_model_path;
     mtp_opts.gpu = opt->mtp_gpu;
     mtp_opts.require_device_arena = true;
-    if (ds4_v100_mtp_sidecar_open(&svc->sidecar, &mtp_opts, NULL, err, errlen) != 0) {
+    if (ds4_mtp_sidecar_open(&svc->sidecar, &mtp_opts, NULL, err, errlen) != 0) {
         replay_mtp_service_close(svc);
         return 1;
     }
-    ds4_gpu_arena *arena = ds4_v100_mtp_sidecar_arena(svc->sidecar);
-    svc->sidecar_uploaded_bytes = ds4_v100_mtp_sidecar_uploaded_bytes(svc->sidecar);
+    ds4_gpu_arena *arena = ds4_mtp_sidecar_arena(svc->sidecar);
+    svc->sidecar_uploaded_bytes = ds4_mtp_sidecar_uploaded_bytes(svc->sidecar);
     svc->sidecar_arena_bytes = ds4_gpu_arena_bytes(arena);
     const uint64_t reserve_bytes = (uint64_t)opt->mtp_reserve_mib * 1024ull * 1024ull;
     const uint64_t free_after_upload = ds4_gpu_arena_free_after_upload_bytes(arena);
@@ -1289,41 +1289,41 @@ static int replay_mtp_service_open(replay_mtp_service **out,
         return 1;
     }
 
-    ds4_v100_context *ctx = NULL;
-    ds4_v100_context_options ctx_opts;
-    ds4_v100_context_options_init(&ctx_opts);
+    ds4_context *ctx = NULL;
+    ds4_context_options ctx_opts;
+    ds4_context_options_init(&ctx_opts);
     ctx_opts.pack_index_path = opt->index_path;
-    if (ds4_v100_context_open(&ctx, &ctx_opts, err, errlen) != 0) {
+    if (ds4_context_open(&ctx, &ctx_opts, err, errlen) != 0) {
         replay_mtp_service_close(svc);
         return 1;
     }
-    ds4_v100_tensor_binding output_weight;
-    int rc = ds4_v100_context_output_head_binding(ctx, &output_weight, err, errlen);
+    ds4_tensor_binding output_weight;
+    int rc = ds4_context_output_head_binding(ctx, &output_weight, err, errlen);
     if (rc != 0) {
-        ds4_v100_context_close(ctx);
+        ds4_context_close(ctx);
         replay_mtp_service_close(svc);
         return 1;
     }
     svc->output_weight_bytes = output_weight.byte_length;
-    if (ds4_v100_mtp_forward_open(&svc->forward,
+    if (ds4_mtp_forward_open(&svc->forward,
                                   svc->sidecar,
-                                  ds4_v100_replay_model_map(rt),
-                                  ds4_v100_replay_model_size(rt),
+                                  ds4_replay_model_map(rt),
+                                  ds4_replay_model_size(rt),
                                   &output_weight,
                                   opt->mtp_gpu,
                                   err,
                                   errlen) != 0) {
-        ds4_v100_context_close(ctx);
+        ds4_context_close(ctx);
         replay_mtp_service_close(svc);
         return 1;
     }
-    ds4_v100_context_close(ctx);
+    ds4_context_close(ctx);
     *out = svc;
     return 0;
 }
 
 static int replay_mtp_service_draft(replay_mtp_service *svc,
-                                    ds4_v100_replay *rt,
+                                    ds4_replay *rt,
                                     uint32_t hc_slot,
                                     uint32_t committed_token,
                                     uint32_t committed_pos,
@@ -1340,13 +1340,13 @@ static int replay_mtp_service_draft(replay_mtp_service *svc,
     result->target_logit = target_logit;
     float embed[DS4_V100_MTP_FORWARD_N_EMBD];
     float hc[DS4_V100_MTP_FORWARD_HC_VALUES];
-    if (ds4_v100_replay_read_token_embedding_f32(rt,
+    if (ds4_replay_read_token_embedding_f32(rt,
                                                  committed_token,
                                                  embed,
                                                  DS4_V100_MTP_FORWARD_N_EMBD,
                                                  err,
                                                  errlen) != 0 ||
-        ds4_v100_replay_read_output_hc_slot(rt,
+        ds4_replay_read_output_hc_slot(rt,
                                             hc_slot,
                                             hc,
                                             sizeof(hc),
@@ -1354,7 +1354,7 @@ static int replay_mtp_service_draft(replay_mtp_service *svc,
                                             errlen) != 0) {
         return 1;
     }
-    ds4_v100_mtp_forward_report report;
+    ds4_mtp_forward_report report;
     memset(&report, 0, sizeof(report));
     result->attempted = true;
     result->attempts++;
@@ -1362,7 +1362,7 @@ static int replay_mtp_service_draft(replay_mtp_service *svc,
     result->target_tokens_verified++;
     const double t0 = now_ms();
     pthread_mutex_lock(&svc->mu);
-    if (ds4_v100_mtp_forward_run_host(svc->forward,
+    if (ds4_mtp_forward_run_host(svc->forward,
                                       embed,
                                       hc,
                                       committed_pos,
@@ -1414,10 +1414,10 @@ static int replay_mtp_service_draft(replay_mtp_service *svc,
 }
 
 static int replay_mtp_service_run(replay_mtp_service *svc,
-                                  ds4_v100_replay *rt,
-                                  const ds4_v100_replay_output *outputs,
+                                  ds4_replay *rt,
+                                  const ds4_replay_output *outputs,
                                   uint32_t n_outputs,
-                                  const ds4_v100_replay_counters *counters,
+                                  const ds4_replay_counters *counters,
                                   replay_mtp_result *result,
                                   char *err,
                                   size_t errlen) {
@@ -1433,11 +1433,11 @@ static int replay_mtp_service_run(replay_mtp_service *svc,
 }
 
 static int replay_mtp_service_run_slot(replay_mtp_service *svc,
-                                       ds4_v100_replay *rt,
+                                       ds4_replay *rt,
                                        uint32_t hc_slot,
-                                       const ds4_v100_replay_output *outputs,
+                                       const ds4_replay_output *outputs,
                                        uint32_t n_outputs,
-                                       const ds4_v100_replay_counters *counters,
+                                       const ds4_replay_counters *counters,
                                        replay_mtp_result *result,
                                        char *err,
                                        size_t errlen) {
@@ -1477,13 +1477,13 @@ static int replay_mtp_service_run_slot(replay_mtp_service *svc,
 }
 
 static int replay_generate_mtp_commit_one_slot(replay_mtp_service *svc,
-                                               ds4_v100_replay *rt,
+                                               ds4_replay *rt,
                                                const ds4_tokens *prompt,
                                                uint32_t max_tokens,
-                                               ds4_v100_replay_output *outputs,
+                                               ds4_replay_output *outputs,
                                                uint32_t output_cap,
                                                uint32_t *out_count,
-                                               ds4_v100_replay_counters *counters,
+                                               ds4_replay_counters *counters,
                                                replay_mtp_result *mtp_result,
                                                char *err,
                                                size_t errlen) {
@@ -1498,9 +1498,9 @@ static int replay_generate_mtp_commit_one_slot(replay_mtp_service *svc,
     mtp_result_set_service(svc, mtp_result);
     svc->requests++;
 
-    ds4_v100_replay_counters local;
-    ds4_v100_replay_counters *c = counters ? counters : &local;
-    if (ds4_v100_replay_begin_generation(rt,
+    ds4_replay_counters local;
+    ds4_replay_counters *c = counters ? counters : &local;
+    if (ds4_replay_begin_generation(rt,
                                          (uint32_t)prompt->len,
                                          c,
                                          err,
@@ -1514,7 +1514,7 @@ static int replay_generate_mtp_commit_one_slot(replay_mtp_service *svc,
             snprintf(err, errlen, "negative prompt token");
             return 1;
         }
-        if (ds4_v100_replay_feed_token_at_position(rt,
+        if (ds4_replay_feed_token_at_position(rt,
                                                    (uint32_t)prompt->v[pos],
                                                    (uint32_t)pos,
                                                    c,
@@ -1527,7 +1527,7 @@ static int replay_generate_mtp_commit_one_slot(replay_mtp_service *svc,
     }
 
     uint32_t n_out = 0;
-    if (ds4_v100_replay_select_current_token(rt,
+    if (ds4_replay_select_current_token(rt,
                                              &outputs[n_out],
                                              c,
                                              err,
@@ -1542,7 +1542,7 @@ static int replay_generate_mtp_commit_one_slot(replay_mtp_service *svc,
         mtp_result->skipped = true;
         snprintf(mtp_result->reason, sizeof(mtp_result->reason), "need_at_least_two_tokens");
         svc->skipped++;
-        ds4_v100_replay_finish_generation(rt, n_out, now_ms() - total0, c);
+        ds4_replay_finish_generation(rt, n_out, now_ms() - total0, c);
         if (out_count) *out_count = n_out;
         return 0;
     }
@@ -1550,7 +1550,7 @@ static int replay_generate_mtp_commit_one_slot(replay_mtp_service *svc,
     for (uint32_t step = 1; step < max_tokens; step++) {
         const uint32_t committed_token = outputs[n_out - 1].token;
         const uint32_t committed_pos = (uint32_t)prompt->len + step - 1u;
-        if (ds4_v100_replay_feed_token_at_position(rt,
+        if (ds4_replay_feed_token_at_position(rt,
                                                    committed_token,
                                                    committed_pos,
                                                    c,
@@ -1561,9 +1561,9 @@ static int replay_generate_mtp_commit_one_slot(replay_mtp_service *svc,
         }
         c->total_input_tokens++;
 
-        ds4_v100_replay_output target;
+        ds4_replay_output target;
         memset(&target, 0, sizeof(target));
-        if (ds4_v100_replay_select_current_token(rt, &target, c, err, errlen) != 0) {
+        if (ds4_replay_select_current_token(rt, &target, c, err, errlen) != 0) {
             return 1;
         }
         if (replay_mtp_service_draft(svc,
@@ -1576,7 +1576,7 @@ static int replay_generate_mtp_commit_one_slot(replay_mtp_service *svc,
                                      mtp_result,
                                      err,
                                      errlen) != 0) {
-            ds4_v100_replay_output_free(&target);
+            ds4_replay_output_free(&target);
             return 1;
         }
         if (mtp_result->accepted) {
@@ -1595,7 +1595,7 @@ static int replay_generate_mtp_commit_one_slot(replay_mtp_service *svc,
                  sizeof(mtp_result->reason),
                  "serial_commit_no_target_forward_savings");
     }
-    ds4_v100_replay_finish_generation(rt, n_out, now_ms() - total0, c);
+    ds4_replay_finish_generation(rt, n_out, now_ms() - total0, c);
     if (out_count) *out_count = n_out;
     return 0;
 }
@@ -1654,9 +1654,9 @@ static void print_mtp_json(FILE *fp, const replay_mtp_result *mtp) {
 }
 
 static void print_json_fp(FILE *fp,
-                          const ds4_v100_replay_output *outputs,
+                          const ds4_replay_output *outputs,
                           uint32_t n_outputs,
-                          const ds4_v100_replay_counters *c,
+                          const ds4_replay_counters *c,
                           const replay_mtp_result *mtp) {
     fprintf(fp, "{");
     fprintf(fp, "\"prompt_tokens\":%" PRIu32 ",", c->prompt_tokens);
@@ -1801,7 +1801,7 @@ static void print_json_fp(FILE *fp,
     fprintf(fp, "}\n");
 }
 
-static void print_open_json(const ds4_v100_replay_counters *c, bool serial_open) {
+static void print_open_json(const ds4_replay_counters *c, bool serial_open) {
     printf("{\"open_only\":true,\"open_mode\":\"%s\",\"timing_ms\":{",
            serial_open ? "serial" : "parallel");
     printf("\"open_total\":%.3f,\"open_stage\":[", c->open_total_ms);
@@ -1814,8 +1814,8 @@ static void print_open_json(const ds4_v100_replay_counters *c, bool serial_open)
 
 static int replay_output_token_matches(const char *label,
                                        uint32_t i,
-                                       const ds4_v100_replay_output *got,
-                                       const ds4_v100_replay_output *want) {
+                                       const ds4_replay_output *got,
+                                       const ds4_replay_output *want) {
     if (!got || !want || got->token != want->token) {
         fprintf(stderr,
                 "ds4-v100-replay: target-block %s[%u] token mismatch got=%" PRIu32
@@ -1829,7 +1829,7 @@ static int replay_output_token_matches(const char *label,
     return 0;
 }
 
-static int run_reset_parity_smoke(ds4_v100_replay *rt,
+static int run_reset_parity_smoke(ds4_replay *rt,
                                   const ds4_tokens *prompt,
                                   uint32_t max_tokens,
                                   const unsigned char *expected,
@@ -1843,13 +1843,13 @@ static int run_reset_parity_smoke(ds4_v100_replay *rt,
         return 1;
     }
 
-    ds4_v100_replay_output first[DS4_V100_REPLAY_MAX_TOKENS];
-    ds4_v100_replay_output second[DS4_V100_REPLAY_MAX_TOKENS];
+    ds4_replay_output first[DS4_V100_REPLAY_MAX_TOKENS];
+    ds4_replay_output second[DS4_V100_REPLAY_MAX_TOKENS];
     memset(first, 0, sizeof(first));
     memset(second, 0, sizeof(second));
 
-    ds4_v100_replay_counters first_counters;
-    ds4_v100_replay_counters second_counters;
+    ds4_replay_counters first_counters;
+    ds4_replay_counters second_counters;
     memset(&first_counters, 0, sizeof(first_counters));
     memset(&second_counters, 0, sizeof(second_counters));
 
@@ -1858,7 +1858,7 @@ static int run_reset_parity_smoke(ds4_v100_replay *rt,
     uint32_t mismatch_index = UINT32_MAX;
     int rc = 1;
 
-    if (ds4_v100_replay_generate(rt,
+    if (ds4_replay_generate(rt,
                                  prompt,
                                  max_tokens,
                                  first,
@@ -1891,9 +1891,9 @@ static int run_reset_parity_smoke(ds4_v100_replay *rt,
         }
     }
 
-    if (ds4_v100_replay_reset(rt, err, errlen)) goto done;
+    if (ds4_replay_reset(rt, err, errlen)) goto done;
 
-    if (ds4_v100_replay_generate(rt,
+    if (ds4_replay_generate(rt,
                                  prompt,
                                  max_tokens,
                                  second,
@@ -1981,15 +1981,15 @@ static int run_reset_parity_smoke(ds4_v100_replay *rt,
 
 done:
     for (uint32_t i = 0; i < first_count && i < DS4_V100_REPLAY_MAX_TOKENS; i++) {
-        ds4_v100_replay_output_free(&first[i]);
+        ds4_replay_output_free(&first[i]);
     }
     for (uint32_t i = 0; i < second_count && i < DS4_V100_REPLAY_MAX_TOKENS; i++) {
-        ds4_v100_replay_output_free(&second[i]);
+        ds4_replay_output_free(&second[i]);
     }
     return rc;
 }
 
-static int run_target_block_smoke(ds4_v100_replay *rt,
+static int run_target_block_smoke(ds4_replay *rt,
                                   const ds4_tokens *prompt,
                                   uint32_t max_tokens,
                                   uint32_t block_n,
@@ -2004,22 +2004,22 @@ static int run_target_block_smoke(ds4_v100_replay *rt,
         return 1;
     }
 
-    ds4_v100_replay_output baseline[DS4_V100_REPLAY_MAX_TOKENS];
-    ds4_v100_replay_output prompt_first;
-    ds4_v100_replay_output block_first[DS4_V100_REPLAY_MAX_TOKENS];
-    ds4_v100_replay_output block_second[DS4_V100_REPLAY_MAX_TOKENS];
+    ds4_replay_output baseline[DS4_V100_REPLAY_MAX_TOKENS];
+    ds4_replay_output prompt_first;
+    ds4_replay_output block_first[DS4_V100_REPLAY_MAX_TOKENS];
+    ds4_replay_output block_second[DS4_V100_REPLAY_MAX_TOKENS];
     memset(baseline, 0, sizeof(baseline));
     memset(&prompt_first, 0, sizeof(prompt_first));
     memset(block_first, 0, sizeof(block_first));
     memset(block_second, 0, sizeof(block_second));
 
-    ds4_v100_replay_counters baseline_counters;
-    ds4_v100_replay_counters smoke_counters;
+    ds4_replay_counters baseline_counters;
+    ds4_replay_counters smoke_counters;
     memset(&baseline_counters, 0, sizeof(baseline_counters));
     memset(&smoke_counters, 0, sizeof(smoke_counters));
 
     uint32_t baseline_count = 0;
-    int rc = ds4_v100_replay_generate(rt,
+    int rc = ds4_replay_generate(rt,
                                       prompt,
                                       max_tokens,
                                       baseline,
@@ -2056,8 +2056,8 @@ static int run_target_block_smoke(ds4_v100_replay *rt,
         }
     }
 
-    if (ds4_v100_replay_reset(rt, err, errlen) ||
-        ds4_v100_replay_begin_generation(rt,
+    if (ds4_replay_reset(rt, err, errlen) ||
+        ds4_replay_begin_generation(rt,
                                          (uint32_t)prompt->len,
                                          &smoke_counters,
                                          err,
@@ -2073,7 +2073,7 @@ static int run_target_block_smoke(ds4_v100_replay *rt,
             rc = 1;
             goto done;
         }
-        if (ds4_v100_replay_feed_token_at_position(rt,
+        if (ds4_replay_feed_token_at_position(rt,
                                                    (uint32_t)prompt->v[pos],
                                                    (uint32_t)pos,
                                                    &smoke_counters,
@@ -2085,7 +2085,7 @@ static int run_target_block_smoke(ds4_v100_replay *rt,
         }
         smoke_counters.total_input_tokens++;
     }
-    if (ds4_v100_replay_select_current_token(rt,
+    if (ds4_replay_select_current_token(rt,
                                              &prompt_first,
                                              &smoke_counters,
                                              err,
@@ -2099,12 +2099,12 @@ static int run_target_block_smoke(ds4_v100_replay *rt,
         goto done;
     }
 
-    ds4_v100_replay_snapshot *snapshot = NULL;
-    if (ds4_v100_replay_snapshot_create(rt, &snapshot, err, errlen)) {
+    ds4_replay_snapshot *snapshot = NULL;
+    if (ds4_replay_snapshot_create(rt, &snapshot, err, errlen)) {
         rc = 1;
         goto done;
     }
-    const uint64_t snapshot_bytes = ds4_v100_replay_snapshot_bytes(snapshot);
+    const uint64_t snapshot_bytes = ds4_replay_snapshot_bytes(snapshot);
 
     uint32_t forced_tokens[DS4_V100_REPLAY_MAX_TOKENS];
     uint32_t positions[DS4_V100_REPLAY_MAX_TOKENS];
@@ -2113,11 +2113,11 @@ static int run_target_block_smoke(ds4_v100_replay *rt,
         positions[i] = (uint32_t)prompt->len + i;
     }
 
-    ds4_v100_replay_target_block_report first_report;
-    ds4_v100_replay_target_block_report second_report;
+    ds4_replay_target_block_report first_report;
+    ds4_replay_target_block_report second_report;
     memset(&first_report, 0, sizeof(first_report));
     memset(&second_report, 0, sizeof(second_report));
-    if (ds4_v100_replay_verify_token_block(rt,
+    if (ds4_replay_verify_token_block(rt,
                                            forced_tokens,
                                            positions,
                                            block_n,
@@ -2128,7 +2128,7 @@ static int run_target_block_smoke(ds4_v100_replay *rt,
                                            &smoke_counters,
                                            err,
                                            errlen)) {
-        ds4_v100_replay_snapshot_free(snapshot);
+        ds4_replay_snapshot_free(snapshot);
         rc = 1;
         goto done;
     }
@@ -2136,18 +2136,18 @@ static int run_target_block_smoke(ds4_v100_replay *rt,
     for (uint32_t i = 0; i < block_n; i++) {
         if (replay_output_token_matches("first", i, &block_first[i], &baseline[i + 1u])) {
             snprintf(err, errlen, "target block first pass mismatch");
-            ds4_v100_replay_snapshot_free(snapshot);
+            ds4_replay_snapshot_free(snapshot);
             rc = 1;
             goto done;
         }
     }
 
-    if (ds4_v100_replay_snapshot_restore(rt, snapshot, err, errlen)) {
-        ds4_v100_replay_snapshot_free(snapshot);
+    if (ds4_replay_snapshot_restore(rt, snapshot, err, errlen)) {
+        ds4_replay_snapshot_free(snapshot);
         rc = 1;
         goto done;
     }
-    if (ds4_v100_replay_verify_token_block(rt,
+    if (ds4_replay_verify_token_block(rt,
                                            forced_tokens,
                                            positions,
                                            block_n,
@@ -2158,7 +2158,7 @@ static int run_target_block_smoke(ds4_v100_replay *rt,
                                            &smoke_counters,
                                            err,
                                            errlen)) {
-        ds4_v100_replay_snapshot_free(snapshot);
+        ds4_replay_snapshot_free(snapshot);
         rc = 1;
         goto done;
     }
@@ -2167,7 +2167,7 @@ static int run_target_block_smoke(ds4_v100_replay *rt,
         if (replay_output_token_matches("second", i, &block_second[i], &baseline[i + 1u]) ||
             replay_output_token_matches("restore", i, &block_second[i], &block_first[i])) {
             snprintf(err, errlen, "target block restore pass mismatch");
-            ds4_v100_replay_snapshot_free(snapshot);
+            ds4_replay_snapshot_free(snapshot);
             rc = 1;
             goto done;
         }
@@ -2175,7 +2175,7 @@ static int run_target_block_smoke(ds4_v100_replay *rt,
 
     smoke_counters.generated_tokens = block_n + 1u;
     smoke_counters.total_ms = now_ms() - smoke0;
-    ds4_v100_replay_finish_generation(rt,
+    ds4_replay_finish_generation(rt,
                                       smoke_counters.generated_tokens,
                                       smoke_counters.total_ms,
                                       &smoke_counters);
@@ -2245,22 +2245,22 @@ static int run_target_block_smoke(ds4_v100_replay *rt,
                second_report.verify_ms);
     }
 
-    ds4_v100_replay_snapshot_free(snapshot);
+    ds4_replay_snapshot_free(snapshot);
 
 done:
     for (uint32_t i = 0; i < baseline_count && i < DS4_V100_REPLAY_MAX_TOKENS; i++) {
-        ds4_v100_replay_output_free(&baseline[i]);
+        ds4_replay_output_free(&baseline[i]);
     }
-    ds4_v100_replay_output_free(&prompt_first);
+    ds4_replay_output_free(&prompt_first);
     for (uint32_t i = 0; i < block_n && i < DS4_V100_REPLAY_MAX_TOKENS; i++) {
-        ds4_v100_replay_output_free(&block_first[i]);
-        ds4_v100_replay_output_free(&block_second[i]);
+        ds4_replay_output_free(&block_first[i]);
+        ds4_replay_output_free(&block_second[i]);
     }
     return rc;
 }
 
 static int run_mtp_draft_block_smoke(replay_mtp_service *svc,
-                                     ds4_v100_replay *rt,
+                                     ds4_replay *rt,
                                      const ds4_tokens *prompt,
                                      uint32_t max_tokens,
                                      uint32_t block_n,
@@ -2276,10 +2276,10 @@ static int run_mtp_draft_block_smoke(replay_mtp_service *svc,
         return 1;
     }
 
-    ds4_v100_replay_counters counters;
+    ds4_replay_counters counters;
     memset(&counters, 0, sizeof(counters));
-    ds4_v100_replay_output first_target;
-    ds4_v100_replay_output target_outputs[DS4_V100_REPLAY_MAX_TOKENS];
+    ds4_replay_output first_target;
+    ds4_replay_output target_outputs[DS4_V100_REPLAY_MAX_TOKENS];
     memset(&first_target, 0, sizeof(first_target));
     memset(target_outputs, 0, sizeof(target_outputs));
 
@@ -2302,14 +2302,14 @@ static int run_mtp_draft_block_smoke(replay_mtp_service *svc,
     memset(hc_b, 0, sizeof(hc_b));
 
     int rc = 1;
-    ds4_v100_replay_snapshot *snapshot = NULL;
-    ds4_v100_replay_target_block_report verify_report;
-    ds4_v100_mtp_forward_report last_mtp_report;
+    ds4_replay_snapshot *snapshot = NULL;
+    ds4_replay_target_block_report verify_report;
+    ds4_mtp_forward_report last_mtp_report;
     memset(&verify_report, 0, sizeof(verify_report));
     memset(&last_mtp_report, 0, sizeof(last_mtp_report));
 
-    if (ds4_v100_replay_reset(rt, err, errlen) ||
-        ds4_v100_replay_begin_generation(rt,
+    if (ds4_replay_reset(rt, err, errlen) ||
+        ds4_replay_begin_generation(rt,
                                          (uint32_t)prompt->len,
                                          &counters,
                                          err,
@@ -2323,7 +2323,7 @@ static int run_mtp_draft_block_smoke(replay_mtp_service *svc,
             snprintf(err, errlen, "negative prompt token at position %d", pos);
             goto done;
         }
-        if (ds4_v100_replay_feed_token_at_position(rt,
+        if (ds4_replay_feed_token_at_position(rt,
                                                    (uint32_t)prompt->v[pos],
                                                    (uint32_t)pos,
                                                    &counters,
@@ -2334,7 +2334,7 @@ static int run_mtp_draft_block_smoke(replay_mtp_service *svc,
         }
         counters.total_input_tokens++;
     }
-    if (ds4_v100_replay_select_current_token(rt,
+    if (ds4_replay_select_current_token(rt,
                                              &first_target,
                                              &counters,
                                              err,
@@ -2363,11 +2363,11 @@ static int run_mtp_draft_block_smoke(replay_mtp_service *svc,
         }
     }
 
-    if (ds4_v100_replay_snapshot_create(rt, &snapshot, err, errlen)) goto done;
-    const uint64_t snapshot_bytes = ds4_v100_replay_snapshot_bytes(snapshot);
+    if (ds4_replay_snapshot_create(rt, &snapshot, err, errlen)) goto done;
+    const uint64_t snapshot_bytes = ds4_replay_snapshot_bytes(snapshot);
 
     const uint32_t first_pos = (uint32_t)prompt->len;
-    if (ds4_v100_replay_feed_token_at_position(rt,
+    if (ds4_replay_feed_token_at_position(rt,
                                                first_target.token,
                                                first_pos,
                                                &counters,
@@ -2377,7 +2377,7 @@ static int run_mtp_draft_block_smoke(replay_mtp_service *svc,
         goto done;
     }
     counters.total_input_tokens++;
-    if (ds4_v100_replay_read_output_hc_slot(rt,
+    if (ds4_replay_read_output_hc_slot(rt,
                                             0,
                                             hc_a,
                                             sizeof(hc_a),
@@ -2391,7 +2391,7 @@ static int run_mtp_draft_block_smoke(replay_mtp_service *svc,
     float *next_hc = hc_b;
     double mtp_ms = 0.0;
     for (uint32_t i = 0; i < block_n; i++) {
-        if (ds4_v100_replay_read_token_embedding_f32(rt,
+        if (ds4_replay_read_token_embedding_f32(rt,
                                                      current_token,
                                                      embed,
                                                      DS4_V100_MTP_FORWARD_N_EMBD,
@@ -2401,11 +2401,11 @@ static int run_mtp_draft_block_smoke(replay_mtp_service *svc,
         }
         memset(top_tokens, 0xff, sizeof(top_tokens));
         memset(top_logits, 0, sizeof(top_logits));
-        ds4_v100_mtp_forward_report report;
+        ds4_mtp_forward_report report;
         memset(&report, 0, sizeof(report));
         const double mtp0 = now_ms();
         pthread_mutex_lock(&svc->mu);
-        int mtp_rc = ds4_v100_mtp_forward_run_host_next_hc(
+        int mtp_rc = ds4_mtp_forward_run_host_next_hc(
             svc->forward,
             embed,
             current_hc,
@@ -2430,7 +2430,7 @@ static int run_mtp_draft_block_smoke(replay_mtp_service *svc,
         next_hc = tmp;
     }
 
-    if (ds4_v100_replay_snapshot_restore(rt, snapshot, err, errlen)) goto done;
+    if (ds4_replay_snapshot_restore(rt, snapshot, err, errlen)) goto done;
 
     forced_tokens[0] = first_target.token;
     positions[0] = first_pos;
@@ -2439,7 +2439,7 @@ static int run_mtp_draft_block_smoke(replay_mtp_service *svc,
         positions[i] = first_pos + i;
     }
 
-    if (ds4_v100_replay_verify_token_block(rt,
+    if (ds4_replay_verify_token_block(rt,
                                            forced_tokens,
                                            positions,
                                            block_n,
@@ -2467,7 +2467,7 @@ static int run_mtp_draft_block_smoke(replay_mtp_service *svc,
 
     counters.generated_tokens = effective_output_tokens;
     counters.total_ms = now_ms() - total0;
-    ds4_v100_replay_finish_generation(rt,
+    ds4_replay_finish_generation(rt,
                                       counters.generated_tokens,
                                       counters.total_ms,
                                       &counters);
@@ -2564,16 +2564,16 @@ static int run_mtp_draft_block_smoke(replay_mtp_service *svc,
     rc = 0;
 
 done:
-    ds4_v100_replay_snapshot_free(snapshot);
-    ds4_v100_replay_output_free(&first_target);
+    ds4_replay_snapshot_free(snapshot);
+    ds4_replay_output_free(&first_target);
     for (uint32_t i = 0; i < block_n && i < DS4_V100_REPLAY_MAX_TOKENS; i++) {
-        ds4_v100_replay_output_free(&target_outputs[i]);
+        ds4_replay_output_free(&target_outputs[i]);
     }
     return rc;
 }
 
 static int run_mtp_block2_commit_smoke(replay_mtp_service *svc,
-                                       ds4_v100_replay *rt,
+                                       ds4_replay *rt,
                                        const ds4_tokens *prompt,
                                        uint32_t max_tokens,
                                        const unsigned char *expected,
@@ -2587,21 +2587,21 @@ static int run_mtp_block2_commit_smoke(replay_mtp_service *svc,
         return 1;
     }
 
-    ds4_v100_replay_output baseline[DS4_V100_REPLAY_MAX_TOKENS];
-    ds4_v100_replay_output outputs[DS4_V100_REPLAY_MAX_TOKENS];
-    ds4_v100_replay_output current;
+    ds4_replay_output baseline[DS4_V100_REPLAY_MAX_TOKENS];
+    ds4_replay_output outputs[DS4_V100_REPLAY_MAX_TOKENS];
+    ds4_replay_output current;
     memset(baseline, 0, sizeof(baseline));
     memset(outputs, 0, sizeof(outputs));
     memset(&current, 0, sizeof(current));
-    ds4_v100_replay_counters baseline_counters;
-    ds4_v100_replay_counters counters;
+    ds4_replay_counters baseline_counters;
+    ds4_replay_counters counters;
     memset(&baseline_counters, 0, sizeof(baseline_counters));
     memset(&counters, 0, sizeof(counters));
     uint32_t baseline_count = 0;
     uint32_t n_out = 0;
     int rc = 1;
 
-    if (ds4_v100_replay_generate(rt,
+    if (ds4_replay_generate(rt,
                                  prompt,
                                  max_tokens,
                                  baseline,
@@ -2636,8 +2636,8 @@ static int run_mtp_block2_commit_smoke(replay_mtp_service *svc,
         }
     }
 
-    if (ds4_v100_replay_reset(rt, err, errlen) ||
-        ds4_v100_replay_begin_generation(rt,
+    if (ds4_replay_reset(rt, err, errlen) ||
+        ds4_replay_begin_generation(rt,
                                          (uint32_t)prompt->len,
                                          &counters,
                                          err,
@@ -2651,7 +2651,7 @@ static int run_mtp_block2_commit_smoke(replay_mtp_service *svc,
             snprintf(err, errlen, "negative prompt token at position %d", pos);
             goto done;
         }
-        if (ds4_v100_replay_feed_token_at_position(rt,
+        if (ds4_replay_feed_token_at_position(rt,
                                                    (uint32_t)prompt->v[pos],
                                                    (uint32_t)pos,
                                                    &counters,
@@ -2663,7 +2663,7 @@ static int run_mtp_block2_commit_smoke(replay_mtp_service *svc,
         counters.total_input_tokens++;
     }
 
-    if (ds4_v100_replay_select_current_token(rt,
+    if (ds4_replay_select_current_token(rt,
                                              &current,
                                              &counters,
                                              err,
@@ -2693,7 +2693,7 @@ static int run_mtp_block2_commit_smoke(replay_mtp_service *svc,
         if (remaining < 2) {
             const uint32_t pos = (uint32_t)prompt->len + n_out - 1u;
             const double t0 = now_ms();
-            if (ds4_v100_replay_feed_token_at_position(rt,
+            if (ds4_replay_feed_token_at_position(rt,
                                                        current.token,
                                                        pos,
                                                        &counters,
@@ -2703,19 +2703,19 @@ static int run_mtp_block2_commit_smoke(replay_mtp_service *svc,
                 goto done;
             }
             counters.total_input_tokens++;
-            ds4_v100_replay_output next;
+            ds4_replay_output next;
             memset(&next, 0, sizeof(next));
-            if (ds4_v100_replay_select_current_token(rt,
+            if (ds4_replay_select_current_token(rt,
                                                      &next,
                                                      &counters,
                                                      err,
                                                      errlen)) {
-                ds4_v100_replay_output_free(&next);
+                ds4_replay_output_free(&next);
                 goto done;
             }
             verify_ms += now_ms() - t0;
             target_forwards++;
-            ds4_v100_replay_output_free(&current);
+            ds4_replay_output_free(&current);
             current = next;
             if (replay_output_copy(&outputs[n_out], &current, err, errlen)) goto done;
             n_out++;
@@ -2725,8 +2725,8 @@ static int run_mtp_block2_commit_smoke(replay_mtp_service *svc,
         blocks++;
         const uint32_t pos = (uint32_t)prompt->len + n_out - 1u;
 
-        ds4_v100_replay_output target0;
-        ds4_v100_replay_output target1;
+        ds4_replay_output target0;
+        ds4_replay_output target1;
         memset(&target0, 0, sizeof(target0));
         memset(&target1, 0, sizeof(target1));
         uint32_t draft_tokens[2] = { UINT32_MAX, UINT32_MAX };
@@ -2741,31 +2741,31 @@ static int run_mtp_block2_commit_smoke(replay_mtp_service *svc,
         memset(hc_b, 0, sizeof(hc_b));
 
         const double verify0 = now_ms();
-        if (ds4_v100_replay_feed_token_at_position(rt,
+        if (ds4_replay_feed_token_at_position(rt,
                                                    current.token,
                                                    pos,
                                                    &counters,
                                                    &counters.continuation_decode_ms,
                                                    err,
                                                    errlen)) {
-            ds4_v100_replay_output_free(&target0);
-            ds4_v100_replay_output_free(&target1);
+            ds4_replay_output_free(&target0);
+            ds4_replay_output_free(&target1);
             goto done;
         }
         counters.total_input_tokens++;
-        if (ds4_v100_replay_read_output_hc_slot(rt,
+        if (ds4_replay_read_output_hc_slot(rt,
                                                 0,
                                                 hc_a,
                                                 sizeof(hc_a),
                                                 err,
                                                 errlen) ||
-            ds4_v100_replay_select_current_token(rt,
+            ds4_replay_select_current_token(rt,
                                                  &target0,
                                                  &counters,
                                                  err,
                                                  errlen)) {
-            ds4_v100_replay_output_free(&target0);
-            ds4_v100_replay_output_free(&target1);
+            ds4_replay_output_free(&target0);
+            ds4_replay_output_free(&target1);
             goto done;
         }
         verify_ms += now_ms() - verify0;
@@ -2776,23 +2776,23 @@ static int run_mtp_block2_commit_smoke(replay_mtp_service *svc,
         float *current_hc = hc_a;
         float *next_hc = hc_b;
         for (uint32_t i = 0; i < 2; i++) {
-            if (ds4_v100_replay_read_token_embedding_f32(rt,
+            if (ds4_replay_read_token_embedding_f32(rt,
                                                          current_token,
                                                          embed,
                                                          DS4_V100_MTP_FORWARD_N_EMBD,
                                                          err,
                                                          errlen)) {
-                ds4_v100_replay_output_free(&target0);
-                ds4_v100_replay_output_free(&target1);
+                ds4_replay_output_free(&target0);
+                ds4_replay_output_free(&target1);
                 goto done;
             }
             memset(top_tokens, 0xff, sizeof(top_tokens));
             memset(top_logits, 0, sizeof(top_logits));
-            ds4_v100_mtp_forward_report report;
+            ds4_mtp_forward_report report;
             memset(&report, 0, sizeof(report));
             const double mtp0 = now_ms();
             pthread_mutex_lock(&svc->mu);
-            int mtp_rc = ds4_v100_mtp_forward_run_host_next_hc(
+            int mtp_rc = ds4_mtp_forward_run_host_next_hc(
                 svc->forward,
                 embed,
                 current_hc,
@@ -2807,8 +2807,8 @@ static int run_mtp_block2_commit_smoke(replay_mtp_service *svc,
                 errlen);
             pthread_mutex_unlock(&svc->mu);
             if (mtp_rc) {
-                ds4_v100_replay_output_free(&target0);
-                ds4_v100_replay_output_free(&target1);
+                ds4_replay_output_free(&target0);
+                ds4_replay_output_free(&target1);
                 goto done;
             }
             mtp_ms += now_ms() - mtp0;
@@ -2827,25 +2827,25 @@ static int run_mtp_block2_commit_smoke(replay_mtp_service *svc,
         if (target0.token == draft_tokens[0]) {
             accepted_prefix = 1;
             const double verify1 = now_ms();
-            if (ds4_v100_replay_feed_token_at_position(rt,
+            if (ds4_replay_feed_token_at_position(rt,
                                                        draft_tokens[0],
                                                        pos + 1u,
                                                        &counters,
                                                        &counters.continuation_decode_ms,
                                                        err,
                                                        errlen)) {
-                ds4_v100_replay_output_free(&target0);
-                ds4_v100_replay_output_free(&target1);
+                ds4_replay_output_free(&target0);
+                ds4_replay_output_free(&target1);
                 goto done;
             }
             counters.total_input_tokens++;
-            if (ds4_v100_replay_select_current_token(rt,
+            if (ds4_replay_select_current_token(rt,
                                                      &target1,
                                                      &counters,
                                                      err,
                                                      errlen)) {
-                ds4_v100_replay_output_free(&target0);
-                ds4_v100_replay_output_free(&target1);
+                ds4_replay_output_free(&target0);
+                ds4_replay_output_free(&target1);
                 goto done;
             }
             verify_ms += now_ms() - verify1;
@@ -2861,40 +2861,40 @@ static int run_mtp_block2_commit_smoke(replay_mtp_service *svc,
         else block2_rejects++;
 
         if (replay_output_copy(&outputs[n_out], &target0, err, errlen)) {
-            ds4_v100_replay_output_free(&target0);
-            ds4_v100_replay_output_free(&target1);
+            ds4_replay_output_free(&target0);
+            ds4_replay_output_free(&target1);
             goto done;
         }
         n_out++;
-        ds4_v100_replay_output_free(&current);
+        ds4_replay_output_free(&current);
 
         if (accepted_prefix >= 1 && n_out < max_tokens) {
             if (replay_output_copy(&outputs[n_out], &target1, err, errlen)) {
-                ds4_v100_replay_output_free(&target0);
-                ds4_v100_replay_output_free(&target1);
+                ds4_replay_output_free(&target0);
+                ds4_replay_output_free(&target1);
                 goto done;
             }
             n_out++;
             if (replay_output_copy(&current, &target1, err, errlen)) {
-                ds4_v100_replay_output_free(&target0);
-                ds4_v100_replay_output_free(&target1);
+                ds4_replay_output_free(&target0);
+                ds4_replay_output_free(&target1);
                 goto done;
             }
         } else {
             if (replay_output_copy(&current, &target0, err, errlen)) {
-                ds4_v100_replay_output_free(&target0);
-                ds4_v100_replay_output_free(&target1);
+                ds4_replay_output_free(&target0);
+                ds4_replay_output_free(&target1);
                 goto done;
             }
         }
-        ds4_v100_replay_output_free(&target0);
-        ds4_v100_replay_output_free(&target1);
+        ds4_replay_output_free(&target0);
+        ds4_replay_output_free(&target1);
         (void)draft_logits;
     }
 
     counters.generated_tokens = n_out;
     counters.total_ms = now_ms() - total0;
-    ds4_v100_replay_finish_generation(rt, counters.generated_tokens, counters.total_ms, &counters);
+    ds4_replay_finish_generation(rt, counters.generated_tokens, counters.total_ms, &counters);
 
     if (n_out != baseline_count) {
         snprintf(err, errlen, "MTP block2 output count mismatch baseline=%" PRIu32 " got=%" PRIu32,
@@ -3010,12 +3010,12 @@ static int run_mtp_block2_commit_smoke(replay_mtp_service *svc,
 
 done:
     for (uint32_t i = 0; i < baseline_count && i < DS4_V100_REPLAY_MAX_TOKENS; i++) {
-        ds4_v100_replay_output_free(&baseline[i]);
+        ds4_replay_output_free(&baseline[i]);
     }
     for (uint32_t i = 0; i < n_out && i < DS4_V100_REPLAY_MAX_TOKENS; i++) {
-        ds4_v100_replay_output_free(&outputs[i]);
+        ds4_replay_output_free(&outputs[i]);
     }
-    ds4_v100_replay_output_free(&current);
+    ds4_replay_output_free(&current);
     return rc;
 }
 
@@ -3304,93 +3304,93 @@ static void write_metrics_text(FILE *fp,
         opt && opt->ctx == 262144 && opt->active_microbatch > 16;
     const bool warmed_ready = !warmup_required || (opt && opt->startup_warmup);
     const uint64_t served = stats ? stats->accepted_connections : 0;
-    fprintf(fp, "# HELP ds4_v100_readiness_level Deployment readiness level exposed by the replay service.\n");
-    fprintf(fp, "# TYPE ds4_v100_readiness_level gauge\n");
-    fprintf(fp, "ds4_v100_readiness_level %d\n", mtp_enabled ? 3 : 2);
-    fprintf(fp, "# HELP ds4_v100_served_requests HTTP requests accepted by this process.\n");
-    fprintf(fp, "# TYPE ds4_v100_served_requests counter\n");
-    fprintf(fp, "ds4_v100_served_requests %" PRIu64 "\n", served);
-    fprintf(fp, "# HELP ds4_v100_generation_requests_total Generation requests accepted by the scheduler.\n");
-    fprintf(fp, "# TYPE ds4_v100_generation_requests_total counter\n");
-    fprintf(fp, "ds4_v100_generation_requests_total %" PRIu64 "\n", stats ? stats->generation_requests : 0);
-    fprintf(fp, "# HELP ds4_v100_tensor_batched_groups_total Same-token-count tensor batch groups executed by the scheduler.\n");
-    fprintf(fp, "# TYPE ds4_v100_tensor_batched_groups_total counter\n");
-    fprintf(fp, "ds4_v100_tensor_batched_groups_total %" PRIu64 "\n", stats ? stats->tensor_batched_groups : 0);
-    fprintf(fp, "# HELP ds4_v100_tensor_batched_requests_total Requests served through tensor batch groups.\n");
-    fprintf(fp, "# TYPE ds4_v100_tensor_batched_requests_total counter\n");
-    fprintf(fp, "ds4_v100_tensor_batched_requests_total %" PRIu64 "\n", stats ? stats->tensor_batched_requests : 0);
-    fprintf(fp, "# HELP ds4_v100_tensor_batched_tokens_total Generated tokens served through tensor batch groups.\n");
-    fprintf(fp, "# TYPE ds4_v100_tensor_batched_tokens_total counter\n");
-    fprintf(fp, "ds4_v100_tensor_batched_tokens_total %" PRIu64 "\n", stats ? stats->tensor_batched_tokens : 0);
-    fprintf(fp, "# HELP ds4_v100_rejected_requests_total HTTP generation requests rejected by admission policy.\n");
-    fprintf(fp, "# TYPE ds4_v100_rejected_requests_total counter\n");
-    fprintf(fp, "ds4_v100_rejected_requests_total %" PRIu64 "\n", stats ? stats->rejected_requests : 0);
-    fprintf(fp, "# HELP ds4_v100_rejected_busy_total HTTP generation requests rejected because the scheduler was busy.\n");
-    fprintf(fp, "# TYPE ds4_v100_rejected_busy_total counter\n");
-    fprintf(fp, "ds4_v100_rejected_busy_total %" PRIu64 "\n", stats ? stats->rejected_busy : 0);
-    fprintf(fp, "# HELP ds4_v100_rejected_context_total HTTP generation requests rejected for exceeding context.\n");
-    fprintf(fp, "# TYPE ds4_v100_rejected_context_total counter\n");
-    fprintf(fp, "ds4_v100_rejected_context_total %" PRIu64 "\n", stats ? stats->rejected_context : 0);
-    fprintf(fp, "# HELP ds4_v100_rejected_bad_request_total HTTP generation requests rejected for malformed input.\n");
-    fprintf(fp, "# TYPE ds4_v100_rejected_bad_request_total counter\n");
-    fprintf(fp, "ds4_v100_rejected_bad_request_total %" PRIu64 "\n", stats ? stats->rejected_bad_request : 0);
-    fprintf(fp, "# HELP ds4_v100_ctx_tokens Configured KV context tokens per slot.\n");
-    fprintf(fp, "# TYPE ds4_v100_ctx_tokens gauge\n");
-    fprintf(fp, "ds4_v100_ctx_tokens %" PRIu64 "\n", opt->ctx);
-    fprintf(fp, "# HELP ds4_v100_default_tokens Default generated tokens per request.\n");
-    fprintf(fp, "# TYPE ds4_v100_default_tokens gauge\n");
-    fprintf(fp, "ds4_v100_default_tokens %" PRIu32 "\n", opt->tokens);
-    fprintf(fp, "# HELP ds4_v100_max_tokens Maximum generated tokens accepted by the appliance endpoint.\n");
-    fprintf(fp, "# TYPE ds4_v100_max_tokens gauge\n");
-    fprintf(fp, "ds4_v100_max_tokens %u\n", DS4_V100_REPLAY_MAX_TOKENS);
-    fprintf(fp, "# HELP ds4_v100_configured_slots Configured admission slots.\n");
-    fprintf(fp, "# TYPE ds4_v100_configured_slots gauge\n");
-    fprintf(fp, "ds4_v100_configured_slots %" PRIu32 "\n", opt->slots);
-    fprintf(fp, "# HELP ds4_v100_active_microbatch Active decode requests supported by this process.\n");
-    fprintf(fp, "# TYPE ds4_v100_active_microbatch gauge\n");
-    fprintf(fp, "ds4_v100_active_microbatch %" PRIu32 "\n", opt->active_microbatch);
-    fprintf(fp, "# HELP ds4_v100_microbatch_wait_us Max microseconds the server waits to coalesce active requests.\n");
-    fprintf(fp, "# TYPE ds4_v100_microbatch_wait_us gauge\n");
-    fprintf(fp, "ds4_v100_microbatch_wait_us %" PRIu32 "\n", opt->microbatch_wait_us);
-    fprintf(fp, "# HELP ds4_v100_active_slots Active slots scheduled concurrently by this process.\n");
-    fprintf(fp, "# TYPE ds4_v100_active_slots gauge\n");
-    fprintf(fp, "ds4_v100_active_slots %" PRIu32 "\n", opt->active_microbatch);
-    fprintf(fp, "# HELP ds4_v100_startup_warmup_enabled Whether the server warmed the appliance before accepting traffic.\n");
-    fprintf(fp, "# TYPE ds4_v100_startup_warmup_enabled gauge\n");
-    fprintf(fp, "ds4_v100_startup_warmup_enabled %d\n", opt->startup_warmup ? 1 : 0);
-    fprintf(fp, "# HELP ds4_v100_warmup_required Whether this context/slot shape requires startup warmup for production readiness.\n");
-    fprintf(fp, "# TYPE ds4_v100_warmup_required gauge\n");
-    fprintf(fp, "ds4_v100_warmup_required %d\n", warmup_required ? 1 : 0);
-    fprintf(fp, "# HELP ds4_v100_warmed_ready Whether the server satisfies the warmed-readiness contract before accepting traffic.\n");
-    fprintf(fp, "# TYPE ds4_v100_warmed_ready gauge\n");
-    fprintf(fp, "ds4_v100_warmed_ready %d\n", warmed_ready ? 1 : 0);
-    fprintf(fp, "# HELP ds4_v100_concurrent_request_capacity Concurrent generation request capacity.\n");
-    fprintf(fp, "# TYPE ds4_v100_concurrent_request_capacity gauge\n");
-    fprintf(fp, "ds4_v100_concurrent_request_capacity %" PRIu32 "\n", opt->active_microbatch);
-    fprintf(fp, "# HELP ds4_v100_scheduler_slots_ready Whether true device-resident multi-slot scheduling is implemented.\n");
-    fprintf(fp, "# TYPE ds4_v100_scheduler_slots_ready gauge\n");
-    fprintf(fp, "ds4_v100_scheduler_slots_ready 1\n");
-    fprintf(fp, "# HELP ds4_v100_mtp_enabled Whether speculative MTP serving is enabled.\n");
-    fprintf(fp, "# TYPE ds4_v100_mtp_enabled gauge\n");
-    fprintf(fp, "ds4_v100_mtp_enabled %d\n", mtp_enabled ? 1 : 0);
-    fprintf(fp, "# HELP ds4_v100_mtp_requests_total Requests evaluated by the MTP service.\n");
-    fprintf(fp, "# TYPE ds4_v100_mtp_requests_total counter\n");
-    fprintf(fp, "ds4_v100_mtp_requests_total %" PRIu64 "\n", mtp_enabled ? mtp->requests : 0);
-    fprintf(fp, "# HELP ds4_v100_mtp_drafts_total MTP draft attempts completed.\n");
-    fprintf(fp, "# TYPE ds4_v100_mtp_drafts_total counter\n");
-    fprintf(fp, "ds4_v100_mtp_drafts_total %" PRIu64 "\n", mtp_enabled ? mtp->drafts : 0);
-    fprintf(fp, "# HELP ds4_v100_mtp_accepted_total MTP drafts matching the base target token.\n");
-    fprintf(fp, "# TYPE ds4_v100_mtp_accepted_total counter\n");
-    fprintf(fp, "ds4_v100_mtp_accepted_total %" PRIu64 "\n", mtp_enabled ? mtp->accepted : 0);
-    fprintf(fp, "# HELP ds4_v100_mtp_rejected_total MTP drafts rejected by exact target-token comparison.\n");
-    fprintf(fp, "# TYPE ds4_v100_mtp_rejected_total counter\n");
-    fprintf(fp, "ds4_v100_mtp_rejected_total %" PRIu64 "\n", mtp_enabled ? mtp->rejected : 0);
-    fprintf(fp, "# HELP ds4_v100_mtp_skipped_total Requests where MTP was skipped.\n");
-    fprintf(fp, "# TYPE ds4_v100_mtp_skipped_total counter\n");
-    fprintf(fp, "ds4_v100_mtp_skipped_total %" PRIu64 "\n", mtp_enabled ? mtp->skipped : 0);
-    fprintf(fp, "# HELP ds4_v100_mtp_committed_total Accepted MTP drafts emitted by commit-mode serving.\n");
-    fprintf(fp, "# TYPE ds4_v100_mtp_committed_total counter\n");
-    fprintf(fp, "ds4_v100_mtp_committed_total %" PRIu64 "\n", mtp_enabled ? mtp->committed : 0);
+    fprintf(fp, "# HELP ds4_readiness_level Deployment readiness level exposed by the replay service.\n");
+    fprintf(fp, "# TYPE ds4_readiness_level gauge\n");
+    fprintf(fp, "ds4_readiness_level %d\n", mtp_enabled ? 3 : 2);
+    fprintf(fp, "# HELP ds4_served_requests HTTP requests accepted by this process.\n");
+    fprintf(fp, "# TYPE ds4_served_requests counter\n");
+    fprintf(fp, "ds4_served_requests %" PRIu64 "\n", served);
+    fprintf(fp, "# HELP ds4_generation_requests_total Generation requests accepted by the scheduler.\n");
+    fprintf(fp, "# TYPE ds4_generation_requests_total counter\n");
+    fprintf(fp, "ds4_generation_requests_total %" PRIu64 "\n", stats ? stats->generation_requests : 0);
+    fprintf(fp, "# HELP ds4_tensor_batched_groups_total Same-token-count tensor batch groups executed by the scheduler.\n");
+    fprintf(fp, "# TYPE ds4_tensor_batched_groups_total counter\n");
+    fprintf(fp, "ds4_tensor_batched_groups_total %" PRIu64 "\n", stats ? stats->tensor_batched_groups : 0);
+    fprintf(fp, "# HELP ds4_tensor_batched_requests_total Requests served through tensor batch groups.\n");
+    fprintf(fp, "# TYPE ds4_tensor_batched_requests_total counter\n");
+    fprintf(fp, "ds4_tensor_batched_requests_total %" PRIu64 "\n", stats ? stats->tensor_batched_requests : 0);
+    fprintf(fp, "# HELP ds4_tensor_batched_tokens_total Generated tokens served through tensor batch groups.\n");
+    fprintf(fp, "# TYPE ds4_tensor_batched_tokens_total counter\n");
+    fprintf(fp, "ds4_tensor_batched_tokens_total %" PRIu64 "\n", stats ? stats->tensor_batched_tokens : 0);
+    fprintf(fp, "# HELP ds4_rejected_requests_total HTTP generation requests rejected by admission policy.\n");
+    fprintf(fp, "# TYPE ds4_rejected_requests_total counter\n");
+    fprintf(fp, "ds4_rejected_requests_total %" PRIu64 "\n", stats ? stats->rejected_requests : 0);
+    fprintf(fp, "# HELP ds4_rejected_busy_total HTTP generation requests rejected because the scheduler was busy.\n");
+    fprintf(fp, "# TYPE ds4_rejected_busy_total counter\n");
+    fprintf(fp, "ds4_rejected_busy_total %" PRIu64 "\n", stats ? stats->rejected_busy : 0);
+    fprintf(fp, "# HELP ds4_rejected_context_total HTTP generation requests rejected for exceeding context.\n");
+    fprintf(fp, "# TYPE ds4_rejected_context_total counter\n");
+    fprintf(fp, "ds4_rejected_context_total %" PRIu64 "\n", stats ? stats->rejected_context : 0);
+    fprintf(fp, "# HELP ds4_rejected_bad_request_total HTTP generation requests rejected for malformed input.\n");
+    fprintf(fp, "# TYPE ds4_rejected_bad_request_total counter\n");
+    fprintf(fp, "ds4_rejected_bad_request_total %" PRIu64 "\n", stats ? stats->rejected_bad_request : 0);
+    fprintf(fp, "# HELP ds4_ctx_tokens Configured KV context tokens per slot.\n");
+    fprintf(fp, "# TYPE ds4_ctx_tokens gauge\n");
+    fprintf(fp, "ds4_ctx_tokens %" PRIu64 "\n", opt->ctx);
+    fprintf(fp, "# HELP ds4_default_tokens Default generated tokens per request.\n");
+    fprintf(fp, "# TYPE ds4_default_tokens gauge\n");
+    fprintf(fp, "ds4_default_tokens %" PRIu32 "\n", opt->tokens);
+    fprintf(fp, "# HELP ds4_max_tokens Maximum generated tokens accepted by the appliance endpoint.\n");
+    fprintf(fp, "# TYPE ds4_max_tokens gauge\n");
+    fprintf(fp, "ds4_max_tokens %u\n", DS4_V100_REPLAY_MAX_TOKENS);
+    fprintf(fp, "# HELP ds4_configured_slots Configured admission slots.\n");
+    fprintf(fp, "# TYPE ds4_configured_slots gauge\n");
+    fprintf(fp, "ds4_configured_slots %" PRIu32 "\n", opt->slots);
+    fprintf(fp, "# HELP ds4_active_microbatch Active decode requests supported by this process.\n");
+    fprintf(fp, "# TYPE ds4_active_microbatch gauge\n");
+    fprintf(fp, "ds4_active_microbatch %" PRIu32 "\n", opt->active_microbatch);
+    fprintf(fp, "# HELP ds4_microbatch_wait_us Max microseconds the server waits to coalesce active requests.\n");
+    fprintf(fp, "# TYPE ds4_microbatch_wait_us gauge\n");
+    fprintf(fp, "ds4_microbatch_wait_us %" PRIu32 "\n", opt->microbatch_wait_us);
+    fprintf(fp, "# HELP ds4_active_slots Active slots scheduled concurrently by this process.\n");
+    fprintf(fp, "# TYPE ds4_active_slots gauge\n");
+    fprintf(fp, "ds4_active_slots %" PRIu32 "\n", opt->active_microbatch);
+    fprintf(fp, "# HELP ds4_startup_warmup_enabled Whether the server warmed the appliance before accepting traffic.\n");
+    fprintf(fp, "# TYPE ds4_startup_warmup_enabled gauge\n");
+    fprintf(fp, "ds4_startup_warmup_enabled %d\n", opt->startup_warmup ? 1 : 0);
+    fprintf(fp, "# HELP ds4_warmup_required Whether this context/slot shape requires startup warmup for production readiness.\n");
+    fprintf(fp, "# TYPE ds4_warmup_required gauge\n");
+    fprintf(fp, "ds4_warmup_required %d\n", warmup_required ? 1 : 0);
+    fprintf(fp, "# HELP ds4_warmed_ready Whether the server satisfies the warmed-readiness contract before accepting traffic.\n");
+    fprintf(fp, "# TYPE ds4_warmed_ready gauge\n");
+    fprintf(fp, "ds4_warmed_ready %d\n", warmed_ready ? 1 : 0);
+    fprintf(fp, "# HELP ds4_concurrent_request_capacity Concurrent generation request capacity.\n");
+    fprintf(fp, "# TYPE ds4_concurrent_request_capacity gauge\n");
+    fprintf(fp, "ds4_concurrent_request_capacity %" PRIu32 "\n", opt->active_microbatch);
+    fprintf(fp, "# HELP ds4_scheduler_slots_ready Whether true device-resident multi-slot scheduling is implemented.\n");
+    fprintf(fp, "# TYPE ds4_scheduler_slots_ready gauge\n");
+    fprintf(fp, "ds4_scheduler_slots_ready 1\n");
+    fprintf(fp, "# HELP ds4_mtp_enabled Whether speculative MTP serving is enabled.\n");
+    fprintf(fp, "# TYPE ds4_mtp_enabled gauge\n");
+    fprintf(fp, "ds4_mtp_enabled %d\n", mtp_enabled ? 1 : 0);
+    fprintf(fp, "# HELP ds4_mtp_requests_total Requests evaluated by the MTP service.\n");
+    fprintf(fp, "# TYPE ds4_mtp_requests_total counter\n");
+    fprintf(fp, "ds4_mtp_requests_total %" PRIu64 "\n", mtp_enabled ? mtp->requests : 0);
+    fprintf(fp, "# HELP ds4_mtp_drafts_total MTP draft attempts completed.\n");
+    fprintf(fp, "# TYPE ds4_mtp_drafts_total counter\n");
+    fprintf(fp, "ds4_mtp_drafts_total %" PRIu64 "\n", mtp_enabled ? mtp->drafts : 0);
+    fprintf(fp, "# HELP ds4_mtp_accepted_total MTP drafts matching the base target token.\n");
+    fprintf(fp, "# TYPE ds4_mtp_accepted_total counter\n");
+    fprintf(fp, "ds4_mtp_accepted_total %" PRIu64 "\n", mtp_enabled ? mtp->accepted : 0);
+    fprintf(fp, "# HELP ds4_mtp_rejected_total MTP drafts rejected by exact target-token comparison.\n");
+    fprintf(fp, "# TYPE ds4_mtp_rejected_total counter\n");
+    fprintf(fp, "ds4_mtp_rejected_total %" PRIu64 "\n", mtp_enabled ? mtp->rejected : 0);
+    fprintf(fp, "# HELP ds4_mtp_skipped_total Requests where MTP was skipped.\n");
+    fprintf(fp, "# TYPE ds4_mtp_skipped_total counter\n");
+    fprintf(fp, "ds4_mtp_skipped_total %" PRIu64 "\n", mtp_enabled ? mtp->skipped : 0);
+    fprintf(fp, "# HELP ds4_mtp_committed_total Accepted MTP drafts emitted by commit-mode serving.\n");
+    fprintf(fp, "# TYPE ds4_mtp_committed_total counter\n");
+    fprintf(fp, "ds4_mtp_committed_total %" PRIu64 "\n", mtp_enabled ? mtp->committed : 0);
 }
 
 static int handle_http_request(int fd, replay_server_state *state) {
@@ -3398,7 +3398,7 @@ static int handle_http_request(int fd, replay_server_state *state) {
         http_error(fd, 500, "server_state_missing");
         return 1;
     }
-    ds4_v100_replay *rt = state->rt;
+    ds4_replay *rt = state->rt;
     const replay_cli_options *opt = state->opt;
     replay_mtp_service *mtp = state->mtp;
     size_t req_len = 0;
@@ -3489,7 +3489,7 @@ static int handle_http_request(int fd, replay_server_state *state) {
 
     replay_pending_generation pending;
     memset(&pending, 0, sizeof(pending));
-    ds4_v100_replay_encode_prompt(rt, opt->system, prompt, DS4_THINK_NONE, &pending.prompt_tokens);
+    ds4_replay_encode_prompt(rt, opt->system, prompt, DS4_THINK_NONE, &pending.prompt_tokens);
     if (opt->ctx && (uint64_t)pending.prompt_tokens.len + tokens > opt->ctx) {
         ds4_tokens_free(&pending.prompt_tokens);
         free(prompt);
@@ -3564,7 +3564,7 @@ static int handle_http_request(int fd, replay_server_state *state) {
             fclose(fp);
         }
     }
-    for (uint32_t i = 0; i < pending.n_outputs; i++) ds4_v100_replay_output_free(&pending.outputs[i]);
+    for (uint32_t i = 0; i < pending.n_outputs; i++) ds4_replay_output_free(&pending.outputs[i]);
     ds4_tokens_free(&pending.prompt_tokens);
     free(prompt);
     free(req);
@@ -3587,16 +3587,16 @@ static void *request_worker_main(void *arg) {
     return NULL;
 }
 
-static int run_startup_warmup(const replay_cli_options *opt, ds4_v100_replay *rt) {
+static int run_startup_warmup(const replay_cli_options *opt, ds4_replay *rt) {
     if (!opt || !rt || !opt->startup_warmup) return 0;
     static const char warmup_prompt[] = "16";
     char err[512] = {0};
     ds4_tokens prompt = {0};
-    ds4_v100_replay_output output = {0};
-    ds4_v100_replay_counters counters;
+    ds4_replay_output output = {0};
+    ds4_replay_counters counters;
     memset(&counters, 0, sizeof(counters));
 
-    ds4_v100_replay_encode_prompt(rt, opt->system, warmup_prompt, DS4_THINK_NONE, &prompt);
+    ds4_replay_encode_prompt(rt, opt->system, warmup_prompt, DS4_THINK_NONE, &prompt);
     if (prompt.len <= 0) {
         fprintf(stderr, "ds4-v100-replay: startup warmup prompt encode failed\n");
         ds4_tokens_free(&prompt);
@@ -3610,7 +3610,7 @@ static int run_startup_warmup(const replay_cli_options *opt, ds4_v100_replay *rt
 
     uint32_t n_outputs = 0;
     const double t0 = now_ms();
-    int rc = ds4_v100_replay_generate(rt,
+    int rc = ds4_replay_generate(rt,
                                       &prompt,
                                       1,
                                       &output,
@@ -3620,7 +3620,7 @@ static int run_startup_warmup(const replay_cli_options *opt, ds4_v100_replay *rt
                                       err,
                                       sizeof(err));
     if (!rc) {
-        rc = ds4_v100_replay_reset(rt, err, sizeof(err));
+        rc = ds4_replay_reset(rt, err, sizeof(err));
     }
     const double total_ms = now_ms() - t0;
     if (rc) {
@@ -3635,13 +3635,13 @@ static int run_startup_warmup(const replay_cli_options *opt, ds4_v100_replay *rt
                 n_outputs ? output.token : UINT32_MAX,
                 total_ms);
     }
-    ds4_v100_replay_output_free(&output);
+    ds4_replay_output_free(&output);
     ds4_tokens_free(&prompt);
     return rc;
 }
 
 static int run_server(const replay_cli_options *opt,
-                      ds4_v100_replay *rt,
+                      ds4_replay *rt,
                       replay_mtp_service *mtp) {
     if (run_startup_warmup(opt, rt) != 0) return 1;
 
@@ -3791,8 +3791,8 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    ds4_v100_replay_options ropts;
-    ds4_v100_replay_options_init(&ropts);
+    ds4_replay_options ropts;
+    ds4_replay_options_init(&ropts);
     ropts.model_path = opt.model_path;
     ropts.pack_index_path = opt.index_path;
     ropts.turbomind_pack_index_path = opt.turbomind_index_path;
@@ -3838,8 +3838,8 @@ int main(int argc, char **argv) {
     }
 
     char err[512] = {0};
-    ds4_v100_replay *rt = NULL;
-    if (ds4_v100_replay_open(&rt, &ropts, err, sizeof(err))) {
+    ds4_replay *rt = NULL;
+    if (ds4_replay_open(&rt, &ropts, err, sizeof(err))) {
         fprintf(stderr, "ds4-v100-replay: %s\n", err[0] ? err : "open failed");
         free(expected);
         free(prompt_owned);
@@ -3847,8 +3847,8 @@ int main(int argc, char **argv) {
     }
 
     if (opt.open_only) {
-        ds4_v100_replay_counters counters;
-        ds4_v100_replay_open_counters(rt, &counters);
+        ds4_replay_counters counters;
+        ds4_replay_open_counters(rt, &counters);
         if (opt.json) {
             print_open_json(&counters, opt.serial_open);
         } else {
@@ -3858,7 +3858,7 @@ int main(int argc, char **argv) {
                 printf("open_stage_ms\t%d\t%.3f\n", i, counters.open_ms[i]);
             }
         }
-        ds4_v100_replay_close(rt);
+        ds4_replay_close(rt);
         free(expected);
         return 0;
     }
@@ -3866,7 +3866,7 @@ int main(int argc, char **argv) {
     replay_mtp_service *mtp = NULL;
     if (replay_mtp_service_open(&mtp, &opt, rt, err, sizeof(err)) != 0) {
         fprintf(stderr, "ds4-v100-replay: %s\n", err[0] ? err : "MTP service open failed");
-        ds4_v100_replay_close(rt);
+        ds4_replay_close(rt);
         free(expected);
         free(prompt_owned);
         return 1;
@@ -3875,7 +3875,7 @@ int main(int argc, char **argv) {
     if (opt.serve) {
         int rc = run_server(&opt, rt, mtp);
         replay_mtp_service_close(mtp);
-        ds4_v100_replay_close(rt);
+        ds4_replay_close(rt);
         free(expected);
         return rc;
     }
@@ -3886,7 +3886,7 @@ int main(int argc, char **argv) {
             ds4_tokens_push(&prompt, (int)opt.synthetic_prompt_token);
         }
     } else {
-        ds4_v100_replay_encode_prompt(rt, opt.system, prompt_text, DS4_THINK_NONE, &prompt);
+        ds4_replay_encode_prompt(rt, opt.system, prompt_text, DS4_THINK_NONE, &prompt);
     }
     if (opt.prompt_token_limit && prompt.len > (int)opt.prompt_token_limit) {
         prompt.len = (int)opt.prompt_token_limit;
@@ -3894,7 +3894,7 @@ int main(int argc, char **argv) {
     if (opt.ctx && (uint64_t)prompt.len + opt.tokens > opt.ctx) {
         fprintf(stderr, "ds4-v100-replay: prompt exceeds configured context\n");
         replay_mtp_service_close(mtp);
-        ds4_v100_replay_close(rt);
+        ds4_replay_close(rt);
         ds4_tokens_free(&prompt);
         free(expected);
         free(prompt_owned);
@@ -3915,7 +3915,7 @@ int main(int argc, char **argv) {
                     err[0] ? err : "reset parity smoke failed");
         }
         replay_mtp_service_close(mtp);
-        ds4_v100_replay_close(rt);
+        ds4_replay_close(rt);
         ds4_tokens_free(&prompt);
         free(expected);
         free(prompt_owned);
@@ -3937,7 +3937,7 @@ int main(int argc, char **argv) {
                     err[0] ? err : "target block smoke failed");
         }
         replay_mtp_service_close(mtp);
-        ds4_v100_replay_close(rt);
+        ds4_replay_close(rt);
         ds4_tokens_free(&prompt);
         free(expected);
         free(prompt_owned);
@@ -3960,7 +3960,7 @@ int main(int argc, char **argv) {
                     err[0] ? err : "MTP draft block smoke failed");
         }
         replay_mtp_service_close(mtp);
-        ds4_v100_replay_close(rt);
+        ds4_replay_close(rt);
         ds4_tokens_free(&prompt);
         free(expected);
         free(prompt_owned);
@@ -3982,15 +3982,15 @@ int main(int argc, char **argv) {
                     err[0] ? err : "MTP block2 commit smoke failed");
         }
         replay_mtp_service_close(mtp);
-        ds4_v100_replay_close(rt);
+        ds4_replay_close(rt);
         ds4_tokens_free(&prompt);
         free(expected);
         free(prompt_owned);
         return smoke_rc;
     }
-    ds4_v100_replay_output outputs[DS4_V100_REPLAY_MAX_TOKENS];
+    ds4_replay_output outputs[DS4_V100_REPLAY_MAX_TOKENS];
     memset(outputs, 0, sizeof(outputs));
-    ds4_v100_replay_counters counters;
+    ds4_replay_counters counters;
     memset(&counters, 0, sizeof(counters));
     uint32_t n_outputs = 0;
     int rc = 0;
@@ -4022,7 +4022,7 @@ int main(int argc, char **argv) {
         } else {
             mtp_json = &mtp_result;
         }
-    } else if (rc == 0 && ds4_v100_replay_generate(rt,
+    } else if (rc == 0 && ds4_replay_generate(rt,
                                                    &prompt,
                                                    opt.tokens,
                                                    outputs,
@@ -4108,10 +4108,10 @@ int main(int argc, char **argv) {
         }
     }
 
-    for (uint32_t i = 0; i < n_outputs; i++) ds4_v100_replay_output_free(&outputs[i]);
+    for (uint32_t i = 0; i < n_outputs; i++) ds4_replay_output_free(&outputs[i]);
     ds4_tokens_free(&prompt);
     replay_mtp_service_close(mtp);
-    ds4_v100_replay_close(rt);
+    ds4_replay_close(rt);
     free(expected);
     free(prompt_owned);
     return rc;

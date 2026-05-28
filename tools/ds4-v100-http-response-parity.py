@@ -192,7 +192,7 @@ def main() -> int:
     common = sorted(control_indices & candidate_indices)
 
     summary: dict[str, Any] = {
-        "schema": "ds4_v100_http_response_parity.v1",
+        "schema": "ds4_http_response_parity.v1",
         "control_dir": str(args.control_dir),
         "candidate_dir": str(args.candidate_dir),
         "control_count": len(control_files),

@@ -653,8 +653,8 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    ds4_v100_tp_runtime_config cfg;
-    ds4_v100_tp_runtime_default_config(&cfg);
+    ds4_tp_runtime_config cfg;
+    ds4_tp_runtime_default_config(&cfg);
     cfg.slots = (uint32_t)opt.slots;
     cfg.ctx = 262144;
     cfg.kv_dtype = DS4_V100_TP_KV_F8_E4M3_B128;
@@ -662,21 +662,21 @@ int main(int argc, char **argv) {
     for (int i = 0; i < kGpus; ++i) cfg.devices[i] = opt.devices[i];
 
     char err[512] = {0};
-    ds4_v100_tp_runtime *rt = nullptr;
-    if (ds4_v100_tp_runtime_open(&rt, &cfg, err, sizeof(err)) != 0) {
+    ds4_tp_runtime *rt = nullptr;
+    if (ds4_tp_runtime_open(&rt, &cfg, err, sizeof(err)) != 0) {
         std::fprintf(stderr, "tp_runtime_open_failed\t%s\n", err);
         return 1;
     }
 
-    ds4_v100_tp_runtime_report runtime_report;
-    ds4_v100_tp_runtime_get_report(rt, &runtime_report);
+    ds4_tp_runtime_report runtime_report;
+    ds4_tp_runtime_get_report(rt, &runtime_report);
 
-    ds4_v100_tp_dense_kv_result kv_result;
+    ds4_tp_dense_kv_result kv_result;
     const auto kv_start = std::chrono::steady_clock::now();
-    if (ds4_v100_tp_runtime_dense_kv_slice(rt, opt.layer, opt.kv_slot, opt.position,
+    if (ds4_tp_runtime_dense_kv_slice(rt, opt.layer, opt.kv_slot, opt.position,
                                            1, &kv_result, err, sizeof(err)) != 0) {
         std::fprintf(stderr, "tp_runtime_dense_kv_slice_failed\t%s\n", err);
-        ds4_v100_tp_runtime_close(rt);
+        ds4_tp_runtime_close(rt);
         return 1;
     }
     const auto kv_stop = std::chrono::steady_clock::now();
@@ -686,7 +686,7 @@ int main(int argc, char **argv) {
     void *lib = dlopen(opt.lib_path, RTLD_LAZY | RTLD_LOCAL);
     if (!lib) {
         std::fprintf(stderr, "dlopen failed for %s: %s\n", opt.lib_path, dlerror());
-        ds4_v100_tp_runtime_close(rt);
+        ds4_tp_runtime_close(rt);
         return 2;
     }
     Api api;
@@ -697,7 +697,7 @@ int main(int argc, char **argv) {
     if (opt.descriptor_backed_experts) {
         const int rc = parse_tm_index(opt.tm_index_path, opt.layer, &bindings);
         if (rc != 0) {
-            ds4_v100_tp_runtime_close(rt);
+            ds4_tp_runtime_close(rt);
             return 2;
         }
     }
@@ -714,7 +714,7 @@ int main(int argc, char **argv) {
         CHECK_CUDA(cudaSetDevice(r.device));
         if (api.init(r.device) != 0) {
             std::fprintf(stderr, "ggml_turbomind_init failed on device %d\n", r.device);
-            ds4_v100_tp_runtime_close(rt);
+            ds4_tp_runtime_close(rt);
             return 3;
         }
         CHECK_CUDA(cudaStreamCreate(&r.stream));
@@ -751,7 +751,7 @@ int main(int argc, char **argv) {
                                     &r.gated, &descriptor_bytes_read) != 0 ||
                 pack_descriptor_set(r.device, bindings.down, p, active, opt.pack_dir,
                                     &r.down, &descriptor_bytes_read) != 0) {
-                ds4_v100_tp_runtime_close(rt);
+                ds4_tp_runtime_close(rt);
                 return 4;
             }
         } else {
@@ -770,7 +770,7 @@ int main(int argc, char **argv) {
             }
             if (pack_fixture_set(r.device, api, kFusedN, kHidden, active, gated, &r.gated) != 0 ||
                 pack_fixture_set(r.device, api, kHidden, kMid, active, down, &r.down) != 0) {
-                ds4_v100_tp_runtime_close(rt);
+                ds4_tp_runtime_close(rt);
                 return 4;
             }
         }
@@ -779,7 +779,7 @@ int main(int argc, char **argv) {
     for (int i = 0; i < opt.warmup; ++i) {
         for (int p = 0; p < kGpus; ++p) {
             if (run_gate(ranks[p], api) != 0 || run_down(ranks[p], api) != 0) {
-                ds4_v100_tp_runtime_close(rt);
+                ds4_tp_runtime_close(rt);
                 return 5;
             }
         }
@@ -835,7 +835,7 @@ int main(int argc, char **argv) {
     int repeat_nan = 0;
     for (int p = 0; p < kGpus; ++p) {
         if (check_repeat(ranks[p], api, &repeat_max_abs, &repeat_bad, &repeat_nan) != 0) {
-            ds4_v100_tp_runtime_close(rt);
+            ds4_tp_runtime_close(rt);
             return 8;
         }
     }
@@ -894,6 +894,6 @@ int main(int argc, char **argv) {
     }
     api.shutdown();
     dlclose(lib);
-    ds4_v100_tp_runtime_close(rt);
+    ds4_tp_runtime_close(rt);
     return (kv_result.max_abs == 0.0 && repeat_bad == 0 && repeat_nan == 0) ? 0 : 1;
 }

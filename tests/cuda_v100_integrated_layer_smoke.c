@@ -25,7 +25,7 @@ typedef struct {
     int fd;
 } model_map;
 
-typedef ds4_v100_bound_matrix bound_matrix;
+typedef ds4_bound_matrix bound_matrix;
 
 static void check(int cond, const char *msg) {
     if (!cond) {
@@ -98,7 +98,7 @@ static void fill_hidden(float *hidden, uint32_t n) {
 }
 
 static const uint8_t *matrix_host_ptr(const model_map *model, const bound_matrix *m) {
-    const ds4_v100_tensor_binding *b = &m->binding;
+    const ds4_tensor_binding *b = &m->binding;
     if (b->source_offset + m->rel > model->size ||
         m->bytes > model->size - b->source_offset - m->rel) {
         return NULL;
@@ -121,7 +121,7 @@ static int upload_matrix(ds4_gpu_arena *arena,
     }
     memcpy(*scratch, src, (size_t)m->bytes);
     return ds4_gpu_arena_upload(arena,
-                                ds4_v100_bound_matrix_arena_offset(m),
+                                ds4_bound_matrix_arena_offset(m),
                                 *scratch,
                                 m->bytes);
 }
@@ -219,7 +219,7 @@ static int router_score_better_ref(float a_score, uint32_t a_idx,
     return a_score > b_score || (a_score == b_score && a_idx < b_idx);
 }
 
-static void cpu_router_select(const ds4_v100_layer_state *state,
+static void cpu_router_select(const ds4_layer_state *state,
                               const model_map *model,
                               const float logits[256],
                               uint32_t token,
@@ -228,7 +228,7 @@ static void cpu_router_select(const ds4_v100_layer_state *state,
     float probs[256];
     for (uint32_t e = 0; e < 256; e++) probs[e] = sqrtf(softplus_ref(logits[e]));
     if (state->router_kind == DS4_V100_ROUTER_HASH && state->has_hash_router) {
-        const ds4_v100_tensor_binding *hash_b = &state->router_hash;
+        const ds4_tensor_binding *hash_b = &state->router_hash;
         if (hash_b->n_shape_dims != 2 || hash_b->shape[0] != 6 ||
             token >= hash_b->shape[1] ||
             hash_b->source_offset > model->size ||
@@ -240,7 +240,7 @@ static void cpu_router_select(const ds4_v100_layer_state *state,
         const int32_t *row = hash + (uint64_t)token * 6u;
         for (uint32_t i = 0; i < 6; i++) selected[i] = row[i];
     } else if (state->router_kind == DS4_V100_ROUTER_BIAS && state->has_bias_router) {
-        const ds4_v100_tensor_binding *bias_b = &state->router_bias;
+        const ds4_tensor_binding *bias_b = &state->router_bias;
         if (bias_b->n_shape_dims != 1 || bias_b->shape[0] != 256 ||
             bias_b->source_offset > model->size ||
             bias_b->byte_length > model->size - bias_b->source_offset) {
@@ -289,7 +289,7 @@ static void cpu_router_select(const ds4_v100_layer_state *state,
 static void cpu_rms_norm_weight(float *out,
                                 const float *x,
                                 const model_map *model,
-                                const ds4_v100_tensor_binding *weight,
+                                const ds4_tensor_binding *weight,
                                 uint32_t n,
                                 float eps) {
     if (!weight || weight->source_offset > model->size ||
@@ -314,7 +314,7 @@ static void cpu_head_rms_norm(float *x, uint32_t n_head, uint32_t head_dim) {
     }
 }
 
-static uint32_t state_ratio(const ds4_v100_layer_state *state) {
+static uint32_t state_ratio(const ds4_layer_state *state) {
     if (state->layer_class == DS4_V100_LAYER_RATIO_4) return 4u;
     if (state->layer_class == DS4_V100_LAYER_RATIO_128) return 128u;
     return 0u;
@@ -348,7 +348,7 @@ static void cpu_rope_tail(float *x,
                           uint32_t head_dim,
                           uint32_t n_rot,
                           uint32_t pos,
-                          const ds4_v100_layer_state *state,
+                          const ds4_layer_state *state,
                           bool inverse) {
     const uint32_t n_nope = head_dim - n_rot;
     const bool compressed = state_ratio(state) != 0;
@@ -389,7 +389,7 @@ static void cpu_rope_tail(float *x,
 
 static void cpu_attention_decode(float *heads,
                                  const model_map *model,
-                                 const ds4_v100_layer_state *state,
+                                 const ds4_layer_state *state,
                                  const float *q,
                                  const float *raw_kv,
                                  uint32_t n_raw,
@@ -444,7 +444,7 @@ static void cpu_attention_decode(float *heads,
 
 static void cpu_grouped_attention_output(float *out,
                                          const model_map *model,
-                                         const ds4_v100_layer_state *state,
+                                         const ds4_layer_state *state,
                                          const float *heads,
                                          float *low) {
     memset(low, 0, (uint64_t)state->attention_output_rank * sizeof(float));
@@ -563,23 +563,23 @@ int main(int argc, char **argv) {
     if (map_model_file(model_path, &model)) return 1;
     check(ds4_gpu_set_model_fd(model.fd), "model fd");
 
-    ds4_v100_context_options opts;
-    ds4_v100_context_options_init(&opts);
+    ds4_context_options opts;
+    ds4_context_options_init(&opts);
     opts.pack_index_path = index;
     opts.kv_ctx_tokens = 1048576;
     opts.kv_active_slots = 1;
 
     char err[512] = {0};
-    ds4_v100_context *ctx = NULL;
-    if (ds4_v100_context_open(&ctx, &opts, err, sizeof(err))) {
+    ds4_context *ctx = NULL;
+    if (ds4_context_open(&ctx, &opts, err, sizeof(err))) {
         fprintf(stderr, "cuda_v100_integrated_layer_smoke: %s\n", err);
         unmap_model_file(&model);
         return 1;
     }
-    ds4_v100_layer_state state;
-    if (ds4_v100_layer_state_init(&state, ctx, layer, err, sizeof(err))) {
+    ds4_layer_state state;
+    if (ds4_layer_state_init(&state, ctx, layer, err, sizeof(err))) {
         fprintf(stderr, "cuda_v100_integrated_layer_smoke: %s\n", err);
-        ds4_v100_context_close(ctx);
+        ds4_context_close(ctx);
         unmap_model_file(&model);
         return 1;
     }
@@ -587,7 +587,7 @@ int main(int argc, char **argv) {
           (state.router_kind == DS4_V100_ROUTER_BIAS && state.has_bias_router))) {
         fprintf(stderr, "cuda_v100_integrated_layer_smoke: layer %d has unsupported router metadata\n",
                 layer);
-        ds4_v100_context_close(ctx);
+        ds4_context_close(ctx);
         unmap_model_file(&model);
         return 1;
     }
@@ -682,8 +682,8 @@ int main(int argc, char **argv) {
         cpu_router_select(&state, &model, logits, (uint32_t)router_token, selected, weights);
         for (uint32_t route = 0; route < 6; route++) {
             check(selected[route] >= 0 && selected[route] < 256, "CPU selected invalid expert");
-            ds4_v100_route_matrices route_views;
-            check(ds4_v100_layer_state_route_matrices(&state,
+            ds4_route_matrices route_views;
+            check(ds4_layer_state_route_matrices(&state,
                                                       (uint32_t)selected[route],
                                                       &route_views,
                                                       err,
@@ -713,12 +713,12 @@ int main(int argc, char **argv) {
 
     uint64_t attention_span = 0;
     uint64_t ffn_span = 0;
-    check(ds4_v100_layer_state_attention_arena_span(&state,
+    check(ds4_layer_state_attention_arena_span(&state,
                                                     &attention_span,
                                                     err,
                                                     sizeof(err)) == 0,
           "attention arena span");
-    check(ds4_v100_layer_state_ffn_arena_span(&state,
+    check(ds4_layer_state_ffn_arena_span(&state,
                                               selected,
                                               6,
                                               &ffn_span,
@@ -829,9 +829,9 @@ int main(int argc, char **argv) {
               "indexer decode-cache tensor allocation");
     }
 
-    ds4_v100_layer_execute_report report;
+    ds4_layer_execute_report report;
     memset(&report, 0, sizeof(report));
-    ds4_v100_layer_execute_report hc_report;
+    ds4_layer_execute_report hc_report;
     memset(&hc_report, 0, sizeof(hc_report));
     int hc_executed = 0;
     int cache_executed = 0;
@@ -850,7 +850,7 @@ int main(int argc, char **argv) {
         check(ds4_gpu_tensor_write(mask_t, 0, comp_mask, (uint64_t)n_comp * sizeof(float)),
               "compressed mask upload");
 
-        ds4_v100_layer_execute_config cfg = {
+        ds4_layer_execute_config cfg = {
             .model_map = model.ptr,
             .model_size = model.size,
             .arena = arena,
@@ -866,7 +866,7 @@ int main(int argc, char **argv) {
             .use_compressed_mask = true,
         };
         err[0] = '\0';
-        check(ds4_v100_layer_execute_decode(&state,
+        check(ds4_layer_execute_decode(&state,
                                             &cfg,
                                             hidden_t,
                                             next_t,
@@ -899,7 +899,7 @@ int main(int argc, char **argv) {
 
         const int hc_failures_before = failures;
         err[0] = '\0';
-        check(ds4_v100_layer_execute_hc_decode(&state,
+        check(ds4_layer_execute_hc_decode(&state,
                                                &cfg,
                                                hidden_hc_t,
                                                next_hc_t,
@@ -954,7 +954,7 @@ int main(int argc, char **argv) {
                                           (uint64_t)cache_comp_cap * DS4_V100_INDEXER_HEAD_DIM),
                   "indexer compressed cache zero");
 
-            ds4_v100_layer_decode_cache decode_cache = {
+            ds4_layer_decode_cache decode_cache = {
                 .raw_kv = cache_raw_t,
                 .raw_cap = cache_raw_cap,
                 .raw_window = 128u,
@@ -972,7 +972,7 @@ int main(int argc, char **argv) {
                 .indexer_top_k = cache_index_top_k,
             };
             for (uint32_t pos = 0; pos < 8u && !failures; pos++) {
-                ds4_v100_layer_execute_config cache_cfg = {
+                ds4_layer_execute_config cache_cfg = {
                     .model_map = model.ptr,
                     .model_size = model.size,
                     .arena = arena,
@@ -980,10 +980,10 @@ int main(int argc, char **argv) {
                     .position = pos,
                     .decode_cache = &decode_cache,
                 };
-                ds4_v100_layer_execute_report cache_report;
+                ds4_layer_execute_report cache_report;
                 memset(&cache_report, 0, sizeof(cache_report));
                 err[0] = '\0';
-                check(ds4_v100_layer_execute_decode(&state,
+                check(ds4_layer_execute_decode(&state,
                                                     &cache_cfg,
                                                     hidden_t,
                                                     next_t,
@@ -1087,7 +1087,7 @@ int main(int argc, char **argv) {
     free(q_a);
     free(attn_norm);
     free(hidden_x);
-    ds4_v100_context_close(ctx);
+    ds4_context_close(ctx);
     unmap_model_file(&model);
     return failures ? 1 : 0;
 }

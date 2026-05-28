@@ -3,7 +3,7 @@ int run_resident_layer_decode(const Options &opt,
                               const LayerStats &layer_stats,
                               RankState ranks[kGpus],
                               const Api &api,
-                              ds4_v100_tp_runtime *rt,
+                              ds4_tp_runtime *rt,
                               const LayerExpertCache *layer_expert_cache,
                               const DenseF16Cache *dense_f16_cache,
                               const LayerDenseOps *layer_dense_ops,
@@ -13,12 +13,12 @@ int run_resident_layer_decode(const Options &opt,
     if (!rt || !layer_expert_cache || !dense_f16_cache) return 2;
 
     char err[512] = {0};
-    ds4_v100_tp_dense_kv_result kv_result;
+    ds4_tp_dense_kv_result kv_result;
     const int write_indexer = ds4_layer_ratio(opt.layer) == 4 ? 1 : 0;
     const uint32_t kv_first_slot = opt.tp_kv_all_slots_gate ? 0u : opt.kv_slot;
     const uint32_t kv_end_slot = opt.tp_kv_all_slots_gate ? (uint32_t)opt.slots : opt.kv_slot + 1u;
     for (uint32_t slot = kv_first_slot; slot < kv_end_slot; ++slot) {
-        if (ds4_v100_tp_runtime_dense_kv_slice(rt, opt.layer, slot, opt.position,
+        if (ds4_tp_runtime_dense_kv_slice(rt, opt.layer, slot, opt.position,
                                                write_indexer, &kv_result, err,
                                                sizeof(err)) != 0) {
             std::fprintf(stderr, "tp_runtime_dense_kv_slice_failed\tslot\t%u\t%s\n",

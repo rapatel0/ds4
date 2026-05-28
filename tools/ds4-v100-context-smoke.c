@@ -46,8 +46,8 @@ static int next_arg(int *i, int argc, char **argv, const char **out) {
 }
 
 int main(int argc, char **argv) {
-    ds4_v100_context_options opts;
-    ds4_v100_context_options_init(&opts);
+    ds4_context_options opts;
+    ds4_context_options_init(&opts);
     bool allow_partial = false;
 
     for (int i = 1; i < argc; i++) {
@@ -143,24 +143,24 @@ int main(int argc, char **argv) {
     }
 
     char err[512];
-    ds4_v100_context *ctx = NULL;
-    if (ds4_v100_context_open(&ctx, &opts, err, sizeof(err))) {
+    ds4_context *ctx = NULL;
+    if (ds4_context_open(&ctx, &opts, err, sizeof(err))) {
         fprintf(stderr, "context_open\tFAIL\t%s\n", err);
         return 1;
     }
-    ds4_v100_context_print_report(ctx, stdout);
+    ds4_context_print_report(ctx, stdout);
     if (allow_partial) {
         fprintf(stdout, "layer_skeleton_result\tSKIPPED_PARTIAL\n");
     } else {
         fprintf(stdout, "layer_skeleton_begin\n");
-        if (ds4_v100_context_validate_layer_skeleton(ctx, stdout, err, sizeof(err))) {
+        if (ds4_context_validate_layer_skeleton(ctx, stdout, err, sizeof(err))) {
             fprintf(stderr, "layer_skeleton\tFAIL\t%s\n", err);
-            ds4_v100_context_close(ctx);
+            ds4_context_close(ctx);
             return 1;
         }
         fprintf(stdout, "layer_skeleton_result\tOK\n");
     }
     fprintf(stdout, "context_smoke_result\tOK\n");
-    ds4_v100_context_close(ctx);
+    ds4_context_close(ctx);
     return 0;
 }

@@ -143,7 +143,7 @@ continuation = as_int("continuation_tokens")
 wall_ms = as_float("total_wall_ms")
 decode_ms = as_float("total_decode_ms")
 result = {
-    "schema": "ds4_v100_tp_ep_sustained_decode_case.v1",
+    "schema": "ds4_tp_ep_sustained_decode_case.v1",
     "backend": "tp_ep_resident_tool",
     "ctx": ctx_i,
     "slots": slots_i,
@@ -181,7 +181,7 @@ with open(result_path, "w", encoding="utf-8") as f:
     f.write("\n")
 
 summary = {
-    "schema": "ds4_v100_tp_ep_sustained_decode.v1",
+    "schema": "ds4_tp_ep_sustained_decode.v1",
     "cases": [result],
 }
 with open(summary_path, "w", encoding="utf-8") as f:

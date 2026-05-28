@@ -137,7 +137,7 @@ commit = load_case("mtp-commit")
 mtp = commit.get("mtp", {}) if isinstance(commit.get("mtp", {}), dict) else {}
 
 summary = {
-    "schema": "ds4_v100_mtp_spec_gate.v1",
+    "schema": "ds4_mtp_spec_gate.v1",
     "baseline": {
         "generated_tokens_per_second": base.get("aggregate_generated_tokens_per_second", 0.0),
         "continuation_tokens_per_second": base.get("aggregate_continuation_tokens_per_second", 0.0),

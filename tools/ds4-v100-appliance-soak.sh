@@ -492,7 +492,7 @@ async_event_handoff_status="$(sed -n 's/.*"async_event_handoff":\([^,}]*\).*/\1/
     printf ']\n'
 } >"$responses_json"
 
-printf '{"aggregate_continuation_tokens_per_second":%s,"aggregate_generated_tokens_per_second":%s,"aggregate_prompt_tokens_per_second":%s,"async_event_handoff":%s,"async_handoff":%s,"async_pipeline_decode":%s,"async_pipeline_mode":"%s","continuation_decode_ms_avg":%s,"continuation_response_tokens_per_second_avg":%s,"continuation_tokens":%s,"elapsed_s":%s,"errors":0,"generated_response_tokens_per_second_avg":%s,"generated_tokens":%s,"latency_ms_avg":%s,"prefill_prompt_replay_ms_avg":%s,"prompt_response_tokens_per_second_avg":%s,"prompt_tokens":%s,"requests":%s,"schema":"ds4_v100_appliance_soak.v1","status_200":%s,"token_match":%s,"warmup_requests":%s}\n' \
+printf '{"aggregate_continuation_tokens_per_second":%s,"aggregate_generated_tokens_per_second":%s,"aggregate_prompt_tokens_per_second":%s,"async_event_handoff":%s,"async_handoff":%s,"async_pipeline_decode":%s,"async_pipeline_mode":"%s","continuation_decode_ms_avg":%s,"continuation_response_tokens_per_second_avg":%s,"continuation_tokens":%s,"elapsed_s":%s,"errors":0,"generated_response_tokens_per_second_avg":%s,"generated_tokens":%s,"latency_ms_avg":%s,"prefill_prompt_replay_ms_avg":%s,"prompt_response_tokens_per_second_avg":%s,"prompt_tokens":%s,"requests":%s,"schema":"ds4_appliance_soak.v1","status_200":%s,"token_match":%s,"warmup_requests":%s}\n' \
     "$aggregate_continuation_tps" \
     "$aggregate_generated_tps" \
     "$aggregate_prompt_tps" \

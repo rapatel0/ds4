@@ -85,14 +85,14 @@ static void unmap_model_file(model_map *m) {
     m->fd = -1;
 }
 
-static int feed_token(ds4_v100_stage_scheduler **scheds,
+static int feed_token(ds4_stage_scheduler **scheds,
                       uint32_t token,
                       uint32_t pos,
                       char *err,
                       size_t errlen) {
-    ds4_v100_stage_scheduler_report report;
+    ds4_stage_scheduler_report report;
     memset(&report, 0, sizeof(report));
-    if (ds4_v100_stage_scheduler_decode_token(scheds[0],
+    if (ds4_stage_scheduler_decode_token(scheds[0],
                                               token,
                                               pos,
                                               &report,
@@ -101,14 +101,14 @@ static int feed_token(ds4_v100_stage_scheduler **scheds,
         return 1;
     }
     for (int stage = 1; stage < DS4_V100_EXPECTED_GPUS; stage++) {
-        if (ds4_v100_stage_scheduler_handoff(scheds[stage],
+        if (ds4_stage_scheduler_handoff(scheds[stage],
                                              scheds[stage - 1],
                                              err,
                                              errlen)) {
             return 1;
         }
         memset(&report, 0, sizeof(report));
-        if (ds4_v100_stage_scheduler_decode_hc(scheds[stage],
+        if (ds4_stage_scheduler_decode_hc(scheds[stage],
                                                token,
                                                pos,
                                                &report,
@@ -120,12 +120,12 @@ static int feed_token(ds4_v100_stage_scheduler **scheds,
     return ds4_gpu_synchronize() ? 0 : 1;
 }
 
-static int select_topk(ds4_v100_stage_scheduler **scheds,
+static int select_topk(ds4_stage_scheduler **scheds,
                        uint32_t *tokens,
                        float *logits,
                        char *err,
                        size_t errlen) {
-    if (ds4_v100_stage_scheduler_select_topk(scheds[DS4_V100_EXPECTED_GPUS - 1],
+    if (ds4_stage_scheduler_select_topk(scheds[DS4_V100_EXPECTED_GPUS - 1],
                                              tokens,
                                              logits,
                                              TOP_K,
@@ -230,8 +230,8 @@ int main(int argc, char **argv) {
 
     model_map model;
     memset(&model, 0, sizeof(model));
-    ds4_v100_stage_scheduler *scheds[DS4_V100_EXPECTED_GPUS] = {0};
-    ds4_v100_stage_scheduler_snapshot *snaps[DS4_V100_EXPECTED_GPUS] = {0};
+    ds4_stage_scheduler *scheds[DS4_V100_EXPECTED_GPUS] = {0};
+    ds4_stage_scheduler_snapshot *snaps[DS4_V100_EXPECTED_GPUS] = {0};
     char err[512] = {0};
     uint32_t before_tokens[TOP_K], restored_tokens[TOP_K], mutated_tokens[TOP_K], replay_tokens[TOP_K];
     float before_logits[TOP_K], restored_logits[TOP_K], mutated_logits[TOP_K], replay_logits[TOP_K];
@@ -270,8 +270,8 @@ int main(int argc, char **argv) {
         goto cleanup;
     }
 
-    ds4_v100_stage_scheduler_options opts;
-    ds4_v100_stage_scheduler_options_init(&opts);
+    ds4_stage_scheduler_options opts;
+    ds4_stage_scheduler_options_init(&opts);
     opts.pack_index_path = index;
     opts.model_map = model.ptr;
     opts.model_size = model.size;
@@ -282,7 +282,7 @@ int main(int argc, char **argv) {
     for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
         opts.stage_id = stage;
         err[0] = '\0';
-        if (ds4_v100_stage_scheduler_open(&scheds[stage], &opts, err, sizeof(err))) {
+        if (ds4_stage_scheduler_open(&scheds[stage], &opts, err, sizeof(err))) {
             fprintf(stderr,
                     "cuda_v100_scheduler_snapshot_smoke: open stage %d failed: %s\n",
                     stage,
@@ -309,14 +309,14 @@ int main(int argc, char **argv) {
         failures++;
         goto cleanup;
     }
-    if (!ds4_v100_stage_scheduler_read_hc(scheds[DS4_V100_EXPECTED_GPUS - 1], before_hc, hc_bytes)) {
+    if (!ds4_stage_scheduler_read_hc(scheds[DS4_V100_EXPECTED_GPUS - 1], before_hc, hc_bytes)) {
         fprintf(stderr, "cuda_v100_scheduler_snapshot_smoke: read before HC failed\n");
         failures++;
         goto cleanup;
     }
     for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
         err[0] = '\0';
-        if (ds4_v100_stage_scheduler_snapshot_create(scheds[stage],
+        if (ds4_stage_scheduler_snapshot_create(scheds[stage],
                                                      &snaps[stage],
                                                      err,
                                                      sizeof(err))) {
@@ -327,7 +327,7 @@ int main(int argc, char **argv) {
             failures++;
             goto cleanup;
         }
-        snapshot_bytes += ds4_v100_stage_scheduler_snapshot_bytes(snaps[stage]);
+        snapshot_bytes += ds4_stage_scheduler_snapshot_bytes(snaps[stage]);
     }
 
     const uint32_t next_token = before_tokens[0];
@@ -343,7 +343,7 @@ int main(int argc, char **argv) {
         failures++;
         goto cleanup;
     }
-    if (!ds4_v100_stage_scheduler_read_hc(scheds[DS4_V100_EXPECTED_GPUS - 1], mutated_hc, hc_bytes)) {
+    if (!ds4_stage_scheduler_read_hc(scheds[DS4_V100_EXPECTED_GPUS - 1], mutated_hc, hc_bytes)) {
         fprintf(stderr, "cuda_v100_scheduler_snapshot_smoke: read mutated HC failed\n");
         failures++;
         goto cleanup;
@@ -358,7 +358,7 @@ int main(int argc, char **argv) {
 
     for (int stage = DS4_V100_EXPECTED_GPUS - 1; stage >= 0; stage--) {
         err[0] = '\0';
-        if (ds4_v100_stage_scheduler_snapshot_restore(scheds[stage],
+        if (ds4_stage_scheduler_snapshot_restore(scheds[stage],
                                                       snaps[stage],
                                                       err,
                                                       sizeof(err))) {
@@ -382,7 +382,7 @@ int main(int argc, char **argv) {
         failures++;
         goto cleanup;
     }
-    if (!ds4_v100_stage_scheduler_read_hc(scheds[DS4_V100_EXPECTED_GPUS - 1], restored_hc, hc_bytes)) {
+    if (!ds4_stage_scheduler_read_hc(scheds[DS4_V100_EXPECTED_GPUS - 1], restored_hc, hc_bytes)) {
         fprintf(stderr, "cuda_v100_scheduler_snapshot_smoke: read restored HC failed\n");
         failures++;
         goto cleanup;
@@ -429,8 +429,8 @@ cleanup:
            replay_delta,
            failures ? "FAIL" : "PASS");
     for (int stage = DS4_V100_EXPECTED_GPUS - 1; stage >= 0; stage--) {
-        ds4_v100_stage_scheduler_snapshot_free(snaps[stage]);
-        ds4_v100_stage_scheduler_close(scheds[stage]);
+        ds4_stage_scheduler_snapshot_free(snaps[stage]);
+        ds4_stage_scheduler_close(scheds[stage]);
     }
     unmap_model_file(&model);
     ds4_gpu_cleanup();

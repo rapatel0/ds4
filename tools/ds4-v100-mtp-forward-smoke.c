@@ -332,18 +332,18 @@ static int fwd_compare(const char *label,
     return max_abs <= tol ? 0 : 1;
 }
 
-static int fwd_bind_views(ds4_v100_mtp_sidecar *sidecar,
+static int fwd_bind_views(ds4_mtp_sidecar *sidecar,
                           fwd_views *v,
                           char *err,
                           size_t errlen) {
 #define BIND_F32_VEC(name, field) \
-    do { if (ds4_v100_mtp_sidecar_f32_vector_view(sidecar, name, &v->field, err, errlen) != 0) return 1; } while (0)
+    do { if (ds4_mtp_sidecar_f32_vector_view(sidecar, name, &v->field, err, errlen) != 0) return 1; } while (0)
 #define BIND_F32_MAT(name, field) \
-    do { if (ds4_v100_mtp_sidecar_f32_matrix_view(sidecar, name, &v->field, err, errlen) != 0) return 1; } while (0)
+    do { if (ds4_mtp_sidecar_f32_matrix_view(sidecar, name, &v->field, err, errlen) != 0) return 1; } while (0)
 #define BIND_Q8(name, field) \
-    do { if (ds4_v100_mtp_sidecar_q8_0_view(sidecar, name, &v->field, err, errlen) != 0) return 1; } while (0)
+    do { if (ds4_mtp_sidecar_q8_0_view(sidecar, name, &v->field, err, errlen) != 0) return 1; } while (0)
 #define BIND_Q4(name, field) \
-    do { if (ds4_v100_mtp_sidecar_q4_k_expert_view(sidecar, name, &v->field, err, errlen) != 0) return 1; } while (0)
+    do { if (ds4_mtp_sidecar_q4_k_expert_view(sidecar, name, &v->field, err, errlen) != 0) return 1; } while (0)
     BIND_F32_VEC("mtp.0.enorm.weight", enorm);
     BIND_F32_VEC("mtp.0.hnorm.weight", hnorm);
     BIND_Q8("mtp.0.e_proj.weight", e_proj);
@@ -434,8 +434,8 @@ static int fwd_bind_views(ds4_v100_mtp_sidecar *sidecar,
 }
 
 static int fwd_cpu_reference(const mtp_logits_model_map *base,
-                             ds4_v100_mtp_sidecar *sidecar,
-                             const ds4_v100_tensor_binding *output_weight,
+                             ds4_mtp_sidecar *sidecar,
+                             const ds4_tensor_binding *output_weight,
                              const fwd_views *v,
                              const float *embed,
                              const float *prev_hc,
@@ -570,7 +570,7 @@ static int fwd_cpu_reference(const mtp_logits_model_map *base,
     mtp_ffn_matmul_f32_host(ffn_router_logits, router_w, MTP_FFN_N_EXPERT, MTP_FFN_N_EMBD, row1);
     router_select_host(selected, weights, ffn_router_probs, ffn_router_logits, router_bias);
     if (q4k_reference(routed,
-                              (const unsigned char *)ds4_v100_mtp_sidecar_map(sidecar),
+                              (const unsigned char *)ds4_mtp_sidecar_map(sidecar),
                               q4_gate_tensor,
                               q4_up_tensor,
                               q4_down_tensor,
@@ -634,8 +634,8 @@ int main(int argc, char **argv) {
     mtp_logits_model_map base_map;
     memset(&base_map, 0, sizeof(base_map));
     base_map.fd = -1;
-    ds4_v100_context *ctx = NULL;
-    ds4_v100_mtp_sidecar *sidecar = NULL;
+    ds4_context *ctx = NULL;
+    ds4_mtp_sidecar *sidecar = NULL;
     ds4_gpu_arena *output_arena = NULL;
     ds4_gpu_tensor *embed_t = NULL;
     ds4_gpu_tensor *prev_hc_t = NULL;
@@ -666,16 +666,16 @@ int main(int argc, char **argv) {
 
     if (mtp_logits_map_model_file(opt.model, &base_map) != 0) goto done;
 
-    ds4_v100_context_options ctx_opts;
-    ds4_v100_context_options_init(&ctx_opts);
+    ds4_context_options ctx_opts;
+    ds4_context_options_init(&ctx_opts);
     ctx_opts.pack_index_path = opt.pack_index;
-    if (ds4_v100_context_open(&ctx, &ctx_opts, err, sizeof(err)) != 0) {
+    if (ds4_context_open(&ctx, &ctx_opts, err, sizeof(err)) != 0) {
         fprintf(stderr, "ds4-v100-mtp-forward-smoke: %s\n", err);
         goto done;
     }
 
-    ds4_v100_tensor_binding output_weight;
-    if (ds4_v100_context_output_head_binding(ctx, &output_weight, err, sizeof(err)) != 0) {
+    ds4_tensor_binding output_weight;
+    if (ds4_context_output_head_binding(ctx, &output_weight, err, sizeof(err)) != 0) {
         fprintf(stderr, "ds4-v100-mtp-forward-smoke: %s\n", err);
         goto done;
     }
@@ -708,12 +708,12 @@ int main(int argc, char **argv) {
         goto done;
     }
 
-    ds4_v100_mtp_sidecar_options mtp_opts;
-    ds4_v100_mtp_sidecar_options_init(&mtp_opts);
+    ds4_mtp_sidecar_options mtp_opts;
+    ds4_mtp_sidecar_options_init(&mtp_opts);
     mtp_opts.mtp_path = opt.mtp_model;
     mtp_opts.gpu = opt.gpu;
     mtp_opts.require_device_arena = true;
-    if (ds4_v100_mtp_sidecar_open(&sidecar, &mtp_opts, report, err, sizeof(err)) != 0) {
+    if (ds4_mtp_sidecar_open(&sidecar, &mtp_opts, report, err, sizeof(err)) != 0) {
         fprintf(stderr,
                 "ds4-v100-mtp-forward-smoke: %s\n",
                 err[0] ? err : "failed to open MTP sidecar");
@@ -848,7 +848,7 @@ int main(int argc, char **argv) {
         goto done_tensors;
     }
 
-    ds4_gpu_arena *arena = ds4_v100_mtp_sidecar_arena(sidecar);
+    ds4_gpu_arena *arena = ds4_mtp_sidecar_arena(sidecar);
     const double t0 = now_ms();
     if (!ds4_gpu_tensor_write(embed_t, 0, embed, embd_bytes) ||
         !ds4_gpu_tensor_write(prev_hc_t, 0, prev_hc, hc_bytes) ||
@@ -986,8 +986,8 @@ done:
     ds4_gpu_tensor_free(prev_hc_t);
     ds4_gpu_tensor_free(embed_t);
     ds4_gpu_arena_close(output_arena);
-    ds4_v100_mtp_sidecar_close(sidecar);
-    ds4_v100_context_close(ctx);
+    ds4_mtp_sidecar_close(sidecar);
+    ds4_context_close(ctx);
     mtp_logits_unmap_model_file(&base_map);
     free(gpu_all_logits);
     free(got_ffn_next);

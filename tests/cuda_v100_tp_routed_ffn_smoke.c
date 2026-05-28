@@ -160,7 +160,7 @@ static float prng_f32(uint32_t *state) {
     return (v - 1.5f) * 0.125f;
 }
 
-static int run_ref(const ds4_v100_layer_state *state,
+static int run_ref(const ds4_layer_state *state,
                    const ds4_gpu_arena *arena,
                    const ds4_gpu_tensor *selected,
                    const ds4_gpu_tensor *weights,
@@ -182,7 +182,7 @@ static int run_ref(const ds4_v100_layer_state *state,
         out);
 }
 
-static int run_ref_accum(const ds4_v100_layer_state *state,
+static int run_ref_accum(const ds4_layer_state *state,
                          const ds4_gpu_arena *arena,
                          const ds4_gpu_tensor *selected,
                          const ds4_gpu_tensor *weights,
@@ -204,7 +204,7 @@ static int run_ref_accum(const ds4_v100_layer_state *state,
         out);
 }
 
-static int run_tp_half(const ds4_v100_layer_state *state,
+static int run_tp_half(const ds4_layer_state *state,
                        const ds4_gpu_arena *arena,
                        uint32_t half,
                        const ds4_gpu_tensor *selected,
@@ -231,23 +231,23 @@ int main(int argc, char **argv) {
     options opt;
     parse_args(argc, argv, &opt);
 
-    ds4_v100_context_options ctx_opts;
-    ds4_v100_context_options_init(&ctx_opts);
+    ds4_context_options ctx_opts;
+    ds4_context_options_init(&ctx_opts);
     ctx_opts.pack_index_path = opt.index_path;
     ctx_opts.turbomind_pack_index_path = opt.tm_index_path;
     ctx_opts.kv_ctx_tokens = 262144;
     ctx_opts.kv_active_slots = opt.tokens;
 
     char err[512] = {0};
-    ds4_v100_context *ctx = NULL;
-    if (ds4_v100_context_open(&ctx, &ctx_opts, err, sizeof(err))) {
+    ds4_context *ctx = NULL;
+    if (ds4_context_open(&ctx, &ctx_opts, err, sizeof(err))) {
         fprintf(stderr, "cuda_v100_tp_routed_ffn_smoke: %s\n", err);
         return 1;
     }
-    ds4_v100_layer_state state;
-    if (ds4_v100_layer_state_init(&state, ctx, opt.layer, err, sizeof(err))) {
+    ds4_layer_state state;
+    if (ds4_layer_state_init(&state, ctx, opt.layer, err, sizeof(err))) {
         fprintf(stderr, "cuda_v100_tp_routed_ffn_smoke: %s\n", err);
-        ds4_v100_context_close(ctx);
+        ds4_context_close(ctx);
         return 1;
     }
     check(state.has_turbomind_routed, "normal TurboMind routed binding missing");
@@ -265,7 +265,7 @@ int main(int argc, char **argv) {
     check(state.routed_experts == state.turbomind_tp2_down_view[1].experts_packed,
           "TP2 down tp1 must pack all experts for this smoke");
     if (failures) {
-        ds4_v100_context_close(ctx);
+        ds4_context_close(ctx);
         return 1;
     }
 
@@ -273,7 +273,7 @@ int main(int argc, char **argv) {
     char *peer_path = path_join(opt.tm_dir, state.turbomind_tp2_gate_up_binding[1].shard_file);
     if (!owner_path || !peer_path) {
         fprintf(stderr, "cuda_v100_tp_routed_ffn_smoke: path allocation failed\n");
-        ds4_v100_context_close(ctx);
+        ds4_context_close(ctx);
         return 1;
     }
     uint64_t owner_bytes = 0;
@@ -285,7 +285,7 @@ int main(int argc, char **argv) {
         free(peer_path);
         free(owner_buf);
         free(peer_buf);
-        ds4_v100_context_close(ctx);
+        ds4_context_close(ctx);
         return 1;
     }
 
@@ -295,7 +295,7 @@ int main(int argc, char **argv) {
         free(peer_path);
         free(owner_buf);
         free(peer_buf);
-        ds4_v100_context_close(ctx);
+        ds4_context_close(ctx);
         return 1;
     }
     check(ds4_gpu_enable_peer_access(opt.owner_gpu, opt.peer_gpu),
@@ -608,7 +608,7 @@ done:
     ds4_gpu_cleanup();
     free(owner_path);
     free(peer_path);
-    ds4_v100_context_close(ctx);
+    ds4_context_close(ctx);
     if (failures) {
         fprintf(stderr, "cuda_v100_tp_routed_ffn_smoke: FAIL\n");
         return 1;

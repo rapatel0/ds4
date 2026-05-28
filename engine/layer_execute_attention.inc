@@ -1,5 +1,5 @@
-static int validate_decode_cache(const ds4_v100_layer_state *state,
-                                 const ds4_v100_layer_decode_cache *cache,
+static int validate_decode_cache(const ds4_layer_state *state,
+                                 const ds4_layer_decode_cache *cache,
                                  char *err,
                                  size_t errlen) {
     if (!cache) return 0;
@@ -54,8 +54,8 @@ static int validate_decode_cache(const ds4_v100_layer_state *state,
     return 0;
 }
 
-static int validate_execute_common(const ds4_v100_layer_state *state,
-                                   const ds4_v100_layer_execute_config *cfg,
+static int validate_execute_common(const ds4_layer_state *state,
+                                   const ds4_layer_execute_config *cfg,
                                    char *err,
                                    size_t errlen) {
     if (!state || !cfg) {
@@ -96,15 +96,15 @@ static int validate_execute_common(const ds4_v100_layer_state *state,
 }
 
 static int prepare_decode_cache_attention(
-        const ds4_v100_layer_state          *state,
-        const ds4_v100_layer_execute_config *cfg,
+        const ds4_layer_state          *state,
+        const ds4_layer_execute_config *cfg,
         const ds4_gpu_tensor                *attn_norm,
         const ds4_gpu_tensor                *q_a_norm,
         ds4_gpu_tensor                      *kv,
-        ds4_v100_attention_inputs           *inputs,
+        ds4_attention_inputs           *inputs,
         char                                *err,
         size_t                               errlen) {
-    ds4_v100_layer_decode_cache *cache = cfg->decode_cache;
+    ds4_layer_decode_cache *cache = cfg->decode_cache;
     if (!cache) return 0;
 
     const uint32_t raw_window = cache->raw_window ? cache->raw_window : 128u;
@@ -149,11 +149,11 @@ static int prepare_decode_cache_attention(
 
     ds4_gpu_bf16_matrix_view comp_kv_v;
     ds4_gpu_bf16_matrix_view comp_sc_v;
-    if (ds4_v100_bound_matrix_bf16_view(&state->attn_compressor_kv,
+    if (ds4_bound_matrix_bf16_view(&state->attn_compressor_kv,
                                         &comp_kv_v,
                                         err,
                                         errlen) ||
-        ds4_v100_bound_matrix_bf16_view(&state->attn_compressor_gate,
+        ds4_bound_matrix_bf16_view(&state->attn_compressor_gate,
                                         &comp_sc_v,
                                         err,
                                         errlen)) {
@@ -234,11 +234,11 @@ static int prepare_decode_cache_attention(
         }
         ds4_gpu_bf16_matrix_view index_kv_v;
         ds4_gpu_bf16_matrix_view index_sc_v;
-        if (ds4_v100_bound_matrix_bf16_view(&state->indexer_compressor_kv,
+        if (ds4_bound_matrix_bf16_view(&state->indexer_compressor_kv,
                                             &index_kv_v,
                                             err,
                                             errlen) ||
-            ds4_v100_bound_matrix_bf16_view(&state->indexer_compressor_gate,
+            ds4_bound_matrix_bf16_view(&state->indexer_compressor_gate,
                                             &index_sc_v,
                                             err,
                                             errlen)) {
@@ -307,7 +307,7 @@ static int prepare_decode_cache_attention(
             ds4_gpu_source_row_view index_q_v;
             ds4_gpu_bf16_matrix_view index_w_v;
             if (source_view(&state->indexer_attn_q_b, &index_q_v, err, errlen) ||
-                ds4_v100_bound_matrix_bf16_view(&state->indexer_proj, &index_w_v, err, errlen)) {
+                ds4_bound_matrix_bf16_view(&state->indexer_proj, &index_w_v, err, errlen)) {
                 goto done;
             }
             ds4_gpu_tensor *indexer_q = ds4_gpu_tensor_alloc(
@@ -367,11 +367,11 @@ done:
     return rc;
 }
 
-static int execute_attention_output(const ds4_v100_layer_state *state,
-                                    const ds4_v100_layer_execute_config *cfg,
+static int execute_attention_output(const ds4_layer_state *state,
+                                    const ds4_layer_execute_config *cfg,
                                     const ds4_gpu_tensor *hidden,
                                     ds4_gpu_tensor *attn_out,
-                                    ds4_v100_layer_execute_report *report,
+                                    ds4_layer_execute_report *report,
                                     char *err,
                                     size_t errlen) {
     const uint32_t hidden_n = state->hidden_size;
@@ -540,7 +540,7 @@ static int execute_attention_output(const ds4_v100_layer_state *state,
         goto done;
     }
 
-    ds4_v100_attention_inputs attn_inputs = {
+    ds4_attention_inputs attn_inputs = {
         .raw_kv = cfg->raw_kv ? cfg->raw_kv : kv,
         .n_raw = n_raw,
         .raw_cap = raw_cap,
@@ -659,8 +659,8 @@ done:
     return rc;
 }
 
-static int execute_attention_output_batch(const ds4_v100_layer_state *state,
-                                          const ds4_v100_layer_execute_config *cfgs,
+static int execute_attention_output_batch(const ds4_layer_state *state,
+                                          const ds4_layer_execute_config *cfgs,
                                           const ds4_gpu_tensor *const *hidden,
                                           ds4_gpu_tensor *const *attn_out,
                                           uint32_t n_slots,
@@ -862,7 +862,7 @@ static int execute_attention_output_batch(const ds4_v100_layer_state *state,
 
         const uint32_t n_raw = cfgs[slot].n_raw ? cfgs[slot].n_raw : 1u;
         const uint32_t raw_cap = cfgs[slot].raw_cap ? cfgs[slot].raw_cap : n_raw;
-        ds4_v100_attention_inputs attn_inputs = {
+        ds4_attention_inputs attn_inputs = {
             .raw_kv = cfgs[slot].raw_kv ? cfgs[slot].raw_kv : kv_view,
             .n_raw = n_raw,
             .raw_cap = raw_cap,

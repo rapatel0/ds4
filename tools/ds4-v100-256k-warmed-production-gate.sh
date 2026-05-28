@@ -183,8 +183,8 @@ status_200 = int(soak.get("status_200", 0) or 0)
 errors = int(soak.get("errors", 0) or 0)
 warmed_ready = bool(status_before.get("warmed_ready"))
 warmup_required = bool(status_before.get("warmup_required"))
-metric_ready = "ds4_v100_warmed_ready 1" in metrics_before
-metric_required = "ds4_v100_warmup_required 1" in metrics_before
+metric_ready = "ds4_warmed_ready 1" in metrics_before
+metric_required = "ds4_warmup_required 1" in metrics_before
 
 decision = "pass"
 if status_200 != requests_i or token_match != requests_i or errors != 0:
@@ -193,7 +193,7 @@ elif not warmed_ready or not warmup_required or not metric_ready or not metric_r
     decision = "fail_readiness_contract"
 
 out = {
-    "schema": "ds4_v100_256k_warmed_production_gate.v1",
+    "schema": "ds4_256k_warmed_production_gate.v1",
     "decision": decision,
     "ctx": int(ctx),
     "slots": int(slots),
@@ -239,8 +239,8 @@ with open(md_path, "w", encoding="utf-8") as f:
     )
     f.write(f"- `warmup_required`: `{str(warmup_required).lower()}`\n")
     f.write(f"- `warmed_ready`: `{str(warmed_ready).lower()}`\n")
-    f.write(f"- metric `ds4_v100_warmup_required 1`: `{str(metric_required).lower()}`\n")
-    f.write(f"- metric `ds4_v100_warmed_ready 1`: `{str(metric_ready).lower()}`\n")
+    f.write(f"- metric `ds4_warmup_required 1`: `{str(metric_required).lower()}`\n")
+    f.write(f"- metric `ds4_warmed_ready 1`: `{str(metric_ready).lower()}`\n")
 
 print(json_path)
 print(md_path)

@@ -8,25 +8,25 @@ static int exec_error(char *err, size_t errlen, const char *fmt, ...) {
     return 1;
 }
 
-static int source_view(const ds4_v100_bound_matrix *m,
+static int source_view(const ds4_bound_matrix *m,
                        ds4_gpu_source_row_view *out,
                        char *err,
                        size_t errlen) {
-    return ds4_v100_bound_matrix_source_view(m, out, err, errlen);
+    return ds4_bound_matrix_source_view(m, out, err, errlen);
 }
 
-static uint64_t model_offset_for_binding(const ds4_v100_layer_execute_config *cfg,
-                                         const ds4_v100_tensor_binding *b) {
+static uint64_t model_offset_for_binding(const ds4_layer_execute_config *cfg,
+                                         const ds4_tensor_binding *b) {
     if (!b) return 0;
     return (cfg && cfg->model_map_uses_shard_offsets) ? b->shard_offset : b->source_offset;
 }
 
-static uint64_t model_offset_for_matrix(const ds4_v100_layer_execute_config *cfg,
-                                        const ds4_v100_bound_matrix *m) {
+static uint64_t model_offset_for_matrix(const ds4_layer_execute_config *cfg,
+                                        const ds4_bound_matrix *m) {
     return m ? model_offset_for_binding(cfg, &m->binding) : 0;
 }
 
-static int source_view_rows(const ds4_v100_bound_matrix *m,
+static int source_view_rows(const ds4_bound_matrix *m,
                             uint32_t first_row,
                             uint32_t rows,
                             ds4_gpu_source_row_view *out,
@@ -41,7 +41,7 @@ static int source_view_rows(const ds4_v100_bound_matrix *m,
                           m->rows);
     }
     memset(out, 0, sizeof(*out));
-    out->arena_offset = ds4_v100_bound_matrix_arena_offset(m) +
+    out->arena_offset = ds4_bound_matrix_arena_offset(m) +
                         (uint64_t)first_row * m->row_bytes;
     out->byte_length = (uint64_t)rows * m->row_bytes;
     out->rows = rows;
@@ -58,12 +58,12 @@ static void free_tensor_array(ds4_gpu_tensor **tensors, uint32_t n) {
     }
 }
 
-void ds4_v100_layer_batch_scratch_init(ds4_v100_layer_batch_scratch *scratch) {
+void ds4_layer_batch_scratch_init(ds4_layer_batch_scratch *scratch) {
     if (!scratch) return;
     memset(scratch, 0, sizeof(*scratch));
 }
 
-void ds4_v100_layer_batch_scratch_free(ds4_v100_layer_batch_scratch *scratch) {
+void ds4_layer_batch_scratch_free(ds4_layer_batch_scratch *scratch) {
     if (!scratch) return;
     free_tensor_array(scratch->hc_norm, DS4_V100_LAYER_MAX_BATCH);
     free_tensor_array(scratch->hc_mix, DS4_V100_LAYER_MAX_BATCH);
@@ -125,7 +125,7 @@ static int alloc_tensor_slot(ds4_gpu_tensor **slot,
     return 0;
 }
 
-static int ensure_batch_scratch(ds4_v100_layer_batch_scratch *scratch,
+static int ensure_batch_scratch(ds4_layer_batch_scratch *scratch,
                                 uint32_t hidden,
                                 uint32_t mid,
                                 uint32_t routes,
@@ -150,7 +150,7 @@ static int ensure_batch_scratch(ds4_v100_layer_batch_scratch *scratch,
         return 0;
     }
 
-    ds4_v100_layer_batch_scratch_free(scratch);
+    ds4_layer_batch_scratch_free(scratch);
     const uint64_t hc_bytes =
         (uint64_t)DS4_V100_N_HC * hidden * sizeof(float);
     const uint64_t hidden_bytes = (uint64_t)hidden * sizeof(float);
@@ -192,7 +192,7 @@ static int ensure_batch_scratch(ds4_v100_layer_batch_scratch *scratch,
                               err,
                               errlen,
                               "batch ffn_cur")) {
-            ds4_v100_layer_batch_scratch_free(scratch);
+            ds4_layer_batch_scratch_free(scratch);
             return 1;
         }
     }
@@ -328,7 +328,7 @@ static int ensure_batch_scratch(ds4_v100_layer_batch_scratch *scratch,
                           err,
                           errlen,
                           "batch attn_low_batch")) {
-        ds4_v100_layer_batch_scratch_free(scratch);
+        ds4_layer_batch_scratch_free(scratch);
         return 1;
     }
 
@@ -406,7 +406,7 @@ static int ensure_batch_scratch(ds4_v100_layer_batch_scratch *scratch,
             !scratch->attn_kv_view[slot] ||
             !scratch->attn_heads_view[slot] ||
             !scratch->attn_low_view[slot]) {
-            ds4_v100_layer_batch_scratch_free(scratch);
+            ds4_layer_batch_scratch_free(scratch);
             return exec_error(err, errlen, "failed to allocate batch scratch views");
         }
     }
@@ -464,8 +464,8 @@ static bool tp2_parallel_halves_enabled(void) {
            env_flag_enabled("DS4_V100_TP_EP_PARALLEL_HALVES");
 }
 
-static bool tp2_routed_enabled(const ds4_v100_layer_state *state,
-                               const ds4_v100_layer_execute_config *cfg,
+static bool tp2_routed_enabled(const ds4_layer_state *state,
+                               const ds4_layer_execute_config *cfg,
                                uint32_t n_slots,
                                bool use_fused_gate_up) {
     if (!state || !cfg || !use_fused_gate_up || !state->has_turbomind_tp2_routed) {
@@ -529,14 +529,14 @@ static void *tp2_routed_worker_main(void *arg) {
     return NULL;
 }
 
-static int execute_turbomind_tp2_routed(const ds4_v100_layer_state *state,
-                                        const ds4_v100_layer_execute_config *cfg,
+static int execute_turbomind_tp2_routed(const ds4_layer_state *state,
+                                        const ds4_layer_execute_config *cfg,
                                         const ds4_gpu_tensor *selected,
                                         const ds4_gpu_tensor *weights,
                                         const ds4_gpu_tensor *x,
                                         uint32_t n_slots,
                                         ds4_gpu_tensor *out,
-                                        ds4_v100_layer_execute_report *tp2_report,
+                                        ds4_layer_execute_report *tp2_report,
                                         char *err,
                                         size_t errlen) {
     const uint32_t hidden = state->hidden_size;
@@ -698,14 +698,14 @@ static int execute_turbomind_tp2_routed(const ds4_v100_layer_state *state,
     return 0;
 }
 
-static bool has_turbomind_separate_gate_up(const ds4_v100_layer_state *state) {
+static bool has_turbomind_separate_gate_up(const ds4_layer_state *state) {
     return state &&
            state->turbomind_gate_view.experts_packed != 0 &&
            state->turbomind_up_view.experts_packed != 0;
 }
 
 static bool ffn_inputs_match_scratch_norm(
-        const ds4_v100_layer_batch_scratch *scratch,
+        const ds4_layer_batch_scratch *scratch,
         const ds4_gpu_tensor *const *ffn_inputs,
         uint32_t n_slots) {
     if (!scratch || !ffn_inputs || n_slots == 0 || n_slots > DS4_V100_LAYER_MAX_BATCH) {
@@ -718,7 +718,7 @@ static bool ffn_inputs_match_scratch_norm(
 }
 
 static bool ffn_outputs_match_scratch_delta(
-        const ds4_v100_layer_batch_scratch *scratch,
+        const ds4_layer_batch_scratch *scratch,
         ds4_gpu_tensor *const *ffn_deltas,
         uint32_t n_slots) {
     if (!scratch || !ffn_deltas || n_slots == 0 || n_slots > DS4_V100_LAYER_MAX_BATCH) {
@@ -731,7 +731,7 @@ static bool ffn_outputs_match_scratch_delta(
 }
 
 static int ensure_cached_ffn_input_ptrs(
-        ds4_v100_layer_batch_scratch *scratch,
+        ds4_layer_batch_scratch *scratch,
         const ds4_gpu_tensor *const *ffn_inputs,
         uint32_t n_slots,
         uint64_t min_row_bytes,
@@ -774,7 +774,7 @@ static int profile_mark(double *last_ms, double *bucket_ms) {
     return 1;
 }
 
-static uint32_t layer_ratio(const ds4_v100_layer_state *state) {
+static uint32_t layer_ratio(const ds4_layer_state *state) {
     if (!state) return 0;
     switch (state->layer_class) {
     case DS4_V100_LAYER_RATIO_4: return 4u;
@@ -788,7 +788,7 @@ static int rope_tail_layer_tensor(ds4_gpu_tensor *x,
                                   uint32_t n_head,
                                   uint32_t head_dim,
                                   uint32_t pos,
-                                  const ds4_v100_layer_state *state,
+                                  const ds4_layer_state *state,
                                   bool inverse) {
     const uint32_t ratio = layer_ratio(state);
     const bool compressed = ratio != 0;
@@ -819,7 +819,7 @@ static int q_head_norm_rope_tail_layer_tensor(ds4_gpu_tensor *x,
                                               uint32_t n_head,
                                               uint32_t head_dim,
                                               uint32_t pos,
-                                              const ds4_v100_layer_state *state) {
+                                              const ds4_layer_state *state) {
     const uint32_t ratio = layer_ratio(state);
     const bool compressed = ratio != 0;
     const float freq_base = compressed ? 160000.0f : 10000.0f;
@@ -858,14 +858,14 @@ typedef struct {
     const ds4_gpu_tensor *indexed_topk;
     uint32_t indexed_top_k;
     bool use_indexed_attention;
-} ds4_v100_attention_inputs;
+} ds4_attention_inputs;
 
 static float compressed_attn_factor(void) {
     return 1.0f / (1.0f + 0.1f * logf(16.0f));
 }
 
-static int grouped_attention_output(const ds4_v100_layer_state *state,
-                                    const ds4_v100_layer_execute_config *cfg,
+static int grouped_attention_output(const ds4_layer_state *state,
+                                    const ds4_layer_execute_config *cfg,
                                     const ds4_gpu_tensor *heads,
                                     ds4_gpu_tensor *low,
                                     ds4_gpu_tensor *out,
@@ -955,8 +955,8 @@ static int grouped_attention_output(const ds4_v100_layer_state *state,
     return 0;
 }
 
-static int grouped_attention_output_b(const ds4_v100_layer_state *state,
-                                      const ds4_v100_layer_execute_config *cfg,
+static int grouped_attention_output_b(const ds4_layer_state *state,
+                                      const ds4_layer_execute_config *cfg,
                                       const ds4_gpu_tensor *low,
                                       ds4_gpu_tensor *out,
                                       char *err,
@@ -978,8 +978,8 @@ static int grouped_attention_output_b(const ds4_v100_layer_state *state,
     return 0;
 }
 
-static int grouped_attention_output_a(const ds4_v100_layer_state *state,
-                                      const ds4_v100_layer_execute_config *cfg,
+static int grouped_attention_output_a(const ds4_layer_state *state,
+                                      const ds4_layer_execute_config *cfg,
                                       const ds4_gpu_tensor *heads,
                                       ds4_gpu_tensor *low,
                                       char *err,

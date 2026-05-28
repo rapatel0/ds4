@@ -157,7 +157,7 @@ static bool replay_stage_layer_range(int stage, int *first_layer, int *last_laye
     int first = -1;
     int last = -1;
     for (int layer = 0; layer < DS4_V100_N_LAYERS; layer++) {
-        if (ds4_v100_stage_for_layer(layer) != stage) continue;
+        if (ds4_stage_for_layer(layer) != stage) continue;
         if (first < 0) first = layer;
         last = layer;
     }
@@ -179,8 +179,8 @@ static bool replay_step_pipeline_prev_done_now(replay_step_pipeline_batch *b,
 }
 
 static void replay_step_pipeline_report_accum(
-    ds4_v100_stage_scheduler_report *dst,
-    const ds4_v100_stage_scheduler_report *src) {
+    ds4_stage_scheduler_report *dst,
+    const ds4_stage_scheduler_report *src) {
     if (!dst || !src) return;
     if (dst->layers_executed == 0) {
         *dst = *src;
@@ -281,7 +281,7 @@ static int replay_step_pipeline_execute_layer_span(replay_step_pipeline_batch *b
         snprintf(local_err, local_errlen, "missing layer-wavefront execution input");
         return 1;
     }
-    ds4_v100_stage_scheduler_report reports[DS4_V100_SCHED_MAX_SLOTS];
+    ds4_stage_scheduler_report reports[DS4_V100_SCHED_MAX_SLOTS];
     memset(reports, 0, sizeof(reports));
 
     double handoff0 = replay_now_ms();
@@ -311,7 +311,7 @@ static int replay_step_pipeline_execute_layer_span(replay_step_pipeline_batch *b
     const double decode0 = replay_now_ms();
     int rc = 0;
     if (start_layer && stage == 0) {
-        rc = ds4_v100_stage_scheduler_decode_token_layer_span(
+        rc = ds4_stage_scheduler_decode_token_layer_span(
             b->rt->scheds[0],
             slot,
             &b->tokens[slot],
@@ -323,7 +323,7 @@ static int replay_step_pipeline_execute_layer_span(replay_step_pipeline_batch *b
             local_err,
             local_errlen);
     } else {
-        rc = ds4_v100_stage_scheduler_decode_hc_layer_span(
+        rc = ds4_stage_scheduler_decode_hc_layer_span(
             b->rt->scheds[stage],
             slot,
             &b->tokens[slot],
@@ -509,7 +509,7 @@ static int replay_step_pipeline_execute_ffn_wavefront_layer(
         snprintf(local_err, local_errlen, "missing FFN-wavefront execution input");
         return 1;
     }
-    ds4_v100_stage_scheduler_report reports[DS4_V100_SCHED_MAX_SLOTS];
+    ds4_stage_scheduler_report reports[DS4_V100_SCHED_MAX_SLOTS];
     memset(reports, 0, sizeof(reports));
 
     double handoff0 = replay_now_ms();
@@ -539,7 +539,7 @@ static int replay_step_pipeline_execute_ffn_wavefront_layer(
     const double decode0 = replay_now_ms();
     int rc = 0;
     if (start_layer && stage == 0) {
-        rc = ds4_v100_stage_scheduler_decode_token_layer_span(
+        rc = ds4_stage_scheduler_decode_token_layer_span(
             b->rt->scheds[0],
             slot,
             &b->tokens[slot],
@@ -551,7 +551,7 @@ static int replay_step_pipeline_execute_ffn_wavefront_layer(
             local_err,
             local_errlen);
     } else {
-        rc = ds4_v100_stage_scheduler_decode_hc_ffn_microbatch_layer(
+        rc = ds4_stage_scheduler_decode_hc_ffn_microbatch_layer(
             b->rt->scheds[stage],
             slot,
             &b->tokens[slot],
@@ -783,7 +783,7 @@ static void *replay_step_pipeline_worker_main(void *arg) {
         memset(&b->reports[stage][slot], 0, chunk * sizeof(b->reports[stage][slot]));
         double t0 = replay_now_ms();
         if (stage == 0) {
-            if (ds4_v100_stage_scheduler_decode_token_slot_span(
+            if (ds4_stage_scheduler_decode_token_slot_span(
                     b->rt->scheds[0],
                     slot,
                     &b->tokens[slot],
@@ -815,7 +815,7 @@ static void *replay_step_pipeline_worker_main(void *arg) {
             }
             b->handoff_ms[stage - 1] += replay_now_ms() - t0;
             t0 = replay_now_ms();
-            if (ds4_v100_stage_scheduler_decode_hc_slot_span(
+            if (ds4_stage_scheduler_decode_hc_slot_span(
                     b->rt->scheds[stage],
                     slot,
                     &b->tokens[slot],
@@ -854,11 +854,11 @@ static void *replay_step_pipeline_worker_main(void *arg) {
     return NULL;
 }
 
-static int replay_feed_token_batch_async_per_step(ds4_v100_replay *rt,
+static int replay_feed_token_batch_async_per_step(ds4_replay *rt,
                                                   const uint32_t *tokens,
                                                   const uint32_t *positions,
                                                   uint32_t n_slots,
-                                                  ds4_v100_replay_counters *counters,
+                                                  ds4_replay_counters *counters,
                                                   double *bucket_ms,
                                                   char *err,
                                                   size_t errlen) {
@@ -948,11 +948,11 @@ static int replay_feed_token_batch_async_per_step(ds4_v100_replay *rt,
     return rc;
 }
 
-static int replay_feed_token_batch_async_pipeline(ds4_v100_replay *rt,
+static int replay_feed_token_batch_async_pipeline(ds4_replay *rt,
                                                   const uint32_t *tokens,
                                                   const uint32_t *positions,
                                                   uint32_t n_slots,
-                                                  ds4_v100_replay_counters *counters,
+                                                  ds4_replay_counters *counters,
                                                   double *bucket_ms,
                                                   char *err,
                                                   size_t errlen) {
@@ -970,11 +970,11 @@ static int replay_feed_token_batch_async_pipeline(ds4_v100_replay *rt,
         rt->pipeline, tokens, positions, n_slots, counters, bucket_ms, err, errlen);
 }
 
-static int replay_feed_token_batch_async_mailbox(ds4_v100_replay *rt,
+static int replay_feed_token_batch_async_mailbox(ds4_replay *rt,
                                                  const uint32_t *tokens,
                                                  const uint32_t *positions,
                                                  uint32_t n_slots,
-                                                 ds4_v100_replay_counters *counters,
+                                                 ds4_replay_counters *counters,
                                                  double *bucket_ms,
                                                  char *err,
                                                  size_t errlen) {
@@ -992,11 +992,11 @@ static int replay_feed_token_batch_async_mailbox(ds4_v100_replay *rt,
         rt->mailbox, tokens, positions, n_slots, counters, bucket_ms, err, errlen);
 }
 
-static int replay_feed_token_batch_async_selected(ds4_v100_replay *rt,
+static int replay_feed_token_batch_async_selected(ds4_replay *rt,
                                                   const uint32_t *tokens,
                                                   const uint32_t *positions,
                                                   uint32_t n_slots,
-                                                  ds4_v100_replay_counters *counters,
+                                                  ds4_replay_counters *counters,
                                                   double *bucket_ms,
                                                   char *err,
                                                   size_t errlen) {
@@ -1017,11 +1017,11 @@ static int replay_feed_token_batch_async_selected(ds4_v100_replay *rt,
     }
 }
 
-static int replay_feed_token_batch_selected(ds4_v100_replay *rt,
+static int replay_feed_token_batch_selected(ds4_replay *rt,
                                             const uint32_t *tokens,
                                             const uint32_t *positions,
                                             uint32_t n_slots,
-                                            ds4_v100_replay_counters *counters,
+                                            ds4_replay_counters *counters,
                                             double *bucket_ms,
                                             char *err,
                                             size_t errlen) {
@@ -1037,16 +1037,16 @@ static int replay_feed_token_batch_selected(ds4_v100_replay *rt,
     return replay_feed_token_batch(rt, tokens, positions, n_slots, counters, bucket_ms, err, errlen);
 }
 
-static int replay_select_token_slot(ds4_v100_replay *rt,
+static int replay_select_token_slot(ds4_replay *rt,
                                     uint32_t slot,
-                                    ds4_v100_replay_output *out,
-                                    ds4_v100_replay_counters *counters,
+                                    ds4_replay_output *out,
+                                    ds4_replay_counters *counters,
                                     char *err,
                                     size_t errlen) {
     uint32_t token = UINT32_MAX;
     float logit = 0.0f;
     double t0 = replay_now_ms();
-    if (ds4_v100_stage_scheduler_select_token_slot(rt->scheds[DS4_V100_EXPECTED_GPUS - 1],
+    if (ds4_stage_scheduler_select_token_slot(rt->scheds[DS4_V100_EXPECTED_GPUS - 1],
                                                    slot,
                                                    &token,
                                                    &logit,
@@ -1066,13 +1066,13 @@ static int replay_select_token_slot(ds4_v100_replay *rt,
     return 0;
 }
 
-static int replay_select_token_batch(ds4_v100_replay *rt,
+static int replay_select_token_batch(ds4_replay *rt,
                                      const replay_batch_slot_plan *plan,
                                      uint32_t n_slots,
                                      uint32_t step,
-                                     ds4_v100_replay_output *outputs,
+                                     ds4_replay_output *outputs,
                                      uint32_t output_stride,
-                                     ds4_v100_replay_counters *counters,
+                                     ds4_replay_counters *counters,
                                      char *err,
                                      size_t errlen) {
     if (!rt || !plan || !outputs || n_slots == 0 || n_slots > DS4_V100_SCHED_MAX_SLOTS) {
@@ -1091,7 +1091,7 @@ static int replay_select_token_batch(ds4_v100_replay *rt,
     uint32_t tokens[DS4_V100_SCHED_MAX_SLOTS];
     float logits[DS4_V100_SCHED_MAX_SLOTS];
     double t0 = replay_now_ms();
-    if (ds4_v100_stage_scheduler_select_token_batch(rt->scheds[DS4_V100_EXPECTED_GPUS - 1],
+    if (ds4_stage_scheduler_select_token_batch(rt->scheds[DS4_V100_EXPECTED_GPUS - 1],
                                                     0,
                                                     n_slots,
                                                     tokens,
@@ -1104,7 +1104,7 @@ static int replay_select_token_batch(ds4_v100_replay *rt,
 
     for (uint32_t slot = 0; slot < n_slots; slot++) {
         const uint32_t prompt_idx = plan[slot].prompt_idx;
-        ds4_v100_replay_output *out =
+        ds4_replay_output *out =
             &outputs[(uint64_t)prompt_idx * output_stride + step];
         memset(out, 0, sizeof(*out));
         out->token = tokens[slot];
@@ -1117,9 +1117,9 @@ static int replay_select_token_batch(ds4_v100_replay *rt,
     return 0;
 }
 
-int ds4_v100_replay_begin_generation(ds4_v100_replay *rt,
+int ds4_replay_begin_generation(ds4_replay *rt,
                                       uint32_t prompt_tokens,
-                                      ds4_v100_replay_counters *counters,
+                                      ds4_replay_counters *counters,
                                       char *err,
                                       size_t errlen) {
     if (!rt || !counters) return replay_error(err, errlen, "missing V100 replay begin input");
@@ -1132,10 +1132,10 @@ int ds4_v100_replay_begin_generation(ds4_v100_replay *rt,
     return 0;
 }
 
-int ds4_v100_replay_feed_token_at_position(ds4_v100_replay *rt,
+int ds4_replay_feed_token_at_position(ds4_replay *rt,
                                             uint32_t token,
                                             uint32_t position,
-                                            ds4_v100_replay_counters *counters,
+                                            ds4_replay_counters *counters,
                                             double *bucket_ms,
                                             char *err,
                                             size_t errlen) {
@@ -1143,30 +1143,30 @@ int ds4_v100_replay_feed_token_at_position(ds4_v100_replay *rt,
     return replay_feed_token(rt, token, position, counters, bucket_ms, err, errlen);
 }
 
-int ds4_v100_replay_select_current_token(ds4_v100_replay *rt,
-                                          ds4_v100_replay_output *out,
-                                          ds4_v100_replay_counters *counters,
+int ds4_replay_select_current_token(ds4_replay *rt,
+                                          ds4_replay_output *out,
+                                          ds4_replay_counters *counters,
                                           char *err,
                                           size_t errlen) {
     if (!rt || !out) return replay_error(err, errlen, "missing V100 replay select input");
     return replay_select_token(rt, out, counters, err, errlen);
 }
 
-void ds4_v100_replay_snapshot_free(ds4_v100_replay_snapshot *snapshot) {
+void ds4_replay_snapshot_free(ds4_replay_snapshot *snapshot) {
     if (!snapshot) return;
     for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
-        ds4_v100_stage_scheduler_snapshot_free(snapshot->stages[stage]);
+        ds4_stage_scheduler_snapshot_free(snapshot->stages[stage]);
     }
     free(snapshot);
 }
 
-uint64_t ds4_v100_replay_snapshot_bytes(
-    const ds4_v100_replay_snapshot *snapshot) {
+uint64_t ds4_replay_snapshot_bytes(
+    const ds4_replay_snapshot *snapshot) {
     return snapshot ? snapshot->bytes : 0;
 }
 
-int ds4_v100_replay_snapshot_create(ds4_v100_replay *rt,
-                                    ds4_v100_replay_snapshot **out,
+int ds4_replay_snapshot_create(ds4_replay *rt,
+                                    ds4_replay_snapshot **out,
                                     char *err,
                                     size_t errlen) {
     if (!out) return replay_error(err, errlen, "missing V100 replay snapshot output");
@@ -1182,30 +1182,30 @@ int ds4_v100_replay_snapshot_create(ds4_v100_replay *rt,
         return 1;
     }
 
-    ds4_v100_replay_snapshot *snap =
-        (ds4_v100_replay_snapshot *)calloc(1, sizeof(*snap));
+    ds4_replay_snapshot *snap =
+        (ds4_replay_snapshot *)calloc(1, sizeof(*snap));
     if (!snap) return replay_error(err, errlen, "failed to allocate V100 replay snapshot");
 
     for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
         if (!rt->scheds[stage]) {
-            ds4_v100_replay_snapshot_free(snap);
+            ds4_replay_snapshot_free(snap);
             return replay_error(err, errlen, "missing V100 replay scheduler for snapshot");
         }
-        if (ds4_v100_stage_scheduler_snapshot_create(rt->scheds[stage],
+        if (ds4_stage_scheduler_snapshot_create(rt->scheds[stage],
                                                      &snap->stages[stage],
                                                      err,
                                                      errlen)) {
-            ds4_v100_replay_snapshot_free(snap);
+            ds4_replay_snapshot_free(snap);
             return 1;
         }
-        snap->bytes += ds4_v100_stage_scheduler_snapshot_bytes(snap->stages[stage]);
+        snap->bytes += ds4_stage_scheduler_snapshot_bytes(snap->stages[stage]);
     }
     *out = snap;
     return 0;
 }
 
-int ds4_v100_replay_snapshot_restore(ds4_v100_replay *rt,
-                                     const ds4_v100_replay_snapshot *snapshot,
+int ds4_replay_snapshot_restore(ds4_replay *rt,
+                                     const ds4_replay_snapshot *snapshot,
                                      char *err,
                                      size_t errlen) {
     if (!rt || !snapshot) {
@@ -1224,7 +1224,7 @@ int ds4_v100_replay_snapshot_restore(ds4_v100_replay *rt,
         if (!rt->scheds[stage] || !snapshot->stages[stage]) {
             return replay_error(err, errlen, "missing V100 replay scheduler snapshot");
         }
-        if (ds4_v100_stage_scheduler_snapshot_restore(rt->scheds[stage],
+        if (ds4_stage_scheduler_snapshot_restore(rt->scheds[stage],
                                                       snapshot->stages[stage],
                                                       err,
                                                       errlen)) {
@@ -1234,16 +1234,16 @@ int ds4_v100_replay_snapshot_restore(ds4_v100_replay *rt,
     return 0;
 }
 
-int ds4_v100_replay_verify_token_block(
-    ds4_v100_replay *rt,
+int ds4_replay_verify_token_block(
+    ds4_replay *rt,
     const uint32_t *tokens,
     const uint32_t *positions,
     uint32_t n_tokens,
     uint32_t accepted_prefix_len,
-    ds4_v100_replay_output *outputs,
+    ds4_replay_output *outputs,
     uint32_t output_cap,
-    ds4_v100_replay_target_block_report *report,
-    ds4_v100_replay_counters *counters,
+    ds4_replay_target_block_report *report,
+    ds4_replay_counters *counters,
     char *err,
     size_t errlen) {
     if (report) memset(report, 0, sizeof(*report));
@@ -1293,10 +1293,10 @@ int ds4_v100_replay_verify_token_block(
     return 0;
 }
 
-void ds4_v100_replay_finish_generation(ds4_v100_replay *rt,
+void ds4_replay_finish_generation(ds4_replay *rt,
                                         uint32_t generated_tokens,
                                         double total_ms,
-                                        ds4_v100_replay_counters *counters) {
+                                        ds4_replay_counters *counters) {
     if (counters) {
         counters->generated_tokens = generated_tokens;
         counters->total_ms = total_ms;
@@ -1316,14 +1316,14 @@ static void replay_sort_batch_plan(replay_batch_slot_plan *plan, uint32_t n) {
     }
 }
 
-int ds4_v100_replay_generate_batch(ds4_v100_replay *rt,
+int ds4_replay_generate_batch(ds4_replay *rt,
                                    const ds4_tokens *prompts,
                                    uint32_t n_prompts,
                                    uint32_t max_tokens,
-                                   ds4_v100_replay_output *outputs,
+                                   ds4_replay_output *outputs,
                                    uint32_t output_stride,
                                    uint32_t *out_counts,
-                                   ds4_v100_replay_counters *counters,
+                                   ds4_replay_counters *counters,
                                    char *err,
                                    size_t errlen) {
     if (!rt || !prompts || !outputs || n_prompts == 0 || max_tokens == 0 ||
@@ -1339,8 +1339,8 @@ int ds4_v100_replay_generate_batch(ds4_v100_replay *rt,
                             "V100 replay runtime is one-shot; reopen it for another prompt");
     }
 
-    ds4_v100_replay_counters local;
-    ds4_v100_replay_counters *c = counters ? counters : &local;
+    ds4_replay_counters local;
+    ds4_replay_counters *c = counters ? counters : &local;
     replay_init_counters(rt, 0, c);
 
     replay_batch_slot_plan plan[DS4_V100_SCHED_MAX_SLOTS] = {0};
@@ -1410,7 +1410,7 @@ int ds4_v100_replay_generate_batch(ds4_v100_replay *rt,
     for (uint32_t step = 1; step < max_tokens; step++) {
         for (uint32_t slot = 0; slot < n_prompts; slot++) {
             const uint32_t prompt_idx = plan[slot].prompt_idx;
-            const ds4_v100_replay_output *row =
+            const ds4_replay_output *row =
                 &outputs[(uint64_t)prompt_idx * output_stride];
             batch_tokens[slot] = row[step - 1].token;
             batch_positions[slot] = plan[slot].prompt_len + step - 1;
@@ -1447,15 +1447,15 @@ int ds4_v100_replay_generate_batch(ds4_v100_replay *rt,
     return 0;
 }
 
-int ds4_v100_replay_generate_first_token_batch(
-    ds4_v100_replay *rt,
+int ds4_replay_generate_first_token_batch(
+    ds4_replay *rt,
     const ds4_tokens *prompts,
     uint32_t n_prompts,
-    ds4_v100_replay_output *outputs,
-    ds4_v100_replay_counters *counters,
+    ds4_replay_output *outputs,
+    ds4_replay_counters *counters,
     char *err,
     size_t errlen) {
-    return ds4_v100_replay_generate_batch(rt,
+    return ds4_replay_generate_batch(rt,
                                           prompts,
                                           n_prompts,
                                           1,
@@ -1467,13 +1467,13 @@ int ds4_v100_replay_generate_first_token_batch(
                                           errlen);
 }
 
-int ds4_v100_replay_generate(ds4_v100_replay *rt,
+int ds4_replay_generate(ds4_replay *rt,
                              const ds4_tokens *prompt,
                              uint32_t max_tokens,
-                             ds4_v100_replay_output *outputs,
+                             ds4_replay_output *outputs,
                              uint32_t output_cap,
                              uint32_t *out_count,
-                             ds4_v100_replay_counters *counters,
+                             ds4_replay_counters *counters,
                              char *err,
                              size_t errlen) {
     if (out_count) *out_count = 0;
@@ -1490,8 +1490,8 @@ int ds4_v100_replay_generate(ds4_v100_replay *rt,
         return replay_error(err, errlen, "V100 replay prompt exceeds configured context");
     }
 
-    ds4_v100_replay_counters local;
-    ds4_v100_replay_counters *c = counters ? counters : &local;
+    ds4_replay_counters local;
+    ds4_replay_counters *c = counters ? counters : &local;
     replay_init_counters(rt, (uint32_t)prompt->len, c);
 
     const double total0 = replay_now_ms();
@@ -1534,7 +1534,7 @@ int ds4_v100_replay_generate(ds4_v100_replay *rt,
     return 0;
 }
 
-int ds4_v100_replay_read_token_embedding_f32(ds4_v100_replay *rt,
+int ds4_replay_read_token_embedding_f32(ds4_replay *rt,
                                              uint32_t token,
                                              float *dst,
                                              uint64_t dst_values,
@@ -1543,7 +1543,7 @@ int ds4_v100_replay_read_token_embedding_f32(ds4_v100_replay *rt,
     if (!rt || !rt->scheds[0] || !dst) {
         return replay_error(err, errlen, "missing V100 replay embedding read input");
     }
-    return ds4_v100_stage_scheduler_read_token_embedding_f32(rt->scheds[0],
+    return ds4_stage_scheduler_read_token_embedding_f32(rt->scheds[0],
                                                              token,
                                                              dst,
                                                              dst_values,
@@ -1551,15 +1551,15 @@ int ds4_v100_replay_read_token_embedding_f32(ds4_v100_replay *rt,
                                                              errlen);
 }
 
-int ds4_v100_replay_read_output_hc(ds4_v100_replay *rt,
+int ds4_replay_read_output_hc(ds4_replay *rt,
                                    float *dst,
                                    uint64_t bytes,
                                    char *err,
                                    size_t errlen) {
-    return ds4_v100_replay_read_output_hc_slot(rt, 0, dst, bytes, err, errlen);
+    return ds4_replay_read_output_hc_slot(rt, 0, dst, bytes, err, errlen);
 }
 
-int ds4_v100_replay_read_output_hc_slot(ds4_v100_replay *rt,
+int ds4_replay_read_output_hc_slot(ds4_replay *rt,
                                         uint32_t slot,
                                         float *dst,
                                         uint64_t bytes,
@@ -1568,7 +1568,7 @@ int ds4_v100_replay_read_output_hc_slot(ds4_v100_replay *rt,
     if (!rt || !rt->scheds[DS4_V100_EXPECTED_GPUS - 1] || !dst) {
         return replay_error(err, errlen, "missing V100 replay HC read input");
     }
-    if (!ds4_v100_stage_scheduler_read_hc_slot(rt->scheds[DS4_V100_EXPECTED_GPUS - 1],
+    if (!ds4_stage_scheduler_read_hc_slot(rt->scheds[DS4_V100_EXPECTED_GPUS - 1],
                                                slot,
                                                dst,
                                                bytes)) {
@@ -1577,7 +1577,7 @@ int ds4_v100_replay_read_output_hc_slot(ds4_v100_replay *rt,
     return 0;
 }
 
-void ds4_v100_replay_output_free(ds4_v100_replay_output *out) {
+void ds4_replay_output_free(ds4_replay_output *out) {
     if (!out) return;
     free(out->text);
     memset(out, 0, sizeof(*out));

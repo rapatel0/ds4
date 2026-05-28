@@ -53,34 +53,34 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    ds4_v100_context_options opts;
-    ds4_v100_context_options_init(&opts);
+    ds4_context_options opts;
+    ds4_context_options_init(&opts);
     opts.pack_index_path = index;
     opts.turbomind_pack_index_path = tm_index;
     opts.kv_ctx_tokens = 1048576;
     opts.kv_active_slots = 1;
 
     char err[512] = {0};
-    ds4_v100_context *ctx = NULL;
-    if (ds4_v100_context_open(&ctx, &opts, err, sizeof(err))) {
+    ds4_context *ctx = NULL;
+    if (ds4_context_open(&ctx, &opts, err, sizeof(err))) {
         fprintf(stderr, "v100_layer_state_smoke: %s\n", err);
         return 1;
     }
 
-    ds4_v100_layer_state state;
-    if (ds4_v100_layer_state_init(&state, ctx, layer, err, sizeof(err))) {
+    ds4_layer_state state;
+    if (ds4_layer_state_init(&state, ctx, layer, err, sizeof(err))) {
         fprintf(stderr, "v100_layer_state_smoke: %s\n", err);
-        ds4_v100_context_close(ctx);
+        ds4_context_close(ctx);
         return 1;
     }
 
-    const ds4_v100_layer_info *li = ds4_v100_context_layer(ctx, layer);
-    const ds4_v100_stage_info *stage = ds4_v100_context_stage(ctx, state.stage_id);
+    const ds4_layer_info *li = ds4_context_layer(ctx, layer);
+    const ds4_stage_info *stage = ds4_context_stage(ctx, state.stage_id);
     check(li != NULL, "layer info exists");
     check(stage != NULL, "stage info exists");
-    check(state.stage_id == ds4_v100_stage_for_layer(layer), "stage matches layer map");
+    check(state.stage_id == ds4_stage_for_layer(layer), "stage matches layer map");
     check(state.owning_gpu == state.stage_id, "owning GPU matches stage");
-    check(state.layer_class == ds4_v100_layer_class_for_layer(layer), "layer class matches schedule");
+    check(state.layer_class == ds4_layer_class_for_layer(layer), "layer class matches schedule");
     check(state.hidden_size == 4096, "hidden size");
     check(state.q_lora_rank == 1024, "q lora rank");
     check(state.q_width == 32768, "q width");
@@ -137,9 +137,9 @@ int main(int argc, char **argv) {
     }
 
     const int32_t selected[6] = {84, 17, 31, 63, 127, 255};
-    ds4_v100_route_matrices route;
+    ds4_route_matrices route;
     if (!state.has_turbomind_routed) {
-        check(ds4_v100_layer_state_route_matrices(&state,
+        check(ds4_layer_state_route_matrices(&state,
                                                   (uint32_t)selected[0],
                                                   &route,
                                                   err,
@@ -153,14 +153,14 @@ int main(int argc, char **argv) {
               "route down dimensions");
 
         ds4_gpu_source_row_view view;
-        check(ds4_v100_bound_matrix_source_view(&route.gate, &view, err, sizeof(err)) == 0,
+        check(ds4_bound_matrix_source_view(&route.gate, &view, err, sizeof(err)) == 0,
               "route source row view");
         check(view.cols == state.hidden_size && view.rows == state.intermediate_size,
               "source row view dimensions");
     }
 
     uint64_t span = 0;
-    check(ds4_v100_layer_state_ffn_arena_span(&state,
+    check(ds4_layer_state_ffn_arena_span(&state,
                                               selected,
                                               6,
                                               &span,
@@ -171,7 +171,7 @@ int main(int argc, char **argv) {
     check(state.kv_view.total_bytes == li->kv_view.total_bytes, "kv view snapshot");
 
     uint64_t attn_span = 0;
-    check(ds4_v100_layer_state_attention_arena_span(&state,
+    check(ds4_layer_state_attention_arena_span(&state,
                                                     &attn_span,
                                                     err,
                                                     sizeof(err)) == 0,
@@ -182,8 +182,8 @@ int main(int argc, char **argv) {
            state.layer_id,
            state.stage_id,
            state.owning_gpu,
-           ds4_v100_layer_class_name(state.layer_class),
-           ds4_v100_router_kind_name(state.router_kind),
+           ds4_layer_class_name(state.layer_class),
+           ds4_router_kind_name(state.router_kind),
            state.hidden_size,
            state.q_width,
            state.kv_latent_width,
@@ -196,6 +196,6 @@ int main(int argc, char **argv) {
            attn_span,
            failures ? "FAIL" : "ok");
 
-    ds4_v100_context_close(ctx);
+    ds4_context_close(ctx);
     return failures ? 1 : 0;
 }

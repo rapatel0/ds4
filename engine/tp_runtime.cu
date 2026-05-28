@@ -26,7 +26,7 @@ struct gpu_state {
     void *kv = nullptr;
     void *comp_state = nullptr;
     void *scratch = nullptr;
-    ds4_v100_tp_gpu_report report = {};
+    ds4_tp_gpu_report report = {};
 };
 
 struct layer_kv_layout {
@@ -41,8 +41,8 @@ struct layer_kv_layout {
 
 } // namespace
 
-struct ds4_v100_tp_runtime {
-    ds4_v100_tp_runtime_config cfg = {};
+struct ds4_tp_runtime {
+    ds4_tp_runtime_config cfg = {};
     gpu_state gpu[kGpus];
     layer_kv_layout kv_layout[kLayers] = {};
     uint64_t kv_slot_stride = 0;
@@ -65,7 +65,7 @@ static int fail_cuda(char *err, size_t err_len, const char *what, cudaError_t rc
 
 static uint64_t checked_mul(uint64_t a, uint64_t b) {
     if (a != 0 && b > UINT64_MAX / a) {
-        std::fprintf(stderr, "ds4_v100_tp_runtime: integer overflow\n");
+        std::fprintf(stderr, "ds4_tp_runtime: integer overflow\n");
         std::abort();
     }
     return a * b;
@@ -79,7 +79,7 @@ static uint64_t bytes_blocks(uint64_t elems, uint64_t block_elems, uint64_t bloc
     return checked_mul((elems + block_elems - 1) / block_elems, block_bytes);
 }
 
-static uint64_t kv_values_bytes(uint64_t values, ds4_v100_tp_kv_dtype kv) {
+static uint64_t kv_values_bytes(uint64_t values, ds4_tp_kv_dtype kv) {
     switch (kv) {
     case DS4_V100_TP_KV_F16:
         return checked_mul(values, 2);
@@ -92,7 +92,7 @@ static uint64_t kv_values_bytes(uint64_t values, ds4_v100_tp_kv_dtype kv) {
     return checked_mul(values, 2);
 }
 
-static bool is_f8_kv(ds4_v100_tp_kv_dtype kv) {
+static bool is_f8_kv(ds4_tp_kv_dtype kv) {
     return kv == DS4_V100_TP_KV_F8_E4M3_B128 ||
            kv == DS4_V100_TP_KV_F8_E5M2_B128;
 }
@@ -102,7 +102,7 @@ static int layer_ratio(int layer) {
     return (layer % 2) == 0 ? 4 : 128;
 }
 
-static uint64_t row_values_bytes(uint64_t values, ds4_v100_tp_kv_dtype kv) {
+static uint64_t row_values_bytes(uint64_t values, ds4_tp_kv_dtype kv) {
     return kv_values_bytes(values, kv);
 }
 
@@ -117,7 +117,7 @@ static uint64_t layer_comp_state_bytes(int layer, uint64_t ctx) {
     return checked_mul(attn / 8u, 4u);
 }
 
-static void planned_kv_bytes(const ds4_v100_tp_runtime_config *cfg,
+static void planned_kv_bytes(const ds4_tp_runtime_config *cfg,
                              uint64_t *kv_per_gpu,
                              uint64_t *comp_per_gpu) {
     uint64_t comp = 0;
@@ -142,7 +142,7 @@ static void planned_kv_bytes(const ds4_v100_tp_runtime_config *cfg,
     *comp_per_gpu = checked_mul(ceil_div(comp, kGpus), cfg->slots);
 }
 
-static void build_kv_layout(ds4_v100_tp_runtime *rt) {
+static void build_kv_layout(ds4_tp_runtime *rt) {
     uint64_t cursor = 0;
     for (int layer = 0; layer < kLayers; ++layer) {
         layer_kv_layout *l = &rt->kv_layout[layer];
@@ -673,17 +673,17 @@ static uint8_t e5m2_quant_byte_host(float x) {
     return (uint8_t)(sign | (uint8_t)best);
 }
 
-static float f8_kv_max_host(ds4_v100_tp_kv_dtype kv_dtype) {
+static float f8_kv_max_host(ds4_tp_kv_dtype kv_dtype) {
     return kv_dtype == DS4_V100_TP_KV_F8_E5M2_B128 ? 57344.0f : 448.0f;
 }
 
-static uint8_t f8_kv_quant_byte_host(float x, ds4_v100_tp_kv_dtype kv_dtype) {
+static uint8_t f8_kv_quant_byte_host(float x, ds4_tp_kv_dtype kv_dtype) {
     return kv_dtype == DS4_V100_TP_KV_F8_E5M2_B128
         ? e5m2_quant_byte_host(x)
         : e4m3fn_quant_byte_host(x);
 }
 
-static float f8_kv_to_f32_host(uint8_t x, ds4_v100_tp_kv_dtype kv_dtype) {
+static float f8_kv_to_f32_host(uint8_t x, ds4_tp_kv_dtype kv_dtype) {
     return kv_dtype == DS4_V100_TP_KV_F8_E5M2_B128
         ? e5m2_to_f32_host(x)
         : e4m3fn_to_f32_host(x);
@@ -706,7 +706,7 @@ static void fill_expected_f8_row(std::vector<unsigned char> *packed,
                                  uint64_t position,
                                  uint32_t logical_cols,
                                  int indexer,
-                                 ds4_v100_tp_kv_dtype kv_dtype) {
+                                 ds4_tp_kv_dtype kv_dtype) {
     const uint64_t row_bytes = kv_values_bytes(logical_cols, kv_dtype);
     packed->assign((size_t)row_bytes, 0);
     decoded->assign((size_t)logical_cols, 0.0f);
@@ -735,7 +735,7 @@ static void fill_expected_f8_row(std::vector<unsigned char> *packed,
 
 } // namespace
 
-extern "C" void ds4_v100_tp_runtime_default_config(ds4_v100_tp_runtime_config *cfg) {
+extern "C" void ds4_tp_runtime_default_config(ds4_tp_runtime_config *cfg) {
     std::memset(cfg, 0, sizeof(*cfg));
     for (int i = 0; i < kGpus; ++i) cfg->devices[i] = i;
     cfg->slots = 32;
@@ -746,8 +746,8 @@ extern "C" void ds4_v100_tp_runtime_default_config(ds4_v100_tp_runtime_config *c
     cfg->allocate_comp_state = 1;
 }
 
-extern "C" int ds4_v100_tp_runtime_open(ds4_v100_tp_runtime **out,
-                                         const ds4_v100_tp_runtime_config *cfg,
+extern "C" int ds4_tp_runtime_open(ds4_tp_runtime **out,
+                                         const ds4_tp_runtime_config *cfg,
                                          char *err,
                                          size_t err_len) {
     if (!out || !cfg) {
@@ -766,7 +766,7 @@ extern "C" int ds4_v100_tp_runtime_open(ds4_v100_tp_runtime **out,
         }
     }
 
-    ds4_v100_tp_runtime *rt = new ds4_v100_tp_runtime();
+    ds4_tp_runtime *rt = new ds4_tp_runtime();
     rt->cfg = *cfg;
     build_kv_layout(rt);
 
@@ -779,7 +779,7 @@ extern "C" int ds4_v100_tp_runtime_open(ds4_v100_tp_runtime **out,
     for (int i = 0; i < kGpus; ++i) {
         rc = cudaSetDevice(cfg->devices[i]);
         if (rc != cudaSuccess) {
-            ds4_v100_tp_runtime_close(rt);
+            ds4_tp_runtime_close(rt);
             return fail_cuda(err, err_len, "cudaSetDevice", rc);
         }
         for (int j = 0; j < kGpus; ++j) {
@@ -787,11 +787,11 @@ extern "C" int ds4_v100_tp_runtime_open(ds4_v100_tp_runtime **out,
             int can_access = 0;
             rc = cudaDeviceCanAccessPeer(&can_access, cfg->devices[i], cfg->devices[j]);
             if (rc != cudaSuccess) {
-                ds4_v100_tp_runtime_close(rt);
+                ds4_tp_runtime_close(rt);
                 return fail_cuda(err, err_len, "cudaDeviceCanAccessPeer", rc);
             }
             if (!can_access) {
-                ds4_v100_tp_runtime_close(rt);
+                ds4_tp_runtime_close(rt);
                 set_err(err, err_len, "peer access unavailable");
                 return -1;
             }
@@ -799,7 +799,7 @@ extern "C" int ds4_v100_tp_runtime_open(ds4_v100_tp_runtime **out,
             if (rc == cudaErrorPeerAccessAlreadyEnabled) {
                 (void)cudaGetLastError();
             } else if (rc != cudaSuccess) {
-                ds4_v100_tp_runtime_close(rt);
+                ds4_tp_runtime_close(rt);
                 return fail_cuda(err, err_len, "cudaDeviceEnablePeerAccess", rc);
             }
         }
@@ -810,7 +810,7 @@ extern "C" int ds4_v100_tp_runtime_open(ds4_v100_tp_runtime **out,
         g->device = cfg->devices[i];
         rc = cudaSetDevice(g->device);
         if (rc != cudaSuccess) {
-            ds4_v100_tp_runtime_close(rt);
+            ds4_tp_runtime_close(rt);
             return fail_cuda(err, err_len, "cudaSetDevice", rc);
         }
         const uint64_t allocated_comp_per_gpu =
@@ -821,12 +821,12 @@ extern "C" int ds4_v100_tp_runtime_open(ds4_v100_tp_runtime **out,
             (allocated_comp_per_gpu != 0 &&
              (rc = cudaMalloc(&g->comp_state, allocated_comp_per_gpu)) != cudaSuccess) ||
             (rc = cudaMalloc(&g->scratch, cfg->scratch_bytes)) != cudaSuccess) {
-            ds4_v100_tp_runtime_close(rt);
+            ds4_tp_runtime_close(rt);
             return fail_cuda(err, err_len, "cudaMalloc", rc);
         }
         rc = cudaMemset(g->hidden_in, 0, hidden_bytes);
         if (rc != cudaSuccess) {
-            ds4_v100_tp_runtime_close(rt);
+            ds4_tp_runtime_close(rt);
             return fail_cuda(err, err_len, "cudaMemset", rc);
         }
         g->report.hidden_bytes = 2 * hidden_bytes;
@@ -842,7 +842,7 @@ extern "C" int ds4_v100_tp_runtime_open(ds4_v100_tp_runtime **out,
     return 0;
 }
 
-extern "C" int ds4_v100_tp_runtime_fixture(ds4_v100_tp_runtime *rt,
+extern "C" int ds4_tp_runtime_fixture(ds4_tp_runtime *rt,
                                             double *max_abs,
                                             char *err,
                                             size_t err_len) {
@@ -892,12 +892,12 @@ extern "C" int ds4_v100_tp_runtime_fixture(ds4_v100_tp_runtime *rt,
     return 0;
 }
 
-extern "C" int ds4_v100_tp_runtime_dense_kv_slice(ds4_v100_tp_runtime *rt,
+extern "C" int ds4_tp_runtime_dense_kv_slice(ds4_tp_runtime *rt,
                                                    int layer,
                                                    uint32_t slot,
                                                    uint64_t position,
                                                    int write_indexer,
-                                                   ds4_v100_tp_dense_kv_result *result,
+                                                   ds4_tp_dense_kv_result *result,
                                                    char *err,
                                                    size_t err_len) {
     if (!rt || !result) {
@@ -1028,12 +1028,12 @@ extern "C" int ds4_v100_tp_runtime_dense_kv_slice(ds4_v100_tp_runtime *rt,
     return 0;
 }
 
-extern "C" int ds4_v100_tp_runtime_kv_row_view(ds4_v100_tp_runtime *rt,
+extern "C" int ds4_tp_runtime_kv_row_view(ds4_tp_runtime *rt,
                                                 int layer,
                                                 uint32_t slot,
                                                 uint64_t position,
-                                                ds4_v100_tp_kv_row_kind kind,
-                                                ds4_v100_tp_kv_row_view *view,
+                                                ds4_tp_kv_row_kind kind,
+                                                ds4_tp_kv_row_view *view,
                                                 char *err,
                                                 size_t err_len) {
     if (!rt || !view) {
@@ -1109,13 +1109,13 @@ extern "C" int ds4_v100_tp_runtime_kv_row_view(ds4_v100_tp_runtime *rt,
     return 0;
 }
 
-extern "C" int ds4_v100_tp_runtime_kv_row_roundtrip_f32(
-    ds4_v100_tp_runtime *rt,
+extern "C" int ds4_tp_runtime_kv_row_roundtrip_f32(
+    ds4_tp_runtime *rt,
     int layer,
     uint32_t slot,
     uint64_t position,
-    ds4_v100_tp_kv_row_kind kind,
-    ds4_v100_tp_kv_row_roundtrip_result *result,
+    ds4_tp_kv_row_kind kind,
+    ds4_tp_kv_row_roundtrip_result *result,
     char *err,
     size_t err_len) {
     if (!rt || !result) {
@@ -1127,8 +1127,8 @@ extern "C" int ds4_v100_tp_runtime_kv_row_roundtrip_f32(
         return -1;
     }
 
-    ds4_v100_tp_kv_row_view view;
-    if (ds4_v100_tp_runtime_kv_row_view(rt, layer, slot, position, kind, &view,
+    ds4_tp_kv_row_view view;
+    if (ds4_tp_runtime_kv_row_view(rt, layer, slot, position, kind, &view,
                                         err, err_len) != 0) {
         return -1;
     }
@@ -1227,12 +1227,12 @@ extern "C" int ds4_v100_tp_runtime_kv_row_roundtrip_f32(
     return 0;
 }
 
-extern "C" int ds4_v100_tp_runtime_kv_row_store_f32_device(
-    ds4_v100_tp_runtime *rt,
+extern "C" int ds4_tp_runtime_kv_row_store_f32_device(
+    ds4_tp_runtime *rt,
     int layer,
     uint32_t slot,
     uint64_t position,
-    ds4_v100_tp_kv_row_kind kind,
+    ds4_tp_kv_row_kind kind,
     const void *src_by_gpu[kGpus],
     char *err,
     size_t err_len) {
@@ -1245,8 +1245,8 @@ extern "C" int ds4_v100_tp_runtime_kv_row_store_f32_device(
         return -1;
     }
 
-    ds4_v100_tp_kv_row_view view;
-    if (ds4_v100_tp_runtime_kv_row_view(rt, layer, slot, position, kind, &view,
+    ds4_tp_kv_row_view view;
+    if (ds4_tp_runtime_kv_row_view(rt, layer, slot, position, kind, &view,
                                         err, err_len) != 0) {
         return -1;
     }
@@ -1273,12 +1273,12 @@ extern "C" int ds4_v100_tp_runtime_kv_row_store_f32_device(
     return 0;
 }
 
-extern "C" int ds4_v100_tp_runtime_kv_row_load_f32_device(
-    ds4_v100_tp_runtime *rt,
+extern "C" int ds4_tp_runtime_kv_row_load_f32_device(
+    ds4_tp_runtime *rt,
     int layer,
     uint32_t slot,
     uint64_t position,
-    ds4_v100_tp_kv_row_kind kind,
+    ds4_tp_kv_row_kind kind,
     void *dst_by_gpu[kGpus],
     char *err,
     size_t err_len) {
@@ -1291,8 +1291,8 @@ extern "C" int ds4_v100_tp_runtime_kv_row_load_f32_device(
         return -1;
     }
 
-    ds4_v100_tp_kv_row_view view;
-    if (ds4_v100_tp_runtime_kv_row_view(rt, layer, slot, position, kind, &view,
+    ds4_tp_kv_row_view view;
+    if (ds4_tp_runtime_kv_row_view(rt, layer, slot, position, kind, &view,
                                         err, err_len) != 0) {
         return -1;
     }
@@ -1325,12 +1325,12 @@ extern "C" int ds4_v100_tp_runtime_kv_row_load_f32_device(
 }
 
 static int kv_rows_store_f32_device_impl(
-    ds4_v100_tp_runtime *rt,
+    ds4_tp_runtime *rt,
     int layer,
     uint32_t first_slot,
     uint32_t slot_count,
     uint64_t position,
-    ds4_v100_tp_kv_row_kind kind,
+    ds4_tp_kv_row_kind kind,
     const void *src_by_gpu[kGpus],
     uint64_t src_stride_floats,
     void *const stream_by_gpu[kGpus],
@@ -1349,8 +1349,8 @@ static int kv_rows_store_f32_device_impl(
         return -1;
     }
 
-    ds4_v100_tp_kv_row_view view;
-    if (ds4_v100_tp_runtime_kv_row_view(rt, layer, first_slot, position, kind,
+    ds4_tp_kv_row_view view;
+    if (ds4_tp_runtime_kv_row_view(rt, layer, first_slot, position, kind,
                                         &view, err, err_len) != 0) {
         return -1;
     }
@@ -1380,13 +1380,13 @@ static int kv_rows_store_f32_device_impl(
     return 0;
 }
 
-extern "C" int ds4_v100_tp_runtime_kv_rows_store_f32_device(
-    ds4_v100_tp_runtime *rt,
+extern "C" int ds4_tp_runtime_kv_rows_store_f32_device(
+    ds4_tp_runtime *rt,
     int layer,
     uint32_t first_slot,
     uint32_t slot_count,
     uint64_t position,
-    ds4_v100_tp_kv_row_kind kind,
+    ds4_tp_kv_row_kind kind,
     const void *src_by_gpu[kGpus],
     uint64_t src_stride_floats,
     char *err,
@@ -1396,13 +1396,13 @@ extern "C" int ds4_v100_tp_runtime_kv_rows_store_f32_device(
         src_stride_floats, nullptr, err, err_len);
 }
 
-extern "C" int ds4_v100_tp_runtime_kv_rows_store_f32_device_streams(
-    ds4_v100_tp_runtime *rt,
+extern "C" int ds4_tp_runtime_kv_rows_store_f32_device_streams(
+    ds4_tp_runtime *rt,
     int layer,
     uint32_t first_slot,
     uint32_t slot_count,
     uint64_t position,
-    ds4_v100_tp_kv_row_kind kind,
+    ds4_tp_kv_row_kind kind,
     const void *src_by_gpu[kGpus],
     uint64_t src_stride_floats,
     void *const stream_by_gpu[kGpus],
@@ -1414,12 +1414,12 @@ extern "C" int ds4_v100_tp_runtime_kv_rows_store_f32_device_streams(
 }
 
 static int kv_rows_load_f32_device_impl(
-    ds4_v100_tp_runtime *rt,
+    ds4_tp_runtime *rt,
     int layer,
     uint32_t first_slot,
     uint32_t slot_count,
     uint64_t position,
-    ds4_v100_tp_kv_row_kind kind,
+    ds4_tp_kv_row_kind kind,
     void *dst_by_gpu[kGpus],
     uint64_t dst_stride_floats,
     void *const stream_by_gpu[kGpus],
@@ -1438,8 +1438,8 @@ static int kv_rows_load_f32_device_impl(
         return -1;
     }
 
-    ds4_v100_tp_kv_row_view view;
-    if (ds4_v100_tp_runtime_kv_row_view(rt, layer, first_slot, position, kind,
+    ds4_tp_kv_row_view view;
+    if (ds4_tp_runtime_kv_row_view(rt, layer, first_slot, position, kind,
                                         &view, err, err_len) != 0) {
         return -1;
     }
@@ -1474,13 +1474,13 @@ static int kv_rows_load_f32_device_impl(
     return 0;
 }
 
-extern "C" int ds4_v100_tp_runtime_kv_rows_load_f32_device(
-    ds4_v100_tp_runtime *rt,
+extern "C" int ds4_tp_runtime_kv_rows_load_f32_device(
+    ds4_tp_runtime *rt,
     int layer,
     uint32_t first_slot,
     uint32_t slot_count,
     uint64_t position,
-    ds4_v100_tp_kv_row_kind kind,
+    ds4_tp_kv_row_kind kind,
     void *dst_by_gpu[kGpus],
     uint64_t dst_stride_floats,
     char *err,
@@ -1490,13 +1490,13 @@ extern "C" int ds4_v100_tp_runtime_kv_rows_load_f32_device(
         dst_stride_floats, nullptr, err, err_len);
 }
 
-extern "C" int ds4_v100_tp_runtime_kv_rows_load_f32_device_streams(
-    ds4_v100_tp_runtime *rt,
+extern "C" int ds4_tp_runtime_kv_rows_load_f32_device_streams(
+    ds4_tp_runtime *rt,
     int layer,
     uint32_t first_slot,
     uint32_t slot_count,
     uint64_t position,
-    ds4_v100_tp_kv_row_kind kind,
+    ds4_tp_kv_row_kind kind,
     void *dst_by_gpu[kGpus],
     uint64_t dst_stride_floats,
     void *const stream_by_gpu[kGpus],
@@ -1507,13 +1507,13 @@ extern "C" int ds4_v100_tp_runtime_kv_rows_load_f32_device_streams(
         dst_stride_floats, stream_by_gpu, err, err_len);
 }
 
-extern "C" int ds4_v100_tp_runtime_kv_row_device_roundtrip_f32(
-    ds4_v100_tp_runtime *rt,
+extern "C" int ds4_tp_runtime_kv_row_device_roundtrip_f32(
+    ds4_tp_runtime *rt,
     int layer,
     uint32_t slot,
     uint64_t position,
-    ds4_v100_tp_kv_row_kind kind,
-    ds4_v100_tp_kv_device_roundtrip_result *result,
+    ds4_tp_kv_row_kind kind,
+    ds4_tp_kv_device_roundtrip_result *result,
     char *err,
     size_t err_len) {
     if (!rt || !result) {
@@ -1521,8 +1521,8 @@ extern "C" int ds4_v100_tp_runtime_kv_row_device_roundtrip_f32(
         return -1;
     }
 
-    ds4_v100_tp_kv_row_view view;
-    if (ds4_v100_tp_runtime_kv_row_view(rt, layer, slot, position, kind, &view,
+    ds4_tp_kv_row_view view;
+    if (ds4_tp_runtime_kv_row_view(rt, layer, slot, position, kind, &view,
                                         err, err_len) != 0) {
         return -1;
     }
@@ -1555,7 +1555,7 @@ extern "C" int ds4_v100_tp_runtime_kv_row_device_roundtrip_f32(
         if (rc != cudaSuccess) goto fail;
     }
 
-    if (ds4_v100_tp_runtime_kv_row_store_f32_device(
+    if (ds4_tp_runtime_kv_row_store_f32_device(
             rt, layer, slot, position, kind, (const void **)src, err, err_len) != 0) {
         goto fail_with_err;
     }
@@ -1565,7 +1565,7 @@ extern "C" int ds4_v100_tp_runtime_kv_row_device_roundtrip_f32(
         rc = cudaDeviceSynchronize();
         if (rc != cudaSuccess) goto fail;
     }
-    if (ds4_v100_tp_runtime_kv_row_load_f32_device(
+    if (ds4_tp_runtime_kv_row_load_f32_device(
             rt, layer, slot, position, kind, dst, err, err_len) != 0) {
         goto fail_with_err;
     }
@@ -1632,8 +1632,8 @@ fail_with_err:
     return -1;
 }
 
-extern "C" void ds4_v100_tp_runtime_get_report(const ds4_v100_tp_runtime *rt,
-                                                ds4_v100_tp_runtime_report *report) {
+extern "C" void ds4_tp_runtime_get_report(const ds4_tp_runtime *rt,
+                                                ds4_tp_runtime_report *report) {
     std::memset(report, 0, sizeof(*report));
     if (!rt) return;
     for (int i = 0; i < kGpus; ++i) {
@@ -1641,7 +1641,7 @@ extern "C" void ds4_v100_tp_runtime_get_report(const ds4_v100_tp_runtime *rt,
     }
 }
 
-extern "C" void ds4_v100_tp_runtime_close(ds4_v100_tp_runtime *rt) {
+extern "C" void ds4_tp_runtime_close(ds4_tp_runtime *rt) {
     if (!rt) return;
     for (int i = 0; i < kGpus; ++i) {
         gpu_state *g = &rt->gpu[i];

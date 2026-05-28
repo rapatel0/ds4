@@ -144,30 +144,30 @@ int run_layer(const Options &opt,
                     (unsigned long long)dense_f16_cache->max_temp_bytes);
     }
 
-    ds4_v100_tp_runtime_config cfg;
+    ds4_tp_runtime_config cfg;
     fill_tp_runtime_config(opt, &cfg);
 
     char err[512] = {0};
-    ds4_v100_tp_runtime *rt = nullptr;
-    ds4_v100_tp_runtime_report runtime_report;
+    ds4_tp_runtime *rt = nullptr;
+    ds4_tp_runtime_report runtime_report;
     if (shared_tp_runtime) {
         rt = shared_tp_runtime->rt;
         runtime_report = shared_tp_runtime->report;
     } else {
-        if (ds4_v100_tp_runtime_open(&rt, &cfg, err, sizeof(err)) != 0) {
+        if (ds4_tp_runtime_open(&rt, &cfg, err, sizeof(err)) != 0) {
             std::fprintf(stderr, "tp_runtime_open_failed\t%s\n", err);
             return 4;
         }
-        ds4_v100_tp_runtime_get_report(rt, &runtime_report);
+        ds4_tp_runtime_get_report(rt, &runtime_report);
     }
     auto close_local_runtime = [&]() {
-        if (!shared_tp_runtime && rt) ds4_v100_tp_runtime_close(rt);
+        if (!shared_tp_runtime && rt) ds4_tp_runtime_close(rt);
     };
 
-    ds4_v100_tp_dense_kv_result kv_result;
+    ds4_tp_dense_kv_result kv_result;
     const auto kv_start = std::chrono::steady_clock::now();
     const int write_indexer = ds4_layer_ratio(opt.layer) == 4 ? 1 : 0;
-    if (ds4_v100_tp_runtime_dense_kv_slice(rt, opt.layer, opt.kv_slot, opt.position,
+    if (ds4_tp_runtime_dense_kv_slice(rt, opt.layer, opt.kv_slot, opt.position,
                                            write_indexer, &kv_result, err, sizeof(err)) != 0) {
         std::fprintf(stderr, "tp_runtime_dense_kv_slice_failed\t%s\n", err);
         close_local_runtime();

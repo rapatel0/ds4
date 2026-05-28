@@ -30,7 +30,7 @@ typedef struct {
     const int *layers;
     int n_layers;
     float *gpu_hc;
-    ds4_v100_layer_execute_report *gpu_reports;
+    ds4_layer_execute_report *gpu_reports;
     uint8_t seen[MAX_CHECKPOINTS];
 } checkpoint_capture;
 
@@ -235,7 +235,7 @@ static void stats_diff(const float *a,
     *nonfinite = bad;
 }
 
-static int capture_v100_checkpoint(const ds4_v100_stage_scheduler_checkpoint *cp,
+static int capture_v100_checkpoint(const ds4_stage_scheduler_checkpoint *cp,
                                    void *user,
                                    char *err,
                                    size_t errlen) {
@@ -317,7 +317,7 @@ int main(int argc, char **argv) {
     int required_stages = 0;
     for (int i = 0; i < n_layers; i++) {
         const int layer = checkpoint_actual_layer(layers[i]);
-        const int stage = layer < 0 ? 0 : ds4_v100_stage_for_layer(layer);
+        const int stage = layer < 0 ? 0 : ds4_stage_for_layer(layer);
         if (stage + 1 > required_stages) required_stages = stage + 1;
     }
     if (required_stages <= 0 || required_stages > DS4_V100_EXPECTED_GPUS) {
@@ -364,8 +364,8 @@ int main(int argc, char **argv) {
     float *gpu_hc = (float *)calloc((size_t)n_layers * (size_t)hc_values, sizeof(float));
     int32_t *cpu_selected = (int32_t *)calloc((size_t)n_layers * ROUTES_PER_TOKEN, sizeof(int32_t));
     float *cpu_weights = (float *)calloc((size_t)n_layers * ROUTES_PER_TOKEN, sizeof(float));
-    ds4_v100_layer_execute_report *gpu_reports =
-        (ds4_v100_layer_execute_report *)calloc((size_t)n_layers, sizeof(*gpu_reports));
+    ds4_layer_execute_report *gpu_reports =
+        (ds4_layer_execute_report *)calloc((size_t)n_layers, sizeof(*gpu_reports));
     check(cpu_hc && gpu_hc && cpu_selected && cpu_weights && gpu_reports, "checkpoint allocation");
     checkpoint_capture capture = {
         .layers = layers,
@@ -415,10 +415,10 @@ int main(int argc, char **argv) {
     if (failures == 0 && map_model_file(model_path, &model)) failures++;
     if (failures == 0) check(ds4_gpu_set_model_fd(model.fd), "model fd");
 
-    ds4_v100_stage_scheduler *scheds[DS4_V100_EXPECTED_GPUS];
+    ds4_stage_scheduler *scheds[DS4_V100_EXPECTED_GPUS];
     memset(scheds, 0, sizeof(scheds));
-    ds4_v100_stage_scheduler_options opts;
-    ds4_v100_stage_scheduler_options_init(&opts);
+    ds4_stage_scheduler_options opts;
+    ds4_stage_scheduler_options_init(&opts);
     opts.pack_index_path = index;
     opts.model_map = model.ptr;
     opts.model_size = model.size;
@@ -433,7 +433,7 @@ int main(int argc, char **argv) {
         for (int i = 0; i < required_stages; i++) {
             opts.stage_id = i;
             err[0] = '\0';
-            if (ds4_v100_stage_scheduler_open(&scheds[i], &opts, err, sizeof(err))) {
+            if (ds4_stage_scheduler_open(&scheds[i], &opts, err, sizeof(err))) {
                 fprintf(stderr,
                         "cuda_v100_scheduler_checkpoint_parity_smoke: open stage %d failed: %s\n",
                         i,
@@ -449,10 +449,10 @@ int main(int argc, char **argv) {
             check(0, "negative prompt token");
             break;
         }
-        ds4_v100_stage_scheduler_report report;
+        ds4_stage_scheduler_report report;
         err[0] = '\0';
         const bool final_token = pos == prompt.len - 1;
-        check(ds4_v100_stage_scheduler_decode_token_checkpoints(
+        check(ds4_stage_scheduler_decode_token_checkpoints(
                   scheds[0],
                   (uint32_t)prompt.v[pos],
                   (uint32_t)pos,
@@ -464,13 +464,13 @@ int main(int argc, char **argv) {
               err[0] ? err : "stage 0 prompt decode");
         for (int stage = 1; stage < required_stages && failures == 0; stage++) {
             err[0] = '\0';
-            check(ds4_v100_stage_scheduler_handoff(scheds[stage],
+            check(ds4_stage_scheduler_handoff(scheds[stage],
                                                    scheds[stage - 1],
                                                    err,
                                                    sizeof(err)) == 0,
                   err[0] ? err : "stage handoff");
             err[0] = '\0';
-            check(ds4_v100_stage_scheduler_decode_hc_checkpoints(
+            check(ds4_stage_scheduler_decode_hc_checkpoints(
                       scheds[stage],
                       (uint32_t)prompt.v[pos],
                       (uint32_t)pos,
@@ -515,7 +515,7 @@ int main(int argc, char **argv) {
             const int kind = checkpoint_kind(layers[i]);
             bool route_bad = false;
             if (layer >= 0 && kind == DS4_V100_HC_CHECKPOINT_LAYER_FINAL) {
-                ds4_v100_layer_execute_report *gr = &gpu_reports[i];
+                ds4_layer_execute_report *gr = &gpu_reports[i];
                 if (gr->routes != ROUTES_PER_TOKEN) {
                     route_bad = true;
                 }
@@ -540,7 +540,7 @@ int main(int argc, char **argv) {
             printf("checkpoint\tlayer=%d\tkind=%s\tstage=%d\tmax_abs=%.9g\trms_abs=%.9g\tcpu_rms=%.9g\tgpu_rms=%.9g\troute0=%d/%.7g:%d/%.7g\t%s\n",
                    layer,
                    checkpoint_kind_name(kind),
-                   layer < 0 ? 0 : ds4_v100_stage_for_layer(layer),
+                   layer < 0 ? 0 : ds4_stage_for_layer(layer),
                    max_abs,
                    rms_abs,
                    cpu_rms,
@@ -570,7 +570,7 @@ int main(int argc, char **argv) {
     }
 
     for (int i = required_stages - 1; i >= 0; i--) {
-        ds4_v100_stage_scheduler_close(scheds[i]);
+        ds4_stage_scheduler_close(scheds[i]);
     }
     unmap_model_file(&model);
     free(gpu_reports);

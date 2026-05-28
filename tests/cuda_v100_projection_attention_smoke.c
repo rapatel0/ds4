@@ -273,8 +273,8 @@ static int compare_f16_row_to_f32(const char *label,
     return 1;
 }
 
-static int read_stage_f16_row(ds4_v100_cuda_context *ctx,
-                              const ds4_v100_cuda_layer_kv_view *view,
+static int read_stage_f16_row(ds4_cuda_context *ctx,
+                              const ds4_cuda_layer_kv_view *view,
                               uint64_t base_offset,
                               uint64_t row,
                               uint32_t dim,
@@ -282,7 +282,7 @@ static int read_stage_f16_row(ds4_v100_cuda_context *ctx,
                               char *err,
                               size_t errlen) {
     const uint64_t off = base_offset + row * dim * sizeof(uint16_t);
-    return ds4_v100_cuda_context_read_kv_arena(ctx,
+    return ds4_cuda_context_read_kv_arena(ctx,
                                                view->stage_id,
                                                off,
                                                out,
@@ -537,31 +537,31 @@ static void run_case(uint32_t ratio) {
                   "device indexer projection");
         }
 
-        ds4_v100_context_options opts;
-        ds4_v100_context_options_init(&opts);
+        ds4_context_options opts;
+        ds4_context_options_init(&opts);
         opts.expected_gpus = 1;
         opts.kv_ctx_tokens = 4096;
         opts.kv_active_slots = 1;
         opts.scratch_bytes_per_gpu = 1024 * 1024;
         opts.reserve_bytes_per_gpu = 0;
         char err[512] = {0};
-        ds4_v100_cuda_context *ctx = NULL;
-        check(ds4_v100_cuda_context_open(&ctx, &opts, err, sizeof(err)) == 0,
+        ds4_cuda_context *ctx = NULL;
+        check(ds4_cuda_context_open(&ctx, &opts, err, sizeof(err)) == 0,
               err[0] ? err : "context open");
         if (ctx) {
             const int layer = ratio == 4u ? 2 : 3;
-            ds4_v100_cuda_layer_kv_view layer_view;
-            check(ds4_v100_cuda_context_layer_kv_view(ctx, layer, &layer_view,
+            ds4_cuda_layer_kv_view layer_view;
+            check(ds4_cuda_context_layer_kv_view(ctx, layer, &layer_view,
                                                        err, sizeof(err)) == 0,
                   err[0] ? err : "layer kv view");
-            ds4_v100_cuda_prefill_kv_update_device update = {
+            ds4_cuda_prefill_kv_update_device update = {
                 .slot = 0,
                 .raw_row = ratio == 4u ? 9u : 11u,
                 .comp_row = ratio == 4u ? 5u : 2u,
                 .attn_row_device_f32 = ds4_gpu_tensor_contents(tmp_t),
                 .indexer_row_device_f32 = ratio == 4u ? ds4_gpu_tensor_contents(idx_t) : NULL,
             };
-            check(ds4_v100_cuda_context_prefill_kv_update_f16_device(ctx,
+            check(ds4_cuda_context_prefill_kv_update_f16_device(ctx,
                                                                      layer,
                                                                      &update,
                                                                      err,
@@ -611,7 +611,7 @@ static void run_case(uint32_t ratio) {
                                              2e-3f),
                       "stage indexer compare");
             }
-            ds4_v100_cuda_context_close(ctx);
+            ds4_cuda_context_close(ctx);
         }
     }
 

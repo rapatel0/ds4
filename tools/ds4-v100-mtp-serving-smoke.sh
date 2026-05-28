@@ -270,9 +270,9 @@ grep -q "\"serving_mode\":\"$mode\"" "$status_json" || fail "status missing MTP 
 grep -q "\"top_k\":$top_k" "$status_json" || fail "status MTP top_k mismatch"
 
 http_get "/metrics" "$metrics_http" "$metrics_txt"
-grep -q '^ds4_v100_readiness_level 3$' "$metrics_txt" || fail "metrics missing readiness level 3"
-grep -q '^ds4_v100_mtp_enabled 1$' "$metrics_txt" || fail "metrics should report mtp enabled"
-grep -q '^ds4_v100_mtp_drafts_total 0$' "$metrics_txt" || fail "initial MTP drafts should be 0"
+grep -q '^ds4_readiness_level 3$' "$metrics_txt" || fail "metrics missing readiness level 3"
+grep -q '^ds4_mtp_enabled 1$' "$metrics_txt" || fail "metrics should report mtp enabled"
+grep -q '^ds4_mtp_drafts_total 0$' "$metrics_txt" || fail "initial MTP drafts should be 0"
 
 awk -v tokens="$tokens" '
 BEGIN {
@@ -380,13 +380,13 @@ else
 fi
 
 http_get "/metrics" "$final_metrics_http" "$final_metrics_txt"
-grep -q "^ds4_v100_mtp_drafts_total $requests$" "$final_metrics_txt" || fail "final metrics drafts counter mismatch"
-grep -q "^ds4_v100_mtp_accepted_total $requests$" "$final_metrics_txt" || fail "final metrics accepted counter mismatch"
-grep -q '^ds4_v100_mtp_rejected_total 0$' "$final_metrics_txt" || fail "final metrics rejected counter mismatch"
+grep -q "^ds4_mtp_drafts_total $requests$" "$final_metrics_txt" || fail "final metrics drafts counter mismatch"
+grep -q "^ds4_mtp_accepted_total $requests$" "$final_metrics_txt" || fail "final metrics accepted counter mismatch"
+grep -q '^ds4_mtp_rejected_total 0$' "$final_metrics_txt" || fail "final metrics rejected counter mismatch"
 if [ "$mode" = "commit" ]; then
-    grep -q "^ds4_v100_mtp_committed_total $requests$" "$final_metrics_txt" || fail "final metrics committed counter mismatch"
+    grep -q "^ds4_mtp_committed_total $requests$" "$final_metrics_txt" || fail "final metrics committed counter mismatch"
 else
-    grep -q '^ds4_v100_mtp_committed_total 0$' "$final_metrics_txt" || fail "final metrics committed counter should be 0"
+    grep -q '^ds4_mtp_committed_total 0$' "$final_metrics_txt" || fail "final metrics committed counter should be 0"
 fi
 
 wait "$server_pid"

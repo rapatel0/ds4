@@ -213,14 +213,14 @@ static void unmap_model_file(model_map *m) {
     m->fd = -1;
 }
 
-static int feed_token(ds4_v100_stage_scheduler **scheds,
+static int feed_token(ds4_stage_scheduler **scheds,
                       uint32_t token,
                       uint32_t pos,
                       char *err,
                       size_t errlen) {
-    ds4_v100_stage_scheduler_report report;
+    ds4_stage_scheduler_report report;
     memset(&report, 0, sizeof(report));
-    if (ds4_v100_stage_scheduler_decode_token(scheds[0],
+    if (ds4_stage_scheduler_decode_token(scheds[0],
                                               token,
                                               pos,
                                               &report,
@@ -229,14 +229,14 @@ static int feed_token(ds4_v100_stage_scheduler **scheds,
         return 1;
     }
     for (int stage = 1; stage < DS4_V100_EXPECTED_GPUS; stage++) {
-        if (ds4_v100_stage_scheduler_handoff(scheds[stage],
+        if (ds4_stage_scheduler_handoff(scheds[stage],
                                              scheds[stage - 1],
                                              err,
                                              errlen)) {
             return 1;
         }
         memset(&report, 0, sizeof(report));
-        if (ds4_v100_stage_scheduler_decode_hc(scheds[stage],
+        if (ds4_stage_scheduler_decode_hc(scheds[stage],
                                                token,
                                                pos,
                                                &report,
@@ -248,7 +248,7 @@ static int feed_token(ds4_v100_stage_scheduler **scheds,
     return ds4_gpu_synchronize() ? 0 : 1;
 }
 
-static int feed_prompt(ds4_v100_stage_scheduler **scheds,
+static int feed_prompt(ds4_stage_scheduler **scheds,
                        const ds4_tokens *prompt,
                        char *err,
                        size_t errlen) {
@@ -268,13 +268,13 @@ static int feed_prompt(ds4_v100_stage_scheduler **scheds,
     return 0;
 }
 
-static int select_topk(ds4_v100_stage_scheduler **scheds,
+static int select_topk(ds4_stage_scheduler **scheds,
                        uint32_t *tokens,
                        float *logits,
                        uint32_t k,
                        char *err,
                        size_t errlen) {
-    if (ds4_v100_stage_scheduler_select_topk(scheds[DS4_V100_EXPECTED_GPUS - 1],
+    if (ds4_stage_scheduler_select_topk(scheds[DS4_V100_EXPECTED_GPUS - 1],
                                              tokens,
                                              logits,
                                              k,
@@ -317,13 +317,13 @@ static int compare_topk(const char *label,
     return failures ? 1 : 0;
 }
 
-static int open_schedulers(ds4_v100_stage_scheduler **scheds,
+static int open_schedulers(ds4_stage_scheduler **scheds,
                            const verify_options *opt,
                            const model_map *model,
                            char *err,
                            size_t errlen) {
-    ds4_v100_stage_scheduler_options sopts;
-    ds4_v100_stage_scheduler_options_init(&sopts);
+    ds4_stage_scheduler_options sopts;
+    ds4_stage_scheduler_options_init(&sopts);
     sopts.pack_index_path = opt->pack_index;
     sopts.model_map = model->ptr;
     sopts.model_size = model->size;
@@ -334,54 +334,54 @@ static int open_schedulers(ds4_v100_stage_scheduler **scheds,
     for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
         sopts.stage_id = stage;
         err[0] = '\0';
-        if (ds4_v100_stage_scheduler_open(&scheds[stage], &sopts, err, errlen)) {
+        if (ds4_stage_scheduler_open(&scheds[stage], &sopts, err, errlen)) {
             return 1;
         }
     }
     return 0;
 }
 
-static void close_schedulers(ds4_v100_stage_scheduler **scheds) {
+static void close_schedulers(ds4_stage_scheduler **scheds) {
     for (int stage = DS4_V100_EXPECTED_GPUS - 1; stage >= 0; stage--) {
-        ds4_v100_stage_scheduler_close(scheds[stage]);
+        ds4_stage_scheduler_close(scheds[stage]);
         scheds[stage] = NULL;
     }
 }
 
-static void free_snapshots(ds4_v100_stage_scheduler_snapshot **snaps) {
+static void free_snapshots(ds4_stage_scheduler_snapshot **snaps) {
     for (int stage = DS4_V100_EXPECTED_GPUS - 1; stage >= 0; stage--) {
-        ds4_v100_stage_scheduler_snapshot_free(snaps[stage]);
+        ds4_stage_scheduler_snapshot_free(snaps[stage]);
         snaps[stage] = NULL;
     }
 }
 
-static int create_snapshots(ds4_v100_stage_scheduler **scheds,
-                            ds4_v100_stage_scheduler_snapshot **snaps,
+static int create_snapshots(ds4_stage_scheduler **scheds,
+                            ds4_stage_scheduler_snapshot **snaps,
                             uint64_t *bytes_out,
                             char *err,
                             size_t errlen) {
     uint64_t bytes = 0;
     for (int stage = 0; stage < DS4_V100_EXPECTED_GPUS; stage++) {
         err[0] = '\0';
-        if (ds4_v100_stage_scheduler_snapshot_create(scheds[stage],
+        if (ds4_stage_scheduler_snapshot_create(scheds[stage],
                                                      &snaps[stage],
                                                      err,
                                                      errlen)) {
             return 1;
         }
-        bytes += ds4_v100_stage_scheduler_snapshot_bytes(snaps[stage]);
+        bytes += ds4_stage_scheduler_snapshot_bytes(snaps[stage]);
     }
     if (bytes_out) *bytes_out = bytes;
     return 0;
 }
 
-static int restore_snapshots(ds4_v100_stage_scheduler **scheds,
-                             ds4_v100_stage_scheduler_snapshot **snaps,
+static int restore_snapshots(ds4_stage_scheduler **scheds,
+                             ds4_stage_scheduler_snapshot **snaps,
                              char *err,
                              size_t errlen) {
     for (int stage = DS4_V100_EXPECTED_GPUS - 1; stage >= 0; stage--) {
         err[0] = '\0';
-        if (ds4_v100_stage_scheduler_snapshot_restore(scheds[stage],
+        if (ds4_stage_scheduler_snapshot_restore(scheds[stage],
                                                       snaps[stage],
                                                       err,
                                                       errlen)) {
@@ -421,13 +421,13 @@ int main(int argc, char **argv) {
     model.fd = -1;
     ds4_engine *tok_engine = NULL;
     ds4_tokens prompt = {0};
-    ds4_v100_context *ctx = NULL;
-    ds4_v100_mtp_sidecar *sidecar = NULL;
-    ds4_v100_mtp_forward *mtp_forward = NULL;
+    ds4_context *ctx = NULL;
+    ds4_mtp_sidecar *sidecar = NULL;
+    ds4_mtp_forward *mtp_forward = NULL;
     ds4_gpu_tensor *mtp_raw = NULL;
     ds4_gpu_tensor *mtp_raw_snapshot = NULL;
-    ds4_v100_stage_scheduler *scheds[DS4_V100_EXPECTED_GPUS] = {0};
-    ds4_v100_stage_scheduler_snapshot *snaps[DS4_V100_EXPECTED_GPUS] = {0};
+    ds4_stage_scheduler *scheds[DS4_V100_EXPECTED_GPUS] = {0};
+    ds4_stage_scheduler_snapshot *snaps[DS4_V100_EXPECTED_GPUS] = {0};
     float *committed_embed = NULL;
     float *post_commit_hc = NULL;
     uint32_t after_prompt_tokens[MTP_VERIFY_MAX_TOPK];
@@ -442,7 +442,7 @@ int main(int argc, char **argv) {
     float restored_logits[MTP_VERIFY_MAX_TOPK];
     float continued_logits[MTP_VERIFY_MAX_TOPK];
     float replay_logits[MTP_VERIFY_MAX_TOPK];
-    ds4_v100_mtp_forward_report mtp_fwd_report;
+    ds4_mtp_forward_report mtp_fwd_report;
     memset(&mtp_fwd_report, 0, sizeof(mtp_fwd_report));
     double restore_delta = 0.0;
     double replay_delta = 0.0;
@@ -500,17 +500,17 @@ int main(int argc, char **argv) {
     }
     fprintf(report, "prompt_tokens\t%d\n", prompt.len);
 
-    ds4_v100_context_options ctx_opts;
-    ds4_v100_context_options_init(&ctx_opts);
+    ds4_context_options ctx_opts;
+    ds4_context_options_init(&ctx_opts);
     ctx_opts.pack_index_path = opt.pack_index;
-    if (ds4_v100_context_open(&ctx, &ctx_opts, err, sizeof(err)) != 0) {
+    if (ds4_context_open(&ctx, &ctx_opts, err, sizeof(err)) != 0) {
         fprintf(stderr,
                 "ds4-v100-mtp-verify-smoke: context open failed: %s\n",
                 err[0] ? err : "context open");
         goto done;
     }
-    ds4_v100_tensor_binding output_weight;
-    if (ds4_v100_context_output_head_binding(ctx,
+    ds4_tensor_binding output_weight;
+    if (ds4_context_output_head_binding(ctx,
                                              &output_weight,
                                              err,
                                              sizeof(err)) != 0) {
@@ -520,21 +520,21 @@ int main(int argc, char **argv) {
         goto done;
     }
 
-    ds4_v100_mtp_sidecar_options mtp_opts;
-    ds4_v100_mtp_sidecar_options_init(&mtp_opts);
+    ds4_mtp_sidecar_options mtp_opts;
+    ds4_mtp_sidecar_options_init(&mtp_opts);
     mtp_opts.mtp_path = opt.mtp_model;
     mtp_opts.gpu = opt.gpu;
     mtp_opts.require_device_arena = true;
-    if (ds4_v100_mtp_sidecar_open(&sidecar, &mtp_opts, report, err, sizeof(err)) != 0) {
+    if (ds4_mtp_sidecar_open(&sidecar, &mtp_opts, report, err, sizeof(err)) != 0) {
         fprintf(stderr,
                 "ds4-v100-mtp-verify-smoke: %s\n",
                 err[0] ? err : "failed to open MTP sidecar");
         goto done;
     }
-    ds4_gpu_arena *mtp_arena = ds4_v100_mtp_sidecar_arena(sidecar);
+    ds4_gpu_arena *mtp_arena = ds4_mtp_sidecar_arena(sidecar);
     const uint64_t reserve_bytes = (uint64_t)opt.reserve_mib * 1024ull * 1024ull;
     const uint64_t free_after_upload = ds4_gpu_arena_free_after_upload_bytes(mtp_arena);
-    fprintf(report, "mtp_uploaded_bytes\t%" PRIu64 "\n", ds4_v100_mtp_sidecar_uploaded_bytes(sidecar));
+    fprintf(report, "mtp_uploaded_bytes\t%" PRIu64 "\n", ds4_mtp_sidecar_uploaded_bytes(sidecar));
     fprintf(report, "mtp_arena_bytes\t%" PRIu64 "\n", ds4_gpu_arena_bytes(mtp_arena));
     fprintf(report, "mtp_arena_kind\t%s\n", ds4_gpu_arena_memory_kind(mtp_arena));
     fprintf(report, "mtp_free_after_upload_bytes\t%" PRIu64 "\n", free_after_upload);
@@ -554,7 +554,7 @@ int main(int argc, char **argv) {
                 err[0] ? err : "open scheduler");
         goto done;
     }
-    if (ds4_v100_mtp_forward_open(&mtp_forward,
+    if (ds4_mtp_forward_open(&mtp_forward,
                                   sidecar,
                                   model.ptr,
                                   model.size,
@@ -605,7 +605,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "ds4-v100-mtp-verify-smoke: MTP input allocation failed\n");
         goto done;
     }
-    if (ds4_v100_stage_scheduler_read_token_embedding_f32(scheds[0],
+    if (ds4_stage_scheduler_read_token_embedding_f32(scheds[0],
                                                           committed_token,
                                                           committed_embed,
                                                           DS4_V100_MTP_FORWARD_N_EMBD,
@@ -616,13 +616,13 @@ int main(int argc, char **argv) {
                 err[0] ? err : "embedding");
         goto done;
     }
-    if (!ds4_v100_stage_scheduler_read_hc(scheds[DS4_V100_EXPECTED_GPUS - 1],
+    if (!ds4_stage_scheduler_read_hc(scheds[DS4_V100_EXPECTED_GPUS - 1],
                                           post_commit_hc,
                                           hc_bytes)) {
         fprintf(stderr, "ds4-v100-mtp-verify-smoke: post-commit HC read failed\n");
         goto done;
     }
-    if (ds4_v100_mtp_forward_run_host(mtp_forward,
+    if (ds4_mtp_forward_run_host(mtp_forward,
                                       committed_embed,
                                       post_commit_hc,
                                       committed_pos,
@@ -889,9 +889,9 @@ done:
     close_schedulers(scheds);
     ds4_gpu_tensor_free(mtp_raw_snapshot);
     ds4_gpu_tensor_free(mtp_raw);
-    ds4_v100_mtp_forward_close(mtp_forward);
-    ds4_v100_mtp_sidecar_close(sidecar);
-    ds4_v100_context_close(ctx);
+    ds4_mtp_forward_close(mtp_forward);
+    ds4_mtp_sidecar_close(sidecar);
+    ds4_context_close(ctx);
     ds4_tokens_free(&prompt);
     ds4_engine_close(tok_engine);
     unmap_model_file(&model);
