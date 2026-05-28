@@ -1226,271 +1226,42 @@ def build_env(args, port, case_dir=None):
             # The HTTP server counts harness control requests too: one readiness
             # /health probe plus final /status and /metrics reads.
             "DS4_V100_MAX_REQUESTS": str(max(args.max_requests, args.requests + 3)),
-            "DS4_V100_TP_EP_HC_PERSIST_STATE": "1",
-            "DS4_V100_TP_EP_HC_CURRENT_INPUT_PEER_GATHER": "1" if args.hc_current_peer_gather else "0",
-            "DS4_V100_TP_EP_HC_CURRENT_INPUT_NCCL_ALLGATHER": "1"
-            if args.hc_current_nccl_allgather
-            else "0",
-            "DS4_V100_TP_EP_HC_CURRENT_ALLREDUCE": "1"
-            if args.hc_current_allreduce
-            else "0",
-            "DS4_V100_TP_EP_HC_CURRENT_FULL_PARITY": "1"
-            if args.hc_current_full_parity
-            else "0",
-            "DS4_V100_TP_EP_HC_CURRENT_INPUT_STREAM_SYNC": "1" if args.hc_current_stream_sync else "0",
-            "DS4_V100_TP_EP_HC_CURRENT_INPUT_FUSED_FILL_PACK": "1"
-            if args.hc_current_fused_fill_pack
-            else "0",
-            "DS4_V100_TP_EP_PEER_ACCOUNTING": "1" if args.tp_peer_accounting else "0",
-            "DS4_V100_TP_EP_PEER_REJECT_SYS": "1" if args.tp_peer_reject_sys else "0",
-            "DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD": "1",
-            "DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD_LAZY": "1"
-            if args.lazy_output_head
-            else "0",
-            "DS4_V100_TP_EP_DECODE_CUDAGRAPH": "1" if args.decode_cudagraph else "0",
-            "DS4_V100_TP_EP_DECODE_CUDAGRAPH_OUTPUT_SYNC": "1"
-            if args.decode_cudagraph_output_sync
-            else "0",
-            "DS4_V100_TP_EP_DECODE_CUDAGRAPH_HC_CURRENT_SYNC": "1"
-            if args.decode_cudagraph_hc_current_sync
-            else "0",
-            "DS4_V100_TP_EP_DECODE_CUDAGRAPH_STAGE_SYNC": args.decode_cudagraph_stage_sync
-            or "",
-            "DS4_V100_TP_EP_DECODE_CUDAGRAPH_SUFFIX_STAGE": args.decode_cudagraph_suffix_stage
-            or "",
-            "DS4_V100_TP_EP_DECODE_CUDAGRAPH_PERSISTENT": "1"
-            if args.persistent_decode_cudagraph
-            else "0",
-            "DS4_V100_TP_EP_DECODE_STAGE_CHECKSUM": "1"
-            if args.decode_stage_checksum
-            else "0",
-            "DS4_V100_TP_EP_COMPACT_ROUTE_COMPOSE": "0"
-            if args.disable_compact_route_compose
-            else "1",
-            "DS4_V100_TP_EP_MODEL_ROUTER_ROUTES": "1" if args.model_router_routes else "0",
-            "DS4_V100_TP_EP_ROUTER_CUBLAS": "1" if args.router_cublas else "0",
-            "DS4_V100_TP_EP_ROUTER_HASH_FAST": "1" if args.router_hash_fast else "0",
-            "DS4_V100_TP_EP_GPU_ROUTE_PLAN": "1" if args.gpu_route_plan else "0",
-            "DS4_V100_TP_EP_ROUTE_PLAN_ASYNC_UPLOAD": "0"
-            if args.disable_route_plan_async_upload
-            else "1",
-            "DS4_V100_TP_EP_COMPACT_MOE_DECODE": "1" if args.compact_moe_decode else "0",
-            "DS4_V100_TP_EP_PARALLEL_EXPERT_LOAD": "1" if args.parallel_expert_load else "0",
-            "DS4_V100_TP_EP_NCCL_REDUCE_SCATTER_COMPOSE": "1"
-            if args.nccl_reduce_scatter_compose
-            else "0",
-            "DS4_V100_TP_EP_FUSED_GATED_SILU": "1" if args.fused_gated_silu else "0",
-            "DS4_V100_TP_EP_ROUTED_FFN_NORM_INPUT": "1" if args.routed_ffn_norm_input else "0",
-            "DS4_V100_TP_EP_ROUTED_FFN_RANK_MAJOR_INPUT": "1"
-            if args.routed_ffn_rank_major_input
-            else "0",
-            "DS4_V100_TP_EP_MODEL_ROUTER_RANK_MAJOR_LOGITS": "1"
-            if args.model_router_rank_major_logits
-            else "0",
-            "DS4_V100_TP_EP_MODEL_ROUTER_ALLREDUCE_LOGITS": "1"
-            if args.model_router_allreduce_logits
-            else "0",
-            "DS4_V100_TP_EP_POST_ATTENTION_FIXED_CAPACITY_ROUTE_PLAN": "1"
-            if args.post_attention_fixed_capacity_route_plan
-            else "0",
-            "DS4_V100_TP_EP_POST_ATTENTION_DEVICE_ACTUAL_ROUTE_SYNC": "1"
-            if args.post_attention_device_actual_route_sync
-            else "0",
-            "DS4_V100_TP_EP_POST_ATTENTION_SLOT_MAJOR_FFN_NORM": "1"
-            if args.post_attention_slot_major_ffn_norm
-            else "0",
-            "DS4_V100_TP_EP_POST_ATTENTION_SKIP_SLOT_MAJOR_FFN_NORM": "1"
-            if args.post_attention_skip_slot_major_ffn_norm
-            else "0",
-            "DS4_V100_TP_EP_POST_ATTENTION_MASKED_COMPACT_COPY": "1"
-            if args.post_attention_masked_compact_copy
-            else "0",
-            "DS4_V100_TP_EP_FP8_E5M2_KV": "1" if args.fp8_e5m2_kv else "0",
-            "DS4_V100_TP_EP_VRAM_REPORT": "1" if args.vram_report else "0",
             "DS4_V100_TP_EP_VRAM_MIN_FREE_MIB": str(args.vram_min_free_mib),
             "DS4_V100_TP_EP_NCCL_MIN_FREE_MIB": str(args.nccl_min_free_mib),
-            "DS4_V100_TP_EP_TP_RUNTIME_SKIP_UNUSED_COMP_STATE": "1"
-            if args.skip_tp_runtime_comp_state
-            else "0",
-            "DS4_V100_TP_EP_TP_RUNTIME_SCRATCH_MIB": str(args.tp_runtime_scratch_mib),
-            "DS4_V100_TP_EP_DEFER_NCCL_INIT": "1" if args.defer_nccl_init else "0",
             "DS4_V100_RESERVE_MIB": "0",
             "DS4_V100_PORT": str(port),
-            "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_HISTORY": "1",
-            "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_SKIP_CURRENT_LOAD": "1",
-            "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_QUIET": "1",
-            "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_BATCH_ROWS": "1",
-            "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_TYPED_KV_STREAM_SYNC": "1",
-            "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_OUTPUT": "1"
-            if args.attention_output
-            else "0",
-            "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_OUTPUT_NCCL_ALLGATHER": "1"
-            if args.attention_output_nccl_allgather
-            else "0",
-            "DS4_V100_TP_EP_TRUE_DS4_POST_ATTENTION_FFN_INPUT": "1"
-            if args.post_attention_ffn_input
-            else "0",
-            "DS4_V100_TP_EP_TRUE_DS4_SEMANTIC_SKIP_STATS": "1"
-            if (
-                args.semantic_skip_stats
-                and (
-                    args.attention_output
-                    or args.attention_output_nccl_allgather
-                    or args.post_attention_ffn_input
-                )
-            )
-            else "0",
-            "DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_INPUT_FILL": "1"
-            if args.fused_compressed_input_fill
-            else "0",
-            "DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_ROPE_ROUND": "1"
-            if args.fused_compressed_rope_round
-            else "0",
-            "DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_POOL_NORM_ROPE_ROUND": "1"
-            if args.fused_compressed_pool_norm_rope_round
-            else "0",
-            "DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_DIRECT_INPUT_FILL": "1"
-            if args.direct_compressed_input_fill
-            else "0",
-            "DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_ATTN_INPUT_FILL": "1"
-            if args.fused_compressed_attn_input_fill
-            else "0",
-            "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_PROJECTION_RANK_LOCAL_INPUT": "1"
-            if args.attention_projection_rank_local_input
-            else "0",
-            "DS4_V100_TP_EP_TRUE_DS4_ATTENTION_PROJECTION_RANK_MAJOR_INPUT": "1"
-            if args.attention_projection_rank_major_input
-            else "0",
-            "DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_SKIP_DENSE_STATS": "1"
-            if not args.disable_skip_compressed_dense_stats
-            else "0",
             "DS4_V100_TP_EP_EXTRA_ARGS": "\n".join(args.server_arg),
             "DS4_V100_CUDA_PROFILER_WINDOW": "1" if "window" in args.tool else "0",
         }
     )
-    if args.fused_compressed_pool_norm:
-        env["DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_POOL_NORM"] = "1"
-    elif getattr(args, "disable_fused_compressed_pool_norm", False):
-        env["DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_FUSED_POOL_NORM"] = "0"
-    if args.compressed_dense_event_wait:
-        env["DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_DENSE_EVENT_WAIT"] = "1"
-    elif getattr(args, "disable_compressed_dense_event_wait", False):
-        env["DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_DENSE_EVENT_WAIT"] = "0"
     apply_nccl_env(args, env, case_dir)
     return env
 
 
+def slugify_label(text):
+    value = re.sub(r"[^A-Za-z0-9._-]+", "-", text.strip()).strip("-").lower()
+    return value[:80]
+
+
 def variant_suffix(args):
-    suffix = ""
-    if args.hc_current_peer_gather:
-        suffix += "-hc-peer-gather"
-    if getattr(args, "hc_current_nccl_allgather", False):
-        suffix += "-hc-nccl-allgather"
-    if args.hc_current_stream_sync:
-        suffix += "-hc-stream-sync"
-    if getattr(args, "hc_current_fused_fill_pack", False):
-        suffix += "-hc-fused-fill-pack"
-    if getattr(args, "tp_peer_accounting", False):
-        suffix += "-peeracct"
-    if getattr(args, "tp_peer_reject_sys", False):
-        suffix += "-rejectsys"
-    if getattr(args, "skip_compressed_store", False):
-        suffix += "-skip-compressed-store"
-    if getattr(args, "skip_indexer_store", False):
-        suffix += "-skip-indexer-store"
-    if getattr(args, "fused_compressed_input_fill", False):
-        suffix += "-fused-compressed-input-fill"
-    if getattr(args, "fused_compressed_rope_round", False):
-        suffix += "-fused-compressed-rope-round"
-    if getattr(args, "fused_compressed_pool_norm", False):
-        suffix += "-fused-compressed-pool-norm"
-    if getattr(args, "disable_fused_compressed_pool_norm", False):
-        suffix += "-no-fused-compressed-pool-norm"
-    if getattr(args, "fused_compressed_pool_norm_rope_round", False):
-        suffix += "-fused-compressed-pool-norm-rope-round"
-    if getattr(args, "direct_compressed_input_fill", False):
-        suffix += "-direct-compressed-input-fill"
-    if getattr(args, "attention_output", False):
-        suffix += "-attention-output"
-    if getattr(args, "attention_output_nccl_allgather", False):
-        suffix += "-attention-output-nccl-allgather"
-    if getattr(args, "post_attention_ffn_input", False):
-        suffix += "-post-attention-ffn-input"
-    if getattr(args, "compressed_dense_event_wait", False):
-        suffix += "-compressed-dense-event-wait"
-    if getattr(args, "disable_compressed_dense_event_wait", False):
-        suffix += "-no-compressed-dense-event-wait"
-    if getattr(args, "skip_compressed_dense_stats", False):
-        suffix += "-skip-compressed-dense-stats"
-    if getattr(args, "disable_skip_compressed_dense_stats", False):
-        suffix += "-no-skip-compressed-dense-stats"
-    if getattr(args, "fused_compressed_attn_input_fill", False):
-        suffix += "-fused-compressed-attn-input-fill"
-    if getattr(args, "attention_projection_rank_local_input", False):
-        suffix += "-attn-proj-rank-local"
-    if getattr(args, "attention_projection_rank_major_input", False):
-        suffix += "-attn-proj-rank-major"
-    if getattr(args, "decode_cudagraph", False):
-        suffix += "-decode-cudagraph"
-    if getattr(args, "persistent_decode_cudagraph", False):
-        suffix += "-persistent-decode-cudagraph"
-    if getattr(args, "decode_cudagraph_suffix_stage", ""):
-        suffix += f"-suffix-{args.decode_cudagraph_suffix_stage}"
-    if getattr(args, "tp_runtime_scratch_mib", 1024) != 1024:
-        suffix += f"-scratch{args.tp_runtime_scratch_mib}"
+    parts = []
+    if args.run_description:
+        label = slugify_label(args.run_description)
+        if label:
+            parts.append(label)
+    if args.server_arg:
+        digest = hashlib.sha1("\n".join(args.server_arg).encode("utf-8")).hexdigest()[:8]
+        parts.append(f"serverargs-h{digest}")
     if getattr(args, "cuda_visible_devices", "0,1,2,3,4,5,6,7") != "0,1,2,3,4,5,6,7":
         digest = hashlib.sha1(args.cuda_visible_devices.encode("utf-8")).hexdigest()[:8]
-        suffix += f"-cuda-visible-h{digest}"
-    if getattr(args, "nccl_no_sys_ring", False):
-        suffix += "-nccl-no-sys"
-    if getattr(args, "defer_nccl_init", False):
-        suffix += "-defer-nccl"
+        parts.append(f"cuda-visible-h{digest}")
+    if not getattr(args, "nccl_no_sys_ring", False):
+        parts.append("nccl-default")
     if getattr(args, "cuda_profiler_device", None) is not None:
-        suffix += f"-profdev{args.cuda_profiler_device}"
+        parts.append(f"profdev{args.cuda_profiler_device}")
     if getattr(args, "cuda_profiler_all_devices", False):
-        suffix += "-prof-all-devices"
-    if getattr(args, "model_router_routes", False):
-        suffix += "-model-router"
-    if getattr(args, "router_cublas", False):
-        suffix += "-router-cublas"
-    if getattr(args, "router_hash_fast", False):
-        suffix += "-router-hash-fast"
-    if getattr(args, "gpu_route_plan", False):
-        suffix += "-gpu-route-plan"
-    if getattr(args, "route_plan_async_upload", False):
-        suffix += "-route-plan-async-upload"
-    if getattr(args, "disable_route_plan_async_upload", False):
-        suffix += "-no-route-plan-async-upload"
-    if getattr(args, "disable_compact_route_compose", False):
-        suffix += "-no-compact-route"
-    if getattr(args, "compact_moe_decode", False):
-        suffix += "-compact-moe"
-    if getattr(args, "parallel_expert_load", True):
-        suffix += "-parallel-expert-load"
-    else:
-        suffix += "-serial-expert-load"
-    if getattr(args, "fused_gated_silu", False):
-        suffix += "-fused-gated-silu"
-    if getattr(args, "routed_ffn_norm_input", False):
-        suffix += "-routed-norm"
-    if getattr(args, "routed_ffn_rank_major_input", False):
-        suffix += "-routed-rank-major"
-    if getattr(args, "model_router_rank_major_logits", False):
-        suffix += "-router-rank-major"
-    if getattr(args, "model_router_allreduce_logits", False):
-        suffix += "-router-allreduce"
-    if getattr(args, "post_attention_fixed_capacity_route_plan", False):
-        suffix += "-post-attn-fixed-route"
-    if getattr(args, "post_attention_device_actual_route_sync", False):
-        suffix += "-post-attn-actual-route"
-    if getattr(args, "post_attention_slot_major_ffn_norm", False):
-        suffix += "-post-attn-slot-major-ffn-norm"
-    if getattr(args, "post_attention_skip_slot_major_ffn_norm", False):
-        suffix += "-post-attn-skip-slot-major-ffn-norm"
-    if getattr(args, "post_attention_masked_compact_copy", False):
-        suffix += "-post-attn-masked-copy"
-    if getattr(args, "fp8_e5m2_kv", False):
-        suffix += "-fp8-e5m2-kv"
+        parts.append("prof-all-devices")
+    suffix = "-" + "-".join(parts) if parts else ""
     if len(suffix) > 180:
         digest = hashlib.sha1(suffix.encode("utf-8")).hexdigest()[:16]
         suffix = f"{suffix[:150]}-h{digest}"
@@ -2095,98 +1866,7 @@ def main():
         choices=["chat", "selected-token"],
         default="chat",
     )
-    parser.add_argument("--hc-current-peer-gather", action="store_true")
-    parser.add_argument("--hc-current-nccl-allgather", action="store_true")
-    parser.add_argument("--hc-current-allreduce", action="store_true")
-    parser.add_argument("--hc-current-full-parity", action="store_true")
-    parser.add_argument("--hc-current-stream-sync", action="store_true")
-    parser.add_argument("--hc-current-fused-fill-pack", action="store_true")
-    parser.add_argument("--tp-peer-accounting", action="store_true")
-    parser.add_argument("--tp-peer-reject-sys", action="store_true")
-    parser.add_argument("--attention-projection-rank-local-input", action="store_true")
-    parser.add_argument("--attention-projection-rank-major-input", action="store_true")
     parser.add_argument("--resident-profile-layer", type=int)
-    parser.add_argument("--attention-output", action="store_true")
-    parser.add_argument("--attention-output-nccl-allgather", action="store_true")
-    parser.add_argument("--post-attention-ffn-input", action="store_true")
-    parser.add_argument(
-        "--semantic-skip-stats",
-        dest="semantic_skip_stats",
-        action="store_true",
-        default=True,
-    )
-    parser.add_argument(
-        "--disable-semantic-skip-stats",
-        dest="semantic_skip_stats",
-        action="store_false",
-    )
-    parser.add_argument("--skip-compressed-store", action="store_true")
-    parser.add_argument("--skip-indexer-store", action="store_true")
-    parser.add_argument("--fused-compressed-input-fill", action="store_true")
-    parser.add_argument("--fused-compressed-rope-round", action="store_true")
-    parser.add_argument("--fused-compressed-pool-norm", action="store_true")
-    parser.add_argument("--fused-compressed-pool-norm-rope-round", action="store_true")
-    parser.add_argument("--direct-compressed-input-fill", action="store_true")
-    parser.add_argument("--compressed-dense-event-wait", action="store_true")
-    parser.add_argument("--disable-compressed-dense-event-wait", action="store_true")
-    parser.add_argument("--skip-compressed-dense-stats", action="store_true")
-    parser.add_argument("--disable-skip-compressed-dense-stats", action="store_true")
-    parser.add_argument("--fused-compressed-attn-input-fill", action="store_true")
-    parser.add_argument("--disable-fused-compressed-pool-norm", action="store_true")
-    parser.add_argument("--decode-cudagraph", action="store_true")
-    parser.add_argument("--decode-cudagraph-output-sync", action="store_true")
-    parser.add_argument("--decode-cudagraph-hc-current-sync", action="store_true")
-    parser.add_argument("--decode-cudagraph-stage-sync", default="")
-    parser.add_argument("--decode-cudagraph-suffix-stage", default="")
-    parser.add_argument("--persistent-decode-cudagraph", action="store_true")
-    parser.add_argument("--decode-stage-checksum", action="store_true")
-    parser.add_argument("--tp-runtime-scratch-mib", type=int, default=1024)
-    parser.add_argument("--defer-nccl-init", action="store_true")
-    parser.add_argument("--model-router-routes", action="store_true")
-    parser.add_argument("--router-cublas", action="store_true")
-    parser.add_argument("--router-hash-fast", action="store_true")
-    parser.add_argument("--gpu-route-plan", action="store_true")
-    parser.add_argument("--route-plan-async-upload", action="store_true")
-    parser.add_argument("--disable-route-plan-async-upload", action="store_true")
-    parser.add_argument("--disable-compact-route-compose", action="store_true")
-    parser.add_argument("--compact-moe-decode", action="store_true")
-    parser.add_argument(
-        "--parallel-expert-load",
-        dest="parallel_expert_load",
-        action="store_true",
-        default=True,
-    )
-    parser.add_argument(
-        "--disable-parallel-expert-load",
-        dest="parallel_expert_load",
-        action="store_false",
-    )
-    parser.add_argument("--nccl-reduce-scatter-compose", action="store_true")
-    parser.add_argument("--fused-gated-silu", action="store_true")
-    parser.add_argument("--routed-ffn-norm-input", action="store_true")
-    parser.add_argument("--routed-ffn-rank-major-input", action="store_true")
-    parser.add_argument("--model-router-rank-major-logits", action="store_true")
-    parser.add_argument("--model-router-allreduce-logits", action="store_true")
-    parser.add_argument("--post-attention-fixed-capacity-route-plan", action="store_true")
-    parser.add_argument("--post-attention-route-reuse-audit", action="store_true")
-    parser.add_argument("--post-attention-device-actual-route-sync", action="store_true")
-    parser.add_argument("--post-attention-slot-major-ffn-norm", action="store_true")
-    parser.add_argument("--post-attention-skip-slot-major-ffn-norm", action="store_true")
-    parser.add_argument("--post-attention-masked-compact-copy", action="store_true")
-    parser.add_argument("--fp8-e5m2-kv", action="store_true")
-    parser.add_argument(
-        "--skip-tp-runtime-comp-state",
-        dest="skip_tp_runtime_comp_state",
-        action="store_true",
-        default=True,
-    )
-    parser.add_argument(
-        "--disable-skip-tp-runtime-comp-state",
-        dest="skip_tp_runtime_comp_state",
-        action="store_false",
-    )
-    parser.add_argument("--lazy-output-head", action="store_true")
-    parser.add_argument("--vram-report", action="store_true")
     parser.add_argument("--vram-min-free-mib", type=int, default=64)
     parser.add_argument("--nccl-min-free-mib", type=int, default=1536)
     parser.add_argument("--port", type=int, default=18357)
@@ -2265,12 +1945,6 @@ def main():
             f"--cuda-visible-devices {NCCL_DEFAULT_VISIBLE_DEVICES}; use "
             "--disable-nccl-no-sys-ring for visible-order diagnostics"
         )
-    if args.fused_compressed_pool_norm and args.disable_fused_compressed_pool_norm:
-        parser.error("--fused-compressed-pool-norm and --disable-fused-compressed-pool-norm are mutually exclusive")
-    if args.skip_compressed_dense_stats and args.disable_skip_compressed_dense_stats:
-        parser.error("--skip-compressed-dense-stats and --disable-skip-compressed-dense-stats are mutually exclusive")
-    if args.compressed_dense_event_wait and args.disable_compressed_dense_event_wait:
-        parser.error("--compressed-dense-event-wait and --disable-compressed-dense-event-wait are mutually exclusive")
     prompt_records = None
     if args.prompt_file:
         prompt_records = load_prompt_records(args.prompt_file)
