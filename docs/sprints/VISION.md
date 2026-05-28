@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-28
-last_updated_by: post-479-nccl-audit
-revision: 480
+last_updated_by: sprint-481-cleanup
+revision: 481
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -41,8 +41,10 @@ not a serial layer-chain.
 
 ## Active Performance Thesis
 
-`TEMP_THROUGHPUT_PROMPT.md` is now the controlling throughput plan. The current
-evidence says the TP/EP serving path is launch/synchronization fragmented:
+The archived throughput prompt
+(`docs/sprints/archive/TEMP_THROUGHPUT_PROMPT.md`) remains the controlling
+throughput plan. The current evidence says the TP/EP serving path is
+launch/synchronization fragmented:
 server decode stays roughly `97-100` aggregate tok/s and average GPU
 utilization stays around `10%` from `1` to `32` active requests at the target
 `32` slot / `256K` shape. Sprint 377's fresh serving baseline at the same
@@ -3264,6 +3266,25 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-27 | Sprint 470 proved routed-FFN suffix replay is not the first persistent-graph correctness blocker. | Added default-off `--decode-cudagraph-suffix-stage-gate routed_ffn`, fixed resident-profile deferred NCCL setup, and shortened long profile artifact names. On V100 layer 0 at `8` slots / `256K` / `3` steps, eager and persistent routed-suffix replay matched checksum `1510241683`; isolated decode improved `35.897593 -> 25.696161` ms/step (`222.856165 -> 311.330552` slot-step tok/s), with one capture and one successful replay. | Keep persistent serving default-off. Continue the suffix split with dense-overlap and compose/final-HC isolation; only return to full HTTP graph A/B after layer-0 checksum parity survives each suffix slice. |
 | 2026-05-27 | Sprint 472 localized the persistent suffix correctness blocker to final-HC carry/expand. | Extended suffix isolation to `dense`, `compose`, and `final_hc`. At layer 0 / `8` slots / `256K` / `3` steps, dense replay matched checksum `5035503764` and improved `43.008403 -> 30.500961` ms/step; compose replay matched checksum `5035503764` and improved `35.169200 -> 27.413582` ms/step; final-HC replay changed checksum `5306391750 -> 2880063635`. | Move final-HC carry/expand out of the captured suffix and run it eagerly after compose replay. Do not run another broad HTTP graph A/B until direct layer-0 checksum matches with this split. |
 | 2026-05-27 | Sprint 473 proved compose-suffix replay with eager final-HC is direct-correct but still HTTP-incorrect. | Added `compose_eager_final_hc`, appliance/profile/A-B suffix wiring, startup-warmup harness control, position-aware persistent cache invalidation, and per-leg GPU route-plan flags in the HTTP A/B harness. Direct all-layer `8` slot / `256K` runs matched checksums for `1` token (`1126925252`) and `2` tokens (`8349369606`) while improving decode `4.785078 -> 11.558355` and `5.870644 -> 14.196876` tok/s. HTTP chat and selected-token A/Bs still failed parity `0/8`; selected-token removes prompt prefill yet changes `128818 -> 0`. | Keep persistent graph serving default-off. Rerun selected-token with `--candidate-gpu-route-plan`, because the direct passing graph validation used the GPU route-plan shape. If that fails, add serving-mode post-graph per-layer checksums and localize the first divergent layer. |
+
+## Sprint Hygiene
+
+Sprint 481 established cleanup discipline for TP/EP feature gates and temporary
+repo-root documents:
+
+1. New feature or diagnostic gates must include a sunset criterion in their
+   introduction commit.
+2. Promotion commits remove the promoted flag's dead branch in the same commit.
+   Rejection commits remove the rejected branch in the same commit.
+3. Flags older than five sprints that are not real runtime knobs are cleanup
+   debt by default.
+4. Keep only the last five numbered `TEMP_STATUS_REPORT_*.md` files at the repo
+   root; archive older reports under `docs/sprints/archive/status-reports/`.
+5. Keep root `TEMP_<topic>.md` files only while their sprint/spec is active.
+   Archive superseded topic prompts under `docs/sprints/archive/` or fold them
+   into permanent docs.
+6. New `tools/*.c` or `tools/*.cu` files must be referenced by the `Makefile` or
+   a shell harness in the same sprint that introduces them.
 
 ## Open Questions
 
