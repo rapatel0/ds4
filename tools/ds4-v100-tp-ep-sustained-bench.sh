@@ -101,19 +101,6 @@ result_json="$case_dir/result.json"
     --warmup 0 \
     --iters 1 \
     --decode-steps "$tokens" \
-    --fuse-compose-sum \
-    --dense-f16-cublas-compose \
-    --dense-f16-cache-compose \
-    --skip-descriptor-checks \
-    --skip-predecode-probes \
-    --shared-expert-bindings \
-    --shared-dense-ops \
-    --overlap-ep-dense \
-    --source-copy-schedule \
-    --skip-self-compose-copy \
-    --multi-copy-streams \
-    --token-major-all-layers \
-    --all-layers \
     --serving-bench >"$stdout_log" 2>"$stderr_log"
 
 python3 - "$stdout_log" "$result_json" "$summary_tsv" "$summary_json" "$ctx" "$slots" "$tokens" <<'PY'
