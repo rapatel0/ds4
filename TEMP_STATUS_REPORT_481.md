@@ -41,16 +41,18 @@ server-side failure capture before touching the cleanup baseline again.
 Root status reports:
 
 - Before: `189` numbered root `TEMP_STATUS_REPORT_*.md` files.
-- After: rolling active window only. `TEMP_STATUS_REPORT_477.md` through
-  `TEMP_STATUS_REPORT_481.md` remain at root.
+- After: rolling active window only. `TEMP_STATUS_REPORT_478.md` through
+  `TEMP_STATUS_REPORT_482.md` remain at root.
 
 Superseded root topic docs archived:
 
+- `TEMP_A6_RANK_LOCAL_NORM_PROMPT.md`
 - `TEMP_CURRENT_REPORT.md`
 - `TEMP_GRAPH_PRIOR_INSIGHTS.md`
 - `TEMP_HC_ALLREDUCE_PROMPT.md`
 - `TEMP_HC_ALLREDUCE_STEER.md`
 - `TEMP_NCCL_BROADCAST_REDUCTION_AUDIT.md`
+- `TEMP_REPO_REVIEW.md`
 - `TEMP_SPIKE_A_VLLM_PORT.md`
 - `TEMP_SPIKE_B_C_CAPTURE.md`
 - `TEMP_STATUS_REPORT.md`

@@ -138,19 +138,19 @@ These don't touch the serving binary, so they don't need the bit-exact gate
 validation per commit. They still go after the snapshot. One bulk commit per
 category is fine.
 
-15. **`TEMP_STATUS_REPORT_*.md` archival.** 189 files at the repo root,
-    numbered 001 through 480. Keep the **last 5** at root for active
-    reference (currently 476–480); move the rest to
+15. **`TEMP_STATUS_REPORT_*.md` archival.** Keep the **last 5** at root for
+    active reference (currently `TEMP_STATUS_REPORT_478.md` through
+    `TEMP_STATUS_REPORT_482.md`); move the rest to
     `docs/sprints/archive/status-reports/` in one commit.
     ```bash
     mkdir -p docs/sprints/archive/status-reports
-    for n in $(seq 1 475); do
+    for n in $(seq 1 477); do
       f=$(printf "TEMP_STATUS_REPORT_%03d.md" "$n")
       [ -f "$f" ] && git mv "$f" docs/sprints/archive/status-reports/
     done
     ```
     Use `git mv` to preserve history. Commit message:
-    `Archive TEMP_STATUS_REPORT_001..475 to docs/sprints/archive/`.
+    `Archive TEMP_STATUS_REPORT_001..477 to docs/sprints/archive/`.
 16. **Superseded `TEMP_<topic>.md` archival.** Classify each:
 
     | Keep at root | Archive to `docs/sprints/archive/` |
@@ -159,8 +159,10 @@ category is fine.
     | `TEMP_POST_SWEEP_DOCKET.md` (active queue) | `TEMP_HC_ALLREDUCE_STEER.md` (same sprint) |
     | `TEMP_CODE_CLEANUP_PROMPT.md` (this sprint's spec) | `TEMP_SYS_TRANSPORT_SWEEP.md` (sprint 479 completed) |
     | `TEMP_PATTERN_A_PROMOTION_PROMPT.md` (queued for next sprint) | `TEMP_NCCL_BROADCAST_REDUCTION_AUDIT.md` (audit done) |
-    | `TEMP_REPO_REVIEW.md` (current reference, until folded into docs/) | `TEMP_THROUGHPUT_PROMPT.md` (older planning) |
-    | `TEMP_A6_RANK_LOCAL_NORM_PROMPT.md` (folded into cleanup — keep until cleanup lands) | `TEMP_GRAPH_PRIOR_INSIGHTS.md` (older) |
+    |  | `TEMP_REPO_REVIEW.md` (repo review reference, archived once folded into docs/) |
+    |  | `TEMP_A6_RANK_LOCAL_NORM_PROMPT.md` (cleanup reference, now archived with the cleanup pass) |
+    |  | `TEMP_THROUGHPUT_PROMPT.md` (older planning) |
+    |  | `TEMP_GRAPH_PRIOR_INSIGHTS.md` (older) |
     |  | `TEMP_SPIKE_A_VLLM_PORT.md` (paused program) |
     |  | `TEMP_SPIKE_B_C_CAPTURE.md` (older planning) |
     |  | `TEMP_CURRENT_REPORT.md` (verify — if stale, archive) |
@@ -168,11 +170,9 @@ category is fine.
     `git mv` the archived ones in one commit. Commit message:
     `Archive superseded TEMP_<topic>.md docs to docs/sprints/archive/`.
 17. **Orphan smoke binary.** `tools/ds4-source-oracle-vector.c` (and the
-    co-located `.o`) does not appear in the Makefile or any shell harness.
-    Verify with `grep -rE "ds4-source-oracle-vector" .` (excluding the file
-    itself and any build artifacts); if confirmed orphan, delete in one
-    commit. Commit message:
-    `Delete orphan tools/ds4-source-oracle-vector.{c,o}`.
+    co-located `.o`) is still referenced by the Makefile and gate harness.
+    Verified references include `Makefile`, `tools/ds4-v100-gate.sh`, and
+    `tests/test-vectors/README.md`. Retain it.
 
     If during code cleanup additional smoke binaries surface as unreferenced
     (no entry in `Makefile`, `tools/*.sh`, or `deploy/`), apply the same
