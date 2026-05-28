@@ -3,7 +3,7 @@
 
 #include "ds4_gpu.h"
 #include "engine/context.h"
-#include "engine/mtp.h"
+#include "engine/mtp_sidecar.h"
 
 #include <stddef.h>
 #include <stdint.h>

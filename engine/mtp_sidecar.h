@@ -1,5 +1,5 @@
-#ifndef DS4_V100_MTP_H
-#define DS4_V100_MTP_H
+#ifndef DS4_MTP_SIDECAR_H
+#define DS4_MTP_SIDECAR_H
 
 #include "ds4.h"
 #include "ds4_gpu.h"
