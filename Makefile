@@ -15,12 +15,12 @@ METAL_SRCS := $(wildcard metal/*.metal)
 PACK_OBJS = ds4_pack.o
 SOURCE_FORMAT_OBJS = ds4_source_formats.o
 TURBOMIND_PACK_OBJS = ds4_turbomind_pack.o
-V100_CONTEXT_OBJS = ds4_v100_context.o $(PACK_OBJS) $(TURBOMIND_PACK_OBJS)
-V100_LAYER_STATE_OBJS = ds4_v100_layer_state.o $(V100_CONTEXT_OBJS) $(SOURCE_FORMAT_OBJS)
-V100_LAYER_EXECUTE_OBJS = ds4_v100_layer_execute.o $(V100_LAYER_STATE_OBJS)
-V100_SCHEDULER_OBJS = ds4_v100_scheduler.o $(V100_LAYER_EXECUTE_OBJS)
-V100_REPLAY_OBJS = ds4_v100_replay.o $(V100_SCHEDULER_OBJS)
-V100_MTP_OBJS = ds4_v100_mtp.o
+V100_CONTEXT_OBJS = engine/context.o $(PACK_OBJS) $(TURBOMIND_PACK_OBJS)
+V100_LAYER_STATE_OBJS = engine/layer_state.o $(V100_CONTEXT_OBJS) $(SOURCE_FORMAT_OBJS)
+V100_LAYER_EXECUTE_OBJS = engine/layer_execute.o $(V100_LAYER_STATE_OBJS)
+V100_SCHEDULER_OBJS = engine/scheduler.o $(V100_LAYER_EXECUTE_OBJS)
+V100_REPLAY_OBJS = engine/replay.o $(V100_SCHEDULER_OBJS)
+V100_MTP_OBJS = engine/mtp.o
 TP_EP_APPLIANCE_DEPS = engine/tp_runtime.cu engine/tp_runtime.h ds4.h $(CPU_CORE_OBJS) kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h kernels/v100/common.cuh kernels/v100/dense.cuh kernels/v100/hc_mix.cuh kernels/v100/hc_shards.cuh kernels/v100/norm.cuh kernels/v100/compose.cuh kernels/v100/router.cuh kernels/v100/diagnostics.cuh kernels/v100/fill_pack.cuh kernels/v100/attention.cuh engine/runtime_types.cuh engine/runtime_options.cuh engine/runtime_profiler.cu engine/runtime_pack.cu engine/output_head.cu engine/turbomind_bindings.cu engine/diagnostics_support.cu engine/runtime_resources.cu engine/appliance_runtime.cu engine/decode_loop.cu engine/hc_current.cu engine/hc_final.cu engine/attention_projection.cu engine/compressed_kv_step.cu engine/attention_read.cu engine/attention_output.cu engine/post_attention_ffn.cu engine/router_step.cu engine/router_plan.cu engine/ep_dense.cu engine/ep_executor.cu engine/ep_compose.cu engine/layer_decode.cu engine/layer_runner.cu engine/token_major_loop.cu appliance/options.cu appliance/http_server.cu appliance/entrypoint.cu
 
 ifeq ($(UNAME_S),Darwin)
@@ -136,26 +136,26 @@ ds4_source_formats.o: ds4_source_formats.c ds4_source_formats.h
 ds4_turbomind_pack.o: ds4_turbomind_pack.c ds4_turbomind_pack.h
 	$(CC) $(CFLAGS) -c -o $@ ds4_turbomind_pack.c
 
-ds4_v100_context.o: ds4_v100_context.c ds4_v100_context.h ds4_pack.h ds4_turbomind_pack.h
-	$(CC) $(CFLAGS) -I. -c -o $@ ds4_v100_context.c
+engine/context.o: engine/context.c engine/context.h ds4_pack.h ds4_turbomind_pack.h
+	$(CC) $(CFLAGS) -I. -c -o $@ engine/context.c
 
-ds4_v100_layer_state.o: ds4_v100_layer_state.c ds4_v100_layer_state.h ds4_v100_context.h ds4_gpu.h ds4_source_formats.h
-	$(CC) $(CFLAGS) -I. -c -o $@ ds4_v100_layer_state.c
+engine/layer_state.o: engine/layer_state.c engine/layer_state.h engine/context.h ds4_gpu.h ds4_source_formats.h
+	$(CC) $(CFLAGS) -I. -c -o $@ engine/layer_state.c
 
-ds4_v100_layer_execute.o: ds4_v100_layer_execute.c ds4_v100_layer_execute.h ds4_v100_layer_state.h ds4_gpu.h
-	$(CC) $(CFLAGS) -I. -c -o $@ ds4_v100_layer_execute.c
+engine/layer_execute.o: engine/layer_execute.c engine/layer_execute.h engine/layer_state.h ds4_gpu.h
+	$(CC) $(CFLAGS) -I. -c -o $@ engine/layer_execute.c
 
-ds4_v100_scheduler.o: ds4_v100_scheduler.c ds4_v100_scheduler.h ds4_v100_layer_execute.h ds4_v100_layer_state.h ds4_v100_context.h ds4_pack.h ds4_gpu.h
-	$(CC) $(CFLAGS) -I. -c -o $@ ds4_v100_scheduler.c
+engine/scheduler.o: engine/scheduler.c engine/scheduler.h engine/layer_execute.h engine/layer_state.h engine/context.h ds4_pack.h ds4_gpu.h
+	$(CC) $(CFLAGS) -I. -c -o $@ engine/scheduler.c
 
-ds4_v100_replay.o: ds4_v100_replay.c ds4_v100_replay.h ds4_v100_scheduler.h ds4.h ds4_gpu.h
-	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ ds4_v100_replay.c
+engine/replay.o: engine/replay.c engine/replay.h engine/scheduler.h ds4.h ds4_gpu.h
+	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ engine/replay.c
 
-ds4_v100_mtp.o: ds4_v100_mtp.c ds4_v100_mtp.h ds4.h ds4_gpu.h
-	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ ds4_v100_mtp.c
+engine/mtp.o: engine/mtp.c engine/mtp.h ds4.h ds4_gpu.h
+	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ engine/mtp.c
 
-ds4_v100_context_cuda.o: ds4_v100_context_cuda.cu ds4_v100_context.h
-	$(NVCC) $(NVCCFLAGS) -I. -c -o $@ ds4_v100_context_cuda.cu
+engine/context_cuda.o: engine/context_cuda.cu engine/context.h
+	$(NVCC) $(NVCCFLAGS) -I. -c -o $@ engine/context_cuda.cu
 
 ds4_cli.o: ds4_cli.c ds4.h linenoise.h
 	$(CC) $(CFLAGS) -c -o $@ ds4_cli.c
@@ -325,7 +325,7 @@ tools/ds4-v100-turbomind-admit: tools/ds4-v100-turbomind-admit.o ds4_pack.o ds4_
 tools/ds4-v100-residency-smoke.o: tools/ds4-v100-residency-smoke.c ds4_pack.h ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-residency-smoke.c
 
-tools/ds4-v100-context-smoke.o: tools/ds4-v100-context-smoke.c ds4_v100_context.h
+tools/ds4-v100-context-smoke.o: tools/ds4-v100-context-smoke.c engine/context.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-context-smoke.c
 
 tools/ds4-v100-layer-descriptor-gate.o: tools/ds4-v100-layer-descriptor-gate.c ds4_pack.h
@@ -337,34 +337,34 @@ tools/ds4-source-oracle-vector.o: tools/ds4-source-oracle-vector.c ds4.h
 tools/ds4-v100-mtp-sidecar-gate.o: tools/ds4-v100-mtp-sidecar-gate.c ds4.h
 	$(CC) $(CFLAGS) -I. -DDS4_NO_GPU -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-mtp-sidecar-gate.c
 
-tools/ds4-v100-mtp-residency-smoke.o: tools/ds4-v100-mtp-residency-smoke.c ds4_v100_mtp.h ds4.h ds4_gpu.h
+tools/ds4-v100-mtp-residency-smoke.o: tools/ds4-v100-mtp-residency-smoke.c engine/mtp.h ds4.h ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-mtp-residency-smoke.c
 
-tools/ds4-v100-mtp-prefix-smoke.o: tools/ds4-v100-mtp-prefix-smoke.c ds4_v100_mtp.h ds4.h ds4_gpu.h
+tools/ds4-v100-mtp-prefix-smoke.o: tools/ds4-v100-mtp-prefix-smoke.c engine/mtp.h ds4.h ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-mtp-prefix-smoke.c
 
-tools/ds4-v100-mtp-q4k-smoke.o: tools/ds4-v100-mtp-q4k-smoke.c ds4_v100_mtp.h ds4.h ds4_gpu.h
+tools/ds4-v100-mtp-q4k-smoke.o: tools/ds4-v100-mtp-q4k-smoke.c engine/mtp.h ds4.h ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-mtp-q4k-smoke.c
 
-tools/ds4-v100-mtp-ffn-smoke.o: tools/ds4-v100-mtp-ffn-smoke.c ds4_v100_mtp.h ds4.h ds4_gpu.h
+tools/ds4-v100-mtp-ffn-smoke.o: tools/ds4-v100-mtp-ffn-smoke.c engine/mtp.h ds4.h ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-mtp-ffn-smoke.c
 
-tools/ds4-v100-mtp-attn-smoke.o: tools/ds4-v100-mtp-attn-smoke.c ds4_v100_mtp.h ds4.h ds4_gpu.h
+tools/ds4-v100-mtp-attn-smoke.o: tools/ds4-v100-mtp-attn-smoke.c engine/mtp.h ds4.h ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-mtp-attn-smoke.c
 
-tools/ds4-v100-mtp-logits-smoke.o: tools/ds4-v100-mtp-logits-smoke.c ds4_v100_mtp.h ds4_v100_context.h ds4_source_formats.h ds4.h ds4_gpu.h
+tools/ds4-v100-mtp-logits-smoke.o: tools/ds4-v100-mtp-logits-smoke.c engine/mtp.h engine/context.h ds4_source_formats.h ds4.h ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-mtp-logits-smoke.c
 
-tools/ds4-v100-mtp-forward-smoke.o: tools/ds4-v100-mtp-forward-smoke.c tools/ds4-v100-mtp-attn-smoke.c tools/ds4-v100-mtp-ffn-smoke.c tools/ds4-v100-mtp-logits-smoke.c ds4_v100_mtp.h ds4_v100_context.h ds4_source_formats.h ds4.h ds4_gpu.h
+tools/ds4-v100-mtp-forward-smoke.o: tools/ds4-v100-mtp-forward-smoke.c tools/ds4-v100-mtp-attn-smoke.c tools/ds4-v100-mtp-ffn-smoke.c tools/ds4-v100-mtp-logits-smoke.c engine/mtp.h engine/context.h ds4_source_formats.h ds4.h ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-mtp-forward-smoke.c
 
-tools/ds4-v100-mtp-forward-common.o: tools/ds4-v100-mtp-forward-common.c tools/ds4-v100-mtp-forward-common.h ds4_v100_mtp.h ds4_v100_context.h ds4.h ds4_gpu.h
+tools/ds4-v100-mtp-forward-common.o: tools/ds4-v100-mtp-forward-common.c tools/ds4-v100-mtp-forward-common.h engine/mtp.h engine/context.h ds4.h ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-mtp-forward-common.c
 
-tools/ds4-v100-mtp-verify-smoke.o: tools/ds4-v100-mtp-verify-smoke.c tools/ds4-v100-mtp-forward-common.h ds4.h ds4_gpu.h ds4_v100_mtp.h ds4_v100_scheduler.h ds4_v100_layer_execute.h ds4_v100_context.h
+tools/ds4-v100-mtp-verify-smoke.o: tools/ds4-v100-mtp-verify-smoke.c tools/ds4-v100-mtp-forward-common.h ds4.h ds4_gpu.h engine/mtp.h engine/scheduler.h engine/layer_execute.h engine/context.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-mtp-verify-smoke.c
 
-tools/ds4-v100-replay.o: tools/ds4-v100-replay.c ds4_v100_replay.h ds4_v100_context.h ds4_v100_mtp.h tools/ds4-v100-mtp-forward-common.h ds4.h ds4_gpu.h
+tools/ds4-v100-replay.o: tools/ds4-v100-replay.c engine/replay.h engine/context.h engine/mtp.h tools/ds4-v100-mtp-forward-common.h ds4.h ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tools/ds4-v100-replay.c
 
 ifeq ($(UNAME_S),Darwin)
@@ -409,9 +409,9 @@ tools/ds4-v100-mtp-ffn-smoke: tools/ds4-v100-mtp-ffn-smoke.o $(V100_MTP_OBJS) $(
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tools/ds4-v100-mtp-attn-smoke: tools/ds4-v100-mtp-attn-smoke.o $(V100_MTP_OBJS) $(CPU_CORE_OBJS) ds4_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
-tools/ds4-v100-mtp-logits-smoke: tools/ds4-v100-mtp-logits-smoke.o $(V100_MTP_OBJS) ds4_v100_context.o $(CPU_CORE_OBJS) ds4_cuda.o
+tools/ds4-v100-mtp-logits-smoke: tools/ds4-v100-mtp-logits-smoke.o $(V100_MTP_OBJS) engine/context.o $(CPU_CORE_OBJS) ds4_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
-tools/ds4-v100-mtp-forward-smoke: tools/ds4-v100-mtp-forward-smoke.o $(V100_MTP_OBJS) ds4_v100_context.o $(CPU_CORE_OBJS) ds4_cuda.o
+tools/ds4-v100-mtp-forward-smoke: tools/ds4-v100-mtp-forward-smoke.o $(V100_MTP_OBJS) engine/context.o $(CPU_CORE_OBJS) ds4_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tools/ds4-v100-mtp-verify-smoke: tools/ds4-v100-mtp-verify-smoke.o tools/ds4-v100-mtp-forward-common.o $(V100_MTP_OBJS) ds4_cpu.o ds4_cuda.o $(V100_SCHEDULER_OBJS)
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
@@ -452,19 +452,19 @@ tests/bf16_probe_smoke.o: tests/bf16_probe_smoke.c ds4_gpu.h
 tests/bf16_probe_smoke: tests/bf16_probe_smoke.o ds4_gpu_arena_stub.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
-tests/v100_context_smoke.o: tests/v100_context_smoke.c ds4_v100_context.h
+tests/v100_context_smoke.o: tests/v100_context_smoke.c engine/context.h
 	$(CC) $(CFLAGS) -I. -c -o $@ tests/v100_context_smoke.c
 
 tests/v100_context_smoke: tests/v100_context_smoke.o $(V100_CONTEXT_OBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
-tests/v100_layer_binding_smoke.o: tests/v100_layer_binding_smoke.c ds4_v100_context.h ds4_source_formats.h
+tests/v100_layer_binding_smoke.o: tests/v100_layer_binding_smoke.c engine/context.h ds4_source_formats.h
 	$(CC) $(CFLAGS) -I. -c -o $@ tests/v100_layer_binding_smoke.c
 
 tests/v100_layer_binding_smoke: tests/v100_layer_binding_smoke.o $(V100_CONTEXT_OBJS) ds4_source_formats.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
-tests/v100_layer_state_smoke.o: tests/v100_layer_state_smoke.c ds4_v100_layer_state.h ds4_v100_context.h ds4_gpu.h
+tests/v100_layer_state_smoke.o: tests/v100_layer_state_smoke.c engine/layer_state.h engine/context.h ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -c -o $@ tests/v100_layer_state_smoke.c
 
 tests/v100_layer_state_smoke: tests/v100_layer_state_smoke.o $(V100_LAYER_STATE_OBJS) ds4_gpu_arena_stub.o
@@ -482,7 +482,7 @@ tests/cuda_long_context_smoke.o: tests/cuda_long_context_smoke.c ds4_gpu.h
 tests/cuda_bf16_probe.o: tests/cuda_bf16_probe.c ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -c -o $@ tests/cuda_bf16_probe.c
 
-tests/cuda_v100_context_smoke.o: tests/cuda_v100_context_smoke.c ds4_v100_context.h
+tests/cuda_v100_context_smoke.o: tests/cuda_v100_context_smoke.c engine/context.h
 	$(CC) $(CFLAGS) -I. -c -o $@ tests/cuda_v100_context_smoke.c
 
 tests/cuda_source_dtypes_smoke.o: tests/cuda_source_dtypes_smoke.c ds4_gpu.h ds4_source_formats.h
@@ -503,7 +503,7 @@ tests/cuda_v100_prefill_kv_smoke.o: tests/cuda_v100_prefill_kv_smoke.c ds4_gpu.h
 tests/cuda_v100_compressor_bridge_smoke.o: tests/cuda_v100_compressor_bridge_smoke.c ds4_gpu.h
 	$(CC) $(CFLAGS) -I. -c -o $@ tests/cuda_v100_compressor_bridge_smoke.c
 
-tests/cuda_v100_projection_attention_smoke.o: tests/cuda_v100_projection_attention_smoke.c ds4_gpu.h ds4_source_formats.h ds4_v100_context.h
+tests/cuda_v100_projection_attention_smoke.o: tests/cuda_v100_projection_attention_smoke.c ds4_gpu.h ds4_source_formats.h engine/context.h
 	$(CC) $(CFLAGS) -I. -c -o $@ tests/cuda_v100_projection_attention_smoke.c
 
 tests/cuda_v100_bounded_logits_smoke.o: tests/cuda_v100_bounded_logits_smoke.c ds4_gpu.h
@@ -521,46 +521,46 @@ tests/cuda_v100_turbomind_adapter_smoke.o: tests/cuda_v100_turbomind_adapter_smo
 tests/cuda_v100_turbomind_sidecar_smoke.o: tests/cuda_v100_turbomind_sidecar_smoke.cu ds4_gpu.h ds4_pack.h ds4_source_formats.h ds4_turbomind_pack.h kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h
 	$(NVCC) $(NVCCFLAGS) $(TURBOMIND_ADAPTER_CUDAFLAGS) -I. -c -o $@ tests/cuda_v100_turbomind_sidecar_smoke.cu
 
-tests/cuda_v100_descriptor_bound_ffn_smoke.o: tests/cuda_v100_descriptor_bound_ffn_smoke.c ds4_gpu.h ds4_source_formats.h ds4_v100_context.h ds4_v100_layer_state.h
+tests/cuda_v100_descriptor_bound_ffn_smoke.o: tests/cuda_v100_descriptor_bound_ffn_smoke.c ds4_gpu.h ds4_source_formats.h engine/context.h engine/layer_state.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tests/cuda_v100_descriptor_bound_ffn_smoke.c
 
-tests/cuda_v100_tp_routed_ffn_smoke.o: tests/cuda_v100_tp_routed_ffn_smoke.c ds4_gpu.h ds4_v100_context.h ds4_v100_layer_state.h
+tests/cuda_v100_tp_routed_ffn_smoke.o: tests/cuda_v100_tp_routed_ffn_smoke.c ds4_gpu.h engine/context.h engine/layer_state.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tests/cuda_v100_tp_routed_ffn_smoke.c
 
-tests/cuda_v100_descriptor_bound_attention_smoke.o: tests/cuda_v100_descriptor_bound_attention_smoke.c ds4_gpu.h ds4_source_formats.h ds4_v100_layer_state.h
+tests/cuda_v100_descriptor_bound_attention_smoke.o: tests/cuda_v100_descriptor_bound_attention_smoke.c ds4_gpu.h ds4_source_formats.h engine/layer_state.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tests/cuda_v100_descriptor_bound_attention_smoke.c
 
-tests/cuda_v100_integrated_layer_smoke.o: tests/cuda_v100_integrated_layer_smoke.c ds4_gpu.h ds4_source_formats.h ds4_v100_layer_state.h ds4_v100_layer_execute.h
+tests/cuda_v100_integrated_layer_smoke.o: tests/cuda_v100_integrated_layer_smoke.c ds4_gpu.h ds4_source_formats.h engine/layer_state.h engine/layer_execute.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tests/cuda_v100_integrated_layer_smoke.c
 
-tests/cuda_v100_stage_scheduler_smoke.o: tests/cuda_v100_stage_scheduler_smoke.c ds4_v100_scheduler.h ds4_v100_layer_execute.h ds4_v100_context.h
+tests/cuda_v100_stage_scheduler_smoke.o: tests/cuda_v100_stage_scheduler_smoke.c engine/scheduler.h engine/layer_execute.h engine/context.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tests/cuda_v100_stage_scheduler_smoke.c
 
-tests/cuda_v100_two_stage_scheduler_smoke.o: tests/cuda_v100_two_stage_scheduler_smoke.c ds4_v100_scheduler.h ds4_v100_layer_execute.h ds4_v100_context.h
+tests/cuda_v100_two_stage_scheduler_smoke.o: tests/cuda_v100_two_stage_scheduler_smoke.c engine/scheduler.h engine/layer_execute.h engine/context.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tests/cuda_v100_two_stage_scheduler_smoke.c
 
-tests/cuda_v100_full_scheduler_smoke.o: tests/cuda_v100_full_scheduler_smoke.c ds4_v100_scheduler.h ds4_v100_layer_execute.h ds4_v100_context.h
+tests/cuda_v100_full_scheduler_smoke.o: tests/cuda_v100_full_scheduler_smoke.c engine/scheduler.h engine/layer_execute.h engine/context.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tests/cuda_v100_full_scheduler_smoke.c
 
-tests/cuda_v100_selected_token_smoke.o: tests/cuda_v100_selected_token_smoke.c ds4.h ds4_v100_scheduler.h ds4_v100_layer_execute.h ds4_v100_context.h
+tests/cuda_v100_selected_token_smoke.o: tests/cuda_v100_selected_token_smoke.c ds4.h engine/scheduler.h engine/layer_execute.h engine/context.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tests/cuda_v100_selected_token_smoke.c
 
-tests/cuda_v100_output_head_parity_smoke.o: tests/cuda_v100_output_head_parity_smoke.c ds4_source_formats.h ds4_v100_scheduler.h ds4_v100_layer_execute.h ds4_v100_context.h
+tests/cuda_v100_output_head_parity_smoke.o: tests/cuda_v100_output_head_parity_smoke.c ds4_source_formats.h engine/scheduler.h engine/layer_execute.h engine/context.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tests/cuda_v100_output_head_parity_smoke.c
 
-tests/cuda_v100_scheduler_checkpoint_parity_smoke.o: tests/cuda_v100_scheduler_checkpoint_parity_smoke.c ds4.h ds4_v100_scheduler.h ds4_v100_layer_execute.h ds4_v100_context.h
+tests/cuda_v100_scheduler_checkpoint_parity_smoke.o: tests/cuda_v100_scheduler_checkpoint_parity_smoke.c ds4.h engine/scheduler.h engine/layer_execute.h engine/context.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tests/cuda_v100_scheduler_checkpoint_parity_smoke.c
 
-tests/cuda_v100_scheduler_snapshot_smoke.o: tests/cuda_v100_scheduler_snapshot_smoke.c ds4_gpu.h ds4_v100_scheduler.h ds4_v100_layer_execute.h ds4_v100_context.h
+tests/cuda_v100_scheduler_snapshot_smoke.o: tests/cuda_v100_scheduler_snapshot_smoke.c ds4_gpu.h engine/scheduler.h engine/layer_execute.h engine/context.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tests/cuda_v100_scheduler_snapshot_smoke.c
 
-tests/cuda_v100_stage_wavefront_smoke.o: tests/cuda_v100_stage_wavefront_smoke.c ds4_v100_scheduler.h ds4_v100_layer_execute.h ds4_v100_context.h
+tests/cuda_v100_stage_wavefront_smoke.o: tests/cuda_v100_stage_wavefront_smoke.c engine/scheduler.h engine/layer_execute.h engine/context.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tests/cuda_v100_stage_wavefront_smoke.c
 
-tests/cuda_v100_stage_layer_span_smoke.o: tests/cuda_v100_stage_layer_span_smoke.c ds4_v100_scheduler.h ds4_v100_layer_execute.h ds4_v100_context.h
+tests/cuda_v100_stage_layer_span_smoke.o: tests/cuda_v100_stage_layer_span_smoke.c engine/scheduler.h engine/layer_execute.h engine/context.h
 	$(CC) $(CFLAGS) -I. -D_FILE_OFFSET_BITS=64 -c -o $@ tests/cuda_v100_stage_layer_span_smoke.c
 
-tests/cuda_hc_relay_smoke.o: tests/cuda_hc_relay_smoke.c ds4_v100_context.h
+tests/cuda_hc_relay_smoke.o: tests/cuda_hc_relay_smoke.c engine/context.h
 	$(CC) $(CFLAGS) -I. -c -o $@ tests/cuda_hc_relay_smoke.c
 
 rax.o: rax.c rax.h rax_malloc.h
@@ -681,7 +681,7 @@ tests/cuda_hc_relay_smoke:
 else
 tests/cuda_bf16_probe: tests/cuda_bf16_probe.o ds4_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
-tests/cuda_v100_context_smoke: tests/cuda_v100_context_smoke.o $(V100_CONTEXT_OBJS) ds4_v100_context_cuda.o
+tests/cuda_v100_context_smoke: tests/cuda_v100_context_smoke.o $(V100_CONTEXT_OBJS) engine/context_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tests/cuda_source_dtypes_smoke: tests/cuda_source_dtypes_smoke.o ds4_cuda.o ds4_source_formats.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
@@ -695,7 +695,7 @@ tests/cuda_v100_prefill_kv_smoke: tests/cuda_v100_prefill_kv_smoke.o ds4_cuda.o 
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tests/cuda_v100_compressor_bridge_smoke: tests/cuda_v100_compressor_bridge_smoke.o ds4_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
-tests/cuda_v100_projection_attention_smoke: tests/cuda_v100_projection_attention_smoke.o ds4_cuda.o ds4_source_formats.o $(V100_CONTEXT_OBJS) ds4_v100_context_cuda.o
+tests/cuda_v100_projection_attention_smoke: tests/cuda_v100_projection_attention_smoke.o ds4_cuda.o ds4_source_formats.o $(V100_CONTEXT_OBJS) engine/context_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tests/cuda_v100_bounded_logits_smoke: tests/cuda_v100_bounded_logits_smoke.o ds4_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
@@ -707,11 +707,11 @@ tests/cuda_v100_turbomind_adapter_smoke: tests/cuda_v100_turbomind_adapter_smoke
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS) -ldl
 tests/cuda_v100_turbomind_sidecar_smoke: tests/cuda_v100_turbomind_sidecar_smoke.o ds4_cuda.o ds4_source_formats.o ds4_pack.o ds4_turbomind_pack.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS) -ldl
-tests/cuda_v100_descriptor_bound_ffn_smoke: tests/cuda_v100_descriptor_bound_ffn_smoke.o ds4_cuda.o ds4_v100_layer_state.o ds4_source_formats.o $(V100_CONTEXT_OBJS) ds4_v100_context_cuda.o
+tests/cuda_v100_descriptor_bound_ffn_smoke: tests/cuda_v100_descriptor_bound_ffn_smoke.o ds4_cuda.o engine/layer_state.o ds4_source_formats.o $(V100_CONTEXT_OBJS) engine/context_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
-tests/cuda_v100_tp_routed_ffn_smoke: tests/cuda_v100_tp_routed_ffn_smoke.o ds4_cuda.o ds4_v100_layer_state.o ds4_source_formats.o $(V100_CONTEXT_OBJS) ds4_v100_context_cuda.o
+tests/cuda_v100_tp_routed_ffn_smoke: tests/cuda_v100_tp_routed_ffn_smoke.o ds4_cuda.o engine/layer_state.o ds4_source_formats.o $(V100_CONTEXT_OBJS) engine/context_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
-tests/cuda_v100_descriptor_bound_attention_smoke: tests/cuda_v100_descriptor_bound_attention_smoke.o ds4_cuda.o ds4_v100_layer_state.o ds4_source_formats.o $(V100_CONTEXT_OBJS) ds4_v100_context_cuda.o
+tests/cuda_v100_descriptor_bound_attention_smoke: tests/cuda_v100_descriptor_bound_attention_smoke.o ds4_cuda.o engine/layer_state.o ds4_source_formats.o $(V100_CONTEXT_OBJS) engine/context_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tests/cuda_v100_integrated_layer_smoke: tests/cuda_v100_integrated_layer_smoke.o ds4_cuda.o $(V100_LAYER_EXECUTE_OBJS)
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
@@ -733,7 +733,7 @@ tests/cuda_v100_stage_wavefront_smoke: tests/cuda_v100_stage_wavefront_smoke.o d
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 tests/cuda_v100_stage_layer_span_smoke: tests/cuda_v100_stage_layer_span_smoke.o ds4_cuda.o $(V100_SCHEDULER_OBJS)
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
-tests/cuda_hc_relay_smoke: tests/cuda_hc_relay_smoke.o $(V100_CONTEXT_OBJS) ds4_v100_context_cuda.o
+tests/cuda_hc_relay_smoke: tests/cuda_hc_relay_smoke.o $(V100_CONTEXT_OBJS) engine/context_cuda.o
 	$(NVCC) $(NVCCFLAGS) -o $@ $^ $(CUDA_LDLIBS)
 endif
 

@@ -1,8 +1,8 @@
 #ifndef DS4_V100_SCHEDULER_H
 #define DS4_V100_SCHEDULER_H
 
-#include "ds4_v100_context.h"
-#include "ds4_v100_layer_execute.h"
+#include "engine/context.h"
+#include "engine/layer_execute.h"
 
 #include <stdbool.h>
 #include <stddef.h>

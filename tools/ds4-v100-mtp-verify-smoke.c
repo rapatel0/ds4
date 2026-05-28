@@ -1,8 +1,8 @@
 #include "ds4.h"
 #include "ds4_gpu.h"
 #include "ds4-v100-mtp-forward-common.h"
-#include "ds4_v100_mtp.h"
-#include "ds4_v100_scheduler.h"
+#include "engine/mtp.h"
+#include "engine/scheduler.h"
 
 #include <errno.h>
 #include <float.h>

@@ -1,5 +1,5 @@
 #include "ds4.h"
-#include "ds4_v100_scheduler.h"
+#include "engine/scheduler.h"
 
 #include <errno.h>
 #include <fcntl.h>

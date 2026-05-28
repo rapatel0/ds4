@@ -1,6 +1,6 @@
-#include "ds4_v100_replay.h"
-#include "ds4_v100_context.h"
-#include "ds4_v100_mtp.h"
+#include "engine/replay.h"
+#include "engine/context.h"
+#include "engine/mtp.h"
 #include "ds4-v100-mtp-forward-common.h"
 
 #include <errno.h>

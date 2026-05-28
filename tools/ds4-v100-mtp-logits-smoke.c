@@ -1,6 +1,6 @@
 #include "ds4_source_formats.h"
-#include "ds4_v100_context.h"
-#include "ds4_v100_mtp.h"
+#include "engine/context.h"
+#include "engine/mtp.h"
 
 #include <errno.h>
 #include <float.h>

@@ -2,7 +2,7 @@
 #define DS4_V100_REPLAY_H
 
 #include "ds4.h"
-#include "ds4_v100_scheduler.h"
+#include "engine/scheduler.h"
 
 #include <stdbool.h>
 #include <stddef.h>

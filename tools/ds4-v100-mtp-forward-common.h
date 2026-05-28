@@ -2,8 +2,8 @@
 #define DS4_V100_MTP_FORWARD_COMMON_H
 
 #include "ds4_gpu.h"
-#include "ds4_v100_context.h"
-#include "ds4_v100_mtp.h"
+#include "engine/context.h"
+#include "engine/mtp.h"
 
 #include <stddef.h>
 #include <stdint.h>
