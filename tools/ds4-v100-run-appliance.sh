@@ -238,7 +238,7 @@ fi
 : "${DS4_V100_TP_EP_NCCL_MIN_FREE_MIB:=}"
 : "${DS4_V100_TP_EP_VERBOSE:=0}"
 : "${DS4_V100_TP_EP_PARALLEL_EXPERT_LOAD:=1}"
-: "${DS4_V100_TP_EP_BIN:=./tools/ds4-v100-tp-ep-full-layer-smoke}"
+: "${DS4_V100_TP_EP_BIN:=./appliance/ds4-v100-tp-ep-appliance}"
 : "${DS4_V100_TP_EP_CONTRACT:=/workspace/logs/sprint245-tp-ep-dense-f16-cache-contract/contract/tp-ep-pack-contract.tsv}"
 : "${DS4_V100_TP_EP_TM_INDEX:=}"
 : "${DS4_V100_TP_EP_TOKENIZER_MODEL:=$DS4_V100_MODEL}"
