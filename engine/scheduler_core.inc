@@ -622,10 +622,7 @@ static int scheduler_load_tp2_env(ds4_stage_scheduler *sched,
     sched->tp2_layer_count = 1;
     sched->tp2_requested_peer_gpu = -1;
 
-    const char *layer_env = getenv("DS4_V100_TP_EP_LAYER_FIRST");
-    if (!layer_env || !layer_env[0]) {
-        layer_env = scheduler_first_env("DS4_V100_TP_ROUTED_FFN_LAYER", "DS4_V100_TP2_LAYER");
-    }
+    const char *layer_env = scheduler_first_env("DS4_V100_TP_ROUTED_FFN_LAYER", "DS4_V100_TP2_LAYER");
     const bool enabled =
         scheduler_env_enabled("DS4_V100_TP_ROUTED_FFN") ||
         scheduler_env_enabled("DS4_V100_TP2_ROUTED_FFN") ||
@@ -634,7 +631,7 @@ static int scheduler_load_tp2_env(ds4_stage_scheduler *sched,
     if (!layer_env) {
         return scheduler_error(err,
                                errlen,
-                               "TP/EP routed FFN requires DS4_V100_TP_EP_LAYER_FIRST");
+                               "TP2 routed FFN requires DS4_V100_TP2_LAYER");
     }
     if (scheduler_parse_i32_value(layer_env,
                                   "TP2 routed FFN layer",
@@ -647,11 +644,8 @@ static int scheduler_load_tp2_env(ds4_stage_scheduler *sched,
     }
     if (sched->tp2_layer < 0) return 0;
 
-    const char *count_env = getenv("DS4_V100_TP_EP_LAYER_COUNT");
-    if (!count_env || !count_env[0]) {
-        count_env = scheduler_first_env("DS4_V100_TP_ROUTED_FFN_LAYER_COUNT",
-                                        "DS4_V100_TP2_LAYER_COUNT");
-    }
+    const char *count_env = scheduler_first_env("DS4_V100_TP_ROUTED_FFN_LAYER_COUNT",
+                                                "DS4_V100_TP2_LAYER_COUNT");
     if (count_env &&
         scheduler_parse_i32_value(count_env,
                                   "TP2 routed FFN layer count",
@@ -668,26 +662,20 @@ static int scheduler_load_tp2_env(ds4_stage_scheduler *sched,
                                "TP2 routed FFN span exceeds layer range");
     }
 
-    const char *dir_env =
-        getenv("DS4_V100_TP_EP_SHARD_DIR");
-    if (!dir_env || !dir_env[0]) {
-        dir_env = scheduler_first_env("DS4_V100_TP_ROUTED_FFN_SHARD_DIR", "DS4_V100_TP2_SHARD_DIR");
-    }
+    const char *dir_env = scheduler_first_env("DS4_V100_TP_ROUTED_FFN_SHARD_DIR",
+                                              "DS4_V100_TP2_SHARD_DIR");
     if (!dir_env) {
         return scheduler_error(err,
                                errlen,
-                               "TP/EP routed FFN requires DS4_V100_TP_EP_SHARD_DIR");
+                               "TP2 routed FFN requires DS4_V100_TP2_SHARD_DIR");
     }
     if (strlen(dir_env) >= sizeof(sched->tp2_shard_dir)) {
         return scheduler_error(err, errlen, "TP2 routed FFN shard dir is too long");
     }
     snprintf(sched->tp2_shard_dir, sizeof(sched->tp2_shard_dir), "%s", dir_env);
 
-    const char *peer_env =
-        getenv("DS4_V100_TP_EP_PEER");
-    if (!peer_env || !peer_env[0]) {
-        peer_env = scheduler_first_env("DS4_V100_TP_ROUTED_FFN_PEER_GPU", "DS4_V100_TP2_PEER_GPU");
-    }
+    const char *peer_env = scheduler_first_env("DS4_V100_TP_ROUTED_FFN_PEER_GPU",
+                                               "DS4_V100_TP2_PEER_GPU");
     if (peer_env &&
         scheduler_parse_i32_value(peer_env,
                                   "TP2 routed FFN peer GPU",
