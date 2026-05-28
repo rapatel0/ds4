@@ -5,7 +5,7 @@
 #define parse_options mtp_attn_parse_options
 #define parse_int mtp_attn_parse_int
 #define parse_double mtp_attn_parse_double
-#include "ds4-v100-mtp-attn-smoke.c"
+#include "mtp-attn-smoke.c"
 #undef parse_double
 #undef parse_int
 #undef parse_options
@@ -35,7 +35,7 @@
 #define matmul_q8_0_host mtp_ffn_matmul_q8_0_host
 #define compare_outputs mtp_ffn_compare_outputs
 #define tensor_bytes mtp_ffn_tensor_bytes
-#include "ds4-v100-mtp-ffn-smoke.c"
+#include "mtp-ffn-smoke.c"
 #undef tensor_bytes
 #undef compare_outputs
 #undef matmul_q8_0_host
@@ -80,7 +80,7 @@
 #define cpu_mtp_logits_topk mtp_logits_cpu_mtp_logits_topk
 #define arena_upload_chunks mtp_logits_arena_upload_chunks
 #define topk_from_logits mtp_logits_topk_from_logits
-#include "ds4-v100-mtp-logits-smoke.c"
+#include "mtp-logits-smoke.c"
 #undef topk_from_logits
 #undef arena_upload_chunks
 #undef cpu_mtp_logits_topk
