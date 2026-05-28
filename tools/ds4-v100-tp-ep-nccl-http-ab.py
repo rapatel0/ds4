@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Run a DS4 V100 TP/EP HTTP A/B for HC-current NCCL allgather.
+"""Run a DS4 V100 TP/EP HTTP A/B comparison.
 
 The harness intentionally composes the existing serving profile, readiness, and
-response-parity tools. It gives the NCCL path a repeatable promotion gate at
+response-parity tools. It gives candidate runs a repeatable promotion gate at
 the real serving shape instead of relying on ad hoc paired shell commands.
 """
 
@@ -102,6 +102,7 @@ def case_profile_cmd(
     args: argparse.Namespace,
     case: str,
     port: int,
+    run_description: str,
     nccl: bool,
     decode_cudagraph: bool,
     decode_cudagraph_output_sync: bool,
@@ -122,6 +123,8 @@ def case_profile_cmd(
     masked_compact_copy: bool,
     cuda_visible_devices: str,
     nccl_no_sys_ring: bool,
+    extra_profile_args: list[str],
+    extra_server_args: list[str],
 ) -> list[str]:
     cmd = [
         sys.executable,
@@ -180,6 +183,8 @@ def case_profile_cmd(
     ]
     if args.prompt_file:
         cmd.extend(["--prompt-file", str(args.prompt_file)])
+    if run_description:
+        cmd.extend(["--run-description", run_description])
     if args.http_endpoint:
         cmd.extend(["--http-endpoint", args.http_endpoint])
     if nccl_no_sys_ring:
@@ -245,6 +250,9 @@ def case_profile_cmd(
         cmd.append("--hc-current-allreduce")
     if masked_compact_copy:
         cmd.append("--post-attention-masked-compact-copy")
+    for server_arg in extra_server_args:
+        cmd.append(f"--server-arg={server_arg}")
+    cmd.extend(extra_profile_args)
     return cmd
 
 
@@ -406,6 +414,7 @@ def summarize_case(summary: dict[str, Any], readiness: dict[str, Any]) -> dict[s
         "graph_audit_capture_eligible",
         "graph_audit_blocker",
         "scaffold_attention_projection_rank_local_input_gate",
+        "scaffold_attention_projection_rank_major_input_gate",
         "scaffold_routed_ffn_rank_major_input_gate",
         "scaffold_model_router_rank_major_logits_gate",
         "scaffold_model_router_allreduce_logits_gate",
@@ -450,6 +459,8 @@ def write_markdown(path: pathlib.Path, result: dict[str, Any]) -> None:
         f"- Shape: `{result['shape']['requests']}` requests, `{result['shape']['slots']}` slots, `{result['shape']['ctx']}` ctx, `{result['shape']['tokens']}` generated tokens/request",
         f"- Control CUDA visible devices: `{result.get('control_cuda_visible_devices')}`",
         f"- Candidate CUDA visible devices: `{result.get('candidate_cuda_visible_devices')}`",
+        f"- Control run: {result.get('control_description') or ''}",
+        f"- Candidate run: {result.get('candidate_description') or ''}",
         f"- NCCL no-SYS ring: `{result.get('nccl_no_sys_ring')}`",
         f"- NCCL ring/env: algo=`{result.get('nccl_algo') or 'default'}`, proto=`{result.get('nccl_proto') or 'default'}`, rings=`{result.get('nccl_rings') or 'default'}`, p2p=`{result.get('nccl_p2p_level') or 'default'}`",
         f"- Control ready: `{control.get('ready')}`",
@@ -497,7 +508,8 @@ def write_markdown(path: pathlib.Path, result: dict[str, Any]) -> None:
         ("graph_audit_sum_replay_ms", "graph audit replay ms"),
         ("graph_audit_capture_eligible", "graph capture eligible"),
         ("graph_audit_blocker", "graph blocker"),
-        ("scaffold_attention_projection_rank_local_input_gate", "rank-local/rank-major attn input gate"),
+        ("scaffold_attention_projection_rank_local_input_gate", "rank-local attn input gate"),
+        ("scaffold_attention_projection_rank_major_input_gate", "rank-major attn input gate"),
         ("scaffold_routed_ffn_rank_major_input_gate", "rank-major FFN input gate"),
         ("scaffold_model_router_rank_major_logits_gate", "rank-major router logits gate"),
         ("scaffold_model_router_allreduce_logits_gate", "allreduce router logits gate"),
@@ -658,6 +670,58 @@ def main() -> int:
     parser.add_argument("--candidate-post-attention-masked-compact-copy", action="store_true")
     parser.add_argument("--candidate-post-attention-device-actual-route-sync", action="store_true")
     parser.add_argument("--candidate-label", default="HC-current NCCL")
+    parser.add_argument("--control-description", default="control baseline")
+    parser.add_argument("--candidate-description", default="")
+    parser.add_argument(
+        "--control-run-arg",
+        dest="control_run_arg",
+        action="append",
+        default=[],
+        help=(
+            "append one raw argument token to the control profile command; "
+            "use --control-run-arg=--flag for values beginning with '-'"
+        ),
+    )
+    parser.add_argument(
+        "--control-profile-arg",
+        dest="control_run_arg",
+        action="append",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--control-server-arg",
+        action="append",
+        default=[],
+        help=(
+            "append one raw argument token to the control serving binary command; "
+            "use --control-server-arg=--flag for values beginning with '-'"
+        ),
+    )
+    parser.add_argument(
+        "--candidate-run-arg",
+        dest="candidate_run_arg",
+        action="append",
+        default=[],
+        help=(
+            "append one raw argument token to the candidate profile command; "
+            "use --candidate-run-arg=--flag for values beginning with '-'"
+        ),
+    )
+    parser.add_argument(
+        "--candidate-profile-arg",
+        dest="candidate_run_arg",
+        action="append",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--candidate-server-arg",
+        action="append",
+        default=[],
+        help=(
+            "append one raw argument token to the candidate serving binary command; "
+            "use --candidate-server-arg=--flag for values beginning with '-'"
+        ),
+    )
     parser.add_argument("--global-lock-file", type=pathlib.Path)
     parser.add_argument("--no-global-lock", action="store_true")
     parser.add_argument("--wait-global-lock", action="store_true")
@@ -707,11 +771,13 @@ def main() -> int:
         }, sort_keys=True), flush=True)
         return 0
 
+    print(f"control run: {args.control_description}", flush=True)
     control_proc = run(
         case_profile_cmd(
             args,
             "control",
             args.port_base,
+            run_description=args.control_description,
             nccl=args.control_hc_current_nccl,
             decode_cudagraph=args.control_decode_cudagraph,
             decode_cudagraph_output_sync=args.control_decode_cudagraph_output_sync,
@@ -732,6 +798,8 @@ def main() -> int:
             masked_compact_copy=False,
             cuda_visible_devices=args.control_cuda_visible_devices,
             nccl_no_sys_ring=args.nccl_no_sys_ring or args.control_nccl_no_sys_ring,
+            extra_profile_args=args.control_run_arg,
+            extra_server_args=args.control_server_arg,
         ),
         repo,
         args.artifact_dir / "control-profile.log",
@@ -741,11 +809,14 @@ def main() -> int:
             f"control profile failed rc={control_proc.returncode}; "
             f"see {args.artifact_dir / 'control-profile.log'}"
         )
+    candidate_description = args.candidate_description or args.candidate_label
+    print(f"candidate run: {candidate_description}", flush=True)
     candidate_proc = run(
         case_profile_cmd(
             args,
             "candidate",
             args.port_base + 1,
+            run_description=candidate_description,
             nccl=args.candidate_hc_current_nccl,
             decode_cudagraph=args.candidate_decode_cudagraph,
             decode_cudagraph_output_sync=args.candidate_decode_cudagraph_output_sync,
@@ -766,6 +837,8 @@ def main() -> int:
             masked_compact_copy=args.candidate_post_attention_masked_compact_copy,
             cuda_visible_devices=args.candidate_cuda_visible_devices,
             nccl_no_sys_ring=args.nccl_no_sys_ring or args.candidate_nccl_no_sys_ring,
+            extra_profile_args=args.candidate_run_arg,
+            extra_server_args=args.candidate_server_arg,
         ),
         repo,
         args.artifact_dir / "candidate-profile.log",
@@ -886,6 +959,9 @@ def main() -> int:
         "control_gpu_route_plan": args.control_gpu_route_plan,
         "control_post_attention_slot_major_ffn_norm": args.control_post_attention_slot_major_ffn_norm,
         "control_post_attention_skip_slot_major_ffn_norm": args.control_post_attention_skip_slot_major_ffn_norm,
+        "control_description": args.control_description,
+        "control_run_arg": args.control_run_arg,
+        "control_server_arg": args.control_server_arg,
         "candidate_hc_current_nccl": args.candidate_hc_current_nccl,
         "candidate_hc_current_allreduce": args.candidate_hc_current_allreduce,
         "candidate_cuda_visible_devices": args.candidate_cuda_visible_devices,
@@ -904,6 +980,9 @@ def main() -> int:
         "candidate_post_attention_slot_major_ffn_norm": args.candidate_post_attention_slot_major_ffn_norm,
         "candidate_post_attention_skip_slot_major_ffn_norm": args.candidate_post_attention_skip_slot_major_ffn_norm,
         "candidate_post_attention_masked_compact_copy": args.candidate_post_attention_masked_compact_copy,
+        "candidate_description": candidate_description,
+        "candidate_run_arg": args.candidate_run_arg,
+        "candidate_server_arg": args.candidate_server_arg,
         "candidate_label": args.candidate_label,
         "nccl_no_sys_ring": args.nccl_no_sys_ring,
         "nccl_algo": args.nccl_algo,

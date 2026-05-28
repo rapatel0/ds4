@@ -2041,6 +2041,27 @@ __global__ void rank_major_current_shards_to_slot_major_kernel(
     full[i] = rank_major[src_i];
 }
 
+__global__ void slot_major_current_to_rank_major_kernel(
+    float *rank_major,
+    const float *full,
+    uint32_t shard_cols,
+    uint32_t ranks,
+    uint32_t slots) {
+    const uint64_t cols = (uint64_t)shard_cols * (uint64_t)ranks;
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t n = (uint64_t)slots * cols;
+    if (i >= n) return;
+    const uint32_t slot = (uint32_t)(i / cols);
+    const uint32_t col = (uint32_t)(i % cols);
+    const uint32_t rank = col / shard_cols;
+    const uint32_t local_col = col - rank * shard_cols;
+    const uint64_t dst_i =
+        ((uint64_t)rank * (uint64_t)slots + (uint64_t)slot) *
+            (uint64_t)shard_cols +
+        (uint64_t)local_col;
+    rank_major[dst_i] = full[i];
+}
+
 __global__ void gather_dense_shard_to_full_kernel(float *full,
                                                   const float *shard,
                                                   int rank,
@@ -11181,6 +11202,196 @@ void log_attention_projection_input_diff(const char *family,
                 stats.first_mismatch, stats.max_abs, status);
 }
 
+unsigned short f32_to_half_raw_host(float v) {
+    if (!std::isfinite(v)) v = 0.0f;
+    v = std::fmin(kFp16Max, std::fmax(-kFp16Max, v));
+    const __half h = __float2half(v);
+    unsigned short raw = 0u;
+    std::memcpy(&raw, &h, sizeof(raw));
+    return raw;
+}
+
+float rank_major_debug_scale(const std::vector<float> &src,
+                             uint32_t slot,
+                             uint32_t shard_cols,
+                             uint32_t ranks,
+                             uint32_t slots,
+                             float eps) {
+    const uint32_t cols = shard_cols * ranks;
+    float max_abs = 0.0f;
+    for (uint32_t col = 0; col < cols; ++col) {
+        const uint32_t src_rank = col / shard_cols;
+        const uint32_t local_col = col - src_rank * shard_cols;
+        const uint64_t src_i =
+            ((uint64_t)src_rank * (uint64_t)slots + (uint64_t)slot) *
+                (uint64_t)shard_cols +
+            (uint64_t)local_col;
+        const float v = src[src_i];
+        if (std::isfinite(v)) max_abs = std::fmax(max_abs, std::fabs(v));
+    }
+    float sum = 0.0f;
+    if (max_abs > 0.0f && std::isfinite(max_abs)) {
+        for (uint32_t col = 0; col < cols; ++col) {
+            const uint32_t src_rank = col / shard_cols;
+            const uint32_t local_col = col - src_rank * shard_cols;
+            const uint64_t src_i =
+                ((uint64_t)src_rank * (uint64_t)slots + (uint64_t)slot) *
+                    (uint64_t)shard_cols +
+                (uint64_t)local_col;
+            const float v = src[src_i];
+            if (std::isfinite(v)) {
+                const float scaled = v / max_abs;
+                sum += scaled * scaled;
+            }
+        }
+    }
+    if (!(max_abs > 0.0f) || !std::isfinite(max_abs)) {
+        return 1.0f / std::sqrt(eps);
+    }
+    return 1.0f / std::sqrt(sum / (float)cols + eps / (max_abs * max_abs)) /
+           max_abs;
+}
+
+float slot_major_debug_scale(const std::vector<float> &src,
+                             uint32_t slot,
+                             uint32_t cols,
+                             float eps) {
+    float max_abs = 0.0f;
+    const uint64_t base = (uint64_t)slot * (uint64_t)cols;
+    for (uint32_t col = 0; col < cols; ++col) {
+        const float v = src[base + col];
+        if (std::isfinite(v)) max_abs = std::fmax(max_abs, std::fabs(v));
+    }
+    float sum = 0.0f;
+    if (max_abs > 0.0f && std::isfinite(max_abs)) {
+        for (uint32_t col = 0; col < cols; ++col) {
+            const float v = src[base + col];
+            if (std::isfinite(v)) {
+                const float scaled = v / max_abs;
+                sum += scaled * scaled;
+            }
+        }
+    }
+    if (!(max_abs > 0.0f) || !std::isfinite(max_abs)) {
+        return 1.0f / std::sqrt(eps);
+    }
+    return 1.0f / std::sqrt(sum / (float)cols + eps / (max_abs * max_abs)) /
+           max_abs;
+}
+
+void log_attention_rank_major_input_debug(
+    const char *family,
+    int layer,
+    RankState &r,
+    const __half *actual,
+    const float *expected_f32,
+    const float *slot_major,
+    const float *rank_major,
+    const float *weight,
+    uint32_t slots,
+    cudaStream_t stream) {
+    if (!actual || !expected_f32 || !slot_major || !rank_major || !weight ||
+        slots == 0) {
+        return;
+    }
+    CHECK_CUDA(cudaStreamSynchronize(stream));
+    const uint32_t shard_cols = kHidden / kGpus;
+    const size_t elems = (size_t)slots * (size_t)kHidden;
+    std::vector<__half> h_actual(elems);
+    std::vector<float> h_expected(elems);
+    std::vector<float> h_slot(elems);
+    std::vector<float> h_rank_major(elems);
+    std::vector<float> h_weight(kHidden);
+    CHECK_CUDA(cudaMemcpy(h_actual.data(), actual,
+                          elems * sizeof(__half), cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(h_expected.data(), expected_f32,
+                          elems * sizeof(float), cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(h_slot.data(), slot_major,
+                          elems * sizeof(float), cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(h_rank_major.data(), rank_major,
+                          elems * sizeof(float), cudaMemcpyDeviceToHost));
+    CHECK_CUDA(cudaMemcpy(h_weight.data(), weight,
+                          kHidden * sizeof(float), cudaMemcpyDeviceToHost));
+
+    unsigned long long raw_mismatches = 0ull;
+    size_t raw_first = (size_t)-1;
+    float raw_max_abs = 0.0f;
+    for (uint32_t slot = 0; slot < slots; ++slot) {
+        for (uint32_t col = 0; col < (uint32_t)kHidden; ++col) {
+            const uint32_t src_rank = col / shard_cols;
+            const uint32_t local_col = col - src_rank * shard_cols;
+            const uint64_t src_i =
+                ((uint64_t)src_rank * (uint64_t)slots + (uint64_t)slot) *
+                    (uint64_t)shard_cols +
+                (uint64_t)local_col;
+            const uint64_t slot_i =
+                (uint64_t)slot * (uint64_t)kHidden + (uint64_t)col;
+            const float a = h_rank_major[src_i];
+            const float b = h_slot[slot_i];
+            const float diff = std::fabs(a - b);
+            if (diff > 0.0f || !std::isfinite(a) || !std::isfinite(b)) {
+                if (raw_first == (size_t)-1) raw_first = (size_t)slot_i;
+                ++raw_mismatches;
+                raw_max_abs = std::fmax(raw_max_abs, diff);
+            }
+        }
+    }
+
+    int first_half = -1;
+    unsigned short got_raw = 0u;
+    unsigned short exp_raw = 0u;
+    float got = 0.0f;
+    float expected = 0.0f;
+    for (size_t i = 0; i < elems; ++i) {
+        std::memcpy(&got_raw, &h_actual[i], sizeof(got_raw));
+        exp_raw = f32_to_half_raw_host(h_expected[i]);
+        if (got_raw != exp_raw) {
+            first_half = (int)i;
+            got = __half2float(h_actual[i]);
+            expected = __half2float(__float2half(h_expected[i]));
+            break;
+        }
+    }
+
+    uint32_t slot = 0u;
+    uint32_t col = 0u;
+    uint64_t src_i = 0u;
+    float rank_major_value = 0.0f;
+    float slot_major_value = 0.0f;
+    float norm_weight = 0.0f;
+    float slot_scale = 0.0f;
+    float rank_major_scale = 0.0f;
+    if (first_half >= 0) {
+        slot = (uint32_t)((uint32_t)first_half / (uint32_t)kHidden);
+        col = (uint32_t)((uint32_t)first_half % (uint32_t)kHidden);
+        const uint32_t src_rank = col / shard_cols;
+        const uint32_t local_col = col - src_rank * shard_cols;
+        src_i = ((uint64_t)src_rank * (uint64_t)slots + (uint64_t)slot) *
+                    (uint64_t)shard_cols +
+                (uint64_t)local_col;
+        rank_major_value = h_rank_major[src_i];
+        slot_major_value = h_slot[(uint64_t)slot * (uint64_t)kHidden + col];
+        norm_weight = h_weight[col];
+        slot_scale = slot_major_debug_scale(h_slot, slot, (uint32_t)kHidden,
+                                            1.0e-6f);
+        rank_major_scale = rank_major_debug_scale(
+            h_rank_major, slot, shard_cols, (uint32_t)kGpus, slots, 1.0e-6f);
+    }
+
+    std::printf("tp_ep_attention_rank_major_input_debug\tlayer\t%d\t"
+                "family\t%s\traw_mismatches\t%llu\traw_first\t%zu\t"
+                "raw_max_abs\t%.9g\tfirst_half_mismatch\t%d\tslot\t%u\t"
+                "col\t%u\tsrc_index\t%llu\trank_major_value\t%.9g\t"
+                "slot_major_value\t%.9g\tweight\t%.9g\tgot_half\t%.9g\t"
+                "expected_half\t%.9g\tslot_scale\t%.9g\t"
+                "rank_major_scale\t%.9g\t%s\n",
+                layer, family, (unsigned long long)raw_mismatches, raw_first,
+                raw_max_abs, first_half, slot, col,
+                (unsigned long long)src_i, rank_major_value, slot_major_value,
+                norm_weight, got, expected, slot_scale, rank_major_scale,
+                (raw_mismatches == 0ull && first_half < 0) ? "PASS" : "DIFF");
+}
+
 bool should_log_routed_semantic_stats(const Options &opt) {
     if (opt.decode_cudagraph_gate || opt.true_ds4_semantic_skip_stats_gate) {
         return false;
@@ -13137,6 +13348,8 @@ int run_true_ds4_attention_projection_prefix(const Options &opt,
     const bool rank_local_input =
         opt.true_ds4_attention_projection_rank_local_input_gate ||
         rank_major_input;
+    const bool refresh_rank_major_from_slot_major =
+        rank_major_input && opt.routed_ffn_norm_input_gate;
     const bool gathered_current_full =
         opt.tp_hc_current_input_peer_gather_gate ||
         opt.tp_hc_current_input_nccl_allgather_gate;
@@ -13198,6 +13411,15 @@ int run_true_ds4_attention_projection_prefix(const Options &opt,
                                  r.d_current_full, (uint32_t)kHidden,
                                  (uint32_t)opt.slots);
             } else if (rank_major_input && r.d_current_full_rank_major) {
+                if (refresh_rank_major_from_slot_major) {
+                    slot_major_current_to_rank_major_kernel<<<
+                        (unsigned int)((hidden_elems + block - 1) / block),
+                        block, 0, r.stream>>>(
+                        r.d_current_full_rank_major, r.d_current_full,
+                        (uint32_t)(kHidden / kGpus), (uint32_t)kGpus,
+                        (uint32_t)opt.slots);
+                    CHECK_CUDA(cudaGetLastError());
+                }
                 fill_two_hidden_inputs_half_from_rank_major_norm_kernel<<<
                     (unsigned int)opt.slots, 256, 0, r.stream>>>(
                     ops->attn_q_a.d_x_half[(size_t)rank],
@@ -13261,6 +13483,14 @@ int run_true_ds4_attention_projection_prefix(const Options &opt,
                 (uint32_t)kHidden, (uint32_t)opt.slots, stream);
             log_attention_projection_input_diff("attn_q_a_input", layer, rank,
                                                 q_a_diff);
+            if (rank_major_input && rank == 0 && layer <= 1) {
+                log_attention_rank_major_input_debug(
+                    "attn_q_a_input", layer, r,
+                    ops->attn_q_a.d_x_half[(size_t)rank], hc->d_attn_normed,
+                    r.d_current_full, r.d_current_full_rank_major,
+                    hc->d_attn_norm_weight[layer], (uint32_t)opt.slots,
+                    stream);
+            }
             const HalfInputDiffStats kv_diff = collect_half_input_tensor_diff(
                 r, ops->attn_kv_latent.d_x_half[(size_t)rank], hc->d_attn_normed,
                 (uint32_t)kHidden, (uint32_t)opt.slots, stream);

@@ -1364,6 +1364,7 @@ def build_env(args, port, case_dir=None):
             "DS4_V100_TP_EP_TRUE_DS4_COMPRESSED_KV_SKIP_DENSE_STATS": "1"
             if not args.disable_skip_compressed_dense_stats
             else "0",
+            "DS4_V100_TP_EP_EXTRA_ARGS": "\n".join(args.server_arg),
             "DS4_V100_CUDA_PROFILER_WINDOW": "1" if "window" in args.tool else "0",
         }
     )
@@ -1677,6 +1678,7 @@ def direct_command(args):
         cmd.append("--true-ds4-compressed-kv-skip-dense-stats-gate")
     if args.fused_compressed_attn_input_fill:
         cmd.append("--true-ds4-compressed-kv-fused-attn-input-fill-gate")
+    cmd.extend(args.server_arg)
     return cmd
 
 
@@ -2077,6 +2079,8 @@ def run_direct_case(args):
         lifecycle.mark("responses_complete", f"returncode={proc.returncode}")
     elapsed_s = time.time() - started
     summary = summarize_direct(case_dir, args.tool, proc.returncode, elapsed_s, args, env)
+    summary["run_description"] = args.run_description
+    summary["server_arg"] = args.server_arg
     summary.update(
         summarize_gpu_samples(
             case_dir / "gpu_util.csv",
@@ -2188,6 +2192,16 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-dir", type=pathlib.Path, default=pathlib.Path("/workspace/ds4-sprint181"))
     parser.add_argument("--artifact-dir", type=pathlib.Path, required=True)
+    parser.add_argument("--run-description", default="")
+    parser.add_argument(
+        "--server-arg",
+        action="append",
+        default=[],
+        help=(
+            "append one raw argument token to the serving binary command; "
+            "use --server-arg=--flag for values beginning with '-'"
+        ),
+    )
     parser.add_argument("--pack-dir", default="/workspace/packs/ds4-appliance-full-tm-gated-s181")
     parser.add_argument(
         "--contract",
@@ -2576,6 +2590,8 @@ def main():
         server_text = (case_dir / "server.out").read_text(errors="replace")
         summary = {
             "tool": args.tool,
+            "run_description": args.run_description,
+            "server_arg": args.server_arg,
             "http_endpoint": args.http_endpoint,
             "prompt_file": str(args.prompt_file) if args.prompt_file else "",
             "prompt_count": len(prompt_records) if prompt_records else 0,
