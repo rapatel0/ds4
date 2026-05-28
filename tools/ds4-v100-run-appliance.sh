@@ -144,19 +144,11 @@ fi
 : "${DS4_V100_TURBOMIND_GRAPH:=1}"
 : "${DS4_V100_TURBOMIND_GRAPH_VERBOSE:=0}"
 : "${DS4_V100_TURBOMIND_PROFILE:=0}"
-: "${DS4_V100_TP_EP_EXTRA_ARGS:=}"
 : "${DS4_V100_NCCL_TOPOLOGY_POLICY:=no-sys}"
 : "${DS4_V100_NCCL_NO_SYS_RING:=0 3 2 1 5 7 6 4}"
 : "${DS4_V100_NCCL_ALLOW_VISIBLE_REMAP:=0}"
 : "${DS4_V100_NCCL_ALGO:=auto}"
 : "${DS4_V100_NCCL_PROTO:=auto}"
-: "${DS4_V100_TP_EP_VRAM_MIN_FREE_MIB:=64}"
-: "${DS4_V100_TP_EP_NCCL_MIN_FREE_MIB:=0}"
-: "${DS4_V100_TP_EP_BIN:=./appliance/ds4-v100-tp-ep-appliance}"
-: "${DS4_V100_TP_EP_CONTRACT:=/workspace/logs/sprint245-tp-ep-dense-f16-cache-contract/contract/tp-ep-pack-contract.tsv}"
-: "${DS4_V100_TP_EP_TM_INDEX:=}"
-: "${DS4_V100_TP_EP_TOKENIZER_MODEL:=$DS4_V100_MODEL}"
-: "${DS4_V100_TP_EP_POSITION:=100000}"
 : "${DS4_V100_TURBOMIND_LIB:=./build/turbomind-v100/libggml-turbomind.so}"
 : "${DS4_V100_HOST:=127.0.0.1}"
 : "${DS4_V100_PORT:=18080}"
@@ -168,13 +160,11 @@ fi
 : "${DS4_V100_MAX_REQUESTS:=0}"
 : "${DS4_V100_LOG_DIR:=logs/v100-appliance}"
 : "${DS4_LOCK_FILE:=$DS4_V100_LOG_DIR/ds4.lock}"
-: "${DS4_V100_SERVE_MODE:=base}"
-if [ "${DS4_V100_SERVE_MODE_LOCK:-}" = "tp-ep" ] ||
-   [ "${DS4_V100_SERVE_MODE_LOCK:-}" = "base" ]; then
-    DS4_V100_SERVE_MODE="$DS4_V100_SERVE_MODE_LOCK"
-elif [ -n "${DS4_V100_SERVE_MODE_LOCK:-}" ]; then
-    fail "DS4_V100_SERVE_MODE_LOCK must be base or tp-ep"
+if [ -n "${DS4_V100_SERVE_MODE_LOCK:-}" ] &&
+   [ "${DS4_V100_SERVE_MODE_LOCK:-}" != "base" ]; then
+    fail "DS4_V100_SERVE_MODE_LOCK must be base for this launcher"
 fi
+DS4_V100_SERVE_MODE=base
 : "${DS4_V100_MTP_SERVING:=off}"
 : "${DS4_V100_MTP_TOP_K:=5}"
 : "${DS4_V100_MTP_GPU:=7}"
@@ -286,10 +276,6 @@ EOF
     fi
 }
 
-case "$DS4_V100_SERVE_MODE" in
-    base|tp-ep) ;;
-    *) fail "DS4_V100_SERVE_MODE must be base or tp-ep" ;;
-esac
 mtp_serving_enabled=0
 case "$DS4_V100_MTP_SERVING" in
     off|false|0) ;;
@@ -318,9 +304,6 @@ fi
 is_uint "$DS4_V100_MAX_REQUESTS" || fail "DS4_V100_MAX_REQUESTS must be an integer"
 is_uint "$DS4_V100_MTP_TOP_K" || fail "DS4_V100_MTP_TOP_K must be an integer"
 is_uint "$DS4_V100_MTP_GPU" || fail "DS4_V100_MTP_GPU must be an integer"
-is_uint "$DS4_V100_TP_EP_POSITION" || fail "DS4_V100_TP_EP_POSITION must be an integer"
-is_uint "$DS4_V100_TP_EP_VRAM_MIN_FREE_MIB" || fail "DS4_V100_TP_EP_VRAM_MIN_FREE_MIB must be an integer"
-is_uint "$DS4_V100_TP_EP_NCCL_MIN_FREE_MIB" || fail "DS4_V100_TP_EP_NCCL_MIN_FREE_MIB must be an integer"
 
 [ "$DS4_V100_CTX" -ge 1 ] || fail "DS4_V100_CTX must be positive"
 [ "$DS4_V100_SLOTS" -ge 1 ] && [ "$DS4_V100_SLOTS" -le 256 ] || fail "DS4_V100_SLOTS must be between 1 and 256"
@@ -670,21 +653,6 @@ case "$DS4_V100_TURBOMIND_PROFILE" in
     1|true|on) DS4_V100_TURBOMIND_PROFILE=1 ;;
     *) fail "DS4_V100_TURBOMIND_PROFILE must be 0 or 1" ;;
 esac
-if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
-    [ "$DS4_V100_CTX" -eq 262144 ] || fail "DS4_V100_SERVE_MODE=tp-ep currently requires DS4_V100_CTX=262144"
-    [ "$DS4_V100_SLOTS" -le 32 ] || fail "DS4_V100_SERVE_MODE=tp-ep currently supports DS4_V100_SLOTS<=32"
-    [ "$DS4_V100_ACTIVE_MICROBATCH" -eq "$DS4_V100_SLOTS" ] || fail "DS4_V100_SERVE_MODE=tp-ep requires active_microbatch == slots"
-    if [ "$mtp_serving_enabled" -eq 1 ]; then
-        fail "DS4_V100_SERVE_MODE=tp-ep does not support MTP yet"
-    fi
-    if [ -z "$DS4_V100_APPLIANCE_DIR" ]; then
-        fail "DS4_V100_SERVE_MODE=tp-ep requires DS4_V100_APPLIANCE_DIR"
-    fi
-    if [ -z "$DS4_V100_TP_EP_TM_INDEX" ]; then
-        DS4_V100_TP_EP_TM_INDEX="$DS4_V100_APPLIANCE_DIR/turbomind-pack-index.tsv"
-    fi
-fi
-
 async_pipeline_mode="$DS4_V100_ASYNC_PIPELINE_MODE"
 case "$async_pipeline_mode" in
     per_step) async_pipeline_mode="per-step" ;;
@@ -715,12 +683,8 @@ if [ "$DS4_V100_ASYNC_FFN_WAVEFRONT" -eq 1 ] && [ "$async_pipeline_mode" != "per
     fail "DS4_V100_ASYNC_FFN_WAVEFRONT requires resolved async pipeline mode per-step"
 fi
 
-if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
-    require_exec "$DS4_V100_TP_EP_BIN"
-else
-    require_exec "$DS4_V100_BIN"
-    require_file "model" "$DS4_V100_MODEL"
-fi
+require_exec "$DS4_V100_BIN"
+require_file "model" "$DS4_V100_MODEL"
 if [ -n "$DS4_V100_APPLIANCE_DIR" ]; then
     require_dir "appliance directory" "$DS4_V100_APPLIANCE_DIR"
     require_file "appliance pack index" "$DS4_V100_APPLIANCE_DIR/pack-index.tsv"
@@ -734,98 +698,55 @@ fi
 if [ "$mtp_serving_enabled" -eq 1 ] && [ -z "$DS4_V100_MTP_MODEL" ]; then
     fail "DS4_V100_MTP_MODEL is required when DS4_V100_MTP_SERVING=$DS4_V100_MTP_SERVING"
 fi
-if [ "$DS4_V100_SERVE_MODE" != "tp-ep" ] &&
-   { [ "$mtp_serving_enabled" -eq 1 ] || [ -n "$DS4_V100_MTP_MODEL" ]; }; then
+if [ "$mtp_serving_enabled" -eq 1 ] || [ -n "$DS4_V100_MTP_MODEL" ]; then
     require_file "MTP model" "$DS4_V100_MTP_MODEL"
-fi
-if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
-    require_file "TP/EP contract" "$DS4_V100_TP_EP_CONTRACT"
-    require_file "TP/EP TurboMind index" "$DS4_V100_TP_EP_TM_INDEX"
-    require_file "TurboMind library" "$DS4_V100_TURBOMIND_LIB"
-    if [ -n "$DS4_V100_TP_EP_TOKENIZER_MODEL" ]; then
-        require_file "TP/EP tokenizer model" "$DS4_V100_TP_EP_TOKENIZER_MODEL"
-    fi
 fi
 check_gpu_reserve
 
-if [ "$DS4_V100_SERVE_MODE" = "tp-ep" ]; then
-    cmd=(
-        "$DS4_V100_TP_EP_BIN"
-        --serve-http
-        --pack-dir "$DS4_V100_APPLIANCE_DIR"
-        --contract "$DS4_V100_TP_EP_CONTRACT"
-        --tm-index "$DS4_V100_TP_EP_TM_INDEX"
-        --lib "$DS4_V100_TURBOMIND_LIB"
-        --slots "$DS4_V100_SLOTS"
-        --position "$DS4_V100_TP_EP_POSITION"
-        --decode-steps "$DS4_V100_TOKENS"
-        --host "$DS4_V100_HOST"
-        --port "$DS4_V100_PORT"
-        --microbatch-wait-us "$microbatch_wait_us"
-    )
-    if [ -n "$DS4_V100_TP_EP_TOKENIZER_MODEL" ]; then
-        cmd+=(--tokenizer-model "$DS4_V100_TP_EP_TOKENIZER_MODEL")
-    fi
-    if [ "$DS4_V100_TP_EP_VRAM_MIN_FREE_MIB" -gt 0 ]; then
-        cmd+=(--vram-min-free-mib "$DS4_V100_TP_EP_VRAM_MIN_FREE_MIB")
-    fi
-    if [ "$DS4_V100_TP_EP_NCCL_MIN_FREE_MIB" -gt 0 ]; then
-        cmd+=(--nccl-min-free-mib "$DS4_V100_TP_EP_NCCL_MIN_FREE_MIB")
-    fi
-    if [ -n "$DS4_V100_TP_EP_EXTRA_ARGS" ]; then
-        while IFS= read -r extra_arg; do
-            [ -n "$extra_arg" ] || continue
-            cmd+=("$extra_arg")
-        done <<< "$DS4_V100_TP_EP_EXTRA_ARGS"
-    fi
+cmd=(
+    "$DS4_V100_BIN"
+    --serve
+    --model "$DS4_V100_MODEL"
+    --ctx "$DS4_V100_CTX"
+    --slots "$DS4_V100_SLOTS"
+    --active-microbatch "$DS4_V100_ACTIVE_MICROBATCH"
+    --microbatch-wait-us "$microbatch_wait_us"
+    --queue-policy "$DS4_V100_QUEUE_POLICY"
+    --tokens "$DS4_V100_TOKENS"
+    --host "$DS4_V100_HOST"
+    --port "$DS4_V100_PORT"
+)
+if [ -n "$DS4_V100_APPLIANCE_DIR" ]; then
+    cmd+=(--appliance-dir "$DS4_V100_APPLIANCE_DIR")
 else
-    cmd=(
-        "$DS4_V100_BIN"
-        --serve
-        --model "$DS4_V100_MODEL"
-        --ctx "$DS4_V100_CTX"
-        --slots "$DS4_V100_SLOTS"
-        --active-microbatch "$DS4_V100_ACTIVE_MICROBATCH"
-        --microbatch-wait-us "$microbatch_wait_us"
-        --queue-policy "$DS4_V100_QUEUE_POLICY"
-        --tokens "$DS4_V100_TOKENS"
-        --host "$DS4_V100_HOST"
-        --port "$DS4_V100_PORT"
-    )
-    if [ -n "$DS4_V100_APPLIANCE_DIR" ]; then
-        cmd+=(--appliance-dir "$DS4_V100_APPLIANCE_DIR")
-    else
-        cmd+=(--index "$DS4_V100_PACK_INDEX")
-    fi
+    cmd+=(--index "$DS4_V100_PACK_INDEX")
 fi
 if [ "$DS4_V100_MAX_REQUESTS" -gt 0 ]; then
     cmd+=(--max-requests "$DS4_V100_MAX_REQUESTS")
 fi
-if [ "$DS4_V100_SERVE_MODE" != "tp-ep" ]; then
-    if [ "$async_pipeline_mode" != "off" ]; then
-        cmd+=(--async-pipeline-mode "$async_pipeline_mode")
-    fi
-    if [ "$async_handoff" -eq 1 ]; then
-        cmd+=(--async-handoff)
-    fi
-    if [ "$async_event_handoff" -eq 1 ]; then
-        cmd+=(--async-event-handoff)
-    fi
-    if [ "$startup_warmup" -eq 1 ]; then
-        cmd+=(--startup-warmup)
-    fi
-    if [ "$cuda_profiler_window" -eq 1 ]; then
-        cmd+=(--cuda-profiler-window)
-    fi
-    if [ "$mtp_serving_enabled" -eq 1 ]; then
-        cmd+=(
-            --mtp-model "$DS4_V100_MTP_MODEL"
-            --mtp-serving "$DS4_V100_MTP_SERVING"
-            --mtp-top-k "$DS4_V100_MTP_TOP_K"
-            --mtp-gpu "$DS4_V100_MTP_GPU"
-            --mtp-reserve-mib "$DS4_V100_RESERVE_MIB"
-        )
-    fi
+if [ "$async_pipeline_mode" != "off" ]; then
+    cmd+=(--async-pipeline-mode "$async_pipeline_mode")
+fi
+if [ "$async_handoff" -eq 1 ]; then
+    cmd+=(--async-handoff)
+fi
+if [ "$async_event_handoff" -eq 1 ]; then
+    cmd+=(--async-event-handoff)
+fi
+if [ "$startup_warmup" -eq 1 ]; then
+    cmd+=(--startup-warmup)
+fi
+if [ "$cuda_profiler_window" -eq 1 ]; then
+    cmd+=(--cuda-profiler-window)
+fi
+if [ "$mtp_serving_enabled" -eq 1 ]; then
+    cmd+=(
+        --mtp-model "$DS4_V100_MTP_MODEL"
+        --mtp-serving "$DS4_V100_MTP_SERVING"
+        --mtp-top-k "$DS4_V100_MTP_TOP_K"
+        --mtp-gpu "$DS4_V100_MTP_GPU"
+        --mtp-reserve-mib "$DS4_V100_RESERVE_MIB"
+    )
 fi
 
 print_resolved() {
@@ -835,7 +756,7 @@ print_resolved() {
 }
 
 if [ "$mode" = "check" ]; then
-    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff async_slot_chunk=${DS4_V100_ASYNC_SLOT_CHUNK:-default} async_ffn_wavefront=$DS4_V100_ASYNC_FFN_WAVEFRONT async_ffn_wavefront_chunk=$DS4_V100_ASYNC_FFN_WAVEFRONT_CHUNK async_ffn_wavefront_verbose=$DS4_V100_ASYNC_FFN_WAVEFRONT_VERBOSE startup_warmup=$startup_warmup cuda_profiler_window=$cuda_profiler_window cuda_tensor_pool=$cuda_tensor_pool cuda_tensor_pool_max_mib=$DS4_V100_CUDA_TENSOR_POOL_MAX_MIB cuda_f8_rowpair=$DS4_V100_CUDA_F8_ROWPAIR cuda_f8_row4=$DS4_V100_CUDA_F8_ROW4 cuda_f8_warp_scale=$DS4_V100_CUDA_F8_WARP_SCALE cuda_f8_grouped_ds4_fast=$DS4_V100_CUDA_F8_GROUPED_DS4_FAST cuda_f8_hmma_shared_down=$DS4_V100_CUDA_F8_HMMA_SHARED_DOWN cuda_f8_hmma_pair_swiglu=$DS4_V100_CUDA_F8_HMMA_PAIR_SWIGLU cuda_f8_hmma_attn_batch=$DS4_V100_CUDA_F8_HMMA_ATTN_BATCH cuda_f8_hmma_grouped_attn_o_batch=$DS4_V100_CUDA_F8_HMMA_GROUPED_ATTN_O_BATCH cuda_f8_hmma_grouped_attn_o_single=$DS4_V100_CUDA_F8_HMMA_GROUPED_ATTN_O_SINGLE cuda_f8_hmma_single=$DS4_V100_CUDA_F8_HMMA_SINGLE cuda_f8_pair_swiglu_single=$DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE cuda_f8_pair_swiglu_single_rows2=$DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE_ROWS2 f8_shared_down_add=$DS4_V100_F8_SHARED_DOWN_ADD batch_attn_proj=$DS4_V100_ENABLE_BATCH_ATTN_PROJ batch_attn_output_a=$DS4_V100_BATCH_ATTN_OUTPUT_A batch_attn_output_b=$DS4_V100_BATCH_ATTN_OUTPUT_B batch_shared_f8=$DS4_V100_BATCH_SHARED_F8 ffn_direct_delta=$DS4_V100_FFN_DIRECT_DELTA disable_grouped_attn_output_a=$DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A single_slot_attn_scratch=$DS4_V100_SINGLE_SLOT_ATTN_SCRATCH single_slot_attn_output_a_hmma=$DS4_V100_SINGLE_SLOT_ATTN_OUTPUT_A_HMMA appliance_dir=${DS4_V100_APPLIANCE_DIR:-none} turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN disable_turbomind_total_tokens=$DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS turbomind_route_validate_sync=$DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC turbomind_small_route_build=$DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD turbomind_route_row_reduce=$DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE turbomind_route_row_reduce_h2=$DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE_H2 turbomind_indexed_a=$DS4_V100_TURBOMIND_INDEXED_A turbomind_fused_gate_up=$DS4_V100_TURBOMIND_FUSED_GATE_UP turbomind_gated_silu=$DS4_V100_TURBOMIND_GATED_SILU turbomind_compact_schedule=$DS4_V100_TURBOMIND_COMPACT_SCHEDULE turbomind_compact_no_host_sync=$DS4_V100_TURBOMIND_COMPACT_NO_HOST_SYNC turbomind_routed_executor=$DS4_V100_TURBOMIND_ROUTED_EXECUTOR turbomind_routed_executor_verbose=$DS4_V100_TURBOMIND_ROUTED_EXECUTOR_VERBOSE turbomind_gate_up_probe=$DS4_V100_TURBOMIND_GATE_UP_PROBE turbomind_down_probe=$DS4_V100_TURBOMIND_DOWN_PROBE turbomind_down_reduce_epilogue=$DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE turbomind_dispatch_policy=$DS4_V100_TURBOMIND_DISPATCH_POLICY turbomind_allow_unsafe_measure=$DS4_V100_TURBOMIND_ALLOW_UNSAFE_MEASURE turbomind_group_pipeline=$DS4_V100_TURBOMIND_GROUP_PIPELINE turbomind_group_pipeline_streams=$DS4_V100_TURBOMIND_GROUP_PIPELINE_STREAMS turbomind_group_pipeline_auto_groups=$DS4_V100_TURBOMIND_GROUP_PIPELINE_AUTO_GROUPS turbomind_graph=$DS4_V100_TURBOMIND_GRAPH turbomind_graph_verbose=$DS4_V100_TURBOMIND_GRAPH_VERBOSE turbomind_profile=$DS4_V100_TURBOMIND_PROFILE tp_ep_bin=$DS4_V100_TP_EP_BIN tp_ep_contract=$DS4_V100_TP_EP_CONTRACT tp_ep_tm_index=${DS4_V100_TP_EP_TM_INDEX:-auto} tp_ep_tokenizer_model=${DS4_V100_TP_EP_TOKENIZER_MODEL:-none} tp_ep_position=$DS4_V100_TP_EP_POSITION tp_ep_vram_min_free_mib=$DS4_V100_TP_EP_VRAM_MIN_FREE_MIB tp_ep_nccl_min_free_mib=$DS4_V100_TP_EP_NCCL_MIN_FREE_MIB"
+    echo "ds4-v100-run-appliance: config ok mode=$DS4_V100_SERVE_MODE mtp=$DS4_V100_MTP_SERVING host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS active_microbatch=$DS4_V100_ACTIVE_MICROBATCH microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS async_pipeline_mode=$async_pipeline_mode async_handoff=$async_handoff async_event_handoff=$async_event_handoff async_slot_chunk=${DS4_V100_ASYNC_SLOT_CHUNK:-default} async_ffn_wavefront=$DS4_V100_ASYNC_FFN_WAVEFRONT async_ffn_wavefront_chunk=$DS4_V100_ASYNC_FFN_WAVEFRONT_CHUNK async_ffn_wavefront_verbose=$DS4_V100_ASYNC_FFN_WAVEFRONT_VERBOSE startup_warmup=$startup_warmup cuda_profiler_window=$cuda_profiler_window cuda_tensor_pool=$cuda_tensor_pool cuda_tensor_pool_max_mib=$DS4_V100_CUDA_TENSOR_POOL_MAX_MIB cuda_f8_rowpair=$DS4_V100_CUDA_F8_ROWPAIR cuda_f8_row4=$DS4_V100_CUDA_F8_ROW4 cuda_f8_warp_scale=$DS4_V100_CUDA_F8_WARP_SCALE cuda_f8_grouped_ds4_fast=$DS4_V100_CUDA_F8_GROUPED_DS4_FAST cuda_f8_hmma_shared_down=$DS4_V100_CUDA_F8_HMMA_SHARED_DOWN cuda_f8_hmma_pair_swiglu=$DS4_V100_CUDA_F8_HMMA_PAIR_SWIGLU cuda_f8_hmma_attn_batch=$DS4_V100_CUDA_F8_HMMA_ATTN_BATCH cuda_f8_hmma_grouped_attn_o_batch=$DS4_V100_CUDA_F8_HMMA_GROUPED_ATTN_O_BATCH cuda_f8_hmma_grouped_attn_o_single=$DS4_V100_CUDA_F8_HMMA_GROUPED_ATTN_O_SINGLE cuda_f8_hmma_single=$DS4_V100_CUDA_F8_HMMA_SINGLE cuda_f8_pair_swiglu_single=$DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE cuda_f8_pair_swiglu_single_rows2=$DS4_V100_CUDA_F8_PAIR_SWIGLU_SINGLE_ROWS2 f8_shared_down_add=$DS4_V100_F8_SHARED_DOWN_ADD batch_attn_proj=$DS4_V100_ENABLE_BATCH_ATTN_PROJ batch_attn_output_a=$DS4_V100_BATCH_ATTN_OUTPUT_A batch_attn_output_b=$DS4_V100_BATCH_ATTN_OUTPUT_B batch_shared_f8=$DS4_V100_BATCH_SHARED_F8 ffn_direct_delta=$DS4_V100_FFN_DIRECT_DELTA disable_grouped_attn_output_a=$DS4_V100_DISABLE_GROUPED_ATTN_OUTPUT_A single_slot_attn_scratch=$DS4_V100_SINGLE_SLOT_ATTN_SCRATCH single_slot_attn_output_a_hmma=$DS4_V100_SINGLE_SLOT_ATTN_OUTPUT_A_HMMA appliance_dir=${DS4_V100_APPLIANCE_DIR:-none} turbomind_routed_ffn=$DS4_V100_TURBOMIND_ROUTED_FFN disable_turbomind_total_tokens=$DS4_V100_DISABLE_TURBOMIND_TOTAL_TOKENS turbomind_route_validate_sync=$DS4_V100_TURBOMIND_ROUTE_VALIDATE_SYNC turbomind_small_route_build=$DS4_V100_TURBOMIND_SMALL_ROUTE_BUILD turbomind_route_row_reduce=$DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE turbomind_route_row_reduce_h2=$DS4_V100_TURBOMIND_ROUTE_ROW_REDUCE_H2 turbomind_indexed_a=$DS4_V100_TURBOMIND_INDEXED_A turbomind_fused_gate_up=$DS4_V100_TURBOMIND_FUSED_GATE_UP turbomind_gated_silu=$DS4_V100_TURBOMIND_GATED_SILU turbomind_compact_schedule=$DS4_V100_TURBOMIND_COMPACT_SCHEDULE turbomind_compact_no_host_sync=$DS4_V100_TURBOMIND_COMPACT_NO_HOST_SYNC turbomind_routed_executor=$DS4_V100_TURBOMIND_ROUTED_EXECUTOR turbomind_routed_executor_verbose=$DS4_V100_TURBOMIND_ROUTED_EXECUTOR_VERBOSE turbomind_gate_up_probe=$DS4_V100_TURBOMIND_GATE_UP_PROBE turbomind_down_probe=$DS4_V100_TURBOMIND_DOWN_PROBE turbomind_down_reduce_epilogue=$DS4_V100_TURBOMIND_DOWN_REDUCE_EPILOGUE turbomind_dispatch_policy=$DS4_V100_TURBOMIND_DISPATCH_POLICY turbomind_allow_unsafe_measure=$DS4_V100_TURBOMIND_ALLOW_UNSAFE_MEASURE turbomind_group_pipeline=$DS4_V100_TURBOMIND_GROUP_PIPELINE turbomind_group_pipeline_streams=$DS4_V100_TURBOMIND_GROUP_PIPELINE_STREAMS turbomind_group_pipeline_auto_groups=$DS4_V100_TURBOMIND_GROUP_PIPELINE_AUTO_GROUPS turbomind_graph=$DS4_V100_TURBOMIND_GRAPH turbomind_graph_verbose=$DS4_V100_TURBOMIND_GRAPH_VERBOSE turbomind_profile=$DS4_V100_TURBOMIND_PROFILE"
     echo "ds4-v100-run-appliance: nccl topology policy=$DS4_V100_NCCL_TOPOLOGY_POLICY cuda_visible_devices=$DS4_V100_CUDA_VISIBLE_DEVICES nccl_algo=${NCCL_ALGO:-auto} nccl_proto=${NCCL_PROTO:-auto} nccl_rings=${NCCL_RINGS:-} nccl_p2p_level=${NCCL_P2P_LEVEL:-}"
     exit 0
 fi
@@ -930,14 +851,6 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "NCCL_PROTO=${NCCL_PROTO:-auto}"
     echo "NCCL_RINGS=${NCCL_RINGS:-}"
     echo "NCCL_P2P_LEVEL=${NCCL_P2P_LEVEL:-}"
-    echo "DS4_V100_TP_EP_EXTRA_ARGS=$DS4_V100_TP_EP_EXTRA_ARGS"
-    echo "DS4_V100_TP_EP_VRAM_MIN_FREE_MIB=$DS4_V100_TP_EP_VRAM_MIN_FREE_MIB"
-    echo "DS4_V100_TP_EP_NCCL_MIN_FREE_MIB=$DS4_V100_TP_EP_NCCL_MIN_FREE_MIB"
-    echo "DS4_V100_TP_EP_BIN=$DS4_V100_TP_EP_BIN"
-    echo "DS4_V100_TP_EP_CONTRACT=$DS4_V100_TP_EP_CONTRACT"
-    echo "DS4_V100_TP_EP_TM_INDEX=$DS4_V100_TP_EP_TM_INDEX"
-    echo "DS4_V100_TP_EP_TOKENIZER_MODEL=$DS4_V100_TP_EP_TOKENIZER_MODEL"
-    echo "DS4_V100_TP_EP_POSITION=$DS4_V100_TP_EP_POSITION"
     echo "DS4_V100_TURBOMIND_LIB=$DS4_V100_TURBOMIND_LIB"
     echo "DS4_V100_HOST=$DS4_V100_HOST"
     echo "DS4_V100_PORT=$DS4_V100_PORT"
