@@ -13,17 +13,9 @@ tm_index=""
 tp_ep_bin="./appliance/ds4-v100-tp-ep-appliance"
 turbomind_lib="/workspace/ds4-sprint181/build/turbomind-v100/libggml-turbomind.so"
 run_appliance="./tools/ds4-v100-run-tp-ep-appliance.sh"
-copy_event_compose="1"
-ep_return_fp16="0"
-compact_route_compose="1"
-diagnostic_output_head="0"
 concurrent_requests="1"
 request_token_pattern=""
 endpoint="selected-token"
-hc_final_expand="0"
-hc_current_input="0"
-hc_persist_state="0"
-kv_all_slots="0"
 
 usage() {
     cat <<'USAGE'
@@ -45,16 +37,6 @@ Options:
   --tp-ep-bin FILE    TP/EP appliance binary
   --turbomind-lib FILE
   --run-appliance FILE
-  --copy-event-compose
-  --no-copy-event-compose
-  --ep-return-fp16
-  --compact-route-compose
-  --no-compact-route-compose
-  --hc-final-expand
-  --hc-current-input
-  --hc-persist-state
-  --kv-all-slots
-  --diagnostic-output-head
   --concurrent-requests
   --sequential-requests
   --request-token-pattern CSV
@@ -82,16 +64,6 @@ while [ "$#" -gt 0 ]; do
         --tp-ep-bin) tp_ep_bin="$2"; shift 2 ;;
         --turbomind-lib) turbomind_lib="$2"; shift 2 ;;
         --run-appliance) run_appliance="$2"; shift 2 ;;
-        --copy-event-compose) copy_event_compose="1"; shift ;;
-        --no-copy-event-compose) copy_event_compose="0"; shift ;;
-        --ep-return-fp16) ep_return_fp16="1"; shift ;;
-        --compact-route-compose) compact_route_compose="1"; shift ;;
-        --no-compact-route-compose) compact_route_compose="0"; shift ;;
-        --hc-final-expand) hc_final_expand="1"; shift ;;
-        --hc-current-input) hc_current_input="1"; hc_final_expand="1"; shift ;;
-        --hc-persist-state) hc_persist_state="1"; shift ;;
-        --kv-all-slots) kv_all_slots="1"; shift ;;
-        --diagnostic-output-head) diagnostic_output_head="1"; shift ;;
         --concurrent-requests) concurrent_requests="1"; shift ;;
         --sequential-requests) concurrent_requests="0"; shift ;;
         --request-token-pattern) request_token_pattern="$2"; shift 2 ;;
@@ -168,14 +140,6 @@ for tokens in "${token_values[@]}"; do
     DS4_V100_HOST=127.0.0.1 \
     DS4_V100_PORT="$port" \
     DS4_V100_MAX_REQUESTS=$((generation_requests + 4)) \
-    DS4_V100_TP_EP_COPY_EVENT_COMPOSE="$copy_event_compose" \
-    DS4_V100_TP_EP_RETURN_FP16="$ep_return_fp16" \
-    DS4_V100_TP_EP_COMPACT_ROUTE_COMPOSE="$compact_route_compose" \
-    DS4_V100_TP_EP_HC_FINAL_EXPAND="$hc_final_expand" \
-    DS4_V100_TP_EP_HC_CURRENT_INPUT="$hc_current_input" \
-    DS4_V100_TP_EP_HC_PERSIST_STATE="$hc_persist_state" \
-    DS4_V100_TP_EP_KV_ALL_SLOTS="$kv_all_slots" \
-    DS4_V100_TP_EP_DIAGNOSTIC_OUTPUT_HEAD="$diagnostic_output_head" \
     DS4_V100_LOG_DIR="$case_dir/runtime" \
     "$run_appliance" >"$server_log" 2>"$server_err" &
     server_pid=$!
