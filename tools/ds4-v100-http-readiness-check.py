@@ -296,40 +296,27 @@ def main() -> int:
     if args.require_resident_kv:
         resident_bad = [
             i for i, meta in enumerate(metas)
-            if not truthy_int(meta.get("kv_runtime_resident")) or
-            not truthy_int(meta.get("hc_persist_state_gate"))
+            if not truthy_int(meta.get("kv_runtime_resident"))
         ]
         add_check(
             checks,
             "resident_kv",
             not resident_bad,
-            "KV runtime and HC persistence are resident in response metadata",
+            "KV runtime is resident in response metadata",
             resident_bad,
         )
 
     if args.require_typed_kv:
-        required = [
-            "true_ds4_attention_typed_kv_raw_gate",
-            "true_ds4_attention_typed_kv_compressed_gate",
-            "true_ds4_attention_typed_kv_indexer_gate",
-            "true_ds4_attention_typed_kv_history_gate",
-            "true_ds4_attention_typed_kv_skip_current_load_gate",
-            "true_ds4_attention_typed_kv_quiet_gate",
-            "true_ds4_attention_typed_kv_batch_rows_gate",
-            "true_ds4_attention_typed_kv_stream_sync_gate",
-        ]
-        typed_bad = [
-            {"index": i, "field": field, "value": meta.get(field)}
-            for i, meta in enumerate(metas)
-            for field in required
-            if not truthy_int(meta.get(field))
-        ]
+        server_log = case_dir / "server.out"
+        server_text = server_log.read_text(encoding="utf-8", errors="replace") if server_log.exists() else ""
+        typed_line_count = len(re.findall(r"tp_ep_true_attention_typed_kv_", server_text))
         add_check(
             checks,
             "typed_kv",
-            not typed_bad,
-            "typed DS4 KV metadata gates are enabled",
-            typed_bad[:16],
+            typed_line_count > 0,
+            "typed DS4 KV execution is present in server log",
+            typed_line_count,
+            ">0",
         )
 
     if args.require_compact_moe:

@@ -509,22 +509,6 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "\"pending_generation_requests\":%zu,"
                           "\"microbatch_wait_us\":%d,"
                           "\"kv_runtime_resident\":%d,"
-                          "\"kv_all_slots_gate\":%d,"
-                          "\"hc_persist_state_gate\":%d,"
-                          "\"true_ds4_attention_typed_kv_raw_gate\":%d,"
-                          "\"true_ds4_attention_typed_kv_compressed_gate\":%d,"
-                          "\"true_ds4_attention_typed_kv_indexer_gate\":%d,"
-                          "\"true_ds4_attention_typed_kv_history_gate\":%d,"
-                          "\"true_ds4_attention_typed_kv_skip_current_load_gate\":%d,"
-                          "\"true_ds4_attention_typed_kv_skip_raw_store_gate\":%d,"
-                          "\"true_ds4_attention_typed_kv_skip_compressed_store_gate\":%d,"
-                          "\"true_ds4_attention_typed_kv_skip_indexer_store_gate\":%d,"
-                          "\"true_ds4_attention_typed_kv_quiet_gate\":%d,"
-                          "\"true_ds4_attention_typed_kv_batch_rows_gate\":%d,"
-                          "\"true_ds4_attention_typed_kv_stream_sync_gate\":%d,"
-                          "\"fp8_e5m2_kv_gate\":%d,"
-                          "\"router_hash_fast_gate\":%d,"
-                          "\"route_plan_async_upload_gate\":%d,"
                           "\"cache_slots_total\":%zu,"
                           "\"cache_slots_used\":%d,"
                           "\"cache_hits\":%llu,"
@@ -581,22 +565,6 @@ int run_tp_ep_http_server(const Options &base_opt,
                           pending_generation.size(),
                           base_opt.microbatch_wait_us,
                           shared_tp_runtime && shared_tp_runtime->initialized ? 1 : 0,
-                          base_opt.tp_kv_all_slots_gate ? 1 : 0,
-                          base_opt.tp_hc_persist_state_gate ? 1 : 0,
-                          base_opt.true_ds4_attention_typed_kv_raw_gate ? 1 : 0,
-                          base_opt.true_ds4_attention_typed_kv_compressed_gate ? 1 : 0,
-                          base_opt.true_ds4_attention_typed_kv_indexer_gate ? 1 : 0,
-                          base_opt.true_ds4_attention_typed_kv_history_gate ? 1 : 0,
-                          base_opt.true_ds4_attention_typed_kv_skip_current_load_gate ? 1 : 0,
-                          base_opt.true_ds4_attention_typed_kv_skip_raw_store_gate ? 1 : 0,
-                          base_opt.true_ds4_attention_typed_kv_skip_compressed_store_gate ? 1 : 0,
-                          base_opt.true_ds4_attention_typed_kv_skip_indexer_store_gate ? 1 : 0,
-                          base_opt.true_ds4_attention_typed_kv_quiet_gate ? 1 : 0,
-                          base_opt.true_ds4_attention_typed_kv_batch_rows_gate ? 1 : 0,
-                          base_opt.true_ds4_attention_typed_kv_stream_sync_gate ? 1 : 0,
-                          base_opt.fp8_e5m2_kv_gate ? 1 : 0,
-                          base_opt.router_hash_fast_gate ? 1 : 0,
-                          base_opt.route_plan_async_upload_gate ? 1 : 0,
                           sessions.slots.size(),
                           sessions.used(),
                           (unsigned long long)sessions.hits,
@@ -674,22 +642,6 @@ int run_tp_ep_http_server(const Options &base_opt,
                           "ds4_tp_ep_pending_generation_requests %zu\n"
                           "ds4_tp_ep_microbatch_wait_us %d\n"
                           "ds4_tp_ep_kv_runtime_resident %d\n"
-                          "ds4_tp_ep_kv_all_slots_gate %d\n"
-                          "ds4_tp_ep_hc_persist_state_gate %d\n"
-                          "ds4_tp_ep_true_ds4_attention_typed_kv_raw_gate %d\n"
-                          "ds4_tp_ep_true_ds4_attention_typed_kv_compressed_gate %d\n"
-                          "ds4_tp_ep_true_ds4_attention_typed_kv_indexer_gate %d\n"
-                          "ds4_tp_ep_true_ds4_attention_typed_kv_history_gate %d\n"
-                          "ds4_tp_ep_true_ds4_attention_typed_kv_skip_current_load_gate %d\n"
-                          "ds4_tp_ep_true_ds4_attention_typed_kv_skip_raw_store_gate %d\n"
-                          "ds4_tp_ep_true_ds4_attention_typed_kv_skip_compressed_store_gate %d\n"
-                          "ds4_tp_ep_true_ds4_attention_typed_kv_skip_indexer_store_gate %d\n"
-                          "ds4_tp_ep_true_ds4_attention_typed_kv_quiet_gate %d\n"
-                          "ds4_tp_ep_true_ds4_attention_typed_kv_batch_rows_gate %d\n"
-                          "ds4_tp_ep_true_ds4_attention_typed_kv_stream_sync_gate %d\n"
-                          "ds4_tp_ep_fp8_e5m2_kv_gate %d\n"
-                          "ds4_tp_ep_router_hash_fast_gate %d\n"
-                          "ds4_tp_ep_route_plan_async_upload_gate %d\n"
                           "ds4_tp_ep_cache_slots_total %zu\n"
                           "ds4_tp_ep_cache_slots_used %d\n"
                           "ds4_tp_ep_cache_hits %llu\n"
@@ -743,22 +695,6 @@ int run_tp_ep_http_server(const Options &base_opt,
                           pending_generation.size(),
                           base_opt.microbatch_wait_us,
                           shared_tp_runtime && shared_tp_runtime->initialized ? 1 : 0,
-                          base_opt.tp_kv_all_slots_gate ? 1 : 0,
-                          base_opt.tp_hc_persist_state_gate ? 1 : 0,
-                          base_opt.true_ds4_attention_typed_kv_raw_gate ? 1 : 0,
-                          base_opt.true_ds4_attention_typed_kv_compressed_gate ? 1 : 0,
-                          base_opt.true_ds4_attention_typed_kv_indexer_gate ? 1 : 0,
-                          base_opt.true_ds4_attention_typed_kv_history_gate ? 1 : 0,
-                          base_opt.true_ds4_attention_typed_kv_skip_current_load_gate ? 1 : 0,
-                          base_opt.true_ds4_attention_typed_kv_skip_raw_store_gate ? 1 : 0,
-                          base_opt.true_ds4_attention_typed_kv_skip_compressed_store_gate ? 1 : 0,
-                          base_opt.true_ds4_attention_typed_kv_skip_indexer_store_gate ? 1 : 0,
-                          base_opt.true_ds4_attention_typed_kv_quiet_gate ? 1 : 0,
-                          base_opt.true_ds4_attention_typed_kv_batch_rows_gate ? 1 : 0,
-                          base_opt.true_ds4_attention_typed_kv_stream_sync_gate ? 1 : 0,
-                          base_opt.fp8_e5m2_kv_gate ? 1 : 0,
-                          base_opt.router_hash_fast_gate ? 1 : 0,
-                          base_opt.route_plan_async_upload_gate ? 1 : 0,
                           sessions.slots.size(),
                           sessions.used(),
                           (unsigned long long)sessions.hits,
@@ -1302,22 +1238,6 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   "\"slot_last_selected_token\":%u,"
                                   "\"microbatch_wait_us\":%d,"
                                   "\"kv_runtime_resident\":%d,"
-                                  "\"kv_all_slots_gate\":%d,"
-                                  "\"hc_persist_state_gate\":%d,"
-                                  "\"true_ds4_attention_typed_kv_raw_gate\":%d,"
-                                  "\"true_ds4_attention_typed_kv_compressed_gate\":%d,"
-                                  "\"true_ds4_attention_typed_kv_indexer_gate\":%d,"
-                                  "\"true_ds4_attention_typed_kv_history_gate\":%d,"
-                                  "\"true_ds4_attention_typed_kv_skip_current_load_gate\":%d,"
-                                  "\"true_ds4_attention_typed_kv_skip_raw_store_gate\":%d,"
-                                  "\"true_ds4_attention_typed_kv_skip_compressed_store_gate\":%d,"
-                                  "\"true_ds4_attention_typed_kv_skip_indexer_store_gate\":%d,"
-                                  "\"true_ds4_attention_typed_kv_quiet_gate\":%d,"
-                                  "\"true_ds4_attention_typed_kv_batch_rows_gate\":%d,"
-                                  "\"true_ds4_attention_typed_kv_stream_sync_gate\":%d,"
-                                  "\"fp8_e5m2_kv_gate\":%d,"
-                                  "\"router_hash_fast_gate\":%d,"
-                                  "\"route_plan_async_upload_gate\":%d,"
                                   "\"decode_slots\":%d,"
                                   "\"prompt_tokens\":%llu,"
                                   "\"generated_tokens\":%llu,"
@@ -1382,22 +1302,6 @@ int run_tp_ep_http_server(const Options &base_opt,
                                   slot_last_selected,
                                   base_opt.microbatch_wait_us,
                                   shared_tp_runtime && shared_tp_runtime->initialized ? 1 : 0,
-                                  req_opt.tp_kv_all_slots_gate ? 1 : 0,
-                                  req_opt.tp_hc_persist_state_gate ? 1 : 0,
-                                  req_opt.true_ds4_attention_typed_kv_raw_gate ? 1 : 0,
-                                  req_opt.true_ds4_attention_typed_kv_compressed_gate ? 1 : 0,
-                                  req_opt.true_ds4_attention_typed_kv_indexer_gate ? 1 : 0,
-                                  req_opt.true_ds4_attention_typed_kv_history_gate ? 1 : 0,
-                                  req_opt.true_ds4_attention_typed_kv_skip_current_load_gate ? 1 : 0,
-                                  req_opt.true_ds4_attention_typed_kv_skip_raw_store_gate ? 1 : 0,
-                                  req_opt.true_ds4_attention_typed_kv_skip_compressed_store_gate ? 1 : 0,
-                                  req_opt.true_ds4_attention_typed_kv_skip_indexer_store_gate ? 1 : 0,
-                                  req_opt.true_ds4_attention_typed_kv_quiet_gate ? 1 : 0,
-                                  req_opt.true_ds4_attention_typed_kv_batch_rows_gate ? 1 : 0,
-                                  req_opt.true_ds4_attention_typed_kv_stream_sync_gate ? 1 : 0,
-                                  req_opt.fp8_e5m2_kv_gate ? 1 : 0,
-                                  req_opt.router_hash_fast_gate ? 1 : 0,
-                                  req_opt.route_plan_async_upload_gate ? 1 : 0,
                                   req_opt.slots,
                                   (unsigned long long)request_prompt_tokens,
                                   (unsigned long long)request_generated,

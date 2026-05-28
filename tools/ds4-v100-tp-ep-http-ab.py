@@ -176,26 +176,6 @@ def run_case(args, name, port, typed, skip_stores=None, typed_quiet=False,
             "generated_tokens_meta": first.get("batch_generated_tokens"),
             "cache_hits": status_json.get("cache_hits"),
             "cache_misses": status_json.get("cache_misses"),
-            "typed_gate_meta": first.get("true_ds4_attention_typed_kv_history_gate"),
-            "typed_skip_current_load_meta": first.get(
-                "true_ds4_attention_typed_kv_skip_current_load_gate"
-            ),
-            "typed_skip_raw_store_meta": first.get(
-                "true_ds4_attention_typed_kv_skip_raw_store_gate"
-            ),
-            "typed_skip_compressed_store_meta": first.get(
-                "true_ds4_attention_typed_kv_skip_compressed_store_gate"
-            ),
-            "typed_skip_indexer_store_meta": first.get(
-                "true_ds4_attention_typed_kv_skip_indexer_store_gate"
-            ),
-            "typed_quiet_meta": first.get("true_ds4_attention_typed_kv_quiet_gate"),
-            "typed_batch_rows_meta": first.get(
-                "true_ds4_attention_typed_kv_batch_rows_gate"
-            ),
-            "typed_stream_sync_meta": first.get(
-                "true_ds4_attention_typed_kv_stream_sync_gate"
-            ),
             "typed_raw_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_raw", server_text)),
             "typed_compressed_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_compressed", server_text)),
             "typed_indexer_lines": len(re.findall(r"tp_ep_true_attention_typed_kv_indexer", server_text)),
