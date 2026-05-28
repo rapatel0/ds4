@@ -22,7 +22,6 @@ int run_decode_loop(const Options &opt,
     stats->steps = opt.decode_steps;
     stats->slots = opt.slots;
     stats->slot_steps = (uint64_t)opt.decode_steps * (uint64_t)opt.slots;
-
     ResidentF8Dense attn;
     ResidentF8Dense shared;
     ResidentF8Dense shared_gate;
@@ -58,7 +57,6 @@ int run_decode_loop(const Options &opt,
         }
         stats->dense_loaded_bytes += shared_gate_op->loaded_bytes + shared_up_op->loaded_bytes;
     }
-
     const uint64_t shard_elems = (uint64_t)opt.slots * (kHidden / kGpus);
     const uint64_t shard_bytes = shard_elems * sizeof(float);
     const uint64_t return_shard_bytes =
@@ -89,7 +87,6 @@ int run_decode_loop(const Options &opt,
         }
         return 2;
     }
-
     int cudagraph_audit_sync_all_calls = 0;
     int cudagraph_audit_event_barrier_calls = 0;
     int cudagraph_audit_stream_syncs = 0;
@@ -379,7 +376,6 @@ int run_decode_loop(const Options &opt,
         }
         return 0;
     };
-
     struct CaptureHostRankState {
         float *final_hc_shard = nullptr;
         float *hc_scratch_shard = nullptr;
@@ -925,7 +921,6 @@ int run_decode_loop(const Options &opt,
                 std::chrono::duration<double, std::milli>(t0 - t_pre).count();
             return 0;
         }
-
         const int block = 256;
         const bool compact_route = opt.compact_route_compose &&
                                    !opt.ep_return_fp16 &&
