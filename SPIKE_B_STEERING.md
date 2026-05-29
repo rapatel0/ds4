@@ -190,9 +190,15 @@ optimized.
   scratch-state noise: graph-vs-graph control showed occurrence 1 differs only
   in full-buffer `route_a` while route totals/slots/weights, outputs, and token
   checksum all match. On occurrence 2, layer 0 still only has `route_a` scratch
-  drift; layer 1 then diverges across current/output tensors. The next C1 step
-  is inter-layer current/HC pointer-buffer handoff repair before any further
-  cache-key retry.
+  drift; layer 1 then diverges across current/output tensors. Sprint 568 found
+  the actual bug: no-suffix full-capture replay recorded fixed final-HC
+  input/output buffer pointers while eager advances logical HC state by swapping
+  `d_final_hc_shard` / `d_hc_scratch_shard`. The replay path now rebases live
+  HC contents into the captured input buffer before launch and restores host
+  pointers to the captured input/output pair, allowing cross-position replay
+  without stale HC reads. The six-request eager-vs-full-graph probe now matches
+  selected tokens and checksums with `43` captures, `215` persistent replays,
+  and zero invalidations.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
   launcher defaults, topology policy, validation harness, model path, or target
@@ -421,9 +427,9 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | C1 layer-1 HC-current replay state guard | full capture | Sprint 564 rejected the cache-miss double-advance hypothesis and added the final-HC pointer identity to the full-capture graph cache key; position-keyed diagnostics and promoted suffix replay remain clean | Med |
 | Done | C1 rank-major replay snapshot repair | full capture | Sprint 566 added stronger diagnostic hashes and comparable eager/replay `step_snapshot` records; the Sprint 565 rank-major HC-current diff is a timing artifact, not the first comparable state drift | Med |
 | Done | C1 route replay boundary localization | full capture | Sprint 567 added route metadata snapshots and graph-vs-graph comparison; `route_a` full-buffer drift is scratch noise because route totals/slots/weights and outputs still match before layer-1 drift | Med |
-| 1 | C1 inter-layer current/HC pointer-buffer repair | full capture | Repair or further localize why the layer after an otherwise-clean replay can read drifted current/HC state. Focus on captured device pointer arguments versus eager/replay host swaps of `d_final_hc_shard` / `d_hc_scratch_shard` across shared rank buffers. | Med-High |
-| 2 | C1 full-capture cross-position cache-key retry | full capture | Retry only after comparable step snapshots are clean under the temporary relaxed build. | Med-High |
-| 3 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
+| Done | C1 inter-layer current/HC pointer-buffer repair | full capture | Sprint 568 stores captured final-HC input/output buffer addresses and rebases live HC state into the captured input before replay; six-request eager-vs-full-graph selected-token/checksum parity passed with `215` cache-hit replays and zero invalidations | Med-High |
+| 1 | C1 serving parity/performance metrology | full capture | Test the opt-in no-suffix full-capture path at serving shape with deterministic generation, substantial warmup, startup/init excluded, and a long prompt before any throughput claim. | Med-High |
+| 2 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
 | Deferred | B1 MTP — sidecar removal + specdec loop | EP 53% | Sidecar runs canonical MTP, not a truncation; cleanup is one ~200-LoC safetensors→GGUF converter + `tp-ep-pack-contract.c` extension + sidecar delete (3 sprints), then MTPBlock.forward (1 sprint), then TP/EP specdec loop (the actual throughput sprint). All after C5/B2/C1/tuning. | Med |
@@ -518,6 +524,10 @@ proved that was a mid-stage-vs-post-graph timing artifact. The comparable
 end-of-step snapshot then showed `route_a` drift after an otherwise-correct
 cross-position replay, but Sprint 567's graph-vs-graph control proved that
 full-buffer route scratch drift is not semantic: route totals/slots/weights and
-outputs still match before the next replay drifts from layer 1 onward. The next
-ordered work is inter-layer current/HC pointer-buffer repair before any further
-cache-key relaxation. MTP stays deferred until the ordered post-C1/tuning point.
+outputs still match before the next replay drifts from layer 1 onward. Sprint
+568 repaired the inter-layer current/HC pointer-buffer bug by rebasing live HC
+state into the captured full-graph input buffer before replay. The six-request
+eager-vs-full-graph probe now matches selected tokens/checksums across positions
+with `43` captures, `215` persistent replays, and zero invalidations. The next
+ordered work is serving parity/performance metrology for the opt-in no-suffix
+full-capture path. MTP stays deferred until the ordered post-C1/tuning point.

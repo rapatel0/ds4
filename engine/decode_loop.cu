@@ -1435,6 +1435,18 @@ int run_decode_loop(const Options &opt,
             }
             return reinterpret_cast<uintptr_t>(ranks[0].d_final_hc_shard);
         };
+        uintptr_t full_capture_final_hc_input_keys[kGpus] = {};
+        uintptr_t full_capture_final_hc_output_keys[kGpus] = {};
+        if (!opt.decode_cudagraph_suffix_stage &&
+            opt.final_hc_carry_gate &&
+            opt.tp_hc_final_expand_gate) {
+            for (int rank = 0; rank < kGpus; ++rank) {
+                full_capture_final_hc_input_keys[rank] =
+                    reinterpret_cast<uintptr_t>(ranks[rank].d_final_hc_shard);
+                full_capture_final_hc_output_keys[rank] =
+                    reinterpret_cast<uintptr_t>(ranks[rank].d_hc_scratch_shard);
+            }
+        }
         const bool persistent_layer_mismatch =
             persistent_enabled && persistent_graph->initialized &&
             persistent_graph->layer != opt.layer;
@@ -1446,14 +1458,20 @@ int run_decode_loop(const Options &opt,
             opt.compact_moe_decode_gate &&
             opt.compact_route_compose &&
             opt.post_attention_fixed_capacity_route_plan_gate;
+        const bool full_capture_rebases_hc_buffers =
+            !opt.decode_cudagraph_suffix_stage &&
+            opt.final_hc_carry_gate &&
+            opt.tp_hc_final_expand_gate;
         const bool persistent_position_keyed =
-            !stable_compose_suffix_geometry;
+            !stable_compose_suffix_geometry &&
+            !full_capture_rebases_hc_buffers;
         const bool persistent_position_mismatch =
             persistent_position_keyed &&
             persistent_enabled && persistent_graph->initialized &&
             persistent_graph->position != opt.position;
         const uintptr_t final_hc_shard_key = full_capture_final_hc_key();
         const bool persistent_final_hc_shard_mismatch =
+            !full_capture_rebases_hc_buffers &&
             persistent_enabled && persistent_graph->initialized &&
             persistent_graph->final_hc_shard_key != final_hc_shard_key;
         const bool persistent_root_device_mismatch =
@@ -1551,10 +1569,52 @@ int run_decode_loop(const Options &opt,
             }
             return rc;
         };
+        auto prepare_full_capture_replay_hc_buffers = [&]() -> int {
+            if (!persistent_enabled || !persistent_graph ||
+                !persistent_graph->initialized ||
+                opt.decode_cudagraph_suffix_stage ||
+                !opt.final_hc_carry_gate ||
+                !opt.tp_hc_final_expand_gate) {
+                return 0;
+            }
+            const uint64_t shard_elems =
+                (uint64_t)opt.slots * (uint64_t)(kHidden / kGpus);
+            const uint64_t hc_shard_bytes =
+                shard_elems * (uint64_t)kHcRows * sizeof(float);
+            for (int rank = 0; rank < kGpus; ++rank) {
+                RankState &r = ranks[rank];
+                float *graph_input = reinterpret_cast<float *>(
+                    persistent_graph->final_hc_input_keys[rank]);
+                float *graph_output = reinterpret_cast<float *>(
+                    persistent_graph->final_hc_output_keys[rank]);
+                if (!graph_input || !graph_output || !r.d_final_hc_shard) {
+                    return 11;
+                }
+                CHECK_CUDA(cudaSetDevice(r.device));
+                if (r.d_final_hc_shard != graph_input) {
+                    CHECK_CUDA(cudaMemcpyAsync(
+                        graph_input, r.d_final_hc_shard,
+                        (size_t)hc_shard_bytes, cudaMemcpyDeviceToDevice,
+                        r.stream));
+                }
+                r.d_final_hc_shard = graph_input;
+                r.d_hc_scratch_shard = graph_output;
+                r.hc_initialized = true;
+            }
+            for (int rank = 0; rank < kGpus; ++rank) {
+                CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+                CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+            }
+            return 0;
+        };
         if (persistent_enabled && persistent_graph->exec) {
             const int prefix_rc = run_persistent_dynamic_prefix();
             if (prefix_rc != 0) {
                 return prefix_rc;
+            }
+            const int rebase_rc = prepare_full_capture_replay_hc_buffers();
+            if (rebase_rc != 0) {
+                return rebase_rc;
             }
             cudagraph_persistent_cache_hits++;
             cudagraph_replay_attempted++;
@@ -1772,6 +1832,12 @@ int run_decode_loop(const Options &opt,
                 persistent_graph->slots = opt.slots;
                 persistent_graph->position = opt.position;
                 persistent_graph->final_hc_shard_key = final_hc_shard_key;
+                for (int rank = 0; rank < kGpus; ++rank) {
+                    persistent_graph->final_hc_input_keys[rank] =
+                        full_capture_final_hc_input_keys[rank];
+                    persistent_graph->final_hc_output_keys[rank] =
+                        full_capture_final_hc_output_keys[rank];
+                }
                 persistent_graph->root_device = root_device;
                 persistent_graph->root_stream = root_stream;
                 persistent_graph->graph = graph;
@@ -1976,6 +2042,10 @@ int run_decode_loop(const Options &opt,
              opt.tp_hc_final_expand_gate)
                 ? reinterpret_cast<uintptr_t>(ranks[0].d_final_hc_shard)
                 : 0;
+        const bool full_capture_cache_can_rebase_hc =
+            full_capture_probe &&
+            opt.final_hc_carry_gate &&
+            opt.tp_hc_final_expand_gate;
         const bool full_capture_cache_hit =
             full_capture_probe &&
             opt.decode_cudagraph_persistent_replay_gate &&
@@ -1983,8 +2053,10 @@ int run_decode_loop(const Options &opt,
             persistent_graph->exec &&
             persistent_graph->layer == opt.layer &&
             persistent_graph->slots == opt.slots &&
-            persistent_graph->position == opt.position &&
-            persistent_graph->final_hc_shard_key == full_capture_final_hc_key &&
+            (full_capture_cache_can_rebase_hc ||
+             persistent_graph->position == opt.position) &&
+            (full_capture_cache_can_rebase_hc ||
+             persistent_graph->final_hc_shard_key == full_capture_final_hc_key) &&
             persistent_graph->root_device == root_device &&
             persistent_graph->root_stream == root_stream;
         if (full_capture_probe && !full_capture_cache_hit) {

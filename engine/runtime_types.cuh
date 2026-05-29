@@ -856,6 +856,8 @@ struct TpCudaGraphLayerExec {
     int failures = 0;
     double instantiate_ms = 0.0;
     double replay_ms = 0.0;
+    uintptr_t final_hc_input_keys[kGpus] = {};
+    uintptr_t final_hc_output_keys[kGpus] = {};
 };
 
 struct TpCudaGraphCache {
