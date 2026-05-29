@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 562)
+# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 563)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -180,6 +180,13 @@ optimized.
   on request three (`117465` / `17092309830` eager versus `2039` /
   `110810249310` replay), proving more captured position-derived graph state
   remains. The candidate was removed and full capture remains position-keyed.
+  Sprint 563 re-applied that failed relaxation only in a temporary remote
+  diagnostic build with `--decode-stage-checksum-gate`. The first logged
+  divergence was not compressed rows: occurrence 1 matched through layer 0 and
+  first diverged at layer 1 `hc_current` (`current_shard`, `current_full`,
+  `current_full_rank_major`, and `final_hc_shard` all drifted). The next C1
+  step is inter-layer current/HC state handoff localization/repair before any
+  further cache-key retry.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
   launcher defaults, topology policy, validation harness, model path, or target
@@ -404,8 +411,10 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | C1 emitted-row host metadata mirror | full capture | Sprint 560 mirrors compressed attention/indexer row counters, row-position arrays, and loaded-row metadata after successful no-suffix full-capture cache-hit replay; a one-off compressed-KV binary matched eager selected tokens/checksums with `43/43` replay hits | Med |
 | Done | C1 emitted topology graph-stability | full capture | Sprint 561 makes graph-mode compressed-KV emitted/non-emitted topology stable by always enqueueing the emitted topology under graph capture and device-masking emitted kernels/copies from `d_decode_position`; emitted and adjacent non-emitted compressed-KV eager/replay probes matched selected tokens/checksums with `43/43` replay hits | Med |
 | Rejected | C1 full-capture cross-position cache-key relaxation retry | full capture | Sprint 562 retried no-suffix full-capture cross-position reuse after Sprint 561; a two-request same-session probe matched, but a six-request same-session probe diverged on request three, so the candidate was removed and the position key remains required | Med-High |
-| 1 | C1 residual captured-position state localization | full capture | Localize the request-three cross-position divergence from Sprint 562. Do not retry cache-key relaxation until remaining captured position-derived row/source arguments or host/device state are identified and made replay-dynamic. | Med-High |
-| 2 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
+| Done | C1 residual captured-position state localization | full capture | Sprint 563 used a temporary remote relaxed build plus `--decode-stage-checksum-gate`; first logged divergence was occurrence 1 at layer 1 `hc_current`, while layer 0 still matched | Med |
+| 1 | C1 layer-1 HC-current replay state repair | full capture | Localize and repair the inter-layer current/HC state handoff that makes layer 1 `hc_current` start from different tensors after a layer-0 full-capture cache-hit replay. Do not retry cache-key relaxation until this starts clean. | Med-High |
+| 2 | C1 full-capture cross-position cache-key retry | full capture | Retry only after layer-1 HC-current starts from matching state under the temporary relaxed build. | Med-High |
+| 3 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
 | Deferred | B1 MTP — sidecar removal + specdec loop | EP 53% | Sidecar runs canonical MTP, not a truncation; cleanup is one ~200-LoC safetensors→GGUF converter + `tp-ep-pack-contract.c` extension + sidecar delete (3 sprints), then MTPBlock.forward (1 sprint), then TP/EP specdec loop (the actual throughput sprint). All after C5/B2/C1/tuning. | Med |
@@ -488,6 +497,8 @@ both emitted and adjacent non-emitted positions against eager with exact
 selected-token/checksum matches. Sprint 562 retried full-capture
 cross-position cache-key relaxation and rejected it: adjacent replay matched,
 but a six-request same-session probe diverged on request three, so the
-candidate was removed and full capture remains position-keyed. The next ordered
-work is localizing the residual captured-position state before any further
-cache-key retry. MTP stays deferred until the ordered post-C1/tuning point.
+candidate was removed and full capture remains position-keyed. Sprint 563
+localized the first logged divergence to layer 1 `hc_current` after layer 0
+still matched under the temporary relaxed build. The next ordered work is
+repairing that inter-layer current/HC replay state before any further cache-key
+retry. MTP stays deferred until the ordered post-C1/tuning point.
