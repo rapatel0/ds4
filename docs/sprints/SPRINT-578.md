@@ -59,6 +59,41 @@ bit-stable, single-slot bit-exact (minimal concurrent work).
    should collapse toward the eager floor (Δ -> 0). Then re-evaluate full capture
    for promotion against the eager floor.
 
+## Deeper trace (addendum)
+
+Static tracing went further and refined the hypothesis:
+
+- The non-compact `atomicAdd` compose is not the served path (ruled out, above).
+- `broadcast_ep_return_slices` (`engine/runtime_pack.cu:267`) ends with
+  `cudaStreamSynchronize` (line 342), which is illegal during graph capture, so
+  it is **not** in the captured graph.
+- Under the cudagraph gate the captured compose takes the **direct peer-copy
+  branch** (`decode_loop.cu:1173-1194`): `enqueue_graph_f32_copy_between_devices`
+  writes `d_ep_remote[src]` on `dst.stream`, and the combine
+  (`compose_next_hidden_compact8_multi_kernel`, line 1279) runs on the **same
+  `dst.stream`**, reading those buffers. Same-stream ordering means the
+  copy->combine hop is ordered; the source `ep_pack` is ordered into the copies
+  by the `sync_all` event barrier (line 1144). So the simple "missing copy->combine
+  wait" theory does **not** hold -- that path appears correctly ordered.
+
+So the defect is subtler than a missing wait. The event-slot-reuse suspect was
+also checked and weakened: `kGraphOrderEventSlots = 1024`
+(`engine/runtime_types.cuh:34`) and per-captured-step usage is ~`645`
+(~15 `next_graph_order_event_slot` allocations x 43 layers), so the rotating pool
+does not wrap within a single captured step -- intra-step reuse is unlikely to be
+the cause.
+
+**Static analysis is exhausted.** Every inspectable candidate is ruled out:
+compose accumulation (deterministic `ep_pack`), route ordering (deterministic
+`route_idx`), copy->combine (same-stream ordered on `dst.stream`), event-slot
+reuse (pool 1024 > ~645/step). The bug is real (Sprint 576) but its exact
+mechanism is not findable by reading code -- it requires a **runtime trace**:
+`nsys` on the captured region to inspect the actual graph node dependencies /
+concurrency, or per-stage differential instrumentation captured inside the graph
+(extend `tp_ep_decode_top1_logit` to emit per-layer-stage hashes under replay vs
+a same-position eager shadow). It must not be patched blind -- that is the Sprint
+572 failure mode the determinism floor was built to prevent.
+
 ## Status
 
 Bug confirmed (Sprint 576), localized (Sprint 577), mechanism narrowed to a
