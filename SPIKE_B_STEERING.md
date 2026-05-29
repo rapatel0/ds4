@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-28 after Sprint 529)
+# Spike B Decode-Optimization Steering (updated 2026-05-28 after Sprint 531)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -38,10 +38,11 @@ optimized.
   hot-path direct peer-copy transport in favor of NCCL, and the structural
   extraction made the surface readable. Sprint 527 removed GPU0-centralized
   output-head prep. Sprint 528 removed output-head device-wide projection/top-1
-  waits, and Sprint 529 removed the attention-output eager
-  stream-synchronization branches. C5 remains open for decode-loop and the
+  waits, Sprint 529 removed the attention-output eager stream-synchronization
+  branches, and Sprint 531 trimmed compact EP compose broadcasts while staying
+  on the no-SYS NCCL broadcast path. C5 remains open for decode-loop and the
   remaining per-stage stream waits. C1 should wait until the remaining
-  sync-point reduction and compact EP compose reduce the capture surface.
+  sync-point reduction reduces the capture surface.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
   launcher defaults, topology policy, validation harness, model path, or target
@@ -91,7 +92,11 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
   no-SYS/no-SHM direction of the promoted topology policy. Future B2 transport
   work should use a ring-compatible or statically bucketed collective shape, not
   all-pairs P2P. Sprint 480's `ncclReduceScatter` evidence covers only
-  non-compact FP32 and is not proof for served compact traffic.
+  non-compact FP32 and is not proof for served compact traffic. Sprint 531
+  promoted the compatible near-term transport cleanup: keep NCCL broadcast,
+  skip zero-route source ranks, and pack active compact rows before broadcast so
+  compact return bytes follow active route counts instead of padded
+  `slots * top_k` segments. The larger B2 fusion item remains open.
 - **B3 TP-sharded experts vs EP A/B (the S-F question — now justified).** EP's 53%
   is dispatch/all-to-all. TP-experts have **no all-to-all** (reduce via the hidden
   all-reduce). For 13B-active/8-GPU/32-slot, test whether all-to-all overhead >
@@ -149,11 +154,11 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | A4 finish rank-major consumers | HC 40% | Sprint 526 completed the remaining post-attention FFN shared/route consumers for the served path | Low |
 | Done | D1 output-head A1 pattern | Model boundary | Sprint 527 removed GPU0-centralized output-head prep; timing regressed, but the capture surface is cleaner | Low |
 | Done | C5 sync-point reduction pass 2 | attention output | Sprint 529 removed attention-output eager host stream waits from the promoted path | Low-Med |
-| 1 | B2 compact EP topology-compatible compose | EP 53% | All-pairs send/recv is rejected; remaining path is ring/bucketed NCCL or fusion that avoids all-pairs SHM | Med |
-| 2 | C5 remaining sync-point passes | both | Decode-loop, HC-current, attention projection/read, post-attention FFN, and EP compose still need per-site review | Low-Med |
+| Done | B2 compact EP broadcast trim | EP 53% | Sprint 531 removed padded compact broadcast over-transfer without all-pairs SHM/P2P | Low |
+| 1 | C5 remaining sync-point passes | both | Decode-loop, HC-current, attention projection/read, post-attention FFN, and EP compose still need per-site review | Low-Med |
 | 3 | C1/C2 piecewise graph capture and serving parity | both | Highest ceiling, but only after the surface is simplified | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
-| 5 | B3/B4/B5 EP structural bets | EP 53% | TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
+| 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
 | Deferred | B1 MTP | EP 53% | Useful later, but do not use it to hide base TP/EP bottlenecks | Med |
 
 ## Discipline
@@ -215,7 +220,7 @@ Aggregates the measurement work that per-sprint validation deferred:
 
 ## One-line frame
 
-With A4 and D1 complete for the served path, keep removing remaining host-sync
-and compact EP compose friction before attempting C1. C1 is still the biggest
-ceiling, but it should run on the simplest fully rank-major, mostly NCCL,
-sync-reduced surface we can make. MTP stays deferred.
+With A4, D1, and the compact EP broadcast trim complete for the served path,
+keep removing remaining host-sync friction before attempting C1. C1 is still
+the biggest ceiling, but it should run on the simplest fully rank-major,
+mostly NCCL, sync-reduced surface we can make. MTP stays deferred.

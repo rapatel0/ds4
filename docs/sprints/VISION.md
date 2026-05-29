@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-28
-last_updated_by: sprint-530-b2-sendrecv-rejection
-revision: 530
+last_updated_by: sprint-531-compact-broadcast-trim
+revision: 531
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -116,6 +116,7 @@ The performance program is intentionally isolated:
 | 56 | SPIKE B reassessment after sprints 478-525 | A4 first, then NCCL/sync cleanup before C1 | `SPIKE_B_STEERING.md` is still the right performance frame, but its state has changed. A1 RMS-norm rank-local is effectively included in A2. A2 HC mix row-parallel all-reduce is promoted from Sprint 478. A3 router rank-local/all-reduce is promoted from Sprint 480. The Sprint 483 "A6 PATH 4" work is a naming collision: it is structurally A4 for the attention-projection consumer, not the steering document's A6. Steering A6 still means fusing HC into the attention-projection prologue, and it remains open. The active order is A4 finish, output-head A1 rank-local boundary, sync-point reduction, compact EP compose NCCL, then C1/C2 graph capture and parity. Sprint 479's SYS transport sweep and the structural extraction through Sprint 502 make C1 newly attackable, but it should run only after the remaining full-current consumers, host syncs, and served compact-compose peer-copy-equivalent movement are cleaned up. MTP is intentionally deferred and is not part of the next performance docket. |
 | 57 | C5 sync-point reduction pass 2 | Promoted C1-readiness cleanup | Sprint 529 replaced the promoted attention-output eager rank-stream/dense-stream handoffs with CUDA event dependencies already used by graph event ordering. No flag, smoke, or diagnostic branch was added. The V100 selected-token gate passed with `http_200=32`, output-head first token `128819`, `output_head_finite_bad=0`, `peer_copy_ops=0`, `peer_copy_sys_bytes=0`, and `nccl_graph_sys_edge_count=0`; server logs had `86` `tp_ep_true_attention_output_projection` lines and zero non-PASS lines. C5 remains open for decode-loop, HC-current, attention projection/read, post-attention FFN, and EP compose sync sites. |
 | 58 | B2 compact EP all-pairs send/recv | Rejected; B2 remains open | Sprint 530 tested grouped all-pairs `ncclSend`/`ncclRecv` for served compact-route compose. The build passed, but selected-token failed before completing requests: NCCL routed some point-to-point pairs through SHM (`7[7] -> 0[0] via SHM/direct/direct`) and failed creating `/dev/shm/nccl-*` segments around `9637892` bytes, ending in `nccl error ./engine/runtime_pack.cu:381: unhandled system error`. The candidate code was removed, leaving the promoted compact compose path unchanged. Future B2 transport work must avoid all-pairs NCCL P2P and use a ring-compatible or statically bucketed no-SYS scheme. |
+| 59 | B2 compact EP broadcast trim | Promoted transport cleanup | Sprint 531 kept served compact compose on NCCL broadcast but removed padded over-transfer: zero-route source ranks skip broadcast, and active compact rows are packed into contiguous scratch before broadcast so byte count follows active route count instead of padded `slots * top_k` segments. The V100 selected-token gate passed with `http_200=32`, server output-head first token `128819`, `output_head_finite_bad=0`, `peer_copy_ops=0`, `peer_copy_sys_bytes=0`, `nccl_graph_sys_edge_count=0`, and `scaffold_compact_moe_decode_gate=1`. Larger B2 fusion remains open, but compact transport cleanup is complete enough for C1 readiness. |
 
 Promotion requires a same-binary V100 A/B at the real serving shape, unchanged
 first token/checksum, and improved GPU utilization or server decode tok/s.
@@ -162,8 +163,8 @@ After A4, the next sprints remove the remaining avoidable host/transport
 friction before graph capture: output-head A1 uses the proven A2 rank-local
 partial plus all-reduce template at the model boundary; C5 sync-point passes
 turn host-blocking synchronization into device events where possible; compact
-EP compose still needs a topology-compatible alternative after all-pairs NCCL
-send/recv was rejected. Together they precondition C1 by removing the two known
+EP compose now stays on topology-compatible NCCL broadcast with padded compact
+over-transfer trimmed. Together they precondition C1 by removing the two known
 capture hazards that still matter after the SYS sweep: host syncs and non-NCCL
 or SHM-routed cross-rank movement in compose.
 
@@ -281,27 +282,43 @@ budget before selected-token responses completed. The candidate code was
 removed. B2 remains open only for a topology-compatible ring/bucketed NCCL
 scheme or a fused compose design that avoids all-pairs P2P.
 
-### Sprint 531 - B2 Compact EP Ring/Bucket Feasibility
+### Sprint 531 - B2 Compact EP Broadcast Trim
 
-Goal: decide whether any compact EP compose transport alternative remains worth
-building before returning to C5 sync cleanup.
+Goal: keep served compact compose on topology-compatible NCCL broadcast while
+removing padded compact over-transfer.
 
 Scope:
 
-1. Inspect the existing broadcast scratch path and the Sprint 530 failure to
-   define allowed topology shapes: NCCL ring/broadcast/reduce-scatter are
-   acceptable; all-pairs P2P/SHM is not.
-2. Sketch a fixed-bucket or ring-staged compact return layout that can preserve
-   compact-route variable sizes without host route-count oracles.
-3. If no topology-compatible design exists without adding more staging cost than
-   it removes, close B2 transport as blocked and move to remaining C5 sync
-   sites.
+1. Skip zero-route source ranks before issuing NCCL broadcast.
+2. For compact sources with fewer active rows than the padded segment stride,
+   pack each destination slice into contiguous scratch on the source rank.
+3. Broadcast only the active packed rows and preserve destination compact row
+   indexing.
 
-Decision: implementation only proceeds if the design can stay on the promoted
-no-SYS NCCL policy and has a clear path to selected-token correctness without a
-new runtime flag.
+Decision: promoted. This closes the current B2 transport cleanup branch without
+adding a runtime flag or all-pairs P2P path. Larger B2 fusion remains open, but
+the next graph-readiness sprint returns to C5 sync-point reduction.
 
-### Sprint 532 - SPIKE B Preflight, Spill, and Capture Eligibility
+### Sprint 532 - C5 Remaining Sync-Point Reduction
+
+Goal: continue replacing hot host waits with device-side events before C1.
+
+Scope:
+
+1. Audit remaining served-path host waits in `engine/hc_current.cu`,
+   `engine/decode_loop.cu`, `engine/attention_projection.cu`,
+   `engine/attention_read.cu`, `engine/post_attention_ffn.cu`, and EP compose
+   boundaries.
+2. Convert only sites with clear stream/data dependencies; leave diagnostics
+   and genuine host-visible result boundaries alone.
+3. Do not add a runtime flag or broad sync diagnostic. Promotion means main
+   path event ordering with the old host wait removed.
+
+Promotion gate: selected-token correctness against the promoted artifact,
+zero direct peer-copy/SYS bytes, no output-token drift, and server logs showing
+the touched stage still passes.
+
+### Sprint 533 - SPIKE B Preflight, Spill, and Capture Eligibility
 
 Goal: make graph and fusion work measurable after A4 has settled the remaining
 full-current consumer surface and after the output-head/sync/compact-compose
@@ -325,7 +342,7 @@ Decision: no promotion expected. The sprint closes with a ranked blocker list,
 kernel spill report, and the exact control artifact path that later candidates
 reuse.
 
-### Sprint 533 - C1 Piecewise Graph Capture Stage 1
+### Sprint 534 - C1 Piecewise Graph Capture Stage 1
 
 Goal: capture and replay the largest graph-safe per-layer subregion without
 moving dynamic serving orchestration into the graph.
@@ -339,14 +356,14 @@ Scope:
    non-static control logic eager.
 3. Start with the smallest direct/layer checksum harness that proves capture
    correctness, then move to selected-token HTTP only after direct parity holds.
-4. Reuse the Sprint 532 promoted control unless the implementation changes
+4. Reuse the Sprint 533 promoted control unless the implementation changes
    defaults.
 
 Promotion gate: selected-token and generated-sequence agreement against the
 promoted control, zero direct peer-copy/SYS bytes, no VRAM admission failures,
 and a material server-decode or request-window utilization improvement.
 
-### Sprint 534 - C2 Graph Serving Parity and Replay Repair
+### Sprint 535 - C2 Graph Serving Parity and Replay Repair
 
 Goal: close the graph-in-serving parity gap instead of repeatedly measuring
 known-bad broad replay.
@@ -365,7 +382,7 @@ Promotion gate: persistent replay must pass parity before any throughput result
 counts. If parity passes but speed is flat, close with a rejection and keep only
 the correctness/event-order cleanup.
 
-### Sprint 535 - A5 and True A6 HC Fusion
+### Sprint 536 - A5 and True A6 HC Fusion
 
 Goal: turn the rank-local HC structure into fewer launches.
 
@@ -384,7 +401,7 @@ in the profiled HC-current/attention prefix, no new spills that erase the
 launch-count win, and improved target-shape server decode or request-window
 utilization.
 
-### Sprint 536 - B3 TP-Sharded Experts vs EP A/B
+### Sprint 537 - B3 TP-Sharded Experts vs EP A/B
 
 Goal: answer whether EP all-to-all orchestration is worse than TP-sharded
 expert reduction at the real serving shape.
@@ -402,7 +419,7 @@ Decision: promote only if correctness and target-shape throughput both win.
 Otherwise record whether TP experts should be abandoned, retried as a fused
 TP4 reduction/compose path, or kept as a diagnostic.
 
-### Sprint 537 - B4 Routed/Shared Expert Overlap
+### Sprint 538 - B4 Routed/Shared Expert Overlap
 
 Goal: overlap the rank-local shared expert with routed all-to-all/dispatch
 without changing output order.
@@ -417,7 +434,7 @@ Scope:
 Promotion gate: parity against the promoted control, no readiness or VRAM
 regression, and a measurable reduction in EP wall time or server decode time.
 
-### Sprint 538 - B5 Correctness-Preserving Capacity Balancing
+### Sprint 539 - B5 Correctness-Preserving Capacity Balancing
 
 Goal: revisit capacity balancing after Sprint 435's capacity-16 failure, but
 only with correctness-preserving fixed-shape semantics.
@@ -3586,6 +3603,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-28 | Sprint 528 completed C5 sync-point reduction pass 1 for output-head waits. | Replaced output-head projection timing `cudaDeviceSynchronize()` with event synchronization and replaced top-1 device-wide waits plus synchronous D2H copies with stream-ordered async D2H into pinned buffers plus stream-scoped waits. The V100 selected-token gate passed with `http_200=32`, output-head server first token `128819`, `output_head_finite_bad=0`, `peer_copy_ops=0`, `peer_copy_sys_bytes=0`, and `nccl_graph_sys_edge_count=0`. Output-head counters moved from `device_sync_count=16, stream_sync_count=0, event_sync_count=0` to `device_sync_count=0, stream_sync_count=8, event_sync_count=8`. | Treat C5 pass 1 as promoted. C5 remains open for decode-loop and per-stage attention/post-attention stream waits; continue with C5 pass 2 before B2 compact EP compose unless a measured blocker argues otherwise. |
 | 2026-05-28 | Sprint 529 completed C5 sync-point reduction pass 2 for attention output. | Replaced the attention-output eager host stream synchronizations around the two dense projection handoffs with CUDA event dependencies, using the existing graph-order helpers and adding no flag or smoke scaffold. The V100 selected-token gate at `32` requests / `32` slots / `256K` / `2` tokens passed with `http_200=32`, output-head first token `128819`, `output_head_finite_bad=0`, `peer_copy_ops=0`, `peer_copy_sys_bytes=0`, and `nccl_graph_sys_edge_count=0`. Server logs had `86` `tp_ep_true_attention_output_projection` lines and zero non-PASS lines. | Treat C5 pass 2 as promoted. Next sprint is B2 compact EP variable-size NCCL compose, while C5 remains open for decode-loop, HC-current, attention projection/read, post-attention FFN, and EP compose sync-site review. |
 | 2026-05-28 | Sprint 530 rejected all-pairs NCCL send/recv for compact EP compose. | The candidate replaced served compact return movement with grouped `ncclSend`/`ncclRecv`; the build passed, but selected-token failed immediately after request start. NCCL routed some all-pairs point-to-point channels through SHM, including `7[7] -> 0[0] via SHM/direct/direct`, then failed creating `/dev/shm/nccl-*` segments around `9637892` bytes and ended at `nccl error ./engine/runtime_pack.cu:381: unhandled system error`. | Candidate code was removed; promoted path is unchanged. Do not retry all-pairs NCCL P2P as the B2 promotion path unless topology first proves no SHM/SYS. Remaining B2 work must be ring/bucket compatible or should be closed in favor of C5 sync cleanup. |
+| 2026-05-28 | Sprint 531 promoted compact EP broadcast trimming. | Kept served compact compose on NCCL broadcast but skipped zero-route source broadcasts and packed active compact rows into source-rank scratch before broadcast. The target selected-token gate passed with `http_200=32`, server output-head first token `128819`, `output_head_finite_bad=0`, `peer_copy_ops=0`, `peer_copy_sys_bytes=0`, `nccl_graph_sys_edge_count=0`, and `scaffold_compact_moe_decode_gate=1`. | Treat B2 compact transport cleanup as complete enough for C1 readiness. Larger B2 fusion remains open; the next sprint returns to C5 remaining sync-point reduction. |
 
 ## Sprint Hygiene
 

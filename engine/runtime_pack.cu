@@ -275,7 +275,9 @@ int broadcast_ep_return_slices(RankState ranks[kGpus],
     CHECK_CUDA(cudaGetDevice(&prior_device));
     for (int src = 0; src < kGpus; ++src) {
         const uint64_t copy_elems = copy_elems_by_src[src];
-        const uint64_t bcast_elems = (uint64_t)kGpus * src_stride_elems;
+        if (copy_elems == 0) continue;
+        if (copy_elems > src_stride_elems) return 6;
+        const uint64_t bcast_elems = (uint64_t)kGpus * copy_elems;
         const size_t elem_bytes = fp16 ? sizeof(__half) : sizeof(float);
         const size_t bcast_bytes = (size_t)(bcast_elems * elem_bytes);
         void *scratch_by_rank[kGpus] = {};
@@ -289,18 +291,36 @@ int broadcast_ep_return_slices(RankState ranks[kGpus],
             ? (const void *)ranks[src].d_ep_contrib_half_all
             : (const void *)ranks[src].d_ep_contrib_all;
         if (!src_all) return 3;
+        if (copy_elems != src_stride_elems) {
+            RankState &sr = ranks[src];
+            CHECK_CUDA(cudaSetDevice(sr.device));
+            const size_t copy_bytes = (size_t)(copy_elems * elem_bytes);
+            const size_t src_pitch = (size_t)(src_stride_elems * elem_bytes);
+            if (fp16) {
+                CHECK_CUDA(cudaMemcpy2DAsync(
+                    sr.d_ep_contrib_half_bcast_all, copy_bytes,
+                    sr.d_ep_contrib_half_all, src_pitch, copy_bytes, kGpus,
+                    cudaMemcpyDeviceToDevice, sr.stream));
+                src_all = sr.d_ep_contrib_half_bcast_all;
+            } else {
+                CHECK_CUDA(cudaMemcpy2DAsync(
+                    sr.d_ep_contrib_bcast_all, copy_bytes,
+                    sr.d_ep_contrib_all, src_pitch, copy_bytes, kGpus,
+                    cudaMemcpyDeviceToDevice, sr.stream));
+                src_all = sr.d_ep_contrib_bcast_all;
+            }
+        }
         if (nccl_broadcast_bytes_from_rank(
                 ranks, src, src_all, scratch_by_rank, bcast_bytes,
                 label ? label : "ep_return_broadcast") != 0) {
             return 4;
         }
-        if (copy_elems == 0) continue;
         const size_t copy_bytes = (size_t)(copy_elems * elem_bytes);
         for (int dst = 0; dst < kGpus; ++dst) {
             if (skip_self_copy && src == dst) continue;
             RankState &r = ranks[dst];
             CHECK_CUDA(cudaSetDevice(r.device));
-            const uint64_t offset_elems = (uint64_t)dst * src_stride_elems;
+            const uint64_t offset_elems = (uint64_t)dst * copy_elems;
             if (fp16) {
                 if (!r.d_ep_remote_half[src]) return 5;
                 const __half *src_ptr =
