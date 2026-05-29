@@ -42,7 +42,7 @@ int run_true_ds4_post_attention_ffn_input(const Options &opt,
     const bool post_attention_fixed_capacity_route_plan =
         opt.post_attention_fixed_capacity_route_plan_gate &&
         opt.model_router_routes &&
-        reuse_model_router_route_plan;
+        graph_event_order;
     cudaStream_t control_stream =
         graph_event_order ? ranks[0].stream : (cudaStream_t)0;
     auto sync_control_device = [&]() {

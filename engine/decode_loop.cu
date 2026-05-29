@@ -1276,9 +1276,14 @@ int run_decode_loop(const Options &opt,
         const bool persistent_slots_mismatch =
             persistent_enabled && persistent_graph->initialized &&
             persistent_graph->slots != opt.slots;
-        // Routed suffix graphs still capture host-side launch geometry.
-        // Reusing them across positions can replay stale route shapes.
-        const bool persistent_position_keyed = true;
+        const bool stable_compose_suffix_geometry =
+            suffix_stage_is("compose_eager_final_hc") &&
+            opt.compact_moe_decode_gate &&
+            opt.compact_route_compose &&
+            opt.post_attention_fixed_capacity_route_plan_gate &&
+            !opt.post_attention_device_actual_route_sync_gate;
+        const bool persistent_position_keyed =
+            !stable_compose_suffix_geometry;
         const bool persistent_position_mismatch =
             persistent_position_keyed &&
             persistent_enabled && persistent_graph->initialized &&

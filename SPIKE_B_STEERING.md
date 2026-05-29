@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 536)
+# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 539)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -34,7 +34,7 @@ optimized.
 - **True A6 is still open.** In this document, A6 means fusing HC/current
   computation into the attention-projection prologue. It does not mean the
   Sprint 483 rank-major attention-projection consumer conversion.
-- **C1 is newly more plausible, but not next.** Sprint 479 removed promoted
+- **C1 is active and correctness-clean through route-stable suffix replay.** Sprint 479 removed promoted
   hot-path direct peer-copy transport in favor of NCCL, and the structural
   extraction made the surface readable. Sprint 527 removed GPU0-centralized
   output-head prep. Sprint 528 removed output-head device-wide projection/top-1
@@ -46,9 +46,13 @@ optimized.
   attention-read raw/window host waits, and Sprint 535 removed the HC-current
   final fill/pack host wait. Sprint 536 completed the preflight/control pass:
   target selected-token still passes with peer-copy/SYS zero and NCCL graph SYS
-  zero. C1 can now start in the existing order. Remaining decode-loop, EP
-  compose, typed-indexer/top-k, and diagnostic/control-only sync sites are C1/C2
-  ordering targets rather than prerequisites for starting capture.
+  zero. Sprint 537 restored direct suffix replay, Sprint 538 repaired serving
+  parity by preventing unsafe cross-position route-shape reuse, and Sprint 539
+  restored served suffix cache reuse with graph-only fixed-capacity
+  post-attention route geometry. Remaining graph work is now performance and
+  capture-surface tuning: reduce fixed-padding overhead, continue remaining
+  decode-loop/EP-compose/typed-indexer sync-site cleanup, and only promote
+  defaults after warmed request-window evidence.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
   launcher defaults, topology policy, validation harness, model path, or target
@@ -223,7 +227,7 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | C5 attention-read raw/window handoffs | attention read | Sprint 534 removed promoted-path attention-read raw/window host waits; typed-indexer/top-k remains separate | Low-Med |
 | Done | C5 HC-current fill handoff | HC-current | Sprint 535 removed the promoted final fill/pack host wait with device-event ordering | Low-Med |
 | Done | SPIKE B preflight/control | both | Sprint 536 recorded ptxas spill data, target selected-token control, sync/capture blocker counts, and reusable control artifact | Low |
-| 1 | C1/C2 piecewise graph capture and serving parity | both | Highest ceiling; use Sprint 536 as control and fix remaining sync sites as graph ordering blockers | Med-High |
+| 1 | C1 graph performance tuning after route-stable suffix replay | both | Sprint 539 restored cache hits and strict selected-token parity; remaining work is reducing fixed-padding overhead and proving warmed request-window throughput before default promotion | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
 | Deferred | B1 MTP — sidecar removal + specdec loop | EP 53% | Sidecar runs canonical MTP, not a truncation; cleanup is one ~200-LoC safetensors→GGUF converter + `tp-ep-pack-contract.c` extension + sidecar delete (3 sprints), then MTPBlock.forward (1 sprint), then TP/EP specdec loop (the actual throughput sprint). All after C5/B2/C1/tuning. | Med |
@@ -287,8 +291,10 @@ Aggregates the measurement work that per-sprint validation deferred:
 
 ## One-line frame
 
-With A4, D1, compact EP broadcast trim, C5 event handoffs, and the Sprint 536
-preflight complete for the served path, start C1 from the reusable Sprint 536
-control artifact. C1 is still the biggest ceiling; remaining host-sync sites
-are now graph-ordering repair work. MTP stays deferred until the ordered
-post-C1/tuning point.
+With A4, D1, compact EP broadcast trim, C5 event handoffs, Sprint 536
+preflight, and Sprint 539 route-stable suffix replay complete for the served
+path, C1 is correctness-clean but not performance-promoted. The next ordered
+work is graph performance tuning on the fixed-capacity suffix or remaining
+sync/capture-surface cleanup, using warmed request-window measurements before
+any default promotion. MTP stays deferred until the ordered post-C1/tuning
+point.
