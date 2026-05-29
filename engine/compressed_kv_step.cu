@@ -596,6 +596,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             if (opt.true_ds4_attention_typed_kv_batch_rows_gate) {
                 const void *src[kGpus] = {};
                 void *streams[kGpus] = {};
+                const void *positions[kGpus] = {};
                 const size_t row_offset =
                     (size_t)emitted_comp_row * (size_t)kHeadDim;
                 for (int rank = 0; rank < kGpus; ++rank) {
@@ -603,13 +604,14 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                     streams[rank] = opt.decode_cudagraph_gate
                         ? (void *)ranks[rank].stream
                         : nullptr;
+                    positions[rank] = ranks[rank].d_decode_position;
                 }
                 const int store_rc = opt.decode_cudagraph_gate
-                    ? ds4_tp_runtime_kv_rows_store_f32_device_streams(
-                          rt, layer, 0, (uint32_t)opt.slots, opt.position,
+                    ? ds4_tp_runtime_kv_rows_store_f32_device_streams_at_position(
+                          rt, layer, 0, (uint32_t)opt.slots,
                           DS4_V100_TP_KV_ROW_ATTN, src,
                           (uint64_t)kBoundedCompRows * (uint64_t)kHeadDim,
-                          streams, err, sizeof(err))
+                          streams, positions, err, sizeof(err))
                     : ds4_tp_runtime_kv_rows_store_f32_device(
                           rt, layer, 0, (uint32_t)opt.slots, opt.position,
                           DS4_V100_TP_KV_ROW_ATTN, src,
@@ -652,6 +654,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             if (opt.true_ds4_attention_typed_kv_batch_rows_gate) {
                 void *dst[kGpus] = {};
                 void *streams[kGpus] = {};
+                const void *positions[kGpus] = {};
                 const size_t row_offset =
                     (size_t)emitted_comp_row * (size_t)kHeadDim;
                 for (int rank = 0; rank < kGpus; ++rank) {
@@ -659,13 +662,14 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                     streams[rank] = opt.decode_cudagraph_gate
                         ? (void *)ranks[rank].stream
                         : nullptr;
+                    positions[rank] = ranks[rank].d_decode_position;
                 }
                 const int load_rc = opt.decode_cudagraph_gate
-                    ? ds4_tp_runtime_kv_rows_load_f32_device_streams(
-                          rt, layer, 0, (uint32_t)opt.slots, opt.position,
+                    ? ds4_tp_runtime_kv_rows_load_f32_device_streams_at_position(
+                          rt, layer, 0, (uint32_t)opt.slots,
                           DS4_V100_TP_KV_ROW_ATTN, dst,
                           (uint64_t)kBoundedCompRows * (uint64_t)kHeadDim,
-                          streams, err, sizeof(err))
+                          streams, positions, err, sizeof(err))
                     : ds4_tp_runtime_kv_rows_load_f32_device(
                           rt, layer, 0, (uint32_t)opt.slots, opt.position,
                           DS4_V100_TP_KV_ROW_ATTN, dst,
@@ -1110,6 +1114,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 if (opt.true_ds4_attention_typed_kv_batch_rows_gate) {
                     const void *src[kGpus] = {};
                     void *streams[kGpus] = {};
+                    const void *positions[kGpus] = {};
                     const size_t row_offset =
                         (size_t)bounded_row * (size_t)kIndexerHeadDim;
                     for (int rank = 0; rank < kGpus; ++rank) {
@@ -1117,13 +1122,14 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                         streams[rank] = opt.decode_cudagraph_gate
                             ? (void *)ranks[rank].stream
                             : nullptr;
+                        positions[rank] = ranks[rank].d_decode_position;
                     }
                     const int store_rc = opt.decode_cudagraph_gate
-                        ? ds4_tp_runtime_kv_rows_store_f32_device_streams(
-                              rt, layer, 0, (uint32_t)opt.slots, opt.position,
+                        ? ds4_tp_runtime_kv_rows_store_f32_device_streams_at_position(
+                              rt, layer, 0, (uint32_t)opt.slots,
                               DS4_V100_TP_KV_ROW_INDEXER, src,
                               (uint64_t)kBoundedCompRows * (uint64_t)kIndexerHeadDim,
-                              streams, err, sizeof(err))
+                              streams, positions, err, sizeof(err))
                         : ds4_tp_runtime_kv_rows_store_f32_device(
                               rt, layer, 0, (uint32_t)opt.slots, opt.position,
                               DS4_V100_TP_KV_ROW_INDEXER, src,
@@ -1167,6 +1173,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 if (opt.true_ds4_attention_typed_kv_batch_rows_gate) {
                     void *dst[kGpus] = {};
                     void *streams[kGpus] = {};
+                    const void *positions[kGpus] = {};
                     const size_t row_offset =
                         (size_t)bounded_row * (size_t)kIndexerHeadDim;
                     for (int rank = 0; rank < kGpus; ++rank) {
@@ -1174,13 +1181,14 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                         streams[rank] = opt.decode_cudagraph_gate
                             ? (void *)ranks[rank].stream
                             : nullptr;
+                        positions[rank] = ranks[rank].d_decode_position;
                     }
                     const int load_rc = opt.decode_cudagraph_gate
-                        ? ds4_tp_runtime_kv_rows_load_f32_device_streams(
-                              rt, layer, 0, (uint32_t)opt.slots, opt.position,
+                        ? ds4_tp_runtime_kv_rows_load_f32_device_streams_at_position(
+                              rt, layer, 0, (uint32_t)opt.slots,
                               DS4_V100_TP_KV_ROW_INDEXER, dst,
                               (uint64_t)kBoundedCompRows * (uint64_t)kIndexerHeadDim,
-                              streams, err, sizeof(err))
+                              streams, positions, err, sizeof(err))
                         : ds4_tp_runtime_kv_rows_load_f32_device(
                               rt, layer, 0, (uint32_t)opt.slots, opt.position,
                               DS4_V100_TP_KV_ROW_INDEXER, dst,
