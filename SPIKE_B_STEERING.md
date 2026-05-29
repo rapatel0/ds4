@@ -453,7 +453,8 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | C1 early continuation replay-state repair | full capture | Sprint 573 showed this was the wrong target: the early-continuation/offset-`0` divergence the prior gates chased is first-token nondeterminism (eager gives `6` distinct continuations for `32` identical prompts; identical control runs differ `3/32`, all offset `0`). The real full-capture bug is a clean offset-`28` cluster, not step `0 -> 1`. | Med-High |
 | Done | C1 late-position comp-emit replay repair | full capture | Sprint 574 disproved comp-emit (emit off on served path) and found the divergence is position-dependent: benign at `250000` (`7/32` offset `28`), catastrophic at `250064` (`32/32` offset `1`). RoPE/raw-window are device-dynamic and ruled out. Serving stage-checksum is misaligned (one token/call -> all `step 0`). | Med-High |
 | Done | C1 full-capture position-derived state localization | full capture | Sprint 575: no per-slot value to localize. Single-slot (`SLOTS=8`, one request) full-capture replay is bit-exact with eager at `250000` (32 tok) and `250064` (4 tok). The divergences are batch nondeterminism; `250064` floor `control-A` vs `control-B` is `32/32`. | Med-High |
-| 1 | C1 full-capture promotion under noise-aware gate | full capture | Full-capture replay is correct per slot, so promotion is now a nondeterminism question, not a correctness one. (1) Adopt per-slot single-request bit-exactness as the correctness gate (passes today). (2) Characterize concurrent-batch output variance of full capture vs the `control-A`/`control-B` floor at matched concurrency across a few positions; if within the floor, promote for the `1.25-1.48x` decode win; if it amplifies variance, treat that as the separate issue to fix. | Med |
+| Done | C1 full-capture promotion under noise-aware gate | full capture | Sprint 576: not promotable. Logit-space floors show eager-vs-eager is bit-identical on matched tokens (`7/32` discrete router-tie flips) but full-vs-full diverges `32/32` with logit Δ up to `3.63`. Full capture is batch-unstable: a real defect, not tolerated noise. | Med |
+| 1 | C1 full-capture batch-instability localization and fix | full capture | Localize the run-to-run batch instability in the graph-replay path using the `tp_ep_decode_top1_logit` diagnostic and a deterministic-reduction probe. Order: (a) EP-compose `atomicAdd` (`kernels/v100/compose.cuh`) replayed nondeterministically in the captured graph; (b) route/compose scratch not deterministically reset between replays; (c) HC rebase / buffer ping-pong. Confirm by replacing the captured-region compose with a fixed-order reduction (and/or deterministic NCCL) and checking full-vs-full floor collapses toward the eager floor. Judge in logit space, not token equality. | Med-High |
 | 2 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
@@ -611,5 +612,21 @@ Reframed promotion gate: (1) per-slot single-request bit-exactness (passes today
 (2) characterize whether full capture amplifies concurrent-batch variance versus
 the `control-A`/`control-B` floor at matched concurrency -- if within the floor,
 promote for the `1.25-1.48x` decode win; if it materially amplifies variance,
-that is the real (separate, smaller) issue. MTP stays deferred until the ordered
-post-C1/tuning point.
+that is the real (separate, smaller) issue. Sprint 576 answered that with a
+logit-space measurement (new `tp_ep_decode_top1_logit` diagnostic) and
+**partly retracts Sprint 575**: it is the real issue, not a small one. With
+warmup disabled so all legs share positions, identical eager runs are
+**bit-identical** on matched tokens (logit Δ = 0; only `7/32` discrete
+router-tie flips), but two identical **full-capture** runs diverge on `32/32`
+slots with continuous logit Δ up to `3.63` (`p50 0.26`). So the inherent serving
+noise is tiny and discrete (MoE router ties, `router.cuh` atomics), and full
+capture adds large run-to-run **batch instability** that eager does not have.
+Full capture is per-slot bit-exact (single slot) but batch-unstable under
+concurrency: a real defect, **not promotable as-is**. The Sprints 570-574
+divergences were this instability conflated with the small eager floor. Next:
+localize the instability (EP-compose `atomicAdd` in `kernels/v100/compose.cuh`
+replayed nondeterministically, route/compose scratch not deterministically
+reset, or HC ping-pong) via the logit diagnostic plus a deterministic-reduction
+probe; if a deterministic compose collapses full's floor toward the eager floor,
+the source is confirmed. MTP stays deferred until the ordered post-C1/tuning
+point.

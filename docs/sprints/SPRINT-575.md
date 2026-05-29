@@ -2,6 +2,14 @@
 
 Date: 2026-05-29
 
+> **Correction (Sprint 576):** the single-slot bit-exactness below is correct,
+> but the inference "per-slot correct => promotable" is wrong. Logit-space
+> measurement shows full capture is **batch-unstable**: two identical full-capture
+> runs diverge on all 32 slots (logit Δ up to 3.63), while two identical eager
+> runs are bit-identical on matched tokens. Full capture is per-slot correct in
+> isolation but non-reproducible under concurrency — a real defect, not tolerated
+> noise. It is NOT promotable as-is. See Sprint 576.
+
 ## Goal
 
 Localize the full-capture divergence to a layer/stage and repair it.

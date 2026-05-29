@@ -770,6 +770,16 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
     const auto top1_stop = std::chrono::steady_clock::now();
     const auto total_stop = std::chrono::steady_clock::now();
 
+    if (opt.decode_stage_checksum_gate) {
+        for (int slot = 0; slot < opt.slots; ++slot) {
+            std::printf("tp_ep_decode_top1_logit\tposition\t%llu\tslot\t%d\t"
+                        "token\t%u\tlogit\t%.9g\n",
+                        (unsigned long long)opt.position, slot,
+                        result->tokens[(size_t)slot],
+                        (double)result->logits[(size_t)slot]);
+        }
+    }
+
     for (int slot = 0; slot < opt.slots; ++slot) {
         if (result->tokens[(size_t)slot] >= (uint32_t)head->vocab ||
             !std::isfinite(result->logits[(size_t)slot])) {
