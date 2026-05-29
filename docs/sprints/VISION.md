@@ -3279,8 +3279,13 @@ repo-root documents:
    Rejection commits remove the rejected branch in the same commit.
 3. Flags older than five sprints that are not real runtime knobs are cleanup
    debt by default.
-4. Keep only the last five numbered `TEMP_STATUS_REPORT_*.md` files at the repo
-   root; archive older reports under `docs/sprints/archive/status-reports/`.
+4. **The canonical sprint record is the sprint document (`docs/sprints/SPRINT-NNN.md`)
+   plus the git commit history.** Per-sprint `TEMP_STATUS_REPORT_*.md` files
+   at the repo root are retired — do not create them. Sprint outcomes,
+   validation gates used, control-artifact pointers, and decisions are
+   recorded in the sprint doc and in commit messages. Run artifacts live
+   under `/localpool/ds4/workspace/<run-id>` and are referenced by path
+   from the sprint doc.
 5. Keep root `TEMP_<topic>.md` files only while their sprint/spec is active.
    Archive superseded topic prompts under `docs/sprints/archive/` or fold them
    into permanent docs.
