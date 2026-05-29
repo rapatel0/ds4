@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 570)
+# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 571)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -20,7 +20,7 @@ kernels. Optimizing the expert GEMM alone moves a fraction of 53% and none of
 40%. MTP remains deferred support code until the base TP/EP path is stable and
 optimized.
 
-## Current reassessment after sprints 478-570
+## Current reassessment after sprints 478-571
 
 - **A1-A3 are done.** A1 RMS-norm rank-local is rolled into A2. A2 HC mix
   row-parallel all-reduce is promoted from Sprint 478. A3 router rank-local
@@ -210,8 +210,14 @@ optimized.
   continuation tok/s wall; median latency `132.083580s -> 103.958728s`), and
   both legs replayed `28724` persistent graph lines with zero peer/SYS hits.
   Correctness failed: `128/128` measured generated-token sequences diverged.
-  Do not promote no-suffix full capture; localize the long-generation or
-  prompt-cache/coalescing replay-state divergence next.
+  Sprint 571 showed this is not a pure `64` token threshold. Recreating the
+  Sprint 569 shape (`32` tokens, one warmup, one measured full-slot batch)
+  diverged for `32/32` responses at continuation offset `1`; the longer Sprint
+  570 prompt diverged immediately at offset `0` even with `32` tokens. Treat the
+  Sprint 569 pass as a positive but insufficient signal, not reproducible
+  promotion evidence. The next C1 target is early continuation replay/prompt-
+  cache/coalescing state, compared only at request-level or same-logical-point
+  diagnostics to avoid another timing-artifact chase.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
   launcher defaults, topology policy, validation harness, model path, or target
@@ -443,7 +449,8 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | C1 inter-layer current/HC pointer-buffer repair | full capture | Sprint 568 stores captured final-HC input/output buffer addresses and rebases live HC state into the captured input before replay; six-request eager-vs-full-graph selected-token/checksum parity passed with `215` cache-hit replays and zero invalidations | Med-High |
 | Done | C1 serving parity/performance metrology | full capture | Sprint 569 ran deterministic warmed long-prompt serving at `32` slots / `256K`; no-suffix full capture matched `32/32` generated token sequences and improved request-window generated throughput `12.603435 -> 16.807308` tok/s versus the promoted suffix-control leg | Med-High |
 | Rejected | C1 longer steady-state serving promotion gate | full capture | Sprint 570 kept the performance signal at `64` tokens / `128` measured requests (`16.618822 -> 20.814267` continuation tok/s wall), but generated-token sequences diverged for `128/128`; no default flip | Med-High |
-| 1 | C1 long-generation divergence localization | full capture | Explain why Sprint 569's `32` token serving gate matched while Sprint 570's longer gate diverged; isolate generation length, full-slot warmup count, prompt-cache/coalescing state, and full-capture cache-hit replay state before another promotion gate. | Med-High |
+| Done | C1 long-generation divergence localization | full capture | Sprint 571 showed the failure is not a pure `64` token issue: recreated `s569-shape` diverged `32/32` at continuation offset `1`, while `s570-prompt-32` diverged `32/32` at offset `0`; use request-level sequences, not timing-shifted tensor logs, as the oracle | Med-High |
+| 1 | C1 early continuation replay-state repair | full capture | Instrument and repair the continuation step `0 -> 1` full-capture replay state: prompt-cache/coalescing metadata, selected token handoff, decode input token, slot assignment, and HC/current rebase timing. Compare only same-logical-point artifacts. | Med-High |
 | 2 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
