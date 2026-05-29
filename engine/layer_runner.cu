@@ -312,6 +312,8 @@ int run_layer(const Options &opt,
             CHECK_CUDA(cudaMalloc(&r.d_gated,
                                   (size_t)r.route_capacity * kMid * sizeof(__half)));
             CHECK_CUDA(cudaMalloc(&r.d_down, route_capacity_elems * sizeof(__half)));
+            CHECK_CUDA(cudaMalloc(&r.d_decode_position, sizeof(uint64_t)));
+            CHECK_CUDA(cudaMemset(r.d_decode_position, 0, sizeof(uint64_t)));
 
             std::mt19937 rng(0xE2350000u + (uint32_t)p * 97u);
             std::uniform_real_distribution<float> dist(-0.003f, 0.003f);
@@ -819,6 +821,7 @@ int run_layer(const Options &opt,
             if (r.d_final_hc_shard) CHECK_CUDA(cudaFree(r.d_final_hc_shard));
             if (r.d_hc_scratch_shard) CHECK_CUDA(cudaFree(r.d_hc_scratch_shard));
             if (r.d_hc_split) CHECK_CUDA(cudaFree(r.d_hc_split));
+            if (r.d_decode_position) CHECK_CUDA(cudaFree(r.d_decode_position));
             for (int layer = 0; layer < 43; ++layer) {
                 if (r.d_attn_raw_swa_layers[layer]) {
                     CHECK_CUDA(cudaFree(r.d_attn_raw_swa_layers[layer]));
@@ -903,4 +906,3 @@ int run_layer(const Options &opt,
     if (!shared_dense_f16_cache) free_dense_f16_cache(local_dense_f16_cache, opt);
     return pass ? 0 : 1;
 }
-

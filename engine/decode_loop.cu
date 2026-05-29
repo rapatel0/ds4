@@ -118,6 +118,23 @@ int run_decode_loop(const Options &opt,
         return opt.decode_cudagraph_suffix_stage &&
                std::strcmp(opt.decode_cudagraph_suffix_stage, stage) == 0;
     };
+    auto update_device_decode_position = [&]() -> int {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            if (!r.d_decode_position) return 10;
+            CHECK_CUDA(cudaSetDevice(r.device));
+            CHECK_CUDA(cudaMemcpyAsync(r.d_decode_position, &opt.position,
+                                       sizeof(opt.position),
+                                       cudaMemcpyHostToDevice, r.stream));
+            if (r.dense_stream && r.dense_stream != r.stream) {
+                CHECK_CUDA(cudaMemcpyAsync(r.d_decode_position, &opt.position,
+                                           sizeof(opt.position),
+                                           cudaMemcpyHostToDevice,
+                                           r.dense_stream));
+            }
+        }
+        return 0;
+    };
     auto sync_all = [&]() {
         if (opt.decode_cudagraph_gate) {
             cudagraph_audit_event_barrier_calls++;
@@ -1264,6 +1281,7 @@ int run_decode_loop(const Options &opt,
 
     auto attempt_capture_probe = [&](bool replay_after_capture) -> int {
         if (!opt.decode_cudagraph_gate) return 0;
+        if (update_device_decode_position() != 0) return 10;
         const int root_device = ranks[0].device;
         cudaStream_t root_stream = ranks[0].stream;
         const bool persistent_enabled =
@@ -1769,6 +1787,13 @@ int run_decode_loop(const Options &opt,
     } else {
         for (int i = 0; i < opt.decode_steps; ++i) {
             current_decode_step = i;
+            if (update_device_decode_position() != 0) {
+                if (!shared_dense_ops) {
+                    free_resident_f8_dense(attn, opt);
+                    free_resident_f8_dense(shared, opt);
+                }
+                return 4;
+            }
             if (run_one_step(&ep_ms, &dense_ms, &compose_ms,
                              &compose_reduce_ms, &compose_copy_ms,
                              &compose_final_ms, &hc_current_input_ms,

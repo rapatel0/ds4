@@ -102,8 +102,8 @@ int run_true_ds4_compressed_reference_diff_gate(const Options &opt,
     if (opt.true_ds4_attention_rope_gate) {
         rope_tail_comp_emit_slots_kernel<<<(unsigned int)opt.slots, 64>>>(
             d_attn_row_ref, (uint32_t)opt.slots, (uint32_t)kHeadDim,
-            (uint32_t)kRotaryDim, 0u, 1u,
-            (uint32_t)(opt.position + 1ull - (uint64_t)ratio),
+            (uint32_t)kRotaryDim, 0u, 1u, r0.d_decode_position,
+            1ll - (int64_t)ratio,
             kRopeOrigCtx, kCompressRopeFreqBase, comp_freq_scale,
             comp_ext_factor, comp_attn_factor, kRopeYarnBetaFast,
             kRopeYarnBetaSlow);
@@ -138,7 +138,7 @@ int run_true_ds4_compressed_reference_diff_gate(const Options &opt,
         rope_tail_comp_emit_slots_kernel<<<(unsigned int)opt.slots, 64>>>(
             d_index_row_ref, (uint32_t)opt.slots,
             (uint32_t)kIndexerHeadDim, (uint32_t)kRotaryDim, 0u, 1u,
-            (uint32_t)(opt.position + 1ull - 4ull),
+            r0.d_decode_position, -3ll,
             kRopeOrigCtx, kCompressRopeFreqBase, comp_freq_scale,
             comp_ext_factor, comp_attn_factor, kRopeYarnBetaFast,
             kRopeYarnBetaSlow);
@@ -475,7 +475,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             r.d_attn_comp_kv_cur, r.d_attn_comp_score_cur,
             r.d_attn_comp_state_kv, r.d_attn_comp_state_score,
             hc->d_attn_compress_ape[layer], (uint32_t)opt.slots,
-            (uint32_t)kHeadDim, (uint32_t)ratio, (uint32_t)opt.position,
+            (uint32_t)kHeadDim, (uint32_t)ratio, r.d_decode_position,
             (uint32_t)comp_state_rows, (uint32_t)comp_state_width);
         if (emitted) {
             const uint32_t comp_row =
@@ -492,8 +492,8 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                     (uint32_t)opt.slots, (uint32_t)kHeadDim, (uint32_t)ratio,
                     comp_row, (uint32_t)kBoundedCompRows,
                     (uint32_t)comp_state_rows, (uint32_t)comp_state_width,
-                    1.0e-6f, (uint32_t)kRotaryDim,
-                    (uint32_t)(opt.position + 1ull - (uint64_t)ratio),
+                    1.0e-6f, (uint32_t)kRotaryDim, r.d_decode_position,
+                    1ll - (int64_t)ratio,
                     kRopeOrigCtx, kCompressRopeFreqBase, comp_freq_scale,
                     comp_ext_factor, comp_attn_factor, kRopeYarnBetaFast,
                     kRopeYarnBetaSlow);
@@ -529,8 +529,8 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                     (unsigned int)opt.slots, 256, 0, r.stream>>>(
                     r.d_attn_comp_rows, (uint32_t)opt.slots,
                     (uint32_t)kHeadDim, (uint32_t)kRotaryDim, comp_row,
-                    (uint32_t)kBoundedCompRows,
-                    (uint32_t)(opt.position + 1ull - (uint64_t)ratio),
+                    (uint32_t)kBoundedCompRows, r.d_decode_position,
+                    1ll - (int64_t)ratio,
                     kRopeOrigCtx, kCompressRopeFreqBase, comp_freq_scale,
                     comp_ext_factor, comp_attn_factor, kRopeYarnBetaFast,
                     kRopeYarnBetaSlow);
@@ -540,8 +540,8 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                         (unsigned int)opt.slots, 64, 0, r.stream>>>(
                         r.d_attn_comp_rows, (uint32_t)opt.slots,
                         (uint32_t)kHeadDim, (uint32_t)kRotaryDim, comp_row,
-                        (uint32_t)kBoundedCompRows,
-                        (uint32_t)(opt.position + 1ull - (uint64_t)ratio),
+                        (uint32_t)kBoundedCompRows, r.d_decode_position,
+                        1ll - (int64_t)ratio,
                         kRopeOrigCtx, kCompressRopeFreqBase, comp_freq_scale,
                         comp_ext_factor, comp_attn_factor, kRopeYarnBetaFast,
                         kRopeYarnBetaSlow);
@@ -901,8 +901,8 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 control_stream>>>(
                 hc->d_indexer_q_full, (uint32_t)(opt.slots * kIndexerHead),
                 (uint32_t)kIndexerHeadDim, (uint32_t)kRotaryDim,
-                (uint32_t)opt.position, kRopeOrigCtx, 0, kCompressRopeFreqBase,
-                comp_freq_scale, comp_ext_factor, comp_attn_factor,
+                ranks[0].d_decode_position, 0ll, kRopeOrigCtx, 0,
+                kCompressRopeFreqBase, comp_freq_scale, comp_ext_factor, comp_attn_factor,
                 kRopeYarnBetaFast, kRopeYarnBetaSlow);
             CHECK_CUDA(cudaGetLastError());
             if (!graph_event_order) {
@@ -963,7 +963,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 r.d_index_comp_kv_cur, r.d_index_comp_score_cur,
                 r.d_index_comp_state_kv, r.d_index_comp_state_score,
                 hc->d_indexer_compress_ape[layer], (uint32_t)opt.slots,
-                (uint32_t)kIndexerHeadDim, 4u, (uint32_t)opt.position,
+                (uint32_t)kIndexerHeadDim, 4u, r.d_decode_position,
                 (uint32_t)kIndexCompStateRows, (uint32_t)kIndexCompWidth);
             if (emitted) {
                 const uint32_t comp_row =
@@ -984,8 +984,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                         comp_row, (uint32_t)kBoundedCompRows,
                         (uint32_t)kIndexCompStateRows,
                         (uint32_t)kIndexCompWidth, 1.0e-6f,
-                        (uint32_t)kRotaryDim,
-                        (uint32_t)(opt.position + 1ull - 4ull),
+                        (uint32_t)kRotaryDim, r.d_decode_position, -3ll,
                         kRopeOrigCtx, kCompressRopeFreqBase, comp_freq_scale,
                         comp_ext_factor, comp_attn_factor, kRopeYarnBetaFast,
                         kRopeYarnBetaSlow);
@@ -1024,7 +1023,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                         r.d_index_comp_rows, (uint32_t)opt.slots,
                         (uint32_t)kIndexerHeadDim, (uint32_t)kRotaryDim,
                         comp_row, (uint32_t)kBoundedCompRows,
-                        (uint32_t)(opt.position + 1ull - 4ull),
+                        r.d_decode_position, -3ll,
                         kRopeOrigCtx, kCompressRopeFreqBase, comp_freq_scale,
                         comp_ext_factor, comp_attn_factor, kRopeYarnBetaFast,
                         kRopeYarnBetaSlow);
@@ -1035,7 +1034,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                             r.d_index_comp_rows, (uint32_t)opt.slots,
                             (uint32_t)kIndexerHeadDim, (uint32_t)kRotaryDim,
                             comp_row, (uint32_t)kBoundedCompRows,
-                            (uint32_t)(opt.position + 1ull - 4ull),
+                            r.d_decode_position, -3ll,
                             kRopeOrigCtx, kCompressRopeFreqBase, comp_freq_scale,
                             comp_ext_factor, comp_attn_factor, kRopeYarnBetaFast,
                             kRopeYarnBetaSlow);
@@ -1477,7 +1476,7 @@ int run_true_ds4_attention_state_update(const Options &opt,
                 r.dense_stream ? r.dense_stream : r.stream>>>(
                 ops->attn_q_b.d_out[(size_t)rank],
                 (uint32_t)(opt.slots * kLocalHeads), (uint32_t)kHeadDim,
-                (uint32_t)kRotaryDim, (uint32_t)opt.position,
+                (uint32_t)kRotaryDim, r.d_decode_position, 0ll,
                 compressed ? kRopeOrigCtx : 0u, 0, freq_base, freq_scale,
                 ext_factor, attn_factor, kRopeYarnBetaFast,
                 kRopeYarnBetaSlow);
@@ -1492,7 +1491,7 @@ int run_true_ds4_attention_state_update(const Options &opt,
             rope_tail_rows_kernel<<<
                 (unsigned int)opt.slots, 64, 0, r.stream>>>(
                 r.d_attn_kv_full, (uint32_t)opt.slots, (uint32_t)kHeadDim,
-                (uint32_t)kRotaryDim, (uint32_t)opt.position,
+                (uint32_t)kRotaryDim, r.d_decode_position, 0ll,
                 compressed ? kRopeOrigCtx : 0u, 0, freq_base, freq_scale,
                 ext_factor, attn_factor, kRopeYarnBetaFast,
                 kRopeYarnBetaSlow);
@@ -1503,8 +1502,8 @@ int run_true_ds4_attention_state_update(const Options &opt,
             kv_fp8_round_store_raw_swa_kernel<<<
                 (unsigned int)((kv_elems + block - 1) / block), block, 0,
                 r.stream>>>(
-                r.d_attn_raw_swa, r.d_attn_kv_full, (uint32_t)opt.slots,
-                (uint32_t)kRawSwaRows, raw_row, (uint32_t)kHeadDim,
+                r.d_attn_raw_swa, r.d_attn_kv_full, r.d_decode_position,
+                (uint32_t)opt.slots, (uint32_t)kRawSwaRows, (uint32_t)kHeadDim,
                 (uint32_t)kRotaryDim);
             CHECK_CUDA(cudaGetLastError());
         }
@@ -1724,4 +1723,3 @@ int run_true_ds4_attention_state_update(const Options &opt,
                 kHeadDim, ms);
     return 0;
 }
-

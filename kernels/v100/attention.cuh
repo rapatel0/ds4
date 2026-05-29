@@ -23,11 +23,26 @@ __device__ float e4m3fn_quant_dequant_dev(float x) {
     return sign * f8_e4m3fn_to_f32_dev((uint8_t)best);
 }
 
+__device__ __forceinline__ uint32_t decode_position_u32_dev(
+    const uint64_t *decode_position,
+    int64_t delta = 0) {
+    const uint64_t base = decode_position ? *decode_position : 0ull;
+    return (uint32_t)(base + (uint64_t)delta);
+}
+
+__device__ __forceinline__ uint32_t decode_raw_row_dev(
+    const uint64_t *decode_position,
+    uint32_t raw_rows) {
+    if (raw_rows == 0u) return 0u;
+    const uint64_t base = decode_position ? *decode_position : 0ull;
+    return (uint32_t)(base % (uint64_t)raw_rows);
+}
+
 __global__ void kv_fp8_round_store_raw_swa_kernel(float *raw_swa,
                                                   const float *kv,
+                                                  const uint64_t *decode_position,
                                                   uint32_t slots,
                                                   uint32_t raw_rows,
-                                                  uint32_t raw_row,
                                                   uint32_t head_dim,
                                                   uint32_t n_rot) {
     const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
@@ -50,6 +65,7 @@ __global__ void kv_fp8_round_store_raw_swa_kernel(float *raw_swa,
         v = e4m3fn_quant_dequant_dev(q) * scale;
     }
     v = __half2float(f32_to_half_saturate(v));
+    const uint32_t raw_row = decode_raw_row_dev(decode_position, raw_rows);
     raw_swa[((uint64_t)slot * raw_rows + raw_row) * head_dim + col] = v;
 }
 
@@ -62,7 +78,8 @@ __global__ void rope_tail_rows_kernel(float *x,
                                       uint32_t rows,
                                       uint32_t head_dim,
                                       uint32_t n_rot,
-                                      uint32_t pos,
+                                      const uint64_t *decode_position,
+                                      int64_t position_delta,
                                       uint32_t n_ctx_orig,
                                       int inverse,
                                       float freq_base,
@@ -75,6 +92,8 @@ __global__ void rope_tail_rows_kernel(float *x,
     if (row >= rows || n_rot > head_dim || (n_rot & 1u)) return;
     float *xr = x + (uint64_t)row * head_dim;
     const uint32_t n_nope = head_dim - n_rot;
+    const uint32_t pos =
+        decode_position_u32_dev(decode_position, position_delta);
     float corr0 = 0.0f, corr1 = 0.0f;
     if (ext_factor != 0.0f) {
         const float denom = 2.0f * logf(freq_base);
@@ -121,11 +140,12 @@ __global__ void attention_raw_swa_one_row_kernel(float *out_heads,
                                                  uint32_t local_heads,
                                                  uint32_t head_dim,
                                                  uint32_t raw_rows,
-                                                 uint32_t raw_row) {
+                                                 const uint64_t *decode_position) {
     const uint32_t row = blockIdx.x;
     if (row >= slots * local_heads) return;
     const uint32_t slot = row / local_heads;
     const uint32_t local_head = row % local_heads;
+    const uint32_t raw_row = decode_raw_row_dev(decode_position, raw_rows);
     const float *q = q_heads + (uint64_t)row * head_dim;
     const float *kv =
         raw_swa + ((uint64_t)slot * raw_rows + raw_row) * (uint64_t)head_dim;
@@ -160,12 +180,13 @@ __global__ void attention_raw_swa_window_kernel(float *out_heads,
                                                 uint32_t local_heads,
                                                 uint32_t head_dim,
                                                 uint32_t raw_rows,
-                                                uint32_t raw_row,
+                                                const uint64_t *decode_position,
                                                 uint32_t valid_rows) {
     const uint32_t row = blockIdx.x;
     if (row >= slots * local_heads || valid_rows == 0 || valid_rows > raw_rows) return;
     const uint32_t slot = row / local_heads;
     const uint32_t local_head = row % local_heads;
+    const uint32_t raw_row = decode_raw_row_dev(decode_position, raw_rows);
     const float *q = q_heads + (uint64_t)row * head_dim;
     __shared__ float partial[256];
     __shared__ float scores[128];
@@ -221,7 +242,7 @@ __global__ void compressor_store_slots_kernel(const float *kv,
                                               uint32_t slots,
                                               uint32_t head_dim,
                                               uint32_t ratio,
-                                              uint32_t pos,
+                                              const uint64_t *decode_position,
                                               uint32_t max_state_rows,
                                               uint32_t max_width) {
     const uint32_t coff = ratio == 4u ? 2u : 1u;
@@ -231,6 +252,7 @@ __global__ void compressor_store_slots_kernel(const float *kv,
     if (i >= n || ratio == 0u || width > max_width) return;
     const uint32_t slot = (uint32_t)(i / width);
     const uint32_t j = (uint32_t)(i - (uint64_t)slot * width);
+    const uint32_t pos = decode_position_u32_dev(decode_position);
     const uint32_t pos_mod = pos % ratio;
     const uint32_t dst_row = ratio == 4u ? ratio + pos_mod : pos_mod;
     if (dst_row >= max_state_rows) return;
@@ -456,7 +478,8 @@ __global__ void compressor_pool_norm_rope_round_emit_slots_kernel(
     uint32_t max_width,
     float eps,
     uint32_t n_rot,
-    uint32_t pos,
+    const uint64_t *decode_position,
+    int64_t position_delta,
     uint32_t n_ctx_orig,
     float freq_base,
     float freq_scale,
@@ -469,6 +492,8 @@ __global__ void compressor_pool_norm_rope_round_emit_slots_kernel(
         ratio == 0u || n_rot > head_dim || (n_rot & 1u)) {
         return;
     }
+    const uint32_t pos =
+        decode_position_u32_dev(decode_position, position_delta);
     const uint32_t coff = ratio == 4u ? 2u : 1u;
     const uint32_t width = coff * head_dim;
     if (width > max_width) return;
@@ -558,7 +583,8 @@ __global__ void rope_tail_comp_emit_slots_kernel(float *rows,
                                                  uint32_t n_rot,
                                                  uint32_t comp_row,
                                                  uint32_t row_cap,
-                                                 uint32_t pos,
+                                                 const uint64_t *decode_position,
+                                                 int64_t position_delta,
                                                  uint32_t n_ctx_orig,
                                                  float freq_base,
                                                  float freq_scale,
@@ -570,6 +596,8 @@ __global__ void rope_tail_comp_emit_slots_kernel(float *rows,
     if (slot >= slots || comp_row >= row_cap || n_rot > head_dim || (n_rot & 1u)) return;
     float *xr = rows + ((uint64_t)slot * row_cap + comp_row) * (uint64_t)head_dim;
     const uint32_t n_nope = head_dim - n_rot;
+    const uint32_t pos =
+        decode_position_u32_dev(decode_position, position_delta);
     float corr0 = 0.0f, corr1 = 0.0f;
     if (ext_factor != 0.0f) {
         const float denom = 2.0f * logf(freq_base);
@@ -613,7 +641,8 @@ __global__ void rope_tail_round_comp_emit_slots_kernel(float *rows,
                                                        uint32_t n_rot,
                                                        uint32_t comp_row,
                                                        uint32_t row_cap,
-                                                       uint32_t pos,
+                                                       const uint64_t *decode_position,
+                                                       int64_t position_delta,
                                                        uint32_t n_ctx_orig,
                                                        float freq_base,
                                                        float freq_scale,
@@ -629,6 +658,8 @@ __global__ void rope_tail_round_comp_emit_slots_kernel(float *rows,
     float *xr = rows + ((uint64_t)slot * row_cap + comp_row) *
                            (uint64_t)head_dim;
     const uint32_t n_nope = head_dim - n_rot;
+    const uint32_t pos =
+        decode_position_u32_dev(decode_position, position_delta);
     float corr0 = 0.0f, corr1 = 0.0f;
     if (ext_factor != 0.0f) {
         const float denom = 2.0f * logf(freq_base);
@@ -841,7 +872,7 @@ __global__ void attention_raw_compressed_window_kernel(float *out_heads,
                                                        uint32_t local_heads,
                                                        uint32_t head_dim,
                                                        uint32_t raw_rows,
-                                                       uint32_t raw_row,
+                                                       const uint64_t *decode_position,
                                                        uint32_t valid_raw_rows,
                                                        uint32_t visible_comp_rows,
                                                        uint32_t selected_comp_rows,
@@ -852,6 +883,7 @@ __global__ void attention_raw_compressed_window_kernel(float *out_heads,
         valid_raw_rows > raw_rows) return;
     const uint32_t slot = row / local_heads;
     const uint32_t local_head = row % local_heads;
+    const uint32_t raw_row = decode_raw_row_dev(decode_position, raw_rows);
     const float *q = q_heads + (uint64_t)row * head_dim;
     __shared__ float partial[256];
     __shared__ float scores[kRawSwaRows + kBoundedCompRows];

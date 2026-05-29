@@ -531,6 +531,7 @@ struct RankState {
     float *d_hc_reduce_sumsq = nullptr;
     float *d_hc_reduce_mix = nullptr;
     float *d_attn_kv_full = nullptr;
+    uint64_t *d_decode_position = nullptr;
     float *d_attn_raw_swa = nullptr;
     float *d_attn_raw_swa_layers[43] = {};
     float *d_attn_sinks = nullptr;

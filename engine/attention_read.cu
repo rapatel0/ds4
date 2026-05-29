@@ -288,7 +288,7 @@ int run_true_ds4_attention_raw_read(const Options &opt,
             (unsigned int)(opt.slots * kLocalHeads), 256, 0, r.stream>>>(
             r.d_attn_heads, ops->attn_q_b.d_out[(size_t)rank], r.d_attn_raw_swa,
             r.d_attn_sinks, (uint32_t)opt.slots, (uint32_t)kLocalHeads,
-            (uint32_t)kHeadDim, (uint32_t)kRawSwaRows, raw_row);
+            (uint32_t)kHeadDim, (uint32_t)kRawSwaRows, r.d_decode_position);
         CHECK_CUDA(cudaGetLastError());
     }
     const auto stop = std::chrono::steady_clock::now();
@@ -385,7 +385,7 @@ int run_true_ds4_attention_raw_window(const Options &opt,
                     ? r.d_indexer_topk
                     : nullptr,
                 r.d_attn_sinks, (uint32_t)opt.slots, (uint32_t)kLocalHeads,
-                (uint32_t)kHeadDim, (uint32_t)kRawSwaRows, raw_row,
+                (uint32_t)kHeadDim, (uint32_t)kRawSwaRows, r.d_decode_position,
                 valid_rows, visible_comp_rows, selected_comp_rows,
                 (uint32_t)kBoundedCompRows, (uint32_t)kIndexerTopK);
         } else {
@@ -394,7 +394,7 @@ int run_true_ds4_attention_raw_window(const Options &opt,
                 r.d_attn_heads, ops->attn_q_b.d_out[(size_t)rank],
                 r.d_attn_raw_swa, r.d_attn_sinks, (uint32_t)opt.slots,
                 (uint32_t)kLocalHeads, (uint32_t)kHeadDim,
-                (uint32_t)kRawSwaRows, raw_row, valid_rows);
+                (uint32_t)kRawSwaRows, r.d_decode_position, valid_rows);
         }
         CHECK_CUDA(cudaGetLastError());
     }

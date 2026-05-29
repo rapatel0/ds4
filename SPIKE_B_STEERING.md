@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 545)
+# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 546)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -73,7 +73,12 @@ optimized.
   typed-KV runtime row selection, compressed-row bookkeeping, and raw-window
   modulo addressing. Full-capture position reuse requires a staged
   replay-updated/device-stable design before `position` can be removed from the
-  persistent cache key.
+  persistent cache key. Sprint 546 completed Stage 1 by adding
+  `RankState::d_decode_position` and converting pure kernel consumers
+  (RoPE, compressed-state store, compressed-row RoPE emit, raw SWA store/read)
+  to read replay-updated device memory. Host emission branches, typed-KV row
+  selection, row-position bookkeeping, and the full-capture position cache key
+  remain intentionally unchanged.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
   launcher defaults, topology policy, validation harness, model path, or target
@@ -219,7 +224,9 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
   replay-updated position must be staged across pure kernel consumers, emitted
   compressed-KV topology, typed-KV runtime row selection, host row-position
   bookkeeping, and raw-window row selection before full capture can reuse graphs
-  across decode positions.
+  across decode positions. Sprint 546 landed the pure-kernel stage only; the
+  next blocker is compressed-KV topology because emitted-row work is still a
+  host branch over `opt.position`.
 - **C2 Fix the graph-in-serving parity bug directly.** Graph mode changes the
   first token = a finite set of missing sync→event dependencies (461 fixed one).
   Diff eager vs graph dependency graph; close them all. Debuggable, not fundamental.
