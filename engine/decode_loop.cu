@@ -118,6 +118,42 @@ int run_decode_loop(const Options &opt,
         return opt.decode_cudagraph_suffix_stage &&
                std::strcmp(opt.decode_cudagraph_suffix_stage, stage) == 0;
     };
+    enum DecodeGraphStage {
+        kStageHcCurrent = 0,
+        kStageAttentionProjection = 1,
+        kStageCompressedKv = 2,
+        kStageAttentionState = 3,
+        kStageTypedHistory = 4,
+        kStageRawRead = 5,
+        kStageAttentionOutput = 6,
+        kStagePostAttentionFfnInput = 7,
+        kStageRoutedFfn = 8,
+        kStageDense = 9,
+        kStageCompose = 10,
+    };
+    auto suffix_stage_starts_at = [&]() -> int {
+        if (suffix_stage_is("post_kv_compose_eager_final_hc")) {
+            return kStageAttentionOutput;
+        }
+        return kStageRoutedFfn;
+    };
+    auto suffix_stage_ends_compose_eager_final_hc = [&]() -> bool {
+        return suffix_stage_is("compose_eager_final_hc") ||
+               suffix_stage_is("post_kv_compose_eager_final_hc");
+    };
+    auto should_run_graph_stage = [&](int stage) -> bool {
+        if (persistent_prefix_only_active) {
+            return stage < suffix_stage_starts_at();
+        }
+        if (persistent_suffix_only_active) {
+            return stage >= suffix_stage_starts_at();
+        }
+        return true;
+    };
+    auto should_stop_prefix_after = [&](int stage) -> bool {
+        return persistent_prefix_only_active &&
+               (stage + 1) >= suffix_stage_starts_at();
+    };
     auto update_device_decode_position = [&]() -> int {
         for (int rank = 0; rank < kGpus; ++rank) {
             RankState &r = ranks[rank];
@@ -550,7 +586,8 @@ int run_decode_loop(const Options &opt,
                             PreEpPrefixBreakdown *pre_ep_breakdown,
                             double *final_hc_ms) -> int {
         auto t_pre = std::chrono::steady_clock::now();
-        if (!persistent_suffix_only_active && opt.tp_hc_current_input_gate) {
+        if (should_run_graph_stage(kStageHcCurrent) &&
+            opt.tp_hc_current_input_gate) {
             const auto t_stage = std::chrono::steady_clock::now();
             if (!shared_hc_controls || !shared_hc_controls->initialized) {
                 std::fprintf(stderr, "tp_hc_current_input_failed\tlayer\t%d\treason\tmissing_controls\n",
@@ -596,8 +633,10 @@ int run_decode_loop(const Options &opt,
             }
             log_rank_stage("hc_current");
             sync_after_decode_stage("hc_current");
+            if (should_stop_prefix_after(kStageHcCurrent)) return 0;
         }
-        if (!persistent_suffix_only_active && opt.true_ds4_attention_projection_gate) {
+        if (should_run_graph_stage(kStageAttentionProjection) &&
+            opt.true_ds4_attention_projection_gate) {
             const auto t_stage = std::chrono::steady_clock::now();
             const int attn_rc = run_true_ds4_attention_projection_prefix(
                 opt, shared_hc_controls, shared_dense_ops, ranks, opt.layer);
@@ -614,8 +653,10 @@ int run_decode_loop(const Options &opt,
             }
             log_rank_stage("attention_projection");
             sync_after_decode_stage("attention_projection");
+            if (should_stop_prefix_after(kStageAttentionProjection)) return 0;
         }
-        if (!persistent_suffix_only_active && opt.true_ds4_compressed_kv_gate) {
+        if (should_run_graph_stage(kStageCompressedKv) &&
+            opt.true_ds4_compressed_kv_gate) {
             const auto t_stage = std::chrono::steady_clock::now();
             const int comp_rc = run_true_ds4_compressed_kv_projection_gate(
                 opt, shared_hc_controls, shared_dense_ops, ranks, rt, opt.layer);
@@ -632,8 +673,10 @@ int run_decode_loop(const Options &opt,
             }
             log_rank_stage("compressed_kv");
             sync_after_decode_stage("compressed_kv");
+            if (should_stop_prefix_after(kStageCompressedKv)) return 0;
         }
-        if (!persistent_suffix_only_active && opt.true_ds4_attention_state_gate) {
+        if (should_run_graph_stage(kStageAttentionState) &&
+            opt.true_ds4_attention_state_gate) {
             const auto t_stage = std::chrono::steady_clock::now();
             const int state_rc = run_true_ds4_attention_state_update(
                 opt, shared_hc_controls, shared_dense_ops, ranks, rt, opt.layer);
@@ -650,8 +693,10 @@ int run_decode_loop(const Options &opt,
             }
             log_rank_stage("attention_state");
             sync_after_decode_stage("attention_state");
+            if (should_stop_prefix_after(kStageAttentionState)) return 0;
         }
-        if (!persistent_suffix_only_active && opt.true_ds4_attention_typed_kv_history_gate) {
+        if (should_run_graph_stage(kStageTypedHistory) &&
+            opt.true_ds4_attention_typed_kv_history_gate) {
             const auto t_stage = std::chrono::steady_clock::now();
             const int history_rc = run_true_ds4_attention_typed_kv_history_load(
                 opt, shared_hc_controls, ranks, rt, opt.layer);
@@ -669,8 +714,10 @@ int run_decode_loop(const Options &opt,
             }
             log_rank_stage("typed_history");
             sync_after_decode_stage("typed_history");
+            if (should_stop_prefix_after(kStageTypedHistory)) return 0;
         }
-        if (!persistent_suffix_only_active && opt.true_ds4_attention_raw_read_gate) {
+        if (should_run_graph_stage(kStageRawRead) &&
+            opt.true_ds4_attention_raw_read_gate) {
             const auto t_stage = std::chrono::steady_clock::now();
             const int raw_read_rc = opt.true_ds4_attention_raw_window_gate
                 ? run_true_ds4_attention_raw_window(
@@ -690,8 +737,10 @@ int run_decode_loop(const Options &opt,
             }
             log_rank_stage("raw_read");
             sync_after_decode_stage("raw_read");
+            if (should_stop_prefix_after(kStageRawRead)) return 0;
         }
-        if (!persistent_suffix_only_active && opt.true_ds4_attention_output_gate) {
+        if (should_run_graph_stage(kStageAttentionOutput) &&
+            opt.true_ds4_attention_output_gate) {
             const auto t_stage = std::chrono::steady_clock::now();
             const int output_rc = run_true_ds4_attention_output_projection(
                 opt, shared_dense_ops, ranks, opt.layer);
@@ -708,8 +757,10 @@ int run_decode_loop(const Options &opt,
             }
             log_rank_stage("attention_output");
             sync_after_decode_stage("attention_output");
+            if (should_stop_prefix_after(kStageAttentionOutput)) return 0;
         }
-        if (!persistent_suffix_only_active && opt.true_ds4_post_attention_ffn_input_gate) {
+        if (should_run_graph_stage(kStagePostAttentionFfnInput) &&
+            opt.true_ds4_post_attention_ffn_input_gate) {
             const auto t_stage = std::chrono::steady_clock::now();
             const int post_rc = run_true_ds4_post_attention_ffn_input(
                 opt, shared_hc_controls, shared_dense_ops, ranks, opt.layer,
@@ -727,6 +778,7 @@ int run_decode_loop(const Options &opt,
             }
             log_rank_stage("post_attention_ffn_input");
             sync_after_decode_stage("post_attention_ffn_input");
+            if (should_stop_prefix_after(kStagePostAttentionFfnInput)) return 0;
         }
         if (persistent_prefix_only_active) {
             return 0;
@@ -1247,7 +1299,7 @@ int run_decode_loop(const Options &opt,
         }
         auto t3 = std::chrono::steady_clock::now();
         if (suffix_stage_is("compose") ||
-            (suffix_stage_is("compose_eager_final_hc") &&
+            (suffix_stage_ends_compose_eager_final_hc() &&
              (capture_probe_active || persistent_suffix_only_active))) {
             *ep_ms += ep_stage_ms;
             *dense_ms += dense_stage_ms;
@@ -1295,7 +1347,7 @@ int run_decode_loop(const Options &opt,
             persistent_enabled && persistent_graph->initialized &&
             persistent_graph->slots != opt.slots;
         const bool stable_compose_suffix_geometry =
-            suffix_stage_is("compose_eager_final_hc") &&
+            suffix_stage_ends_compose_eager_final_hc() &&
             opt.compact_moe_decode_gate &&
             opt.compact_route_compose &&
             opt.post_attention_fixed_capacity_route_plan_gate &&
@@ -1428,7 +1480,7 @@ int run_decode_loop(const Options &opt,
             cudagraph_capture_nodes = persistent_graph->nodes;
             if (rc != cudaSuccess) persistent_graph->failures++;
             if (rc == cudaSuccess &&
-                suffix_stage_is("compose_eager_final_hc")) {
+                suffix_stage_ends_compose_eager_final_hc()) {
                 double eager_final_hc_ms = 0.0;
                 const int final_rc = run_final_hc_carry(&eager_final_hc_ms);
                 cudagraph_replay_prefix_ms += eager_final_hc_ms;
@@ -1659,7 +1711,7 @@ int run_decode_loop(const Options &opt,
                 }
                 first_error = rc;
             } else {
-                if (suffix_stage_is("compose_eager_final_hc")) {
+                if (suffix_stage_ends_compose_eager_final_hc()) {
                     double eager_final_hc_ms = 0.0;
                     const int final_rc = run_final_hc_carry(&eager_final_hc_ms);
                     cudagraph_replay_prefix_ms += eager_final_hc_ms;

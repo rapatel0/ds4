@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 547)
+# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 548)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -20,7 +20,7 @@ kernels. Optimizing the expert GEMM alone moves a fraction of 53% and none of
 40%. MTP remains deferred support code until the base TP/EP path is stable and
 optimized.
 
-## Current reassessment after sprints 478-536
+## Current reassessment after sprints 478-548
 
 - **A1-A3 are done.** A1 RMS-norm rank-local is rolled into A2. A2 HC mix
   row-parallel all-reduce is promoted from Sprint 478. A3 router rank-local
@@ -81,10 +81,12 @@ optimized.
   remain intentionally unchanged. Sprint 547 reviewed the next topology stage
   and rejected always-launching emitted-row kernels as a standalone change: it
   would add non-emitted-position work without solving typed-KV runtime row
-  selection or host row bookkeeping. The next C1 decision is capture-boundary
-  selection: find the largest post-KV graph region that is replay-stable and
-  larger than the promoted `compose_eager_final_hc` suffix, or commit to a
-  typed-KV runtime/device-state refactor.
+  selection or host row bookkeeping. Sprint 548 evaluated the larger
+  post-KV suffix boundary (`attention_output` through compose, final-HC eager).
+  It is replay-stable in the reduced direct scaffold, including cross-position
+  cache reuse, but it is slower than the promoted `compose_eager_final_hc`
+  suffix because graph size and replay cost increase. Keep it diagnostic-only;
+  do not promote it as the default suffix.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
   launcher defaults, topology policy, validation harness, model path, or target
@@ -234,8 +236,12 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
   next blocker is compressed-KV topology because emitted-row work is still a
   host branch over `opt.position`. Sprint 547 rejected a narrow always-launch
   emitted-kernel patch because typed-KV runtime calls and host row bookkeeping
-  would still make full capture position-dependent. Next evaluate a larger
-  post-KV capture boundary before attempting a typed-KV runtime refactor.
+  would still make full capture position-dependent. Sprint 548 proved the
+  larger post-KV suffix boundary is correct but not a promotion candidate at
+  the reduced direct shape; it should remain a diagnostic boundary. Next C1
+  work should reduce fixed-padding overhead inside the promoted graph-stable
+  routed executor/compose path, or resume full-capture device-state work with
+  a typed-KV/runtime refactor plan.
 - **C2 Fix the graph-in-serving parity bug directly.** Graph mode changes the
   first token = a finite set of missing sync→event dependencies (461 fixed one).
   Diff eager vs graph dependency graph; close them all. Debuggable, not fundamental.
@@ -283,7 +289,7 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | C5 HC-current fill handoff | HC-current | Sprint 535 removed the promoted final fill/pack host wait with device-event ordering | Low-Med |
 | Done | SPIKE B preflight/control | both | Sprint 536 recorded ptxas spill data, target selected-token control, sync/capture blocker counts, and reusable control artifact | Low |
 | Done | C1 route-stable graph suffix replay | both | Sprints 539-540 restored cache hits, strict selected-token parity, and warmed request-window speedup; launcher default promoted with opt-out | Med |
-| 1 | C1 full-capture/sync cleanup and padding-efficiency tuning | both | Suffix replay is promoted and the stale helper-host-sync audit label is gone; remaining C1 work is real full-capture blockers and fixed-capacity padding overhead | Med-High |
+| 1 | C1 graph padding-efficiency or full-capture device-state work | both | Suffix replay is promoted; Sprint 548 showed moving the suffix earlier to post-KV is correct but slower, so the next useful work is reducing fixed-capacity routed/compose padding overhead or paying down the typed-KV/full-capture device-state blocker | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
 | Deferred | B1 MTP — sidecar removal + specdec loop | EP 53% | Sidecar runs canonical MTP, not a truncation; cleanup is one ~200-LoC safetensors→GGUF converter + `tp-ep-pack-contract.c` extension + sidecar delete (3 sprints), then MTPBlock.forward (1 sprint), then TP/EP specdec loop (the actual throughput sprint). All after C5/B2/C1/tuning. | Med |
@@ -349,6 +355,6 @@ Aggregates the measurement work that per-sprint validation deferred:
 
 With A4, D1, compact EP broadcast trim, C5 event handoffs, Sprint 536
 preflight, and Sprint 540 graph suffix replay promotion complete for the served
-path, the next ordered work is remaining C1 full-capture/sync cleanup or
-fixed-padding efficiency tuning. MTP stays deferred until the ordered
-post-C1/tuning point.
+path, the next ordered work is C1 fixed-padding efficiency tuning or the
+typed-KV/full-capture device-state refactor path. MTP stays deferred until the
+ordered post-C1/tuning point.

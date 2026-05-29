@@ -107,6 +107,8 @@ int open_shared_rank_buffers(const Options &opt, SharedRankBuffers *shared) {
         CHECK_CUDA(cudaMalloc(&r.d_gated,
                               (size_t)r.route_capacity * kMid * sizeof(__half)));
         CHECK_CUDA(cudaMalloc(&r.d_down, route_capacity_elems * sizeof(__half)));
+        CHECK_CUDA(cudaMalloc(&r.d_decode_position, sizeof(uint64_t)));
+        CHECK_CUDA(cudaMemset(r.d_decode_position, 0, sizeof(uint64_t)));
         if (opt.model_router_rank_major_logits_gate ||
             opt.model_router_allreduce_logits_gate) {
             if (opt.model_router_rank_major_logits_gate) {
@@ -136,6 +138,7 @@ int open_shared_rank_buffers(const Options &opt, SharedRankBuffers *shared) {
         shared->core_bytes += (size_t)r.route_capacity * kFusedN * sizeof(__half);
         shared->core_bytes += (size_t)r.route_capacity * kMid * sizeof(__half);
         shared->core_bytes += route_capacity_elems * sizeof(__half);
+        shared->core_bytes += sizeof(uint64_t);
         if (opt.model_router_rank_major_logits_gate) {
             shared->core_bytes += (size_t)opt.slots * sizeof(float);
             shared->core_bytes += (size_t)opt.slots * kLocalExperts * sizeof(float);
@@ -312,6 +315,7 @@ void close_shared_rank_buffers(SharedRankBuffers *shared) {
         if (r.d_final_hc_shard) CHECK_CUDA(cudaFree(r.d_final_hc_shard));
         if (r.d_hc_scratch_shard) CHECK_CUDA(cudaFree(r.d_hc_scratch_shard));
         if (r.d_hc_split) CHECK_CUDA(cudaFree(r.d_hc_split));
+        if (r.d_decode_position) CHECK_CUDA(cudaFree(r.d_decode_position));
         if (r.d_hc_reduce_max) CHECK_CUDA(cudaFree(r.d_hc_reduce_max));
         if (r.d_hc_reduce_sumsq) CHECK_CUDA(cudaFree(r.d_hc_reduce_sumsq));
         if (r.d_hc_reduce_mix) CHECK_CUDA(cudaFree(r.d_hc_reduce_mix));
@@ -629,4 +633,3 @@ int ensure_compose_buffers(const Options &opt, RankState ranks[kGpus]) {
     }
     return 0;
 }
-
