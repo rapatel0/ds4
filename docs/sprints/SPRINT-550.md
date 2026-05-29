@@ -56,14 +56,49 @@ This short run is correctness and transport evidence only. It is not a
 steady-state performance gate because it does not use a long warm request
 window.
 
+Warmed selected-token graph candidate:
+
+- Artifact:
+  `/workspace/s550-ep-pack-route-block-artifacts/none-s550-graph32x64-p262080/summary.json`
+- Shape: `32` requests / `32` slots / `256K` context / `64` generated tokens
+- Startup handling: `--startup-warmup auto`; compare request-window metrics
+  only, not total process lifetime
+- Endpoint: `/v100/selected-token`
+- Result:
+  - `http_200=32`
+  - `output_head_first_token=107027`, matching the promoted Sprint 540 warmed
+    graph control
+  - `graph_audit_blocker=none`
+  - `graph_audit_persistent_cache_hits=43`
+  - `graph_audit_persistent_invalidations=0`
+  - `graph_audit_persistent_invalidate_position=0`
+  - `graph_audit_replay_succeeded=43`
+  - `graph_audit_replay_attempted=43`
+  - `peer_copy_ops=0`
+  - `peer_copy_sys_bytes=0`
+  - `nccl_graph_sys_edge_count=0`
+  - `vram_failures=0`
+
+Performance versus the promoted Sprint 540 warmed graph control:
+
+- Request window: `90.181067s -> 90.528551s`
+- Client generated tok/s: `22.709904 -> 22.622697`
+- Scaffold ms/token: `666.058962 -> 668.605160`
+- Projected slot-step tok/s: `48.043795 -> 47.860833`
+
+This is effectively performance-neutral/slightly slower within run noise. The
+promotion rationale is structural: the graph-visible shape and math are
+unchanged, inactive padded pack routes now avoid hidden-wide work, and the
+validated correctness/topology invariants remain clean.
+
 ## Decision
 
 Promote the route-block compact EP pack kernel. It is a contained
 fixed-envelope efficiency cleanup and keeps the graph-stable route shape
 unchanged.
 
-Continue C1 padding-efficiency work by looking for the next fixed-capacity
-compact compose/executor site where inactive padded routes still do hidden-wide
-work. If the remaining overhead is inside Turbomind grouped GEMM row bounds,
-that likely requires a larger executor-level design rather than another kernel
-launch rewrite.
+Do not infer a steady-state throughput win from this sprint. The warmed run
+suggests the obvious compact-pack padding site was not the dominant residual
+cost. Continue C1 by moving to larger work: either a grouped-GEMM/copy-shape
+design that changes real executor/compose overhead while preserving graph
+stable shapes, or the typed-KV/full-capture device-state refactor path.

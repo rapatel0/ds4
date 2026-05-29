@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 550)
+# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 550 warmed gate)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -66,7 +66,11 @@ optimized.
   code so the promoted fixed-capacity route plan is the only supported
   graph-stable padding surface. Sprint 550 made the compact EP pack kernel
   route-blocked so inactive padded routes return before hidden-wide work while
-  preserving the fixed graph-visible route envelope.
+  preserving the fixed graph-visible route envelope. The warmed `32` request /
+  `32` slot / `64` token graph gate stayed correctness-clean and topology-clean
+  but did not improve steady-state throughput versus the Sprint 540 promoted
+  control (`90.181067s -> 90.528551s`, `22.709904 -> 22.622697` client
+  generated tok/s). Treat that as a structural cleanup, not a performance lever.
 - **Full capture is correctness-clean but still position-keyed.** Sprint 544
   disabled the promoted suffix stage and ran full-capture graph gates on the
   current surface. It matched eager response/checksum multisets with
@@ -249,9 +253,12 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
   a typed-KV/runtime refactor plan. Sprint 549 retired the rejected padding
   scaffolds (`device_actual_route_sync`, static rank/executor/compose caps,
   and masked compact copy); do not tune by resurrecting them. Sprint 550
-  completed the first promoted fixed-envelope padding-efficiency cleanup by
-  making compact EP pack one block per route instead of a flat
-  `routes * hidden` launch.
+  completed the obvious fixed-envelope compact-pack cleanup by making compact
+  EP pack one block per route instead of a flat `routes * hidden` launch, but
+  the warmed graph gate was performance-neutral. Further small padding-kernel
+  rewrites need direct evidence before promotion; the next C1 sprint should
+  prefer a larger grouped-GEMM/copy-shape design or resume the typed-KV/full-
+  capture device-state path.
 - **C2 Fix the graph-in-serving parity bug directly.** Graph mode changes the
   first token = a finite set of missing sync→event dependencies (461 fixed one).
   Diff eager vs graph dependency graph; close them all. Debuggable, not fundamental.
@@ -300,8 +307,8 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | SPIKE B preflight/control | both | Sprint 536 recorded ptxas spill data, target selected-token control, sync/capture blocker counts, and reusable control artifact | Low |
 | Done | C1 route-stable graph suffix replay | both | Sprints 539-540 restored cache hits, strict selected-token parity, and warmed request-window speedup; launcher default promoted with opt-out | Med |
 | Done | C1 rejected padding knob cleanup | both | Sprint 549 removed static route caps, host-synced actual-route updates, and masked compact copy from active code; fixed-capacity route planning remains the supported graph-stable surface | Low |
-| Done | C1 compact EP pack route-blocking | EP/compose | Sprint 550 preserved fixed graph-visible route shapes but changed compact EP pack so inactive padded routes skip hidden-wide work | Low |
-| 1 | C1 graph padding-efficiency or full-capture device-state work | both | Suffix replay is promoted; Sprint 548 showed moving the suffix earlier to post-KV is correct but slower, and Sprint 550 handled the obvious compact pack padding site. Next useful work is the next fixed-capacity executor/compose padding site or the typed-KV/full-capture device-state blocker. | Med-High |
+| Done | C1 compact EP pack route-blocking | EP/compose | Sprint 550 preserved fixed graph-visible route shapes and changed compact EP pack so inactive padded routes skip hidden-wide work; the warmed gate was correctness/topology-clean but performance-neutral | Low |
+| 1 | C1 full-capture device-state or larger executor/compose shape work | both | Suffix replay is promoted; Sprint 548 showed moving the suffix earlier to post-KV is correct but slower, and Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever. Next useful work should be a typed-KV/full-capture device-state refactor or a larger grouped-GEMM/copy-shape design, not another tiny padding-kernel rewrite without direct evidence. | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
 | Deferred | B1 MTP — sidecar removal + specdec loop | EP 53% | Sidecar runs canonical MTP, not a truncation; cleanup is one ~200-LoC safetensors→GGUF converter + `tp-ep-pack-contract.c` extension + sidecar delete (3 sprints), then MTPBlock.forward (1 sprint), then TP/EP specdec loop (the actual throughput sprint). All after C5/B2/C1/tuning. | Med |
@@ -368,6 +375,6 @@ Aggregates the measurement work that per-sprint validation deferred:
 With A4, D1, compact EP broadcast trim, C5 event handoffs, Sprint 536
 preflight, Sprint 540 graph suffix replay promotion, Sprint 549 rejected
 padding-knob cleanup, and Sprint 550 compact EP pack route-blocking complete
-for the served path, the next ordered work is further C1 fixed-padding
-efficiency tuning or the typed-KV/full-capture device-state refactor path. MTP
-stays deferred until the ordered post-C1/tuning point.
+for the served path, the next ordered work is C1 typed-KV/full-capture
+device-state refactor or a larger executor/compose shape design with direct
+evidence. MTP stays deferred until the ordered post-C1/tuning point.
