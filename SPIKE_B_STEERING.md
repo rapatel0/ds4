@@ -450,7 +450,8 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | C1 serving parity/performance metrology | full capture | Sprint 569 ran deterministic warmed long-prompt serving at `32` slots / `256K`; no-suffix full capture matched `32/32` generated token sequences and improved request-window generated throughput `12.603435 -> 16.807308` tok/s versus the promoted suffix-control leg | Med-High |
 | Rejected | C1 longer steady-state serving promotion gate | full capture | Sprint 570 kept the performance signal at `64` tokens / `128` measured requests (`16.618822 -> 20.814267` continuation tok/s wall), but generated-token sequences diverged for `128/128`; no default flip | Med-High |
 | Done | C1 long-generation divergence localization | full capture | Sprint 571 showed the failure is not a pure `64` token issue: recreated `s569-shape` diverged `32/32` at continuation offset `1`, while `s570-prompt-32` diverged `32/32` at offset `0`; use request-level sequences, not timing-shifted tensor logs, as the oracle | Med-High |
-| 1 | C1 early continuation replay-state repair | full capture | Instrument and repair the continuation step `0 -> 1` full-capture replay state: prompt-cache/coalescing metadata, selected token handoff, decode input token, slot assignment, and HC/current rebase timing. Compare only same-logical-point artifacts. | Med-High |
+| Done | C1 early continuation replay-state repair | full capture | Sprint 573 showed this was the wrong target: the early-continuation/offset-`0` divergence the prior gates chased is first-token nondeterminism (eager gives `6` distinct continuations for `32` identical prompts; identical control runs differ `3/32`, all offset `0`). The real full-capture bug is a clean offset-`28` cluster, not step `0 -> 1`. | Med-High |
+| 1 | C1 late-position comp-emit replay repair | full capture | Instrument the ratio-4 compressed-KV emit boundary at generation offset `27 -> 28` (comp ring-row index, load/store decision, row-position metadata at capture vs cache-hit replay), then repair. Judge against an identical-config `control-A` vs `control-B` determinism floor and `eager`, never exact equality with one control run. | Med-High |
 | 2 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
@@ -561,4 +562,23 @@ responses. The next C1 work is same-logical-point instrumentation around
 continuation step `0 -> 1` -- prompt-cache/coalescing metadata, slot order,
 decode input token, selected-token handoff, and full-capture HC/current rebase
 timing -- using request-level generated sequences or same-logical-point logs as
-evidence. MTP stays deferred until the ordered post-C1/tuning point.
+evidence. Sprint 573 ran the determinism baseline the prior gates lacked and
+reframed the whole problem: the serving decode path is nondeterministic at the
+first token (pure eager gives `6` distinct continuations for `32` identical
+prompts; two identical promoted-control runs differ on `3/32`, all at offset
+`0`), promoted suffix-control matches eager within that floor, and full capture's
+real divergence is a clean cluster of `7` requests at **offset `28`** that
+appears in no noise comparison. The offset-`0` full-capture mismatches were just
+nondeterminism. So Sprints 570-572 conflated first-token noise (compounded over
+sequence length by the exact-equality oracle) with the real bug, and the real
+bug is **late-position compressed-KV emit-replay state**, not the "step `0 -> 1`"
+early continuation 571/572 chased. Even (ratio-4) layers emit at
+`(position+1)%4==0`; with `position 250000 ≡ 0 (mod 4)` the emit boundaries land
+at generation offsets `3..27`, and offset `28` is the first token after the
+offset-`27` emit. Two durable corrections: (1) every full-capture gate must run
+an identical-config `control-A` vs `control-B` determinism floor and judge
+against it and against `eager`, never against exact equality with one control
+run; (2) the next C1 target is same-logical-point instrumentation at the ratio-4
+compressed-KV emit boundary around offset `27 -> 28` (comp ring-row index,
+load/store decision, row-position metadata at capture vs cache-hit replay), then
+the narrow repair. MTP stays deferred until the ordered post-C1/tuning point.
