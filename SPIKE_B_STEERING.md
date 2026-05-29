@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 554)
+# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 555)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -120,7 +120,12 @@ optimized.
   compressed attention and indexer history loads now derive the historical
   source position from `d_decode_position` plus bounded row inside the runtime
   kernel. Full capture remains position-keyed because emitted/non-emitted graph
-  topology and host emitted-row bookkeeping are still host-selected.
+  topology and host emitted-row bookkeeping are still host-selected. Sprint 555
+  tested dropping the position key for no-suffix full capture when compressed KV
+  is off, but rejected it: structural cache reuse worked (`43/43` replays,
+  zero position invalidations), yet selected-token correctness failed versus
+  eager (`29361` eager first token vs `128819` / `118235` candidates). The
+  full-capture position key remains a correctness guard.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
   launcher defaults, topology policy, validation harness, model path, or target
@@ -337,8 +342,10 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | C1 emitted typed-KV dynamic physical row | full capture | Sprint 552 made graph-mode emitted compressed/indexer typed-KV runtime store/load compute physical rows from `d_decode_position`; targeted smokes matched static row behavior exactly | Low-Med |
 | Done | C1 emitted typed-KV dynamic bounded row | full capture | Sprint 553 made graph-mode emitted compressed/indexer typed-KV runtime store/load compute the compact bounded row from `d_decode_position`; targeted smokes matched static row behavior at bounded row `1` | Low-Med |
 | Done | C1 typed-history dynamic row-position load | full capture | Sprint 554 made graph-mode compressed/indexer typed-history reload derive historical source positions from `d_decode_position` plus bounded row inside the TP runtime; targeted smokes matched static row loads exactly | Low-Med |
-| 1 | C1 emitted topology and row-position metadata | full capture | Full capture is still position-keyed because emitted work selection, compressed/indexer row counters, row-position arrays, and graph topology still differ by emitted/non-emitted position. This needs one coordinated device-state/topology change or an explicit saturated-history full-capture boundary before removing the full-capture position key. | Med-High |
-| 2 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
+| Rejected | C1 served full-capture position-key removal | full capture | Sprint 555 proved no-suffix full-capture cross-position reuse is still semantically unsafe even with compressed KV off; cache reuse worked but selected-token first token changed | Med-High |
+| 1 | C1 full-capture first-divergence localization | full capture | The position key is still a correctness guard. Before another cache-key change, localize the first divergent stage/checksum on the no-suffix full-capture replay path. | Med |
+| 2 | C1 emitted topology and row-position metadata | full capture | Compressed-KV full capture still has emitted/non-emitted topology and host emitted-row bookkeeping. Keep it after served full-capture divergence is understood. | Med-High |
+| 3 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
 | Deferred | B1 MTP — sidecar removal + specdec loop | EP 53% | Sidecar runs canonical MTP, not a truncation; cleanup is one ~200-LoC safetensors→GGUF converter + `tp-ep-pack-contract.c` extension + sidecar delete (3 sprints), then MTPBlock.forward (1 sprint), then TP/EP specdec loop (the actual throughput sprint). All after C5/B2/C1/tuning. | Med |
@@ -407,7 +414,8 @@ preflight, Sprint 540 graph suffix replay promotion, Sprint 549 rejected
 padding-knob cleanup, Sprint 550 compact EP pack route-blocking, Sprint 551
 dynamic-position raw typed-KV, Sprint 552 dynamic-position emitted typed-KV
 physical rows, Sprint 553 dynamic bounded rows, and Sprint 554 dynamic
-typed-history row loads complete for the served/full-capture surface, the next
-ordered work is emitted/non-emitted topology stability and remaining emitted-row
-bookkeeping for full capture. MTP stays deferred until the ordered
-post-C1/tuning point.
+typed-history row loads complete for the served/full-capture surface, Sprint
+555 proved full-capture cross-position reuse is still unsafe without a first
+divergence fix. The next ordered work is full-capture first-divergence
+localization before any further cache-key relaxation. MTP stays deferred until
+the ordered post-C1/tuning point.
