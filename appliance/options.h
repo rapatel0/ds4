@@ -62,6 +62,7 @@ void usage(const char *argv0) {
                  "       [--position N] [--decode-steps N]\n"
                  "       [--serve-http] [--host ADDR] [--port N]\n"
                  "       [--microbatch-wait-us N]\n"
+                 "       [--max-requests N]\n"
                  "       [--vram-min-free-mib N]\n"
                  "       [--nccl-min-free-mib N]\n"
                  "       [--help]\n",
@@ -120,6 +121,10 @@ bool parse_args(int argc, char **argv, Options *opt) {
         } else if (std::strcmp(arg, "--microbatch-wait-us") == 0) {
             if (!val || !parse_int(val, &opt->microbatch_wait_us) ||
                 opt->microbatch_wait_us < 0 || opt->microbatch_wait_us > 1000000) return false;
+            ++i;
+        } else if (std::strcmp(arg, "--max-requests") == 0) {
+            if (!val || !parse_int(val, &opt->max_requests) ||
+                opt->max_requests < 0) return false;
             ++i;
         } else if (std::strcmp(arg, "--vram-min-free-mib") == 0) {
             if (!val || !parse_u64(val, &opt->vram_min_free_mib)) return false;

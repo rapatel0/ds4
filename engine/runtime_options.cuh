@@ -80,7 +80,7 @@ struct Options {
     bool gpu_route_plan_gate = true;
     bool route_plan_async_upload_gate = true;
     bool routed_ffn_norm_input_gate = true;
-    bool routed_ffn_rank_major_input_gate = false;
+    bool routed_ffn_rank_major_input_gate = true;
     bool routed_ffn_rank_major_shared_input_gate = false;
     bool routed_ffn_rank_major_route_input_gate = false;
     bool routed_ffn_rank_major_input_parity_gate = false;
@@ -92,7 +92,6 @@ struct Options {
     int post_attention_static_compose_route_cap = 0;
     bool post_attention_masked_compact_copy_gate = false;
     bool post_attention_slot_major_ffn_norm_gate = false;
-    bool post_attention_skip_slot_major_ffn_norm_gate = false;
     bool model_router_rank_major_logits_gate = false;
     bool model_router_allreduce_logits_gate = true;
     bool true_shared_ffn_gate = true;

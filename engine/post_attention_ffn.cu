@@ -15,8 +15,7 @@ int run_true_ds4_post_attention_ffn_input(const Options &opt,
         ops->shared_up.rows_per_gpu != kMid / kGpus) {
         return 2;
     }
-    if (!hc->d_current_full || !hc->d_ffn_normed ||
-        !hc->d_ffn_norm_weight[layer]) {
+    if (!hc->d_ffn_norm_weight[layer]) {
         return 3;
     }
 
@@ -138,11 +137,13 @@ int run_true_ds4_post_attention_ffn_input(const Options &opt,
         !rank_major_route_input ||
         !(opt.model_router_rank_major_logits_gate ||
           opt.model_router_allreduce_logits_gate) ||
-        !opt.post_attention_skip_slot_major_ffn_norm_gate ||
         opt.post_attention_slot_major_ffn_norm_gate ||
         opt.routed_ffn_rank_major_input_parity_gate ||
         !opt.true_ds4_semantic_skip_stats_gate;
     if (needs_slot_major_ffn_norm) {
+        if (!hc->d_current_full || !hc->d_ffn_normed) {
+            return 3;
+        }
         CHECK_CUDA(cudaSetDevice(opt.devices[0]));
         for (int rank = 0; rank < kGpus; ++rank) {
             gather_current_shard_to_full_kernel<<<
@@ -342,6 +343,7 @@ int run_true_ds4_post_attention_ffn_input(const Options &opt,
          (opt.routed_ffn_rank_major_input_parity_gate ||
           !rank_major_shared_input || !rank_major_route_input));
     if (post_ffn_slot_major_broadcast) {
+        if (!hc->d_ffn_normed) return 10;
         const int bcast_rc = nccl_broadcast_f32_from_device0_to_current_full(
             opt, ranks, hc->d_ffn_normed, full_elems,
             "post_attention_ffn_normed_current");
@@ -542,4 +544,3 @@ int run_true_ds4_post_attention_ffn_input(const Options &opt,
     return (post_shard_stats.finite_bad || ffn_norm_stats.finite_bad ||
             route_inv_scale_stats.finite_bad) ? 8 : 0;
 }
-

@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-28)
+# Spike B Decode-Optimization Steering (updated 2026-05-28 after Sprint 526)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -25,18 +25,18 @@ optimized.
 - **A1-A3 are done.** A1 RMS-norm rank-local is rolled into A2. A2 HC mix
   row-parallel all-reduce is promoted from Sprint 478. A3 router rank-local
   all-reduce is promoted from Sprint 480.
-- **A4 is the next implementation target.** Sprint 483's "A6 PATH 4" result is
-  structurally A4 for the attention-projection consumer, not the steering
-  document's A6. The remaining A4 consumers are FFN-norm and post-attention FFN
-  input in `engine/post_attention_ffn.cu`. Finish them together, then delete
-  the full-current allgather and slot-major transpose once no consumer needs
-  them.
+- **A4 is complete for the served TP/EP path.** Sprint 483's "A6 PATH 4" result
+  was structurally A4 for the attention-projection consumer, and Sprint 526
+  finished the post-attention FFN shared/routed consumers in
+  `engine/post_attention_ffn.cu`. The promoted path now reports
+  `rank_major_shared_input=1`, `rank_major_route_input=1`, and
+  `slot_major_ffn_norm=0`.
 - **True A6 is still open.** In this document, A6 means fusing HC/current
   computation into the attention-projection prologue. It does not mean the
   Sprint 483 rank-major attention-projection consumer conversion.
-- **C1 is newly more plausible, but not first.** Sprint 479 removed promoted
+- **C1 is newly more plausible, but not next.** Sprint 479 removed promoted
   hot-path direct peer-copy transport in favor of NCCL, and the structural
-  extraction made the surface readable. Still, C1 should wait until A4,
+  extraction made the surface readable. Still, C1 should wait until
   output-head A1, sync-point reduction, and compact EP compose reduce the
   capture surface.
 - **Use previous promotions as the control.** Do not duplicate control runs
@@ -58,19 +58,19 @@ Steps 2–6 and 9–10 run on GPU0 over the full hidden while 7 GPUs idle. Every
   full-norm + mix + split + broadcast with 2 rank-local kernels + 1 tiny allreduce.
 - **A3 Router rank-local:** `[slots,4096]·[4096,256]`, 4096 contraction → row-
   parallel → all-reduce `[slots,256]`. Done and promoted.
-- **A4 Drop the full-current allgather (step 8)** by making ALL consumers
-  rank-major. Attention projection is done under the old "A6 PATH 4" name, and
-  router is covered by promoted A3. Finish FFN-norm and post-attention FFN input
-  together in `engine/post_attention_ffn.cu`, then delete the full-current
-  allgather and slot-major transpose.
+- **A4 Drop the full-current allgather (step 8):** complete for the served
+  TP/EP path. Attention projection is done under the old "A6 PATH 4" name,
+  router is covered by promoted A3, and Sprint 526 made post-attention FFN
+  shared/route consumers rank-major by default while removing the promoted
+  path's slot-major FFN norm dependency.
 - **A5 Fuse the survivors:** after A1–A4, HC-current ≈ 3 rank-local kernels + 2
   tiny all-reduces/layer vs ~12 steps. Fuse norm+partial-mix; mix-apply+FFN-norm.
 - **A6 Fuse HC into the attention-projection prologue** (compute `current_shard`
   inside the projection kernel; drop the intermediate buffer + a launch).
 
-Net: GPU0-serial / ~12-launch / barrier-heavy → 8-way parallel / ~3-launch / 2
-tiny collectives. **A1-A3 are complete; A4 is the next bankable step because it
-turns partial rank-major conversion into deleted full-current staging.**
+Net: GPU0-serial / ~12-launch / barrier-heavy -> 8-way parallel / ~3-launch / 2
+tiny collectives. **A1-A4 are complete for the served TP/EP path; the next
+bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 
 ## B. EP (53%) — orchestration + sub-1-token experts
 
@@ -140,13 +140,13 @@ turns partial rank-major conversion into deleted full-current staging.**
 
 | # | Idea | Domain | Why | Risk |
 |---|---|---|---|---|
-| 1 | A4 finish rank-major consumers | HC 40% | Low-risk bit-exact work; deletes full-current allgather/transpose after final consumer conversion | Low |
-| 2 | D1 output-head A1 pattern | Model boundary | Same proven A2 template; removes GPU0-centralized output-head norm/mix and hard host syncs | Low |
-| 3 | C5 sync-point reduction | both | Removes host round-trips and makes C1 graph capture structurally possible | Low-Med |
-| 4 | B2 compact EP variable-size NCCL compose | EP 53% | Targets served compact traffic and removes remaining peer-copy-equivalent compose movement | Med |
-| 5 | C1/C2 piecewise graph capture and serving parity | both | Highest ceiling, but only after the surface is simplified | Med-High |
-| 6 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
-| 7 | B3/B4/B5 EP structural bets | EP 53% | TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
+| Done | A4 finish rank-major consumers | HC 40% | Sprint 526 completed the remaining post-attention FFN shared/route consumers for the served path | Low |
+| 1 | D1 output-head A1 pattern | Model boundary | Same proven A2 template; removes GPU0-centralized output-head norm/mix and hard host syncs | Low |
+| 2 | C5 sync-point reduction | both | Removes host round-trips and makes C1 graph capture structurally possible | Low-Med |
+| 3 | B2 compact EP variable-size NCCL compose | EP 53% | Targets served compact traffic and removes remaining peer-copy-equivalent compose movement | Med |
+| 4 | C1/C2 piecewise graph capture and serving parity | both | Highest ceiling, but only after the surface is simplified | Med-High |
+| 5 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
+| 6 | B3/B4/B5 EP structural bets | EP 53% | TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
 | Deferred | B1 MTP | EP 53% | Useful later, but do not use it to hide base TP/EP bottlenecks | Med |
 
 ## Discipline (unchanged)
@@ -158,10 +158,14 @@ turns partial rank-major conversion into deleted full-current staging.**
   real invalidator makes it non-comparable.
 - No micro-opt before the change is justified by the profile.
 - Re-profile the domain table after each promoted change (shares shift).
+- One-off smokes and temporary gates are for evaluation only. A promoted result
+  moves into the main code/default path and deletes the smoke-only flag,
+  rejected branch, or diagnostic scaffold in the same sprint unless there is a
+  documented debugger-only reason to keep it default-off.
 
 ## One-line frame
 
-Finish A4 first, then remove the remaining output-head, host-sync, and compact
-EP compose friction before attempting C1. C1 is still the biggest ceiling, but
-it should run on the simplest fully rank-major, mostly NCCL, sync-reduced
-surface we can make. MTP stays deferred.
+With A4 complete for the served path, remove the remaining output-head,
+host-sync, and compact EP compose friction before attempting C1. C1 is still
+the biggest ceiling, but it should run on the simplest fully rank-major, mostly
+NCCL, sync-reduced surface we can make. MTP stays deferred.

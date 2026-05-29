@@ -395,7 +395,6 @@ int run_token_major_serving_loop(const Options &opt,
                 "post_attention_static_compose_route_cap\t%d\t"
                 "post_attention_masked_compact_copy_gate\t%d\t"
                 "post_attention_slot_major_ffn_norm_gate\t%d\t"
-                "post_attention_skip_slot_major_ffn_norm_gate\t%d\t"
                 "model_router_rank_major_logits_gate\t%d\t"
                 "model_router_allreduce_logits_gate\t%d\t"
                 "routed_gate_standalone_swiglu\t%d\t"
@@ -477,7 +476,6 @@ int run_token_major_serving_loop(const Options &opt,
                 opt.post_attention_static_compose_route_cap,
                 opt.post_attention_masked_compact_copy_gate ? 1 : 0,
                 opt.post_attention_slot_major_ffn_norm_gate ? 1 : 0,
-                opt.post_attention_skip_slot_major_ffn_norm_gate ? 1 : 0,
                 opt.model_router_rank_major_logits_gate ? 1 : 0,
                 opt.model_router_allreduce_logits_gate ? 1 : 0,
                 (opt.routed_ffn_norm_input_gate &&

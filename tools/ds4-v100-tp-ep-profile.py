@@ -1426,7 +1426,6 @@ def add_tp_ep_line_summaries(summary, stdout):
                 "post_attention_static_executor_route_cap",
                 "post_attention_static_compose_route_cap",
                 "post_attention_slot_major_ffn_norm_gate",
-                "post_attention_skip_slot_major_ffn_norm_gate",
                 "post_attention_masked_compact_copy_gate",
                 "routed_gate_standalone_swiglu",
                 "sum_final_hc_ms",
