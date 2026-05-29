@@ -1,322 +1,362 @@
 # MTP Implementation Plan
 
-This document captures the discovery and planning work for replacing the
-current Multi-Token Prediction (MTP) sidecar with a fully-integrated MTP path
-on the V100 TP/EP appliance. It is the prerequisite-discharged record for
-SPIKE B item **B1** — research is done, the weights are local, the
-implementation is now a sequenced engineering task.
+Discovery and planning for collapsing the V100 MTP sidecar into the
+appliance's main weight-pack pipeline. Prerequisite-discharged record for
+SPIKE B item **B1** — research is done, the existing pack tools do most of
+the work, and the remaining scope is small and mechanical.
 
 ## TL;DR
 
-- The current `engine/mtp_sidecar.{c,h}` runtime is **not running real MTP**.
-  It loads only 32 tensors of a 1,575-tensor MTPBlock. The canonical
-  attention + MoE expert weights for layer 43 (the MTP block) are absent
-  from the sidecar's source file.
-- The canonical weights **are already on the V100 pod** at
-  `/models/deepseek-v4-flash-safetensors-cache/model-00046-of-00046.safetensors`,
-  at the same FP8/MXFP4 quantization as the main model (with scales).
-- The main appliance file `/models/DSv4-Flash-256e-fixed.gguf` **does not
-  contain MTP** — it was produced via the stock HuggingFace transformers
-  loader, which silently strips MTP keys.
-- The implementation path is therefore a packaging + binding + forward-pass
-  exercise on top of the existing pack tools and engine, not a research
-  expedition. It scopes into roughly **3 sprints** plus the
-  speculative-decode-loop work that B1 was always about.
+- The sidecar (`engine/mtp_sidecar.{c,h}`) runs **complete canonical MTP**,
+  not a truncated probe — its 32 tensors are the full MTPBlock in GGUF
+  packing convention. Upstream `research/ds4/ds4.c:3068-3104`
+  `mtp_weights_bind()` requires exactly the same 32 tensor families.
+- **Upstream ds4.c has no sidecar.** It loads MTP from the *same* GGUF as
+  the main model. The V100 sidecar exists because the appliance's main
+  GGUF was produced via a pipeline that stripped MTP (HF transformers
+  `_keys_to_ignore_on_load_unexpected = [r"(^|\.)mtp\..*"]`), and someone
+  preserved MTP in a separate Q4_K/Q8_0 GGUF + parallel runtime as a
+  band-aid.
+- **The existing pack pipeline already handles 99% of what we need.** The
+  appliance's pack-contract / appliance-pack / TurboMind-pack /
+  runtime-load chain is format-agnostic and already shards by TP8/EP8.
+  Adding MTP is a one-off converter + small contract extension, not new
+  infrastructure.
+- **Actual scope:** ~200 LoC for a new safetensors→GGUF converter, ~50–100
+  LoC to extend `tools/tp-ep-pack-contract.c` for layer 43, mechanical
+  binding additions in `engine/runtime_pack.cu`, and a sidecar deletion.
+  Three sprint-sized tasks. Then the actual B1 throughput work
+  (MTPBlock.forward + specdec loop) is unchanged.
+- **Schedule:** still behind C5 / B2 / C1 / tuning sprint. In-place
+  optimization first; MTP integration last.
 
-## Evidence (verified on the pod, 2026-05-28)
+## Evidence (verified on the pod and against upstream, 2026-05-28)
 
-| File | Size | Tensors | MTP tensors |
-|---|---:|---:|---:|
-| `/models/DSv4-Flash-256e-fixed.gguf` (the appliance file) | 146 GB | 1,328 | **0** |
-| `/models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf` (sidecar source) | 3.6 GB | **32** | 32 |
-| `/models/deepseek-v4-flash-safetensors-cache/` (canonical HF release) | 46 shards | — | **1,575** in shard 46 |
+### What's on the pod
 
-Canonical config from the safetensors cache:
+| File | Size | Tensors | MTP content |
+|---|---:|---:|---|
+| `/models/DSv4-Flash-256e-fixed.gguf` (appliance main) | 146 GB | 1,328 | **0** — stripped at conversion |
+| `/models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf` (sidecar source) | 3.6 GB | 32 | Complete MTPBlock at Q4_K/Q8_0/F32 |
+| `/models/deepseek-v4-flash-safetensors-cache/` (canonical HF release) | 46 shards | — | Complete MTPBlock at FP8/MXFP4 in shard 46 |
+
+Config from the canonical safetensors:
 
 ```
 num_nextn_predict_layers: 1
-num_hidden_layers: 43
-architectures: DeepseekV4ForCausalLM
+num_hidden_layers:        43
+architectures:            DeepseekV4ForCausalLM
 ```
 
-Tensor-name sample from the canonical release (all under `mtp.0.*`):
+### What upstream ds4.c expects (the canonical tensor set)
+
+`research/ds4/ds4.c:3068-3104` — `mtp_weights_bind()` binds **exactly 32
+tensor families** as the full MTP draft model. Naming/packing convention:
 
 ```
-mtp.0.attn.attn_sink
-mtp.0.attn.kv_norm.weight
-mtp.0.attn.q_norm.weight
-mtp.0.attn.wkv.scale
-mtp.0.attn.wo_a.scale
-mtp.0.attn.wo_b.scale
-mtp.0.attn.wq_a.scale
-mtp.0.attn.wq_b.scale
-mtp.0.attn_norm.weight
-mtp.0.enorm.weight
-mtp.0.e_proj.scale
-mtp.0.ffn_norm.weight
-mtp.0.hnorm.weight
-mtp.0.norm.weight
-mtp.0.hc_head_fn / base / scale
-mtp.0.hc_attn_fn / base / scale
-mtp.0.hc_ffn_fn / base / scale
-mtp.0.ffn.gate.weight / bias
-mtp.0.ffn.<routed-expert weights>.weight / scale
-... (1,575 total, including 256 routed experts + the shared expert)
+Head + prologue (8):
+  mtp.0.hc_head_base / fn / scale
+  mtp.0.e_proj / h_proj
+  mtp.0.enorm / hnorm / norm
+
+Attention sublayer (11):
+  mtp.0.hc_attn_fn / scale / base
+  mtp.0.attn_norm
+  mtp.0.attn_q_a / q_a_norm / q_b
+  mtp.0.attn_kv / attn_kv_a_norm
+  mtp.0.attn_sinks
+  mtp.0.attn_output_a / attn_output_b
+
+FFN/MoE sublayer (13):
+  mtp.0.hc_ffn_fn / scale / base
+  mtp.0.ffn_norm
+  mtp.0.ffn_gate_inp                              (router weight)
+  mtp.0.exp_probs_b.bias                          (router bias)
+  mtp.0.ffn_gate_exps / up_exps / down_exps       (256 routed experts, stacked)
+  mtp.0.ffn_gate_shexp / up_shexp / down_shexp    (shared expert)
 ```
 
-## MTP architecture (from the authoritative reference)
+The "32 vs 1,575" gap I worried about earlier was just packing convention.
+GGUF stacks the 256 routed experts into 3 tensors (`ffn_*_exps`); HF
+safetensors unpacks each expert as its own tensor. Same logical weights.
 
-`reference/model.py:738-766` — `MTPBlock`:
+### Upstream speculative-decode interface
 
-```python
-class MTPBlock(Block):
-    def __init__(self, layer_id, args):
-        super().__init__(layer_id, args)            # FULL Block: attention + MoE FFN
-        self.e_proj = Linear(dim, dim)              # embedding projection
-        self.h_proj = Linear(dim, dim)              # hidden projection
-        self.enorm  = RMSNorm(dim)
-        self.hnorm  = RMSNorm(dim)
-        self.norm   = RMSNorm(dim)
-        self.hc_head_fn / base / scale = Parameter(...)   # MTP-specific HC head
-        self.embed: ParallelEmbedding = None        # SHARED with main Transformer
-        self.head:  ParallelHead       = None       # SHARED with main Transformer
-
-    def forward(self, x, start_pos, input_ids):
-        e = self.embed(input_ids)
-        e = self.enorm(e)
-        x = self.hnorm(x)
-        x = self.e_proj(e).unsqueeze(2) + self.h_proj(x)   # combine embed + prev hidden
-        x = super().forward(x, start_pos, input_ids)        # full Block forward
-        logits = self.head(x, self.hc_head_fn, self.hc_head_scale,
-                              self.hc_head_base, self.norm)
-        return logits
-```
-
-Two crucial facts:
-
-1. **MTPBlock IS a Block.** It inherits the full attention + 256-expert MoE
-   FFN + HC infrastructure. There are no kernels to write that the engine
-   doesn't already have.
-2. **It shares the main model's `embed` and `head`.** No separate
-   lm_head, no separate embedding table — the MTP block reuses what the main
-   Transformer already has. Only the 6 extras (`e_proj`, `h_proj`, `enorm`,
-   `hnorm`, `norm`) and the 3 HC-head tensors (`hc_head_fn/base/scale`) are
-   new tensor families.
-
-## Why the current sidecar is what it is
-
-The story explains itself once you know two facts:
-
-1. **The HF transformers DSv4 modeling class strips MTP at load time:**
-
-   ```python
-   _keys_to_ignore_on_load_unexpected = [r"(^|\.)mtp\..*"]
-   ```
-
-   Any conversion pipeline that uses `transformers.from_pretrained()`
-   silently drops every MTP tensor. That's why `DSv4-Flash-256e-fixed.gguf`
-   has zero MTP tensors despite the canonical release shipping 1,575 of them.
-
-2. **The sidecar was built when the appliance pack contract didn't have a
-   place for MTP tensors.** Rather than extend the contract, the original
-   ds4.c team produced a separate small GGUF and a parallel loader. That
-   separate file (`DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf`) was
-   hand-assembled from a partial source and contains only **32 tensors** —
-   the HC-head matrices, the 6 extras, and a handful of attention
-   projections. **It does not contain the routed experts or most of the
-   attention LoRA factors.** Whatever serves today is running a
-   heavily-truncated approximation of MTP, not the canonical block.
-
-The sidecar therefore is two debts at once: a parallel quantization runtime
-(Q4_K/Q8_0 vs the main path's FP8/MXFP4) **and** a degraded model artifact.
-Removing it isn't just cleanup; it's a quality upgrade.
-
-## Implementation plan
-
-The work splits into three concrete sprints plus the speculative-decode-loop
-work B1 was always about. Phases 1–3 below collapse the sidecar; the
-speculative-decode loop is the actual B1 throughput lever.
-
-### Phase 1 — Pack canonical MTP weights into the appliance contract
-
-Convert the canonical `mtp.0.*` tensors from the safetensors cache into the
-appliance's pack format and add them to the pack-index TSV.
-
-- **Source:** `/models/deepseek-v4-flash-safetensors-cache/model-00046-of-00046.safetensors`
-  for MTP-specific tensors, plus the relevant earlier shards for the shared
-  embed and head (no change to those — just confirm they're already in the
-  main GGUF, which they are).
-- **Target format:** same FP8/MXFP4 + scales the main path already uses.
-  The canonical safetensors are already at this quantization (e.g.
-  `mtp.0.attn.wq_a.scale` exists), so this is a **format-shuffle, not a
-  re-quantization**.
-- **Pack tool:** extend `tools/ds4-v100-turbomind-pack.cu` and/or
-  `tools/ds4-v100-appliance-pack.cu` to handle the `mtp.0.*` tensor
-  namespace. The shard rules for `mtp.0.attn.*` and `mtp.0.ffn.experts.*`
-  are identical to the rules for `layers.42.attn.*` and
-  `layers.42.ffn.experts.*` (TP8 + EP8 with 32 routed experts per rank).
-  The 9 new tensor families (`e_proj`, `h_proj`, `enorm`, `hnorm`, `norm`,
-  `hc_head_fn`, `hc_head_base`, `hc_head_scale`) need binding rules added —
-  small dense tensors, replicated or sharded by feature dim depending on
-  whether the engine's MTP forward consumes them rank-local.
-- **Output:** a new pack contract file
-  (`/workspace/logs/sprint-XXX-tp-ep-mtp-contract/contract/tp-ep-pack-contract.tsv`)
-  that includes `mtp.0.*` entries.
-
-This sprint produces a pack contract and verifies via `runtime_pack.cu`
-that the binding succeeds (no kernel changes, no decode-path changes).
-Tolerance gate against the prior promoted control.
-
-### Phase 2 — Bind MTP tensors through the main weight-load path
-
-Make `engine/runtime_pack.cu` and `engine/runtime_resources.cu` aware of the
-layer-43 MTP block: allocate the per-rank attention + MoE expert buffers for
-it, allocate the 9 extras, hold pointers consistent with the main layers.
-
-- The 256 routed experts at layer 43 use the existing EP8 layout (32 per
-  rank). The shared expert at layer 43 uses the existing replicated layout.
-- The attention LoRA factors at layer 43 use the existing TP8 column/row
-  shard rules.
-- The 9 extras are small and probably replicated; finalize that during the
-  sprint.
-- The shared `embed` and `head` are already loaded by the main path —
-  expose them to the MTP step via the engine API.
-
-No decode-path changes yet. Phase 2 ends with "MTP weights are resident, the
-sidecar is no longer referenced by the load path." The sidecar code (`engine/
-mtp_sidecar.{c,h}`, the Q4_K/Q8_0 helpers in `ds4_pack.{c,h}` and
-`ds4_source_formats.{c,h}`) gets deleted in this sprint's promote commit.
-
-Tolerance gate: serving must still pass at promoted-control parity with MTP
-loaded but not exercised.
-
-### Phase 3 — Implement `MTPBlock.forward` in `engine/`
-
-Add the actual MTP forward function. It runs as one additional sublayer the
-decode loop can call when MTP is enabled.
-
-The forward, in engine terms:
+`research/ds4/ds4.h`:
 
 ```c
-// engine/mtp_step.cu (extends the existing file)
-int run_mtp_step(...) {
-    // prologue
-    e = engine_embed(input_ids);          // shared with main
-    e = rms_norm(e, enorm);
-    x = rms_norm(x, hnorm);
-    x = e_proj(e) + h_proj(x);            // small dense ops
-
-    // body — reuses the existing Block forward primitives
-    run_hc_current(...);                  // engine/hc_current.cu
-    run_attention(...);                   // engine/attention_*.cu
-    run_ep_compose(...);                  // engine/ep_compose.cu
-    run_post_attention_ffn(...);          // engine/post_attention_ffn.cu
-
-    // epilogue — MTP-specific HC head
-    logits = run_mtp_head(x, hc_head_fn, hc_head_scale, hc_head_base, norm);
-    return logits;
-}
+int  ds4_session_eval_speculative_argmax(ds4_session *s, int first_token,
+                                         int max_tokens, int eos_token,
+                                         int *accepted, int accepted_cap, ...);
+bool ds4_engine_has_mtp(ds4_engine *e);
+int  ds4_engine_mtp_draft_tokens(ds4_engine *e);
 ```
 
-All sublayer calls reuse the existing kernels — `kernels/v100/norm.cuh`,
-`kernels/v100/attention.cuh`, `kernels/v100/ep_compose.cuh`,
-`kernels/v100/hc_mix.cuh`. No new kernel work.
+Plus engine options `mtp_draft_tokens` (cap 16, default 1) and `mtp_margin`
+(default 3.0). The upstream Mac path runs real MTP speculative decoding
+through this interface.
 
-Phase 3 ends with: MTP forward exists and produces correct logits at
-single-step, gated behind an explicit `--mtp-serving-gate` (or env var).
-The decode loop does not yet use it for speculative decoding.
+## Why the V100 has a sidecar (the actual history)
 
-Tolerance gate: with MTP enabled and run once per decode step,
-selected-token agreement vs control ≥ 0.99.
+1. Upstream ds4.c expects MTP in the **same GGUF** as the main model.
+   `mtp_weights_bind(w, m)` calls `required_tensor(m, "mtp.0.*")` against
+   the same model handle as the main layers.
+2. The V100 appliance's main GGUF (`DSv4-Flash-256e-fixed.gguf`) was
+   produced by a conversion pipeline that used the HF transformers loader,
+   which silently strips MTP via
+   `_keys_to_ignore_on_load_unexpected = [r"(^|\.)mtp\..*"]`.
+3. Someone produced a separate MTP-only GGUF
+   (`DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf`) at Q4_K/Q8_0/F32 quantization
+   to preserve MTP.
+4. A sidecar loader (`engine/mtp_sidecar.{c,h}` + Q4_K/Q8_0 paths in
+   `ds4_pack.{c,h}` / `ds4_source_formats.{c,h}`) was added to bridge it.
 
-### Phase 4 — The speculative-decode loop (the actual B1 throughput lever)
+**The sidecar is a packaging band-aid, not an architectural choice.** It
+runs the complete canonical MTPBlock — just from a separate file at lower
+precision via parallel infrastructure.
 
-This is what the SPIKE_B_STEERING B1 entry was really about: use MTP to
-verify K draft tokens per main-model step, raising effective batch size and
-fixing the M < 1 token/expert problem.
+## The existing pack pipeline
 
-- Run MTP forward to propose K draft tokens.
-- Run main model forward on (prev + K drafts) in parallel.
-- Accept-or-reject draft tokens by comparing main-model verify logits to
-  draft probabilities.
+The V100 appliance already has a complete offline-pack + runtime-load
+pipeline. Tools and what they do:
+
+```
+input:  GGUF + index TSV
+            ↓
+    tools/tp-ep-pack-contract.c (717 lines)
+        - knows DS4_N_LAYER=43, DS4_N_EXPERT=256, EP8/TP8 sharding rules
+        - emits pack-contract.tsv: one row per (tensor, gpu) assignment
+        - columns: record_type, tensor_id, source_name, layer_id, family,
+                   source_dtype, owning_gpu, source_offset, byte_length, ...
+            ↓
+    tools/appliance-pack.cu (1,298 lines)
+        - args: --source GGUF --index TSV --out-dir DIR
+        - uses ds4_pack.h + ds4_source_formats.h + TurboMind API
+        - emits: gpu{0..7}.weights + pack-index.tsv + turbomind-pack-index.tsv
+            ↓
+    tools/turbomind-pack.cu
+        - per-layer TurboMind-specific routed-expert layout (--layer N)
+            ↓
+output: per-rank shard files at /workspace/logs/sprint-NNN-.../contract/
+        consumed at runtime via DS4_V100_TP_EP_CONTRACT → ds4_pack_open()
+        → engine/runtime_pack.cu
+```
+
+**Format support is already complete.** `ds4_source_formats.h` handles
+`f8_e4m3_b128` (FP8 with per-128-block scales), `mxfp4` (MXFP4 with
+per-32-block scales), `bf16`, and `f32` — exactly the formats the
+canonical HF safetensors ships in.
+
+**Sharding is already complete.** The pack contract assigns each tensor a
+`(layer_id, family, owning_gpu)` triple using the TP8/EP8 rules. Adding
+layer 43 (MTP) means emitting more rows that reuse these existing rules.
+
+## Implementation scope
+
+Five concrete pieces; only one is new code from scratch.
+
+### 1. A one-off safetensors → GGUF converter (~200 LoC, NEW)
+
+Lives in `tools/`. Reads canonical HF safetensors shard 46, emits a
+GGUF fragment containing the `mtp.0.*` tensors in the naming + packing
+convention upstream `mtp_weights_bind()` expects.
+
+Responsibilities:
+
+- Parse safetensors header (`u64 header_length || JSON || tensor blobs`),
+  resolve offsets and dtypes for `mtp.0.*` entries.
+- **Stack the 256 routed experts.** HF safetensors stores each expert as
+  its own tensor (`mtp.0.ffn.experts.0.gate_up.weight` through
+  `mtp.0.ffn.experts.255.gate_up.weight`). The GGUF/upstream convention
+  wants three stacked tensors: `mtp.0.ffn_gate_exps`,
+  `mtp.0.ffn_up_exps`, `mtp.0.ffn_down_exps`. Read 256 reads, write one
+  stacked blob per family.
+- **Apply the naming remap.** HF names use `attn.wq_a.weight`,
+  `attn.kv_norm.weight`, `ffn.gate.weight`; upstream uses `attn_q_a.weight`,
+  `attn_kv_a_norm.weight`, `ffn_gate_inp.weight`. A small static table.
+- **Preserve dtypes verbatim.** No re-quantization. FP8 stays FP8, MXFP4
+  stays MXFP4, BF16 stays BF16. Just copy bytes.
+- Emit a GGUF with the MTP tensors in the expected naming.
+
+Output options:
+
+- **(a) Standalone MTP-GGUF fragment** the pack contract can reference as a
+  separate `shard_file`. Smallest run.
+- **(b) Unified main + MTP GGUF** by appending the MTP fragment to a copy
+  of `DSv4-Flash-256e-fixed.gguf` (preferred — single source file matches
+  upstream's expectation; the cost is one 146 GB file copy).
+
+Recommend (b) for the cleanest match to upstream and the simplest runtime
+story. Run once per model artifact.
+
+### 2. Extend `tools/tp-ep-pack-contract.c` for layer 43 (~50–100 LoC)
+
+The file already knows about 43 layers, 256 experts, and the EP8/TP8
+sharding rules. Add emission for layer 43 (MTP). Most tensor families
+reuse existing logic:
+
+- Attention LoRA (`attn_q_a/b`, `attn_kv`, `attn_output_a/b`,
+  `attn_q_a_norm`, `attn_kv_a_norm`, `attn_sinks`, `attn_norm`) — same
+  TP8 column/row sharding as layers 0–42.
+- Router (`ffn_gate_inp`, `exp_probs_b.bias`) — replicated, same as
+  existing.
+- Routed experts (`ffn_gate_exps / up_exps / down_exps`) — EP8 with 32
+  experts per rank, same as existing.
+- Shared expert (`ffn_gate_shexp / up_shexp / down_shexp`) — same
+  treatment as existing.
+- HC sublayer params (`hc_attn_*`, `hc_ffn_*`) — same as existing layer's
+  HC mixing.
+
+Genuinely new tensor families (9):
+
+- `e_proj`, `h_proj` — small dense `[dim, dim]`. Same handling as
+  `attn_q_a` (TP-shardable but maybe replicated for simplicity).
+- `enorm`, `hnorm`, `norm` — small `[dim]` norms, replicated.
+- `hc_head_fn`, `hc_head_base`, `hc_head_scale` — same as existing HC head
+  parameters at the model boundary.
+
+### 3. Re-run the pack pipeline against the unified GGUF (mechanical)
+
+Once the pack contract emits MTP rows and the unified GGUF exists:
+
+```bash
+tools/tp-ep-pack-contract \
+    --source DSv4-Flash-256e-fixed-with-mtp.gguf \
+    --out contract/tp-ep-pack-contract.tsv
+
+tools/ds4-v100-appliance-pack \
+    --index contract/tp-ep-pack-contract.tsv \
+    --source DSv4-Flash-256e-fixed-with-mtp.gguf \
+    --out-dir contract/
+
+tools/ds4-v100-turbomind-pack \
+    --index contract/tp-ep-pack-contract.tsv \
+    --source DSv4-Flash-256e-fixed-with-mtp.gguf \
+    --out-dir contract/ \
+    --layer 43
+```
+
+No code changes — re-run the existing tools against the new input.
+
+### 4. Engine binding rules in `engine/runtime_pack.cu` (small)
+
+Tell the engine layer 43 exists. The `runtime_pack.cu` file already binds
+layers 0–42 via the pack contract. Most of the change is "extend the
+per-layer loop to 44 layers" plus a few bindings for the 9 new tensor
+families (allocate small device buffers, copy in from the pack-contract
+arena). Comparable in scope to any "add a layer family" diff.
+
+### 5. Delete the sidecar (mechanical)
+
+- `engine/mtp_sidecar.c`
+- `engine/mtp_sidecar.h`
+- Q4_K and Q8_0 source paths in `ds4_pack.c`, `ds4_pack.h`,
+  `ds4_source_formats.c`, `ds4_source_formats.h` — verify no other
+  consumer outside the sidecar; many tests may consume these.
+- The standalone MTP smokes in `smokes/mtp-*.{c,cu}` that target the
+  sidecar interface. These were already flagged as "smokes that grew up"
+  debt in the repo review.
+- Launcher / profile references to `DS4_V100_MTP_*` env vars that were
+  sidecar-specific.
+
+Operator-side: the separate
+`/models/DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf` file becomes unreferenced
+and can be removed from `/models/` on the pod.
+
+## What stays the same — the actual B1 work
+
+Steps 1–5 above land MTP weights in the engine. They do not enable TP/EP
+MTP serving. The actual throughput work is unchanged:
+
+### Phase A — MTPBlock.forward in `engine/`
+
+Add `engine/mtp_step.cu` (extends the existing file from sprint 525) with
+`run_mtp_step(...)` that calls existing sublayer primitives:
+
+```c
+e = engine_embed(input_ids);          // shared with main
+e = rms_norm(e, enorm);
+x = rms_norm(x, hnorm);
+x = e_proj(e) + h_proj(x);
+
+run_hc_current(...);                  // engine/hc_current.cu
+run_attention(...);                   // engine/attention_*.cu
+run_ep_compose(...);                  // engine/ep_compose.cu
+run_post_attention_ffn(...);          // engine/post_attention_ffn.cu
+
+logits = run_mtp_head(x, hc_head_fn, hc_head_scale, hc_head_base, norm);
+```
+
+All sublayer calls reuse the existing kernels (`kernels/v100/norm.cuh`,
+`attention.cuh`, `ep_compose.cuh`, `hc_mix.cuh`). **No new kernel work.**
+
+### Phase B — TP/EP speculative-decode loop (the real B1)
+
+Wire the speculative pattern across 8 ranks:
+
+- MTP forward proposes K draft tokens (K = `mtp_draft_tokens`, ≤ 16).
+- Main model forward processes (prev + K drafts) in parallel.
+- Accept/reject by comparing main verify logits to draft probabilities,
+  using `mtp_margin` as the threshold — same semantics as upstream
+  `ds4_session_eval_speculative_argmax`.
 - Advance position by 1 + accepted_k.
-- Coordinate accepts/rejects across all 8 ranks so KV state stays consistent.
+- **Cross-rank coordination: every rank must agree on accept/reject so KV
+  state stays consistent.** This is the work the TP/EP launcher refuses
+  MTP for today.
 
-This is the cross-rank coordination work the TP/EP launcher currently
-refuses MTP for. It is the largest piece of work in the B1 program and is
-where the "MTP unsupported on TP/EP yet" stops being honest. **It depends
-on phases 1–3 being done first** but is *not* unblocked by them — it's
-a separate body of work on top.
+This is the largest piece of B1 — raising effective `M` from <1 to
+`(K+1)`/expert and lifting the EP-bound 53% bucket.
 
 ## Sequencing relative to the rest of SPIKE B
 
-In-place model tuning still goes first. The full sequence:
+In-place model tuning still goes first.
 
 ```
 1. C5 sync-point reduction pass 2          ← in flight (sprint 529)
 2. B2 compact EP variable-size NCCL compose
 3. C1 piecewise graph capture
 4. Tuning sprint (reference-shape perf, shape envelope, NCCL pinning, C4 spill)
-5. MTP Phase 1 — pack canonical weights         ← this document
-6. MTP Phase 2 — bind through main path; delete sidecar
-7. MTP Phase 3 — MTPBlock.forward
-8. MTP Phase 4 — speculative-decode loop (B1)
+5. MTP weight integration (steps 1–5 above — 3 small sprints)
+6. MTPBlock.forward (Phase A — 1 sprint)
+7. TP/EP speculative-decode loop (Phase B / actual B1 — N sprints)
 ```
 
-Phases 5–7 are sprint-sized cleanups, each with a tolerance gate against the
-prior promoted control. Phase 4 is the actual throughput sprint, and it's
-where the per-sprint perf measurement opt-in (per the validation policy)
-applies — the gate is whether speculative-decode acceptance × verify-cost
-beats baseline tok/s.
-
-## Quality implication of fixing this
-
-The current sidecar runs a stripped-down MTP — 32 of 1,575 canonical tensors
-— so draft predictions are made from a partial network missing the routed
-experts and most of the attention. Whatever quality the current `DS4_V100_MTP_SERVING=on`
-path gets is from running on the wrong model. After Phase 3, MTP serves from
-the full canonical MTPBlock at the same quantization as the main path. Draft
-acceptance rate should improve materially — which is exactly the variable
-that determines whether speculative decoding pays off in Phase 4.
+Steps 5–6 are correctness-only per the per-sprint validation policy.
+Step 7 is the throughput sprint and opts into perf measurement at the
+reference shape per `docs/sprints/VALIDATION_CONTROL_POLICY.md`.
 
 ## Files affected (forward-looking inventory)
 
-**Add / extend:**
+**Add:**
 
-- `tools/ds4-v100-turbomind-pack.cu` — extend for `mtp.0.*` namespace
-- `tools/ds4-v100-appliance-pack.cu` — same
-- A new pack contract TSV
-- `engine/runtime_pack.cu` — bind the new tensor families
-- `engine/runtime_resources.cu` — allocate per-rank buffers for layer 43
-- `engine/runtime_options.cuh` — promote MTP defaults
-- `engine/mtp_step.cu` — implement `MTPBlock.forward`
-- `engine/api.h` — expose the MTP step to the appliance
-- `appliance/main.cu` — call into the MTP step from the decode loop (Phase 4)
+- `tools/ds4-v100-mtp-from-safetensors.{c,cu}` (or similar name) — the
+  ~200-line one-off converter.
+- `engine/mtp_step.cu` extensions for `run_mtp_step` (Phase A).
 
-**Delete (in Phase 2's promote commit):**
+**Extend:**
+
+- `tools/tp-ep-pack-contract.c` — emit layer-43 rows (~50–100 LoC).
+- `engine/runtime_pack.cu` — bind MTP tensor families.
+- `engine/api.h` — expose `run_mtp_step` if Phase A lands.
+- `appliance/main.cu` — call into MTP step from the decode loop (Phase B).
+
+**Delete (when steps 1–5 land):**
 
 - `engine/mtp_sidecar.c`
 - `engine/mtp_sidecar.h`
-- The Q4_K and Q8_0 paths in `ds4_pack.c`, `ds4_pack.h`,
-  `ds4_source_formats.c`, `ds4_source_formats.h` (verify no other consumer)
-- The standalone MTP smokes in `smokes/mtp-*.{c,cu}` that target the sidecar
-  (they were already flagged as "smokes that grew up" debt; this is when
-  they retire)
-- The sidecar source file `DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf` becomes
-  unreferenced (operator-side cleanup, not a code change)
+- Q4_K / Q8_0 source paths in `ds4_pack.{c,h}` and
+  `ds4_source_formats.{c,h}` (after verifying no other consumer).
+- `smokes/mtp-*.{c,cu}` smokes that target the sidecar.
+- `DS4_V100_MTP_*` env vars in launcher/profile that were sidecar-only.
 
-**Out of scope here:**
-
-- TP/EP MTP launcher refusal removal (lifted in Phase 3 or 4 by the same
-  sprint that lands the working integration).
-- Any speculative-decode tuning (K choice, acceptance threshold) — that's
-  Phase 4 sprint-internal work.
+**No engine kernel changes anywhere.**
 
 ## One-line summary
 
-The canonical MTP weights are 1,575 tensors at `mtp.0.*` already on the pod
-at FP8/MXFP4 with scales; the local appliance GGUF stripped them via the HF
-loader gotcha, and the sidecar runs a 32-tensor truncated approximation.
-Real MTP integration is three sprint-sized binding/forward-pass steps
-(Phases 1–3) plus the speculative-decode loop (Phase 4), all sequenced
-behind C5/B2/C1/Tuning.
+The existing pack pipeline (`tp-ep-pack-contract.c` → `appliance-pack.cu`
+→ runtime mmap) already handles formats, sharding, and per-rank staging.
+Adding MTP is a one-off ~200-LoC safetensors→GGUF converter plus a small
+contract extension and engine-side binding rules — three sprint-sized
+tasks that delete the sidecar runtime. The actual B1 throughput work
+(MTPBlock.forward + TP/EP-coordinated specdec loop) is unchanged and
+still sits behind C5 / B2 / C1 / tuning.

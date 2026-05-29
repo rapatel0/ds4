@@ -118,7 +118,7 @@ The performance program is intentionally isolated:
 | 58 | B2 compact EP all-pairs send/recv | Rejected; B2 remains open | Sprint 530 tested grouped all-pairs `ncclSend`/`ncclRecv` for served compact-route compose. The build passed, but selected-token failed before completing requests: NCCL routed some point-to-point pairs through SHM (`7[7] -> 0[0] via SHM/direct/direct`) and failed creating `/dev/shm/nccl-*` segments around `9637892` bytes, ending in `nccl error ./engine/runtime_pack.cu:381: unhandled system error`. The candidate code was removed, leaving the promoted compact compose path unchanged. Future B2 transport work must avoid all-pairs NCCL P2P and use a ring-compatible or statically bucketed no-SYS scheme. |
 | 59 | B2 compact EP broadcast trim | Promoted transport cleanup | Sprint 531 kept served compact compose on NCCL broadcast but removed padded over-transfer: zero-route source ranks skip broadcast, and active compact rows are packed into contiguous scratch before broadcast so byte count follows active route count instead of padded `slots * top_k` segments. The V100 selected-token gate passed with `http_200=32`, server output-head first token `128819`, `output_head_finite_bad=0`, `peer_copy_ops=0`, `peer_copy_sys_bytes=0`, `nccl_graph_sys_edge_count=0`, and `scaffold_compact_moe_decode_gate=1`. Larger B2 fusion remains open, but compact transport cleanup is complete enough for C1 readiness. |
 | 60 | C5 post-attention FFN event handoffs | Promoted C1-readiness cleanup | Sprint 532 removed promoted-path host stream synchronizations from `engine/post_attention_ffn.cu` after post-attention shard production with semantic stats skipped, after rank-major all-gather, and at the final rank-stream-to-dense-stream handoff. The handoffs now use existing device-event ordering and the main path, with no runtime flag, permanent smoke, broad diagnostic branch, or MTP work. The V100 selected-token gate passed with `http_200=32`, server output-head first token `128819`, `output_head_finite_bad=0`, `peer_copy_ops=0`, `peer_copy_sys_bytes=0`, and `nccl_graph_sys_edge_count=0`; server logs showed `tp_ep_post_attention_ffn_input ... PASS` with `rank_major_input=1`, `rank_major_shared_input=1`, `rank_major_route_input=1`, and `slot_major_ffn_norm=0`. C5 remains open for decode-loop, HC-current, attention projection/read, EP compose, and diagnostic/control-only post-attention sync sites. |
-| 61 | B1 MTP implementation investigation | Research complete; implementation deferred | `MTP_IMPLEMENTATION.md` records that canonical MTP weights are already local on the V100 pod as 1,575 `mtp.0.*` tensors in the safetensors cache, while the current sidecar source contains only 32 tensors and the main appliance GGUF contains zero MTP tensors because the HF loader stripped `mtp.*` keys. The implementation is now planned as pack canonical tensors, bind them through the main load path and delete the sidecar, implement canonical `MTPBlock.forward`, then build the speculative-decode loop. | Do not start MTP before the base TP/EP cleanup/tuning sequence. Treat phases 1-3 as structural integration after tuning; Phase 4 is the B1 throughput sprint and must opt into reference-shape perf measurement. |
+| 61 | B1 MTP implementation investigation | Research complete; implementation deferred | `MTP_IMPLEMENTATION.md` records that the sidecar runs complete canonical MTP — not a truncated probe. The sidecar's 32 tensors are the full MTPBlock in GGUF packing convention; upstream `research/ds4/ds4.c:3068-3104` `mtp_weights_bind()` requires exactly these 32 tensor families. The "32 vs 1,575" gap between the sidecar GGUF and the HF safetensors cache is packing convention (GGUF stacks 256 routed experts into 3 tensors; HF unpacks each expert), not truncation. The V100 sidecar exists because the appliance GGUF was produced through a pipeline that ran the HF transformers loader, which silently strips `mtp.*` via `_keys_to_ignore_on_load_unexpected = [r"(^|\.)mtp\..*"]`; someone preserved MTP in a separate Q4_K/Q8_0 GGUF + parallel runtime as a packaging band-aid. Cleanup is the existing pack pipeline plus one ~200-LoC safetensors→GGUF converter, a ~50–100 LoC extension to `tools/tp-ep-pack-contract.c` for layer 43, mechanical binding additions in `engine/runtime_pack.cu`, and sidecar deletion. No new kernels. The real B1 throughput lever is the TP/EP-coordinated speculative-decode loop, which the sidecar removal does not on its own enable. | Do not start MTP before the base TP/EP cleanup/tuning sequence. The converter + contract + sidecar-delete steps are correctness-only; the speculative-decode loop is the B1 throughput sprint and must opt into reference-shape perf measurement. |
 | 62 | C5 attention-projection event handoffs | Promoted C1-readiness cleanup | Sprint 533 removed promoted-path host waits from `engine/attention_projection.cu` by using existing device-event helpers for attention-norm control-to-rank ordering, Q/KV input-fill-to-dense ordering, Q/KV dense-to-control ordering, Q/KV norm-fill-to-dense ordering, and Q-B dense-to-rank ordering. It also removed an unnecessary host wait between same-control-stream gather and Q/KV norm work. The V100 selected-token gate passed with `http_200=32`, server output-head first token `128819`, `output_head_finite_bad=0`, `peer_copy_ops=0`, `peer_copy_sys_bytes=0`, and `nccl_graph_sys_edge_count=0`; server logs showed `tp_ep_true_attention_projection_prefix ... PASS` with `rank_major_input=1`. | Treat attention-projection promoted-path handoffs as complete. C5 remains open for decode-loop, HC-current, attention read, EP compose, and diagnostic/control-only sync sites. |
 | 63 | C5 attention-read event handoffs | Promoted C1-readiness cleanup | Sprint 534 removed promoted-path host waits after raw-read/raw-window attention kernels in `engine/attention_read.cu`. The next attention-output stage consumes `d_attn_heads` on the same rank streams and already uses device-event handoffs to dense streams; diagnostic stat reads still synchronize through `log_tensor_f32_stats()` when they actually consume host-visible data. The V100 selected-token gate passed with `http_200=32`, server output-head first token `128819`, `output_head_finite_bad=0`, `peer_copy_ops=0`, `peer_copy_sys_bytes=0`, and `nccl_graph_sys_edge_count=0`; server logs showed `tp_ep_true_attention_raw_window ... PASS`. | Treat attention-read raw/window promoted-path handoffs as complete. C5 remains open for decode-loop, HC-current, EP compose, typed-indexer/top-k, and diagnostic/control-only sync sites. |
 
@@ -138,10 +138,12 @@ non-comparable.
 
 This sequence implements the rest of `SPIKE_B_STEERING.md` after the A1-A3
 promotions. MTP is deferred implementation work, not an active optimization
-before the base TP/EP path is stable. The MTP research blocker is cleared and
-recorded in `MTP_IMPLEMENTATION.md`: canonical `mtp.0.*` weights are local,
-the current sidecar is incomplete, and the real work is a sequenced
-pack/bind/forward/speculative-decode integration.
+before the base TP/EP path is stable. The MTP research blocker is cleared
+and recorded in `MTP_IMPLEMENTATION.md`: the sidecar runs complete canonical
+MTP (its 32 tensors are the full MTPBlock in GGUF packing convention,
+matching upstream `mtp_weights_bind()`), and the real work is a sequenced
+converter / pack-contract extension / sidecar deletion / forward /
+speculative-decode integration using the existing pack pipeline.
 
 The order is A4 before C1. C1 has the larger ceiling, but A4 is the lower-risk
 compounder: Sprint 483 already proved the rank-major consumer pattern on
@@ -545,12 +547,26 @@ exercising MTP in decode.
 
 Scope:
 
-1. Extend the pack tooling for the `mtp.0.*` namespace using the same TP8/EP8
-   rules as a normal layer-43 Block where applicable.
-2. Add binding rules for `e_proj`, `h_proj`, `enorm`, `hnorm`, `norm`, and
-   `hc_head_fn/base/scale`.
-3. Verify the generated pack contract includes all 1,575 canonical MTP
-   tensors and does not depend on the old sidecar GGUF.
+1. Add a one-off `safetensors → GGUF` converter (~200 LoC, lives in `tools/`)
+   that reads `/models/deepseek-v4-flash-safetensors-cache/model-00046-of-00046.safetensors`,
+   stacks the 256 routed experts into the GGUF convention
+   (`ffn_gate_exps` / `up_exps` / `down_exps`), applies the HF→upstream
+   naming remap (`attn.wq_a` → `attn_q_a`, etc.), preserves FP8/MXFP4/BF16
+   dtypes verbatim, and either appends to a copy of
+   `DSv4-Flash-256e-fixed.gguf` (recommended for upstream parity) or emits
+   a standalone MTP-GGUF fragment.
+2. Extend `tools/tp-ep-pack-contract.c` (~50–100 LoC) to emit layer-43 rows
+   for the 32 canonical MTP tensor families using the existing TP8/EP8
+   sharding rules: attention LoRA TP-style, routed experts EP-style,
+   shared expert / router / norms replicated. The 9 genuinely-new families
+   (`e_proj`, `h_proj`, `enorm`, `hnorm`, `norm`, `hc_head_fn/base/scale`)
+   get small-dense/replicated treatment.
+3. Re-run `tools/appliance-pack.cu` and `tools/turbomind-pack.cu` against
+   the new unified GGUF (no code changes — these tools are
+   format-agnostic and already shard by TP8/EP8).
+4. Verify the generated pack contract includes the 32 canonical MTP tensor
+   families in GGUF packing convention and does not depend on the old
+   sidecar GGUF.
 
 Promotion gate: pack/load validation passes and normal TP/EP serving remains
 at promoted-control correctness with MTP not exercised.

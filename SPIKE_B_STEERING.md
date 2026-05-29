@@ -88,23 +88,57 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
   out of the active docket until the base TP/EP path is stable and optimized.
   The implementation record is `MTP_IMPLEMENTATION.md`.
 
-  Current facts from the investigation:
+  Current facts (verified against `research/ds4/` upstream and the pod
+  2026-05-28):
 
-  - Canonical MTP weights are already local on the V100 pod at
-    `/models/deepseek-v4-flash-safetensors-cache/model-00046-of-00046.safetensors`.
-    They include 1,575 `mtp.0.*` tensors at the same FP8/MXFP4 quantization
-    style as the main path.
-  - The current MTP sidecar source contains only 32 MTP tensors, so it is not
-    running the canonical `MTPBlock`; it is a truncated approximation missing
-    routed experts and most attention LoRA factors.
-  - The main appliance GGUF contains zero MTP tensors because the stock HF
-    loader strips `mtp.*` keys during conversion.
-  - No new kernel family is expected for phases 1-3. MTPBlock reuses the
-    existing Block primitives plus small prologue/epilogue tensor bindings.
-  - The sequenced implementation is: pack canonical MTP tensors into the
-    appliance contract, bind them through the main load path and delete the
-    sidecar, implement `MTPBlock.forward`, then build the speculative-decode
-    loop. Only the final speculative-decode phase is the B1 throughput lever.
+  - **The sidecar runs complete canonical MTP, not a truncated probe.** Its
+    32 tensors are the full MTPBlock in GGUF packing convention. Upstream
+    `research/ds4/ds4.c:3068-3104` `mtp_weights_bind()` requires exactly
+    these 32 tensor families. The "32 vs 1,575" gap is packing convention,
+    not truncation: GGUF stacks the 256 routed experts into 3 tensors
+    (`ffn_*_exps`); HF safetensors unpacks each expert as its own tensor.
+  - **Upstream ds4.c has no sidecar.** It expects MTP in the *same* GGUF as
+    the main model. The V100 sidecar exists because the appliance GGUF was
+    produced through a pipeline that ran the HF transformers loader, which
+    silently strips `mtp.*` via
+    `_keys_to_ignore_on_load_unexpected = [r"(^|\.)mtp\..*"]`. Someone
+    preserved MTP in a separate Q4_K/Q8_0/F32 GGUF + a parallel runtime
+    loader. **It is a packaging band-aid, not an architectural choice.**
+  - **The canonical weights are local in two forms:** the sidecar's
+    `DeepSeek-V4-Flash-MTP-Q4K-Q8_0-F32.gguf` (3.6 GB, complete MTP at
+    Q4_K/Q8_0/F32) and the HF safetensors cache at
+    `/models/deepseek-v4-flash-safetensors-cache/model-00046-of-00046.safetensors`
+    (complete MTP at FP8/MXFP4 with scales, same precision as the main
+    path).
+  - **The existing pack pipeline handles almost everything.**
+    `tools/tp-ep-pack-contract.c` → `tools/appliance-pack.cu` →
+    `tools/turbomind-pack.cu` → runtime mmap is already format-agnostic
+    (`f8_e4m3_b128`, `mxfp4`, `bf16`, `f32`) and already shards by TP8/EP8.
+    Adding MTP is **one ~200-LoC one-off safetensors→GGUF converter** plus
+    a small extension to `tp-ep-pack-contract.c` for layer 43 (~50–100 LoC
+    reusing existing sharding rules) plus mechanical binding additions in
+    `engine/runtime_pack.cu` plus sidecar deletion.
+  - **No new kernels.** MTPBlock reuses the existing Block primitives
+    (`kernels/v100/norm.cuh`, `attention.cuh`, `ep_compose.cuh`,
+    `hc_mix.cuh`) plus a small prologue (`e_proj` + `h_proj` + norms) and
+    an HC head epilogue. The forward (Phase A) is binding only.
+  - **The real B1 work is unchanged: the TP/EP speculative-decode loop**
+    (Phase B / `ds4_session_eval_speculative_argmax`-equivalent),
+    accepting/rejecting K draft tokens across 8 ranks with KV-consistent
+    accept semantics. That is what the TP/EP launcher refuses MTP for
+    today, and it does not become easier just because the sidecar is
+    removed.
+  - **Sequence (5–7 are MTP-specific):**
+    1. C5 sync-point reduction pass 2 (in flight, sprint 529)
+    2. B2 compact EP variable-size NCCL compose
+    3. C1 piecewise graph capture
+    4. Tuning sprint (reference-shape perf + shape envelope + NCCL
+       pinning + C4 spill)
+    5. MTP weight integration: converter + contract + sidecar delete
+       (three sprint-sized tasks, correctness-only)
+    6. MTPBlock.forward in `engine/` (one sprint, Phase A)
+    7. TP/EP specdec loop (Phase B / the actual B1, multi-sprint, opts
+       into perf measurement per validation policy)
 - **B2 Fuse dispatch + grouped-GEMM + weighted-combine** into 1–2 kernels,
   device-side offsets only (no host sync on route counts). Template: the fork's
   `awq_moe_single_token_sm70` compact path. Make compact-route-compose the
@@ -188,7 +222,7 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | 3 | C1/C2 piecewise graph capture and serving parity | both | Highest ceiling, but only after the surface is simplified | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
-| Deferred | B1 MTP canonical integration | EP 53% | Research blocker cleared: canonical weights are local and sidecar is incomplete. Do phases 1-3 after the base TP/EP optimization/tuning sequence, then Phase 4 speculative decode | Med |
+| Deferred | B1 MTP — sidecar removal + specdec loop | EP 53% | Sidecar runs canonical MTP, not a truncation; cleanup is one ~200-LoC safetensors→GGUF converter + `tp-ep-pack-contract.c` extension + sidecar delete (3 sprints), then MTPBlock.forward (1 sprint), then TP/EP specdec loop (the actual throughput sprint). All after C5/B2/C1/tuning. | Med |
 
 ## Discipline
 
