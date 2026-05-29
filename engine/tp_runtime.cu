@@ -450,6 +450,73 @@ __global__ void store_f32_device_to_f8_kv_rows_kernel(unsigned char *kv,
     kv[out] = f8_kv_quant_byte_dev(slot_src[col] / decoded_scale, kv_dtype);
 }
 
+__device__ uint64_t typed_kv_physical_row_dev(uint64_t position,
+                                              int ratio,
+                                              int kind) {
+    if (kind == DS4_V100_TP_KV_ROW_ATTN_RAW) {
+        return position % (uint64_t)kSwa;
+    }
+    if (kind == DS4_V100_TP_KV_ROW_INDEXER) {
+        return position / 4ull;
+    }
+    return ratio == 0 ? position % (uint64_t)kSwa
+                      : (uint64_t)kSwa + position / (uint64_t)ratio;
+}
+
+__global__ void store_f32_device_to_f8_kv_rows_at_position_kernel(
+    unsigned char *kv,
+    uint64_t first_base_offset,
+    uint64_t kv_slot_stride,
+    uint64_t rows,
+    uint64_t shard_row_bytes,
+    int gpu,
+    int ratio,
+    int kind,
+    const uint64_t *decode_position,
+    const float *src,
+    uint64_t src_stride_floats,
+    uint32_t logical_cols,
+    uint64_t logical_row_bytes,
+    uint32_t slot_count,
+    int kv_dtype) {
+    const uint64_t idx = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t total = (uint64_t)slot_count * shard_row_bytes;
+    if (idx >= total) return;
+    const uint64_t position = decode_position ? *decode_position : 0ull;
+    const uint64_t physical_row = typed_kv_physical_row_dev(position, ratio, kind);
+    if (physical_row >= rows) return;
+    const uint32_t slot = (uint32_t)(idx / shard_row_bytes);
+    const uint64_t i = idx - (uint64_t)slot * shard_row_bytes;
+    const uint64_t global_byte = (uint64_t)gpu * shard_row_bytes + i;
+    if (global_byte >= logical_row_bytes) return;
+    const uint32_t block = (uint32_t)(global_byte / 129ull);
+    const uint32_t in_block = (uint32_t)(global_byte - (uint64_t)block * 129ull);
+    const uint32_t col0 = block * 128u;
+    if (col0 >= logical_cols) return;
+
+    const float *slot_src = src + (uint64_t)slot * src_stride_floats;
+    float amax = 0.0f;
+    for (uint32_t c = 0; c < 128u && col0 + c < logical_cols; ++c) {
+        amax = fmaxf(amax, fabsf(slot_src[col0 + c]));
+    }
+    if (amax < 1.0e-8f) amax = 1.0e-8f;
+    const uint8_t scale_byte = e8m0_encode_pow2_scale(amax / f8_kv_max_dev(kv_dtype));
+    const float decoded_scale = e8m0_to_f32_dev(scale_byte);
+
+    const uint64_t out = first_base_offset + (uint64_t)slot * kv_slot_stride +
+                         physical_row * shard_row_bytes + i;
+    if (in_block == 0u) {
+        kv[out] = scale_byte;
+        return;
+    }
+    const uint32_t col = col0 + in_block - 1u;
+    if (col >= logical_cols) {
+        kv[out] = 0;
+        return;
+    }
+    kv[out] = f8_kv_quant_byte_dev(slot_src[col] / decoded_scale, kv_dtype);
+}
+
 __device__ uint8_t get_sharded_row_byte(uint64_t global_byte,
                                         uint64_t row_bytes,
                                         const unsigned char *p0,
@@ -534,6 +601,58 @@ __global__ void load_f8_kv_rows_to_f32_device_kernel(float *dst,
     const uint8_t q =
         get_sharded_row_byte(q_off, row_bytes, s0, s1, s2, s3, s4, s5, s6, s7);
     dst[(uint64_t)slot * dst_stride_floats + col] =
+        f8_kv_to_f32_dev(q, kv_dtype) * e8m0_to_f32_dev(scale_byte);
+}
+
+__global__ void load_f8_kv_rows_at_position_to_f32_device_kernel(
+    float *dst,
+    uint64_t dst_stride_floats,
+    uint32_t logical_cols,
+    uint64_t rows,
+    uint64_t row_bytes,
+    uint64_t kv_slot_stride,
+    uint32_t slot_count,
+    int ratio,
+    int kind,
+    const uint64_t *decode_position,
+    const unsigned char *p0,
+    const unsigned char *p1,
+    const unsigned char *p2,
+    const unsigned char *p3,
+    const unsigned char *p4,
+    const unsigned char *p5,
+    const unsigned char *p6,
+    const unsigned char *p7,
+    int kv_dtype) {
+    const uint64_t idx = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t total = (uint64_t)slot_count * (uint64_t)logical_cols;
+    if (idx >= total) return;
+    const uint64_t position = decode_position ? *decode_position : 0ull;
+    const uint64_t physical_row = typed_kv_physical_row_dev(position, ratio, kind);
+    if (physical_row >= rows) return;
+    const uint32_t slot = (uint32_t)(idx / (uint64_t)logical_cols);
+    const uint32_t col = (uint32_t)(idx - (uint64_t)slot * (uint64_t)logical_cols);
+    const uint64_t block = (uint64_t)(col / 128u);
+    const uint64_t block_off = block * 129ull;
+    const uint64_t q_off = block_off + 1ull + (uint64_t)(col & 127u);
+    const uint64_t row_off = physical_row * row_bytes;
+    const unsigned char *s0 = p0 + (uint64_t)slot * kv_slot_stride + row_off;
+    const unsigned char *s1 = p1 + (uint64_t)slot * kv_slot_stride + row_off;
+    const unsigned char *s2 = p2 + (uint64_t)slot * kv_slot_stride + row_off;
+    const unsigned char *s3 = p3 + (uint64_t)slot * kv_slot_stride + row_off;
+    const unsigned char *s4 = p4 + (uint64_t)slot * kv_slot_stride + row_off;
+    const unsigned char *s5 = p5 + (uint64_t)slot * kv_slot_stride + row_off;
+    const unsigned char *s6 = p6 + (uint64_t)slot * kv_slot_stride + row_off;
+    const unsigned char *s7 = p7 + (uint64_t)slot * kv_slot_stride + row_off;
+    const uint8_t scale_byte =
+        get_sharded_row_byte(block_off, row_bytes, s0, s1, s2, s3, s4, s5, s6, s7);
+    const uint8_t q =
+        get_sharded_row_byte(q_off, row_bytes, s0, s1, s2, s3, s4, s5, s6, s7);
+    const uint64_t dst_row_offset =
+        kind == DS4_V100_TP_KV_ROW_ATTN_RAW
+            ? physical_row * (uint64_t)logical_cols
+            : 0ull;
+    dst[(uint64_t)slot * dst_stride_floats + dst_row_offset + col] =
         f8_kv_to_f32_dev(q, kv_dtype) * e8m0_to_f32_dev(scale_byte);
 }
 
@@ -1380,6 +1499,112 @@ static int kv_rows_store_f32_device_impl(
     return 0;
 }
 
+static int kv_kind_layout(const ds4_tp_runtime *rt,
+                          int layer,
+                          ds4_tp_kv_row_kind kind,
+                          uint32_t *logical_cols,
+                          uint64_t *logical_row_bytes,
+                          uint64_t *base,
+                          uint64_t *rows,
+                          uint64_t *row_bytes,
+                          char *err,
+                          size_t err_len) {
+    if (!rt || layer < 0 || layer >= kLayers) {
+        set_err(err, err_len, "invalid runtime or layer");
+        return -1;
+    }
+    const layer_kv_layout *layout = &rt->kv_layout[layer];
+    if (kind == DS4_V100_TP_KV_ROW_ATTN ||
+        kind == DS4_V100_TP_KV_ROW_ATTN_RAW) {
+        *logical_cols = kHeadDim;
+        *logical_row_bytes = kv_values_bytes(kHeadDim, rt->cfg.kv_dtype);
+        *base = layout->attn_base;
+        *rows = layout->attn_rows;
+        *row_bytes = layout->attn_row_bytes;
+        return 0;
+    }
+    if (kind == DS4_V100_TP_KV_ROW_INDEXER) {
+        if (layout->ratio != 4) {
+            set_err(err, err_len, "indexer KV is only present on ratio-4 layers");
+            return -1;
+        }
+        *logical_cols = kIndexerHeadDim;
+        *logical_row_bytes = kv_values_bytes(kIndexerHeadDim, rt->cfg.kv_dtype);
+        *base = layout->indexer_base;
+        *rows = layout->indexer_rows;
+        *row_bytes = layout->indexer_row_bytes;
+        return 0;
+    }
+    set_err(err, err_len, "unknown KV row kind");
+    return -1;
+}
+
+static int kv_rows_store_f32_device_at_position_impl(
+    ds4_tp_runtime *rt,
+    int layer,
+    uint32_t first_slot,
+    uint32_t slot_count,
+    ds4_tp_kv_row_kind kind,
+    const void *src_by_gpu[kGpus],
+    uint64_t src_stride_floats,
+    void *const stream_by_gpu[kGpus],
+    const void *const position_by_gpu[kGpus],
+    char *err,
+    size_t err_len) {
+    if (!rt || !src_by_gpu || !position_by_gpu || slot_count == 0 ||
+        src_stride_floats == 0) {
+        set_err(err, err_len, "invalid argument");
+        return -1;
+    }
+    if (first_slot >= rt->cfg.slots || slot_count > rt->cfg.slots - first_slot) {
+        set_err(err, err_len, "slot range is outside configured slot count");
+        return -1;
+    }
+    if (!is_f8_kv(rt->cfg.kv_dtype)) {
+        set_err(err, err_len, "device KV rows store currently supports F8 KV only");
+        return -1;
+    }
+
+    uint32_t logical_cols = 0;
+    uint64_t logical_row_bytes = 0;
+    uint64_t base = 0;
+    uint64_t rows = 0;
+    uint64_t row_bytes = 0;
+    if (kv_kind_layout(rt, layer, kind, &logical_cols, &logical_row_bytes,
+                       &base, &rows, &row_bytes, err, err_len) != 0) {
+        return -1;
+    }
+
+    const uint64_t slot_base = checked_mul((uint64_t)first_slot, rt->kv_slot_stride);
+    const uint64_t first_base_offset = slot_base + base;
+    const int ratio = rt->kv_layout[layer].ratio;
+    const int block = 256;
+    for (int i = 0; i < kGpus; ++i) {
+        if (!src_by_gpu[i] || !position_by_gpu[i]) {
+            set_err(err, err_len, "null source or position pointer");
+            return -1;
+        }
+        gpu_state *g = &rt->gpu[i];
+        cudaError_t rc = cudaSetDevice(g->device);
+        if (rc != cudaSuccess) return fail_cuda(err, err_len, "cudaSetDevice", rc);
+        const uint64_t total = (uint64_t)slot_count * row_bytes;
+        const int grid = (int)((total + block - 1) / block);
+        cudaStream_t stream = stream_by_gpu ? (cudaStream_t)stream_by_gpu[i] : (cudaStream_t)0;
+        store_f32_device_to_f8_kv_rows_at_position_kernel<<<grid, block, 0, stream>>>(
+            (unsigned char *)g->kv, first_base_offset, rt->kv_slot_stride,
+            rows, row_bytes, i, ratio, (int)kind,
+            (const uint64_t *)position_by_gpu[i], (const float *)src_by_gpu[i],
+            src_stride_floats, logical_cols, logical_row_bytes, slot_count,
+            (int)rt->cfg.kv_dtype);
+        rc = cudaGetLastError();
+        if (rc != cudaSuccess) {
+            return fail_cuda(err, err_len,
+                             "store_f32_device_to_f8_kv_rows_at_position_kernel", rc);
+        }
+    }
+    return 0;
+}
+
 extern "C" int ds4_tp_runtime_kv_rows_store_f32_device(
     ds4_tp_runtime *rt,
     int layer,
@@ -1411,6 +1636,23 @@ extern "C" int ds4_tp_runtime_kv_rows_store_f32_device_streams(
     return kv_rows_store_f32_device_impl(
         rt, layer, first_slot, slot_count, position, kind, src_by_gpu,
         src_stride_floats, stream_by_gpu, err, err_len);
+}
+
+extern "C" int ds4_tp_runtime_kv_rows_store_f32_device_streams_at_position(
+    ds4_tp_runtime *rt,
+    int layer,
+    uint32_t first_slot,
+    uint32_t slot_count,
+    ds4_tp_kv_row_kind kind,
+    const void *src_by_gpu[kGpus],
+    uint64_t src_stride_floats,
+    void *const stream_by_gpu[kGpus],
+    const void *const position_by_gpu[kGpus],
+    char *err,
+    size_t err_len) {
+    return kv_rows_store_f32_device_at_position_impl(
+        rt, layer, first_slot, slot_count, kind, src_by_gpu,
+        src_stride_floats, stream_by_gpu, position_by_gpu, err, err_len);
 }
 
 static int kv_rows_load_f32_device_impl(
@@ -1474,6 +1716,78 @@ static int kv_rows_load_f32_device_impl(
     return 0;
 }
 
+static int kv_rows_load_f32_device_at_position_impl(
+    ds4_tp_runtime *rt,
+    int layer,
+    uint32_t first_slot,
+    uint32_t slot_count,
+    ds4_tp_kv_row_kind kind,
+    void *dst_by_gpu[kGpus],
+    uint64_t dst_stride_floats,
+    void *const stream_by_gpu[kGpus],
+    const void *const position_by_gpu[kGpus],
+    char *err,
+    size_t err_len) {
+    if (!rt || !dst_by_gpu || !position_by_gpu || slot_count == 0 ||
+        dst_stride_floats == 0) {
+        set_err(err, err_len, "invalid argument");
+        return -1;
+    }
+    if (first_slot >= rt->cfg.slots || slot_count > rt->cfg.slots - first_slot) {
+        set_err(err, err_len, "slot range is outside configured slot count");
+        return -1;
+    }
+    if (!is_f8_kv(rt->cfg.kv_dtype)) {
+        set_err(err, err_len, "device KV rows load currently supports F8 KV only");
+        return -1;
+    }
+
+    uint32_t logical_cols = 0;
+    uint64_t logical_row_bytes = 0;
+    uint64_t base = 0;
+    uint64_t rows = 0;
+    uint64_t row_bytes = 0;
+    if (kv_kind_layout(rt, layer, kind, &logical_cols, &logical_row_bytes,
+                       &base, &rows, &row_bytes, err, err_len) != 0) {
+        return -1;
+    }
+    (void)logical_row_bytes;
+
+    const uint64_t slot_base = checked_mul((uint64_t)first_slot, rt->kv_slot_stride);
+    const uint64_t first_base_offset = slot_base + base;
+    const unsigned char *p[kGpus] = {};
+    for (int i = 0; i < kGpus; ++i) {
+        if (!dst_by_gpu[i] || !position_by_gpu[i]) {
+            set_err(err, err_len, "null destination or position pointer");
+            return -1;
+        }
+        p[i] = (const unsigned char *)rt->gpu[i].kv + first_base_offset;
+    }
+
+    const int ratio = rt->kv_layout[layer].ratio;
+    const int block = 256;
+    const uint64_t total = (uint64_t)slot_count * (uint64_t)logical_cols;
+    const int grid = (int)((total + block - 1) / block);
+    for (int i = 0; i < kGpus; ++i) {
+        gpu_state *g = &rt->gpu[i];
+        cudaError_t rc = cudaSetDevice(g->device);
+        if (rc != cudaSuccess) return fail_cuda(err, err_len, "cudaSetDevice", rc);
+        cudaStream_t stream = stream_by_gpu ? (cudaStream_t)stream_by_gpu[i] : (cudaStream_t)0;
+        load_f8_kv_rows_at_position_to_f32_device_kernel<<<grid, block, 0, stream>>>(
+            (float *)dst_by_gpu[i], dst_stride_floats, logical_cols,
+            rows, row_bytes, rt->kv_slot_stride, slot_count, ratio, (int)kind,
+            (const uint64_t *)position_by_gpu[i],
+            p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7],
+            (int)rt->cfg.kv_dtype);
+        rc = cudaGetLastError();
+        if (rc != cudaSuccess) {
+            return fail_cuda(err, err_len,
+                             "load_f8_kv_rows_at_position_to_f32_device_kernel", rc);
+        }
+    }
+    return 0;
+}
+
 extern "C" int ds4_tp_runtime_kv_rows_load_f32_device(
     ds4_tp_runtime *rt,
     int layer,
@@ -1505,6 +1819,23 @@ extern "C" int ds4_tp_runtime_kv_rows_load_f32_device_streams(
     return kv_rows_load_f32_device_impl(
         rt, layer, first_slot, slot_count, position, kind, dst_by_gpu,
         dst_stride_floats, stream_by_gpu, err, err_len);
+}
+
+extern "C" int ds4_tp_runtime_kv_rows_load_f32_device_streams_at_position(
+    ds4_tp_runtime *rt,
+    int layer,
+    uint32_t first_slot,
+    uint32_t slot_count,
+    ds4_tp_kv_row_kind kind,
+    void *dst_by_gpu[kGpus],
+    uint64_t dst_stride_floats,
+    void *const stream_by_gpu[kGpus],
+    const void *const position_by_gpu[kGpus],
+    char *err,
+    size_t err_len) {
+    return kv_rows_load_f32_device_at_position_impl(
+        rt, layer, first_slot, slot_count, kind, dst_by_gpu,
+        dst_stride_floats, stream_by_gpu, position_by_gpu, err, err_len);
 }
 
 extern "C" int ds4_tp_runtime_kv_row_device_roundtrip_f32(

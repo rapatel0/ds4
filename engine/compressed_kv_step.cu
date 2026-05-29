@@ -1544,17 +1544,20 @@ int run_true_ds4_attention_state_update(const Options &opt,
             if (opt.true_ds4_attention_typed_kv_batch_rows_gate) {
                 const void *src[kGpus] = {};
                 void *streams[kGpus] = {};
+                const void *positions[kGpus] = {};
                 for (int rank = 0; rank < kGpus; ++rank) {
                     src[rank] = ranks[rank].d_attn_kv_full;
                     streams[rank] = opt.decode_cudagraph_gate
                         ? (void *)ranks[rank].stream
                         : nullptr;
+                    positions[rank] = ranks[rank].d_decode_position;
                 }
                 const int store_rc = opt.decode_cudagraph_gate
-                    ? ds4_tp_runtime_kv_rows_store_f32_device_streams(
-                          rt, layer, 0, (uint32_t)opt.slots, opt.position,
+                    ? ds4_tp_runtime_kv_rows_store_f32_device_streams_at_position(
+                          rt, layer, 0, (uint32_t)opt.slots,
                           DS4_V100_TP_KV_ROW_ATTN_RAW, src,
-                          (uint64_t)kHeadDim, streams, err, sizeof(err))
+                          (uint64_t)kHeadDim, streams, positions, err,
+                          sizeof(err))
                     : ds4_tp_runtime_kv_rows_store_f32_device(
                           rt, layer, 0, (uint32_t)opt.slots, opt.position,
                           DS4_V100_TP_KV_ROW_ATTN_RAW, src,
@@ -1594,20 +1597,20 @@ int run_true_ds4_attention_state_update(const Options &opt,
             if (opt.true_ds4_attention_typed_kv_batch_rows_gate) {
                 void *dst[kGpus] = {};
                 void *streams[kGpus] = {};
-                const size_t row_offset =
-                    (size_t)raw_row * (size_t)kHeadDim;
+                const void *positions[kGpus] = {};
                 for (int rank = 0; rank < kGpus; ++rank) {
-                    dst[rank] = ranks[rank].d_attn_raw_swa + row_offset;
+                    dst[rank] = ranks[rank].d_attn_raw_swa;
                     streams[rank] = opt.decode_cudagraph_gate
                         ? (void *)ranks[rank].stream
                         : nullptr;
+                    positions[rank] = ranks[rank].d_decode_position;
                 }
                 const int load_rc = opt.decode_cudagraph_gate
-                    ? ds4_tp_runtime_kv_rows_load_f32_device_streams(
-                          rt, layer, 0, (uint32_t)opt.slots, opt.position,
+                    ? ds4_tp_runtime_kv_rows_load_f32_device_streams_at_position(
+                          rt, layer, 0, (uint32_t)opt.slots,
                           DS4_V100_TP_KV_ROW_ATTN_RAW, dst,
                           (uint64_t)kRawSwaRows * (uint64_t)kHeadDim,
-                          streams, err, sizeof(err))
+                          streams, positions, err, sizeof(err))
                     : ds4_tp_runtime_kv_rows_load_f32_device(
                           rt, layer, 0, (uint32_t)opt.slots, opt.position,
                           DS4_V100_TP_KV_ROW_ATTN_RAW, dst,

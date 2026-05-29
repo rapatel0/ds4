@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 550 warmed gate)
+# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 551)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -95,7 +95,15 @@ optimized.
   It is replay-stable in the reduced direct scaffold, including cross-position
   cache reuse, but it is slower than the promoted `compose_eager_final_hc`
   suffix because graph size and replay cost increase. Keep it diagnostic-only;
-  do not promote it as the default suffix.
+  do not promote it as the default suffix. Sprint 551 removed the raw typed-KV
+  store/load launch-argument dependency on host `opt.position` for graph mode
+  by adding dynamic-position TP runtime row APIs that read
+  `RankState::d_decode_position` in the store/load kernels. The targeted
+  `attn_raw` smoke matched the existing static-position runtime path exactly
+  at nonzero raw row `65`. This is a C1 readiness step only; full capture
+  remains position-keyed because emitted compressed/indexer rows still depend
+  on host `emitted`, host row counters, host row-position arrays, and static
+  typed-KV runtime calls.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
   launcher defaults, topology policy, validation harness, model path, or target
@@ -308,7 +316,9 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | C1 route-stable graph suffix replay | both | Sprints 539-540 restored cache hits, strict selected-token parity, and warmed request-window speedup; launcher default promoted with opt-out | Med |
 | Done | C1 rejected padding knob cleanup | both | Sprint 549 removed static route caps, host-synced actual-route updates, and masked compact copy from active code; fixed-capacity route planning remains the supported graph-stable surface | Low |
 | Done | C1 compact EP pack route-blocking | EP/compose | Sprint 550 preserved fixed graph-visible route shapes and changed compact EP pack so inactive padded routes skip hidden-wide work; the warmed gate was correctness/topology-clean but performance-neutral | Low |
-| 1 | C1 full-capture device-state or larger executor/compose shape work | both | Suffix replay is promoted; Sprint 548 showed moving the suffix earlier to post-KV is correct but slower, and Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever. Next useful work should be a typed-KV/full-capture device-state refactor or a larger grouped-GEMM/copy-shape design, not another tiny padding-kernel rewrite without direct evidence. | Med-High |
+| Done | C1 dynamic-position raw typed KV | full capture | Sprint 551 made graph-mode raw typed-KV store/load compute physical rows from `d_decode_position`; targeted smoke matched static row behavior exactly | Low-Med |
+| 1 | C1 emitted compressed/indexer typed-KV device state | full capture | Full capture is still position-keyed because emitted compressed/indexer rows use host `emitted`, host row counters/position arrays, and static-position typed-KV runtime calls. This needs one coordinated device-state change before removing the full-capture position key. | Med-High |
+| 2 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
 | Deferred | B1 MTP — sidecar removal + specdec loop | EP 53% | Sidecar runs canonical MTP, not a truncation; cleanup is one ~200-LoC safetensors→GGUF converter + `tp-ep-pack-contract.c` extension + sidecar delete (3 sprints), then MTPBlock.forward (1 sprint), then TP/EP specdec loop (the actual throughput sprint). All after C5/B2/C1/tuning. | Med |
@@ -374,7 +384,7 @@ Aggregates the measurement work that per-sprint validation deferred:
 
 With A4, D1, compact EP broadcast trim, C5 event handoffs, Sprint 536
 preflight, Sprint 540 graph suffix replay promotion, Sprint 549 rejected
-padding-knob cleanup, and Sprint 550 compact EP pack route-blocking complete
-for the served path, the next ordered work is C1 typed-KV/full-capture
-device-state refactor or a larger executor/compose shape design with direct
-evidence. MTP stays deferred until the ordered post-C1/tuning point.
+padding-knob cleanup, Sprint 550 compact EP pack route-blocking, and Sprint 551
+dynamic-position raw typed-KV complete for the served/full-capture surface, the
+next ordered work is emitted compressed/indexer typed-KV device state for full
+capture. MTP stays deferred until the ordered post-C1/tuning point.
