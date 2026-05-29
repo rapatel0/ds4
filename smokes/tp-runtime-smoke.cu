@@ -16,9 +16,10 @@ static void usage(const char *argv0) {
                  "usage: %s [--ctx N] [--slots N] [--scratch-mib N] "
                  "[--kv-dtype f16|f8|f8_e4m3_b128|f8_e5m2_b128|q8_0] [--dense-kv-slice] "
                  "[--typed-kv-row] [--device-kv-row] [--device-kv-row-at-position] "
-                 "[--device-kv-row-at-position-bounded] "
+                 "[--device-kv-row-at-position-bounded] [--device-kv-history-row] "
                  "[--kind attn|attn_raw|indexer] "
-                 "[--layer N] [--slot N] [--position N] [--indexer on|off]\n",
+                 "[--layer N] [--slot N] [--position N] [--history-row N] "
+                 "[--indexer on|off]\n",
                  argv0);
 }
 
@@ -42,10 +43,12 @@ int main(int argc, char **argv) {
     bool device_kv_row = false;
     bool device_kv_row_at_position = false;
     bool device_kv_row_at_position_bounded = false;
+    bool device_kv_history_row = false;
     ds4_tp_kv_row_kind row_kind = DS4_V100_TP_KV_ROW_ATTN;
     int layer = 2;
     uint32_t slot = 0;
     unsigned long long position = 0;
+    uint32_t history_row = (uint32_t)-1;
     int indexer = 0;
 
     for (int i = 1; i < argc; ++i) {
@@ -76,6 +79,8 @@ int main(int argc, char **argv) {
             device_kv_row_at_position = true;
         } else if (std::strcmp(arg, "--device-kv-row-at-position-bounded") == 0) {
             device_kv_row_at_position_bounded = true;
+        } else if (std::strcmp(arg, "--device-kv-history-row") == 0) {
+            device_kv_history_row = true;
         } else if (std::strcmp(arg, "--kind") == 0 && val) {
             if (std::strcmp(val, "attn") == 0 || std::strcmp(val, "attention") == 0) {
                 row_kind = DS4_V100_TP_KV_ROW_ATTN;
@@ -98,6 +103,9 @@ int main(int argc, char **argv) {
             ++i;
         } else if (std::strcmp(arg, "--position") == 0 && val) {
             position = parse_u64(val);
+            ++i;
+        } else if (std::strcmp(arg, "--history-row") == 0 && val) {
+            history_row = (uint32_t)parse_u64(val);
             ++i;
         } else if (std::strcmp(arg, "--indexer") == 0 && val) {
             if (std::strcmp(val, "on") == 0 || std::strcmp(val, "true") == 0 ||
@@ -348,6 +356,156 @@ int main(int argc, char **argv) {
                                : "attn"),
                     (unsigned long long)view.physical_row, view.logical_cols,
                     bad, max_abs);
+        ds4_tp_runtime_close(rt);
+        return bad == 0 && max_abs == 0.0 ? 0 : 1;
+    }
+
+    if (device_kv_history_row) {
+        static const uint32_t kSmokeBoundedRows = 8u;
+        ds4_tp_kv_row_view current_view;
+        if (ds4_tp_runtime_kv_row_view(rt, layer, slot, position, row_kind,
+                                       &current_view, err, sizeof(err)) != 0) {
+            std::fprintf(stderr, "tp_runtime_history_view_failed\t%s\n", err);
+            ds4_tp_runtime_close(rt);
+            return 1;
+        }
+        const uint64_t emit_ratio =
+            row_kind == DS4_V100_TP_KV_ROW_INDEXER ? 4ull
+                                                   : (uint64_t)current_view.ratio;
+        if (row_kind == DS4_V100_TP_KV_ROW_ATTN_RAW || emit_ratio == 0ull) {
+            std::fprintf(stderr, "tp_runtime_history_unsupported_kind\n");
+            ds4_tp_runtime_close(rt);
+            return 1;
+        }
+        const uint64_t emitted_count = (position + 1ull) / emit_ratio;
+        if (emitted_count == 0ull) {
+            std::fprintf(stderr, "tp_runtime_history_no_emitted_rows\n");
+            ds4_tp_runtime_close(rt);
+            return 1;
+        }
+        if (history_row == (uint32_t)-1) {
+            history_row = (uint32_t)((emitted_count - 1ull) % kSmokeBoundedRows);
+        }
+        if (history_row >= kSmokeBoundedRows ||
+            (uint64_t)history_row >= emitted_count) {
+            std::fprintf(stderr, "tp_runtime_history_row_out_of_range\n");
+            ds4_tp_runtime_close(rt);
+            return 1;
+        }
+        const uint64_t offset =
+            (emitted_count - 1ull + (uint64_t)kSmokeBoundedRows -
+             (uint64_t)history_row) %
+            (uint64_t)kSmokeBoundedRows;
+        const uint64_t emission = emitted_count - offset;
+        const uint64_t history_position = emission * emit_ratio - 1ull;
+        ds4_tp_kv_row_view history_view;
+        if (ds4_tp_runtime_kv_row_view(rt, layer, slot, history_position, row_kind,
+                                       &history_view, err, sizeof(err)) != 0) {
+            std::fprintf(stderr, "tp_runtime_history_source_view_failed\t%s\n", err);
+            ds4_tp_runtime_close(rt);
+            return 1;
+        }
+        const uint64_t row_values = history_view.logical_cols;
+        const uint64_t bounded_stride =
+            (uint64_t)kSmokeBoundedRows * (uint64_t)history_view.logical_cols;
+        const uint64_t row_bytes = row_values * sizeof(float);
+        const uint64_t bounded_bytes = bounded_stride * sizeof(float);
+        void *src_full[DS4_V100_TP_MAX_GPUS] = {};
+        void *src_row[DS4_V100_TP_MAX_GPUS] = {};
+        void *static_dst[DS4_V100_TP_MAX_GPUS] = {};
+        void *dynamic_dst[DS4_V100_TP_MAX_GPUS] = {};
+        void *pos_dev[DS4_V100_TP_MAX_GPUS] = {};
+        std::vector<float> host_src((size_t)bounded_stride, 0.0f);
+        for (uint64_t i = 0; i < row_values; ++i) {
+            host_src[(size_t)((uint64_t)history_row * row_values + i)] =
+                (float)((int)(i % 89ull) - 44) * 0.017578125f +
+                (float)((int)(history_position % 19ull) - 9) * 0.02734375f;
+        }
+        for (int gpu = 0; gpu < DS4_V100_TP_MAX_GPUS; ++gpu) {
+            cudaError_t rc = cudaSetDevice(gpu);
+            if (rc != cudaSuccess) {
+                std::fprintf(stderr, "cudaSetDevice failed: %s\n",
+                             cudaGetErrorString(rc));
+                ds4_tp_runtime_close(rt);
+                return 1;
+            }
+            cudaMalloc(&src_full[gpu], (size_t)bounded_bytes);
+            cudaMalloc(&static_dst[gpu], (size_t)row_bytes);
+            cudaMalloc(&dynamic_dst[gpu], (size_t)bounded_bytes);
+            cudaMalloc(&pos_dev[gpu], sizeof(uint64_t));
+            cudaMemcpy(src_full[gpu], host_src.data(), (size_t)bounded_bytes,
+                       cudaMemcpyHostToDevice);
+            src_row[gpu] =
+                (float *)src_full[gpu] + (uint64_t)history_row * row_values;
+            cudaMemset(static_dst[gpu], 0, (size_t)row_bytes);
+            cudaMemset(dynamic_dst[gpu], 0, (size_t)bounded_bytes);
+            cudaMemcpy(pos_dev[gpu], &position, sizeof(uint64_t),
+                       cudaMemcpyHostToDevice);
+        }
+        if (ds4_tp_runtime_kv_row_store_f32_device(
+                rt, layer, slot, history_position, row_kind,
+                (const void **)src_row, err, sizeof(err)) != 0 ||
+            ds4_tp_runtime_kv_row_load_f32_device(
+                rt, layer, slot, history_position, row_kind, static_dst, err,
+                sizeof(err)) != 0) {
+            std::fprintf(stderr, "tp_runtime_static_history_row_failed\t%s\n", err);
+            ds4_tp_runtime_close(rt);
+            return 1;
+        }
+        void *streams[DS4_V100_TP_MAX_GPUS] = {};
+        if (ds4_tp_runtime_kv_rows_load_f32_device_streams_at_history_row(
+                rt, layer, slot, 1, row_kind, history_row, dynamic_dst,
+                bounded_stride, kSmokeBoundedRows, streams,
+                (const void *const *)pos_dev, err, sizeof(err)) != 0) {
+            std::fprintf(stderr, "tp_runtime_dynamic_history_row_failed\t%s\n", err);
+            ds4_tp_runtime_close(rt);
+            return 1;
+        }
+        for (int gpu = 0; gpu < DS4_V100_TP_MAX_GPUS; ++gpu) {
+            cudaSetDevice(gpu);
+            cudaDeviceSynchronize();
+        }
+        uint32_t bad = 0;
+        double max_abs = 0.0;
+        for (int gpu = 0; gpu < DS4_V100_TP_MAX_GPUS; ++gpu) {
+            std::vector<float> static_host((size_t)row_values);
+            std::vector<float> dynamic_host((size_t)row_values);
+            cudaSetDevice(gpu);
+            cudaMemcpy(static_host.data(), static_dst[gpu],
+                       (size_t)row_bytes, cudaMemcpyDeviceToHost);
+            cudaMemcpy(dynamic_host.data(),
+                       (float *)dynamic_dst[gpu] +
+                           (uint64_t)history_row * row_values,
+                       (size_t)row_bytes, cudaMemcpyDeviceToHost);
+            for (uint32_t i = 0; i < history_view.logical_cols; ++i) {
+                const double diff =
+                    std::fabs((double)static_host[(size_t)i] -
+                              (double)dynamic_host[(size_t)i]);
+                if (diff != 0.0) bad++;
+                if (diff > max_abs) max_abs = diff;
+            }
+        }
+        for (int gpu = 0; gpu < DS4_V100_TP_MAX_GPUS; ++gpu) {
+            cudaSetDevice(gpu);
+            cudaFree(pos_dev[gpu]);
+            cudaFree(dynamic_dst[gpu]);
+            cudaFree(static_dst[gpu]);
+            cudaFree(src_full[gpu]);
+        }
+        std::printf("tp_dynamic_history_kv_row\tctx=%llu\tslots=%u\t"
+                    "layer=%d\tratio=%d\tslot=%u\tposition=%llu\t"
+                    "history_position=%llu\tkind=%s\tphysical_row=%llu\t"
+                    "bounded_row=%u\tlogical_cols=%u\tbad_values=%u\t"
+                    "max_abs=%.9f\n",
+                    (unsigned long long)cfg.ctx, cfg.slots, history_view.layer,
+                    history_view.ratio, history_view.slot,
+                    (unsigned long long)position,
+                    (unsigned long long)history_position,
+                    history_view.kind == DS4_V100_TP_KV_ROW_INDEXER
+                        ? "indexer"
+                        : "attn",
+                    (unsigned long long)history_view.physical_row, history_row,
+                    history_view.logical_cols, bad, max_abs);
         ds4_tp_runtime_close(rt);
         return bad == 0 && max_abs == 0.0 ? 0 : 1;
     }

@@ -257,6 +257,21 @@ int ds4_tp_runtime_kv_rows_load_f32_device_streams_at_position_bounded(
     char *err,
     size_t err_len);
 
+int ds4_tp_runtime_kv_rows_load_f32_device_streams_at_history_row(
+    ds4_tp_runtime *rt,
+    int layer,
+    uint32_t first_slot,
+    uint32_t slot_count,
+    ds4_tp_kv_row_kind kind,
+    uint32_t bounded_row,
+    void *dst_by_gpu[DS4_V100_TP_MAX_GPUS],
+    uint64_t dst_stride_floats,
+    uint32_t bounded_rows,
+    void *const stream_by_gpu[DS4_V100_TP_MAX_GPUS],
+    const void *const position_by_gpu[DS4_V100_TP_MAX_GPUS],
+    char *err,
+    size_t err_len);
+
 int ds4_tp_runtime_kv_row_device_roundtrip_f32(
     ds4_tp_runtime *rt,
     int layer,
