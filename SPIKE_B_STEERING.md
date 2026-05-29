@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 563)
+# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 569)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -20,7 +20,7 @@ kernels. Optimizing the expert GEMM alone moves a fraction of 53% and none of
 40%. MTP remains deferred support code until the base TP/EP path is stable and
 optimized.
 
-## Current reassessment after sprints 478-548
+## Current reassessment after sprints 478-569
 
 - **A1-A3 are done.** A1 RMS-norm rank-local is rolled into A2. A2 HC mix
   row-parallel all-reduce is promoted from Sprint 478. A3 router rank-local
@@ -198,7 +198,14 @@ optimized.
   pointers to the captured input/output pair, allowing cross-position replay
   without stale HC reads. The six-request eager-vs-full-graph probe now matches
   selected tokens and checksums with `43` captures, `215` persistent replays,
-  and zero invalidations.
+  and zero invalidations. Sprint 569 then moved from reduced selected-token
+  checks to serving metrology at `32` slots / `256K`: after a full-slot warmup,
+  deterministic long-prompt measured serving output matched `32/32` generated
+  token sequences between the promoted suffix-control leg and opt-in no-suffix
+  full capture. The no-suffix full-capture request window improved generated
+  throughput `12.603435 -> 16.807308` tok/s and median latency
+  `81.205441s -> 60.873505s`. Treat this as a positive opt-in C1 performance
+  signal, but do not flip the default from one warmed serving run.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
   launcher defaults, topology policy, validation harness, model path, or target
@@ -428,7 +435,8 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | C1 rank-major replay snapshot repair | full capture | Sprint 566 added stronger diagnostic hashes and comparable eager/replay `step_snapshot` records; the Sprint 565 rank-major HC-current diff is a timing artifact, not the first comparable state drift | Med |
 | Done | C1 route replay boundary localization | full capture | Sprint 567 added route metadata snapshots and graph-vs-graph comparison; `route_a` full-buffer drift is scratch noise because route totals/slots/weights and outputs still match before layer-1 drift | Med |
 | Done | C1 inter-layer current/HC pointer-buffer repair | full capture | Sprint 568 stores captured final-HC input/output buffer addresses and rebases live HC state into the captured input before replay; six-request eager-vs-full-graph selected-token/checksum parity passed with `215` cache-hit replays and zero invalidations | Med-High |
-| 1 | C1 serving parity/performance metrology | full capture | Test the opt-in no-suffix full-capture path at serving shape with deterministic generation, substantial warmup, startup/init excluded, and a long prompt before any throughput claim. | Med-High |
+| Done | C1 serving parity/performance metrology | full capture | Sprint 569 ran deterministic warmed long-prompt serving at `32` slots / `256K`; no-suffix full capture matched `32/32` generated token sequences and improved request-window generated throughput `12.603435 -> 16.807308` tok/s versus the promoted suffix-control leg | Med-High |
+| 1 | C1 longer steady-state serving promotion gate | full capture | Repeat/extend the warmed serving gate with a longer measured window, startup/init excluded, deterministic generation, and explicit graph/status counter extraction before flipping no-suffix full capture to the launcher default. | Med-High |
 | 2 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
