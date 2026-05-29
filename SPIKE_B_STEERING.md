@@ -36,9 +36,9 @@ optimized.
   Sprint 483 rank-major attention-projection consumer conversion.
 - **C1 is newly more plausible, but not next.** Sprint 479 removed promoted
   hot-path direct peer-copy transport in favor of NCCL, and the structural
-  extraction made the surface readable. Still, C1 should wait until
-  output-head A1, sync-point reduction, and compact EP compose reduce the
-  capture surface.
+  extraction made the surface readable. Sprint 527 removed GPU0-centralized
+  output-head prep. Still, C1 should wait until sync-point reduction and
+  compact EP compose reduce the remaining capture surface.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
   launcher defaults, topology policy, validation harness, model path, or target
@@ -128,44 +128,85 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 ## D. Model-boundary NCCL cleanup
 
 - **D1 Output-head A1 pattern.** `engine/output_head.cu` still has the same
-  gather-to-GPU0 → centralized RMS/mix/weighted sum/final RMS pattern that A2
-  fixed inside every layer, plus hard host synchronizations. Apply the same
-  rank-local partial plus NCCL all-reduce template at the model boundary:
-  partial sum-of-squares over each `[slots,4,512]` shard, all-reduce the per-slot
-  sums, normalize locally, and compute the head mix row-parallel. Expected gain
-  is smaller than per-layer A2 because it runs once per decode step, but it is a
-  clean `1-2%` candidate and removes another GPU0-centralized boundary.
+  gather-to-GPU0 -> centralized RMS/mix/weighted sum/final RMS pattern that A2
+  fixed inside every layer, plus hard host synchronizations. Done in Sprint 527:
+  rank-local stable reductions plus NCCL all-reduces/all-gather replaced the
+  centralized prep. This is a structural/C1-prep promotion, not a direct
+  throughput win at the measured shape.
 
 ## Recommended priority
 
 | # | Idea | Domain | Why | Risk |
 |---|---|---|---|---|
 | Done | A4 finish rank-major consumers | HC 40% | Sprint 526 completed the remaining post-attention FFN shared/route consumers for the served path | Low |
-| 1 | D1 output-head A1 pattern | Model boundary | Same proven A2 template; removes GPU0-centralized output-head norm/mix and hard host syncs | Low |
-| 2 | C5 sync-point reduction | both | Removes host round-trips and makes C1 graph capture structurally possible | Low-Med |
-| 3 | B2 compact EP variable-size NCCL compose | EP 53% | Targets served compact traffic and removes remaining peer-copy-equivalent compose movement | Med |
-| 4 | C1/C2 piecewise graph capture and serving parity | both | Highest ceiling, but only after the surface is simplified | Med-High |
-| 5 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
-| 6 | B3/B4/B5 EP structural bets | EP 53% | TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
+| Done | D1 output-head A1 pattern | Model boundary | Sprint 527 removed GPU0-centralized output-head prep; timing regressed, but the capture surface is cleaner | Low |
+| 1 | C5 sync-point reduction | both | Removes host round-trips and makes C1 graph capture structurally possible | Low-Med |
+| 2 | B2 compact EP variable-size NCCL compose | EP 53% | Targets served compact traffic and removes remaining peer-copy-equivalent compose movement | Med |
+| 3 | C1/C2 piecewise graph capture and serving parity | both | Highest ceiling, but only after the surface is simplified | Med-High |
+| 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
+| 5 | B3/B4/B5 EP structural bets | EP 53% | TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
 | Deferred | B1 MTP | EP 53% | Useful later, but do not use it to hide base TP/EP bottlenecks | Med |
 
-## Discipline (unchanged)
+## Discipline
 
-- A/B every idea on the steady-state reference above, **parity-gated** (first
-  token unchanged + tolerance) — not on reduced/short shapes that flatter results.
-- Report **server decode tok/s AND GPU util** for control vs candidate.
-- No re-baselining; use the latest promoted artifact as the control unless a
-  real invalidator makes it non-comparable.
-- No micro-opt before the change is justified by the profile.
-- Re-profile the domain table after each promoted change (shares shift).
-- One-off smokes and temporary gates are for evaluation only. A promoted result
-  moves into the main code/default path and deletes the smoke-only flag,
-  rejected branch, or diagnostic scaffold in the same sprint unless there is a
-  documented debugger-only reason to keep it default-off.
+**Per-sprint: correctness only. Perf measurement aggregates at the tuning
+sprint.** The structural changes in A4/D1/sync-reduction/EP-compact are each
+clear wins over GPU0-centralized norming; per-sprint reference-shape runs add
+cost (10–15 min each), noise (shape variance), and no decision value when the
+expected magnitude per sprint is single-digit percent. The dedicated tuning
+sprint at the end of the program measures the cumulative win.
+
+### Per-sprint validation (minimal cost, catches real bugs)
+
+- **Tolerance gate.** Selected-token + generated-sequence agreement ≥ `0.99`
+  against the prior promoted control artifact. Reuse the artifact pointer;
+  do not run a fresh control. Governed by `docs/sprints/VALIDATION_CONTROL_POLICY.md`.
+- **Transport invariant.** `peer_copy_ops = 0` and `peer_copy_sys_bytes = 0`
+  on the promoted path. Re-introducing a peer copy is a regression.
+- **Scaffold confirmation.** Server log shows the intended path is the path
+  taken (e.g., `rank_major_input=1`, `slot_major_ffn_norm=0` on every checked
+  layer). Free, gives confidence the structural change actually fires.
+- **Cleanup discipline.** Promotion = move into `engine/` (or
+  `kernels/v100/`) and delete the flag + dead branch in the same commit. No
+  drift.
+
+### Exception: novel-risk sprints opt into perf measurement
+
+For sprints whose **failure mode is "structurally landed but perf didn't
+transfer to serving,"** opt into perf measurement inside the sprint. The
+canonical case is **C1 piecewise graph capture** — sprints 415–463 had the
+2.27× win in the smoke and zero transfer to serving. For that class, the
+sprint plan names "decode tok/s at reference shape" as an in-scope gate
+alongside the tolerance gate.
+
+The default for everything else (A4, D1, sync-reduction, EP-compact, the
+remaining Pattern A items) is correctness only.
+
+### Tuning sprint (deferred — runs once at program completion)
+
+Aggregates the measurement work that per-sprint validation deferred:
+
+- Full reference-shape decode tok/s and request-window GPU util.
+- Domain-table re-profile (HC-current vs EP vs other), which re-picks
+  what's next.
+- Shape envelope sweep — slot counts, context lengths, request counts —
+  on the post-structural surface.
+- `NCCL_ALGO` / `NCCL_PROTO` pinning per payload size.
+- C4 spill check (`-Xptxas -v` + ncu) on the rank-local and HC-mix kernels.
+
+### Carried-forward rules
+
+- **No re-baselining.** Control is always the latest promoted artifact
+  pointer unless a real invalidator (model / launcher / shape / flags /
+  harness semantics) makes it non-comparable.
+- **One-off smokes and temporary gates are evaluation-only.** A promoted
+  result moves into the main path and deletes the smoke-only flag, the
+  rejected branch, or the diagnostic scaffold in the same sprint unless
+  there is a documented debugger-only reason to keep it default-off.
 
 ## One-line frame
 
-With A4 complete for the served path, remove the remaining output-head,
-host-sync, and compact EP compose friction before attempting C1. C1 is still
-the biggest ceiling, but it should run on the simplest fully rank-major, mostly
-NCCL, sync-reduced surface we can make. MTP stays deferred.
+With A4 and D1 complete for the served path, remove the remaining host-sync and
+compact EP compose friction before attempting C1. C1 is still the biggest
+ceiling, but it should run on the simplest fully rank-major, mostly NCCL,
+sync-reduced surface we can make. MTP stays deferred.

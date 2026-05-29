@@ -4,16 +4,17 @@ struct SharedOutputHead {
     int vocab = 0;
     int rows_per_gpu = 0;
     ContractRow output_rows[kGpus];
-    float *d_hc = nullptr;
-    float *d_hc_norm = nullptr;
-    float *d_head_pre = nullptr;
-    float *d_head_weights = nullptr;
-    float *d_embd = nullptr;
-    float *d_embd_norm = nullptr;
-    float *d_head_fn = nullptr;
-    float *d_head_base = nullptr;
-    float *d_head_scale = nullptr;
-    float *d_output_norm = nullptr;
+    float *d_head_base_rank[kGpus] = {};
+    float *d_head_scale_rank[kGpus] = {};
+    float *d_head_fn_rank[kGpus] = {};
+    float *d_output_norm_rank[kGpus] = {};
+    float *d_reduce_max[kGpus] = {};
+    float *d_reduce_sumsq[kGpus] = {};
+    float *d_head_pre_rank[kGpus] = {};
+    float *d_head_weights_rank[kGpus] = {};
+    float *d_embd_shard[kGpus] = {};
+    float *d_embd_norm_shard[kGpus] = {};
+    float *d_embd_rank_major[kGpus] = {};
     uint16_t *d_w[kGpus] = {};
     float *d_x[kGpus] = {};
     float *d_logits[kGpus] = {};
@@ -30,6 +31,195 @@ struct SharedOutputHead {
     uint64_t output_weight_bytes = 0;
     uint64_t logits_bytes = 0;
 };
+
+__global__ void output_head_hc_local_max_mix4_partial_kernel(float *max_abs_out,
+                                                             float *mix_out,
+                                                             const float *hc_shard,
+                                                             const float *fn_shard,
+                                                             uint32_t slots) {
+    const uint32_t op = blockIdx.x;
+    const uint32_t slot = blockIdx.y;
+    constexpr uint32_t shard_cols = kHidden / kGpus;
+    constexpr uint32_t local_cols = kHcRows * shard_cols;
+    if (slot >= slots || op > 4u) return;
+    const float *x = hc_shard + (uint64_t)slot * local_cols;
+    if (op == 0u) {
+        float local_max = 0.0f;
+        for (uint32_t c = threadIdx.x; c < local_cols; c += blockDim.x) {
+            const float v = x[c];
+            if (isfinite(v)) local_max = fmaxf(local_max, fabsf(v));
+        }
+        const float max_abs = block_max_256_f32(local_max);
+        if (threadIdx.x == 0u) max_abs_out[slot] = max_abs;
+        return;
+    }
+    const uint32_t mix = op - 1u;
+    float acc = 0.0f;
+    for (uint32_t c = threadIdx.x; c < local_cols; c += blockDim.x) {
+        const float v = x[c];
+        if (isfinite(v)) acc += fn_shard[(uint64_t)c * 4ull + mix] * v;
+    }
+    acc = block_sum_256_f32(acc);
+    if (threadIdx.x == 0u) {
+        mix_out[(uint64_t)slot * 4ull + mix] = isfinite(acc) ? acc : 0.0f;
+    }
+}
+
+__global__ void output_head_hc_local_stable_sumsq_kernel(float *sumsq_out,
+                                                         const float *hc_shard,
+                                                         const float *global_max_abs,
+                                                         uint32_t slots) {
+    const uint32_t slot = blockIdx.x;
+    constexpr uint32_t shard_cols = kHidden / kGpus;
+    constexpr uint32_t local_cols = kHcRows * shard_cols;
+    if (slot >= slots) return;
+    const float max_abs = global_max_abs[slot];
+    const float *x = hc_shard + (uint64_t)slot * local_cols;
+    float sum = 0.0f;
+    if (max_abs > 0.0f && isfinite(max_abs)) {
+        for (uint32_t c = threadIdx.x; c < local_cols; c += blockDim.x) {
+            const float v = x[c];
+            if (isfinite(v)) {
+                const float scaled = v / max_abs;
+                sum += scaled * scaled;
+            }
+        }
+    }
+    sum = block_sum_256_f32(sum);
+    if (threadIdx.x == 0u) sumsq_out[slot] = isfinite(sum) ? sum : 0.0f;
+}
+
+__global__ void output_head_weights_from_reduced_mix4_kernel(float *weights,
+                                                             const float *global_max_abs,
+                                                             const float *global_sumsq,
+                                                             const float *global_mix,
+                                                             const float *scale,
+                                                             const float *base,
+                                                             uint32_t slots,
+                                                             float eps) {
+    const uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    const uint32_t n = slots * 4u;
+    if (i >= n) return;
+    const uint32_t slot = i >> 2u;
+    const uint32_t h = i & 3u;
+    const float max_abs = global_max_abs[slot];
+    const float sum = global_sumsq[slot];
+    float norm_scale = rsqrtf(eps);
+    if (max_abs > 0.0f && isfinite(max_abs)) {
+        norm_scale =
+            rsqrtf(sum / (float)(kHcRows * kHidden) +
+                   eps / (max_abs * max_abs)) /
+            max_abs;
+    }
+    const float pre = global_mix[i] * norm_scale;
+    const float z = pre * scale[0] + base[h];
+    weights[i] = 1.0f / (1.0f + expf(-z)) + 1.0e-6f;
+}
+
+__global__ void output_head_weighted_sum_shard_kernel(float *out,
+                                                      const float *hc_shard,
+                                                      const float *weights,
+                                                      uint32_t slots) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    constexpr uint32_t shard_cols = kHidden / kGpus;
+    const uint64_t n = (uint64_t)slots * shard_cols;
+    if (i >= n) return;
+    const uint32_t slot = (uint32_t)(i / shard_cols);
+    const uint32_t local_h = (uint32_t)(i - (uint64_t)slot * shard_cols);
+    const uint64_t base = (uint64_t)slot * 4ull * shard_cols;
+    const float w0 = weights[(uint64_t)slot * 4ull + 0ull];
+    const float w1 = weights[(uint64_t)slot * 4ull + 1ull];
+    const float w2 = weights[(uint64_t)slot * 4ull + 2ull];
+    const float w3 = weights[(uint64_t)slot * 4ull + 3ull];
+    const float v = hc_shard[base + local_h] * w0 +
+                    hc_shard[base + (uint64_t)shard_cols + local_h] * w1 +
+                    hc_shard[base + 2ull * (uint64_t)shard_cols + local_h] * w2 +
+                    hc_shard[base + 3ull * (uint64_t)shard_cols + local_h] * w3;
+    out[i] = isfinite(v) ? v : 0.0f;
+}
+
+__global__ void output_head_embd_local_max_kernel(float *max_abs_out,
+                                                  const float *embd_shard,
+                                                  uint32_t slots) {
+    const uint32_t slot = blockIdx.x;
+    constexpr uint32_t shard_cols = kHidden / kGpus;
+    if (slot >= slots) return;
+    const float *x = embd_shard + (uint64_t)slot * shard_cols;
+    float local_max = 0.0f;
+    for (uint32_t c = threadIdx.x; c < shard_cols; c += blockDim.x) {
+        const float v = x[c];
+        if (isfinite(v)) local_max = fmaxf(local_max, fabsf(v));
+    }
+    const float max_abs = block_max_256_f32(local_max);
+    if (threadIdx.x == 0u) max_abs_out[slot] = max_abs;
+}
+
+__global__ void output_head_embd_local_stable_sumsq_kernel(float *sumsq_out,
+                                                           const float *embd_shard,
+                                                           const float *global_max_abs,
+                                                           uint32_t slots) {
+    const uint32_t slot = blockIdx.x;
+    constexpr uint32_t shard_cols = kHidden / kGpus;
+    if (slot >= slots) return;
+    const float max_abs = global_max_abs[slot];
+    const float *x = embd_shard + (uint64_t)slot * shard_cols;
+    float sum = 0.0f;
+    if (max_abs > 0.0f && isfinite(max_abs)) {
+        for (uint32_t c = threadIdx.x; c < shard_cols; c += blockDim.x) {
+            const float v = x[c];
+            if (isfinite(v)) {
+                const float scaled = v / max_abs;
+                sum += scaled * scaled;
+            }
+        }
+    }
+    sum = block_sum_256_f32(sum);
+    if (threadIdx.x == 0u) sumsq_out[slot] = isfinite(sum) ? sum : 0.0f;
+}
+
+__global__ void output_head_apply_output_norm_shard_kernel(float *out,
+                                                           const float *embd_shard,
+                                                           const float *norm_weight_shard,
+                                                           const float *global_max_abs,
+                                                           const float *global_sumsq,
+                                                           uint32_t slots,
+                                                           float eps) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    constexpr uint32_t shard_cols = kHidden / kGpus;
+    const uint64_t n = (uint64_t)slots * shard_cols;
+    if (i >= n) return;
+    const uint32_t slot = (uint32_t)(i / shard_cols);
+    const uint32_t local_h = (uint32_t)(i - (uint64_t)slot * shard_cols);
+    const float max_abs = global_max_abs[slot];
+    const float sum = global_sumsq[slot];
+    float norm_scale = rsqrtf(eps);
+    if (max_abs > 0.0f && isfinite(max_abs)) {
+        norm_scale =
+            rsqrtf(sum / (float)kHidden + eps / (max_abs * max_abs)) /
+            max_abs;
+    }
+    const float v = embd_shard[i];
+    const float y = isfinite(v) ? v * norm_scale * norm_weight_shard[local_h] : 0.0f;
+    out[i] = isfinite(y) ? y : 0.0f;
+}
+
+__global__ void output_head_rank_major_to_slot_major_kernel(float *slot_major,
+                                                            const float *rank_major,
+                                                            uint32_t slots) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    constexpr uint32_t shard_cols = kHidden / kGpus;
+    const uint64_t n = (uint64_t)slots * (uint64_t)kHidden;
+    if (i >= n) return;
+    const uint32_t slot = (uint32_t)(i / kHidden);
+    const uint32_t h = (uint32_t)(i - (uint64_t)slot * kHidden);
+    const uint32_t rank = h / shard_cols;
+    const uint32_t local_h = h - rank * shard_cols;
+    const uint64_t src =
+        ((uint64_t)rank * (uint64_t)slots + (uint64_t)slot) *
+            (uint64_t)shard_cols +
+        local_h;
+    slot_major[i] = rank_major[src];
+}
 
 struct OutputHeadRunResult {
     bool pass = true;
@@ -194,35 +384,21 @@ int open_shared_output_head(const Options &opt,
         return 3;
     }
 
-    const uint64_t hc_elems = (uint64_t)opt.slots * 4ull * (uint64_t)kHidden;
     const uint64_t embd_elems = (uint64_t)opt.slots * (uint64_t)kHidden;
+    const uint64_t hc_shard_cols = 4ull * (uint64_t)(kHidden / kGpus);
+    const uint64_t embd_shard_elems =
+        (uint64_t)opt.slots * (uint64_t)(kHidden / kGpus);
     const uint64_t logits_elems = (uint64_t)opt.slots * (uint64_t)out->rows_per_gpu;
     const uint64_t output_shard_bytes =
         (uint64_t)out->rows_per_gpu * (uint64_t)kHidden * sizeof(uint16_t);
 
     CHECK_CUDA(cudaSetDevice(opt.devices[0]));
-    CHECK_CUDA(cudaMalloc(&out->d_hc, (size_t)hc_elems * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&out->d_hc_norm, (size_t)hc_elems * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&out->d_head_pre, (size_t)opt.slots * 4 * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&out->d_head_weights, (size_t)opt.slots * 4 * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&out->d_embd, (size_t)embd_elems * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&out->d_embd_norm, (size_t)embd_elems * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&out->d_head_fn, hc_head_fn.size() * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&out->d_head_base, hc_head_base.size() * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&out->d_head_scale, hc_head_scale.size() * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&out->d_output_norm, output_norm.size() * sizeof(float)));
-    CHECK_CUDA(cudaMemcpy(out->d_head_fn, hc_head_fn.data(),
-                          hc_head_fn.size() * sizeof(float), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(out->d_head_base, hc_head_base.data(),
-                          hc_head_base.size() * sizeof(float), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(out->d_head_scale, hc_head_scale.data(),
-                          hc_head_scale.size() * sizeof(float), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(out->d_output_norm, output_norm.data(),
-                          output_norm.size() * sizeof(float), cudaMemcpyHostToDevice));
     CHECK_CUDA(cudaStreamCreateWithFlags(&out->stream[0], cudaStreamNonBlocking));
     CHECK_CUDA(cudaEventCreateWithFlags(&out->prep_ready, cudaEventDisableTiming));
 
     std::vector<uint16_t> host_w((size_t)out->rows_per_gpu * (size_t)kHidden);
+    std::vector<float> head_fn_rank((size_t)hc_shard_cols * 4u);
+    std::vector<float> output_norm_rank((size_t)(kHidden / kGpus));
     for (int gpu = 0; gpu < kGpus; ++gpu) {
         const ContractRow &r = out->output_rows[gpu];
         const std::string path = path_join(opt.pack_dir, r.source_pack_file);
@@ -235,6 +411,28 @@ int open_shared_output_head(const Options &opt,
         CHECK_CUDA(cudaMalloc(&out->d_x[gpu], (size_t)embd_elems * sizeof(float)));
         CHECK_CUDA(cudaMalloc(&out->d_logits[gpu],
                               (size_t)logits_elems * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&out->d_head_fn_rank[gpu],
+                              head_fn_rank.size() * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&out->d_head_base_rank[gpu],
+                              hc_head_base.size() * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&out->d_head_scale_rank[gpu],
+                              hc_head_scale.size() * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&out->d_output_norm_rank[gpu],
+                              output_norm_rank.size() * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&out->d_reduce_max[gpu],
+                              (size_t)opt.slots * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&out->d_reduce_sumsq[gpu],
+                              (size_t)opt.slots * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&out->d_head_pre_rank[gpu],
+                              (size_t)opt.slots * 4u * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&out->d_head_weights_rank[gpu],
+                              (size_t)opt.slots * 4u * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&out->d_embd_shard[gpu],
+                              (size_t)embd_shard_elems * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&out->d_embd_norm_shard[gpu],
+                              (size_t)embd_shard_elems * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&out->d_embd_rank_major[gpu],
+                              (size_t)embd_elems * sizeof(float)));
         CHECK_CUDA(cudaMalloc(&out->d_best_token[gpu],
                               (size_t)opt.slots * sizeof(uint32_t)));
         CHECK_CUDA(cudaMalloc(&out->d_best_logit[gpu],
@@ -255,6 +453,29 @@ int open_shared_output_head(const Options &opt,
                                   (size_t)opt.slots * sizeof(float)));
         CHECK_CUDA(cudaMemcpy(out->d_w[gpu], host_w.data(),
                               (size_t)output_shard_bytes, cudaMemcpyHostToDevice));
+        for (uint32_t c = 0; c < hc_shard_cols; ++c) {
+            const uint64_t global_c = (uint64_t)gpu * hc_shard_cols + c;
+            for (uint32_t h = 0; h < 4u; ++h) {
+                head_fn_rank[(uint64_t)c * 4ull + h] =
+                    hc_head_fn[(uint64_t)h * (4ull * (uint64_t)kHidden) + global_c];
+            }
+        }
+        const uint32_t shard_cols = (uint32_t)(kHidden / kGpus);
+        for (uint32_t c = 0; c < shard_cols; ++c) {
+            output_norm_rank[c] = output_norm[(uint64_t)gpu * shard_cols + c];
+        }
+        CHECK_CUDA(cudaMemcpy(out->d_head_fn_rank[gpu], head_fn_rank.data(),
+                              head_fn_rank.size() * sizeof(float),
+                              cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(out->d_head_base_rank[gpu], hc_head_base.data(),
+                              hc_head_base.size() * sizeof(float),
+                              cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(out->d_head_scale_rank[gpu], hc_head_scale.data(),
+                              hc_head_scale.size() * sizeof(float),
+                              cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMemcpy(out->d_output_norm_rank[gpu], output_norm_rank.data(),
+                              output_norm_rank.size() * sizeof(float),
+                              cudaMemcpyHostToDevice));
         out->output_weight_bytes += output_shard_bytes;
     }
     out->logits_bytes = logits_elems * sizeof(float) * kGpus;
@@ -275,22 +496,23 @@ void close_shared_output_head(const Options &opt, SharedOutputHead *out) {
         if (out->stream[gpu]) CHECK_CUDA(cudaStreamDestroy(out->stream[gpu]));
         if (out->d_best_logit[gpu]) CHECK_CUDA(cudaFree(out->d_best_logit[gpu]));
         if (out->d_best_token[gpu]) CHECK_CUDA(cudaFree(out->d_best_token[gpu]));
+        if (out->d_embd_rank_major[gpu]) CHECK_CUDA(cudaFree(out->d_embd_rank_major[gpu]));
+        if (out->d_embd_norm_shard[gpu]) CHECK_CUDA(cudaFree(out->d_embd_norm_shard[gpu]));
+        if (out->d_embd_shard[gpu]) CHECK_CUDA(cudaFree(out->d_embd_shard[gpu]));
+        if (out->d_head_weights_rank[gpu]) CHECK_CUDA(cudaFree(out->d_head_weights_rank[gpu]));
+        if (out->d_head_pre_rank[gpu]) CHECK_CUDA(cudaFree(out->d_head_pre_rank[gpu]));
+        if (out->d_reduce_sumsq[gpu]) CHECK_CUDA(cudaFree(out->d_reduce_sumsq[gpu]));
+        if (out->d_reduce_max[gpu]) CHECK_CUDA(cudaFree(out->d_reduce_max[gpu]));
+        if (out->d_output_norm_rank[gpu]) CHECK_CUDA(cudaFree(out->d_output_norm_rank[gpu]));
+        if (out->d_head_scale_rank[gpu]) CHECK_CUDA(cudaFree(out->d_head_scale_rank[gpu]));
+        if (out->d_head_base_rank[gpu]) CHECK_CUDA(cudaFree(out->d_head_base_rank[gpu]));
+        if (out->d_head_fn_rank[gpu]) CHECK_CUDA(cudaFree(out->d_head_fn_rank[gpu]));
         if (out->d_logits[gpu]) CHECK_CUDA(cudaFree(out->d_logits[gpu]));
         if (out->d_x[gpu]) CHECK_CUDA(cudaFree(out->d_x[gpu]));
         if (out->d_w[gpu]) CHECK_CUDA(cudaFree(out->d_w[gpu]));
     }
     CHECK_CUDA(cudaSetDevice(opt.devices[0]));
     if (out->prep_ready) CHECK_CUDA(cudaEventDestroy(out->prep_ready));
-    if (out->d_output_norm) CHECK_CUDA(cudaFree(out->d_output_norm));
-    if (out->d_head_scale) CHECK_CUDA(cudaFree(out->d_head_scale));
-    if (out->d_head_base) CHECK_CUDA(cudaFree(out->d_head_base));
-    if (out->d_head_fn) CHECK_CUDA(cudaFree(out->d_head_fn));
-    if (out->d_embd_norm) CHECK_CUDA(cudaFree(out->d_embd_norm));
-    if (out->d_embd) CHECK_CUDA(cudaFree(out->d_embd));
-    if (out->d_head_weights) CHECK_CUDA(cudaFree(out->d_head_weights));
-    if (out->d_head_pre) CHECK_CUDA(cudaFree(out->d_head_pre));
-    if (out->d_hc_norm) CHECK_CUDA(cudaFree(out->d_hc_norm));
-    if (out->d_hc) CHECK_CUDA(cudaFree(out->d_hc));
     *out = SharedOutputHead{};
 }
 
@@ -300,12 +522,9 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
                                         OutputHeadRunResult *result) {
     if (!head || !head->initialized || head->slots != opt.slots) return 1;
     const auto total_start = std::chrono::steady_clock::now();
-    const uint64_t hc_shard_elems =
-        (uint64_t)opt.slots * 4ull * (uint64_t)(kHidden / kGpus);
-    const uint64_t hc_elems = (uint64_t)opt.slots * 4ull * (uint64_t)kHidden;
     const uint64_t embd_elems = (uint64_t)opt.slots * (uint64_t)kHidden;
-    const uint64_t logits_elems =
-        (uint64_t)opt.slots * (uint64_t)head->rows_per_gpu;
+    const uint64_t embd_shard_elems =
+        (uint64_t)opt.slots * (uint64_t)(kHidden / kGpus);
 
     if (opt.decode_cudagraph_gate) {
         if (opt.decode_cudagraph_output_sync_gate) {
@@ -325,58 +544,160 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
     }
 
     const auto gather_start = std::chrono::steady_clock::now();
-    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
     for (int rank = 0; rank < kGpus; ++rank) {
         if (!ranks[rank].d_final_hc_shard) {
             std::fprintf(stderr, "diagnostic output-head missing final HC shard rank=%d\n",
                          rank);
             return 2;
         }
-        gather_hc_shard_to_full_kernel<<<(unsigned int)((hc_shard_elems + 255) / 256), 256>>>(
-            head->d_hc, ranks[rank].d_final_hc_shard, rank, (uint32_t)opt.slots);
+        if (!ranks[rank].compose_nccl_initialized || !ranks[rank].compose_nccl ||
+            !head->d_head_fn_rank[rank] || !head->d_head_base_rank[rank] ||
+            !head->d_head_scale_rank[rank] || !head->d_output_norm_rank[rank] ||
+            !head->d_reduce_max[rank] || !head->d_reduce_sumsq[rank] ||
+            !head->d_head_pre_rank[rank] || !head->d_head_weights_rank[rank] ||
+            !head->d_embd_shard[rank] || !head->d_embd_norm_shard[rank] ||
+            !head->d_embd_rank_major[rank] || !head->d_x[rank]) {
+            return 2;
+        }
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        const dim3 partial_grid(5u, (unsigned int)opt.slots, 1u);
+        output_head_hc_local_max_mix4_partial_kernel<<<
+            partial_grid, 256, 0, ranks[rank].stream>>>(
+            head->d_reduce_max[rank],
+            head->d_head_pre_rank[rank],
+            ranks[rank].d_final_hc_shard,
+            head->d_head_fn_rank[rank],
+            (uint32_t)opt.slots);
+        CHECK_CUDA(cudaGetLastError());
     }
-    CHECK_CUDA(cudaGetLastError());
-    CHECK_CUDA(cudaDeviceSynchronize());
-    result->device_sync_count++;
+    CHECK_NCCL(ncclGroupStart());
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        CHECK_NCCL(ncclAllReduce(head->d_reduce_max[rank],
+                                 head->d_reduce_max[rank],
+                                 (size_t)opt.slots, ncclFloat, ncclMax,
+                                 r.compose_nccl, r.stream));
+        CHECK_NCCL(ncclAllReduce(head->d_head_pre_rank[rank],
+                                 head->d_head_pre_rank[rank],
+                                 (size_t)opt.slots * 4u, ncclFloat, ncclSum,
+                                 r.compose_nccl, r.stream));
+    }
+    CHECK_NCCL(ncclGroupEnd());
     const auto gather_stop = std::chrono::steady_clock::now();
 
     const auto prep_start = std::chrono::steady_clock::now();
-    rms_norm_plain_rows_stable_kernel<<<(unsigned int)opt.slots, 256>>>(
-        head->d_hc_norm, head->d_hc, 4u * (uint32_t)kHidden,
-        (uint32_t)opt.slots, 1.0e-6f);
-    const dim3 head_grid(4u, (unsigned int)opt.slots, 1u);
-    f32_dense_kernel<<<head_grid, 256>>>(head->d_head_pre, head->d_head_fn,
-                                         head->d_hc_norm, 4u,
-                                         4u * (uint32_t)kHidden,
-                                         (uint32_t)opt.slots);
-    output_hc_weights_rows_kernel<<<(unsigned int)(((uint64_t)opt.slots * 4ull + 255) / 256), 256>>>(
-        head->d_head_weights, head->d_head_pre, head->d_head_scale,
-        head->d_head_base, (uint32_t)opt.slots);
-    hc_weighted_sum_rows_kernel<<<(unsigned int)((embd_elems + 255) / 256), 256>>>(
-        head->d_embd, head->d_hc, head->d_head_weights, (uint32_t)opt.slots);
-    rms_norm_weight_rows_stable_kernel<<<(unsigned int)opt.slots, 256>>>(
-        head->d_embd_norm, head->d_embd, head->d_output_norm,
-        (uint32_t)kHidden, (uint32_t)opt.slots, 1.0e-6f);
-    CHECK_CUDA(cudaGetLastError());
-    CHECK_CUDA(cudaDeviceSynchronize());
-    result->device_sync_count++;
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        output_head_hc_local_stable_sumsq_kernel<<<
+            (unsigned int)opt.slots, 256, 0, ranks[rank].stream>>>(
+            head->d_reduce_sumsq[rank],
+            ranks[rank].d_final_hc_shard,
+            head->d_reduce_max[rank],
+            (uint32_t)opt.slots);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    CHECK_NCCL(ncclGroupStart());
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        CHECK_NCCL(ncclAllReduce(head->d_reduce_sumsq[rank],
+                                 head->d_reduce_sumsq[rank],
+                                 (size_t)opt.slots, ncclFloat, ncclSum,
+                                 r.compose_nccl, r.stream));
+    }
+    CHECK_NCCL(ncclGroupEnd());
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        output_head_weights_from_reduced_mix4_kernel<<<
+            (unsigned int)(((uint64_t)opt.slots * 4ull + 255) / 256),
+            256, 0, ranks[rank].stream>>>(
+            head->d_head_weights_rank[rank],
+            head->d_reduce_max[rank],
+            head->d_reduce_sumsq[rank],
+            head->d_head_pre_rank[rank],
+            head->d_head_scale_rank[rank],
+            head->d_head_base_rank[rank],
+            (uint32_t)opt.slots, 1.0e-6f);
+        output_head_weighted_sum_shard_kernel<<<
+            (unsigned int)((embd_shard_elems + 255) / 256),
+            256, 0, ranks[rank].stream>>>(
+            head->d_embd_shard[rank],
+            ranks[rank].d_final_hc_shard,
+            head->d_head_weights_rank[rank],
+            (uint32_t)opt.slots);
+        output_head_embd_local_max_kernel<<<
+            (unsigned int)opt.slots, 256, 0, ranks[rank].stream>>>(
+            head->d_reduce_max[rank],
+            head->d_embd_shard[rank],
+            (uint32_t)opt.slots);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    CHECK_NCCL(ncclGroupStart());
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        CHECK_NCCL(ncclAllReduce(head->d_reduce_max[rank],
+                                 head->d_reduce_max[rank],
+                                 (size_t)opt.slots, ncclFloat, ncclMax,
+                                 r.compose_nccl, r.stream));
+    }
+    CHECK_NCCL(ncclGroupEnd());
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        output_head_embd_local_stable_sumsq_kernel<<<
+            (unsigned int)opt.slots, 256, 0, ranks[rank].stream>>>(
+            head->d_reduce_sumsq[rank],
+            head->d_embd_shard[rank],
+            head->d_reduce_max[rank],
+            (uint32_t)opt.slots);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    CHECK_NCCL(ncclGroupStart());
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        CHECK_NCCL(ncclAllReduce(head->d_reduce_sumsq[rank],
+                                 head->d_reduce_sumsq[rank],
+                                 (size_t)opt.slots, ncclFloat, ncclSum,
+                                 r.compose_nccl, r.stream));
+    }
+    CHECK_NCCL(ncclGroupEnd());
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        output_head_apply_output_norm_shard_kernel<<<
+            (unsigned int)((embd_shard_elems + 255) / 256),
+            256, 0, ranks[rank].stream>>>(
+            head->d_embd_norm_shard[rank],
+            head->d_embd_shard[rank],
+            head->d_output_norm_rank[rank],
+            head->d_reduce_max[rank],
+            head->d_reduce_sumsq[rank],
+            (uint32_t)opt.slots, 1.0e-6f);
+        CHECK_CUDA(cudaGetLastError());
+    }
     const auto prep_stop = std::chrono::steady_clock::now();
 
     const auto broadcast_start = std::chrono::steady_clock::now();
-    void *x_dsts[kGpus] = {};
-    for (int gpu = 0; gpu < kGpus; ++gpu) {
-        x_dsts[gpu] = head->d_x[gpu];
+    CHECK_NCCL(ncclGroupStart());
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        CHECK_NCCL(ncclAllGather(head->d_embd_norm_shard[rank],
+                                 head->d_embd_rank_major[rank],
+                                 (size_t)embd_shard_elems, ncclFloat,
+                                 r.compose_nccl, r.stream));
     }
-    if (nccl_broadcast_bytes_from_rank0(
-            ranks, head->d_embd_norm, x_dsts,
-            (size_t)embd_elems * sizeof(float),
-            "shared_output_head_x") != 0) {
-        return 6;
-    }
-    for (int gpu = 0; gpu < kGpus; ++gpu) {
-        CHECK_CUDA(cudaSetDevice(ranks[gpu].device));
-        CHECK_CUDA(cudaStreamSynchronize(ranks[gpu].stream));
-        result->device_sync_count++;
+    CHECK_NCCL(ncclGroupEnd());
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        output_head_rank_major_to_slot_major_kernel<<<
+            (unsigned int)((embd_elems + 255) / 256),
+            256, 0, ranks[rank].stream>>>(
+            head->d_x[rank],
+            head->d_embd_rank_major[rank],
+            (uint32_t)opt.slots);
+        CHECK_CUDA(cudaGetLastError());
     }
     const auto broadcast_stop = std::chrono::steady_clock::now();
 
@@ -384,14 +705,15 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
     for (int gpu = 0; gpu < kGpus; ++gpu) {
         CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
         const dim3 grid((unsigned int)head->rows_per_gpu, (unsigned int)opt.slots, 1u);
-        CHECK_CUDA(cudaEventRecord(head->projection_start[gpu]));
-        bf16_dense_kernel<<<grid, 256>>>(head->d_logits[gpu], head->d_w[gpu],
-                                         head->d_x[gpu],
-                                         (uint32_t)head->rows_per_gpu,
-                                         (uint32_t)kHidden,
-                                         (uint32_t)kHidden,
-                                         (uint32_t)opt.slots);
-        CHECK_CUDA(cudaEventRecord(head->projection_stop[gpu]));
+        CHECK_CUDA(cudaEventRecord(head->projection_start[gpu], ranks[gpu].stream));
+        bf16_dense_kernel<<<grid, 256, 0, ranks[gpu].stream>>>(
+            head->d_logits[gpu], head->d_w[gpu],
+            head->d_x[gpu],
+            (uint32_t)head->rows_per_gpu,
+            (uint32_t)kHidden,
+            (uint32_t)kHidden,
+            (uint32_t)opt.slots);
+        CHECK_CUDA(cudaEventRecord(head->projection_stop[gpu], ranks[gpu].stream));
         CHECK_CUDA(cudaGetLastError());
     }
     for (int gpu = 0; gpu < kGpus; ++gpu) {
@@ -417,7 +739,7 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
         const int shard_index = head->output_rows[gpu].shard_index >= 0
             ? head->output_rows[gpu].shard_index
             : gpu;
-        shard_top1_kernel<<<(unsigned int)opt.slots, 256>>>(
+        shard_top1_kernel<<<(unsigned int)opt.slots, 256, 0, ranks[gpu].stream>>>(
             head->d_best_token[gpu], head->d_best_logit[gpu],
             head->d_logits[gpu], (uint32_t)head->rows_per_gpu,
             (uint32_t)(shard_index * head->rows_per_gpu), (uint32_t)opt.slots);
@@ -476,8 +798,6 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
         std::chrono::duration<double, std::milli>(top1_stop - top1_start).count();
     result->total_ms =
         std::chrono::duration<double, std::milli>(total_stop - total_start).count();
-    (void)hc_elems;
-    (void)logits_elems;
     return result->pass ? 0 : 5;
 }
 
@@ -1140,4 +1460,3 @@ int nccl_broadcast_f32_from_device0_to_current_full(
     const float *src_device0,
     uint64_t elems,
     const char *label);
-
