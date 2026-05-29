@@ -1320,16 +1320,8 @@ int run_decode_loop(const Options &opt,
     auto attempt_capture_probe = [&](bool replay_after_capture) -> int {
         if (!opt.decode_cudagraph_gate) return 0;
         if (update_device_decode_position() != 0) return 10;
-        if (replay_after_capture && !opt.decode_cudagraph_suffix_stage) {
-            const cudaError_t rc = cudaErrorNotSupported;
-            cudagraph_capture_error = (int)rc;
-            cudagraph_replay_error = (int)rc;
-            std::printf("tp_ep_decode_cudagraph_replay_probe_blocked\t"
-                        "layer\t%d\treason\tfull_capture_live_state_replay_requires_snapshot\t"
-                        "error_code\t%d\terror_name\t%s\n",
-                        opt.layer, (int)rc, cudaGetErrorName(rc));
-            return 11;
-        }
+        const bool full_capture_replay_probe =
+            replay_after_capture && !opt.decode_cudagraph_suffix_stage;
         const int root_device = ranks[0].device;
         cudaStream_t root_stream = ranks[0].stream;
         const bool persistent_enabled =
@@ -1393,7 +1385,7 @@ int run_decode_loop(const Options &opt,
             close_tp_cuda_graph_layer_exec(persistent_graph);
         }
         auto run_persistent_dynamic_prefix = [&]() -> int {
-            if (!persistent_enabled) return 0;
+            if (!persistent_enabled || !opt.decode_cudagraph_suffix_stage) return 0;
             double prefix_ep = 0.0;
             double prefix_dense = 0.0;
             double prefix_compose = 0.0;
@@ -1509,7 +1501,9 @@ int run_decode_loop(const Options &opt,
             cudagraph_persistent_cache_misses++;
         }
         cudagraph_capture_attempted++;
-        if (replay_after_capture) cudagraph_replay_attempted++;
+        const bool launch_replay_after_capture =
+            replay_after_capture && !full_capture_replay_probe;
+        if (launch_replay_after_capture) cudagraph_replay_attempted++;
         CaptureHostRankState saved[kGpus];
         save_capture_host_state(saved);
         const int prefix_rc = run_persistent_dynamic_prefix();
@@ -1582,7 +1576,8 @@ int run_decode_loop(const Options &opt,
         if (first_error == cudaSuccess) {
             phase = "enqueue";
             capture_probe_active = true;
-            persistent_suffix_only_active = persistent_enabled;
+            persistent_suffix_only_active =
+                persistent_enabled && opt.decode_cudagraph_suffix_stage;
             step_rc = run_one_step(&cap_ep, &cap_dense, &cap_compose,
                                    &cap_compose_reduce, &cap_compose_copy,
                                    &cap_compose_final, &cap_hc_current,
@@ -1668,7 +1663,17 @@ int run_decode_loop(const Options &opt,
                 graphs.clear();
             }
         }
-        if (first_error == cudaSuccess && step_rc == 0 && replay_after_capture &&
+        if (full_capture_replay_probe && first_error == cudaSuccess &&
+            step_rc == 0 && persistent_enabled && persistent_graph &&
+            persistent_graph->exec) {
+            std::printf("tp_ep_decode_cudagraph_replay_probe_deferred\t"
+                        "layer\t%d\treason\tfull_capture_cache_miss_uses_capture_result\t"
+                        "position\t%llu\tnodes\t%zu\n",
+                        opt.layer, (unsigned long long)opt.position,
+                        persistent_graph->nodes);
+        }
+        if (first_error == cudaSuccess && step_rc == 0 &&
+            launch_replay_after_capture &&
             (graph_exec || (persistent_enabled && persistent_graph && persistent_graph->exec))) {
             phase = "launch";
             cudaGraphExec_t launch_exec =
@@ -1743,7 +1748,7 @@ int run_decode_loop(const Options &opt,
 
         cudagraph_capture_error = (int)first_error;
         cudagraph_capture_nodes = node_count;
-        if (replay_after_capture) {
+        if (launch_replay_after_capture || replay_success) {
             cudagraph_replay_error = replay_success ? 0 : (int)first_error;
         }
         if (first_error == cudaSuccess && step_rc == 0) {
@@ -1774,7 +1779,7 @@ int run_decode_loop(const Options &opt,
                     cudagraph_persistent_invalidate_position,
                     cudagraph_persistent_invalidate_root_device,
                     cudagraph_persistent_invalidate_root_stream,
-                    replay_after_capture ? opt.decode_steps : 0,
+                    launch_replay_after_capture ? opt.decode_steps : 0,
                     cudagraph_instantiate_ms, cudagraph_replay_ms);
         if (graph_exec) {
             CHECK_CUDA(cudaGraphExecDestroy(graph_exec));
@@ -1818,27 +1823,10 @@ int run_decode_loop(const Options &opt,
     double final_hc_ms = 0.0;
     bool used_graph_replay = false;
     const auto start = std::chrono::steady_clock::now();
-    if (opt.decode_cudagraph_replay_probe_gate) {
-        std::printf("tp_ep_decode_cudagraph_replay_probe_start\tlayer\t%d\t"
-                    "steps\t%d\tslots\t%d\n",
-                    opt.layer, opt.decode_steps, opt.slots);
-        const int cap_rc = attempt_capture_probe(true);
-        if (cap_rc != 0 || cudagraph_replay_succeeded == 0) {
-            if (!shared_dense_ops) {
-                free_resident_f8_dense(attn, opt);
-                free_resident_f8_dense(shared, opt);
-            }
-            return 4;
-        }
-        used_graph_replay = true;
-    } else {
+    auto run_eager_decode_steps = [&]() -> int {
         for (int i = 0; i < opt.decode_steps; ++i) {
             current_decode_step = i;
             if (update_device_decode_position() != 0) {
-                if (!shared_dense_ops) {
-                    free_resident_f8_dense(attn, opt);
-                    free_resident_f8_dense(shared, opt);
-                }
                 return 4;
             }
             if (run_one_step(&ep_ms, &dense_ms, &compose_ms,
@@ -1846,14 +1834,62 @@ int run_decode_loop(const Options &opt,
                              &compose_final_ms, &hc_current_input_ms,
                              &hc_current_breakdown, &pre_ep_breakdown,
                              &final_hc_ms) != 0) {
-                if (!shared_dense_ops) {
-                    free_resident_f8_dense(attn, opt);
-                    free_resident_f8_dense(shared, opt);
-                }
                 return 4;
             }
         }
         current_decode_step = -1;
+        return 0;
+    };
+    if (opt.decode_cudagraph_replay_probe_gate) {
+        std::printf("tp_ep_decode_cudagraph_replay_probe_start\tlayer\t%d\t"
+                    "steps\t%d\tslots\t%d\n",
+                    opt.layer, opt.decode_steps, opt.slots);
+        const bool full_capture_probe =
+            !opt.decode_cudagraph_suffix_stage;
+        const int root_device = ranks[0].device;
+        cudaStream_t root_stream = ranks[0].stream;
+        const bool full_capture_cache_hit =
+            full_capture_probe &&
+            opt.decode_cudagraph_persistent_replay_gate &&
+            persistent_graph && persistent_graph->initialized &&
+            persistent_graph->exec &&
+            persistent_graph->layer == opt.layer &&
+            persistent_graph->slots == opt.slots &&
+            persistent_graph->position == opt.position &&
+            persistent_graph->root_device == root_device &&
+            persistent_graph->root_stream == root_stream;
+        if (full_capture_probe && !full_capture_cache_hit) {
+            const int eager_rc = run_eager_decode_steps();
+            if (eager_rc != 0) {
+                if (!shared_dense_ops) {
+                    free_resident_f8_dense(attn, opt);
+                    free_resident_f8_dense(shared, opt);
+                }
+                return eager_rc;
+            }
+        }
+        const int cap_rc = attempt_capture_probe(true);
+        const bool full_capture_capture_only_ok =
+            full_capture_probe && cudagraph_capture_succeeded > 0;
+        if (cap_rc != 0 ||
+            (cudagraph_replay_succeeded == 0 &&
+             !full_capture_capture_only_ok)) {
+            if (!shared_dense_ops) {
+                free_resident_f8_dense(attn, opt);
+                free_resident_f8_dense(shared, opt);
+            }
+            return 4;
+        }
+        used_graph_replay = cudagraph_replay_succeeded > 0;
+    } else {
+        const int eager_rc = run_eager_decode_steps();
+        if (eager_rc != 0) {
+            if (!shared_dense_ops) {
+                free_resident_f8_dense(attn, opt);
+                free_resident_f8_dense(shared, opt);
+            }
+            return eager_rc;
+        }
     }
     const auto stop = std::chrono::steady_clock::now();
     stats->total_ms = used_graph_replay

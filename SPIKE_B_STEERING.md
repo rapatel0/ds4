@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 557)
+# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 558)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -138,7 +138,15 @@ optimized.
   Sprint 557 promoted the first repair: no-suffix replay-probe now fails loudly
   with `full_capture_live_state_replay_requires_snapshot` instead of returning
   a misleading token. A promoted suffix replay sanity still captured/replayed
-  `43/43`, so the serving suffix path remains unchanged.
+  `43/43`, so the serving suffix path remains unchanged. Sprint 558 replaced
+  the guard with a real fresh-state no-suffix replay validation path: on a
+  full-capture cache miss, the served request runs eager and the graph is
+  captured only as an audit/cache artifact; a later same-position request can
+  replay the cached full graph from fresh request state. The reduced sequential
+  probe matched eager selected tokens on both requests (`128819`, `128819`) and
+  replayed `43/43` cached full graphs on the second request, but the second
+  request checksum still drifted (`5174931161` eager vs `5002850195` replay).
+  Treat this as validation-harness repair, not full-capture serving promotion.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
   launcher defaults, topology policy, validation harness, model path, or target
@@ -358,8 +366,9 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Rejected | C1 served full-capture position-key removal | full capture | Sprint 555 proved no-suffix full-capture cross-position reuse is still semantically unsafe even with compressed KV off; cache reuse worked but selected-token first token changed | Med-High |
 | Done | C1 full-capture replay-probe localization | full capture | Sprint 556 showed plain no-suffix full capture preserves eager output, while immediate replay-probe changes it because the probe replays a captured full step on already-advanced live buffers | Med |
 | Done | C1 no-suffix replay-probe guard | full capture | Sprint 557 made invalid no-suffix full-capture replay-probe fail loudly instead of replaying on already-advanced live buffers; promoted suffix replay is unaffected | Low |
-| 1 | C1 full-capture fresh-state replay validation | full capture | Add a real snapshot/restore probe or split cache-miss/cache-hit validation so no-suffix full-capture replay is tested from fresh device state before another cache-key experiment | Med |
-| 2 | C1 emitted topology and row-position metadata | full capture | Compressed-KV full capture still has emitted/non-emitted topology and host emitted-row bookkeeping. Keep it after fresh-state replay validation exists. | Med-High |
+| Done | C1 full-capture fresh-state replay validation | full capture | Sprint 558 split full-capture cache-miss/cache-hit validation so cache miss serves eager and captures only, while a later same-position request replays from fresh state; selected tokens matched but checksum drift remains | Med |
+| 1 | C1 full-capture checksum-drift localization | full capture | Localize the reduced sequential second-request checksum drift before relaxing the full-capture position key or promoting no-suffix full capture beyond diagnostics | Med |
+| 2 | C1 emitted topology and row-position metadata | full capture | Compressed-KV full capture still has emitted/non-emitted topology and host emitted-row bookkeeping. Keep it after fresh-state replay validation and checksum localization. | Med-High |
 | 3 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
@@ -433,6 +442,7 @@ typed-history row loads complete for the served/full-capture surface, Sprint
 555 proved full-capture cross-position reuse is still unsafe without a first
 divergence fix, Sprint 556 showed the immediate no-suffix replay-probe is
 itself invalid because it double-applies the captured full step on live buffers,
-and Sprint 557 made that invalid probe fail loudly. The next ordered work is a
-fresh-state full-capture replay validation mechanism before any further
+Sprint 557 made that invalid probe fail loudly, and Sprint 558 replaced the
+guard with a fresh-state same-position replay validation path. The next ordered
+work is localizing the remaining full-capture checksum drift before any further
 cache-key relaxation. MTP stays deferred until the ordered post-C1/tuning point.
