@@ -369,6 +369,17 @@ int run_decode_loop(const Options &opt,
                                  full_elems * sizeof(float), stream);
                 log_stage_tensor(stage, "route_a", rank, r.d_a,
                                  route_hidden_elems * sizeof(__half), stream);
+                log_stage_tensor(stage, "route_totals", rank,
+                                 r.d_route_totals,
+                                 (uint64_t)kGpus * sizeof(int), stream);
+                log_stage_tensor(stage, "route_slots", rank,
+                                 r.d_route_slots,
+                                 (uint64_t)r.route_capacity * sizeof(int),
+                                 stream);
+                log_stage_tensor(stage, "route_weights", rank,
+                                 r.d_route_weights,
+                                 (uint64_t)r.route_capacity * sizeof(float),
+                                 stream);
                 log_stage_tensor(stage, "next_hidden", rank,
                                  r.d_next_hidden,
                                  shard_elems * sizeof(float), stream);

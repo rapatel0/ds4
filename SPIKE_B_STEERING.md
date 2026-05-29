@@ -186,12 +186,13 @@ optimized.
   records. That proved the Sprint 565 `hc_current.current_full_rank_major`
   clue was a timing artifact: eager observed the buffer immediately after
   HC-current, while replay observed it only after the graph completed. The
-  comparable snapshot now points at the route replay boundary: the first
-  cross-position replay still returns the correct token but leaves `route_a`
-  scratch different across all layers/ranks; the next replay first keeps
-  layer-0 output tensors clean except `route_a`, then drifts broadly from
-  layer 1 onward. The next C1 step is route-plan/route-pack replay repair
-  before any further cache-key retry.
+  comparable snapshot next pointed at `route_a`, but Sprint 567 proved that was
+  scratch-state noise: graph-vs-graph control showed occurrence 1 differs only
+  in full-buffer `route_a` while route totals/slots/weights, outputs, and token
+  checksum all match. On occurrence 2, layer 0 still only has `route_a` scratch
+  drift; layer 1 then diverges across current/output tensors. The next C1 step
+  is inter-layer current/HC pointer-buffer handoff repair before any further
+  cache-key retry.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
   launcher defaults, topology policy, validation harness, model path, or target
@@ -419,7 +420,8 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | C1 residual captured-position state localization | full capture | Sprint 563 used a temporary remote relaxed build plus `--decode-stage-checksum-gate`; first logged divergence was occurrence 1 at layer 1 `hc_current`, while layer 0 still matched | Med |
 | Done | C1 layer-1 HC-current replay state guard | full capture | Sprint 564 rejected the cache-miss double-advance hypothesis and added the final-HC pointer identity to the full-capture graph cache key; position-keyed diagnostics and promoted suffix replay remain clean | Med |
 | Done | C1 rank-major replay snapshot repair | full capture | Sprint 566 added stronger diagnostic hashes and comparable eager/replay `step_snapshot` records; the Sprint 565 rank-major HC-current diff is a timing artifact, not the first comparable state drift | Med |
-| 1 | C1 route replay boundary repair | full capture | Repair or further localize why cross-position replay leaves `route_a` scratch different after an otherwise-correct replay, then turns into layer-1 visible drift on the following replay. Suspect the route-plan/route-pack/fixed-capacity compact compose boundary before retrying cache-key relaxation. | Med-High |
+| Done | C1 route replay boundary localization | full capture | Sprint 567 added route metadata snapshots and graph-vs-graph comparison; `route_a` full-buffer drift is scratch noise because route totals/slots/weights and outputs still match before layer-1 drift | Med |
+| 1 | C1 inter-layer current/HC pointer-buffer repair | full capture | Repair or further localize why the layer after an otherwise-clean replay can read drifted current/HC state. Focus on captured device pointer arguments versus eager/replay host swaps of `d_final_hc_shard` / `d_hc_scratch_shard` across shared rank buffers. | Med-High |
 | 2 | C1 full-capture cross-position cache-key retry | full capture | Retry only after comparable step snapshots are clean under the temporary relaxed build. | Med-High |
 | 3 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
@@ -513,8 +515,9 @@ on request three; the remaining blocker is not the final-HC pointer key alone.
 Sprint 565 reran stage checksums after that guard and initially moved the first
 sequential diff to layer 0 `hc_current.current_full_rank_major`, but Sprint 566
 proved that was a mid-stage-vs-post-graph timing artifact. The comparable
-end-of-step snapshot now shows the first persistent drift at `route_a` after an
-otherwise-correct cross-position replay, followed by broad layer-1 drift on the
-next replay. The next ordered work is route replay boundary repair before any
-further cache-key relaxation. MTP stays deferred until the ordered post-C1/tuning
-point.
+end-of-step snapshot then showed `route_a` drift after an otherwise-correct
+cross-position replay, but Sprint 567's graph-vs-graph control proved that
+full-buffer route scratch drift is not semantic: route totals/slots/weights and
+outputs still match before the next replay drifts from layer 1 onward. The next
+ordered work is inter-layer current/HC pointer-buffer repair before any further
+cache-key relaxation. MTP stays deferred until the ordered post-C1/tuning point.
