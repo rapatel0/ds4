@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-28
-last_updated_by: sprint-482-a6-debug
-revision: 482
+last_updated_by: spike-b-reassessment-plan
+revision: 526
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -113,11 +113,285 @@ The performance program is intentionally isolated:
 | 53 | Legacy manual P2P baseline gating | Promotion defaults now NCCL or explicit baseline | The post-sweep cleanup made remaining legacy direct peer-copy benchmark paths explicit opt-in baselines. `tools/ds4-v100-tp8-layer-proxy.cu` and `tools/ds4-v100-tp8-collective-workbench.cu` now default to `--algo nccl`; root/doubling direct peer-copy modes require `--allow-manual-peer-baseline`. TP4/TP8 collective/layer smoke tools now default to NCCL all-reduce. TurboMind TP4/TP8 smoke tools default to NCCL broadcast-to-root transport plus existing fixed-order float accumulation, while the old synchronous `cudaMemcpyPeer` reducer requires `--reduce-algo manual --allow-manual-peer-baseline`. V100 builds pass for all touched legacy targets; default NCCL smokes pass for the collective/layer tools and TP4 TurboMind. `kernels/turbomind/ggml-turbomind/test_tp4_resident_layer_slice.cu` now defaults to NCCL all-reduce and gates old root/doubling peer-copy algorithms behind `DS4_ALLOW_MANUAL_PEER_BASELINE=1`. The TurboMind 2-GPU and 4-GPU split proxies now default their copy-inclusive transport to NCCL broadcast plus grouped send/recv, with old peer transport gated by `DS4_ALLOW_MANUAL_PEER_BASELINE=1`; one-case NCCL smokes pass correctness. TP8 TurboMind FFN currently fails its own correctness fixture under both old manual and NCCL transport reducers, so keep it out of promotion evidence until repaired. |
 | 54 | Pattern-A relaxed-gate promotion | A3 promoted; A6 rejected | Sprint 480 applied the relaxed agreement-only arithmetic policy without rerunning candidates whose existing artifacts already satisfied the gate. A3 router all-reduce is now default-on from the existing `/workspace/s480-a3-router-allreduce-tolerance` evidence: selected-token agreement `1.0`, generated-sequence agreement `1.0`, and advisory relerr `0.025157711827123192`. EP compose `ncclReduceScatter` is default-aligned as `auto`, enabled only for non-compact FP32 compose, from existing `/workspace/s480-ep-reducescatter-tolerance` evidence: agreement `1.0/1.0` and advisory relerr `7.054008547965787e-05`. A2 remains default-on from Sprint 478; an attempted A2-off current control failed internally and is not promotion evidence. A6 remains rejected with agreement `0.03125/0.03125`. The post-promotion serving sanity at `32` slots / `256K` / `256` requests / `64` tokens served `256/256`, emitted `16384` tokens, kept `peer_copy_ops=0` and `peer_copy_sys_bytes=0`, and averaged `38.179785` generated decode tok/s. |
 | 55 | A6 PATH 4 failure capture | Diagnostic unblocked; A6 still default-off | Sprint 481 attempted the rank-major attention projection PATH 4 revive and backed it out after the candidate returned `0/256` HTTP 200. Sprint 482 added a distinct diagnostic `--true-ds4-attention-projection-rank-major-input-gate`, launcher/profile env, and early `failure-summary.{json,md}` capture. The first V100 rerun exposed a cleanup-era wiring bug: the profile/launcher exported `--true-ds4-semantic-skip-stats-gate` for a non-semantic A6 diagnostic, so the binary exited during validation. After gating semantic skip-stats to attention-output/post-attention paths, the narrow A6 PATH 4 selected-token diagnostic served `4/4` HTTP 200 with `0` peer-copy ops, `0` SYS bytes, and `0` VRAM failures. This is not promotion evidence; next step is a same-binary tolerance/promotion A/B at the real serving shape. |
+| 56 | SPIKE B reassessment after sprints 478-525 | A4 first, then NCCL/sync cleanup before C1 | `SPIKE_B_STEERING.md` is still the right performance frame, but its state has changed. A1 RMS-norm rank-local is effectively included in A2. A2 HC mix row-parallel all-reduce is promoted from Sprint 478. A3 router rank-local/all-reduce is promoted from Sprint 480. The Sprint 483 "A6 PATH 4" work is a naming collision: it is structurally A4 for the attention-projection consumer, not the steering document's A6. Steering A6 still means fusing HC into the attention-projection prologue, and it remains open. The active order is A4 finish, output-head A1 rank-local boundary, sync-point reduction, compact EP compose NCCL, then C1/C2 graph capture and parity. Sprint 479's SYS transport sweep and the structural extraction through Sprint 502 make C1 newly attackable, but it should run only after the remaining full-current consumers, host syncs, and served compact-compose peer-copy-equivalent movement are cleaned up. MTP is intentionally deferred and is not part of the next performance docket. |
 
 Promotion requires a same-binary V100 A/B at the real serving shape, unchanged
 first token/checksum, and improved GPU utilization or server decode tok/s.
 Rejected gates stay opt-in diagnostics. A sprint that cannot produce either a
 promotion or a concrete blocker is not complete.
+
+Unless a code or data-path change invalidates prior evidence, future A/B work
+uses the latest promoted run as the control leg. Do not duplicate prior control
+work merely because a new sprint starts. A control refresh is required only when
+the binary, model path, launcher defaults, topology policy, validation harness,
+or target shape changed in a way that makes the old promoted artifact
+non-comparable.
+
+## SPIKE B Remaining Sprint Sequence
+
+This sequence implements the rest of `SPIKE_B_STEERING.md` after the A1-A3
+promotions. It treats MTP as deferred support code, not active work.
+
+The order is A4 before C1. C1 has the larger ceiling, but A4 is the lower-risk
+compounder: Sprint 483 already proved the rank-major consumer pattern on
+attention projection with `32/32` bit-exact parity, about `+1.0%` decode, and
+about `+9.7%` on the attention-projection stage. The same mechanical layout
+conversion applies to the remaining FFN-norm and post-attention FFN input
+consumers in `engine/post_attention_ffn.cu`.
+
+The important A4 win is back-loaded. Partial conversion keeps the
+`ncclAllGather(d_current_shard -> d_current_full_rank_major)` plus slot-major
+transpose alive for whichever consumer still needs full-current staging. Once
+all consumers are rank-major, that step-8 full-current allgather/transpose can
+be deleted instead of carried forward. That is the largest remaining
+HC-current structural cleanup and it also shrinks the C1 graph-capture surface:
+piecewise capture no longer has to include a dynamic-size full-current
+collective and its stream-timing dependencies. This is why the C1 attempt comes
+after A4, not before it.
+
+Risk model:
+
+| Path | Expected sprints | Risk | Success win | Failure carry-forward |
+|---|---:|---|---|---|
+| A4 finish | 1 focused sprint | Bit-exact, low | About `+3%` combined plus full-current allgather/transpose deletion | Converted consumers still hold if one substep needs follow-up |
+| C1 piecewise graph | 5-10 likely sprints | Parity plus dynamism, medium-high | Potentially recovers a large part of the stranded graph speedup | May produce no serving-transferable gain |
+
+After A4, the next three sprints remove the remaining avoidable host/transport
+friction before graph capture: output-head A1 uses the proven A2 rank-local
+partial plus all-reduce template at the model boundary; the sync-point pass
+turns host-blocking synchronization into device events where possible; compact
+EP compose replaces the remaining served-path peer-copy-equivalent movement
+with an NCCL-compatible variable-size collective. Together they precondition C1
+by removing the two known capture hazards that still matter after the SYS
+sweep: host syncs and non-NCCL cross-rank movement in compose.
+
+### Sprint 526 - A4 Finish Rank-Major Consumers
+
+Goal: remove the remaining full-current allgather consumers so the step-8
+full-hidden staging path can be dropped before graph capture or fusion work.
+
+Scope:
+
+1. Convert the FFN-norm consumer in `engine/post_attention_ffn.cu` to consume
+   rank-major current data or the per-rank shard with direct pre-consumer
+   parity.
+2. Convert the post-attention FFN input consumer in the same file without
+   reintroducing the rejected narrow slot-major FFN norm skip.
+3. Confirm router rank-major remains covered by the promoted A3 path and
+   attention-projection rank-major remains the Sprint 483/A4 consumer result.
+4. Delete the full-current allgather and slot-major transpose after the last
+   consumer no longer needs them; quarantine only if validation proves a hidden
+   consumer remains.
+
+Promotion gate: target-shape agreement against the promoted control, zero
+direct peer-copy/SYS bytes, and either reduced HC-current/post-attention
+staging time or reduced launch/sync count. A narrow `1.01x` move without a
+larger launch-count reduction is not enough. This is expected to be one
+coordinated sprint, not two separate A4 sub-sprints, because both remaining
+consumers live in `engine/post_attention_ffn.cu` and the allgather delete
+should land with the coordinated conversion once parity is proven.
+
+### Sprint 527 - Output-Head A1 Rank-Local Boundary
+
+Goal: apply the A2 rank-local partial/all-reduce pattern once at the model
+boundary so output-head no longer gathers HC to GPU0 for centralized norm/mix.
+
+Scope:
+
+1. Replace the gather-to-GPU0, centralized RMS, centralized head mix, weighted
+   HC sum, and final RMS sequence in `engine/output_head.cu` with rank-local
+   partials plus small NCCL all-reduces.
+2. Compute each rank's `sum(x*x)` over its `[slots, 4, 512]` shard, all-reduce
+   the per-slot sum, and normalize locally.
+3. Compute the head-mix projection row-parallel so each rank contributes its
+   local shard to the `4` output numbers per slot.
+4. Replace the two hard `cudaDeviceSynchronize()` boundaries with device-side
+   event ordering.
+
+Promotion gate: same tolerance/agreement policy as A2/A3, zero direct
+peer-copy/SYS bytes, no output-token drift, and a measurable reduction in
+output-head boundary time or target-shape decode time. Expected gain is modest
+because this runs once per decode step, but it is a clean bankable `1-2%`
+candidate and removes another GPU0-centralized pattern.
+
+### Sprint 528 - Sync-Point Reduction for C1 Readiness
+
+Goal: reduce host involvement in hot-path cross-stream coordination before
+piecewise graph capture.
+
+Scope:
+
+1. Audit the hot engine synchronization points, currently concentrated in
+   `engine/hc_current.cu`, `engine/decode_loop.cu`,
+   `engine/attention_projection.cu`, `engine/post_attention_ffn.cu`,
+   `engine/attention_output.cu`, `engine/attention_read.cu`, and
+   `engine/ep_compose.cu`.
+2. Replace structurally unnecessary `cudaDeviceSynchronize()` and
+   `cudaStreamSynchronize()` calls with `cudaEventRecord()` plus
+   `cudaStreamWaitEvent()` dependencies.
+3. Keep host synchronization only at serving boundaries, diagnostics, or
+   places where a host-visible result is genuinely consumed.
+4. Record before/after sync counts and mark any remaining host sync with the
+   specific data dependency that requires it.
+
+Promotion gate: target-shape agreement against the promoted control, reduced
+hot-path host sync count, no readiness/VRAM regression, and no response-token
+drift. Throughput lift is useful, but the required deliverable is a cleaner
+graph-capturable surface for C1.
+
+### Sprint 529 - B2 Compact EP Compose Variable-Size NCCL
+
+Goal: make the served compact-route compose path use NCCL-compatible
+cross-rank movement instead of per-pair peer-copy wrappers.
+
+Scope:
+
+1. Replace the compact-route `enqueue_graph_f32_copy_between_devices` movement
+   in `engine/ep_compose.cu` with grouped `ncclSend`/`ncclRecv` using the
+   existing per-pair routed-compose row counts, or a statically bucketed
+   per-route-group reduce-scatter if that proves cleaner.
+2. Preserve compact-route variable sizes without host route-count oracles that
+   would invalidate graph capture.
+3. Keep the existing fixed-order local compose math unless the NCCL movement
+   requires a tolerance-gated reduction-order change.
+4. Treat Sprint 480 non-compact FP32 `ncclReduceScatter` as directional
+   evidence only; the served default must win on compact traffic.
+
+Promotion gate: compact default traffic must pass target-shape agreement and
+improve EP/compose time, server decode, or request-window utilization. If the
+win appears only in non-compact FP32, do not promote it as the default path.
+
+### Sprint 530 - SPIKE B Preflight, Spill, and Capture Eligibility
+
+Goal: make graph and fusion work measurable after A4 has settled the remaining
+full-current consumer surface and after the output-head/sync/compact-compose
+preconditions have reduced the capture surface.
+
+Scope:
+
+1. Run the C4 spill/occupancy check on the promoted HC-mix, head-dim-512
+   attention, rank-major consumer, and compact EP kernels with `-Xptxas -v`
+   plus short steady-state `ncu` windows.
+2. Refresh launch-count and sync-count accounting for the promoted TP/EP
+   appliance at `32` slots / `256K` using existing low-overhead profiling.
+3. Audit graph capture blockers after the SYS sweep, A4 cleanup, output-head
+   boundary conversion, sync-point pass, and compact EP compose work: every hot
+   cross-rank op should be NCCL or an already justified eager boundary; direct
+   peer-copy hot paths must remain zero.
+4. Record the current promoted run as the reusable control artifact for the
+   following SPIKE B sprints.
+
+Decision: no promotion expected. The sprint closes with a ranked blocker list,
+kernel spill report, and the exact control artifact path that later candidates
+reuse.
+
+### Sprint 531 - C1 Piecewise Graph Capture Stage 1
+
+Goal: capture and replay the largest graph-safe per-layer subregion without
+moving dynamic serving orchestration into the graph.
+
+Scope:
+
+1. Capture the stable layer compute region around HC-current, attention, EP,
+   and compose using persistent device buffers for route metadata and decode
+   state.
+2. Keep request management, output head, sampling, admission, and any
+   non-static control logic eager.
+3. Start with the smallest direct/layer checksum harness that proves capture
+   correctness, then move to selected-token HTTP only after direct parity holds.
+4. Reuse the Sprint 530 promoted control unless the implementation changes
+   defaults.
+
+Promotion gate: selected-token and generated-sequence agreement against the
+promoted control, zero direct peer-copy/SYS bytes, no VRAM admission failures,
+and a material server-decode or request-window utilization improvement.
+
+### Sprint 532 - C2 Graph Serving Parity and Replay Repair
+
+Goal: close the graph-in-serving parity gap instead of repeatedly measuring
+known-bad broad replay.
+
+Scope:
+
+1. Use serving-mode per-layer/per-stage checksums to localize the first replay
+   divergence.
+2. Fix event ordering with precise per-stage events and stream waits, not broad
+   device synchronizes.
+3. Keep final-HC carry/expand eager if that remains the smallest proven correct
+   split.
+4. Make dynamic decode state replay-updated through device buffers where needed.
+
+Promotion gate: persistent replay must pass parity before any throughput result
+counts. If parity passes but speed is flat, close with a rejection and keep only
+the correctness/event-order cleanup.
+
+### Sprint 533 - A5 and True A6 HC Fusion
+
+Goal: turn the rank-local HC structure into fewer launches.
+
+Scope:
+
+1. Fuse RMS-norm partials with HC-mix partial work where register pressure
+   allows.
+2. Fuse HC mix apply with the next FFN-norm consumer when data dependencies
+   permit.
+3. Implement the steering document's true A6: compute the HC/current shard in
+   the attention-projection prologue and remove the intermediate buffer/launch.
+4. Re-run the C4 spill checks on every fused kernel before promotion.
+
+Promotion gate: parity/tolerance against the promoted control, fewer launches
+in the profiled HC-current/attention prefix, no new spills that erase the
+launch-count win, and improved target-shape server decode or request-window
+utilization.
+
+### Sprint 534 - B3 TP-Sharded Experts vs EP A/B
+
+Goal: answer whether EP all-to-all orchestration is worse than TP-sharded
+expert reduction at the real serving shape.
+
+Scope:
+
+1. Build a focused TP-sharded expert candidate that avoids prior TP8 invalid
+   math and explicitly compares TP4/TP8 feasibility.
+2. Keep the A/B isolated from MTP and graph replay so the expert topology is
+   the measured variable.
+3. Measure server decode, request-window utilization, routed expert time,
+   all-to-all/reduce time, and memory headroom.
+
+Decision: promote only if correctness and target-shape throughput both win.
+Otherwise record whether TP experts should be abandoned, retried as a fused
+TP4 reduction/compose path, or kept as a diagnostic.
+
+### Sprint 535 - B4 Routed/Shared Expert Overlap
+
+Goal: overlap the rank-local shared expert with routed all-to-all/dispatch
+without changing output order.
+
+Scope:
+
+1. Separate shared dense expert work from routed dispatch dependencies.
+2. Use explicit events so combine waits on both shared and routed outputs only
+   where required.
+3. Validate under the same compact EP defaults used by serving.
+
+Promotion gate: parity against the promoted control, no readiness or VRAM
+regression, and a measurable reduction in EP wall time or server decode time.
+
+### Sprint 536 - B5 Correctness-Preserving Capacity Balancing
+
+Goal: revisit capacity balancing after Sprint 435's capacity-16 failure, but
+only with correctness-preserving fixed-shape semantics.
+
+Scope:
+
+1. Keep host-visible graph shapes fixed.
+2. Move balancing, inactive-row handling, or overflow protection inside
+   correctness-checked device code.
+3. Fail fast on selected-token or generated-sequence drift before collecting
+   expensive throughput runs.
+
+Promotion gate: no output drift, no dropped selected experts, no route-weight
+mismatches, and an EP throughput or graph-capture simplification benefit.
 
 Sprint 376's broad CUDA graph capture remained blocked by peer-copy transport,
 but Sprint 417 changed the graph thesis for the TP/EP direct decode path:

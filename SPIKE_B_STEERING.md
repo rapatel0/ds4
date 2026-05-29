@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (2026-05-27)
+# Spike B Decode-Optimization Steering (updated 2026-05-28)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -15,41 +15,77 @@ Both dominant domains are **overhead-bound, not compute- or bandwidth-bound:**
   **GPU0-centralization** × 43 layers, not data.
 
 **Consequence:** wins come from STRUCTURE — de-centralize, fuse, fewer launches,
-capture static sub-regions, more tokens-per-step (MTP) — **not** from faster
-kernels. Optimizing the expert GEMM alone moves a fraction of 53% and none of 40%.
+remove host synchronization, capture static sub-regions — **not** from faster
+kernels. Optimizing the expert GEMM alone moves a fraction of 53% and none of
+40%. MTP remains deferred support code until the base TP/EP path is stable and
+optimized.
+
+## Current reassessment after sprints 478-525
+
+- **A1-A3 are done.** A1 RMS-norm rank-local is rolled into A2. A2 HC mix
+  row-parallel all-reduce is promoted from Sprint 478. A3 router rank-local
+  all-reduce is promoted from Sprint 480.
+- **A4 is the next implementation target.** Sprint 483's "A6 PATH 4" result is
+  structurally A4 for the attention-projection consumer, not the steering
+  document's A6. The remaining A4 consumers are FFN-norm and post-attention FFN
+  input in `engine/post_attention_ffn.cu`. Finish them together, then delete
+  the full-current allgather and slot-major transpose once no consumer needs
+  them.
+- **True A6 is still open.** In this document, A6 means fusing HC/current
+  computation into the attention-projection prologue. It does not mean the
+  Sprint 483 rank-major attention-projection consumer conversion.
+- **C1 is newly more plausible, but not first.** Sprint 479 removed promoted
+  hot-path direct peer-copy transport in favor of NCCL, and the structural
+  extraction made the surface readable. Still, C1 should wait until A4,
+  output-head A1, sync-point reduction, and compact EP compose reduce the
+  capture surface.
+- **Use previous promotions as the control.** Do not duplicate control runs
+  solely because a new sprint starts. Refresh control only when the binary,
+  launcher defaults, topology policy, validation harness, model path, or target
+  shape changed enough to invalidate the previous promoted artifact.
 
 ## A. HC-current (40%) — de-centralize GPU0 (highest-ROI, eager-path win today)
 
 Steps 2–6 and 9–10 run on GPU0 over the full hidden while 7 GPUs idle. Every
 "global over hidden" op decomposes into rank-local partial + one tiny all-reduce:
 
-- **A1 RMS-norm rank-local:** partial sum-of-squares on each `[slots,4,512]`
-  shard → all-reduce `[slots,4]` scalar → normalize locally. No gather.
-- **A2 HC mix as row-parallel GEMM:** `attn_fn[16384×24] @ hc[slots,16384]` —
+- **A1 RMS-norm rank-local:** done as part of A2. Partial sum-of-squares on
+  each `[slots,4,512]` shard → all-reduce `[slots,4]` scalar → normalize
+  locally. No gather.
+- **A2 HC mix as row-parallel GEMM:** done and promoted. `attn_fn[16384×24] @ hc[slots,16384]` —
   16384=4×4096 is the contraction, already sharded (2048/rank). Each rank computes
   partial `[slots,24]` → all-reduce `[slots,24]` (3 KiB). Replaces gather-to-0 +
   full-norm + mix + split + broadcast with 2 rank-local kernels + 1 tiny allreduce.
 - **A3 Router rank-local:** `[slots,4096]·[4096,256]`, 4096 contraction → row-
-  parallel → all-reduce `[slots,256]`. (Sprint 426 started — finish, make default.)
+  parallel → all-reduce `[slots,256]`. Done and promoted.
 - **A4 Drop the full-current allgather (step 8)** by making ALL consumers
-  rank-major (attn-proj done = +13%; do router + FFN-norm + post-attn FFN input).
+  rank-major. Attention projection is done under the old "A6 PATH 4" name, and
+  router is covered by promoted A3. Finish FFN-norm and post-attention FFN input
+  together in `engine/post_attention_ffn.cu`, then delete the full-current
+  allgather and slot-major transpose.
 - **A5 Fuse the survivors:** after A1–A4, HC-current ≈ 3 rank-local kernels + 2
   tiny all-reduces/layer vs ~12 steps. Fuse norm+partial-mix; mix-apply+FFN-norm.
 - **A6 Fuse HC into the attention-projection prologue** (compute `current_shard`
   inside the projection kernel; drop the intermediate buffer + a launch).
 
 Net: GPU0-serial / ~12-launch / barrier-heavy → 8-way parallel / ~3-launch / 2
-tiny collectives. **A1–A3 is the concrete "how" for the 40%.**
+tiny collectives. **A1-A3 are complete; A4 is the next bankable step because it
+turns partial rank-major conversion into deleted full-current staging.**
 
 ## B. EP (53%) — orchestration + sub-1-token experts
 
-- **B1 MTP is an EP-efficiency lever, not just a decode multiplier.** EP is 53%
+- **B1 MTP is deferred.** EP is 53%
   *because* M<1/expert; MTP (verify K draft tokens) makes experts see (K+1)× tokens
-  → tiles fill + fewer steps. Sequence after correctness is stable, but it is the
-  structural fix for the largest domain, not optional polish.
+  → tiles fill + fewer steps. That remains true, but TP/EP MTP is intentionally
+  out of the active docket until the base TP/EP path is stable and optimized.
 - **B2 Fuse dispatch + grouped-GEMM + weighted-combine** into 1–2 kernels,
   device-side offsets only (no host sync on route counts). Template: the fork's
-  `awq_moe_single_token_sm70` compact path. Make compact-route-compose the default.
+  `awq_moe_single_token_sm70` compact path. Make compact-route-compose the
+  default. First finish the open compact-route transport half: replace the served
+  path's variable-size per-pair peer-copy-equivalent compose movement with grouped
+  `ncclSend`/`ncclRecv` or a statically bucketed NCCL scheme. Sprint 480's
+  `ncclReduceScatter` evidence covers only non-compact FP32 and is not proof for
+  served compact traffic.
 - **B3 TP-sharded experts vs EP A/B (the S-F question — now justified).** EP's 53%
   is dispatch/all-to-all. TP-experts have **no all-to-all** (reduce via the hidden
   all-reduce). For 13B-active/8-GPU/32-slot, test whether all-to-all overhead >
@@ -68,8 +104,9 @@ tiny collectives. **A1–A3 is the concrete "how" for the 40%.**
   head, sampling) eager around it; feed routing via **persistent device buffers**
   (fixed worst-case `slots×top_k`; route values change per step, graph structure
   fixed). Bridges "works in smoke, blocked in serving" → could recover most of the
-  2.27× without solving the whole loop. The async-route-plan was the capture-
-  breaker → make routing write a persistent device buffer the graph reads.
+  2.27× without solving the whole loop. Do this after A4, output-head A1,
+  sync-point reduction, and compact EP compose so the captured region is not
+  polluted by avoidable host syncs or remaining non-NCCL compose movement.
 - **C2 Fix the graph-in-serving parity bug directly.** Graph mode changes the
   first token = a finite set of missing sync→event dependencies (461 fixed one).
   Diff eager vs graph dependency graph; close them all. Debuggable, not fundamental.
@@ -81,27 +118,50 @@ tiny collectives. **A1–A3 is the concrete "how" for the 40%.**
   attention, and rank-major consume kernels: `-Xptxas -v` (registers/smem/spill) +
   ncu (occupancy, long-scoreboard stalls). If they spill, the rank-local rewrites
   leave perf on the floor.
+- **C5 Replace hot host syncs with device events.** The hot engine path still
+  contains dozens of `cudaDeviceSynchronize()` / `cudaStreamSynchronize()` calls
+  across HC-current, decode-loop, attention projection/read/output,
+  post-attention FFN, and EP compose. Replace structurally unnecessary host
+  round-trips with `cudaEventRecord()` / `cudaStreamWaitEvent()` dependencies.
+  This is both an eager-path cleanup and a graph-capture prerequisite.
+
+## D. Model-boundary NCCL cleanup
+
+- **D1 Output-head A1 pattern.** `engine/output_head.cu` still has the same
+  gather-to-GPU0 → centralized RMS/mix/weighted sum/final RMS pattern that A2
+  fixed inside every layer, plus hard host synchronizations. Apply the same
+  rank-local partial plus NCCL all-reduce template at the model boundary:
+  partial sum-of-squares over each `[slots,4,512]` shard, all-reduce the per-slot
+  sums, normalize locally, and compute the head mix row-parallel. Expected gain
+  is smaller than per-layer A2 because it runs once per decode step, but it is a
+  clean `1-2%` candidate and removes another GPU0-centralized boundary.
 
 ## Recommended priority
 
 | # | Idea | Domain | Why | Risk |
 |---|---|---|---|---|
-| 1 | A1–A3 rank-local HC norm/mix/router | HC 40% | De-centralizes GPU0; 8-way parallel; eager-path win now | Low |
-| 2 | C1 piecewise graph of layer compute | both | Highest ceiling — recovers stranded 2.27× in serving | Med |
-| 3 | B3 TP-experts vs EP A/B | EP 53% | Profile justifies it; could delete the all-to-all | Med |
-| 4 | A5/A6 + B2 kernel fusion / launch-count | both | Universal eager win; compounds with #1 | Low |
-| 5 | B1 MTP | EP 53% | Structural fix for sub-1-token experts; biggest multiplier | Med (after #1–4) |
+| 1 | A4 finish rank-major consumers | HC 40% | Low-risk bit-exact work; deletes full-current allgather/transpose after final consumer conversion | Low |
+| 2 | D1 output-head A1 pattern | Model boundary | Same proven A2 template; removes GPU0-centralized output-head norm/mix and hard host syncs | Low |
+| 3 | C5 sync-point reduction | both | Removes host round-trips and makes C1 graph capture structurally possible | Low-Med |
+| 4 | B2 compact EP variable-size NCCL compose | EP 53% | Targets served compact traffic and removes remaining peer-copy-equivalent compose movement | Med |
+| 5 | C1/C2 piecewise graph capture and serving parity | both | Highest ceiling, but only after the surface is simplified | Med-High |
+| 6 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
+| 7 | B3/B4/B5 EP structural bets | EP 53% | TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
+| Deferred | B1 MTP | EP 53% | Useful later, but do not use it to hide base TP/EP bottlenecks | Med |
 
 ## Discipline (unchanged)
 
 - A/B every idea on the steady-state reference above, **parity-gated** (first
   token unchanged + tolerance) — not on reduced/short shapes that flatter results.
 - Report **server decode tok/s AND GPU util** for control vs candidate.
-- No re-baselining; no micro-opt before the change is justified by the profile.
+- No re-baselining; use the latest promoted artifact as the control unless a
+  real invalidator makes it non-comparable.
+- No micro-opt before the change is justified by the profile.
 - Re-profile the domain table after each promoted change (shares shift).
 
 ## One-line frame
 
-Both big domains are "do less / in parallel / in one launch" problems — **#1
-(rank-local HC) + #4 (fusion) lift the eager served path now; #2 (piecewise graph)
-is the swing for the big win; #3 and #5 are the structural EP bets.**
+Finish A4 first, then remove the remaining output-head, host-sync, and compact
+EP compose friction before attempting C1. C1 is still the biggest ceiling, but
+it should run on the simplest fully rank-major, mostly NCCL, sync-reduced
+surface we can make. MTP stays deferred.
