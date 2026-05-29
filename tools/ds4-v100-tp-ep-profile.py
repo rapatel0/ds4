@@ -1309,6 +1309,33 @@ def maybe_number(value):
 
 
 def add_tp_ep_line_summaries(summary, stdout):
+    def parse_int_list(value):
+        if not value:
+            return []
+        out = []
+        for item in str(value).split(","):
+            try:
+                out.append(int(item))
+            except ValueError:
+                return []
+        return out
+
+    def median_value(values):
+        if not values:
+            return None
+        ordered = sorted(values)
+        mid = len(ordered) // 2
+        if len(ordered) % 2:
+            return ordered[mid]
+        return (ordered[mid - 1] + ordered[mid]) / 2.0
+
+    def percentile_value(values, pct):
+        if not values:
+            return None
+        ordered = sorted(values)
+        idx = int((len(ordered) - 1) * pct)
+        return ordered[idx]
+
     compressed_sum_keys = [
         "attn_input_fill_ms",
         "attn_dense_ms",
@@ -1345,6 +1372,14 @@ def add_tp_ep_line_summaries(summary, stdout):
         "fused_pool_norm_layers": 0,
         "fused_pool_norm_rope_round_layers": 0,
     }
+    compact_route_records = 0
+    compact_route_layers = set()
+    compact_route_shapes = set()
+    compact_total_routes = []
+    compact_max_rank_routes = []
+    compact_nonzero_rank_counts = []
+    compact_all_dest_bytes = 0
+    compact_actual_bytes = 0
     for line in stdout.splitlines():
         tag, fields = parse_tab_line(line)
         if tag == "tp_ep_serving_bench":
@@ -1571,8 +1606,54 @@ def add_tp_ep_line_summaries(summary, stdout):
                 "compact_bytes",
             ]:
                 summary[f"compact_moe_{key}"] = maybe_number(fields.get(key))
+            routes = parse_int_list(fields.get("routes"))
+            if routes:
+                compact_route_records += 1
+                layer = maybe_number(fields.get("layer"))
+                if isinstance(layer, int):
+                    compact_route_layers.add(layer)
+                compact_route_shapes.add(tuple(routes))
+                compact_total_routes.append(sum(routes))
+                compact_max_rank_routes.append(max(routes))
+                compact_nonzero_rank_counts.append(sum(1 for route in routes if route))
+                all_dest = maybe_number(fields.get("all_dest_bytes"))
+                compact_bytes = maybe_number(fields.get("compact_bytes"))
+                if isinstance(all_dest, int):
+                    compact_all_dest_bytes += all_dest
+                if isinstance(compact_bytes, int):
+                    compact_actual_bytes += compact_bytes
     for key, value in compressed_counts.items():
         summary[f"compressed_kv_{key}"] = value
+    if compact_route_records:
+        summary["compact_moe_route_stat_records"] = compact_route_records
+        summary["compact_moe_layers_seen"] = len(compact_route_layers)
+        summary["compact_moe_unique_route_shapes"] = len(compact_route_shapes)
+        summary["compact_moe_shape_repeat_ratio"] = (
+            1.0 - (len(compact_route_shapes) / compact_route_records)
+        )
+        summary["compact_moe_total_routes_min"] = min(compact_total_routes)
+        summary["compact_moe_total_routes_max"] = max(compact_total_routes)
+        summary["compact_moe_max_rank_routes_min"] = min(compact_max_rank_routes)
+        summary["compact_moe_max_rank_routes_p50"] = median_value(
+            compact_max_rank_routes
+        )
+        summary["compact_moe_max_rank_routes_p95"] = percentile_value(
+            compact_max_rank_routes, 0.95
+        )
+        summary["compact_moe_max_rank_routes_max"] = max(compact_max_rank_routes)
+        summary["compact_moe_nonzero_rank_count_min"] = min(
+            compact_nonzero_rank_counts
+        )
+        summary["compact_moe_nonzero_rank_count_p50"] = median_value(
+            compact_nonzero_rank_counts
+        )
+        summary["compact_moe_nonzero_rank_count_max"] = max(
+            compact_nonzero_rank_counts
+        )
+        if compact_all_dest_bytes > 0:
+            summary["compact_moe_compact_over_all_dest_pct"] = (
+                100.0 * compact_actual_bytes / compact_all_dest_bytes
+            )
     return summary
 
 

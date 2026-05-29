@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 539)
+# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 542)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -55,8 +55,12 @@ optimized.
   `99.446247s -> 90.181067s`. The TP/EP launcher now defaults graph suffix
   replay on, with `DS4_V100_TP_EP_GRAPH_SUFFIX_REPLAY=0` as the operational
   opt-out. Sprint 541 fixed the stale helper-host-sync audit label; the
-  promoted graph path now reports `graph_audit_blocker=none`. Remaining graph
-  work is full-capture/sync cleanup and fixed-padding efficiency tuning, not
+  promoted graph path now reports `graph_audit_blocker=none`. Sprint 542
+  quantified the fixed-capacity route envelope and rejected lowering static
+  route caps as the next promotion lever because Sprints 434/436/437 already
+  showed static rank/executor/compose caps can change tokens even when overflow
+  audits pass. Remaining graph work is full-capture/sync cleanup and
+  full-shape device-masked route/executor/compose efficiency tuning, not
   serving-parity repair.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
@@ -186,6 +190,13 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
   2.27× without solving the whole loop. Do this after A4, output-head A1,
   sync-point reduction, and compact EP compose so the captured region is not
   polluted by avoidable host syncs or remaining non-NCCL compose movement.
+  Sprint 542's route-padding audit showed the current fixed graph envelope uses
+  worst-case per-rank route capacity (`192` rows/rank at the `32` slot x top-6
+  shape), while logged actual route pressure had p50 max-rank `64` and max
+  `132`. Do not reduce this with static caps; prior static-cap sprints changed
+  tokens. The safe efficiency path is a full-shape device-masked executor and
+  compose implementation that preserves graph-visible shapes while skipping
+  inactive rows internally.
 - **C2 Fix the graph-in-serving parity bug directly.** Graph mode changes the
   first token = a finite set of missing sync→event dependencies (461 fixed one).
   Diff eager vs graph dependency graph; close them all. Debuggable, not fundamental.
