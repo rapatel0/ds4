@@ -440,6 +440,57 @@ int run_decode_loop(const Options &opt,
             r.hc_initialized = true;
         }
     };
+    auto apply_full_capture_replay_compressed_kv_host_state = [&]() {
+        if (opt.decode_cudagraph_suffix_stage ||
+            !opt.true_ds4_compressed_kv_gate) {
+            return;
+        }
+        const int ratio = ds4_layer_ratio(opt.layer);
+        if (ratio == 0 ||
+            ((opt.position + 1ull) % (uint64_t)ratio) != 0ull) {
+            return;
+        }
+        const bool mark_attn_loaded =
+            opt.true_ds4_attention_typed_kv_compressed_gate &&
+            (!opt.true_ds4_attention_typed_kv_skip_current_load_gate ||
+             opt.true_ds4_attention_typed_kv_skip_compressed_store_gate);
+        const bool update_indexer =
+            opt.true_ds4_indexer_attention_gate && ratio == 4;
+        const bool mark_indexer_loaded =
+            update_indexer &&
+            opt.true_ds4_attention_typed_kv_indexer_gate &&
+            (!opt.true_ds4_attention_typed_kv_skip_current_load_gate ||
+             opt.true_ds4_attention_typed_kv_skip_indexer_store_gate);
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            const uint32_t attn_row =
+                r.attn_comp_rows_written_layers[opt.layer] %
+                (uint32_t)kBoundedCompRows;
+            r.attn_comp_row_position_layers[opt.layer][attn_row] =
+                opt.position;
+            r.attn_comp_row_loaded_layers[opt.layer][attn_row] = false;
+            r.attn_comp_rows_written_layers[opt.layer]++;
+            if (mark_attn_loaded) {
+                r.attn_comp_row_loaded_layers[opt.layer][attn_row] = true;
+                r.attn_comp_row_loaded_position_layers[opt.layer][attn_row] =
+                    opt.position;
+            }
+
+            if (!update_indexer) continue;
+            const uint32_t index_row =
+                r.index_comp_rows_written_layers[opt.layer] %
+                (uint32_t)kBoundedCompRows;
+            r.index_comp_row_position_layers[opt.layer][index_row] =
+                opt.position;
+            r.index_comp_row_loaded_layers[opt.layer][index_row] = false;
+            r.index_comp_rows_written_layers[opt.layer]++;
+            if (mark_indexer_loaded) {
+                r.index_comp_row_loaded_layers[opt.layer][index_row] = true;
+                r.index_comp_row_loaded_position_layers[opt.layer][index_row] =
+                    opt.position;
+            }
+        }
+    };
     struct CaptureHostRankState {
         float *final_hc_shard = nullptr;
         float *hc_scratch_shard = nullptr;
@@ -1479,6 +1530,7 @@ int run_decode_loop(const Options &opt,
             if (rc != cudaSuccess) persistent_graph->failures++;
             if (rc == cudaSuccess) {
                 apply_full_capture_replay_host_swaps();
+                apply_full_capture_replay_compressed_kv_host_state();
             }
             if (rc == cudaSuccess &&
                 suffix_stage_ends_compose_eager_final_hc()) {
