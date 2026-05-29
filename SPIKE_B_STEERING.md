@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 543)
+# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 544)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -62,6 +62,12 @@ optimized.
   audits pass. Remaining graph work is full-capture/sync cleanup and
   full-shape device-masked route/executor/compose efficiency tuning, not
   serving-parity repair.
+- **Full capture is correctness-clean but still position-keyed.** Sprint 544
+  disabled the promoted suffix stage and ran full-capture graph gates on the
+  current surface. It matched eager response/checksum multisets with
+  `graph_audit_blocker=none`, captured/replayed `43/43`, and kept peer/SYS zero,
+  but had `0` persistent cache hits and `43` position invalidations. The next
+  full-capture blocker is dynamic decode-position state, not helper host sync.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
   launcher defaults, topology policy, validation harness, model path, or target
@@ -201,6 +207,10 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
   tokens. The safe efficiency path is a full-shape device-masked executor and
   compose implementation that preserves graph-visible shapes while skipping
   inactive rows internally.
+  Sprint 544 rechecked full capture without the suffix stage: parity is clean,
+  but persistent cache reuse is still blocked by position-keyed graph captures.
+  The next C1 code target is device-resident replay-updated position state so
+  full capture can reuse graphs across decode positions.
 - **C2 Fix the graph-in-serving parity bug directly.** Graph mode changes the
   first token = a finite set of missing sync→event dependencies (461 fixed one).
   Diff eager vs graph dependency graph; close them all. Debuggable, not fundamental.
