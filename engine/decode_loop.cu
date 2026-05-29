@@ -1390,6 +1390,14 @@ int run_decode_loop(const Options &opt,
             replay_after_capture &&
             opt.decode_cudagraph_persistent_replay_gate &&
             persistent_graph;
+        auto full_capture_final_hc_key = [&]() -> uintptr_t {
+            if (opt.decode_cudagraph_suffix_stage ||
+                !opt.final_hc_carry_gate ||
+                !opt.tp_hc_final_expand_gate) {
+                return 0;
+            }
+            return reinterpret_cast<uintptr_t>(ranks[0].d_final_hc_shard);
+        };
         const bool persistent_layer_mismatch =
             persistent_enabled && persistent_graph->initialized &&
             persistent_graph->layer != opt.layer;
@@ -1407,6 +1415,10 @@ int run_decode_loop(const Options &opt,
             persistent_position_keyed &&
             persistent_enabled && persistent_graph->initialized &&
             persistent_graph->position != opt.position;
+        const uintptr_t final_hc_shard_key = full_capture_final_hc_key();
+        const bool persistent_final_hc_shard_mismatch =
+            persistent_enabled && persistent_graph->initialized &&
+            persistent_graph->final_hc_shard_key != final_hc_shard_key;
         const bool persistent_root_device_mismatch =
             persistent_enabled && persistent_graph->initialized &&
             persistent_graph->root_device != root_device;
@@ -1414,7 +1426,8 @@ int run_decode_loop(const Options &opt,
             persistent_enabled && persistent_graph->initialized &&
             persistent_graph->root_stream != root_stream;
         if (persistent_layer_mismatch || persistent_slots_mismatch ||
-            persistent_position_mismatch || persistent_root_device_mismatch ||
+            persistent_position_mismatch || persistent_final_hc_shard_mismatch ||
+            persistent_root_device_mismatch ||
             persistent_root_stream_mismatch) {
             cudagraph_persistent_invalidations++;
             cudagraph_persistent_invalidate_layer +=
@@ -1431,17 +1444,22 @@ int run_decode_loop(const Options &opt,
                         "layer\t%d\tcached_layer\t%d\tslots\t%d\t"
                         "cached_slots\t%d\tposition\t%llu\t"
                         "cached_position\t%llu\troot_device\t%d\t"
-                        "cached_root_device\t%d\tlayer_mismatch\t%d\t"
+                        "cached_root_device\t%d\tfinal_hc_key\t%llu\t"
+                        "cached_final_hc_key\t%llu\tlayer_mismatch\t%d\t"
                         "slots_mismatch\t%d\tposition_mismatch\t%d\t"
+                        "final_hc_shard_mismatch\t%d\t"
                         "root_device_mismatch\t%d\troot_stream_mismatch\t%d\n",
                         opt.layer, persistent_graph->layer, opt.slots,
                         persistent_graph->slots,
                         (unsigned long long)opt.position,
                         (unsigned long long)persistent_graph->position,
                         root_device, persistent_graph->root_device,
+                        (unsigned long long)final_hc_shard_key,
+                        (unsigned long long)persistent_graph->final_hc_shard_key,
                         persistent_layer_mismatch ? 1 : 0,
                         persistent_slots_mismatch ? 1 : 0,
                         persistent_position_mismatch ? 1 : 0,
+                        persistent_final_hc_shard_mismatch ? 1 : 0,
                         persistent_root_device_mismatch ? 1 : 0,
                         persistent_root_stream_mismatch ? 1 : 0);
             close_tp_cuda_graph_layer_exec(persistent_graph);
@@ -1716,6 +1734,7 @@ int run_decode_loop(const Options &opt,
                 persistent_graph->layer = opt.layer;
                 persistent_graph->slots = opt.slots;
                 persistent_graph->position = opt.position;
+                persistent_graph->final_hc_shard_key = final_hc_shard_key;
                 persistent_graph->root_device = root_device;
                 persistent_graph->root_stream = root_stream;
                 persistent_graph->graph = graph;
@@ -1914,6 +1933,12 @@ int run_decode_loop(const Options &opt,
             !opt.decode_cudagraph_suffix_stage;
         const int root_device = ranks[0].device;
         cudaStream_t root_stream = ranks[0].stream;
+        const uintptr_t full_capture_final_hc_key =
+            (!opt.decode_cudagraph_suffix_stage &&
+             opt.final_hc_carry_gate &&
+             opt.tp_hc_final_expand_gate)
+                ? reinterpret_cast<uintptr_t>(ranks[0].d_final_hc_shard)
+                : 0;
         const bool full_capture_cache_hit =
             full_capture_probe &&
             opt.decode_cudagraph_persistent_replay_gate &&
@@ -1922,6 +1947,7 @@ int run_decode_loop(const Options &opt,
             persistent_graph->layer == opt.layer &&
             persistent_graph->slots == opt.slots &&
             persistent_graph->position == opt.position &&
+            persistent_graph->final_hc_shard_key == full_capture_final_hc_key &&
             persistent_graph->root_device == root_device &&
             persistent_graph->root_stream == root_stream;
         if (full_capture_probe && !full_capture_cache_hit) {

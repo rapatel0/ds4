@@ -844,6 +844,7 @@ struct TpCudaGraphLayerExec {
     int layer = -1;
     int slots = 0;
     uint64_t position = 0;
+    uintptr_t final_hc_shard_key = 0;
     int root_device = -1;
     cudaStream_t root_stream = nullptr;
     cudaGraph_t graph = nullptr;

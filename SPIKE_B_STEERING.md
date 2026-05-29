@@ -412,8 +412,9 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | C1 emitted topology graph-stability | full capture | Sprint 561 makes graph-mode compressed-KV emitted/non-emitted topology stable by always enqueueing the emitted topology under graph capture and device-masking emitted kernels/copies from `d_decode_position`; emitted and adjacent non-emitted compressed-KV eager/replay probes matched selected tokens/checksums with `43/43` replay hits | Med |
 | Rejected | C1 full-capture cross-position cache-key relaxation retry | full capture | Sprint 562 retried no-suffix full-capture cross-position reuse after Sprint 561; a two-request same-session probe matched, but a six-request same-session probe diverged on request three, so the candidate was removed and the position key remains required | Med-High |
 | Done | C1 residual captured-position state localization | full capture | Sprint 563 used a temporary remote relaxed build plus `--decode-stage-checksum-gate`; first logged divergence was occurrence 1 at layer 1 `hc_current`, while layer 0 still matched | Med |
-| 1 | C1 layer-1 HC-current replay state repair | full capture | Localize and repair the inter-layer current/HC state handoff that makes layer 1 `hc_current` start from different tensors after a layer-0 full-capture cache-hit replay. Do not retry cache-key relaxation until this starts clean. | Med-High |
-| 2 | C1 full-capture cross-position cache-key retry | full capture | Retry only after layer-1 HC-current starts from matching state under the temporary relaxed build. | Med-High |
+| Done | C1 layer-1 HC-current replay state guard | full capture | Sprint 564 rejected the cache-miss double-advance hypothesis and added the final-HC pointer identity to the full-capture graph cache key; position-keyed diagnostics and promoted suffix replay remain clean | Med |
+| 1 | C1 captured-position scalar audit/repair | full capture | Remote-only relaxed retry still diverged on request three with the final-HC pointer key, so audit remaining captured `opt.position` / derived row arguments and move replay-critical uses to `d_decode_position` before another cache-key relaxation. | Med-High |
+| 2 | C1 full-capture cross-position cache-key retry | full capture | Retry only after the captured-position scalar audit shows no replay-critical host-position arguments remain. | Med-High |
 | 3 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
@@ -499,6 +500,11 @@ cross-position cache-key relaxation and rejected it: adjacent replay matched,
 but a six-request same-session probe diverged on request three, so the
 candidate was removed and full capture remains position-keyed. Sprint 563
 localized the first logged divergence to layer 1 `hc_current` after layer 0
-still matched under the temporary relaxed build. The next ordered work is
-repairing that inter-layer current/HC replay state before any further cache-key
-retry. MTP stays deferred until the ordered post-C1/tuning point.
+still matched under the temporary relaxed build. Sprint 564 rejected the
+cache-miss capture-as-result hypothesis, added final-HC pointer identity to the
+full-capture cache key, and showed a remote-only relaxed retry still diverges
+on request three; the remaining blocker is captured position-dependent state,
+not the final-HC pointer key alone. The next ordered work is auditing and
+repairing replay-critical scalar `opt.position` / derived row arguments before
+any further cache-key relaxation. MTP stays deferred until the ordered
+post-C1/tuning point.
