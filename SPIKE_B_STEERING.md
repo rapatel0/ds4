@@ -34,7 +34,7 @@ optimized.
 - **True A6 is still open.** In this document, A6 means fusing HC/current
   computation into the attention-projection prologue. It does not mean the
   Sprint 483 rank-major attention-projection consumer conversion.
-- **C1 is active and correctness-clean through route-stable suffix replay.** Sprint 479 removed promoted
+- **C1 suffix replay is promoted for the TP/EP launcher.** Sprint 479 removed promoted
   hot-path direct peer-copy transport in favor of NCCL, and the structural
   extraction made the surface readable. Sprint 527 removed GPU0-centralized
   output-head prep. Sprint 528 removed output-head device-wide projection/top-1
@@ -49,10 +49,13 @@ optimized.
   zero. Sprint 537 restored direct suffix replay, Sprint 538 repaired serving
   parity by preventing unsafe cross-position route-shape reuse, and Sprint 539
   restored served suffix cache reuse with graph-only fixed-capacity
-  post-attention route geometry. Remaining graph work is now performance and
-  capture-surface tuning: reduce fixed-padding overhead, continue remaining
-  decode-loop/EP-compose/typed-indexer sync-site cleanup, and only promote
-  defaults after warmed request-window evidence.
+  post-attention route geometry. Sprint 540 then ran a warmed `32` request /
+  `32` slot / `64` token selected-token gate with startup isolated; graph
+  matched all generated sequences and improved request-window throughput
+  `99.446247s -> 90.181067s`. The TP/EP launcher now defaults graph suffix
+  replay on, with `DS4_V100_TP_EP_GRAPH_SUFFIX_REPLAY=0` as the operational
+  opt-out. Remaining graph work is full-capture/sync cleanup and fixed-padding
+  efficiency tuning, not serving-parity repair.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
   launcher defaults, topology policy, validation harness, model path, or target
@@ -227,7 +230,8 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | C5 attention-read raw/window handoffs | attention read | Sprint 534 removed promoted-path attention-read raw/window host waits; typed-indexer/top-k remains separate | Low-Med |
 | Done | C5 HC-current fill handoff | HC-current | Sprint 535 removed the promoted final fill/pack host wait with device-event ordering | Low-Med |
 | Done | SPIKE B preflight/control | both | Sprint 536 recorded ptxas spill data, target selected-token control, sync/capture blocker counts, and reusable control artifact | Low |
-| 1 | C1 graph performance tuning after route-stable suffix replay | both | Sprint 539 restored cache hits and strict selected-token parity; remaining work is reducing fixed-padding overhead and proving warmed request-window throughput before default promotion | Med-High |
+| Done | C1 route-stable graph suffix replay | both | Sprints 539-540 restored cache hits, strict selected-token parity, and warmed request-window speedup; launcher default promoted with opt-out | Med |
+| 1 | C1 full-capture/sync cleanup and padding-efficiency tuning | both | Suffix replay is promoted; remaining C1 work is eliminating helper-host-sync blockers and reducing fixed-capacity padding overhead | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
 | Deferred | B1 MTP — sidecar removal + specdec loop | EP 53% | Sidecar runs canonical MTP, not a truncation; cleanup is one ~200-LoC safetensors→GGUF converter + `tp-ep-pack-contract.c` extension + sidecar delete (3 sprints), then MTPBlock.forward (1 sprint), then TP/EP specdec loop (the actual throughput sprint). All after C5/B2/C1/tuning. | Med |
@@ -292,9 +296,7 @@ Aggregates the measurement work that per-sprint validation deferred:
 ## One-line frame
 
 With A4, D1, compact EP broadcast trim, C5 event handoffs, Sprint 536
-preflight, and Sprint 539 route-stable suffix replay complete for the served
-path, C1 is correctness-clean but not performance-promoted. The next ordered
-work is graph performance tuning on the fixed-capacity suffix or remaining
-sync/capture-surface cleanup, using warmed request-window measurements before
-any default promotion. MTP stays deferred until the ordered post-C1/tuning
-point.
+preflight, and Sprint 540 graph suffix replay promotion complete for the served
+path, the next ordered work is remaining C1 full-capture/sync cleanup or
+fixed-padding efficiency tuning. MTP stays deferred until the ordered
+post-C1/tuning point.
