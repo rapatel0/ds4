@@ -1015,7 +1015,8 @@ int run_decode_loop(const Options &opt,
             int grid = (int)((route_hidden_elems + block - 1) / block);
             if (compact_route) {
                 if (route_hidden_elems > 0) {
-                    ep_pack_route_dest_shards_kernel<<<grid, block, 0, r.stream>>>(
+                    ep_pack_route_dest_shards_kernel<<<
+                        (unsigned int)compose_routes, block, 0, r.stream>>>(
                         r.d_ep_contrib_all, r.d_down, r.d_route_weights,
                         route_total_limit, compose_routes,
                         (int)compact_segment_routes, p);

@@ -44,22 +44,23 @@ __global__ void ep_pack_route_dest_shards_kernel(float *packed,
                                                  int routes,
                                                  int segment_routes,
                                                  int rank) {
-    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
-    const uint64_t total = (uint64_t)routes * kHidden;
-    if (i >= total) return;
-    const int route = (int)(i / kHidden);
+    const int route = (int)blockIdx.x;
+    if (route >= routes) return;
     if (route_totals && rank >= 0 && rank < kGpus && route >= route_totals[rank]) {
         return;
     }
-    const int h = (int)(i % kHidden);
     const float w = route_weights ? route_weights[route] : kSyntheticRouteWeight;
-    const int dest = h / (kHidden / kGpus);
-    const int local_h = h % (kHidden / kGpus);
-    const uint64_t out_idx =
-        ((uint64_t)dest * (uint64_t)segment_routes + (uint64_t)route) *
-            (kHidden / kGpus) +
-        local_h;
-    packed[out_idx] = __half2float(route_hidden[i]) * w;
+    for (int h = (int)threadIdx.x; h < kHidden; h += (int)blockDim.x) {
+        const int dest = h / (kHidden / kGpus);
+        const int local_h = h % (kHidden / kGpus);
+        const uint64_t out_idx =
+            ((uint64_t)dest * (uint64_t)segment_routes + (uint64_t)route) *
+                (kHidden / kGpus) +
+            (uint64_t)local_h;
+        const uint64_t in_idx =
+            (uint64_t)route * (uint64_t)kHidden + (uint64_t)h;
+        packed[out_idx] = __half2float(route_hidden[in_idx]) * w;
+    }
 }
 
 __global__ void add_f32_kernel(float *dst, const float *src, uint64_t n) {
