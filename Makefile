@@ -22,7 +22,148 @@ V100_SCHEDULER_OBJS = engine/scheduler.o $(V100_LAYER_EXECUTE_OBJS)
 V100_REPLAY_OBJS = engine/replay.o $(V100_SCHEDULER_OBJS)
 V100_MTP_SIDECAR_OBJS = engine/mtp_sidecar.o
 V100_MTP_STEP_OBJS = engine/mtp_step.o
-TP_EP_APPLIANCE_DEPS = engine/tp_runtime.cu engine/tp_runtime.h ds4.h $(CPU_CORE_OBJS) kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h kernels/v100/common.cuh kernels/v100/dense.cuh kernels/v100/hc_mix.cuh kernels/v100/hc_shards.cuh kernels/v100/norm.cuh kernels/v100/compose.cuh kernels/v100/router.cuh kernels/v100/diagnostics.cuh kernels/v100/fill_pack.cuh kernels/v100/attention.cuh engine/runtime_types.cuh engine/runtime_options.cuh engine/api.h engine/runtime_profiler.cu engine/runtime_pack.cu engine/output_head.cu engine/turbomind_bindings.cu engine/diagnostics_support.cu engine/runtime_resources.cu engine/appliance_runtime.cu engine/decode_loop.cu engine/hc_current.cu engine/hc_final.cu engine/attention_projection.cu engine/compressed_kv_step.cu engine/attention_read.cu engine/attention_output.cu engine/post_attention_ffn.cu engine/router_step.cu engine/router_plan.cu engine/ep_dense.cu engine/ep_executor.cu engine/ep_compose.cu engine/layer_decode.cu engine/layer_runner.cu engine/token_major_loop.cu appliance/options.h appliance/request_scheduler.cu appliance/http_server.cu appliance/entrypoint.cu
+TURBOMIND_API_HEADER = kernels/turbomind/ggml-turbomind/include/ggml-turbomind-api.h
+V100_KERNEL_HEADERS = \
+	kernels/v100/common.cuh \
+	kernels/v100/dense.cuh \
+	kernels/v100/hc_mix.cuh \
+	kernels/v100/hc_shards.cuh \
+	kernels/v100/norm.cuh \
+	kernels/v100/compose.cuh \
+	kernels/v100/router.cuh \
+	kernels/v100/diagnostics.cuh \
+	kernels/v100/fill_pack.cuh \
+	kernels/v100/attention.cuh
+ENGINE_API_HEADERS = \
+	engine/runtime_types.cuh \
+	engine/runtime_options.cuh \
+	engine/api.h \
+	engine/tp_runtime.h
+ENGINE_SUPPORT_SRCS = \
+	engine/runtime_profiler.cu \
+	engine/runtime_pack.cu \
+	engine/output_head.cu \
+	engine/turbomind_bindings.cu \
+	engine/diagnostics_support.cu \
+	engine/runtime_resources.cu \
+	engine/appliance_runtime.cu
+ENGINE_STEP_SRCS = \
+	engine/decode_loop.cu \
+	engine/hc_current.cu \
+	engine/hc_final.cu \
+	engine/attention_projection.cu \
+	engine/compressed_kv_step.cu \
+	engine/attention_read.cu \
+	engine/attention_output.cu \
+	engine/post_attention_ffn.cu \
+	engine/router_step.cu \
+	engine/router_plan.cu \
+	engine/ep_dense.cu \
+	engine/ep_executor.cu \
+	engine/ep_compose.cu \
+	engine/layer_decode.cu \
+	engine/layer_runner.cu \
+	engine/token_major_loop.cu
+APPLIANCE_SRCS = \
+	appliance/options.h \
+	appliance/request_scheduler.cu \
+	appliance/http_server.cu \
+	appliance/entrypoint.cu
+TP_EP_APPLIANCE_DEPS = \
+	engine/tp_runtime.cu \
+	ds4.h \
+	$(CPU_CORE_OBJS) \
+	$(TURBOMIND_API_HEADER) \
+	$(V100_KERNEL_HEADERS) \
+	$(ENGINE_API_HEADERS) \
+	$(ENGINE_SUPPORT_SRCS) \
+	$(ENGINE_STEP_SRCS) \
+	$(APPLIANCE_SRCS)
+
+CORE_BINS = ds4 ds4-server ds4-bench ds4-eval ds4_cpu ds4_native ds4_server_test ds4_test
+TEST_BINS = \
+	tests/cuda_long_context_smoke \
+	tests/cuda_bf16_probe \
+	tests/cuda_v100_context_smoke \
+	tests/cuda_source_dtypes_smoke \
+	tests/cuda_f8_hmma_shared_down_smoke \
+	tests/cuda_f8_hmma_pair_swiglu_smoke \
+	tests/cuda_f8_hmma_attn_batch_smoke \
+	tests/cuda_v100_prefill_kv_smoke \
+	tests/cuda_v100_compressor_bridge_smoke \
+	tests/cuda_v100_projection_attention_smoke \
+	tests/cuda_v100_bounded_logits_smoke \
+	tests/cuda_v100_mxfp4_moe_smoke \
+	tests/cuda_v100_tc_grid_int8_smoke \
+	tests/cuda_v100_turbomind_adapter_smoke \
+	tests/cuda_v100_turbomind_sidecar_smoke \
+	tests/cuda_v100_descriptor_bound_ffn_smoke \
+	tests/cuda_v100_tp_routed_ffn_smoke \
+	tests/cuda_v100_descriptor_bound_attention_smoke \
+	tests/cuda_v100_integrated_layer_smoke \
+	tests/cuda_v100_stage_scheduler_smoke \
+	tests/cuda_v100_two_stage_scheduler_smoke \
+	tests/cuda_v100_full_scheduler_smoke \
+	tests/cuda_v100_selected_token_smoke \
+	tests/cuda_v100_output_head_parity_smoke \
+	tests/cuda_v100_scheduler_checkpoint_parity_smoke \
+	tests/cuda_v100_scheduler_snapshot_smoke \
+	tests/cuda_v100_stage_wavefront_smoke \
+	tests/cuda_v100_stage_layer_span_smoke \
+	tests/cuda_hc_relay_smoke \
+	tests/pack_index_smoke \
+	tests/gpu_arena_smoke \
+	tests/bf16_probe_smoke \
+	tests/v100_context_smoke \
+	tests/v100_layer_binding_smoke \
+	tests/v100_layer_state_smoke \
+	tests/source_dtypes_smoke
+TOOL_BINS = \
+	tools/ds4-v100-plan \
+	tools/ds4-v100-plan-tp \
+	tools/ds4-v100-tp-ep-pack-contract \
+	tools/ds4-v100-tp-ep-int8-candidates \
+	tools/ds4-v100-tp-ep-layer-descriptor-smoke \
+	tools/ds4-v100-tp-estimate \
+	tools/ds4-v100-tp8-kv-shard-smoke \
+	tools/ds4-v100-pack \
+	tools/ds4-v100-turbomind-pack \
+	tools/ds4-v100-appliance-pack \
+	tools/ds4-v100-turbomind-admit \
+	tools/ds4-source-oracle-vector \
+	tools/ds4-v100-replay
+SMOKE_BINS = \
+	tools/ds4-v100-tp4-collective-smoke \
+	tools/ds4-v100-tp4-layer-proxy \
+	tools/ds4-v100-tp8-collective-smoke \
+	tools/ds4-v100-tp8-collective-workbench \
+	tools/ds4-v100-tp8-layer-proxy \
+	tools/ds4-v100-tp-runtime-smoke \
+	tools/ds4-v100-tp8-layer-smoke \
+	tools/ds4-v100-tp8-real-layer-smoke \
+	tools/ds4-v100-tp8-turbomind-ffn-smoke \
+	tools/ds4-v100-tp-ep-expert-smoke \
+	tools/ds4-v100-tp-ep-layer-smoke \
+	tools/ds4-v100-tp-ep-dense-cache-smoke \
+	tools/ds4-v100-tp-ep-int8-compressor-workbench \
+	tools/ds4-v100-tp4-turbomind-layer-smoke \
+	tools/ds4-v100-routed-ffn-tile-workbench \
+	tools/ds4-v100-tp-kv-arena-smoke \
+	tools/ds4-v100-residency-smoke \
+	tools/ds4-v100-context-smoke \
+	tools/ds4-v100-layer-descriptor-gate \
+	tools/ds4-v100-mtp-sidecar-gate \
+	tools/ds4-v100-mtp-residency-smoke \
+	tools/ds4-v100-mtp-prefix-smoke \
+	tools/ds4-v100-mtp-q4k-smoke \
+	tools/ds4-v100-mtp-ffn-smoke \
+	tools/ds4-v100-mtp-attn-smoke \
+	tools/ds4-v100-mtp-logits-smoke \
+	tools/ds4-v100-mtp-forward-smoke \
+	tools/ds4-v100-mtp-verify-smoke
+APPLIANCE_BINS = appliance/ds4-v100-tp-ep-appliance
+CLEAN_OBJS = *.o tests/*.o tools/*.o engine/*.o
+CLEAN_BINS = $(CORE_BINS) $(TEST_BINS) $(TOOL_BINS) $(SMOKE_BINS) $(APPLIANCE_BINS)
 
 ifeq ($(UNAME_S),Darwin)
 METAL_LDLIBS := $(LDLIBS) -framework Foundation -framework Metal
@@ -749,4 +890,4 @@ test: ds4_test
 	./ds4_test
 
 clean:
-	rm -f ds4 ds4-server ds4-bench ds4-eval ds4_cpu ds4_native ds4_server_test ds4_test *.o tests/*.o tests/cuda_long_context_smoke tests/cuda_bf16_probe tests/cuda_v100_context_smoke tests/cuda_source_dtypes_smoke tests/cuda_f8_hmma_shared_down_smoke tests/cuda_f8_hmma_pair_swiglu_smoke tests/cuda_f8_hmma_attn_batch_smoke tests/cuda_v100_prefill_kv_smoke tests/cuda_v100_compressor_bridge_smoke tests/cuda_v100_projection_attention_smoke tests/cuda_v100_bounded_logits_smoke tests/cuda_v100_mxfp4_moe_smoke tests/cuda_v100_tc_grid_int8_smoke tests/cuda_v100_turbomind_adapter_smoke tests/cuda_v100_turbomind_sidecar_smoke tests/cuda_v100_descriptor_bound_ffn_smoke tests/cuda_v100_tp_routed_ffn_smoke tests/cuda_v100_descriptor_bound_attention_smoke tests/cuda_v100_integrated_layer_smoke tests/cuda_v100_stage_scheduler_smoke tests/cuda_v100_two_stage_scheduler_smoke tests/cuda_v100_full_scheduler_smoke tests/cuda_v100_selected_token_smoke tests/cuda_v100_output_head_parity_smoke tests/cuda_v100_scheduler_checkpoint_parity_smoke tests/cuda_v100_scheduler_snapshot_smoke tests/cuda_v100_stage_wavefront_smoke tests/cuda_v100_stage_layer_span_smoke tests/cuda_hc_relay_smoke tests/pack_index_smoke tests/gpu_arena_smoke tests/bf16_probe_smoke tests/v100_context_smoke tests/v100_layer_binding_smoke tests/v100_layer_state_smoke tests/source_dtypes_smoke tools/*.o tools/ds4-v100-plan tools/ds4-v100-plan-tp tools/ds4-v100-tp-ep-pack-contract tools/ds4-v100-tp-ep-layer-descriptor-smoke tools/ds4-v100-tp-estimate tools/ds4-v100-tp8-kv-shard-smoke tools/ds4-v100-tp4-collective-smoke tools/ds4-v100-tp4-layer-proxy tools/ds4-v100-tp8-collective-smoke tools/ds4-v100-tp8-collective-workbench tools/ds4-v100-tp8-layer-proxy tools/ds4-v100-tp-runtime-smoke tools/ds4-v100-tp8-layer-smoke tools/ds4-v100-tp8-real-layer-smoke tools/ds4-v100-tp8-turbomind-ffn-smoke tools/ds4-v100-tp-ep-expert-smoke tools/ds4-v100-tp-ep-layer-smoke tools/ds4-v100-tp-ep-dense-cache-smoke tools/ds4-v100-tp-ep-int8-compressor-workbench tools/ds4-v100-tp4-turbomind-layer-smoke tools/ds4-v100-routed-ffn-tile-workbench tools/ds4-v100-pack tools/ds4-v100-turbomind-pack tools/ds4-v100-appliance-pack tools/ds4-v100-turbomind-admit tools/ds4-v100-residency-smoke tools/ds4-v100-context-smoke tools/ds4-v100-layer-descriptor-gate tools/ds4-source-oracle-vector tools/ds4-v100-mtp-sidecar-gate tools/ds4-v100-mtp-residency-smoke tools/ds4-v100-mtp-prefix-smoke tools/ds4-v100-mtp-q4k-smoke tools/ds4-v100-mtp-ffn-smoke tools/ds4-v100-mtp-attn-smoke tools/ds4-v100-mtp-logits-smoke tools/ds4-v100-mtp-forward-smoke tools/ds4-v100-mtp-verify-smoke tools/ds4-v100-replay appliance/ds4-v100-tp-ep-appliance
+	rm -f $(CLEAN_OBJS) $(CLEAN_BINS)

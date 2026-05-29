@@ -32,3 +32,33 @@ tool helper.
 - This is an ownership move, not a claim that TP/EP appliance MTP serving is
   complete or promoted.
 - The MTP serving appliance integration remains unfinished.
+
+## Follow-on: Makefile Cleanup
+
+Appended to the previous structural cleanup instead of opening a new sprint.
+
+### Changes
+
+- Split the single-line `TP_EP_APPLIANCE_DEPS` into readable groups:
+  `V100_KERNEL_HEADERS`, `ENGINE_API_HEADERS`, `ENGINE_SUPPORT_SRCS`,
+  `ENGINE_STEP_SRCS`, and `APPLIANCE_SRCS`.
+- Replaced the long `clean` command body with `CLEAN_OBJS` and `CLEAN_BINS`
+  groups.
+- Added missing `tools/ds4-v100-tp-ep-int8-candidates` coverage to `clean`.
+- Kept smoke binary output paths under `tools/` for now because active shell
+  harnesses still invoke those paths.
+- Kept `tools/ds4-source-oracle-vector` because `tools/ds4-v100-gate.sh`
+  still builds and runs it.
+- Did not add `appliance/options.cu` because that file does not exist in the
+  current tree.
+
+### Validation
+
+- `git diff --check -- Makefile`
+- `make -n clean`
+- Local representative build:
+  `make -B tools/ds4-v100-plan tools/ds4-v100-plan-tp tools/ds4-v100-tp-ep-pack-contract tools/ds4-v100-tp-ep-int8-candidates tools/ds4-v100-tp-estimate tools/ds4-v100-context-smoke tools/ds4-v100-layer-descriptor-gate tools/ds4-source-oracle-vector tools/ds4-v100-mtp-sidecar-gate`
+- Remote V100 dry-run:
+  `CUDA_ARCH=sm_70 make -n appliance/ds4-v100-tp-ep-appliance`
+- Remote V100 build:
+  `CUDA_ARCH=sm_70 make -B -j80 appliance/ds4-v100-tp-ep-appliance`
