@@ -1,8 +1,8 @@
 ---
 created: 2026-05-17
 last_updated: 2026-05-28
-last_updated_by: sprint-531-compact-broadcast-trim
-revision: 531
+last_updated_by: sprint-532-post-ffn-events
+revision: 532
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
@@ -117,6 +117,8 @@ The performance program is intentionally isolated:
 | 57 | C5 sync-point reduction pass 2 | Promoted C1-readiness cleanup | Sprint 529 replaced the promoted attention-output eager rank-stream/dense-stream handoffs with CUDA event dependencies already used by graph event ordering. No flag, smoke, or diagnostic branch was added. The V100 selected-token gate passed with `http_200=32`, output-head first token `128819`, `output_head_finite_bad=0`, `peer_copy_ops=0`, `peer_copy_sys_bytes=0`, and `nccl_graph_sys_edge_count=0`; server logs had `86` `tp_ep_true_attention_output_projection` lines and zero non-PASS lines. C5 remains open for decode-loop, HC-current, attention projection/read, post-attention FFN, and EP compose sync sites. |
 | 58 | B2 compact EP all-pairs send/recv | Rejected; B2 remains open | Sprint 530 tested grouped all-pairs `ncclSend`/`ncclRecv` for served compact-route compose. The build passed, but selected-token failed before completing requests: NCCL routed some point-to-point pairs through SHM (`7[7] -> 0[0] via SHM/direct/direct`) and failed creating `/dev/shm/nccl-*` segments around `9637892` bytes, ending in `nccl error ./engine/runtime_pack.cu:381: unhandled system error`. The candidate code was removed, leaving the promoted compact compose path unchanged. Future B2 transport work must avoid all-pairs NCCL P2P and use a ring-compatible or statically bucketed no-SYS scheme. |
 | 59 | B2 compact EP broadcast trim | Promoted transport cleanup | Sprint 531 kept served compact compose on NCCL broadcast but removed padded over-transfer: zero-route source ranks skip broadcast, and active compact rows are packed into contiguous scratch before broadcast so byte count follows active route count instead of padded `slots * top_k` segments. The V100 selected-token gate passed with `http_200=32`, server output-head first token `128819`, `output_head_finite_bad=0`, `peer_copy_ops=0`, `peer_copy_sys_bytes=0`, `nccl_graph_sys_edge_count=0`, and `scaffold_compact_moe_decode_gate=1`. Larger B2 fusion remains open, but compact transport cleanup is complete enough for C1 readiness. |
+| 60 | C5 post-attention FFN event handoffs | Promoted C1-readiness cleanup | Sprint 532 removed promoted-path host stream synchronizations from `engine/post_attention_ffn.cu` after post-attention shard production with semantic stats skipped, after rank-major all-gather, and at the final rank-stream-to-dense-stream handoff. The handoffs now use existing device-event ordering and the main path, with no runtime flag, permanent smoke, broad diagnostic branch, or MTP work. The V100 selected-token gate passed with `http_200=32`, server output-head first token `128819`, `output_head_finite_bad=0`, `peer_copy_ops=0`, `peer_copy_sys_bytes=0`, and `nccl_graph_sys_edge_count=0`; server logs showed `tp_ep_post_attention_ffn_input ... PASS` with `rank_major_input=1`, `rank_major_shared_input=1`, `rank_major_route_input=1`, and `slot_major_ffn_norm=0`. C5 remains open for decode-loop, HC-current, attention projection/read, EP compose, and diagnostic/control-only post-attention sync sites. |
+| 61 | B1 MTP implementation investigation | Research complete; implementation deferred | `MTP_IMPLEMENTATION.md` records that canonical MTP weights are already local on the V100 pod as 1,575 `mtp.0.*` tensors in the safetensors cache, while the current sidecar source contains only 32 tensors and the main appliance GGUF contains zero MTP tensors because the HF loader stripped `mtp.*` keys. The implementation is now planned as pack canonical tensors, bind them through the main load path and delete the sidecar, implement canonical `MTPBlock.forward`, then build the speculative-decode loop. | Do not start MTP before the base TP/EP cleanup/tuning sequence. Treat phases 1-3 as structural integration after tuning; Phase 4 is the B1 throughput sprint and must opt into reference-shape perf measurement. |
 
 Promotion requires a same-binary V100 A/B at the real serving shape, unchanged
 first token/checksum, and improved GPU utilization or server decode tok/s.
@@ -133,7 +135,11 @@ non-comparable.
 ## SPIKE B Remaining Sprint Sequence
 
 This sequence implements the rest of `SPIKE_B_STEERING.md` after the A1-A3
-promotions. It treats MTP as deferred support code, not active work.
+promotions. MTP is deferred implementation work, not an active optimization
+before the base TP/EP path is stable. The MTP research blocker is cleared and
+recorded in `MTP_IMPLEMENTATION.md`: canonical `mtp.0.*` weights are local,
+the current sidecar is incomplete, and the real work is a sequenced
+pack/bind/forward/speculative-decode integration.
 
 The order is A4 before C1. C1 has the larger ceiling, but A4 is the lower-risk
 compounder: Sprint 483 already proved the rank-major consumer pattern on
@@ -299,26 +305,48 @@ Decision: promoted. This closes the current B2 transport cleanup branch without
 adding a runtime flag or all-pairs P2P path. Larger B2 fusion remains open, but
 the next graph-readiness sprint returns to C5 sync-point reduction.
 
-### Sprint 532 - C5 Remaining Sync-Point Reduction
+### Sprint 532 - C5 Post-Attention FFN Event Handoffs
 
-Goal: continue replacing hot host waits with device-side events before C1.
+Goal: continue replacing hot host waits with device-side events before C1 by
+removing promoted-path ordering waits from `engine/post_attention_ffn.cu`.
 
 Scope:
 
-1. Audit remaining served-path host waits in `engine/hc_current.cu`,
+1. Remove the promoted semantic-skip path's rank-stream sync after
+   `d_post_attn_shard` production.
+2. Remove the promoted rank-major path's rank-stream sync after the
+   post-attention all-gather.
+3. Replace the final rank-stream sync before dense-stream consumers with the
+   existing device-event handoff helper.
+4. Leave diagnostics and genuine host-visible route/control boundaries alone.
+5. Do not add a runtime flag, permanent smoke, broad sync diagnostic, or MTP
+   work.
+
+Decision: promoted. The selected-token gate passed with `32/32` HTTP 200,
+first token `128819`, zero direct peer copies, zero peer-copy SYS bytes, zero
+NCCL SYS graph edges, and post-attention FFN PASS logs for the promoted
+rank-major path.
+
+### Sprint 533 - C5 Remaining Sync-Point Reduction
+
+Goal: continue C5 by removing the next contained set of promoted-path host
+waits before C1.
+
+Scope:
+
+1. Audit remaining promoted-path waits in `engine/hc_current.cu`,
    `engine/decode_loop.cu`, `engine/attention_projection.cu`,
-   `engine/attention_read.cu`, `engine/post_attention_ffn.cu`, and EP compose
-   boundaries.
+   `engine/attention_read.cu`, and EP compose boundaries.
 2. Convert only sites with clear stream/data dependencies; leave diagnostics
    and genuine host-visible result boundaries alone.
-3. Do not add a runtime flag or broad sync diagnostic. Promotion means main
-   path event ordering with the old host wait removed.
+3. Keep the scope to main-path event ordering. No runtime flag, permanent
+   smoke, broad sync diagnostic, or MTP work.
 
 Promotion gate: selected-token correctness against the promoted artifact,
 zero direct peer-copy/SYS bytes, no output-token drift, and server logs showing
 the touched stage still passes.
 
-### Sprint 533 - SPIKE B Preflight, Spill, and Capture Eligibility
+### Sprint 534 - SPIKE B Preflight, Spill, and Capture Eligibility
 
 Goal: make graph and fusion work measurable after A4 has settled the remaining
 full-current consumer surface and after the output-head/sync/compact-compose
@@ -332,9 +360,9 @@ Scope:
 2. Refresh launch-count and sync-count accounting for the promoted TP/EP
    appliance at `32` slots / `256K` using existing low-overhead profiling.
 3. Audit graph capture blockers after the SYS sweep, A4 cleanup, output-head
-   boundary conversion, sync-point pass, and compact EP compose work: every hot
-   cross-rank op should be NCCL or an already justified eager boundary; direct
-   peer-copy hot paths must remain zero.
+   boundary conversion, sync-point passes, and compact EP compose work: every
+   hot cross-rank op should be NCCL or an already justified eager boundary;
+   direct peer-copy hot paths must remain zero.
 4. Record the current promoted run as the reusable control artifact for the
    following SPIKE B sprints.
 
@@ -342,7 +370,7 @@ Decision: no promotion expected. The sprint closes with a ranked blocker list,
 kernel spill report, and the exact control artifact path that later candidates
 reuse.
 
-### Sprint 534 - C1 Piecewise Graph Capture Stage 1
+### Sprint 535 - C1 Piecewise Graph Capture Stage 1
 
 Goal: capture and replay the largest graph-safe per-layer subregion without
 moving dynamic serving orchestration into the graph.
@@ -356,14 +384,14 @@ Scope:
    non-static control logic eager.
 3. Start with the smallest direct/layer checksum harness that proves capture
    correctness, then move to selected-token HTTP only after direct parity holds.
-4. Reuse the Sprint 533 promoted control unless the implementation changes
+4. Reuse the Sprint 534 promoted control unless the implementation changes
    defaults.
 
 Promotion gate: selected-token and generated-sequence agreement against the
 promoted control, zero direct peer-copy/SYS bytes, no VRAM admission failures,
 and a material server-decode or request-window utilization improvement.
 
-### Sprint 535 - C2 Graph Serving Parity and Replay Repair
+### Sprint 536 - C2 Graph Serving Parity and Replay Repair
 
 Goal: close the graph-in-serving parity gap instead of repeatedly measuring
 known-bad broad replay.
@@ -382,7 +410,7 @@ Promotion gate: persistent replay must pass parity before any throughput result
 counts. If parity passes but speed is flat, close with a rejection and keep only
 the correctness/event-order cleanup.
 
-### Sprint 536 - A5 and True A6 HC Fusion
+### Sprint 537 - A5 and True A6 HC Fusion
 
 Goal: turn the rank-local HC structure into fewer launches.
 
@@ -401,7 +429,7 @@ in the profiled HC-current/attention prefix, no new spills that erase the
 launch-count win, and improved target-shape server decode or request-window
 utilization.
 
-### Sprint 537 - B3 TP-Sharded Experts vs EP A/B
+### Sprint 538 - B3 TP-Sharded Experts vs EP A/B
 
 Goal: answer whether EP all-to-all orchestration is worse than TP-sharded
 expert reduction at the real serving shape.
@@ -419,7 +447,7 @@ Decision: promote only if correctness and target-shape throughput both win.
 Otherwise record whether TP experts should be abandoned, retried as a fused
 TP4 reduction/compose path, or kept as a diagnostic.
 
-### Sprint 538 - B4 Routed/Shared Expert Overlap
+### Sprint 539 - B4 Routed/Shared Expert Overlap
 
 Goal: overlap the rank-local shared expert with routed all-to-all/dispatch
 without changing output order.
@@ -434,7 +462,7 @@ Scope:
 Promotion gate: parity against the promoted control, no readiness or VRAM
 regression, and a measurable reduction in EP wall time or server decode time.
 
-### Sprint 539 - B5 Correctness-Preserving Capacity Balancing
+### Sprint 540 - B5 Correctness-Preserving Capacity Balancing
 
 Goal: revisit capacity balancing after Sprint 435's capacity-16 failure, but
 only with correctness-preserving fixed-shape semantics.
@@ -449,6 +477,94 @@ Scope:
 
 Promotion gate: no output drift, no dropped selected experts, no route-weight
 mismatches, and an EP throughput or graph-capture simplification benefit.
+
+### Sprint 541 - Post-Structural Tuning and Reprofile
+
+Goal: measure the cumulative result of the C5/C1/A5-A6/B2-B5 sequence before
+starting MTP integration.
+
+Scope:
+
+1. Run the reference-shape serving profile at `32` slots / `256K`.
+2. Refresh request-window GPU utilization, domain timing, launch/sync counts,
+   NCCL topology accounting, and memory headroom.
+3. Run the shape envelope sweep and NCCL protocol/payload-size checks.
+4. Run the C4 spill/occupancy checks if they were not completed in Sprint 534.
+5. Decide whether the remaining top bottleneck is still EP underfill,
+   graph/launch overhead, or a new post-fusion hotspot.
+
+Decision: no code promotion expected. This sprint sets the control artifact
+and bottleneck map for MTP phases 1-4.
+
+### Sprint 542 - B1 MTP Phase 1: Canonical Pack Contract
+
+Goal: pack the canonical `mtp.0.*` tensors into the appliance contract without
+exercising MTP in decode.
+
+Scope:
+
+1. Extend the pack tooling for the `mtp.0.*` namespace using the same TP8/EP8
+   rules as a normal layer-43 Block where applicable.
+2. Add binding rules for `e_proj`, `h_proj`, `enorm`, `hnorm`, `norm`, and
+   `hc_head_fn/base/scale`.
+3. Verify the generated pack contract includes all 1,575 canonical MTP
+   tensors and does not depend on the old sidecar GGUF.
+
+Promotion gate: pack/load validation passes and normal TP/EP serving remains
+at promoted-control correctness with MTP not exercised.
+
+### Sprint 543 - B1 MTP Phase 2: Main-Path Bindings and Sidecar Delete
+
+Goal: make MTP tensors resident through the main load path and retire the
+parallel sidecar runtime.
+
+Scope:
+
+1. Bind layer-43 attention, shared expert, routed experts, and MTP-specific
+   prologue/epilogue tensors through `engine/runtime_pack.cu` and
+   `engine/runtime_resources.cu`.
+2. Expose the shared embedding/head resources needed by the MTP step.
+3. Delete `engine/mtp_sidecar.{c,h}` and the sidecar-only Q4_K/Q8_0 paths once
+   no other consumer remains.
+4. Retire sidecar-targeting MTP smokes as part of the same promotion.
+
+Promotion gate: serving correctness matches the promoted control with MTP
+loaded but not exercised; no sidecar path remains in the appliance build.
+
+### Sprint 544 - B1 MTP Phase 3: Canonical MTPBlock Forward
+
+Goal: implement the canonical single-step `MTPBlock.forward` on top of the
+existing TP/EP Block primitives.
+
+Scope:
+
+1. Add the MTP prologue: shared embedding lookup, `enorm`, `hnorm`,
+   `e_proj`, `h_proj`, and combine.
+2. Reuse existing HC-current, attention, EP compose, and post-attention FFN
+   sublayer calls for the inherited Block body.
+3. Add the MTP-specific output head using `hc_head_fn/base/scale` and `norm`.
+4. Keep the decode loop from relying on speculative acceptance in this phase.
+
+Promotion gate: MTP forward can be exercised explicitly with selected-token
+agreement against the promoted control policy; default serving remains stable.
+
+### Sprint 545 - B1 MTP Phase 4: Speculative Decode Loop
+
+Goal: turn canonical MTP into the throughput lever by verifying draft tokens
+per main-model step.
+
+Scope:
+
+1. Generate K draft tokens with the canonical MTP forward path.
+2. Verify drafts with the main model while preserving TP/EP KV state and rank
+   agreement on accept/reject decisions.
+3. Advance positions by `1 + accepted_k` only after all ranks agree.
+4. Tune K and acceptance policy under the reference serving profile.
+
+Promotion gate: correctness against the promoted control plus a material
+reference-shape throughput or request-window utilization win. This sprint opts
+into performance measurement because the failure mode is direct serving
+transfer, not just structural correctness.
 
 Sprint 376's broad CUDA graph capture remained blocked by peer-copy transport,
 but Sprint 417 changed the graph thesis for the TP/EP direct decode path:
@@ -3604,6 +3720,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-28 | Sprint 529 completed C5 sync-point reduction pass 2 for attention output. | Replaced the attention-output eager host stream synchronizations around the two dense projection handoffs with CUDA event dependencies, using the existing graph-order helpers and adding no flag or smoke scaffold. The V100 selected-token gate at `32` requests / `32` slots / `256K` / `2` tokens passed with `http_200=32`, output-head first token `128819`, `output_head_finite_bad=0`, `peer_copy_ops=0`, `peer_copy_sys_bytes=0`, and `nccl_graph_sys_edge_count=0`. Server logs had `86` `tp_ep_true_attention_output_projection` lines and zero non-PASS lines. | Treat C5 pass 2 as promoted. Next sprint is B2 compact EP variable-size NCCL compose, while C5 remains open for decode-loop, HC-current, attention projection/read, post-attention FFN, and EP compose sync-site review. |
 | 2026-05-28 | Sprint 530 rejected all-pairs NCCL send/recv for compact EP compose. | The candidate replaced served compact return movement with grouped `ncclSend`/`ncclRecv`; the build passed, but selected-token failed immediately after request start. NCCL routed some all-pairs point-to-point channels through SHM, including `7[7] -> 0[0] via SHM/direct/direct`, then failed creating `/dev/shm/nccl-*` segments around `9637892` bytes and ended at `nccl error ./engine/runtime_pack.cu:381: unhandled system error`. | Candidate code was removed; promoted path is unchanged. Do not retry all-pairs NCCL P2P as the B2 promotion path unless topology first proves no SHM/SYS. Remaining B2 work must be ring/bucket compatible or should be closed in favor of C5 sync cleanup. |
 | 2026-05-28 | Sprint 531 promoted compact EP broadcast trimming. | Kept served compact compose on NCCL broadcast but skipped zero-route source broadcasts and packed active compact rows into source-rank scratch before broadcast. The target selected-token gate passed with `http_200=32`, server output-head first token `128819`, `output_head_finite_bad=0`, `peer_copy_ops=0`, `peer_copy_sys_bytes=0`, `nccl_graph_sys_edge_count=0`, and `scaffold_compact_moe_decode_gate=1`. | Treat B2 compact transport cleanup as complete enough for C1 readiness. Larger B2 fusion remains open; the next sprint returns to C5 remaining sync-point reduction. |
+| 2026-05-28 | Sprint 532 promoted post-attention FFN event handoffs. | Removed promoted-path host stream waits from `engine/post_attention_ffn.cu` after semantic-skip post-attention shard production, after rank-major all-gather, and at the final rank-stream-to-dense-stream handoff. The target selected-token gate passed with `http_200=32`, server output-head first token `128819`, `output_head_finite_bad=0`, `peer_copy_ops=0`, `peer_copy_sys_bytes=0`, `nccl_graph_sys_edge_count=0`, and `tp_ep_post_attention_ffn_input` PASS logs showing `rank_major_input=1`, `rank_major_shared_input=1`, `rank_major_route_input=1`, and `slot_major_ffn_norm=0`. | Treat C5 post-attention FFN promoted-path handoffs as complete. Continue C5 on decode-loop, HC-current, attention projection/read, EP compose, and diagnostic/control-only post-attention sync sites before C1 preflight. |
 
 ## Sprint Hygiene
 

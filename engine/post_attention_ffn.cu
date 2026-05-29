@@ -75,10 +75,9 @@ int run_true_ds4_post_attention_ffn_input(const Options &opt,
             return 9;
         }
     } else {
-        for (int rank = 0; rank < kGpus; ++rank) {
-            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
-            if (!opt.true_ds4_semantic_skip_stats_gate) {
+        if (!opt.true_ds4_semantic_skip_stats_gate) {
+            for (int rank = 0; rank < kGpus; ++rank) {
+                CHECK_CUDA(cudaSetDevice(ranks[rank].device));
                 merge_tensor_stats(
                     &post_shard_stats,
                     collect_tensor_f32_stats(ranks[rank].d_post_attn_shard,
@@ -123,11 +122,6 @@ int run_true_ds4_post_attention_ffn_input(const Options &opt,
             if (enqueue_control_wait_after_rank_streams(opt, ranks,
                                                         control_stream) != 0) {
                 return 9;
-            }
-        } else {
-            for (int rank = 0; rank < kGpus; ++rank) {
-                CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-                CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
             }
         }
     }
@@ -498,14 +492,7 @@ int run_true_ds4_post_attention_ffn_input(const Options &opt,
             }
         }
     }
-    if (graph_event_order) {
-        if (enqueue_dense_wait_after_rank_stream(ranks) != 0) return 9;
-    } else {
-        for (int rank = 0; rank < kGpus; ++rank) {
-            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
-        }
-    }
+    if (enqueue_dense_wait_after_rank_stream(ranks) != 0) return 9;
 
     TensorF32Stats route_inv_scale_stats;
     int total_routes = 0;

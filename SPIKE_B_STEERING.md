@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-28 after Sprint 531)
+# Spike B Decode-Optimization Steering (updated 2026-05-28 after Sprint 532)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -20,7 +20,7 @@ kernels. Optimizing the expert GEMM alone moves a fraction of 53% and none of
 40%. MTP remains deferred support code until the base TP/EP path is stable and
 optimized.
 
-## Current reassessment after sprints 478-525
+## Current reassessment after sprints 478-532
 
 - **A1-A3 are done.** A1 RMS-norm rank-local is rolled into A2. A2 HC mix
   row-parallel all-reduce is promoted from Sprint 478. A3 router rank-local
@@ -39,10 +39,12 @@ optimized.
   extraction made the surface readable. Sprint 527 removed GPU0-centralized
   output-head prep. Sprint 528 removed output-head device-wide projection/top-1
   waits, Sprint 529 removed the attention-output eager stream-synchronization
-  branches, and Sprint 531 trimmed compact EP compose broadcasts while staying
-  on the no-SYS NCCL broadcast path. C5 remains open for decode-loop and the
-  remaining per-stage stream waits. C1 should wait until the remaining
-  sync-point reduction reduces the capture surface.
+  branches, Sprint 531 trimmed compact EP compose broadcasts while staying
+  on the no-SYS NCCL broadcast path, and Sprint 532 removed promoted-path
+  post-attention FFN input host waits. C5 remains open for decode-loop,
+  HC-current, attention projection/read, EP compose, and diagnostic/control
+  post-attention boundaries. C1 should wait until the remaining sync-point
+  reduction reduces the capture surface.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
   launcher defaults, topology policy, validation harness, model path, or target
@@ -78,10 +80,29 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 
 ## B. EP (53%) — orchestration + sub-1-token experts
 
-- **B1 MTP is deferred.** EP is 53%
+- **B1 MTP is deferred, but the research blocker is cleared.** EP is 53%
   *because* M<1/expert; MTP (verify K draft tokens) makes experts see (K+1)× tokens
   → tiles fill + fewer steps. That remains true, but TP/EP MTP is intentionally
   out of the active docket until the base TP/EP path is stable and optimized.
+  The implementation record is `MTP_IMPLEMENTATION.md`.
+
+  Current facts from the investigation:
+
+  - Canonical MTP weights are already local on the V100 pod at
+    `/models/deepseek-v4-flash-safetensors-cache/model-00046-of-00046.safetensors`.
+    They include 1,575 `mtp.0.*` tensors at the same FP8/MXFP4 quantization
+    style as the main path.
+  - The current MTP sidecar source contains only 32 MTP tensors, so it is not
+    running the canonical `MTPBlock`; it is a truncated approximation missing
+    routed experts and most attention LoRA factors.
+  - The main appliance GGUF contains zero MTP tensors because the stock HF
+    loader strips `mtp.*` keys during conversion.
+  - No new kernel family is expected for phases 1-3. MTPBlock reuses the
+    existing Block primitives plus small prologue/epilogue tensor bindings.
+  - The sequenced implementation is: pack canonical MTP tensors into the
+    appliance contract, bind them through the main load path and delete the
+    sidecar, implement `MTPBlock.forward`, then build the speculative-decode
+    loop. Only the final speculative-decode phase is the B1 throughput lever.
 - **B2 Fuse dispatch + grouped-GEMM + weighted-combine** into 1–2 kernels,
   device-side offsets only (no host sync on route counts). Template: the fork's
   `awq_moe_single_token_sm70` compact path. Make compact-route-compose the
@@ -136,9 +157,10 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
   round-trips with `cudaEventRecord()` / `cudaStreamWaitEvent()` dependencies.
   This is both an eager-path cleanup and a graph-capture prerequisite. Sprint
   528 completed the output-head wait cleanup; Sprint 529 completed the
-  attention-output projection handoff cleanup. Decode-loop, HC-current,
-  attention projection/read, post-attention FFN, and EP compose still need
-  per-site review.
+  attention-output projection handoff cleanup; Sprint 532 completed the
+  promoted post-attention FFN input handoffs. Decode-loop, HC-current,
+  attention projection/read, EP compose, and diagnostic/control-only
+  post-attention sync sites still need per-site review.
 
 ## D. Model-boundary NCCL cleanup
 
@@ -155,11 +177,12 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | D1 output-head A1 pattern | Model boundary | Sprint 527 removed GPU0-centralized output-head prep; timing regressed, but the capture surface is cleaner | Low |
 | Done | C5 sync-point reduction pass 2 | attention output | Sprint 529 removed attention-output eager host stream waits from the promoted path | Low-Med |
 | Done | B2 compact EP broadcast trim | EP 53% | Sprint 531 removed padded compact broadcast over-transfer without all-pairs SHM/P2P | Low |
-| 1 | C5 remaining sync-point passes | both | Decode-loop, HC-current, attention projection/read, post-attention FFN, and EP compose still need per-site review | Low-Med |
+| Done | C5 post-attention FFN handoffs | post-attention | Sprint 532 removed promoted-path post-attention FFN host waits with device-event ordering | Low-Med |
+| 1 | C5 remaining sync-point passes | both | Decode-loop, HC-current, attention projection/read, EP compose, and diagnostic/control post-attention sync sites still need per-site review | Low-Med |
 | 3 | C1/C2 piecewise graph capture and serving parity | both | Highest ceiling, but only after the surface is simplified | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
-| Deferred | B1 MTP | EP 53% | Useful later, but do not use it to hide base TP/EP bottlenecks | Med |
+| Deferred | B1 MTP canonical integration | EP 53% | Research blocker cleared: canonical weights are local and sidecar is incomplete. Do phases 1-3 after the base TP/EP optimization/tuning sequence, then Phase 4 speculative decode | Med |
 
 ## Discipline
 
