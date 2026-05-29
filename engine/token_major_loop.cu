@@ -718,8 +718,10 @@ int run_token_major_serving_loop(const Options &opt,
              !opt.decode_cudagraph_gate ? 1 : 0) +
             (opt.true_ds4_attention_raw_read_gate &&
              !opt.decode_cudagraph_gate ? 1 : 0) +
-            (opt.true_ds4_attention_output_gate ? 1 : 0) +
-            (opt.true_ds4_post_attention_ffn_input_gate ? 1 : 0) +
+            (opt.true_ds4_attention_output_gate &&
+             !opt.decode_cudagraph_gate ? 1 : 0) +
+            (opt.true_ds4_post_attention_ffn_input_gate &&
+             !opt.decode_cudagraph_gate ? 1 : 0) +
             (opt.final_hc_carry_gate && opt.tp_hc_final_expand_gate &&
              !opt.decode_cudagraph_gate ? 1 : 0);
         const bool capture_replay_validated =

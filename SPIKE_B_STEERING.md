@@ -54,8 +54,10 @@ optimized.
   matched all generated sequences and improved request-window throughput
   `99.446247s -> 90.181067s`. The TP/EP launcher now defaults graph suffix
   replay on, with `DS4_V100_TP_EP_GRAPH_SUFFIX_REPLAY=0` as the operational
-  opt-out. Remaining graph work is full-capture/sync cleanup and fixed-padding
-  efficiency tuning, not serving-parity repair.
+  opt-out. Sprint 541 fixed the stale helper-host-sync audit label; the
+  promoted graph path now reports `graph_audit_blocker=none`. Remaining graph
+  work is full-capture/sync cleanup and fixed-padding efficiency tuning, not
+  serving-parity repair.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
   launcher defaults, topology policy, validation harness, model path, or target
@@ -231,7 +233,7 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | C5 HC-current fill handoff | HC-current | Sprint 535 removed the promoted final fill/pack host wait with device-event ordering | Low-Med |
 | Done | SPIKE B preflight/control | both | Sprint 536 recorded ptxas spill data, target selected-token control, sync/capture blocker counts, and reusable control artifact | Low |
 | Done | C1 route-stable graph suffix replay | both | Sprints 539-540 restored cache hits, strict selected-token parity, and warmed request-window speedup; launcher default promoted with opt-out | Med |
-| 1 | C1 full-capture/sync cleanup and padding-efficiency tuning | both | Suffix replay is promoted; remaining C1 work is eliminating helper-host-sync blockers and reducing fixed-capacity padding overhead | Med-High |
+| 1 | C1 full-capture/sync cleanup and padding-efficiency tuning | both | Suffix replay is promoted and the stale helper-host-sync audit label is gone; remaining C1 work is real full-capture blockers and fixed-capacity padding overhead | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
 | Deferred | B1 MTP — sidecar removal + specdec loop | EP 53% | Sidecar runs canonical MTP, not a truncation; cleanup is one ~200-LoC safetensors→GGUF converter + `tp-ep-pack-contract.c` extension + sidecar delete (3 sprints), then MTPBlock.forward (1 sprint), then TP/EP specdec loop (the actual throughput sprint). All after C5/B2/C1/tuning. | Med |
