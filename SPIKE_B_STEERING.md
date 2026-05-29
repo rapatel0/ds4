@@ -85,10 +85,13 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
   device-side offsets only (no host sync on route counts). Template: the fork's
   `awq_moe_single_token_sm70` compact path. Make compact-route-compose the
   default. First finish the open compact-route transport half: replace the served
-  path's variable-size per-pair peer-copy-equivalent compose movement with grouped
-  `ncclSend`/`ncclRecv` or a statically bucketed NCCL scheme. Sprint 480's
-  `ncclReduceScatter` evidence covers only non-compact FP32 and is not proof for
-  served compact traffic.
+  path's variable-size compose movement with a topology-compatible NCCL scheme.
+  Sprint 530 rejected all-pairs grouped `ncclSend`/`ncclRecv`: NCCL routed some
+  pairs through SHM and failed the container `/dev/shm` budget, violating the
+  no-SYS/no-SHM direction of the promoted topology policy. Future B2 transport
+  work should use a ring-compatible or statically bucketed collective shape, not
+  all-pairs P2P. Sprint 480's `ncclReduceScatter` evidence covers only
+  non-compact FP32 and is not proof for served compact traffic.
 - **B3 TP-sharded experts vs EP A/B (the S-F question — now justified).** EP's 53%
   is dispatch/all-to-all. TP-experts have **no all-to-all** (reduce via the hidden
   all-reduce). For 13B-active/8-GPU/32-slot, test whether all-to-all overhead >
@@ -146,7 +149,7 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | A4 finish rank-major consumers | HC 40% | Sprint 526 completed the remaining post-attention FFN shared/route consumers for the served path | Low |
 | Done | D1 output-head A1 pattern | Model boundary | Sprint 527 removed GPU0-centralized output-head prep; timing regressed, but the capture surface is cleaner | Low |
 | Done | C5 sync-point reduction pass 2 | attention output | Sprint 529 removed attention-output eager host stream waits from the promoted path | Low-Med |
-| 1 | B2 compact EP variable-size NCCL compose | EP 53% | Targets served compact traffic and removes remaining peer-copy-equivalent compose movement | Med |
+| 1 | B2 compact EP topology-compatible compose | EP 53% | All-pairs send/recv is rejected; remaining path is ring/bucketed NCCL or fusion that avoids all-pairs SHM | Med |
 | 2 | C5 remaining sync-point passes | both | Decode-loop, HC-current, attention projection/read, post-attention FFN, and EP compose still need per-site review | Low-Med |
 | 3 | C1/C2 piecewise graph capture and serving parity | both | Highest ceiling, but only after the surface is simplified | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
