@@ -1340,6 +1340,17 @@ int enqueue_rank_streams_wait_after_dense_streams(RankState ranks[kGpus]) {
         if (!ev) return 1;
         CHECK_CUDA(cudaEventRecord(ev, r.dense_stream));
         CHECK_CUDA(cudaStreamWaitEvent(r.stream, ev, 0));
+        // Bidirectional barrier: also make the dense stream wait for the rank
+        // stream. The eager path this substitutes for fully drains BOTH streams
+        // (cudaStreamSynchronize on dense_stream and stream); a dense->rank-only
+        // edge lets dense_stream lap rank_stream across graph replays, racing the
+        // in-place writes to the attention dense output (attn_q_b.d_out) against
+        // the prior step's readers. Recording the rank-stream event and waiting on
+        // it from dense_stream restores the two-way ordering the eager sync implied.
+        cudaEvent_t sev = graph_stream_done_event(r, slot);
+        if (!sev) return 1;
+        CHECK_CUDA(cudaEventRecord(sev, r.stream));
+        CHECK_CUDA(cudaStreamWaitEvent(r.dense_stream, sev, 0));
     }
     return 0;
 }

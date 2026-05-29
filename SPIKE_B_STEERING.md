@@ -455,7 +455,8 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | C1 full-capture position-derived state localization | full capture | Sprint 575: no per-slot value to localize. Single-slot (`SLOTS=8`, one request) full-capture replay is bit-exact with eager at `250000` (32 tok) and `250064` (4 tok). The divergences are batch nondeterminism; `250064` floor `control-A` vs `control-B` is `32/32`. | Med-High |
 | Done | C1 full-capture promotion under noise-aware gate | full capture | Sprint 576: not promotable. Logit-space floors show eager-vs-eager is bit-identical on matched tokens (`7/32` discrete router-tie flips) but full-vs-full diverges `32/32` with logit Δ up to `3.63`. Full capture is batch-unstable: a real defect, not tolerated noise. | Med |
 | Done | C1 full-capture batch-instability localization | full capture | Sprint 577: full-vs-full logit floor scales with active routed tokens (1-2 active ~bit-exact, `8` -> Δ 1.21/`8` flips, `32` -> Δ 3.63/`32` flips). The 8-slot graph is constant across these, so it is not a static pointer/buffer bug; it tracks active route count -> accumulation-order nondeterminism in the graphed route/compose. compute-sanitizer OOMs before decode and no smoke reproduces the graph-replay path, so it cannot reach this bug. | Med-High |
-| 1 | C1 captured-compose nondeterminism: runtime trace required | full capture | Sprint 578 exhausted static analysis -- all inspectable candidates ruled out: compose accumulation (deterministic `ep_pack`), route ordering (deterministic `route_idx`), copy->combine (same-stream ordered on `dst.stream`; the captured path uses direct peer copies, not the sync-bearing `broadcast_ep_return_slices`), and event-slot reuse (`kGraphOrderEventSlots=1024` > ~645/step). The bug is real but needs a **runtime trace**: `nsys` on the captured region to inspect actual graph node dependencies/concurrency, or per-stage differential instrumentation captured inside the graph (extend `tp_ep_decode_top1_logit` to per-layer-stage hashes under replay vs a same-position eager shadow). Do NOT patch blind. Then fix and confirm the full-vs-full logit floor collapses toward eager. | Med-High |
+| Done | C1 captured-compose nondeterminism: FIXED | full capture | Sprint 579: runtime per-stage diff localized the divergence to the captured `compressed_kv` stage's `attn_q_b.d_out` on `dense_stream`, caused by `enqueue_rank_streams_wait_after_dense_streams` being a dense->rank-only barrier (eager fully drains both streams). Made it bidirectional (`output_head.cu`); full-vs-full sequence mismatch went `8/8 -> 0/8`. Determinism defect fixed; correctness-preserving (ordering-only). | Med-High |
+| 1 | C1 full-capture serving promotion gate (now deterministic) | full capture | With the determinism defect fixed, run the standard serving parity/perf gate for no-suffix full capture vs the eager floor at the reference shape, re-confirm the promoted suffix-control path under the strengthened barrier, then decide the launcher default. Full capture's `1.25-1.48x` decode win is now on a deterministic path. | Med |
 | 2 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
@@ -640,5 +641,18 @@ is unusable here: it initialized NCCL/8-GPU fine but **OOMed during expert load*
 load path, and no smoke test exercises the cudagraph replay path so there is no
 low-memory repro. So the next step is the **deterministic-compose rebuild**
 (`nccl_reduce_scatter_compose_gate` or a non-atomic combine; compile-time, needs
-a rebuild): rerun full-vs-full and check the floor collapses toward eager. MTP
-stays deferred until the ordered post-C1/tuning point.
+a rebuild): rerun full-vs-full and check the floor collapses toward eager.
+Sprint 579 **fixed it**: per-stage runtime diff (matched positions via a leading
+dummy leg) localized the first divergence to the captured `compressed_kv` stage's
+`attn_q_b.d_out` on `dense_stream` at the first ratio-4 emit position. Root cause:
+`enqueue_rank_streams_wait_after_dense_streams` (`output_head.cu`) was a
+**dense->rank-only** barrier, while the eager path it substitutes for fully drains
+**both** streams; the one-directional edge let `dense_stream` lap `rank_stream`
+across replays and race the in-place writes to `attn_q_b.d_out`. Making the
+barrier **bidirectional** (record a rank-stream event, make `dense_stream` wait on
+it) took full-vs-full sequence mismatch `8/8 -> 0/8` (two identical full-capture
+runs now bit-identical). The fix is ordering-only (correctness-preserving) and is
+in the shared captured-region helper, so it strengthens every cudagraph path. Next
+is the standard serving parity/perf promotion gate vs the eager floor (full
+capture is now deterministic, so the `1.25-1.48x` decode win is on a sound path).
+MTP stays deferred until the ordered post-C1/tuning point.
