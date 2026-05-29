@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 542)
+# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 543)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -88,6 +88,10 @@ Steps 2–6 and 9–10 run on GPU0 over the full hidden while 7 GPUs idle. Every
   path's slot-major FFN norm dependency.
 - **A5 Fuse the survivors:** after A1–A4, HC-current ≈ 3 rank-local kernels + 2
   tiny all-reduces/layer vs ~12 steps. Fuse norm+partial-mix; mix-apply+FFN-norm.
+  Sprint 543 rejected the tempting split-apply + weighted-current fusion:
+  it preserved parity but regressed the warmed graph-suffix serving gate
+  (`90.181067s -> 95.164862s` and `96.046732s` for two variants). Do not retry
+  that shape without a direct kernel microbenchmark proving a win.
 - **A6 Fuse HC into the attention-projection prologue** (compute `current_shard`
   inside the projection kernel; drop the intermediate buffer + a launch).
 
