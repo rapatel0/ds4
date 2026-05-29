@@ -9,6 +9,27 @@ __global__ void checksum_bytes_kernel(const unsigned char *data, uint64_t n,
     atomicAdd(out, local);
 }
 
+__global__ void diagnostic_checksum_bytes_kernel(const unsigned char *data,
+                                                 uint64_t n,
+                                                 unsigned long long *out) {
+    unsigned long long local = 0;
+    for (uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+         i < n;
+         i += (uint64_t)blockDim.x * gridDim.x) {
+        unsigned long long x =
+            ((unsigned long long)i + 0x9e3779b97f4a7c15ull) ^
+            ((unsigned long long)data[i] << 32) ^
+            ((unsigned long long)data[i] * 0xbf58476d1ce4e5b9ull);
+        x ^= x >> 30;
+        x *= 0xbf58476d1ce4e5b9ull;
+        x ^= x >> 27;
+        x *= 0x94d049bb133111ebull;
+        x ^= x >> 31;
+        local ^= x;
+    }
+    atomicXor(out, local);
+}
+
 __global__ void copy_f32_kernel(float *dst, const float *src, uint64_t n) {
     for (uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
          i < n;

@@ -250,7 +250,7 @@ int run_decode_loop(const Options &opt,
         CHECK_CUDA(cudaMalloc(&d_sum, sizeof(unsigned long long)));
         CHECK_CUDA(cudaMemsetAsync(d_sum, 0, sizeof(unsigned long long),
                                    stream));
-        checksum_bytes_kernel<<<grid, block, 0, stream>>>(
+        diagnostic_checksum_bytes_kernel<<<grid, block, 0, stream>>>(
             static_cast<const unsigned char *>(ptr), bytes, d_sum);
         CHECK_CUDA(cudaGetLastError());
         CHECK_CUDA(cudaMemcpyAsync(&h_sum, d_sum, sizeof(h_sum),
@@ -351,6 +351,30 @@ int run_decode_loop(const Options &opt,
                 log_stage_tensor(stage, "final_hc_shard", rank,
                                  r.d_final_hc_shard,
                                  hc_shard_elems * sizeof(float), stream);
+            } else if (std::strcmp(stage, "step_snapshot") == 0) {
+                log_stage_tensor(stage, "current_shard", rank,
+                                 r.d_current_shard,
+                                 shard_elems * sizeof(float), stream);
+                log_stage_tensor(stage, "current_full", rank,
+                                 r.d_current_full,
+                                 full_elems * sizeof(float), stream);
+                log_stage_tensor(stage, "current_full_rank_major", rank,
+                                 r.d_current_full_rank_major,
+                                 full_elems * sizeof(float), stream);
+                log_stage_tensor(stage, "post_attn_shard", rank,
+                                 r.d_post_attn_shard,
+                                 shard_elems * sizeof(float), stream);
+                log_stage_tensor(stage, "post_attn_rank_major", rank,
+                                 r.d_post_attn_full_rank_major,
+                                 full_elems * sizeof(float), stream);
+                log_stage_tensor(stage, "route_a", rank, r.d_a,
+                                 route_hidden_elems * sizeof(__half), stream);
+                log_stage_tensor(stage, "next_hidden", rank,
+                                 r.d_next_hidden,
+                                 shard_elems * sizeof(float), stream);
+                log_stage_tensor(stage, "final_hc_shard", rank,
+                                 r.d_final_hc_shard,
+                                 hc_shard_elems * sizeof(float), stream);
             } else if (attn_op && rank < (int)attn_op->d_out.size()) {
                 log_stage_tensor(stage, "attn_dense_out", rank,
                                  attn_op->d_out[(size_t)rank],
@@ -380,6 +404,7 @@ int run_decode_loop(const Options &opt,
         log_rank_stage("ep_copy");
         log_rank_stage("compose");
         log_rank_stage("final_hc");
+        log_rank_stage("step_snapshot");
         current_decode_step = saved_decode_step;
     };
     auto run_final_hc_carry = [&](double *final_hc_ms) -> int {
@@ -420,6 +445,7 @@ int run_decode_loop(const Options &opt,
             }
         }
         log_rank_stage("final_hc");
+        log_rank_stage("step_snapshot");
         sync_after_decode_stage("final_hc");
         if (final_hc_ms) {
             const auto t_stop = std::chrono::steady_clock::now();
