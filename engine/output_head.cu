@@ -718,8 +718,8 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
     }
     for (int gpu = 0; gpu < kGpus; ++gpu) {
         CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
-        CHECK_CUDA(cudaDeviceSynchronize());
-        result->device_sync_count++;
+        CHECK_CUDA(cudaEventSynchronize(head->projection_stop[gpu]));
+        result->event_sync_count++;
         float kernel_ms = 0.0f;
         CHECK_CUDA(cudaEventElapsedTime(&kernel_ms,
                                         head->projection_start[gpu],
@@ -730,11 +730,7 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
     const auto projection_stop_wall = std::chrono::steady_clock::now();
 
     const auto top1_start = std::chrono::steady_clock::now();
-    std::vector<std::vector<uint32_t>> host_tokens((size_t)kGpus);
-    std::vector<std::vector<float>> host_logits((size_t)kGpus);
     for (int gpu = 0; gpu < kGpus; ++gpu) {
-        host_tokens[(size_t)gpu].resize((size_t)opt.slots);
-        host_logits[(size_t)gpu].resize((size_t)opt.slots);
         CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
         const int shard_index = head->output_rows[gpu].shard_index >= 0
             ? head->output_rows[gpu].shard_index
@@ -744,22 +740,22 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
             head->d_logits[gpu], (uint32_t)head->rows_per_gpu,
             (uint32_t)(shard_index * head->rows_per_gpu), (uint32_t)opt.slots);
         CHECK_CUDA(cudaGetLastError());
+        CHECK_CUDA(cudaMemcpyAsync(head->h_best_token[gpu], head->d_best_token[gpu],
+                                   (size_t)opt.slots * sizeof(uint32_t),
+                                   cudaMemcpyDeviceToHost, ranks[gpu].stream));
+        CHECK_CUDA(cudaMemcpyAsync(head->h_best_logit[gpu], head->d_best_logit[gpu],
+                                   (size_t)opt.slots * sizeof(float),
+                                   cudaMemcpyDeviceToHost, ranks[gpu].stream));
     }
 
     result->tokens.assign((size_t)opt.slots, UINT32_MAX);
     result->logits.assign((size_t)opt.slots, -std::numeric_limits<float>::max());
     for (int gpu = 0; gpu < kGpus; ++gpu) {
         CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
-        CHECK_CUDA(cudaDeviceSynchronize());
-        result->device_sync_count++;
-        CHECK_CUDA(cudaMemcpy(host_tokens[(size_t)gpu].data(), head->d_best_token[gpu],
-                              (size_t)opt.slots * sizeof(uint32_t),
-                              cudaMemcpyDeviceToHost));
-        CHECK_CUDA(cudaMemcpy(host_logits[(size_t)gpu].data(), head->d_best_logit[gpu],
-                              (size_t)opt.slots * sizeof(float),
-                              cudaMemcpyDeviceToHost));
+        CHECK_CUDA(cudaStreamSynchronize(ranks[gpu].stream));
+        result->stream_sync_count++;
         for (int slot = 0; slot < opt.slots; ++slot) {
-            const float logit = host_logits[(size_t)gpu][(size_t)slot];
+            const float logit = head->h_best_logit[gpu][slot];
             if (!std::isfinite(logit)) {
                 result->finite_bad++;
                 result->pass = false;
@@ -767,7 +763,7 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
             }
             if (logit > result->logits[(size_t)slot]) {
                 result->logits[(size_t)slot] = logit;
-                result->tokens[(size_t)slot] = host_tokens[(size_t)gpu][(size_t)slot];
+                result->tokens[(size_t)slot] = head->h_best_token[gpu][slot];
             }
         }
     }

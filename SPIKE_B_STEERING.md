@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-28 after Sprint 526)
+# Spike B Decode-Optimization Steering (updated 2026-05-28 after Sprint 527)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -37,8 +37,10 @@ optimized.
 - **C1 is newly more plausible, but not next.** Sprint 479 removed promoted
   hot-path direct peer-copy transport in favor of NCCL, and the structural
   extraction made the surface readable. Sprint 527 removed GPU0-centralized
-  output-head prep. Still, C1 should wait until sync-point reduction and
-  compact EP compose reduce the remaining capture surface.
+  output-head prep. Sprint 528 removed output-head device-wide projection/top-1
+  waits, but C5 remains open for decode-loop and per-stage stream waits. C1
+  should wait until the remaining sync-point reduction and compact EP compose
+  reduce the capture surface.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
   launcher defaults, topology policy, validation harness, model path, or target
@@ -127,9 +129,7 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 
 ## D. Model-boundary NCCL cleanup
 
-- **D1 Output-head A1 pattern.** `engine/output_head.cu` still has the same
-  gather-to-GPU0 -> centralized RMS/mix/weighted sum/final RMS pattern that A2
-  fixed inside every layer, plus hard host synchronizations. Done in Sprint 527:
+- **D1 Output-head A1 pattern.** Done in Sprint 527:
   rank-local stable reductions plus NCCL all-reduces/all-gather replaced the
   centralized prep. This is a structural/C1-prep promotion, not a direct
   throughput win at the measured shape.
@@ -140,7 +140,7 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 |---|---|---|---|---|
 | Done | A4 finish rank-major consumers | HC 40% | Sprint 526 completed the remaining post-attention FFN shared/route consumers for the served path | Low |
 | Done | D1 output-head A1 pattern | Model boundary | Sprint 527 removed GPU0-centralized output-head prep; timing regressed, but the capture surface is cleaner | Low |
-| 1 | C5 sync-point reduction | both | Removes host round-trips and makes C1 graph capture structurally possible | Low-Med |
+| 1 | C5 sync-point reduction pass 2 | both | Sprint 528 removed output-head device-wide waits; decode-loop and per-stage stream waits remain | Low-Med |
 | 2 | B2 compact EP variable-size NCCL compose | EP 53% | Targets served compact traffic and removes remaining peer-copy-equivalent compose movement | Med |
 | 3 | C1/C2 piecewise graph capture and serving parity | both | Highest ceiling, but only after the surface is simplified | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
