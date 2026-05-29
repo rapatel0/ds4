@@ -165,9 +165,6 @@ int upload_post_attention_fixed_capacity_route_plan_gpu(
         !hc->d_router_weights) {
         return 1;
     }
-    if (opt.post_attention_device_actual_route_sync_gate && graph_event_order) {
-        return 7;
-    }
     const int block = 256;
     const uint32_t route_entries = (uint32_t)(opt.slots * opt.top_k);
     const size_t selected_bytes = (size_t)route_entries * sizeof(int);
@@ -199,10 +196,6 @@ int upload_post_attention_fixed_capacity_route_plan_gpu(
             return 2;
         }
         r.routes = r.route_capacity;
-        if (opt.post_attention_static_rank_route_cap > 0) {
-            r.routes = std::min(r.routes,
-                                opt.post_attention_static_rank_route_cap);
-        }
         r.active_experts = kLocalExperts;
         r.max_routes_per_expert = r.routes;
         CHECK_CUDA(cudaSetDevice(r.device));
@@ -256,36 +249,6 @@ int upload_post_attention_fixed_capacity_route_plan_gpu(
                 (uint32_t)opt.slots, (uint32_t)opt.top_k);
         }
         CHECK_CUDA(cudaGetLastError());
-    }
-    if (opt.post_attention_device_actual_route_sync_gate) {
-        for (int rank = 0; rank < kGpus; ++rank) {
-            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
-        }
-        std::vector<int> totals((size_t)kGpus, 0);
-        std::vector<int> offsets_all((size_t)kGpus * (size_t)(kLocalExperts + 1), 0);
-        CHECK_CUDA(cudaSetDevice(ranks[0].device));
-        CHECK_CUDA(cudaMemcpy(totals.data(), ranks[0].d_route_totals,
-                              totals.size() * sizeof(int),
-                              cudaMemcpyDeviceToHost));
-        CHECK_CUDA(cudaMemcpy(offsets_all.data(), ranks[0].d_route_offsets_all,
-                              offsets_all.size() * sizeof(int),
-                              cudaMemcpyDeviceToHost));
-        for (int rank = 0; rank < kGpus; ++rank) {
-            RankState &r = ranks[rank];
-            if (totals[(size_t)rank] > r.route_capacity) return 8;
-            r.routes = totals[(size_t)rank];
-            int active = 0;
-            int max_routes = 0;
-            const int *off = offsets_all.data() + (size_t)rank * (kLocalExperts + 1);
-            for (int local = 0; local < kLocalExperts; ++local) {
-                const int count = off[local + 1] - off[local];
-                if (count > 0) ++active;
-                max_routes = std::max(max_routes, count);
-            }
-            r.active_experts = active;
-            r.max_routes_per_expert = max_routes;
-        }
     }
     (void)control_stream;
     return 0;
@@ -813,10 +776,6 @@ void print_post_attention_route_reuse_audit(const Options &opt,
                                             const char *label) {
     if (!opt.post_attention_route_reuse_audit_gate) return;
     unsigned long long total[4] = {};
-    int cap_overflow = 0;
-    int cap_max_total = 0;
-    int compose_cap_overflow = 0;
-    int compose_cap_max_total = 0;
     for (int rank = 0; rank < kGpus; ++rank) {
         RankState &r = ranks[rank];
         if (!r.d_post_attn_route_audit) continue;
@@ -831,61 +790,10 @@ void print_post_attention_route_reuse_audit(const Options &opt,
                     "invalid_slot\t%llu\n",
                     label ? label : "unknown", opt.layer, rank,
                     h[0], h[1], h[2], h[3]);
-        if (opt.post_attention_static_rank_route_cap > 0 &&
-            r.d_route_totals) {
-            int route_total = 0;
-            CHECK_CUDA(cudaMemcpy(&route_total, r.d_route_totals + rank,
-                                  sizeof(route_total),
-                                  cudaMemcpyDeviceToHost));
-            cap_max_total = std::max(cap_max_total, route_total);
-            if (route_total > opt.post_attention_static_rank_route_cap) {
-                ++cap_overflow;
-            }
-            std::printf("tp_ep_static_route_cap_audit\tlabel\t%s\t"
-                        "layer\t%d\trank\t%d\tcap\t%d\tactual\t%d\t%s\n",
-                        label ? label : "unknown", opt.layer, rank,
-                        opt.post_attention_static_rank_route_cap, route_total,
-                        route_total <= opt.post_attention_static_rank_route_cap
-                            ? "PASS" : "OVERFLOW");
-        }
-        if (opt.post_attention_static_compose_route_cap > 0 &&
-            r.d_route_totals) {
-            int route_total = 0;
-            CHECK_CUDA(cudaMemcpy(&route_total, r.d_route_totals + rank,
-                                  sizeof(route_total),
-                                  cudaMemcpyDeviceToHost));
-            compose_cap_max_total = std::max(compose_cap_max_total, route_total);
-            if (route_total > opt.post_attention_static_compose_route_cap) {
-                ++compose_cap_overflow;
-            }
-            std::printf("tp_ep_static_compose_route_cap_audit\tlabel\t%s\t"
-                        "layer\t%d\trank\t%d\tcap\t%d\tactual\t%d\t%s\n",
-                        label ? label : "unknown", opt.layer, rank,
-                        opt.post_attention_static_compose_route_cap,
-                        route_total,
-                        route_total <= opt.post_attention_static_compose_route_cap
-                            ? "PASS" : "OVERFLOW");
-        }
     }
     std::printf("tp_ep_post_attention_route_reuse_audit_total\tlabel\t%s\t"
                 "layer\t%d\troutes_checked\t%llu\tmissing_selected\t%llu\t"
                 "weight_mismatch\t%llu\tinvalid_slot\t%llu\n",
                 label ? label : "unknown", opt.layer,
                 total[0], total[1], total[2], total[3]);
-    if (opt.post_attention_static_rank_route_cap > 0) {
-        std::printf("tp_ep_static_route_cap_audit_total\tlabel\t%s\t"
-                    "layer\t%d\tcap\t%d\tmax_actual\t%d\toverflow_ranks\t%d\t%s\n",
-                    label ? label : "unknown", opt.layer,
-                    opt.post_attention_static_rank_route_cap, cap_max_total,
-                    cap_overflow, cap_overflow == 0 ? "PASS" : "OVERFLOW");
-    }
-    if (opt.post_attention_static_compose_route_cap > 0) {
-        std::printf("tp_ep_static_compose_route_cap_audit_total\tlabel\t%s\t"
-                    "layer\t%d\tcap\t%d\tmax_actual\t%d\toverflow_ranks\t%d\t%s\n",
-                    label ? label : "unknown", opt.layer,
-                    opt.post_attention_static_compose_route_cap,
-                    compose_cap_max_total, compose_cap_overflow,
-                    compose_cap_overflow == 0 ? "PASS" : "OVERFLOW");
-    }
 }
-

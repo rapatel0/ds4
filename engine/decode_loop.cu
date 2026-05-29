@@ -1086,25 +1086,10 @@ int run_decode_loop(const Options &opt,
                                   (uint64_t)(kHidden / kGpus)
                             : shard_elems;
                         if (copy_elems > 0) {
-                            if (compact_route &&
-                                opt.post_attention_masked_compact_copy_gate) {
-                                const int copy_routes =
-                                    routed_compose_rows(ranks[src], opt);
-                                copy_compact_active_route_shard_kernel<<<
-                                    (unsigned int)((copy_elems +
-                                                    (uint64_t)block - 1) /
-                                                   (uint64_t)block),
-                                    block, 0, ranks[dst].stream>>>(
-                                    ranks[dst].d_ep_remote[src], src_ptr,
-                                    ranks[dst].d_route_totals, src,
-                                    copy_routes, kHidden / kGpus);
-                                CHECK_CUDA(cudaGetLastError());
-                            } else {
-                                enqueue_graph_f32_copy_between_devices(
-                                    opt, ranks[dst].device, ranks[src].device,
-                                    ranks[dst].d_ep_remote[src], src_ptr,
-                                    copy_elems, ranks[dst].stream, block);
-                            }
+                            enqueue_graph_f32_copy_between_devices(
+                                opt, ranks[dst].device, ranks[src].device,
+                                ranks[dst].d_ep_remote[src], src_ptr,
+                                copy_elems, ranks[dst].stream, block);
                         }
                     }
                 }
@@ -1350,8 +1335,7 @@ int run_decode_loop(const Options &opt,
             suffix_stage_ends_compose_eager_final_hc() &&
             opt.compact_moe_decode_gate &&
             opt.compact_route_compose &&
-            opt.post_attention_fixed_capacity_route_plan_gate &&
-            !opt.post_attention_device_actual_route_sync_gate;
+            opt.post_attention_fixed_capacity_route_plan_gate;
         const bool persistent_position_keyed =
             !stable_compose_suffix_geometry;
         const bool persistent_position_mismatch =

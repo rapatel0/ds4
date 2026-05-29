@@ -86,11 +86,6 @@ struct Options {
     bool routed_ffn_rank_major_input_parity_gate = false;
     bool post_attention_route_reuse_audit_gate = false;
     bool post_attention_fixed_capacity_route_plan_gate = true;
-    bool post_attention_device_actual_route_sync_gate = false;
-    int post_attention_static_rank_route_cap = 0;
-    int post_attention_static_executor_route_cap = 0;
-    int post_attention_static_compose_route_cap = 0;
-    bool post_attention_masked_compact_copy_gate = false;
     bool post_attention_slot_major_ffn_norm_gate = false;
     bool model_router_rank_major_logits_gate = false;
     bool model_router_allreduce_logits_gate = true;

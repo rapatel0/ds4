@@ -17,28 +17,6 @@ __global__ void copy_f32_kernel(float *dst, const float *src, uint64_t n) {
     }
 }
 
-__global__ void copy_compact_active_route_shard_kernel(
-    float *dst,
-    const float *src,
-    const int *route_totals,
-    int src_rank,
-    int routes,
-    int shard_cols) {
-    const uint64_t n = (uint64_t)routes * (uint64_t)shard_cols;
-    int active = routes;
-    if (route_totals && src_rank >= 0 && src_rank < kGpus) {
-        active = route_totals[src_rank];
-        if (active < 0) active = 0;
-        if (active > routes) active = routes;
-    }
-    for (uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
-         i < n;
-         i += (uint64_t)blockDim.x * gridDim.x) {
-        const int route = (int)(i / (uint64_t)shard_cols);
-        dst[i] = route < active ? src[i] : 0.0f;
-    }
-}
-
 __global__ void copy_i32_kernel(int *dst, const int *src, uint64_t n) {
     for (uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
          i < n;

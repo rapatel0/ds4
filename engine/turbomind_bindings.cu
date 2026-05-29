@@ -276,18 +276,11 @@ void close_shared_expert_bindings(SharedExpertBindings *shared) {
 }
 
 int routed_executor_rows(const RankState &rank, const Options &opt) {
-    int rows = rank.routes;
-    if (opt.post_attention_static_executor_route_cap > 0) {
-        rows = std::min(rows, opt.post_attention_static_executor_route_cap);
-    }
-    return rows;
+    (void)opt;
+    return rank.routes;
 }
 
 int routed_compose_rows(const RankState &rank, const Options &opt) {
-    int rows = rank.routes;
-    if (opt.post_attention_static_compose_route_cap > 0) {
-        rows = std::min(rows, opt.post_attention_static_compose_route_cap);
-    }
-    return rows;
+    (void)opt;
+    return rank.routes;
 }
-

@@ -389,11 +389,6 @@ int run_token_major_serving_loop(const Options &opt,
                 "routed_ffn_rank_major_input_parity_gate\t%d\t"
                 "post_attention_route_reuse_audit_gate\t%d\t"
                 "post_attention_fixed_capacity_route_plan_gate\t%d\t"
-                "post_attention_device_actual_route_sync_gate\t%d\t"
-                "post_attention_static_rank_route_cap\t%d\t"
-                "post_attention_static_executor_route_cap\t%d\t"
-                "post_attention_static_compose_route_cap\t%d\t"
-                "post_attention_masked_compact_copy_gate\t%d\t"
                 "post_attention_slot_major_ffn_norm_gate\t%d\t"
                 "model_router_rank_major_logits_gate\t%d\t"
                 "model_router_allreduce_logits_gate\t%d\t"
@@ -470,11 +465,6 @@ int run_token_major_serving_loop(const Options &opt,
                 opt.routed_ffn_rank_major_input_parity_gate ? 1 : 0,
                 opt.post_attention_route_reuse_audit_gate ? 1 : 0,
                 opt.post_attention_fixed_capacity_route_plan_gate ? 1 : 0,
-                opt.post_attention_device_actual_route_sync_gate ? 1 : 0,
-                opt.post_attention_static_rank_route_cap,
-                opt.post_attention_static_executor_route_cap,
-                opt.post_attention_static_compose_route_cap,
-                opt.post_attention_masked_compact_copy_gate ? 1 : 0,
                 opt.post_attention_slot_major_ffn_norm_gate ? 1 : 0,
                 opt.model_router_rank_major_logits_gate ? 1 : 0,
                 opt.model_router_allreduce_logits_gate ? 1 : 0,
