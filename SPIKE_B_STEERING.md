@@ -550,6 +550,15 @@ outputs still match before the next replay drifts from layer 1 onward. Sprint
 568 repaired the inter-layer current/HC pointer-buffer bug by rebasing live HC
 state into the captured full-graph input buffer before replay. The six-request
 eager-vs-full-graph probe now matches selected tokens/checksums across positions
-with `43` captures, `215` persistent replays, and zero invalidations. The next
-ordered work is serving parity/performance metrology for the opt-in no-suffix
-full-capture path. MTP stays deferred until the ordered post-C1/tuning point.
+with `43` captures, `215` persistent replays, and zero invalidations. Sprint
+569 showed a strong warmed-serving opt-in throughput signal with matching
+generated token sequences, Sprint 570 rejected the default flip because a
+longer steady-state gate diverged for `128/128` measured responses, and Sprint
+571 localized the failure to early continuation replay state rather than a pure
+64-token threshold. Sprint 572 rejected the cache-miss capture-as-served-result
+repair: `s569-shape` and `s570-prompt-32` still diverged for `32/32` measured
+responses. The next C1 work is same-logical-point instrumentation around
+continuation step `0 -> 1` -- prompt-cache/coalescing metadata, slot order,
+decode input token, selected-token handoff, and full-capture HC/current rebase
+timing -- using request-level generated sequences or same-logical-point logs as
+evidence. MTP stays deferred until the ordered post-C1/tuning point.
