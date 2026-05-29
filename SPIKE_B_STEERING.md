@@ -451,7 +451,8 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Rejected | C1 longer steady-state serving promotion gate | full capture | Sprint 570 kept the performance signal at `64` tokens / `128` measured requests (`16.618822 -> 20.814267` continuation tok/s wall), but generated-token sequences diverged for `128/128`; no default flip | Med-High |
 | Done | C1 long-generation divergence localization | full capture | Sprint 571 showed the failure is not a pure `64` token issue: recreated `s569-shape` diverged `32/32` at continuation offset `1`, while `s570-prompt-32` diverged `32/32` at offset `0`; use request-level sequences, not timing-shifted tensor logs, as the oracle | Med-High |
 | Done | C1 early continuation replay-state repair | full capture | Sprint 573 showed this was the wrong target: the early-continuation/offset-`0` divergence the prior gates chased is first-token nondeterminism (eager gives `6` distinct continuations for `32` identical prompts; identical control runs differ `3/32`, all offset `0`). The real full-capture bug is a clean offset-`28` cluster, not step `0 -> 1`. | Med-High |
-| 1 | C1 late-position comp-emit replay repair | full capture | Instrument the ratio-4 compressed-KV emit boundary at generation offset `27 -> 28` (comp ring-row index, load/store decision, row-position metadata at capture vs cache-hit replay), then repair. Judge against an identical-config `control-A` vs `control-B` determinism floor and `eager`, never exact equality with one control run. | Med-High |
+| Done | C1 late-position comp-emit replay repair | full capture | Sprint 574 disproved comp-emit (emit off on served path) and found the divergence is position-dependent: benign at `250000` (`7/32` offset `28`), catastrophic at `250064` (`32/32` offset `1`). RoPE/raw-window are device-dynamic and ruled out. Serving stage-checksum is misaligned (one token/call -> all `step 0`). | Med-High |
+| 1 | C1 full-capture position-derived state localization | full capture | Localize the captured-graph position-derived value (survives HC rebase; not RoPE/raw-window) using a multi-step capture/replay probe (`decode_steps > 1`) at the catastrophic position `250064` with `--decode-stage-checksum-gate`, diffing eager-step-k vs full-replay-step-k per `(layer, stage)`. Then the narrow repair, judged against the `control-A`/`control-B` determinism floor and `eager` at `250064` and `250000`. | Med-High |
 | 2 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
@@ -581,4 +582,18 @@ against it and against `eager`, never against exact equality with one control
 run; (2) the next C1 target is same-logical-point instrumentation at the ratio-4
 compressed-KV emit boundary around offset `27 -> 28` (comp ring-row index,
 load/store decision, row-position metadata at capture vs cache-hit replay), then
-the narrow repair. MTP stays deferred until the ordered post-C1/tuning point.
+the narrow repair. Sprint 574 then disproved the comp-emit guess (compressed-KV
+emit is off on the served path) and found the divergence is strongly
+position-dependent: at `position 250000` full capture is benign (`7/32` at offset
+`28`), but at `250064` it breaks immediately at offset `1` for `32/32` requests
+(`32` distinct sequences for identical prompts). So `250000` -- used by every gate
+since Sprint 569 -- is an unusually clean position that understates the bug; the
+captured graph carries a position-derived value, only correct near the capture
+position, whose error scales with replay drift. RoPE and raw-window row selection
+are device-dynamic (read live `d_decode_position`) and ruled out. The per-layer
+`--decode-stage-checksum-gate` is wired but misaligned with serving (one token per
+call -> every token logs as `step 0`), so the next localization must use a
+multi-step capture/replay probe (`decode_steps > 1`) at `250064`, diffing
+eager-step-k vs full-replay-step-k per `(layer, stage)`. Then the narrow repair,
+validated against the determinism floor at `250064` and `250000`. MTP stays
+deferred until the ordered post-C1/tuning point.
