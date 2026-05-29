@@ -1276,9 +1276,9 @@ int run_decode_loop(const Options &opt,
         const bool persistent_slots_mismatch =
             persistent_enabled && persistent_graph->initialized &&
             persistent_graph->slots != opt.slots;
-        const bool persistent_position_keyed =
-            !opt.decode_cudagraph_suffix_stage ||
-            !opt.decode_cudagraph_suffix_stage[0];
+        // Routed suffix graphs still capture host-side launch geometry.
+        // Reusing them across positions can replay stale route shapes.
+        const bool persistent_position_keyed = true;
         const bool persistent_position_mismatch =
             persistent_position_keyed &&
             persistent_enabled && persistent_graph->initialized &&
