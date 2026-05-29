@@ -27,8 +27,6 @@ int run_true_ds4_attention_output_projection(const Options &opt,
         (uint64_t)opt.slots * (uint64_t)kAttentionOutputAInput;
     const uint64_t out_a_full_elems =
         (uint64_t)opt.slots * (uint64_t)kAttentionOutputAFull;
-    const bool graph_event_order = opt.decode_cudagraph_gate;
-
     for (int rank = 0; rank < kGpus; ++rank) {
         RankState &r = ranks[rank];
         CHECK_CUDA(cudaSetDevice(r.device));
@@ -45,30 +43,12 @@ int run_true_ds4_attention_output_projection(const Options &opt,
                           (uint32_t)opt.slots);
         CHECK_CUDA(cudaGetLastError());
     }
-    if (graph_event_order) {
-        if (enqueue_dense_wait_after_rank_stream(ranks) != 0) return 4;
-    } else {
-        for (int rank = 0; rank < kGpus; ++rank) {
-            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
-        }
-    }
+    if (enqueue_dense_wait_after_rank_stream(ranks) != 0) return 4;
 
     if (launch_resident_f8_dense(opt, ops->attn_output_a, ranks) != 0) {
         return 5;
     }
-    if (graph_event_order) {
-        if (enqueue_rank_streams_wait_after_dense_streams(ranks) != 0) return 5;
-    } else {
-        for (int rank = 0; rank < kGpus; ++rank) {
-            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-            if (ranks[rank].dense_stream) {
-                CHECK_CUDA(cudaStreamSynchronize(ranks[rank].dense_stream));
-            } else {
-                CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
-            }
-        }
-    }
+    if (enqueue_rank_streams_wait_after_dense_streams(ranks) != 0) return 5;
 
     const bool use_nccl_allgather =
         opt.true_ds4_attention_output_nccl_allgather_gate;
@@ -125,30 +105,12 @@ int run_true_ds4_attention_output_projection(const Options &opt,
             CHECK_CUDA(cudaGetLastError());
         }
     }
-    if (graph_event_order) {
-        if (enqueue_dense_wait_after_rank_stream(ranks) != 0) return 6;
-    } else {
-        for (int rank = 0; rank < kGpus; ++rank) {
-            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
-        }
-    }
+    if (enqueue_dense_wait_after_rank_stream(ranks) != 0) return 6;
 
     if (launch_resident_f8_dense(opt, ops->attn, ranks) != 0) {
         return 7;
     }
-    if (graph_event_order) {
-        if (enqueue_rank_streams_wait_after_dense_streams(ranks) != 0) return 7;
-    } else {
-        for (int rank = 0; rank < kGpus; ++rank) {
-            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-            if (ranks[rank].dense_stream) {
-                CHECK_CUDA(cudaStreamSynchronize(ranks[rank].dense_stream));
-            } else {
-                CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
-            }
-        }
-    }
+    if (enqueue_rank_streams_wait_after_dense_streams(ranks) != 0) return 7;
 
     TensorF32Stats head_stats;
     TensorF32Stats out_a_stats;
@@ -192,4 +154,3 @@ int run_true_ds4_attention_output_projection(const Options &opt,
                 out_b_stats.finite_bad, ms);
     return 0;
 }
-
