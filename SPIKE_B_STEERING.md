@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 546)
+# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 547)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -78,7 +78,13 @@ optimized.
   (RoPE, compressed-state store, compressed-row RoPE emit, raw SWA store/read)
   to read replay-updated device memory. Host emission branches, typed-KV row
   selection, row-position bookkeeping, and the full-capture position cache key
-  remain intentionally unchanged.
+  remain intentionally unchanged. Sprint 547 reviewed the next topology stage
+  and rejected always-launching emitted-row kernels as a standalone change: it
+  would add non-emitted-position work without solving typed-KV runtime row
+  selection or host row bookkeeping. The next C1 decision is capture-boundary
+  selection: find the largest post-KV graph region that is replay-stable and
+  larger than the promoted `compose_eager_final_hc` suffix, or commit to a
+  typed-KV runtime/device-state refactor.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
   launcher defaults, topology policy, validation harness, model path, or target
@@ -226,7 +232,10 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
   bookkeeping, and raw-window row selection before full capture can reuse graphs
   across decode positions. Sprint 546 landed the pure-kernel stage only; the
   next blocker is compressed-KV topology because emitted-row work is still a
-  host branch over `opt.position`.
+  host branch over `opt.position`. Sprint 547 rejected a narrow always-launch
+  emitted-kernel patch because typed-KV runtime calls and host row bookkeeping
+  would still make full capture position-dependent. Next evaluate a larger
+  post-KV capture boundary before attempting a typed-KV runtime refactor.
 - **C2 Fix the graph-in-serving parity bug directly.** Graph mode changes the
   first token = a finite set of missing sync→event dependencies (461 fixed one).
   Diff eager vs graph dependency graph; close them all. Debuggable, not fundamental.
