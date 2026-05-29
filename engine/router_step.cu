@@ -119,7 +119,6 @@ int run_model_router_allreduce_logits(const Options &opt,
                                       cudaStream_t control_stream,
                                       bool post_attention_input) {
     if (!opt.model_router_allreduce_logits_gate) return 0;
-    if (opt.decode_cudagraph_gate) return 11;
     if (!hc || !hc->d_router_logits || layer < 0 || layer >= 43) return 1;
     const uint32_t shard_cols = (uint32_t)(kHidden / kGpus);
     for (int rank = 0; rank < kGpus; ++rank) {
@@ -203,16 +202,24 @@ int run_model_router_allreduce_logits(const Options &opt,
     CHECK_NCCL(ncclGroupEnd());
     for (int rank = 0; rank < kGpus; ++rank) {
         CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        if (opt.decode_cudagraph_gate) {
+            continue;
+        }
         CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
     }
     CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    if (opt.decode_cudagraph_gate &&
+        enqueue_control_wait_after_rank_streams(opt, ranks, control_stream) != 0) {
+        return 3;
+    }
     CHECK_CUDA(cudaMemcpyAsync(hc->d_router_logits,
                                ranks[0].d_router_logits_rank_major,
                                (size_t)opt.slots * kGlobalExperts *
                                    sizeof(float),
                                cudaMemcpyDeviceToDevice,
                                control_stream));
-    CHECK_CUDA(cudaStreamSynchronize(control_stream));
+    if (!opt.decode_cudagraph_gate) {
+        CHECK_CUDA(cudaStreamSynchronize(control_stream));
+    }
     return 0;
 }
-

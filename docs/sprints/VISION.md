@@ -432,10 +432,17 @@ Scope:
    correctness, then move to selected-token HTTP only after direct parity holds.
 4. Reuse the Sprint 536 promoted control unless the implementation changes
    defaults.
+5. Treat very short direct or HTTP graph probes as correctness/cache-behavior
+   evidence only. They may prove capture success, replay success, cache hits,
+   token agreement, or blocker location, but they are not performance evidence.
+   Performance claims require startup/initialization isolated out, startup
+   warmup enabled when serving supports it, enough warmed requests/tokens to
+   reach steady state, and comparison on request-window or steady-state fields
+   rather than full-run elapsed time or full-run GPU averages.
 
 Promotion gate: selected-token and generated-sequence agreement against the
 promoted control, zero direct peer-copy/SYS bytes, no VRAM admission failures,
-and a material server-decode or request-window utilization improvement.
+and a material warmed server-decode or request-window utilization improvement.
 
 ### Sprint 538 - C2 Graph Serving Parity and Replay Repair
 
@@ -3785,6 +3792,7 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 | 2026-05-28 | Sprint 534 promoted attention-read event handoffs. | Removed promoted-path host waits after raw-read/raw-window attention kernels in `engine/attention_read.cu`. The next attention-output stage consumes `d_attn_heads` on the same rank streams, while early-layer diagnostics still synchronize through `log_tensor_f32_stats()` when they actually read host-visible stats. The target selected-token gate passed with `http_200=32`, server output-head first token `128819`, `output_head_finite_bad=0`, `peer_copy_ops=0`, `peer_copy_sys_bytes=0`, `nccl_graph_sys_edge_count=0`, and `tp_ep_true_attention_raw_window` PASS logs. | Treat C5 attention-read raw/window promoted-path handoffs as complete. Continue C5 on decode-loop, HC-current, EP compose, typed-indexer/top-k, and diagnostic/control-only sync sites before C1 preflight. |
 | 2026-05-29 | Sprint 535 promoted the HC-current final fill event handoff. | Replaced the promoted HC-current final fill/pack rank-stream host wait with the existing dense-stream device-event handoff. The selected-token gate passed with `32/32` HTTP 200, output-head first token `128819`, zero direct peer copies, zero peer-copy SYS bytes, zero NCCL graph SYS edges, and HC-current/attention downstream PASS markers. | Treat this contained C5 HC-current boundary as complete. Remaining host syncs are now recorded as C1/C2 ordering blockers instead of broad cleanup prerequisites. |
 | 2026-05-29 | Sprint 536 closed SPIKE B preflight. | Built with `-Xptxas -v`: `118` kernels parsed, only `compressor_pool_emit_slots_kernel` spilled (`255` regs, `40` byte stores/loads). The promoted-shape selected-token profile passed at `32` requests / `32` slots / `256K` / `2` tokens with first token `128819`, peer-copy ops/SYS bytes `0`, NCCL graph SYS edges `0`, `vram_min_free_mib=3852`, and domain ranking EP `64.35%`, HC-current `29.51%`. `ncu` is installed but short attempts failed to collect kernels because the driver profiling resource was unavailable. | Use `/workspace/s536-preflight-profile-r3/none-s536-preflight-selected32-r3/summary.json` as the control for C1/C2. Start C1 next in the existing order; retry `ncu` during tuning when profiling-resource contention is cleared. |
+| 2026-05-29 | Sprint 537 reopened C1 graph suffix replay on the current appliance. | Restored narrowly scoped graph diagnostic CLI wiring, made promoted HC-current/router NCCL all-reduce paths graph-order capable, and made suffix-only persistent graphs reusable across decode positions. Direct `8` slot / `256K` / `4` token graph replay passed with first token `123327`, `43` misses, `129` cache hits, `172/172` successful replays, zero invalidations, and no NCCL SYS edges; eager was `448.760927` ms/token and graph was `440.622602` ms/token, treated as correctness/cache evidence only. Reduced HTTP selected-token also replayed (`43/43` hits) with zero peer-copy/SYS and zero NCCL SYS edges, but failed serving parity: eager first token `29361`, graph first token `61012`. | Do not promote graph serving defaults. C1 Stage 1 is complete as direct graph enablement; next ordered work is C2 serving parity repair with per-stage serving checksums. Short graph probes are not performance evidence; future perf claims require startup isolated, startup warmup, enough warmed work, and request-window/steady metrics. |
 
 ## Sprint Hygiene
 

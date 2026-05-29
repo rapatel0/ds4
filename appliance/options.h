@@ -65,6 +65,12 @@ void usage(const char *argv0) {
                  "       [--max-requests N]\n"
                  "       [--vram-min-free-mib N]\n"
                  "       [--nccl-min-free-mib N]\n"
+                 "       [--decode-cudagraph-gate]\n"
+                 "       [--decode-cudagraph-replay-probe-gate]\n"
+                 "       [--decode-cudagraph-persistent-replay-gate]\n"
+                 "       [--decode-cudagraph-suffix-stage STAGE]\n"
+                 "       [--decode-cudagraph-stage-sync STAGE]\n"
+                 "       [--decode-stage-checksum-gate]\n"
                  "       [--help]\n",
                  argv0);
 }
@@ -132,6 +138,36 @@ bool parse_args(int argc, char **argv, Options *opt) {
         } else if (std::strcmp(arg, "--nccl-min-free-mib") == 0) {
             if (!val || !parse_u64(val, &opt->nccl_min_free_mib)) return false;
             ++i;
+        } else if (std::strcmp(arg, "--decode-cudagraph-gate") == 0 ||
+                   std::strcmp(arg, "--decode-cudagraph") == 0) {
+            opt->decode_cudagraph_gate = true;
+        } else if (std::strcmp(arg, "--decode-cudagraph-replay-probe-gate") == 0 ||
+                   std::strcmp(arg, "--decode-cudagraph-replay-probe") == 0) {
+            opt->decode_cudagraph_gate = true;
+            opt->decode_cudagraph_replay_probe_gate = true;
+        } else if (std::strcmp(arg, "--decode-cudagraph-persistent-replay-gate") == 0 ||
+                   std::strcmp(arg, "--decode-cudagraph-persistent-replay") == 0) {
+            opt->decode_cudagraph_gate = true;
+            opt->decode_cudagraph_persistent_replay_gate = true;
+        } else if (std::strcmp(arg, "--decode-cudagraph-suffix-stage") == 0 ||
+                   std::strcmp(arg, "--decode-cudagraph-suffix-stage-gate") == 0) {
+            if (!val || !*val) return false;
+            opt->decode_cudagraph_suffix_stage = val;
+            ++i;
+        } else if (std::strcmp(arg, "--decode-cudagraph-stage-sync") == 0 ||
+                   std::strcmp(arg, "--decode-cudagraph-stage-sync-gate") == 0) {
+            if (!val || !*val) return false;
+            opt->decode_cudagraph_stage_sync = val;
+            ++i;
+        } else if (std::strcmp(arg, "--decode-cudagraph-output-sync-gate") == 0 ||
+                   std::strcmp(arg, "--decode-cudagraph-output-sync") == 0) {
+            opt->decode_cudagraph_output_sync_gate = true;
+        } else if (std::strcmp(arg, "--decode-cudagraph-hc-current-sync-gate") == 0 ||
+                   std::strcmp(arg, "--decode-cudagraph-hc-current-sync") == 0) {
+            opt->decode_cudagraph_hc_current_sync_gate = true;
+        } else if (std::strcmp(arg, "--decode-stage-checksum-gate") == 0 ||
+                   std::strcmp(arg, "--decode-stage-checksum") == 0) {
+            opt->decode_stage_checksum_gate = true;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);

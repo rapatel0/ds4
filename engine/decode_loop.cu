@@ -1276,7 +1276,11 @@ int run_decode_loop(const Options &opt,
         const bool persistent_slots_mismatch =
             persistent_enabled && persistent_graph->initialized &&
             persistent_graph->slots != opt.slots;
+        const bool persistent_position_keyed =
+            !opt.decode_cudagraph_suffix_stage ||
+            !opt.decode_cudagraph_suffix_stage[0];
         const bool persistent_position_mismatch =
+            persistent_position_keyed &&
             persistent_enabled && persistent_graph->initialized &&
             persistent_graph->position != opt.position;
         const bool persistent_root_device_mismatch =

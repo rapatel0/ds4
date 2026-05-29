@@ -99,7 +99,6 @@ int run_shared_hc_current_input(const Options &opt,
     }
 
     if (opt.tp_hc_current_allreduce_gate) {
-        if (graph_event_order) return 11;
         for (int rank = 0; rank < kGpus; ++rank) {
             RankState &r = ranks[rank];
             if (!r.compose_nccl_initialized || !r.compose_nccl ||
