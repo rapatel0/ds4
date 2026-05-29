@@ -2,6 +2,13 @@
 
 Date: 2026-05-29
 
+> **Correction (Sprint 575):** the "catastrophic at `250064`" conclusion below is
+> retracted. It lacked a determinism floor at `250064`; re-running the floor shows
+> `control-A` vs `control-B` (identical config) also diverges `32/32` there, so the
+> position is measurement-unstable, not a full-capture bug. Single-slot testing
+> (Sprint 575) shows full-capture replay is per-slot bit-exact with eager at both
+> `250000` (32 tokens) and `250064`. The divergences are batch nondeterminism.
+
 ## Goal
 
 Localize the late-position (offset `28`) full-capture divergence Sprint 573

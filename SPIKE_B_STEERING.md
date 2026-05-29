@@ -452,7 +452,8 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | C1 long-generation divergence localization | full capture | Sprint 571 showed the failure is not a pure `64` token issue: recreated `s569-shape` diverged `32/32` at continuation offset `1`, while `s570-prompt-32` diverged `32/32` at offset `0`; use request-level sequences, not timing-shifted tensor logs, as the oracle | Med-High |
 | Done | C1 early continuation replay-state repair | full capture | Sprint 573 showed this was the wrong target: the early-continuation/offset-`0` divergence the prior gates chased is first-token nondeterminism (eager gives `6` distinct continuations for `32` identical prompts; identical control runs differ `3/32`, all offset `0`). The real full-capture bug is a clean offset-`28` cluster, not step `0 -> 1`. | Med-High |
 | Done | C1 late-position comp-emit replay repair | full capture | Sprint 574 disproved comp-emit (emit off on served path) and found the divergence is position-dependent: benign at `250000` (`7/32` offset `28`), catastrophic at `250064` (`32/32` offset `1`). RoPE/raw-window are device-dynamic and ruled out. Serving stage-checksum is misaligned (one token/call -> all `step 0`). | Med-High |
-| 1 | C1 full-capture position-derived state localization | full capture | Localize the captured-graph position-derived value (survives HC rebase; not RoPE/raw-window) using a multi-step capture/replay probe (`decode_steps > 1`) at the catastrophic position `250064` with `--decode-stage-checksum-gate`, diffing eager-step-k vs full-replay-step-k per `(layer, stage)`. Then the narrow repair, judged against the `control-A`/`control-B` determinism floor and `eager` at `250064` and `250000`. | Med-High |
+| Done | C1 full-capture position-derived state localization | full capture | Sprint 575: no per-slot value to localize. Single-slot (`SLOTS=8`, one request) full-capture replay is bit-exact with eager at `250000` (32 tok) and `250064` (4 tok). The divergences are batch nondeterminism; `250064` floor `control-A` vs `control-B` is `32/32`. | Med-High |
+| 1 | C1 full-capture promotion under noise-aware gate | full capture | Full-capture replay is correct per slot, so promotion is now a nondeterminism question, not a correctness one. (1) Adopt per-slot single-request bit-exactness as the correctness gate (passes today). (2) Characterize concurrent-batch output variance of full capture vs the `control-A`/`control-B` floor at matched concurrency across a few positions; if within the floor, promote for the `1.25-1.48x` decode win; if it amplifies variance, treat that as the separate issue to fix. | Med |
 | 2 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
@@ -595,5 +596,20 @@ are device-dynamic (read live `d_decode_position`) and ruled out. The per-layer
 call -> every token logs as `step 0`), so the next localization must use a
 multi-step capture/replay probe (`decode_steps > 1`) at `250064`, diffing
 eager-step-k vs full-replay-step-k per `(layer, stage)`. Then the narrow repair,
-validated against the determinism floor at `250064` and `250000`. MTP stays
-deferred until the ordered post-C1/tuning point.
+validated against the determinism floor at `250064` and `250000`. Sprint 575
+resolved the whole question and **retracts the Sprint 574 catastrophic claim**:
+single-slot testing (`SLOTS=8`, one active request) shows full-capture replay is
+**per-slot bit-exact with eager** -- identical generated sequences at `250000`
+(32 tokens) and `250064` (4 tokens). The `250064` "catastrophe" was measurement
+instability: with the floor, `control-A` vs `control-B` (identical config) also
+diverges `32/32` there (`control-B` collapsed to `5` distinct sequences). So the
+C1 full-capture replay is **correct**; every divergence since Sprint 570 is
+batch/concurrency nondeterminism (reduction order across concurrent slots, present
+in identical-config controls: `3/32` at `250000`, `32/32` at `250064`), and the
+blocker was an exact-equality oracle applied to a nondeterministic serving path.
+Reframed promotion gate: (1) per-slot single-request bit-exactness (passes today);
+(2) characterize whether full capture amplifies concurrent-batch variance versus
+the `control-A`/`control-B` floor at matched concurrency -- if within the floor,
+promote for the `1.25-1.48x` decode win; if it materially amplifies variance,
+that is the real (separate, smaller) issue. MTP stays deferred until the ordered
+post-C1/tuning point.
