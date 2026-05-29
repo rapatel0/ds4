@@ -1320,6 +1320,16 @@ int run_decode_loop(const Options &opt,
     auto attempt_capture_probe = [&](bool replay_after_capture) -> int {
         if (!opt.decode_cudagraph_gate) return 0;
         if (update_device_decode_position() != 0) return 10;
+        if (replay_after_capture && !opt.decode_cudagraph_suffix_stage) {
+            const cudaError_t rc = cudaErrorNotSupported;
+            cudagraph_capture_error = (int)rc;
+            cudagraph_replay_error = (int)rc;
+            std::printf("tp_ep_decode_cudagraph_replay_probe_blocked\t"
+                        "layer\t%d\treason\tfull_capture_live_state_replay_requires_snapshot\t"
+                        "error_code\t%d\terror_name\t%s\n",
+                        opt.layer, (int)rc, cudaGetErrorName(rc));
+            return 11;
+        }
         const int root_device = ranks[0].device;
         cudaStream_t root_stream = ranks[0].stream;
         const bool persistent_enabled =
