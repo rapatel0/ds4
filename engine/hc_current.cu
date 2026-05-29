@@ -603,14 +603,7 @@ int run_shared_hc_current_input(const Options &opt,
             CHECK_CUDA(cudaGetLastError());
         }
     }
-    if (graph_event_order) {
-        if (enqueue_dense_wait_after_rank_stream(ranks) != 0) return 11;
-    } else {
-        for (int rank = 0; rank < kGpus; ++rank) {
-            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
-        }
-    }
+    if (enqueue_dense_wait_after_rank_stream(ranks) != 0) return 11;
     auto t_fill_done = std::chrono::steady_clock::now();
     if (breakdown) {
         breakdown->seed_ms +=
