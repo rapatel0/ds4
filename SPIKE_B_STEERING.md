@@ -454,7 +454,8 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | C1 late-position comp-emit replay repair | full capture | Sprint 574 disproved comp-emit (emit off on served path) and found the divergence is position-dependent: benign at `250000` (`7/32` offset `28`), catastrophic at `250064` (`32/32` offset `1`). RoPE/raw-window are device-dynamic and ruled out. Serving stage-checksum is misaligned (one token/call -> all `step 0`). | Med-High |
 | Done | C1 full-capture position-derived state localization | full capture | Sprint 575: no per-slot value to localize. Single-slot (`SLOTS=8`, one request) full-capture replay is bit-exact with eager at `250000` (32 tok) and `250064` (4 tok). The divergences are batch nondeterminism; `250064` floor `control-A` vs `control-B` is `32/32`. | Med-High |
 | Done | C1 full-capture promotion under noise-aware gate | full capture | Sprint 576: not promotable. Logit-space floors show eager-vs-eager is bit-identical on matched tokens (`7/32` discrete router-tie flips) but full-vs-full diverges `32/32` with logit Δ up to `3.63`. Full capture is batch-unstable: a real defect, not tolerated noise. | Med |
-| 1 | C1 full-capture batch-instability localization and fix | full capture | Localize the run-to-run batch instability in the graph-replay path using the `tp_ep_decode_top1_logit` diagnostic and a deterministic-reduction probe. Order: (a) EP-compose `atomicAdd` (`kernels/v100/compose.cuh`) replayed nondeterministically in the captured graph; (b) route/compose scratch not deterministically reset between replays; (c) HC rebase / buffer ping-pong. Confirm by replacing the captured-region compose with a fixed-order reduction (and/or deterministic NCCL) and checking full-vs-full floor collapses toward the eager floor. Judge in logit space, not token equality. | Med-High |
+| Done | C1 full-capture batch-instability localization | full capture | Sprint 577: full-vs-full logit floor scales with active routed tokens (1-2 active ~bit-exact, `8` -> Δ 1.21/`8` flips, `32` -> Δ 3.63/`32` flips). The 8-slot graph is constant across these, so it is not a static pointer/buffer bug; it tracks active route count -> accumulation-order nondeterminism in the graphed route/compose. compute-sanitizer OOMs before decode and no smoke reproduces the graph-replay path, so it cannot reach this bug. | Med-High |
+| 1 | C1 deterministic-compose rebuild (confirm + fix) | full capture | Flip the captured-region compose to a deterministic fixed-order reduction (`nccl_reduce_scatter_compose_gate=true` or a non-atomic combine; compile-time defaults in `engine/runtime_options.cuh`, no CLI toggle -> rebuild). Rerun the full-vs-full logit floor at `8`/`32` slots; if full's floor collapses toward the eager floor (Δ -> 0), the determinism defect is confirmed and fixed, and full capture can be re-evaluated for promotion against the eager floor. Judge in logit space. | Med-High |
 | 2 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
@@ -628,5 +629,16 @@ localize the instability (EP-compose `atomicAdd` in `kernels/v100/compose.cuh`
 replayed nondeterministically, route/compose scratch not deterministically
 reset, or HC ping-pong) via the logit diagnostic plus a deterministic-reduction
 probe; if a deterministic compose collapses full's floor toward the eager floor,
-the source is confirmed. MTP stays deferred until the ordered post-C1/tuning
-point.
+the source is confirmed. Sprint 577 localized it: the full-vs-full logit floor
+**scales with active routed tokens** (1-2 active ~bit-exact; `8` -> Δ 1.21,
+`8/8` flips; `32` -> Δ 3.63, `32/32`). The 8-slot graph structure is identical
+across those runs, so it is **not a static pointer/buffer bug** -- it tracks
+active route count, i.e. accumulation-order nondeterminism in the graphed
+route/compose. A `compute-sanitizer --tool initcheck` attempt confirmed the tool
+is unusable here: it initialized NCCL/8-GPU fine but **OOMed during expert load**
+(shadow memory + ~24 GB model > 32 GB) before reaching decode, `0 errors` in the
+load path, and no smoke test exercises the cudagraph replay path so there is no
+low-memory repro. So the next step is the **deterministic-compose rebuild**
+(`nccl_reduce_scatter_compose_gate` or a non-atomic combine; compile-time, needs
+a rebuild): rerun full-vs-full and check the floor collapses toward eager. MTP
+stays deferred until the ordered post-C1/tuning point.
