@@ -64,7 +64,13 @@ batch at `250000`):
 | `full-A` vs `full-B` generated-sequence mismatch | `8/8` (Δ up to `3.63`) | **`0/8`** |
 | first-diff offsets | all `0` | none |
 
-Two identical full-capture runs are now bit-identical. The remaining within-batch
+A separate correctness confirmation (eager vs full capture, matched positions,
+short prompt) gives **`eager_vs_full_mismatch = 0/8`**: full capture now matches
+ground-truth eager exactly, not merely self-consistent. So the fix is both
+determinism-restoring and correctness-preserving, as expected for an ordering-only
+change.
+
+Two identical full-capture runs are now bit-identical, and they match eager. The remaining within-batch
 slot variation (7 distinct sequences for 8 identical short prompts) is reproduced
 identically across runs -- the same benign batch-reduction-order behavior eager
 exhibits; the run-to-run nondeterminism that was the defect is gone.
