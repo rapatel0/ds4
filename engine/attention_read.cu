@@ -291,12 +291,6 @@ int run_true_ds4_attention_raw_read(const Options &opt,
             (uint32_t)kHeadDim, (uint32_t)kRawSwaRows, raw_row);
         CHECK_CUDA(cudaGetLastError());
     }
-    if (!opt.decode_cudagraph_gate) {
-        for (int rank = 0; rank < kGpus; ++rank) {
-            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
-        }
-    }
     const auto stop = std::chrono::steady_clock::now();
     const double ms = std::chrono::duration<double, std::milli>(stop - start).count();
     if (!opt.decode_cudagraph_gate && layer <= 2) {
@@ -404,12 +398,6 @@ int run_true_ds4_attention_raw_window(const Options &opt,
         }
         CHECK_CUDA(cudaGetLastError());
     }
-    if (!opt.decode_cudagraph_gate) {
-        for (int rank = 0; rank < kGpus; ++rank) {
-            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
-        }
-    }
     const auto stop = std::chrono::steady_clock::now();
     const double ms = std::chrono::duration<double, std::milli>(stop - start).count();
     if (!opt.decode_cudagraph_gate && layer <= 2) {
@@ -437,4 +425,3 @@ int run_true_ds4_attention_raw_window(const Options &opt,
                 ms);
     return 0;
 }
-

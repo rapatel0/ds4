@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-28 after Sprint 533)
+# Spike B Decode-Optimization Steering (updated 2026-05-28 after Sprint 534)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -20,7 +20,7 @@ kernels. Optimizing the expert GEMM alone moves a fraction of 53% and none of
 40%. MTP remains deferred support code until the base TP/EP path is stable and
 optimized.
 
-## Current reassessment after sprints 478-533
+## Current reassessment after sprints 478-534
 
 - **A1-A3 are done.** A1 RMS-norm rank-local is rolled into A2. A2 HC mix
   row-parallel all-reduce is promoted from Sprint 478. A3 router rank-local
@@ -41,9 +41,10 @@ optimized.
   waits, Sprint 529 removed the attention-output eager stream-synchronization
   branches, Sprint 531 trimmed compact EP compose broadcasts while staying
   on the no-SYS NCCL broadcast path, Sprint 532 removed promoted-path
-  post-attention FFN input host waits, and Sprint 533 removed promoted-path
-  attention-projection host waits. C5 remains open for decode-loop,
-  HC-current, attention read, EP compose, and diagnostic/control-only
+  post-attention FFN input host waits, Sprint 533 removed promoted-path
+  attention-projection host waits, and Sprint 534 removed promoted-path
+  attention-read raw/window host waits. C5 remains open for decode-loop,
+  HC-current, EP compose, typed-indexer/top-k, and diagnostic/control-only
   boundaries. C1 should wait until the remaining sync-point reduction reduces
   the capture surface.
 - **Use previous promotions as the control.** Do not duplicate control runs
@@ -160,8 +161,9 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
   528 completed the output-head wait cleanup; Sprint 529 completed the
   attention-output projection handoff cleanup; Sprint 532 completed the
   promoted post-attention FFN input handoffs; Sprint 533 completed the
-  promoted attention-projection handoffs. Decode-loop, HC-current, attention
-  read, EP compose, and diagnostic/control-only sync sites still need
+  promoted attention-projection handoffs; Sprint 534 completed the promoted
+  attention-read raw/window handoffs. Decode-loop, HC-current, EP compose,
+  typed-indexer/top-k, and diagnostic/control-only sync sites still need
   per-site review.
 
 ## D. Model-boundary NCCL cleanup
@@ -181,7 +183,8 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | B2 compact EP broadcast trim | EP 53% | Sprint 531 removed padded compact broadcast over-transfer without all-pairs SHM/P2P | Low |
 | Done | C5 post-attention FFN handoffs | post-attention | Sprint 532 removed promoted-path post-attention FFN host waits with device-event ordering | Low-Med |
 | Done | C5 attention-projection handoffs | attention projection | Sprint 533 removed promoted-path attention-projection host waits with device-event ordering | Low-Med |
-| 1 | C5 remaining sync-point passes | both | Decode-loop, HC-current, attention read, EP compose, and diagnostic/control-only sync sites still need per-site review | Low-Med |
+| Done | C5 attention-read raw/window handoffs | attention read | Sprint 534 removed promoted-path attention-read raw/window host waits; typed-indexer/top-k remains separate | Low-Med |
+| 1 | C5 remaining sync-point passes | both | Decode-loop, HC-current, EP compose, typed-indexer/top-k, and diagnostic/control-only sync sites still need per-site review | Low-Med |
 | 3 | C1/C2 piecewise graph capture and serving parity | both | Highest ceiling, but only after the surface is simplified | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
