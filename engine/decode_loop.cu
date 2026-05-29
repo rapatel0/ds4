@@ -429,6 +429,17 @@ int run_decode_loop(const Options &opt,
         }
         return 0;
     };
+    auto apply_full_capture_replay_host_swaps = [&]() {
+        if (!opt.final_hc_carry_gate || !opt.tp_hc_final_expand_gate ||
+            opt.decode_cudagraph_suffix_stage) {
+            return;
+        }
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            std::swap(r.d_final_hc_shard, r.d_hc_scratch_shard);
+            r.hc_initialized = true;
+        }
+    };
     struct CaptureHostRankState {
         float *final_hc_shard = nullptr;
         float *hc_scratch_shard = nullptr;
@@ -1466,6 +1477,9 @@ int run_decode_loop(const Options &opt,
             cudagraph_replay_error = rc == cudaSuccess ? 0 : (int)rc;
             cudagraph_capture_nodes = persistent_graph->nodes;
             if (rc != cudaSuccess) persistent_graph->failures++;
+            if (rc == cudaSuccess) {
+                apply_full_capture_replay_host_swaps();
+            }
             if (rc == cudaSuccess &&
                 suffix_stage_ends_compose_eager_final_hc()) {
                 double eager_final_hc_ms = 0.0;
