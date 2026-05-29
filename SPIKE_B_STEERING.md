@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 555)
+# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 556)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -125,7 +125,16 @@ optimized.
   is off, but rejected it: structural cache reuse worked (`43/43` replays,
   zero position invalidations), yet selected-token correctness failed versus
   eager (`29361` eager first token vs `128819` / `118235` candidates). The
-  full-capture position key remains a correctness guard.
+  full-capture position key remains a correctness guard. Sprint 556 localized
+  the immediate replay failure: no-suffix full capture without replay-probe
+  preserved the same selected-token first token as eager at the exact `8x2`
+  shape (`128819`), while adding replay-probe changed it to `118235`. The
+  replay-probe path captures by executing the full step on live buffers and
+  then immediately launches the captured full graph against those already-
+  advanced buffers. That is not a valid full-capture replay parity test. Full
+  capture needs a replay validation harness that snapshots/restores device
+  input state, or a split cache-miss path that keeps the capture-executed result
+  and tests replay only from fresh state, before any new cache-key relaxation.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
   launcher defaults, topology policy, validation harness, model path, or target
@@ -343,8 +352,9 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | C1 emitted typed-KV dynamic bounded row | full capture | Sprint 553 made graph-mode emitted compressed/indexer typed-KV runtime store/load compute the compact bounded row from `d_decode_position`; targeted smokes matched static row behavior at bounded row `1` | Low-Med |
 | Done | C1 typed-history dynamic row-position load | full capture | Sprint 554 made graph-mode compressed/indexer typed-history reload derive historical source positions from `d_decode_position` plus bounded row inside the TP runtime; targeted smokes matched static row loads exactly | Low-Med |
 | Rejected | C1 served full-capture position-key removal | full capture | Sprint 555 proved no-suffix full-capture cross-position reuse is still semantically unsafe even with compressed KV off; cache reuse worked but selected-token first token changed | Med-High |
-| 1 | C1 full-capture first-divergence localization | full capture | The position key is still a correctness guard. Before another cache-key change, localize the first divergent stage/checksum on the no-suffix full-capture replay path. | Med |
-| 2 | C1 emitted topology and row-position metadata | full capture | Compressed-KV full capture still has emitted/non-emitted topology and host emitted-row bookkeeping. Keep it after served full-capture divergence is understood. | Med-High |
+| Done | C1 full-capture replay-probe localization | full capture | Sprint 556 showed plain no-suffix full capture preserves eager output, while immediate replay-probe changes it because the probe replays a captured full step on already-advanced live buffers | Med |
+| 1 | C1 full-capture replay validation repair | full capture | Fix or split the no-suffix replay-probe/cache-miss harness so replay is tested from fresh device state before another full-capture cache-key experiment | Med |
+| 2 | C1 emitted topology and row-position metadata | full capture | Compressed-KV full capture still has emitted/non-emitted topology and host emitted-row bookkeeping. Keep it after replay validation semantics are clean. | Med-High |
 | 3 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
@@ -416,6 +426,8 @@ dynamic-position raw typed-KV, Sprint 552 dynamic-position emitted typed-KV
 physical rows, Sprint 553 dynamic bounded rows, and Sprint 554 dynamic
 typed-history row loads complete for the served/full-capture surface, Sprint
 555 proved full-capture cross-position reuse is still unsafe without a first
-divergence fix. The next ordered work is full-capture first-divergence
-localization before any further cache-key relaxation. MTP stays deferred until
-the ordered post-C1/tuning point.
+divergence fix, and Sprint 556 showed the immediate no-suffix replay-probe is
+itself invalid because it double-applies the captured full step on live buffers.
+The next ordered work is full-capture replay validation repair before any
+further cache-key relaxation. MTP stays deferred until the ordered post-C1/tuning
+point.
