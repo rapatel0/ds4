@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 552)
+# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 553)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -109,6 +109,13 @@ optimized.
   smokes matched the existing static-position row path exactly. Full capture
   remains position-keyed because emitted topology, bounded-row source/dest
   pointers, row counters, and row-position arrays are still host-selected.
+  Sprint 553 removed the captured bounded-row source/dest pointers for
+  graph-mode emitted compressed/indexer typed-KV store/load by computing the
+  bounded compact row from `d_decode_position` inside the runtime kernels.
+  Targeted smokes validated nonzero bounded row `1` for both compressed
+  attention and indexer rows. Full capture remains position-keyed because
+  emitted work selection, host row counters, host row-position arrays, and
+  typed-history reload are still host-driven.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
   launcher defaults, topology policy, validation harness, model path, or target
@@ -323,7 +330,8 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | C1 compact EP pack route-blocking | EP/compose | Sprint 550 preserved fixed graph-visible route shapes and changed compact EP pack so inactive padded routes skip hidden-wide work; the warmed gate was correctness/topology-clean but performance-neutral | Low |
 | Done | C1 dynamic-position raw typed KV | full capture | Sprint 551 made graph-mode raw typed-KV store/load compute physical rows from `d_decode_position`; targeted smoke matched static row behavior exactly | Low-Med |
 | Done | C1 emitted typed-KV dynamic physical row | full capture | Sprint 552 made graph-mode emitted compressed/indexer typed-KV runtime store/load compute physical rows from `d_decode_position`; targeted smokes matched static row behavior exactly | Low-Med |
-| 1 | C1 emitted-row topology and bounded-row device state | full capture | Full capture is still position-keyed because emitted work selection, compressed/indexer bounded-row source/dest pointers, row counters, and row-position arrays remain host-selected. This needs one coordinated device-state change before removing the full-capture position key. | Med-High |
+| Done | C1 emitted typed-KV dynamic bounded row | full capture | Sprint 553 made graph-mode emitted compressed/indexer typed-KV runtime store/load compute the compact bounded row from `d_decode_position`; targeted smokes matched static row behavior at bounded row `1` | Low-Med |
+| 1 | C1 emitted topology and row-position metadata | full capture | Full capture is still position-keyed because emitted work selection, compressed/indexer row counters, row-position arrays, and typed-history reload remain host-driven. This needs one coordinated device-state change or a different full-capture boundary before removing the full-capture position key. | Med-High |
 | 2 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
@@ -391,7 +399,8 @@ Aggregates the measurement work that per-sprint validation deferred:
 With A4, D1, compact EP broadcast trim, C5 event handoffs, Sprint 536
 preflight, Sprint 540 graph suffix replay promotion, Sprint 549 rejected
 padding-knob cleanup, Sprint 550 compact EP pack route-blocking, Sprint 551
-dynamic-position raw typed-KV, and Sprint 552 dynamic-position emitted typed-KV
-runtime calls complete for the served/full-capture surface, the next ordered
-work is emitted-row topology and bounded-row device state for full capture. MTP
-stays deferred until the ordered post-C1/tuning point.
+dynamic-position raw typed-KV, Sprint 552 dynamic-position emitted typed-KV
+physical rows, and Sprint 553 dynamic bounded rows complete for the
+served/full-capture surface, the next ordered work is emitted topology and
+row-position metadata for full capture. MTP stays deferred until the ordered
+post-C1/tuning point.
