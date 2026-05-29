@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-28 after Sprint 534)
+# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 536)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -20,7 +20,7 @@ kernels. Optimizing the expert GEMM alone moves a fraction of 53% and none of
 40%. MTP remains deferred support code until the base TP/EP path is stable and
 optimized.
 
-## Current reassessment after sprints 478-534
+## Current reassessment after sprints 478-536
 
 - **A1-A3 are done.** A1 RMS-norm rank-local is rolled into A2. A2 HC mix
   row-parallel all-reduce is promoted from Sprint 478. A3 router rank-local
@@ -42,11 +42,13 @@ optimized.
   branches, Sprint 531 trimmed compact EP compose broadcasts while staying
   on the no-SYS NCCL broadcast path, Sprint 532 removed promoted-path
   post-attention FFN input host waits, Sprint 533 removed promoted-path
-  attention-projection host waits, and Sprint 534 removed promoted-path
-  attention-read raw/window host waits. C5 remains open for decode-loop,
-  HC-current, EP compose, typed-indexer/top-k, and diagnostic/control-only
-  boundaries. C1 should wait until the remaining sync-point reduction reduces
-  the capture surface.
+  attention-projection host waits, Sprint 534 removed promoted-path
+  attention-read raw/window host waits, and Sprint 535 removed the HC-current
+  final fill/pack host wait. Sprint 536 completed the preflight/control pass:
+  target selected-token still passes with peer-copy/SYS zero and NCCL graph SYS
+  zero. C1 can now start in the existing order. Remaining decode-loop, EP
+  compose, typed-indexer/top-k, and diagnostic/control-only sync sites are C1/C2
+  ordering targets rather than prerequisites for starting capture.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
   launcher defaults, topology policy, validation harness, model path, or target
@@ -196,9 +198,10 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
   attention-output projection handoff cleanup; Sprint 532 completed the
   promoted post-attention FFN input handoffs; Sprint 533 completed the
   promoted attention-projection handoffs; Sprint 534 completed the promoted
-  attention-read raw/window handoffs. Decode-loop, HC-current, EP compose,
+  attention-read raw/window handoffs; Sprint 535 completed the promoted
+  HC-current final fill/pack handoff. Decode-loop, EP compose,
   typed-indexer/top-k, and diagnostic/control-only sync sites still need
-  per-site review.
+  per-site review as part of C1/C2 ordering repair.
 
 ## D. Model-boundary NCCL cleanup
 
@@ -218,8 +221,9 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | C5 post-attention FFN handoffs | post-attention | Sprint 532 removed promoted-path post-attention FFN host waits with device-event ordering | Low-Med |
 | Done | C5 attention-projection handoffs | attention projection | Sprint 533 removed promoted-path attention-projection host waits with device-event ordering | Low-Med |
 | Done | C5 attention-read raw/window handoffs | attention read | Sprint 534 removed promoted-path attention-read raw/window host waits; typed-indexer/top-k remains separate | Low-Med |
-| 1 | C5 remaining sync-point passes | both | Decode-loop, HC-current, EP compose, typed-indexer/top-k, and diagnostic/control-only sync sites still need per-site review | Low-Med |
-| 3 | C1/C2 piecewise graph capture and serving parity | both | Highest ceiling, but only after the surface is simplified | Med-High |
+| Done | C5 HC-current fill handoff | HC-current | Sprint 535 removed the promoted final fill/pack host wait with device-event ordering | Low-Med |
+| Done | SPIKE B preflight/control | both | Sprint 536 recorded ptxas spill data, target selected-token control, sync/capture blocker counts, and reusable control artifact | Low |
+| 1 | C1/C2 piecewise graph capture and serving parity | both | Highest ceiling; use Sprint 536 as control and fix remaining sync sites as graph ordering blockers | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
 | Deferred | B1 MTP — sidecar removal + specdec loop | EP 53% | Sidecar runs canonical MTP, not a truncation; cleanup is one ~200-LoC safetensors→GGUF converter + `tp-ep-pack-contract.c` extension + sidecar delete (3 sprints), then MTPBlock.forward (1 sprint), then TP/EP specdec loop (the actual throughput sprint). All after C5/B2/C1/tuning. | Med |
@@ -283,7 +287,8 @@ Aggregates the measurement work that per-sprint validation deferred:
 
 ## One-line frame
 
-With A4, D1, and the compact EP broadcast trim complete for the served path,
-keep removing remaining host-sync friction before attempting C1. C1 is still
-the biggest ceiling, but it should run on the simplest fully rank-major,
-mostly NCCL, sync-reduced surface we can make. MTP stays deferred.
+With A4, D1, compact EP broadcast trim, C5 event handoffs, and the Sprint 536
+preflight complete for the served path, start C1 from the reusable Sprint 536
+control artifact. C1 is still the biggest ceiling; remaining host-sync sites
+are now graph-ordering repair work. MTP stays deferred until the ordered
+post-C1/tuning point.
