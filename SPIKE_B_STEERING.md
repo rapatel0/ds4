@@ -1,4 +1,4 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 560)
+# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 561)
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
@@ -164,9 +164,19 @@ optimized.
   That one-off validation matched compressed-KV eager selected tokens and
   decode checksums on both sequential requests (`58204`, `109597` and
   `7265791446`, `79399742586`) while replaying `43/43` cached full graphs with
-  zero invalidations, zero peer/SYS, and zero NCCL graph SYS edges. This is
-  still not a compressed-KV serving promotion. Emitted/non-emitted topology
-  remains host-selected, and full capture remains position-keyed.
+  zero invalidations, zero peer/SYS, and zero NCCL graph SYS edges. Sprint 561
+  then made graph-mode compressed-KV emitted/non-emitted topology stable by
+  enqueueing the emitted-row topology in graph mode and masking emitted work
+  from `d_decode_position` on non-emitted positions, while leaving eager compact
+  topology and host row metadata tied to the real host `emitted` value. The
+  one-off compressed-KV validation matched eager selected tokens/checksums at
+  both an emitted ratio-4 position (`262083`: `58204`, `109597` /
+  `7265791446`, `79399742586`) and an adjacent non-emitted position (`262084`:
+  `109939`, `107875` / `561376577`, `2841198172`) with `43/43` cached full
+  graph replays, zero invalidations, zero peer/SYS, and zero NCCL graph SYS
+  edges. This is still not a compressed-KV serving promotion. Full capture
+  remains position-keyed until cross-position cache-key relaxation is retried
+  against the now graph-stable compressed-KV topology.
 - **Use previous promotions as the control.** Do not duplicate control runs
   solely because a new sprint starts. Refresh control only when the binary,
   launcher defaults, topology policy, validation harness, model path, or target
@@ -389,9 +399,9 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | C1 full-capture fresh-state replay validation | full capture | Sprint 558 split full-capture cache-miss/cache-hit validation so cache miss serves eager and captures only, while a later same-position request replays from fresh state; selected tokens matched but checksum drift remains | Med |
 | Done | C1 full-capture checksum-drift localization | full capture | Sprint 559 fixed the replay-time final-HC host pointer swap mirror; same-position no-suffix full-capture replay now matches eager selected tokens and checksums at the reduced diagnostic shape | Med |
 | Done | C1 emitted-row host metadata mirror | full capture | Sprint 560 mirrors compressed attention/indexer row counters, row-position arrays, and loaded-row metadata after successful no-suffix full-capture cache-hit replay; a one-off compressed-KV binary matched eager selected tokens/checksums with `43/43` replay hits | Med |
-| 1 | C1 emitted topology graph-stability | full capture | Emitted/non-emitted compressed-KV topology is still host-selected. Keep the position key until this is graph-stable and validated. | Med-High |
-| 2 | C1 full-capture cross-position cache-key relaxation | full capture | Retry only after emitted topology/row metadata are device-stable; Sprint 555 proved dropping the key earlier is unsafe | Med-High |
-| 3 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
+| Done | C1 emitted topology graph-stability | full capture | Sprint 561 makes graph-mode compressed-KV emitted/non-emitted topology stable by always enqueueing the emitted topology under graph capture and device-masking emitted kernels/copies from `d_decode_position`; emitted and adjacent non-emitted compressed-KV eager/replay probes matched selected tokens/checksums with `43/43` replay hits | Med |
+| 1 | C1 full-capture cross-position cache-key relaxation | full capture | Retry now that row metadata and emitted topology are graph-stable; Sprint 555 proved dropping the key earlier was unsafe, so this must remain diagnostic until same-binary cross-position parity is proven | Med-High |
+| 2 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
 | Deferred | B1 MTP — sidecar removal + specdec loop | EP 53% | Sidecar runs canonical MTP, not a truncation; cleanup is one ~200-LoC safetensors→GGUF converter + `tp-ep-pack-contract.c` extension + sidecar delete (3 sprints), then MTPBlock.forward (1 sprint), then TP/EP specdec loop (the actual throughput sprint). All after C5/B2/C1/tuning. | Med |
@@ -468,7 +478,9 @@ Sprint 557 made that invalid probe fail loudly, Sprint 558 replaced the guard
 with a fresh-state same-position replay validation path, Sprint 559 fixed the
 final-HC host pointer swap missing from full-capture cache-hit replay, and
 Sprint 560 mirrored compressed-row host metadata for same-position no-suffix
-cache-hit replay and validated it with a one-off compressed-KV binary. The next
-ordered work is emitted/non-emitted topology graph-stability before any
-full-capture cross-position cache-key relaxation. MTP stays deferred until the
-ordered post-C1/tuning point.
+cache-hit replay and validated it with a one-off compressed-KV binary. Sprint
+561 made emitted/non-emitted compressed-KV topology graph-stable and validated
+both emitted and adjacent non-emitted positions against eager with exact
+selected-token/checksum matches. The next ordered work is full-capture
+cross-position cache-key relaxation as a diagnostic parity sprint, not no-suffix
+serving promotion. MTP stays deferred until the ordered post-C1/tuning point.

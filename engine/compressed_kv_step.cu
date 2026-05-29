@@ -275,15 +275,17 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
     const bool fused_ratio4_current_fill =
         opt.true_ds4_compressed_kv_fused_input_fill_gate &&
         opt.true_ds4_indexer_attention_gate && ratio == 4;
+    const bool graph_event_order = opt.decode_cudagraph_gate;
+    const bool graph_stable_emit_topology = graph_event_order && ratio != 0;
+    const bool emit_topology_active = emitted || graph_stable_emit_topology;
     const bool fused_rope_round =
         opt.true_ds4_compressed_kv_fused_rope_round_gate &&
-        opt.true_ds4_attention_rope_gate && emitted;
+        opt.true_ds4_attention_rope_gate && emit_topology_active;
     const bool fused_pool_norm =
-        opt.true_ds4_compressed_kv_fused_pool_norm_gate && emitted;
+        opt.true_ds4_compressed_kv_fused_pool_norm_gate && emit_topology_active;
     const bool fused_pool_norm_rope_round =
         opt.true_ds4_compressed_kv_fused_pool_norm_rope_round_gate &&
-        opt.true_ds4_attention_rope_gate && emitted;
-    const bool graph_event_order = opt.decode_cudagraph_gate;
+        opt.true_ds4_attention_rope_gate && emit_topology_active;
     cudaStream_t control_stream = graph_event_order ? ranks[0].stream : (cudaStream_t)0;
     if (!direct_current_input_fill) {
         const int bcast_rc = nccl_broadcast_f32_from_device0_to_current_full(
@@ -477,13 +479,17 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             hc->d_attn_compress_ape[layer], (uint32_t)opt.slots,
             (uint32_t)kHeadDim, (uint32_t)ratio, r.d_decode_position,
             (uint32_t)comp_state_rows, (uint32_t)comp_state_width);
-        if (emitted) {
+        if (emit_topology_active) {
             const uint32_t comp_row =
                 r.attn_comp_rows_written_layers[layer] %
                 (uint32_t)kBoundedCompRows;
             if (rank == 0) emitted_comp_row = comp_row;
-            r.attn_comp_row_position_layers[layer][comp_row] = opt.position;
-            r.attn_comp_row_loaded_layers[layer][comp_row] = false;
+            if (emitted) {
+                r.attn_comp_row_position_layers[layer][comp_row] = opt.position;
+                r.attn_comp_row_loaded_layers[layer][comp_row] = false;
+            }
+            const uint64_t *emit_position =
+                graph_event_order ? r.d_decode_position : nullptr;
             if (fused_pool_norm_rope_round) {
                 compressor_pool_norm_rope_round_emit_slots_kernel<<<
                     (unsigned int)opt.slots, 256, 0, r.stream>>>(
@@ -496,7 +502,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                     1ll - (int64_t)ratio,
                     kRopeOrigCtx, kCompressRopeFreqBase, comp_freq_scale,
                     comp_ext_factor, comp_attn_factor, kRopeYarnBetaFast,
-                    kRopeYarnBetaSlow);
+                    kRopeYarnBetaSlow, emit_position);
             } else if (fused_pool_norm) {
                 compressor_pool_norm_emit_slots_kernel<<<
                     (unsigned int)opt.slots, 256, 0, r.stream>>>(
@@ -505,7 +511,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                     (uint32_t)opt.slots, (uint32_t)kHeadDim, (uint32_t)ratio,
                     comp_row, (uint32_t)kBoundedCompRows,
                     (uint32_t)comp_state_rows, (uint32_t)comp_state_width,
-                    1.0e-6f);
+                    1.0e-6f, emit_position);
             } else {
                 compressor_pool_emit_slots_kernel<<<
                     dim3((unsigned int)((kHeadDim + block - 1) / block),
@@ -515,12 +521,13 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                     r.d_attn_comp_state_score, (uint32_t)opt.slots,
                     (uint32_t)kHeadDim, (uint32_t)ratio, comp_row,
                     (uint32_t)kBoundedCompRows, (uint32_t)comp_state_rows,
-                    (uint32_t)comp_state_width);
+                    (uint32_t)comp_state_width, emit_position);
                 compressor_norm_emit_slots_kernel<<<(unsigned int)opt.slots, 256,
                                                     0, r.stream>>>(
                     r.d_attn_comp_rows, hc->d_attn_compress_norm[layer],
                     (uint32_t)opt.slots, (uint32_t)kHeadDim, comp_row,
-                    (uint32_t)kBoundedCompRows, 1.0e-6f);
+                    (uint32_t)kBoundedCompRows, 1.0e-6f, emit_position,
+                    (uint32_t)ratio);
             }
             if (fused_pool_norm_rope_round) {
                 // RoPE and F16 rounding were already applied by the fused emit.
@@ -533,7 +540,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                     1ll - (int64_t)ratio,
                     kRopeOrigCtx, kCompressRopeFreqBase, comp_freq_scale,
                     comp_ext_factor, comp_attn_factor, kRopeYarnBetaFast,
-                    kRopeYarnBetaSlow);
+                    kRopeYarnBetaSlow, emit_position, (uint32_t)ratio);
             } else {
                 if (opt.true_ds4_attention_rope_gate) {
                     rope_tail_comp_emit_slots_kernel<<<
@@ -544,16 +551,17 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                         1ll - (int64_t)ratio,
                         kRopeOrigCtx, kCompressRopeFreqBase, comp_freq_scale,
                         comp_ext_factor, comp_attn_factor, kRopeYarnBetaFast,
-                        kRopeYarnBetaSlow);
+                        kRopeYarnBetaSlow, emit_position, (uint32_t)ratio);
                 }
                 round_comp_emit_slots_kernel<<<
                     (unsigned int)(((uint64_t)opt.slots * kHeadDim + block - 1) /
                                    block),
                     block, 0, r.stream>>>(
                     r.d_attn_comp_rows, (uint32_t)opt.slots, (uint32_t)kHeadDim,
-                    comp_row, (uint32_t)kBoundedCompRows);
+                    comp_row, (uint32_t)kBoundedCompRows, emit_position,
+                    (uint32_t)ratio);
             }
-            r.attn_comp_rows_written_layers[layer]++;
+            if (emitted) r.attn_comp_rows_written_layers[layer]++;
         }
         visible = std::max(
             visible,
@@ -572,7 +580,8 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
         attn_state_emit_ms = elapsed_ms(t_stage, now);
         t_stage = now;
     }
-    if (opt.true_ds4_attention_typed_kv_compressed_gate && emitted) {
+    if (opt.true_ds4_attention_typed_kv_compressed_gate &&
+        emit_topology_active) {
         if (!rt) {
             std::fprintf(stderr,
                          "tp_ep_true_attention_typed_kv_compressed_failed\t"
@@ -704,8 +713,9 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             current_load = 1;
         }
         sync_typed_kv_boundary(opt, ranks);
-        if (!opt.true_ds4_attention_typed_kv_skip_current_load_gate ||
-            !current_store) {
+        if (emitted &&
+            (!opt.true_ds4_attention_typed_kv_skip_current_load_gate ||
+             !current_store)) {
             for (int rank = 0; rank < kGpus; ++rank) {
                 ranks[rank].attn_comp_row_loaded_layers[layer][emitted_comp_row] = true;
                 ranks[rank].attn_comp_row_loaded_position_layers[layer][emitted_comp_row] =
@@ -967,15 +977,20 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 hc->d_indexer_compress_ape[layer], (uint32_t)opt.slots,
                 (uint32_t)kIndexerHeadDim, 4u, r.d_decode_position,
                 (uint32_t)kIndexCompStateRows, (uint32_t)kIndexCompWidth);
-            if (emitted) {
+            if (emit_topology_active) {
                 const uint32_t comp_row =
                     r.index_comp_rows_written_layers[layer] %
                     (uint32_t)kBoundedCompRows;
-                r.index_comp_row_position_layers[layer][comp_row] = opt.position;
-                r.index_comp_row_loaded_layers[layer][comp_row] = false;
+                if (emitted) {
+                    r.index_comp_row_position_layers[layer][comp_row] =
+                        opt.position;
+                    r.index_comp_row_loaded_layers[layer][comp_row] = false;
+                }
                 const uint32_t visible_after =
                     std::min(r.index_comp_rows_written_layers[layer] + 1u,
                              (uint32_t)kBoundedCompRows);
+                const uint64_t *emit_position =
+                    graph_event_order ? r.d_decode_position : nullptr;
                 if (fused_pool_norm_rope_round) {
                     compressor_pool_norm_rope_round_emit_slots_kernel<<<
                         (unsigned int)opt.slots, 256, 0, r.stream>>>(
@@ -989,7 +1004,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                         (uint32_t)kRotaryDim, r.d_decode_position, -3ll,
                         kRopeOrigCtx, kCompressRopeFreqBase, comp_freq_scale,
                         comp_ext_factor, comp_attn_factor, kRopeYarnBetaFast,
-                        kRopeYarnBetaSlow);
+                        kRopeYarnBetaSlow, emit_position);
                 } else if (fused_pool_norm) {
                     compressor_pool_norm_emit_slots_kernel<<<
                         (unsigned int)opt.slots, 256, 0, r.stream>>>(
@@ -999,7 +1014,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                         (uint32_t)opt.slots, (uint32_t)kIndexerHeadDim, 4u,
                         comp_row, (uint32_t)kBoundedCompRows,
                         (uint32_t)kIndexCompStateRows,
-                        (uint32_t)kIndexCompWidth, 1.0e-6f);
+                        (uint32_t)kIndexCompWidth, 1.0e-6f, emit_position);
                 } else {
                     compressor_pool_emit_slots_kernel<<<
                         dim3((unsigned int)((kIndexerHeadDim + block - 1) / block),
@@ -1010,12 +1025,12 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                         (uint32_t)kIndexerHeadDim, 4u, comp_row,
                         (uint32_t)kBoundedCompRows,
                         (uint32_t)kIndexCompStateRows,
-                        (uint32_t)kIndexCompWidth);
+                        (uint32_t)kIndexCompWidth, emit_position);
                     compressor_norm_emit_slots_kernel<<<(unsigned int)opt.slots,
                                                         256, 0, r.stream>>>(
                         r.d_index_comp_rows, hc->d_indexer_compress_norm[layer],
                         (uint32_t)opt.slots, (uint32_t)kIndexerHeadDim, comp_row,
-                        (uint32_t)kBoundedCompRows, 1.0e-6f);
+                        (uint32_t)kBoundedCompRows, 1.0e-6f, emit_position, 4u);
                 }
                 if (fused_pool_norm_rope_round) {
                     // RoPE and F16 rounding were already applied by the fused emit.
@@ -1028,7 +1043,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                         r.d_decode_position, -3ll,
                         kRopeOrigCtx, kCompressRopeFreqBase, comp_freq_scale,
                         comp_ext_factor, comp_attn_factor, kRopeYarnBetaFast,
-                        kRopeYarnBetaSlow);
+                        kRopeYarnBetaSlow, emit_position, 4u);
                 } else {
                     if (opt.true_ds4_attention_rope_gate) {
                         rope_tail_comp_emit_slots_kernel<<<
@@ -1039,7 +1054,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                             r.d_decode_position, -3ll,
                             kRopeOrigCtx, kCompressRopeFreqBase, comp_freq_scale,
                             comp_ext_factor, comp_attn_factor, kRopeYarnBetaFast,
-                            kRopeYarnBetaSlow);
+                            kRopeYarnBetaSlow, emit_position, 4u);
                     }
                     round_comp_emit_slots_kernel<<<
                         (unsigned int)(((uint64_t)opt.slots *
@@ -1049,7 +1064,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                         block, 0, r.stream>>>(
                         r.d_index_comp_rows, (uint32_t)opt.slots,
                         (uint32_t)kIndexerHeadDim, comp_row,
-                        (uint32_t)kBoundedCompRows);
+                        (uint32_t)kBoundedCompRows, emit_position, 4u);
                 }
                 if (rank == 0 && !opt.true_ds4_attention_typed_kv_indexer_gate) {
                     indexer_score_bounded_rows_slots_kernel<<<
@@ -1059,14 +1074,15 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                         r.d_index_comp_rows, (uint32_t)opt.slots,
                         visible_after, (uint32_t)kBoundedCompRows,
                         (uint32_t)kIndexerTopK,
-                        1.0f / sqrtf((float)(kIndexerHead * kIndexerHeadDim)));
+                        1.0f / sqrtf((float)(kIndexerHead * kIndexerHeadDim)),
+                        emit_position, 4u);
                 } else if (!opt.true_ds4_attention_typed_kv_indexer_gate) {
                     seed_single_topk_kernel<<<(unsigned int)opt.slots, 256, 0,
                                                r.stream>>>(
                         r.d_indexer_scores, r.d_indexer_topk,
                         (uint32_t)opt.slots, (uint32_t)kIndexerTopK);
                 }
-                r.index_comp_rows_written_layers[layer]++;
+                if (emitted) r.index_comp_rows_written_layers[layer]++;
             }
             CHECK_CUDA(cudaGetLastError());
         }
@@ -1081,7 +1097,8 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             indexer_state_emit_ms = elapsed_ms(t_stage, now);
             t_stage = now;
         }
-        if (opt.true_ds4_attention_typed_kv_indexer_gate && emitted) {
+        if (opt.true_ds4_attention_typed_kv_indexer_gate &&
+            emit_topology_active) {
             if (!rt) {
                 std::fprintf(stderr,
                              "tp_ep_true_attention_typed_kv_indexer_failed\t"
@@ -1222,8 +1239,9 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 current_load = 1;
             }
             sync_typed_kv_boundary(opt, ranks);
-            if (!opt.true_ds4_attention_typed_kv_skip_current_load_gate ||
-                !current_store) {
+            if (emitted &&
+                (!opt.true_ds4_attention_typed_kv_skip_current_load_gate ||
+                 !current_store)) {
                 for (int rank = 0; rank < kGpus; ++rank) {
                     ranks[rank].index_comp_row_loaded_layers[layer][bounded_row] = true;
                     ranks[rank].index_comp_row_loaded_position_layers[layer][bounded_row] =
@@ -1237,7 +1255,8 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 hc->d_indexer_q_full, hc->d_indexer_w_full,
                 ranks[0].d_index_comp_rows, (uint32_t)opt.slots, visible_after,
                 (uint32_t)kBoundedCompRows, (uint32_t)kIndexerTopK,
-                1.0f / sqrtf((float)(kIndexerHead * kIndexerHeadDim)));
+                1.0f / sqrtf((float)(kIndexerHead * kIndexerHeadDim)),
+                graph_event_order ? ranks[0].d_decode_position : nullptr, 4u);
             CHECK_CUDA(cudaGetLastError());
             for (int rank = 1; rank < kGpus; ++rank) {
                 CHECK_CUDA(cudaSetDevice(ranks[rank].device));
@@ -1280,7 +1299,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                             current_load);
             }
         }
-        if (emitted && ranks[0].d_indexer_topk) {
+        if (emit_topology_active && ranks[0].d_indexer_topk) {
             const uint64_t topk_elems =
                 (uint64_t)opt.slots * (uint64_t)kIndexerTopK;
             const size_t topk_bytes = (size_t)topk_elems * sizeof(uint32_t);
@@ -1298,11 +1317,12 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
             for (int rank = 1; rank < kGpus; ++rank) {
                 CHECK_CUDA(cudaSetDevice(ranks[rank].device));
                 if (graph_event_order) {
-                    copy_u32_kernel<<<
+                    copy_u32_if_emitted_kernel<<<
                         (unsigned int)((topk_elems + block - 1) / block),
                         block, 0, ranks[rank].stream>>>(
                         ranks[rank].d_indexer_topk, ranks[0].d_indexer_topk,
-                        topk_elems);
+                        topk_elems, ranks[rank].d_decode_position,
+                        (uint32_t)ratio);
                     CHECK_CUDA(cudaGetLastError());
                 }
             }
@@ -1328,7 +1348,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
     reference_diff_ms =
         elapsed_ms(diff_start, std::chrono::steady_clock::now());
     const auto shift_start = std::chrono::steady_clock::now();
-    if (emitted && ratio == 4) {
+    if (emit_topology_active && ratio == 4) {
         for (int rank = 0; rank < kGpus; ++rank) {
             RankState &r = ranks[rank];
             CHECK_CUDA(cudaSetDevice(r.device));
@@ -1340,7 +1360,8 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                 block, 0, r.stream>>>(
                 r.d_attn_comp_state_kv, r.d_attn_comp_state_score,
                 (uint32_t)opt.slots, (uint32_t)comp_width,
-                (uint32_t)comp_state_rows, (uint32_t)comp_state_width);
+                (uint32_t)comp_state_rows, (uint32_t)comp_state_width,
+                graph_event_order ? r.d_decode_position : nullptr, 4u);
             if (opt.true_ds4_indexer_attention_gate && r.d_index_comp_state_kv &&
                 r.d_index_comp_state_score) {
                 compressor_shift_ratio4_slots_kernel<<<
@@ -1352,7 +1373,8 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                     r.d_index_comp_state_kv, r.d_index_comp_state_score,
                     (uint32_t)opt.slots, (uint32_t)kIndexCompWidth,
                     (uint32_t)kIndexCompStateRows,
-                    (uint32_t)kIndexCompWidth);
+                    (uint32_t)kIndexCompWidth,
+                    graph_event_order ? r.d_decode_position : nullptr, 4u);
             }
             CHECK_CUDA(cudaGetLastError());
         }

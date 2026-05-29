@@ -33,6 +33,22 @@ __global__ void copy_u32_kernel(uint32_t *dst, const uint32_t *src, uint64_t n) 
     }
 }
 
+__global__ void copy_u32_if_emitted_kernel(uint32_t *dst,
+                                           const uint32_t *src,
+                                           uint64_t n,
+                                           const uint64_t *decode_position,
+                                           uint32_t ratio) {
+    if (ratio == 0u || !decode_position ||
+        (((*decode_position + 1ull) % (uint64_t)ratio) != 0ull)) {
+        return;
+    }
+    for (uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+         i < n;
+         i += (uint64_t)blockDim.x * gridDim.x) {
+        dst[i] = src[i];
+    }
+}
+
 __device__ float f8_e8m0_to_f32_dev(uint8_t e) {
     return __uint_as_float(e == 0 ? 0x00400000u : ((uint32_t)e << 23));
 }

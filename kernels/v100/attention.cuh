@@ -30,6 +30,13 @@ __device__ __forceinline__ uint32_t decode_position_u32_dev(
     return (uint32_t)(base + (uint64_t)delta);
 }
 
+__device__ __forceinline__ bool emitted_position_dev(
+    const uint64_t *decode_position,
+    uint32_t ratio) {
+    if (ratio == 0u || !decode_position) return true;
+    return (((*decode_position + 1ull) % (uint64_t)ratio) == 0ull);
+}
+
 __device__ __forceinline__ uint32_t decode_raw_row_dev(
     const uint64_t *decode_position,
     uint32_t raw_rows) {
@@ -272,10 +279,12 @@ __global__ void compressor_pool_emit_slots_kernel(float *rows,
                                                   uint32_t comp_row,
                                                   uint32_t row_cap,
                                                   uint32_t max_state_rows,
-                                                  uint32_t max_width) {
+                                                  uint32_t max_width,
+                                                  const uint64_t *emit_position = nullptr) {
     const uint32_t slot = blockIdx.y;
     const uint32_t d = blockIdx.x * blockDim.x + threadIdx.x;
-    if (slot >= slots || d >= head_dim || comp_row >= row_cap || ratio == 0u) return;
+    if (!emitted_position_dev(emit_position, ratio) || slot >= slots ||
+        d >= head_dim || comp_row >= row_cap || ratio == 0u) return;
     const uint32_t coff = ratio == 4u ? 2u : 1u;
     const uint32_t width = coff * head_dim;
     if (width > max_width) return;
@@ -321,9 +330,12 @@ __global__ void compressor_norm_emit_slots_kernel(float *rows,
                                                   uint32_t head_dim,
                                                   uint32_t comp_row,
                                                   uint32_t row_cap,
-                                                  float eps) {
+                                                  float eps,
+                                                  const uint64_t *emit_position = nullptr,
+                                                  uint32_t emit_ratio = 0u) {
     const uint32_t slot = blockIdx.x;
-    if (slot >= slots || comp_row >= row_cap) return;
+    if (!emitted_position_dev(emit_position, emit_ratio) ||
+        slot >= slots || comp_row >= row_cap) return;
     float *row = rows + ((uint64_t)slot * row_cap + comp_row) * (uint64_t)head_dim;
     float local_max = 0.0f;
     for (uint32_t d = threadIdx.x; d < head_dim; d += blockDim.x) {
@@ -417,9 +429,11 @@ __global__ void compressor_pool_norm_emit_slots_kernel(float *rows,
                                                        uint32_t row_cap,
                                                        uint32_t max_state_rows,
                                                        uint32_t max_width,
-                                                       float eps) {
+                                                       float eps,
+                                                       const uint64_t *emit_position = nullptr) {
     const uint32_t slot = blockIdx.x;
-    if (slot >= slots || head_dim > 512u || comp_row >= row_cap || ratio == 0u) {
+    if (!emitted_position_dev(emit_position, ratio) ||
+        slot >= slots || head_dim > 512u || comp_row >= row_cap || ratio == 0u) {
         return;
     }
     const uint32_t coff = ratio == 4u ? 2u : 1u;
@@ -486,9 +500,11 @@ __global__ void compressor_pool_norm_rope_round_emit_slots_kernel(
     float ext_factor,
     float attn_factor,
     float beta_fast,
-    float beta_slow) {
+    float beta_slow,
+    const uint64_t *emit_position = nullptr) {
     const uint32_t slot = blockIdx.x;
-    if (slot >= slots || head_dim > 512u || comp_row >= row_cap ||
+    if (!emitted_position_dev(emit_position, ratio) ||
+        slot >= slots || head_dim > 512u || comp_row >= row_cap ||
         ratio == 0u || n_rot > head_dim || (n_rot & 1u)) {
         return;
     }
@@ -591,9 +607,13 @@ __global__ void rope_tail_comp_emit_slots_kernel(float *rows,
                                                  float ext_factor,
                                                  float attn_factor,
                                                  float beta_fast,
-                                                 float beta_slow) {
+                                                 float beta_slow,
+                                                 const uint64_t *emit_position = nullptr,
+                                                 uint32_t emit_ratio = 0u) {
     const uint32_t slot = blockIdx.x;
-    if (slot >= slots || comp_row >= row_cap || n_rot > head_dim || (n_rot & 1u)) return;
+    if (!emitted_position_dev(emit_position, emit_ratio) ||
+        slot >= slots || comp_row >= row_cap || n_rot > head_dim ||
+        (n_rot & 1u)) return;
     float *xr = rows + ((uint64_t)slot * row_cap + comp_row) * (uint64_t)head_dim;
     const uint32_t n_nope = head_dim - n_rot;
     const uint32_t pos =
@@ -649,9 +669,12 @@ __global__ void rope_tail_round_comp_emit_slots_kernel(float *rows,
                                                        float ext_factor,
                                                        float attn_factor,
                                                        float beta_fast,
-                                                       float beta_slow) {
+                                                       float beta_slow,
+                                                       const uint64_t *emit_position = nullptr,
+                                                       uint32_t emit_ratio = 0u) {
     const uint32_t slot = blockIdx.x;
-    if (slot >= slots || comp_row >= row_cap || n_rot > head_dim ||
+    if (!emitted_position_dev(emit_position, emit_ratio) ||
+        slot >= slots || comp_row >= row_cap || n_rot > head_dim ||
         (n_rot & 1u)) {
         return;
     }
@@ -704,10 +727,13 @@ __global__ void round_comp_emit_slots_kernel(float *rows,
                                              uint32_t slots,
                                              uint32_t head_dim,
                                              uint32_t comp_row,
-                                             uint32_t row_cap) {
+                                             uint32_t row_cap,
+                                             const uint64_t *emit_position = nullptr,
+                                             uint32_t emit_ratio = 0u) {
     const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
     const uint64_t n = (uint64_t)slots * head_dim;
-    if (i >= n || comp_row >= row_cap) return;
+    if (!emitted_position_dev(emit_position, emit_ratio) ||
+        i >= n || comp_row >= row_cap) return;
     const uint32_t slot = (uint32_t)(i / head_dim);
     const uint32_t d = (uint32_t)(i - (uint64_t)slot * head_dim);
     float *row = rows + ((uint64_t)slot * row_cap + comp_row) * (uint64_t)head_dim;
@@ -743,11 +769,14 @@ __global__ void compressor_shift_ratio4_slots_kernel(float *state_kv,
                                                      uint32_t slots,
                                                      uint32_t width,
                                                      uint32_t max_state_rows,
-                                                     uint32_t max_width) {
+                                                     uint32_t max_width,
+                                                     const uint64_t *emit_position = nullptr,
+                                                     uint32_t emit_ratio = 0u) {
     const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
     const uint64_t half = 4ull * width;
     const uint64_t n = (uint64_t)slots * half;
-    if (i >= n || width > max_width || max_state_rows < 8u) return;
+    if (!emitted_position_dev(emit_position, emit_ratio) ||
+        i >= n || width > max_width || max_state_rows < 8u) return;
     const uint32_t slot = (uint32_t)(i / half);
     const uint32_t j = (uint32_t)(i - (uint64_t)slot * half);
     const uint64_t base = (uint64_t)slot * max_state_rows * (uint64_t)max_width;
@@ -822,9 +851,12 @@ __global__ void indexer_score_bounded_rows_slots_kernel(float *scores,
                                                         uint32_t visible_rows,
                                                         uint32_t row_cap,
                                                         uint32_t top_k,
-                                                        float scale) {
+                                                        float scale,
+                                                        const uint64_t *emit_position = nullptr,
+                                                        uint32_t emit_ratio = 0u) {
     const uint32_t slot = blockIdx.x;
-    if (slot >= slots || visible_rows == 0u || visible_rows > row_cap) return;
+    if (!emitted_position_dev(emit_position, emit_ratio) ||
+        slot >= slots || visible_rows == 0u || visible_rows > row_cap) return;
     __shared__ float partial[256];
     for (uint32_t row = 0; row < visible_rows; ++row) {
         const float *krow =
