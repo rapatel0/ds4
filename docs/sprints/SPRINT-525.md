@@ -62,3 +62,32 @@ Appended to the previous structural cleanup instead of opening a new sprint.
   `CUDA_ARCH=sm_70 make -n appliance/ds4-v100-tp-ep-appliance`
 - Remote V100 build:
   `CUDA_ARCH=sm_70 make -B -j80 appliance/ds4-v100-tp-ep-appliance`
+
+## Follow-on: High Tooling Cleanup
+
+Appended to the same cleanup stream after the Makefile cleanup.
+
+### Changes
+
+- Converted `tools/ds4-v100-run-appliance.sh` into a small compatibility
+  dispatcher.
+- Moved the PP/base implementation into
+  `tools/ds4-v100-run-pp-appliance.sh`.
+- Kept `tools/ds4-v100-run-tp-ep-appliance.sh` as the explicit TP/EP
+  launcher.
+- Left MTP smokes/support untouched; that code may be needed when MTP work
+  resumes.
+
+### Remaining High Debt
+
+- `tools/ds4-v100-tp-ep-profile.py` remains the active TP/EP collector and
+  still needs a real six-bucket cleanup instead of a wrapper move.
+- `tools/ds4-v100-sustained-decode-bench.sh` remains active via production
+  and practical-serving gates.
+- `tools/ds4-v100-gate.sh` remains active as the umbrella gate harness.
+
+### Validation
+
+- `bash -n tools/ds4-v100-run-appliance.sh tools/ds4-v100-run-pp-appliance.sh tools/ds4-v100-run-tp-ep-appliance.sh`
+- `tools/ds4-v100-run-appliance.sh --check --allow-missing`
+- `DS4_V100_SERVE_MODE=tp-ep tools/ds4-v100-run-appliance.sh --check --allow-missing`
