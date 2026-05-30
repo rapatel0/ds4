@@ -377,8 +377,37 @@ the MTPBlock.forward (Phase A) sprint. The appliance decode is a deeply
 43-layer-specialized optimized pipeline; adding a 44th layer touches its core
 caches. Alternative (disable the optimization gates for the MTP layer to use a
 baseline path) is uncertain -- the decode loop has no obvious non-optimized
-attention-projection fallback. Decision/implementation of the optimized-infra
-extension is the next substantial chunk.
+attention-projection fallback.
+
+### Architecture re-evaluation (2026-05-30): option (a) is larger/riskier than (b)
+
+Quantifying option (a) (run_layer reuse): `SharedHcControls` (runtime_pack.cu:903)
+alone has ~30 per-layer `[43]` arrays (d_attn_norm_weight, d_q_a/kv_a_norm_weight,
+d_attn_fn/base/scale[+_rank], d_ffn_fn/base/scale[+_rank], d_ffn_norm_weight,
+d_router_w[+_ep/_shard], d_router_bias, d_router_hash, ...), plus `SharedDenseOps`
+and `DenseF16Cache`. Extending ALL of them to [44] + their loaders to populate
+layer 43 from the MTP contract is a large change to the CORE, already-validated
+serving structures -- higher risk (a subtle bug there regresses the shipped
+1.22x serving) for relatively little MTP-specific reuse benefit.
+
+This flips the earlier preference. **Option (b) -- a dedicated EP MTP forward --
+is now the sounder path:** it's ISOLATED from the validated serving structs
+(no [43]->[44] migration of core caches), and the MTP attention is genuinely a
+different model (raw-SWA draft, `mtp_step.cu`'s `raw_t`) that `mtp_step.cu`
+already implements. The EP version reuses the turbomind mxfp4 EP routed-FFN
+dispatch (`ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_f32`)
++ the engine's dense-F8 / attention / HC primitive kernels directly, sourcing
+weights from the Phase-2 bound structures (`MtpNonExpertWeights` + `mtp_layer`),
+in a self-contained `run_mtp_ep_draft()` -- NOT through run_layer's optimized
+infra. The committed kLayers->44 + KV-slot + guard changes are gated to layer 43
+(no serving impact) and the KV slot still serves the MTP raw-SWA.
+
+This is the key Phase-A decision: implement the dedicated EP MTP forward
+(isolated, mtp_step.cu-templated, EP-FFN-reusing) rather than migrate the core
+serving caches. That dedicated forward + its prologue/head + sidecar-logit
+validation is the substantial Phase-A sprint.
+
+Decision/implementation of the dedicated EP MTP forward is the next chunk.
 
 ## Status
 
