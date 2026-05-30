@@ -73,12 +73,23 @@ layer-43 binding through the unified path, and the speculative-decode loop.
    (`mtp-contract2` already has the 24 EP rows) through turbomind-pack +
    `appliance-pack --fuse-gate-up-interleaved`, so each rank gets its 32-expert
    slice and gate/up is fused. (The earlier single-GPU emission ran against the
-   wrong owning_gpu=0 index and without the fuse flag.) Validate: 8 shards with
-   **equal** expert bytes per rank (EP is balanced, unlike LP), and a fused
-   `blk.43.ffn_gate_up_exps` turbomind row matching a main-model `blk.N` row.
-2. **Runtime layer-43 bind.** Bind layer 43 through `runtime_pack.cu` like layers
-   0-42 (turbomind_gate_up_view/down_view + dense/attn TP shards + the MTP
-   `enorm`/`e_proj`). Validate: appliance loads layer 43, all ranks non-empty.
+   wrong owning_gpu=0 index and without the fuse flag.)
+
+   **Storage is by-layer, NOT equal-shard (firsthand-confirmed).** EP-split
+   happens at LOAD, not in the pack: `engine/turbomind_bindings.cu:138`
+   computes `global_expert = rank * kLocalExperts + active[i]`
+   (`kLocalExperts=32`, `active=[0..32)`), so each rank reads its own
+   `[rank*32, rank*32+32)` slice from the single by-layer sidecar blob via
+   `weight_offset + global_expert*weight_bytes_per_expert`. So the MTP layer-43
+   experts are one by-layer blob (256 experts, fused gate_up, mxfp4) on one
+   owning_gpu, exactly like s181 (shards stay unequal). Validate: a fused
+   `blk.43.ffn_gate_up_exps` turbomind-index row (256 experts) matching a
+   main-model `blk.N` row, NOT equal shard sizes.
+2. **Runtime layer-43 bind.** Two loops hardcode `layer < 43` and must become
+   `< 44`: (a) `engine/runtime_pack.cu` (dense/attn/HC/norm + the MTP
+   `enorm`/`e_proj`), and (b) `engine/turbomind_bindings.cu:198`
+   `open_shared_expert_bindings` (the per-rank 32-expert blob load). Validate:
+   appliance loads layer 43, each rank binds its 32-expert slice.
 3. **MTPBlock.forward (EP).** Add the embedding-combine prologue + run layer 43
    through the shared EP per-layer execution + the output head. Validate against
    the LP sidecar's MTP logits as a reference (same draft distribution).
