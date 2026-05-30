@@ -1654,39 +1654,22 @@ int run_mtp_prologue(const Options &opt,
     if (launch_resident_f8_dense(opt, mtp_dense->h_proj, ranks) != 0) return 7;
     if (sync_all_devices(opt) != 0) return 3;
 
-    /* 7. Per rank: comb = repeat(e1) + h1; partial flat sum-of-squares. */
+    /* 7. mtp_in = repeat(e1) across kHcRows + h1, written DIRECTLY into
+     * d_final_hc_shard for run_layer(43). The canonical ds4.c MTP prologue ends
+     * at this add (ds4.c:13620-13625: add -> cur_hc -> decode_layer) -- there is
+     * NO post-combine flat RMS-norm. (The earlier flat norm followed the LP
+     * sidecar mtp_step.cu, which never worked; it corrupted the block input.)
+     * The block's own input norm handles normalization. */
     const uint64_t comb_elems = (uint64_t)opt.slots * kHcRows * shard;
-    const uint32_t per_slot = kHcRows * shard;       /* the rank's 2048 shard cols */
+    (void)eps;
     for (int gpu = 0; gpu < kGpus; ++gpu) {
         CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
         cudaStream_t st = ranks[gpu].stream;
         mtp_repeat_rows_kernel<<<(unsigned int)((comb_elems + 255) / 256), 256, 0, st>>>(
-            scratch.d_comb[gpu], mtp_dense->e_proj.d_out[(size_t)gpu],
+            ranks[gpu].d_final_hc_shard, mtp_dense->e_proj.d_out[(size_t)gpu],
             (uint32_t)opt.slots, (uint32_t)kHcRows, shard);
         add_f32_kernel<<<(unsigned int)((comb_elems + 255) / 256), 256, 0, st>>>(
-            scratch.d_comb[gpu], mtp_dense->h_proj.d_out[(size_t)gpu], comb_elems);
-        mtp_partial_sumsq_kernel<<<(unsigned int)((opt.slots + 255) / 256), 256, 0, st>>>(
-            scratch.d_sumsq[gpu], scratch.d_comb[gpu], (uint32_t)opt.slots, per_slot);
-        CHECK_CUDA(cudaGetLastError());
-    }
-    if (sync_all_devices(opt) != 0) return 3;
-    /* 8. Cross-rank sum-of-squares all-reduce (the flat norm is over all kHcRows*kHidden). */
-    CHECK_NCCL(ncclGroupStart());
-    for (int gpu = 0; gpu < kGpus; ++gpu) {
-        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
-        CHECK_NCCL(ncclAllReduce(scratch.d_sumsq[gpu], scratch.d_sumsq[gpu],
-                                 (size_t)opt.slots, ncclFloat, ncclSum,
-                                 ranks[gpu].compose_nccl, ranks[gpu].stream));
-    }
-    CHECK_NCCL(ncclGroupEnd());
-    /* 9. Scale into d_final_hc_shard (the MTP input run_layer(43) consumes). */
-    const uint32_t total_dim = (uint32_t)kHcRows * (uint32_t)kHidden;  /* 16384 */
-    for (int gpu = 0; gpu < kGpus; ++gpu) {
-        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
-        cudaStream_t st = ranks[gpu].stream;
-        mtp_scale_flat_kernel<<<(unsigned int)((comb_elems + 255) / 256), 256, 0, st>>>(
-            ranks[gpu].d_final_hc_shard, scratch.d_comb[gpu], scratch.d_sumsq[gpu],
-            (uint32_t)opt.slots, per_slot, total_dim, eps);
+            ranks[gpu].d_final_hc_shard, mtp_dense->h_proj.d_out[(size_t)gpu], comb_elems);
         CHECK_CUDA(cudaGetLastError());
     }
     if (sync_all_devices(opt) != 0) return 3;
