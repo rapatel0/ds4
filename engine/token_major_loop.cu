@@ -356,6 +356,15 @@ int run_token_major_serving_loop(const Options &opt,
             opt.mtp_contract_path) {
             Options mtp_opt = opt;
             mtp_opt.layer = 43;
+            /* Sprint 585: the MTP layer must get the SAME per-step opt overrides
+             * the main 0-42 layers get (position/decode_steps/raw-SWA valid rows/
+             * warmup); mtp_opt=opt alone left these at stale request defaults, so
+             * the MTP attention ran with a wrong raw-SWA window. */
+            mtp_opt.position = opt.position + (uint64_t)step;
+            mtp_opt.decode_steps = 1;
+            mtp_opt.true_ds4_attention_raw_valid_rows =
+                std::max(1u, std::min((uint32_t)(step + 1), (uint32_t)kRawSwaRows));
+            mtp_opt.warmup = 0;
             /* Sprint 585: preserve the main model's final hidden (layer-42 output)
              * before the MTP prologue/body overwrite d_final_hc_shard, so the main
              * output head still produces the correct served token. Restored after
