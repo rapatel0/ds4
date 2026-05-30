@@ -357,6 +357,7 @@ int run_token_major_serving_loop(const Options &opt,
             opt.mtp_contract_path) {
             Options mtp_opt = opt;
             mtp_opt.layer = 43;
+            mtp_opt.pack_dir = opt.mtp_pack_dir ? opt.mtp_pack_dir : opt.pack_dir;
             /* Sprint 585: the MTP layer must get the SAME per-step opt overrides
              * the main 0-42 layers get (position/decode_steps/raw-SWA valid rows/
              * warmup); mtp_opt=opt alone left these at stale request defaults, so

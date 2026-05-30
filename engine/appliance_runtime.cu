@@ -758,6 +758,7 @@ int run_tp_ep_appliance(Options opt) {
     if (shared_expert_bindings.mtp_initialized && opt.mtp_contract_path) {
         Options mtp_opt = opt;
         mtp_opt.layer = 43;
+        mtp_opt.pack_dir = opt.mtp_pack_dir ? opt.mtp_pack_dir : opt.pack_dir;
         LayerRunSummary ms;
         SharedTpRuntime *tp_runtime_arg =
             shared_tp_runtime.initialized ? &shared_tp_runtime : nullptr;
