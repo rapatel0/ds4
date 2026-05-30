@@ -472,6 +472,29 @@ int run_tp_ep_appliance(Options opt) {
     SharedOutputHead *shared_output_head_arg =
         shared_output_head.initialized ? &shared_output_head : nullptr;
 
+    /* MTP (layer 43) output head: shares the LM matmul + working buffers,
+     * overrides the head HC weights with the MTP's (no-op unless --mtp-contract).
+     * Consumed by the draft-logit head in the specdec loop. */
+    SharedOutputHead mtp_output_head;
+    if (shared_output_head.initialized &&
+        load_mtp_output_head(opt, &shared_output_head, &mtp_output_head) != 0) {
+        std::fprintf(stderr, "tp_ep MTP output-head load failed\n");
+        close_shared_output_head(opt, &shared_output_head);
+        close_shared_hc_controls(opt, &shared_hc_controls);
+        free_shared_dense_ops(&shared_dense_ops, opt);
+        close_shared_expert_bindings(&shared_expert_bindings);
+        close_shared_tp_runtime(&shared_tp_runtime);
+        close_shared_rank_buffers(&shared_rank_buffers);
+        close_shared_api(&shared_api);
+        if (shared_dense_f16_cache) {
+            free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+        }
+        return 14;
+    }
+    SharedOutputHead *mtp_output_head_arg =
+        (shared_output_head.initialized && opt.mtp_contract_path) ? &mtp_output_head : nullptr;
+    (void)mtp_output_head_arg;  /* threaded to the draft head next */
+
     SharedTokenEmbedding shared_token_embedding;
     if (opt.serve_http) {
         std::vector<ContractRow> all_rows;

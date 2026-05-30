@@ -483,6 +483,66 @@ int open_shared_output_head(const Options &opt,
     return 0;
 }
 
+/* MTP (layer 43) output head: shares the main head's LM matmul (output.weight)
+ * + working buffers, overriding only the head HC weights (hc_head_* + output_norm)
+ * with the MTP's, loaded from the MTP contract (blk.43.*). The MTP predicts in
+ * the same vocab, so the LM head is shared. Produces draft logits from the MTP
+ * body output via run_shared_output_head_from_rank_hc. No-op unless MTP set. */
+int load_mtp_output_head(const Options &opt, const SharedOutputHead *main_head,
+                         SharedOutputHead *mtp_head) {
+    if (!opt.mtp_contract_path || !opt.mtp_pack_dir) return 0;
+    if (!main_head || !main_head->initialized || !mtp_head) return 1;
+    *mtp_head = *main_head;  /* share LM head (d_w), working buffers, vocab, streams */
+    std::vector<ContractRow> rows;
+    LayerStats st;
+    if (parse_contract(opt.mtp_contract_path, 43, &rows, &st) != 0 || st.bad_rows != 0) {
+        std::fprintf(stderr, "MTP output-head contract parse failed\n");
+        return 2;
+    }
+    Options mopt = opt;
+    mopt.pack_dir = opt.mtp_pack_dir;
+    std::vector<float> hc_head_fn, hc_head_base, hc_head_scale, output_norm;
+    if (load_control_f32(mopt, rows, "blk.43.hc_head_fn", (size_t)4 * 4 * kHidden, &hc_head_fn) ||
+        load_control_f32(mopt, rows, "blk.43.hc_head_base", 4, &hc_head_base) ||
+        load_control_f32(mopt, rows, "blk.43.hc_head_scale", 1, &hc_head_scale) ||
+        load_control_f32(mopt, rows, "blk.43.norm.weight", kHidden, &output_norm)) {
+        std::fprintf(stderr, "MTP output-head HC/norm load failed\n");
+        return 3;
+    }
+    const uint64_t hc_shard_cols = 4ull * (uint64_t)(kHidden / kGpus);
+    const uint32_t shard_cols = (uint32_t)(kHidden / kGpus);
+    std::vector<float> head_fn_rank((size_t)hc_shard_cols * 4u);
+    std::vector<float> output_norm_rank((size_t)shard_cols);
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        for (uint32_t c = 0; c < hc_shard_cols; ++c) {
+            const uint64_t global_c = (uint64_t)gpu * hc_shard_cols + c;
+            for (uint32_t h = 0; h < 4u; ++h)
+                head_fn_rank[(uint64_t)c * 4ull + h] =
+                    hc_head_fn[(uint64_t)h * (4ull * (uint64_t)kHidden) + global_c];
+        }
+        for (uint32_t c = 0; c < shard_cols; ++c)
+            output_norm_rank[c] = output_norm[(uint64_t)gpu * shard_cols + c];
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        /* override the aliased head-HC pointers with fresh MTP-owned buffers */
+        CHECK_CUDA(cudaMalloc(&mtp_head->d_head_fn_rank[gpu], head_fn_rank.size() * sizeof(float)));
+        CHECK_CUDA(cudaMemcpy(mtp_head->d_head_fn_rank[gpu], head_fn_rank.data(),
+                              head_fn_rank.size() * sizeof(float), cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMalloc(&mtp_head->d_head_base_rank[gpu], hc_head_base.size() * sizeof(float)));
+        CHECK_CUDA(cudaMemcpy(mtp_head->d_head_base_rank[gpu], hc_head_base.data(),
+                              hc_head_base.size() * sizeof(float), cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMalloc(&mtp_head->d_head_scale_rank[gpu], hc_head_scale.size() * sizeof(float)));
+        CHECK_CUDA(cudaMemcpy(mtp_head->d_head_scale_rank[gpu], hc_head_scale.data(),
+                              hc_head_scale.size() * sizeof(float), cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMalloc(&mtp_head->d_output_norm_rank[gpu], output_norm_rank.size() * sizeof(float)));
+        CHECK_CUDA(cudaMemcpy(mtp_head->d_output_norm_rank[gpu], output_norm_rank.data(),
+                              output_norm_rank.size() * sizeof(float), cudaMemcpyHostToDevice));
+    }
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    std::printf("tp_ep_mtp_output_head_load\tlayer\t43\tvocab\t%d\tPASS\n", mtp_head->vocab);
+    std::fflush(stdout);
+    return 0;
+}
+
 void close_shared_output_head(const Options &opt, SharedOutputHead *out) {
     if (!out || !out->initialized) return;
     for (int gpu = 0; gpu < kGpus; ++gpu) {
