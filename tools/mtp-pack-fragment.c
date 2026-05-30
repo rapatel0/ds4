@@ -44,9 +44,16 @@ static const nm FAM[]={
  {"attn_q_a.weight","attn.wq_a"},{"attn_q_b.weight","attn.wq_b"},{"attn_q_a_norm.weight","attn.q_norm"},
  {"attn_kv.weight","attn.wkv"},{"attn_kv_a_norm.weight","attn.kv_norm"},{"attn_output_a.weight","attn.wo_a"},
  {"attn_output_b.weight","attn.wo_b"},{"attn_sinks.weight","attn.attn_sink"},{"attn_norm.weight","attn_norm"},
- {"enorm.weight","enorm"},{"hnorm.weight","hnorm"},{"e_proj.weight","e_proj"},{"ffn_norm.weight","ffn_norm"},
- {"ffn_gate_inp.weight","ffn.gate"},{"ffn_gate_shexp.weight","ffn.shared_experts.w1"},
+ {"enorm.weight","enorm"},{"hnorm.weight","hnorm"},{"norm.weight","norm"},
+ {"e_proj.weight","e_proj"},{"h_proj.weight","h_proj"},{"ffn_norm.weight","ffn_norm"},
+ {"ffn_gate_inp.weight","ffn.gate"},{"exp_probs_b","ffn.gate.bias"},
+ {"ffn_gate_shexp.weight","ffn.shared_experts.w1"},
  {"ffn_up_shexp.weight","ffn.shared_experts.w3"},{"ffn_down_shexp.weight","ffn.shared_experts.w2"},
+ /* hyper-connection families (F32, bare names) -- same gguf convention as layers 0-42 */
+ {"hc_attn_fn","hc_attn_fn"},{"hc_attn_scale","hc_attn_scale"},{"hc_attn_base","hc_attn_base"},
+ {"hc_ffn_fn","hc_ffn_fn"},{"hc_ffn_scale","hc_ffn_scale"},{"hc_ffn_base","hc_ffn_base"},
+ /* MTP-specific output-head HC families (F32, bare) */
+ {"hc_head_fn","hc_head_fn"},{"hc_head_scale","hc_head_scale"},{"hc_head_base","hc_head_base"},
 };
 /* read+repack one tensor given hf base name (auto-route by dtype); appends weight (+optional scale). returns 0 if absent */
 static int conv_one(const char*hf,ot*out,char*srcdt,char*srcshape){
