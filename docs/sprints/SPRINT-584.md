@@ -218,12 +218,16 @@ So the EP MTP integration is in the replay pipeline, NOT `mtp_step.cu`:
 - **Phase 5 (the specdec loop):** wire draft -> `ds4_replay_verify_token_block`
   (exists) -> accept/reject -> advance, coordinated across the 8 ranks.
 
-**Runtime-validation prerequisite:** layer 43 must be in the SAME pack +
-contract the appliance loads. Per MTP_IMPLEMENTATION.md option (b), the clean
-path is a unified GGUF (append the MTP fragment to the 146 GB main GGUF) re-packed
-to layers 0-43, OR a merged contract/turbomind-index that references both the
-s181 shards (0-42) and the `mtp-shards-ep` layer-43 blob. Either is a real pack
-step; the bind/forward can be compiled + unit-checked first.
+**Runtime-validation prerequisite — DE-RISKED (no re-pack needed).** Because
+the MTP layer uses DEDICATED storage (not the main [43] arrays), it can load
+from its OWN pack dir. `pack_descriptor_set` already takes a `pack_dir` arg
+(`turbomind_bindings.cu:110/113`: `sidecar_path = path_join(pack_dir, sidecar_file)`).
+So the appliance loads layers 0-42 from the s181 pack and layer 43 (MTP) from
+the `mtp-shards-ep` + `mtp-contract-ep` artifacts via a dedicated bind + a new
+`--mtp-pack-dir`/`--mtp-contract` option. No unified 146 GB re-pack; the MTP
+weights stay decoupled (like the sidecar) but in the unified EP format
+(mxfp4/turbomind, fused gate_up, EP-split 32/rank). This is validatable: the
+appliance loads the MTP layer from its own dir, byte counts match, no crash.
 
 ## Status
 
