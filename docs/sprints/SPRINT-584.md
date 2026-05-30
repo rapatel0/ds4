@@ -161,9 +161,46 @@ contract's `efirst`/`ecount` (`turbomind_bindings.cu:138`). Artifacts:
 `/workspace/mtp-fragment-ep.gguf`, `mtp-manifest-ep.tsv`, `mtp-shards-ep/`
 (shards + fused turbomind-pack-index), `mtp-contract-ep/` (EP contract).
 
+## Phase 2 design (runtime layer-43 bind) — scoped 2026-05-30
+
+**Key finding: a naive `layer < 43` -> `< 44` loop extension is WRONG.**
+`ds4_layer_ratio(43)` returns 128 (43 is odd, >=2), so the standard per-layer
+binding in `runtime_pack.cu` would try to load `attn_compress_ape` / `indexer`
+tensors for layer 43 -- but the MTP attention has NONE of those. The safetensors
+`mtp.0.attn.*` set is only `wq_a/b`, `wkv`, `wo_a/b`, `q_norm`, `kv_norm`,
+`attn_sink` -- the simple ratio=0 attention form. So the MTP layer needs
+DEDICATED binding, not the ratio-driven 0-42 loop.
+
+**The binding template already exists.** `engine/mtp_step.cu`'s `mtpf_views`
+struct (lines 34-67) is exactly the 32-family MTP weight set: `enorm`, `hnorm`,
+`e_proj`, `h_proj`, `hc_attn_{fn,scale,base}`, `attn_norm`, `attn_q_a`,
+`attn_q_a_norm`, `attn_q_b`, `attn_kv`, `attn_kv_norm`, `attn_sinks`,
+`attn_output_a/b`, `hc_ffn_{fn,scale,base}`, `ffn_norm`, `ffn_gate_inp`,
+`exp_probs_b`, `ffn_{gate,up,down}_shexp`, `ffn_{gate,up,down}_exps`,
+`hc_head_{fn,scale,base}`, `output_norm` (= our `blk.43.norm.weight`). Ratio=0
+(no compress/indexer), prologue + head -- matches our 32-family pack exactly.
+
+**The only EP change vs the LP sidecar bind:** experts move from
+`ds4_gpu_q4_k_expert_view` (bound via `ds4_mtp_sidecar_*` from the Q4_K sidecar)
+to the turbomind mxfp4 EP-split views, bound via
+`turbomind_bindings.cu` `open_shared_expert_bindings` /
+`pack_descriptor_set` -- the same path layers 0-42 use, which slices 32/rank
+at load (`global_expert = rank*32 + active[i]`). The non-expert families
+(norms/hc/proj, all F32/F8 control+dense) load from the unified pack-ep
+artifacts via `runtime_pack.cu`'s control/dense loaders.
+
+**Phase 2 implementation:** (a) extend `open_shared_expert_bindings`
+`layer < 43` -> `< 44` + size `LayerExpertCache layers[]` for 44, so layer 43's
+experts load from `mtp-shards-ep` + `mtp-contract-ep`; (b) add a dedicated
+MTP non-expert bind (the 29 non-expert families) into MTP storage, sourced
+from the unified pack (not the sidecar). Validate: appliance loads layer 43,
+each rank binds its 32-expert slice + the non-expert families, no crash, byte
+counts match. Requires a CUDA rebuild + load test on the pod.
+
 ## Status
 
-Phase 1 (EP=8 MTP weight pack) COMPLETE + validated. Prior MTP weight-pack
-work was LP-framed and is superseded. Next: Phase 2 -- runtime layer-43 bind
-(extend `runtime_pack.cu` and `turbomind_bindings.cu:198` `layer < 43` -> `< 44`,
-+ the MTP `enorm`/`e_proj`/`h_proj`/`hnorm`/`norm`/`hc_head_*` families).
+Phase 1 (EP=8 MTP weight pack) COMPLETE + validated. Phase 2 design scoped:
+dedicated MTP bind (NOT a ratio-driven loop extension -- ds4_layer_ratio(43)=128
+mismatch), templated on `mtp_step.cu` `mtpf_views`, experts via the shared
+turbomind EP path. Implementation (engine + CUDA build + load test) is the next
+chunk and is coupled to Phase 3 (the EP forward) through the weight struct.
