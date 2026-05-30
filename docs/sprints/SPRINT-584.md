@@ -258,12 +258,48 @@ replicated_control). **Phase 2 (runtime layer-43 bind) is COMPLETE**: layer
 43's full weights (experts + dense + control) load from the dedicated MTP pack
 dir, serving path undisturbed, no re-pack.
 
+## Phase 3 (MTP draft forward) design — scoped 2026-05-30
+
+The complete forward sequence already exists in `engine/mtp_step.cu:605-650`
+(the LP path). It is a single-token arena sequence:
+prologue (`enorm` RMS -> `e_proj` matmul -> repeat HC; `hnorm` RMS -> `h_proj`
+matmul -> add) -> HC attn mix -> attention (`attn_q_a` -> `q_a_norm` -> `attn_q_b`
+-> head RMS -> `attn_kv` -> `kv_norm` -> kv store -> decode heads -> output) ->
+HC expand -> HC ffn mix -> `ffn_norm` -> router (`ffn_gate_inp` ->
+`router_select_bias`) -> **routed MoE** -> shared expert (gate/up/swiglu/down) ->
+add -> HC expand -> HC head mix -> `output_hc_weights` -> weighted sum ->
+`output_norm` -> output matmul -> logits.
+
+Reuse this skeleton; THREE substantive EP changes make it sprint-sized:
+1. **Dense projections F8, not Q8_0.** The LP path uses
+   `ds4_gpu_arena_q8_0_matmul_f32` (sidecar Q8_0). The EP MTP weights are
+   F8_E4M3 (e_proj/h_proj/attn_q_a/q_b/kv/output_a-b/shared experts), so these
+   become the F8 dense matmul path (as layers 0-42 use).
+2. **Routed FFN: EP all-to-all, not single-GPU Q4_K.** The LP path uses
+   `ds4_gpu_arena_q4_k_routed_moe_one_f32` (single-GPU). The EP version uses the
+   shared `ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_f32`
+   dispatch across the 8 ranks (the EP-split experts from Phase 2 +
+   dispatch/combine all-to-all) -- this is the throughput point.
+3. **Weights from the bound structures, multi-rank.** Source the weights from
+   the Phase-2 `MtpNonExpertWeights` (by name/rank) + the MTP expert cache, not
+   the sidecar views, and run the sequence across the 8 ranks in the replay
+   pipeline (not the single-GPU arena).
+
+Validation gate: the EP MTP draft logits must match the LP sidecar's draft
+distribution (the reference) within the determinism floor. This is the
+"MTPBlock.forward" Phase A (~1 sprint per MTP_IMPLEMENTATION.md) and is the next
+major engine implementation; the weight integration it builds on is now done.
+
 ## Status
 
 Phase 1 (EP=8 MTP weight pack) COMPLETE + validated. Phase 2 (runtime layer-43
 bind) COMPLETE + runtime-validated -- experts (EP-split 32/rank) AND the 29
 non-expert families load from a dedicated MTP pack dir, serving path
-undisturbed. Architecture fully mapped:
+undisturbed. Phase 3 (MTP draft forward) scoped: reuse the mtp_step.cu sequence
+with 3 EP changes (F8 dense matmuls, EP all-to-all routed FFN, bound-structure
+weights + multi-rank); validated against the LP sidecar draft logits. This is
+the sprint-sized Phase A engine work; weight integration (steps 1-4) is done.
+Architecture fully mapped:
 Phase 2 = dedicated layer-43 bind (ratio-0, templated on `mtpf_views`, experts
 via the shared turbomind EP path); Phase 3 = MTP draft forward in the REPLAY
 pipeline (verify half `ds4_replay_verify_token_block` already exists); Phase 5
