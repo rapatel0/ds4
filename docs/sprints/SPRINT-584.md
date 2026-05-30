@@ -290,6 +290,40 @@ distribution (the reference) within the determinism floor. This is the
 "MTPBlock.forward" Phase A (~1 sprint per MTP_IMPLEMENTATION.md) and is the next
 major engine implementation; the weight integration it builds on is now done.
 
+### Phase 3 implementation architecture DECIDED (reuse run_layer)
+
+Two paths considered for the multi-rank EP MTP body:
+- **(A) Reuse `run_layer`** (the validated multi-rank per-layer EP execution:
+  attention + HC + the turbomind mxfp4 all-to-all routed FFN) for the MTP
+  transformer body, wrapped by a new prologue + head. CHOSEN.
+- (B) A from-scratch dedicated multi-rank MTP forward. Rejected -- it would
+  reimplement the EP all-to-all (huge, error-prone).
+
+**Key finding that shapes the bind:** `run_layer` sources weights from
+`SharedDenseOps->layers[opt.layer]` (`runtime_types.cuh:684`, a `[43]` array,
+loaded by `open_shared_dense_ops`), `SharedHcControls` (loaded by
+`open_shared_hc_controls`), and `shared_expert_bindings->layers[opt.layer]`.
+It does NOT read the name-keyed `MtpNonExpertWeights` I built in Phase 2. So
+the clean path requires the MTP non-expert weights in THOSE structures at
+slot 43:
+- Extend `SharedDenseOps.layers[43]->[44]` + `SharedHcControls` for layer 43
+  (a CONTAINED `[43]->[44]` -- just these two structs + their loaders, not the
+  full `runtime_types` `[43]` sprawl).
+- Extend `open_shared_dense_ops` / `open_shared_hc_controls` to load layer 43
+  from the MTP contract+pack (reusing the Phase-2 load mechanism --
+  parse_contract + read -- only the target struct changes; the Phase-2 load
+  validation still confirmed the MTP non-expert tensors are readable/correct).
+- `run_layer` for `opt.layer==43`: source the contract from `mtp_contract_path`
+  and the expert cache from `shared_expert_bindings->mtp_layer`; force ratio=0.
+- New: the prologue (`enorm`/`e_proj` + `hnorm`/`h_proj`) before, and the head
+  (`hc_head_*` + `output_norm` + output matmul) after.
+
+This reuses the validated EP all-to-all (the hard, throughput-critical part) and
+confines new code to the prologue/head + the contained `[44]` extension + the
+`run_layer` MTP redirect. The Phase-2 `MtpNonExpertWeights` is superseded as the
+consumption format (its load logic is reused); the expert bind
+(`shared_expert_bindings.mtp_layer`) is directly reusable by `run_layer`.
+
 ## Status
 
 Phase 1 (EP=8 MTP weight pack) COMPLETE + validated. Phase 2 (runtime layer-43
