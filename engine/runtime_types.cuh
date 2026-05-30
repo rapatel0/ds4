@@ -680,9 +680,14 @@ struct LayerDenseOps {
     ResidentF8Dense shared_up;
     /* Sprint 585: MTP (layer 43) embedding-combine prologue projections
      * (e_proj/h_proj, F8 [kHidden x kHidden], output-sharded 512/rank). Empty
-     * for layers 0-42; populated only by load_mtp_dense_layer43. */
+     * for layers 0-42; populated only by load_mtp_dense_layer43. h_proj is
+     * prepared with slots*kHcRows so one matmul covers all 4 HC rows. */
     ResidentF8Dense e_proj;
     ResidentF8Dense h_proj;
+    /* MTP prologue RMS-norm weights (enorm/hnorm), f32 [kHidden], replicated
+     * full per rank. */
+    float *d_enorm[8] = {nullptr};
+    float *d_hnorm[8] = {nullptr};
     bool initialized = false;
 };
 

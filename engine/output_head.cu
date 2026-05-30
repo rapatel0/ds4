@@ -1358,17 +1358,38 @@ int load_mtp_dense_layer43(const Options &opt, const DenseF16Cache *cache,
     }
     /* Sprint 585: the MTP embedding-combine prologue projections. e_proj/h_proj
      * are F8 [kHidden x kHidden], output-sharded kHidden/kGpus per rank (same
-     * tensor_dim split as attn_q_a), so the default expected_rows_per_gpu applies. */
+     * tensor_dim split as attn_q_a), so the default expected_rows_per_gpu applies.
+     * e_proj runs on the [slots,kHidden] embedding (one row); h_proj runs on the
+     * prev-HC state [slots,kHcRows,kHidden], so prepare it with slots*kHcRows so a
+     * single matmul covers all 4 HC rows (input/output flatten contiguously). */
     const std::string e_proj_t = layer_tensor_name(L, "e_proj.weight");
     const std::string h_proj_t = layer_tensor_name(L, "h_proj.weight");
+    Options hopt = mopt;
+    hopt.slots = opt.slots * kHcRows;
     if (prepare_resident_f8_dense(mopt, rows, e_proj_t.c_str(), 5, cache, &d.e_proj) != 0 ||
-        prepare_resident_f8_dense(mopt, rows, h_proj_t.c_str(), 6, cache, &d.h_proj) != 0) {
+        prepare_resident_f8_dense(hopt, rows, h_proj_t.c_str(), 6, cache, &d.h_proj) != 0) {
         std::fprintf(stderr, "MTP dense e_proj/h_proj load failed\n");
         return 6;
     }
+    /* enorm/hnorm: replicated f32 [kHidden], full per rank. */
+    std::vector<float> enorm_w, hnorm_w;
+    if (load_control_f32(mopt, rows, "blk.43.enorm.weight", kHidden, &enorm_w) ||
+        load_control_f32(mopt, rows, "blk.43.hnorm.weight", kHidden, &hnorm_w)) {
+        std::fprintf(stderr, "MTP enorm/hnorm load failed\n");
+        return 7;
+    }
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        CHECK_CUDA(cudaMalloc(&d.d_enorm[gpu], (size_t)kHidden * sizeof(float)));
+        CHECK_CUDA(cudaMemcpy(d.d_enorm[gpu], enorm_w.data(),
+                              (size_t)kHidden * sizeof(float), cudaMemcpyHostToDevice));
+        CHECK_CUDA(cudaMalloc(&d.d_hnorm[gpu], (size_t)kHidden * sizeof(float)));
+        CHECK_CUDA(cudaMemcpy(d.d_hnorm[gpu], hnorm_w.data(),
+                              (size_t)kHidden * sizeof(float), cudaMemcpyHostToDevice));
+    }
     std::printf("tp_ep_mtp_prologue_proj_load\tlayer\t43\te_proj_rows_per_gpu\t%d\t"
-                "h_proj_rows_per_gpu\t%d\tPASS\n",
-                d.e_proj.rows_per_gpu, d.h_proj.rows_per_gpu);
+                "h_proj_rows_per_gpu\t%d\th_proj_slots\t%d\tPASS\n",
+                d.e_proj.rows_per_gpu, d.h_proj.rows_per_gpu, d.h_proj.slots);
     d.initialized = true;
     std::printf("tp_ep_mtp_dense_layer43_load\tlayer\t43\tPASS\n");
     std::fflush(stdout);
@@ -1448,6 +1469,227 @@ int launch_resident_f8_dense_f32_input(const Options &opt,
             op.rows_per_gpu, op.cols, (uint32_t)op.row_bytes, op.slots);
         CHECK_CUDA(cudaGetLastError());
     }
+    return 0;
+}
+
+/* ===== Sprint 585: MTP (layer 43) embedding-combine prologue (EP) ===== */
+
+/* out[slot,row,h] = in[slot,h]  (broadcast e_proj output across the kHcRows). */
+__global__ void mtp_repeat_rows_kernel(float *out, const float *in,
+                                       uint32_t slots, uint32_t rows, uint32_t shard) {
+    const uint64_t n = (uint64_t)slots * rows * shard;
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    const uint32_t h = (uint32_t)(i % shard);
+    const uint32_t slot = (uint32_t)(i / ((uint64_t)rows * shard));
+    out[i] = in[(uint64_t)slot * shard + h];
+}
+
+/* Per-slot partial sum-of-squares over the rank's per_slot shard elements
+ * (one thread per slot; slots is tiny). */
+__global__ void mtp_partial_sumsq_kernel(float *sumsq, const float *in,
+                                         uint32_t slots, uint32_t per_slot) {
+    const uint32_t slot = blockIdx.x * blockDim.x + threadIdx.x;
+    if (slot >= slots) return;
+    const float *src = in + (uint64_t)slot * per_slot;
+    float s = 0.0f;
+    for (uint32_t c = 0; c < per_slot; ++c) {
+        const float v = src[c];
+        if (isfinite(v)) s += v * v;
+    }
+    sumsq[slot] = s;
+}
+
+/* Flat RMS-norm (no weight) over the full total_dim per slot, using the
+ * cross-rank-reduced sum-of-squares. out and in are the rank's per_slot shard. */
+__global__ void mtp_scale_flat_kernel(float *out, const float *in,
+                                      const float *sumsq_total, uint32_t slots,
+                                      uint32_t per_slot, uint32_t total_dim, float eps) {
+    const uint64_t n = (uint64_t)slots * per_slot;
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    const uint32_t slot = (uint32_t)(i / per_slot);
+    const float mean = sumsq_total[slot] / (float)total_dim;
+    const float rstd = rsqrtf(mean + eps);
+    float v = in[i] * rstd;
+    if (!isfinite(v)) v = 0.0f;
+    out[i] = v;
+}
+
+struct MtpPrologueScratch {
+    int slots = 0;
+    bool ready = false;
+    float *d_embed_f32[kGpus] = {nullptr};   /* [slots, kHidden]            */
+    float *d_e0[kGpus] = {nullptr};          /* [slots, kHidden]            */
+    float *d_prev_full[kGpus] = {nullptr};   /* [slots, kHcRows, kHidden]   */
+    float *d_hnorm_out[kGpus] = {nullptr};   /* [slots, kHcRows, kHidden]   */
+    float *d_comb[kGpus] = {nullptr};        /* [slots, kHcRows, shard]     */
+    float *d_sumsq[kGpus] = {nullptr};       /* [slots]                     */
+    float *d_prev_full_dev0 = nullptr;       /* [slots, kHcRows, kHidden] on dev0 */
+};
+
+static int ensure_mtp_prologue_scratch(const Options &opt, MtpPrologueScratch *s) {
+    if (s->ready && s->slots == opt.slots) return 0;
+    const uint32_t shard = kHidden / kGpus;
+    const uint64_t emb = (uint64_t)opt.slots * kHidden;
+    const uint64_t full = (uint64_t)opt.slots * kHcRows * kHidden;
+    const uint64_t comb = (uint64_t)opt.slots * kHcRows * shard;
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        CHECK_CUDA(cudaMalloc(&s->d_embed_f32[gpu], emb * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&s->d_e0[gpu], emb * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&s->d_prev_full[gpu], full * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&s->d_hnorm_out[gpu], full * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&s->d_comb[gpu], comb * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&s->d_sumsq[gpu], (size_t)opt.slots * sizeof(float)));
+    }
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    CHECK_CUDA(cudaMalloc(&s->d_prev_full_dev0, full * sizeof(float)));
+    s->slots = opt.slots;
+    s->ready = true;
+    return 0;
+}
+
+static int sync_all_devices(const Options &opt) {
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        CHECK_CUDA(cudaDeviceSynchronize());
+    }
+    return 0;
+}
+
+/* MTP embedding-combine prologue (EP, rank-sharded). Combines the last token's
+ * embedding (enorm -> e_proj -> repeat across kHcRows) with the previous hidden
+ * state in ranks[].d_final_hc_shard (hnorm per row -> h_proj), adds, applies the
+ * flat post-combine RMS-norm, and writes the MTP input back into d_final_hc_shard
+ * for run_layer(43) to consume. Mirrors engine/mtp_step.cu:606-615 in EP form.
+ * Synchronous (correctness-first); the prologue cost is tiny vs the 43-layer
+ * forward. No-op unless the MTP dense ops (e_proj/h_proj/enorm/hnorm) are loaded. */
+int run_mtp_prologue(const Options &opt,
+                     RankState ranks[kGpus],
+                     const LayerDenseOps *mtp_dense,
+                     SharedTokenEmbedding *embedding,
+                     const std::vector<uint32_t> *tokens) {
+    if (!mtp_dense || !mtp_dense->e_proj.d_out.size() || !mtp_dense->h_proj.d_out.size() ||
+        !mtp_dense->d_enorm[0] || !embedding || !embedding->initialized ||
+        embedding->h_w_full.empty()) {
+        return 0;  /* MTP prologue not configured -- skip (no-op) */
+    }
+    static MtpPrologueScratch scratch;
+    if (ensure_mtp_prologue_scratch(opt, &scratch) != 0) return 1;
+    const uint32_t shard = kHidden / kGpus;
+    const float eps = 1.0e-6f;
+
+    /* 1. Host-gather the f32 embedding of the current tokens [slots, kHidden]. */
+    std::vector<float> h_embed((size_t)opt.slots * kHidden);
+    for (int slot = 0; slot < opt.slots; ++slot) {
+        uint32_t tok = (tokens && (int)tokens->size() > slot) ? (*tokens)[(size_t)slot] : 0u;
+        if (tok >= (uint32_t)embedding->vocab) tok = 0u;
+        const uint16_t *src = embedding->h_w_full.data() + (uint64_t)tok * kHidden;
+        float *dst = h_embed.data() + (size_t)slot * kHidden;
+        for (int h = 0; h < kHidden; ++h) {
+            const uint32_t u = ((uint32_t)src[h]) << 16;  /* bf16 -> f32 */
+            float f;
+            std::memcpy(&f, &u, sizeof(f));
+            dst[h] = f;
+        }
+    }
+
+    /* 2. Per rank: H2D embed, enorm RMS, cast -> e_proj half input. */
+    const uint64_t emb_elems = (uint64_t)opt.slots * kHidden;
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        cudaStream_t st = ranks[gpu].stream;
+        CHECK_CUDA(cudaMemcpyAsync(scratch.d_embed_f32[gpu], h_embed.data(),
+                                   emb_elems * sizeof(float), cudaMemcpyHostToDevice, st));
+        rms_norm_weight_rows_stable_kernel<<<(unsigned int)opt.slots, 256, 0, st>>>(
+            scratch.d_e0[gpu], scratch.d_embed_f32[gpu], mtp_dense->d_enorm[gpu],
+            (uint32_t)kHidden, (uint32_t)opt.slots, eps);
+        if (!mtp_dense->e_proj.d_x_half[(size_t)gpu]) return 2;
+        cast_f32_to_half_kernel<<<(unsigned int)((emb_elems + 255) / 256), 256, 0, st>>>(
+            mtp_dense->e_proj.d_x_half[(size_t)gpu], scratch.d_e0[gpu], emb_elems);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    if (sync_all_devices(opt) != 0) return 3;
+    /* 3. e_proj matmul: [slots, kHidden] -> rank shard [slots, shard]. */
+    if (launch_resident_f8_dense(opt, mtp_dense->e_proj, ranks) != 0) return 4;
+    if (sync_all_devices(opt) != 0) return 3;
+
+    /* 4. Gather prev-hidden (d_final_hc_shard) to full [slots,kHcRows,kHidden] on
+     * dev0, then broadcast to every rank (needed full for the output-sharded h_proj). */
+    const uint64_t full_elems = (uint64_t)opt.slots * kHcRows * kHidden;
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    for (int rank = 0; rank < kGpus; ++rank) {
+        if (!ranks[rank].d_final_hc_shard) return 5;
+        gather_hc_shard_to_full_kernel<<<(unsigned int)((full_elems + 255) / 256), 256, 0,
+                                         ranks[0].stream>>>(
+            scratch.d_prev_full_dev0, ranks[rank].d_final_hc_shard, rank, (uint32_t)opt.slots);
+    }
+    CHECK_CUDA(cudaGetLastError());
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    CHECK_CUDA(cudaStreamSynchronize(ranks[0].stream));
+    void *dsts[kGpus] = {};
+    for (int rank = 0; rank < kGpus; ++rank) dsts[rank] = scratch.d_prev_full[rank];
+    if (nccl_broadcast_bytes_from_rank0(ranks, scratch.d_prev_full_dev0, dsts,
+                                        full_elems * sizeof(float), "mtp_prologue_prev_hc") != 0) {
+        return 6;
+    }
+    if (sync_all_devices(opt) != 0) return 3;
+
+    /* 5. Per rank: hnorm RMS per HC row, cast -> h_proj half input. */
+    const uint32_t hrows = (uint32_t)opt.slots * kHcRows;
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        cudaStream_t st = ranks[gpu].stream;
+        rms_norm_weight_rows_stable_kernel<<<(unsigned int)hrows, 256, 0, st>>>(
+            scratch.d_hnorm_out[gpu], scratch.d_prev_full[gpu], mtp_dense->d_hnorm[gpu],
+            (uint32_t)kHidden, hrows, eps);
+        if (!mtp_dense->h_proj.d_x_half[(size_t)gpu]) return 2;
+        cast_f32_to_half_kernel<<<(unsigned int)((full_elems + 255) / 256), 256, 0, st>>>(
+            mtp_dense->h_proj.d_x_half[(size_t)gpu], scratch.d_hnorm_out[gpu], full_elems);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    if (sync_all_devices(opt) != 0) return 3;
+    /* 6. h_proj matmul: [slots*kHcRows, kHidden] -> [slots*kHcRows, shard]. */
+    if (launch_resident_f8_dense(opt, mtp_dense->h_proj, ranks) != 0) return 7;
+    if (sync_all_devices(opt) != 0) return 3;
+
+    /* 7. Per rank: comb = repeat(e1) + h1; partial flat sum-of-squares. */
+    const uint64_t comb_elems = (uint64_t)opt.slots * kHcRows * shard;
+    const uint32_t per_slot = kHcRows * shard;       /* the rank's 2048 shard cols */
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        cudaStream_t st = ranks[gpu].stream;
+        mtp_repeat_rows_kernel<<<(unsigned int)((comb_elems + 255) / 256), 256, 0, st>>>(
+            scratch.d_comb[gpu], mtp_dense->e_proj.d_out[(size_t)gpu],
+            (uint32_t)opt.slots, (uint32_t)kHcRows, shard);
+        add_f32_kernel<<<(unsigned int)((comb_elems + 255) / 256), 256, 0, st>>>(
+            scratch.d_comb[gpu], mtp_dense->h_proj.d_out[(size_t)gpu], comb_elems);
+        mtp_partial_sumsq_kernel<<<(unsigned int)((opt.slots + 255) / 256), 256, 0, st>>>(
+            scratch.d_sumsq[gpu], scratch.d_comb[gpu], (uint32_t)opt.slots, per_slot);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    if (sync_all_devices(opt) != 0) return 3;
+    /* 8. Cross-rank sum-of-squares all-reduce (the flat norm is over all kHcRows*kHidden). */
+    CHECK_NCCL(ncclGroupStart());
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        CHECK_NCCL(ncclAllReduce(scratch.d_sumsq[gpu], scratch.d_sumsq[gpu],
+                                 (size_t)opt.slots, ncclFloat, ncclSum,
+                                 ranks[gpu].compose_nccl, ranks[gpu].stream));
+    }
+    CHECK_NCCL(ncclGroupEnd());
+    /* 9. Scale into d_final_hc_shard (the MTP input run_layer(43) consumes). */
+    const uint32_t total_dim = (uint32_t)kHcRows * (uint32_t)kHidden;  /* 16384 */
+    for (int gpu = 0; gpu < kGpus; ++gpu) {
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        cudaStream_t st = ranks[gpu].stream;
+        mtp_scale_flat_kernel<<<(unsigned int)((comb_elems + 255) / 256), 256, 0, st>>>(
+            ranks[gpu].d_final_hc_shard, scratch.d_comb[gpu], scratch.d_sumsq[gpu],
+            (uint32_t)opt.slots, per_slot, total_dim, eps);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    if (sync_all_devices(opt) != 0) return 3;
     return 0;
 }
 

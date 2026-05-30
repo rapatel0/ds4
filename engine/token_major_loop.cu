@@ -356,6 +356,21 @@ int run_token_major_serving_loop(const Options &opt,
             opt.mtp_contract_path) {
             Options mtp_opt = opt;
             mtp_opt.layer = 43;
+            /* Sprint 585 (1.2b): MTP embedding-combine prologue. Combines the
+             * current token's embedding with the prev-hidden (layer-42 output)
+             * already in ranks[].d_final_hc_shard, writing the MTP input back
+             * into d_final_hc_shard for run_layer(43). No-op unless the MTP dense
+             * ops (e_proj/h_proj/enorm/hnorm) are loaded. Runs BEFORE run_layer. */
+            if (shared_dense_ops && shared_dense_ops->initialized &&
+                shared_rank_buffers && shared_rank_buffers->initialized &&
+                shared_token_embedding) {
+                const int prc = run_mtp_prologue(
+                    opt, shared_rank_buffers->ranks, &shared_dense_ops->layers[43],
+                    shared_token_embedding, decode_input_tokens);
+                if (prc != 0) {
+                    std::fprintf(stderr, "tp_ep_mtp_prologue_failed\trc\t%d\n", prc);
+                }
+            }
             LayerRunSummary ms;
             SharedTpRuntime *mtp_tp =
                 (shared_tp_runtime && shared_tp_runtime->initialized) ? shared_tp_runtime
