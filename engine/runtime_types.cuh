@@ -678,6 +678,11 @@ struct LayerDenseOps {
     ResidentF8Dense shared;
     ResidentF8Dense shared_gate;
     ResidentF8Dense shared_up;
+    /* Sprint 585: MTP (layer 43) embedding-combine prologue projections
+     * (e_proj/h_proj, F8 [kHidden x kHidden], output-sharded 512/rank). Empty
+     * for layers 0-42; populated only by load_mtp_dense_layer43. */
+    ResidentF8Dense e_proj;
+    ResidentF8Dense h_proj;
     bool initialized = false;
 };
 

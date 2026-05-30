@@ -1356,6 +1356,19 @@ int load_mtp_dense_layer43(const Options &opt, const DenseF16Cache *cache,
             return 4;
         }
     }
+    /* Sprint 585: the MTP embedding-combine prologue projections. e_proj/h_proj
+     * are F8 [kHidden x kHidden], output-sharded kHidden/kGpus per rank (same
+     * tensor_dim split as attn_q_a), so the default expected_rows_per_gpu applies. */
+    const std::string e_proj_t = layer_tensor_name(L, "e_proj.weight");
+    const std::string h_proj_t = layer_tensor_name(L, "h_proj.weight");
+    if (prepare_resident_f8_dense(mopt, rows, e_proj_t.c_str(), 5, cache, &d.e_proj) != 0 ||
+        prepare_resident_f8_dense(mopt, rows, h_proj_t.c_str(), 6, cache, &d.h_proj) != 0) {
+        std::fprintf(stderr, "MTP dense e_proj/h_proj load failed\n");
+        return 6;
+    }
+    std::printf("tp_ep_mtp_prologue_proj_load\tlayer\t43\te_proj_rows_per_gpu\t%d\t"
+                "h_proj_rows_per_gpu\t%d\tPASS\n",
+                d.e_proj.rows_per_gpu, d.h_proj.rows_per_gpu);
     d.initialized = true;
     std::printf("tp_ep_mtp_dense_layer43_load\tlayer\t43\tPASS\n");
     std::fflush(stdout);
