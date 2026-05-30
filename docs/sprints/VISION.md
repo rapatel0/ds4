@@ -3864,6 +3864,8 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 
 | 2026-05-29 | Sprint 583 designed the MTP converter + I8->MXFP4 re-quant spec. | Per-family source->target mapping fixed: attn/proj F8_E4M3+E8M0 -> f8_e4m3_b128 direct; norms BF16/F32 direct; experts I8+E8M0 -> MXFP4 via dequant (i8*2^e8m0, 16-elem blocks) then re-quant to 32-elem MXFP4 blocks (per-block amax -> E8M0 scale, nearest fp4 nibble). Mirrors the runtime mxfp4/e8m0 decode for round-trip consistency. | Converter tool (`tools/mtp-safetensors-to-gguf.c`, modeled on pack.c/appliance-pack.cu) + contract layer-43 extension are the implementation chunk; build + validate against the safetensors on the pod. Then binding + sidecar delete (584), forward (Phase A), specdec (Phase B). |
 
+| 2026-05-29 | Sprint 583 completed + validated the MTP weight-pack pipeline. | Built `tools/mtp-pack-fragment.c` (the only new artifact): reads the safetensors, losslessly re-packs all 32 families (experts are packed-FP4+E8M0 -> mxfp4 nibble-permute, dense F8_E4M3 -> f8_e4m3_b128; round-trips 0-mismatch on real weights), stacks 256 experts, emits a convention-compliant GGUF + Sprint-002 manifest. The full pipeline (pack.c -> turbomind-pack --layer 43 -> tp-ep-pack-contract) ingests it with zero code changes: expert_rows=24 (EP8), 72 dense + 64 control layer-43 rows, correctly TP8/EP8 sharded. | The steered contract layer-43 extension is a no-op (pipeline is layer-generic). Remaining MTP weight bits (appliance-pack --layer 43 shards, runtime_pack.cu bind, sidecar delete) are mechanical; the substantial remaining MTP work is MTPBlock.forward + the specdec loop (engine kernels). |
+
 ## Sprint Hygiene
 
 Sprint 481 established cleanup discipline for TP/EP feature gates and temporary
