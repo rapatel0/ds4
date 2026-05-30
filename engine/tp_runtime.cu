@@ -99,6 +99,7 @@ static bool is_f8_kv(ds4_tp_kv_dtype kv) {
 
 static int layer_ratio(int layer) {
     if (layer < 2) return 0;
+    if (layer == 43) return 0;  /* MTP block: raw-SWA attention, no compressed KV/indexer */
     return (layer % 2) == 0 ? 4 : 128;
 }
 
