@@ -197,10 +197,41 @@ from the unified pack (not the sidecar). Validate: appliance loads layer 43,
 each rank binds its 32-expert slice + the non-expert families, no crash, byte
 counts match. Requires a CUDA rebuild + load test on the pod.
 
+## Phase 3/5 integration point found (2026-05-30)
+
+The LP `mtp_step.cu` forward (`ds4_mtp_forward_*`) is **dead code in the TP/EP
+appliance** -- it's not invoked anywhere in `engine/*.cu|*.inc` or
+`appliance/*.cu`. The real EP decode driver is the **replay pipeline**
+(`engine/replay.c` + `replay_step_pipeline.inc`), and the **verify half of
+speculative decode already exists** there: `ds4_replay_verify_token_block`
+(`replay_step_pipeline.inc:1237`) feeds a draft token block through the main
+model and selects argmax per position, reporting `accepted_prefix_len` /
+`speculative_saves`. The sprint181 `mtp_serving=verify` run exercised it
+(mtp_attempted=16, accepted=16) with externally-supplied draft tokens.
+
+So the EP MTP integration is in the replay pipeline, NOT `mtp_step.cu`:
+- **Phase 3 (the missing piece):** an MTP draft forward (layer 43) that runs
+  in the replay pipeline -- embedding-combine prologue (`enorm`/`hnorm`/`e_proj`/
+  `h_proj`) + the shared EP per-layer execution (attention + HC + the
+  `ds4_gpu_arena_turbomind_mxfp4_routed_gate_up_swiglu_down_sum_f32` routed FFN)
+  + the MTP head (`hc_head_*` + `output_norm`) -> draft logits -> K draft tokens.
+- **Phase 5 (the specdec loop):** wire draft -> `ds4_replay_verify_token_block`
+  (exists) -> accept/reject -> advance, coordinated across the 8 ranks.
+
+**Runtime-validation prerequisite:** layer 43 must be in the SAME pack +
+contract the appliance loads. Per MTP_IMPLEMENTATION.md option (b), the clean
+path is a unified GGUF (append the MTP fragment to the 146 GB main GGUF) re-packed
+to layers 0-43, OR a merged contract/turbomind-index that references both the
+s181 shards (0-42) and the `mtp-shards-ep` layer-43 blob. Either is a real pack
+step; the bind/forward can be compiled + unit-checked first.
+
 ## Status
 
-Phase 1 (EP=8 MTP weight pack) COMPLETE + validated. Phase 2 design scoped:
-dedicated MTP bind (NOT a ratio-driven loop extension -- ds4_layer_ratio(43)=128
-mismatch), templated on `mtp_step.cu` `mtpf_views`, experts via the shared
-turbomind EP path. Implementation (engine + CUDA build + load test) is the next
-chunk and is coupled to Phase 3 (the EP forward) through the weight struct.
+Phase 1 (EP=8 MTP weight pack) COMPLETE + validated. Architecture fully mapped:
+Phase 2 = dedicated layer-43 bind (ratio-0, templated on `mtpf_views`, experts
+via the shared turbomind EP path); Phase 3 = MTP draft forward in the REPLAY
+pipeline (verify half `ds4_replay_verify_token_block` already exists); Phase 5
+= the specdec accept/reject loop. These are the core B1 engine effort (CUDA
+builds + serving validation), sequenced as multiple sprints per
+MTP_IMPLEMENTATION.md. Next concrete step: the Phase 2 bind code +
+`turbomind_bindings.cu` `layer < 44` extension, compiled as the first checkpoint.
