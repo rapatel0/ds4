@@ -107,6 +107,38 @@ layer-43 binding through the unified path, and the speculative-decode loop.
 - Steering + vision updated; committed (excluding user-owned
   `docs/sprints/VALIDATION_CONTROL_POLICY.md` and `research/`).
 
+## PHASE 3 MILESTONE (2026-05-30): MTP transformer body executes through the EP decode
+
+Built the entire MTP layer-43 weight bind + forward execution incrementally
+(each step compile-validated + load-tested, 0-42 serving byte-intact throughout),
+advancing the MTP layer through every decode-stage blocker:
+
+| Stage | Fix (commit) | Result |
+|---|---|---|
+| expert bind | `open_mtp_expert_bindings` (193b555a) | EP-split 32/rank PASS |
+| non-expert bind | `open_mtp_nonexpert_bindings` (08d839a3) | 99 tensors PASS |
+| struct extensions | kLayers->44, KV arrays, 9-file guards, HcControls/DenseOps [44] (250a83c2, a95cf621, af9fb479, 2e120e69) | builds, serving intact |
+| HC + dense load | `load_mtp_hc_layer43` + `load_mtp_dense_layer43` (b396796e, 57962414) | attention projection cleared |
+| HC rank-dist | d_attn_fn_rank etc. (9f8ec414) | hc_current rc=12 cleared |
+| router + norm-rank | d_router_w_shard + d_ffn_norm_weight_rank (83095e68) | router allreduce rc=2 cleared |
+| KV layout | `layer_ratio(43)=0` (9c5867ab) | raw-SWA aligned |
+
+**Result: the MTP transformer body (attention + HC + EP routed FFN + compose)
+executes through `run_layer`'s unified multi-rank EP path** -- decode_checksum
+6684186189, decode_pass=1, max_abs=0, expert_rows=16 (EP-split). The residual
+`rc=1` is the shared scaffold's `kv_rows>0` check, which does not apply to the
+MTP (raw-SWA attention -> kv_rows=0 is correct). The hard structural integration
+that was the bulk of Phase A is DONE.
+
+**Remaining (Phase A finish + Phase B, coupled):** the MTP prologue
+(embedding-combine `enorm`/`e_proj` + `hnorm`/`h_proj` -> MTP input) and head
+(`hc_head_*` + `output_norm` -> draft logits) wrap the now-working body, but
+need the decode context (embedding + previous hidden state) the specdec loop
+provides -- so they're built with Phase B (the TP/EP draft-K / verify (exists) /
+accept-reject loop), validated against the LP sidecar's draft distribution.
+The weights for the prologue/head are already bound (MtpNonExpertWeights:
+e_proj/h_proj dense, enorm/hnorm/norm/hc_head_* control).
+
 ## Phase 1 progress (2026-05-30) — guided by MTP_IMPLEMENTATION.md
 
 `MTP_IMPLEMENTATION.md` is the authoritative guide (user-confirmed). It defines
