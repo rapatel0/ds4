@@ -354,16 +354,41 @@ mirroring `mtp_step.cu`), composed with the reused EP FFN. (b) is closer to the
 canonical MTP draft semantics and avoids the [43] KV-array sprawl. This is the
 next decision/implementation step.
 
+### Phase 3 rc=14 root cause CONFIRMED (2026-05-30): optimized decode infra has no contract fallback
+
+After kLayers->44 + KV arrays + the 9-file guard migration, the MTP layer
+cleared all layer-range guards and reached the decode kernels, failing at rc=14.
+Root cause (code-confirmed in `engine/attention_projection.cu:1-30`):
+`run_true_ds4_attention_projection_prefix` returns 1 when `ops` (LayerDenseOps)
+is null -- and the MTP scaffold passes `shared_dense_ops=nullptr`. It ALSO
+requires `hc->d_attn_norm_weight[layer]` / `d_q_a_norm_weight[layer]` /
+`d_kv_a_norm_weight[layer]` (SharedHcControls per-layer arrays). So the
+appliance's OPTIMIZED decode path (`true_ds4_attention_projection_gate`,
+`dense_f16_*_compose`) has NO contract fallback for dense/HC -- it requires
+`SharedDenseOps->layers[layer]` + `SharedHcControls` populated per-layer.
+
+**Scope finding:** the run_layer-reuse path for the MTP body requires extending
+the WHOLE optimized-decode infrastructure to layer 43, not just kLayers/KV:
+`SharedDenseOps.layers[43]->[44]` + `open_shared_dense_ops` for layer 43,
+`SharedHcControls` per-layer arrays ->[44] + `open_shared_hc_controls` for layer
+43, and likely the `DenseF16Cache` (the f16 cache the dense-ops loader consumes)
+for layer 43. This is a large, invasive multi-structure extension -- the bulk of
+the MTPBlock.forward (Phase A) sprint. The appliance decode is a deeply
+43-layer-specialized optimized pipeline; adding a 44th layer touches its core
+caches. Alternative (disable the optimization gates for the MTP layer to use a
+baseline path) is uncertain -- the decode loop has no obvious non-optimized
+attention-projection fallback. Decision/implementation of the optimized-infra
+extension is the next substantial chunk.
+
 ## Status
 
 Phase 1 (EP=8 MTP weight pack) COMPLETE + validated. Phase 2 (runtime layer-43
-bind) COMPLETE + runtime-validated -- experts (EP-split 32/rank) AND the 29
-non-expert families load from a dedicated MTP pack dir, serving path
-undisturbed. Phase 3 (MTP draft forward) IN PROGRESS: run_layer MTP redirect +
-token-major scaffold implemented + built; load test surfaced that the MTP
-attention needs dedicated draft-KV handling (run_layer's persistent KV cache
-rejects layer 43) -- FFN EP-reuse is feasible, attention needs MTP-specific
-code. Earlier design notes (reuse the mtp_step.cu sequence
+bind) COMPLETE + runtime-validated. Phase 3 (MTP draft forward) IN PROGRESS:
+run_layer MTP redirect + kLayers->44 + KV arrays + guard migration landed (MTP
+layer reaches the decode kernels; existing serving intact); rc=14 root cause
+confirmed -- the optimized decode path needs SharedDenseOps + SharedHcControls
+populated for layer 43 (no contract fallback), a large multi-structure [44]
+extension that is the bulk of Phase A. Earlier design notes (reuse the mtp_step.cu sequence
 with 3 EP changes (F8 dense matmuls, EP all-to-all routed FFN, bound-structure
 weights + multi-rank); validated against the LP sidecar draft logits. This is
 the sprint-sized Phase A engine work; weight integration (steps 1-4) is done.
