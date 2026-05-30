@@ -398,7 +398,8 @@ int open_shared_output_head(const Options &opt,
 
     std::vector<uint16_t> host_w((size_t)out->rows_per_gpu * (size_t)kHidden);
     std::vector<float> head_fn_rank((size_t)hc_shard_cols * 4u);
-    std::vector<float> output_norm_rank((size_t)(kHidden / kGpus));
+    const uint32_t shard_cols = (uint32_t)(kHidden / kGpus);
+    std::vector<float> output_norm_rank((size_t)shard_cols);
     for (int gpu = 0; gpu < kGpus; ++gpu) {
         const ContractRow &r = out->output_rows[gpu];
         const std::string path = path_join(opt.pack_dir, r.source_pack_file);
@@ -454,13 +455,16 @@ int open_shared_output_head(const Options &opt,
         CHECK_CUDA(cudaMemcpy(out->d_w[gpu], host_w.data(),
                               (size_t)output_shard_bytes, cudaMemcpyHostToDevice));
         for (uint32_t c = 0; c < hc_shard_cols; ++c) {
-            const uint64_t global_c = (uint64_t)gpu * hc_shard_cols + c;
+            const uint32_t hc_row = c / shard_cols;
+            const uint32_t local_c = c - hc_row * shard_cols;
+            const uint64_t global_c =
+                (uint64_t)hc_row * (uint64_t)kHidden +
+                (uint64_t)gpu * (uint64_t)shard_cols + local_c;
             for (uint32_t h = 0; h < 4u; ++h) {
                 head_fn_rank[(uint64_t)c * 4ull + h] =
                     hc_head_fn[(uint64_t)h * (4ull * (uint64_t)kHidden) + global_c];
             }
         }
-        const uint32_t shard_cols = (uint32_t)(kHidden / kGpus);
         for (uint32_t c = 0; c < shard_cols; ++c) {
             output_norm_rank[c] = output_norm[(uint64_t)gpu * shard_cols + c];
         }
@@ -515,7 +519,11 @@ int load_mtp_output_head(const Options &opt, const SharedOutputHead *main_head,
     std::vector<float> output_norm_rank((size_t)shard_cols);
     for (int gpu = 0; gpu < kGpus; ++gpu) {
         for (uint32_t c = 0; c < hc_shard_cols; ++c) {
-            const uint64_t global_c = (uint64_t)gpu * hc_shard_cols + c;
+            const uint32_t hc_row = c / shard_cols;
+            const uint32_t local_c = c - hc_row * shard_cols;
+            const uint64_t global_c =
+                (uint64_t)hc_row * (uint64_t)kHidden +
+                (uint64_t)gpu * (uint64_t)shard_cols + local_c;
             for (uint32_t h = 0; h < 4u; ++h)
                 head_fn_rank[(uint64_t)c * 4ull + h] =
                     hc_head_fn[(uint64_t)h * (4ull * (uint64_t)kHidden) + global_c];
