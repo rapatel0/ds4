@@ -4,6 +4,17 @@ Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s
 server decode, ~889 ms decode domain).
 
+**Updated baseline (Sprint 581, full-capture default promoted):** at 32 slots /
+256K / 64 tok/req, the promoted no-suffix full-capture default delivers `26.8`
+tok/s aggregate decode (`1.225x` over the suffix path it replaced; `2.34` vs
+`1.53` per-request decode). Decode-domain gap attribution (eager, `14.4` ms/step):
+**EP/MoE all-to-all = `65.2%`** (the dominant cost and the source of the
+utilization "waves"; ~`0.75` tokens/expert leaves grouped-GEMM tiles nearly empty,
+SMOCC ~`0.08-0.11`), attention ~`12%`, compose ~`11%`, HC-current ~`8%`, and
+host-sync orchestration (route_upload/fill_pack/router_select, the PCIe/GPU0 skew)
+only ~`5%`. So the throughput headroom is EP (B2 + MTP), not the host-sync/
+output-head cleanup.
+
 ## Unifying diagnosis — read this first
 
 Both dominant domains are **overhead-bound, not compute- or bandwidth-bound:**
@@ -457,8 +468,9 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | C1 full-capture batch-instability localization | full capture | Sprint 577: full-vs-full logit floor scales with active routed tokens (1-2 active ~bit-exact, `8` -> Δ 1.21/`8` flips, `32` -> Δ 3.63/`32` flips). The 8-slot graph is constant across these, so it is not a static pointer/buffer bug; it tracks active route count -> accumulation-order nondeterminism in the graphed route/compose. compute-sanitizer OOMs before decode and no smoke reproduces the graph-replay path, so it cannot reach this bug. | Med-High |
 | Done | C1 captured-compose nondeterminism: FIXED | full capture | Sprint 579: runtime per-stage diff localized the divergence to the captured `compressed_kv` stage's `attn_q_b.d_out` on `dense_stream`, caused by `enqueue_rank_streams_wait_after_dense_streams` being a dense->rank-only barrier (eager fully drains both streams). Made it bidirectional (`output_head.cu`); full-vs-full sequence mismatch went `8/8 -> 0/8`. Determinism defect fixed; correctness-preserving (ordering-only). | Med-High |
 | Done | C1 full-capture serving promotion gate | full capture | Sprint 580: gate passed and **no-suffix full capture is now the promoted launcher default**. At `32` slots / pos `250000`, parity was perfect within the determinism floor (floor `0`, full-vs-full `0`, eager-vs-full `0`) and full capture was `1.203x` wall / `1.518x` decode faster than suffix-control (median latency `42.09s -> 34.98s`). Launcher uses a 3-mode `DS4_V100_TP_EP_DECODE_GRAPH_MODE` (`full` default; `suffix`/`eager` opt-outs; `GRAPH_SUFFIX_REPLAY` back-compat override). | Med |
-| 1 | Tuning sprint (reference-shape perf envelope) | both | Now that A1-A4 + C1 (suffix and full-capture) are promoted, measure the cumulative decode throughput at the reference shape and tune: reference-shape perf + domain table, shape envelope (slots x context sweep), NCCL pinning, and C4 spill. This is the de-confounded steady-state measurement before opening the MTP bet. Opts into perf measurement per VALIDATION_CONTROL_POLICY. | Med |
-| 2 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
+| Done | Tuning sprint (reference-shape baseline + gap attribution) | both | Sprint 581: new baseline `26.8` tok/s agg decode at 32 slots / 256K / 64 tok/req on the full-capture default (`1.225x` over suffix). Gap attribution (eager, `14.4` ms/step): EP/MoE all-to-all `65.2%` (the waves; ~0.75 tok/expert -> empty tiles, SMOCC ~0.08-0.11), attention ~12%, compose ~11%, HC ~8%, host-sync ~5%. Throughput headroom is EP, not host-sync. Shape-envelope / NCCL-pinning / C4-spill levers deferred (situational; EP dominates today). | Med |
+| 1 | MTP (B1) — the EP-fill throughput bet | EP 65% | EP is 65% of decode *because* of sub-1-token-per-expert. MTP (verify K draft tokens) makes each step see (K+1)x tokens -> fills grouped-GEMM tiles, raises occupancy, and amortizes the all-to-all and per-step host orchestration -> attacks the 65% and the utilization waves at the root. Sequence: (a) MTP weight integration (safetensors->GGUF converter + `tp-ep-pack-contract.c` layer-43 extension + sidecar delete, ~3 sprints, correctness-only); (b) MTPBlock.forward in `engine/` (1 sprint, Phase A); (c) TP/EP specdec accept/reject loop (the actual throughput sprint, multi-sprint, opts into perf). See `MTP_IMPLEMENTATION.md`. | High |
+| 2 | B2 compact EP dispatch+combine fusion | EP 65% | Pre/parallel-to MTP: fuse dispatch+grouped-GEMM+weighted-combine into 1-2 kernels with device-side offsets; replace the variable-size compose movement with a ring-compatible / statically bucketed NCCL collective (not all-pairs P2P -> SHM budget, Sprint 530). Directly trims the 65% EP orchestration. Needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite (Sprint 550). | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
 | Deferred | B1 MTP — sidecar removal + specdec loop | EP 53% | Sidecar runs canonical MTP, not a truncation; cleanup is one ~200-LoC safetensors→GGUF converter + `tp-ep-pack-contract.c` extension + sidecar delete (3 sprints), then MTPBlock.forward (1 sprint), then TP/EP specdec loop (the actual throughput sprint). All after C5/B2/C1/tuning. | Med |
