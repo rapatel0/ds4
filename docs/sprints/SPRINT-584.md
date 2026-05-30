@@ -63,32 +63,36 @@ layer-43 binding through the unified path, and the speculative-decode loop.
 
 ## Plan (phased; each phase builds+validates on the pod per the steering process)
 
-1. **Converter fix (EP format).** `tools/mtp-pack-fragment.c` must emit experts
-   as **fused** `blk.43.ffn_gate_up_exps` (gate+up interleaved, mxfp4,
-   `turbomind_mxfp4_grouped_gate_up_interleaved`) + `blk.43.ffn_down_exps`, to
-   match `state->turbomind_gate_up_view`. (Today it emits separate gate/up.)
-   Validate: round-trip + the emitted GGUF tensor shape `[4096x4096x256]` and
-   layout match a main-model `blk.N.ffn_gate_up_exps` row.
-2. **EP pack emission.** Drive the pipeline from the EP `ep_expert` contract
+1. **EP pack emission (NOT a converter change).** Correction: the gate/up
+   FUSION is a downstream `appliance-pack` option (`--fuse-gate-up-interleaved`;
+   it reads SEPARATE `ffn_gate_exps`/`ffn_up_exps` at `tools/appliance-pack.cu:302-314`
+   and fuses to `turbomind_mxfp4_grouped_gate_up_interleaved`). The main-model
+   SOURCE manifest also has separate gate/up. So `tools/mtp-pack-fragment.c`'s
+   separate gate/up is ALREADY correct and needs no change. The real Phase-1
+   work is operational: drive the pipeline from the EP `ep_expert` contract
    (`mtp-contract2` already has the 24 EP rows) through turbomind-pack +
-   appliance-pack so each rank gets its 32-expert slice. Validate: 8 shards
-   with **equal** expert bytes per rank (EP is balanced, unlike LP).
-3. **Runtime layer-43 bind.** Bind layer 43 through `runtime_pack.cu` like layers
+   `appliance-pack --fuse-gate-up-interleaved`, so each rank gets its 32-expert
+   slice and gate/up is fused. (The earlier single-GPU emission ran against the
+   wrong owning_gpu=0 index and without the fuse flag.) Validate: 8 shards with
+   **equal** expert bytes per rank (EP is balanced, unlike LP), and a fused
+   `blk.43.ffn_gate_up_exps` turbomind row matching a main-model `blk.N` row.
+2. **Runtime layer-43 bind.** Bind layer 43 through `runtime_pack.cu` like layers
    0-42 (turbomind_gate_up_view/down_view + dense/attn TP shards + the MTP
    `enorm`/`e_proj`). Validate: appliance loads layer 43, all ranks non-empty.
-4. **MTPBlock.forward (EP).** Add the embedding-combine prologue + run layer 43
+3. **MTPBlock.forward (EP).** Add the embedding-combine prologue + run layer 43
    through the shared EP per-layer execution + the output head. Validate against
    the LP sidecar's MTP logits as a reference (same draft distribution).
-5. **Sidecar delete.** Remove `engine/mtp_step.cu` + `engine/mtp_sidecar.{c,h}`
-   once (4) matches the reference.
-6. **TP/EP speculative-decode loop (Phase B).** The draft-K / verify / accept
+4. **Sidecar delete.** Remove `engine/mtp_step.cu` + `engine/mtp_sidecar.{c,h}`
+   once (3) matches the reference.
+5. **TP/EP speculative-decode loop (Phase B).** The draft-K / verify / accept
    loop across ranks — the actual throughput sprint; opts into perf measurement.
 
 ## Definition of Done (this planning sprint)
 
 - The LP-vs-EP distinction and EP=8 MTP design recorded, with code evidence.
 - Prior LP-framed MTP records (582/583, steering, vision) annotated as LP-era.
-- Phase 1 (converter EP fusion) scoped as the first build increment.
+- Phase 1 (EP pack emission via the ep_expert contract + `--fuse-gate-up-interleaved`)
+  scoped as the first build increment; converter confirmed already correct.
 - Steering + vision updated; committed (excluding user-owned
   `docs/sprints/VALIDATION_CONTROL_POLICY.md` and `research/`).
 
