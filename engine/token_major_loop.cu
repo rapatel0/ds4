@@ -347,6 +347,32 @@ int run_token_major_serving_loop(const Options &opt,
                 return rc == 0 ? 1 : rc;
             }
         }
+        /* MTP draft (layer 43): run the MTP block via run_layer after the main
+         * 0-42 stack, validating it executes in the active token-major path.
+         * run_layer redirects to mtp_layer + mtp_contract on layer==43; ratio=0;
+         * no f16 cache / dense_ops / graph cache for the MTP layer. */
+        if (shared_expert_bindings && shared_expert_bindings->mtp_initialized &&
+            opt.mtp_contract_path) {
+            Options mtp_opt = opt;
+            mtp_opt.layer = 43;
+            LayerRunSummary ms;
+            SharedTpRuntime *mtp_tp =
+                (shared_tp_runtime && shared_tp_runtime->initialized) ? shared_tp_runtime
+                                                                      : nullptr;
+            const int mrc = run_layer(mtp_opt, &ms, nullptr, shared_api,
+                                      shared_rank_buffers, mtp_tp,
+                                      shared_expert_bindings, nullptr,
+                                      shared_hc_controls);
+            std::printf("tp_ep_mtp_layer_scaffold\tstep\t%d\tlayer\t43\tratio\t%d\t"
+                        "expert_rows\t%llu\tdense_rows\t%llu\tcontrol_rows\t%llu\t"
+                        "decode_ms_per_step\t%.6f\tdecode_checksum\t%llu\trc\t%d\t%s\n",
+                        step, ms.ratio, (unsigned long long)ms.expert_rows,
+                        (unsigned long long)ms.dense_rows,
+                        (unsigned long long)ms.control_rows, ms.decode_ms_per_step,
+                        (unsigned long long)ms.decode_checksum, mrc,
+                        (mrc == 0 && ms.pass) ? "PASS" : "FAIL");
+            std::fflush(stdout);
+        }
         const auto step_stop = std::chrono::steady_clock::now();
         const double step_wall_ms =
             std::chrono::duration<double, std::milli>(step_stop - step_start).count();

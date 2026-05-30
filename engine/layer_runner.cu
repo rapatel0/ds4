@@ -7,9 +7,14 @@ int run_layer(const Options &opt,
               const SharedExpertBindings *shared_expert_bindings,
               const SharedDenseOps *shared_dense_ops,
               SharedHcControls *shared_hc_controls) {
+    /* MTP block (layer 43): source the contract + expert cache from the
+     * dedicated MTP artifacts, not the main 0-42 pack. */
+    const bool mtp_mode = (opt.layer == 43);
+    const char *contract_for_layer =
+        (mtp_mode && opt.mtp_contract_path) ? opt.mtp_contract_path : opt.contract_path;
     std::vector<ContractRow> rows;
     LayerStats layer_stats;
-    if (parse_contract(opt.contract_path, opt.layer, &rows, &layer_stats) != 0 ||
+    if (parse_contract(contract_for_layer, opt.layer, &rows, &layer_stats) != 0 ||
         layer_stats.bad_rows != 0) {
         std::fprintf(stderr, "contract parse failed bad_rows=%llu\n",
                      (unsigned long long)layer_stats.bad_rows);
@@ -18,10 +23,14 @@ int run_layer(const Options &opt,
     DescriptorBindings bindings;
     const LayerExpertCache *layer_expert_cache = nullptr;
     if (shared_expert_bindings) {
-        layer_expert_cache = &shared_expert_bindings->layers[opt.layer];
+        layer_expert_cache = (mtp_mode && shared_expert_bindings->mtp_initialized)
+                                 ? &shared_expert_bindings->mtp_layer
+                                 : &shared_expert_bindings->layers[opt.layer];
         bindings = layer_expert_cache->bindings;
     } else {
-        if (parse_tm_index(opt.tm_index_path, opt.layer, &bindings) != 0) {
+        const char *tm_for_layer =
+            (mtp_mode && opt.mtp_tm_index_path) ? opt.mtp_tm_index_path : opt.tm_index_path;
+        if (parse_tm_index(tm_for_layer, opt.layer, &bindings) != 0) {
             std::fprintf(stderr, "tm index parse failed for layer %d\n", opt.layer);
             return 2;
         }
@@ -474,7 +483,7 @@ int run_layer(const Options &opt,
             : nullptr;
     const int decode_rc = run_decode_loop(opt, rows, ranks, *api, rt, dense_f16_cache,
                                           layer_dense_ops, shared_hc_controls,
-                                          shared_rank_buffers
+                                          (shared_rank_buffers && !mtp_mode)
                                               ? &shared_rank_buffers->graph_cache.layers[opt.layer]
                                               : nullptr,
                                           &decode_loop);

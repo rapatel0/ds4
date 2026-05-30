@@ -324,12 +324,46 @@ confines new code to the prologue/head + the contained `[44]` extension + the
 consumption format (its load logic is reused); the expert bind
 (`shared_expert_bindings.mtp_layer`) is directly reusable by `run_layer`.
 
+### Phase 3 implementation progress + KV-management finding (2026-05-30)
+
+Implemented (commits cd572ae8..this): converter body-tensor renames
+(`attn_kv`->`attn_kv_latent`, `attn_sinks.weight`->`attn_sinks`) so the MTP pack
+matches the main convention for run_layer reuse (re-ran the pack chain); a
+`run_layer` MTP redirect (`ds4_layer_ratio(43)=0`; layer-43 sources the contract
+from `mtp_contract_path`, experts from `shared_expert_bindings->mtp_layer`, graph
+cache disabled); and an MTP layer-43 scaffold in the active token-major path
+(`token_major_loop.cu`). Builds clean.
+
+**Load-test finding (the incremental gate working):** the MTP scaffold reached
+`run_layer` (ratio=0 applied correctly) but FAILED with
+`tp_runtime_dense_kv_slice_failed: layer is outside DS4 range`
+(`tp_runtime.cu:1231`, `layer >= kLayers`). This is NOT just a bound to bump:
+`run_layer` does **persistent per-layer KV-cache management** over the [43]
+layer arrays, but the MTP attention uses a **dedicated draft KV buffer**
+(`mtp_step.cu` `raw_t` / `MTPF_RAW_CAP`), not the persistent 43-layer cache.
+So the clean split is:
+- **FFN (routed MoE)**: reuse the EP all-to-all dispatch via run_layer -- the
+  throughput point, experts already bound in `mtp_layer`. Feasible.
+- **Attention**: needs MTP-specific KV handling (dedicated draft KV), NOT
+  run_layer's persistent-cache path. run_layer cannot be reused wholesale.
+
+Resolution options for Phase 3 attention: (a) give the MTP layer a KV slot
+(`kLayers`->44 + the [43] KV/state arrays -> [44]) and run it like a main layer
+over the context KV; or (b) an MTP-specific attention path (dedicated draft KV,
+mirroring `mtp_step.cu`), composed with the reused EP FFN. (b) is closer to the
+canonical MTP draft semantics and avoids the [43] KV-array sprawl. This is the
+next decision/implementation step.
+
 ## Status
 
 Phase 1 (EP=8 MTP weight pack) COMPLETE + validated. Phase 2 (runtime layer-43
 bind) COMPLETE + runtime-validated -- experts (EP-split 32/rank) AND the 29
 non-expert families load from a dedicated MTP pack dir, serving path
-undisturbed. Phase 3 (MTP draft forward) scoped: reuse the mtp_step.cu sequence
+undisturbed. Phase 3 (MTP draft forward) IN PROGRESS: run_layer MTP redirect +
+token-major scaffold implemented + built; load test surfaced that the MTP
+attention needs dedicated draft-KV handling (run_layer's persistent KV cache
+rejects layer 43) -- FFN EP-reuse is feasible, attention needs MTP-specific
+code. Earlier design notes (reuse the mtp_step.cu sequence
 with 3 EP changes (F8 dense matmuls, EP all-to-all routed FFN, bound-structure
 weights + multi-rank); validated against the LP sidecar draft logits. This is
 the sprint-sized Phase A engine work; weight integration (steps 1-4) is done.

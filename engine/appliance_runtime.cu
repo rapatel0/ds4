@@ -698,6 +698,29 @@ int run_tp_ep_appliance(Options opt) {
             return rc == 0 ? 1 : rc;
         }
     }
+    /* MTP block (layer 43): validate the MTP transformer body runs via run_layer
+     * (reuses the EP all-to-all dispatch). Experts from shared_expert_bindings
+     * ->mtp_layer, contract from mtp_contract_path, ratio=0; dense/control load
+     * from the MTP contract (no f16 cache / dense_ops for layer 43). */
+    if (shared_expert_bindings.mtp_initialized && opt.mtp_contract_path) {
+        Options mtp_opt = opt;
+        mtp_opt.layer = 43;
+        LayerRunSummary ms;
+        SharedTpRuntime *tp_runtime_arg =
+            shared_tp_runtime.initialized ? &shared_tp_runtime : nullptr;
+        const int mrc = run_layer(mtp_opt, &ms, nullptr, &shared_api,
+                                  &shared_rank_buffers, tp_runtime_arg,
+                                  &shared_expert_bindings, nullptr,
+                                  shared_hc_controls_arg);
+        std::printf("tp_ep_mtp_layer_scaffold\tlayer\t43\tratio\t%d\t"
+                    "expert_rows\t%llu\tdense_rows\t%llu\tcontrol_rows\t%llu\t"
+                    "decode_ms_per_step\t%.6f\tdecode_checksum\t%llu\trc\t%d\t%s\n",
+                    ms.ratio, (unsigned long long)ms.expert_rows,
+                    (unsigned long long)ms.dense_rows,
+                    (unsigned long long)ms.control_rows,
+                    ms.decode_ms_per_step, (unsigned long long)ms.decode_checksum,
+                    mrc, (mrc == 0 && ms.pass) ? "PASS" : "FAIL");
+    }
     const auto stop = std::chrono::steady_clock::now();
     const double wall_ms =
         std::chrono::duration<double, std::milli>(stop - start).count();

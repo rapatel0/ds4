@@ -426,6 +426,7 @@ std::string layer_tensor_name(int layer, const char *suffix) {
 
 int ds4_layer_ratio(int layer) {
     if (layer < 2) return 0;
+    if (layer == 43) return 0;  /* MTP block: simple attention, no compress/indexer */
     return (layer % 2) == 0 ? 4 : 128;
 }
 
