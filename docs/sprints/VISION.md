@@ -3860,6 +3860,8 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 
 | 2026-05-29 | Sprint 581 set the new reference baseline and attributed the decode domain. | Full-capture default: `26.8` tok/s agg decode at 32 slots / 256K / 64 tok/req (`1.225x` over suffix). Eager gap attribution (`14.4` ms/step): EP/MoE all-to-all `65.2%`, attention ~12%, compose ~11%, HC ~8%, host-sync ~5%. EP dominates (sub-1-token-per-expert -> empty tiles, SMOCC ~0.08-0.11). | C1 + tuning done. Next ordered item: MTP/B1 (the EP-fill bet) with B2 alongside; host-sync/output-head cleanup is a ~5% secondary. |
 
+| 2026-05-29 | Sprint 582 scoped MTP weight integration (B1 Phase A.1). | Confirmed the 32-family MTP tensor set in the safetensors cache (`1575` tensors). Found the expert weights are I8+E8M0 (not mxfp4 as `MTP_IMPLEMENTATION.md` assumed) and `ds4_source_formats` has no raw-I8 path, so the converter must re-quantize I8+E8M0 -> MXFP4 (acceptable: MTP is a verified draft model, ~Q4_K parity with the sidecar). Attn/proj F8_E4M3+E8M0 and BF16/F32 map directly. | Converter (with I8->MXFP4 re-quant) + contract layer-43 -> Sprint 583; binding + sidecar delete -> 584; then MTPBlock.forward and the specdec loop. Served path unchanged. |
+
 ## Sprint Hygiene
 
 Sprint 481 established cleanup discipline for TP/EP feature gates and temporary
