@@ -134,9 +134,36 @@ fused gate_up). Validate: a fused `blk.43.ffn_gate_up_exps` turbomind row
 (256 experts) matching a main-model `blk.N` row. (Schema-matching across pack.c
 /contract/appliance-pack indices is the known fiddly part.)
 
+### Phase 1 COMPLETE + validated end-to-end (2026-05-30)
+
+The full EP=8 MTP weight pack ran on the pod from the 32-family GGUF:
+
+1. `pack.c --manifest mtp-manifest-ep.tsv --gpus 8 --write-index` ->
+   `/workspace/mtp-pack-ep/pack-index.tsv` (32 tensors, 3.35 GiB).
+2. `appliance-pack --index pack-index.tsv --source mtp-fragment-ep.gguf
+   --layer 43 --fuse-gate-up-interleaved --lib <turbomind>` -> packed
+   `blk.43.ffn_gate_up_exps experts=256/256 fused_N=4096 interleaved=1` +
+   `blk.43.ffn_down_exps experts=256/256` into `/workspace/mtp-shards-ep`.
+   **The fused row matches the main-model `blk.N.ffn_gate_up_exps` format
+   exactly** (same `fused_N=4096 interleaved=1`). gpu0.weights=3.6 GB,
+   gpu1-7=0 -- correct by-layer storage for a single layer (runtime EP-slices
+   at load).
+3. `tp-ep-pack-contract --pack-dir mtp-shards-ep` ->
+   `/workspace/mtp-contract-ep/tp-ep-pack-contract.tsv`: **16 `ep_expert` rows**
+   (2 fused expert tensors x 8 ranks; the fusion collapsed the old 24 from 3
+   separate tensors), **32 experts/rank** EP-split (`efirst` 0/32/../224,
+   `ecount=32`) across all 8 GPUs, plus 80 `dense_tp`, 512 `kv_shard`,
+   328 `kv_comp_state`, 152 `replicated_control`. A correct TP8/EP8 plan.
+
+This is the EP=8 MTP weight pack: fused gate_up (production format), experts
+EP-sliced 32/rank, dense TP-sharded, loaded per-rank at runtime via the
+contract's `efirst`/`ecount` (`turbomind_bindings.cu:138`). Artifacts:
+`/workspace/mtp-fragment-ep.gguf`, `mtp-manifest-ep.tsv`, `mtp-shards-ep/`
+(shards + fused turbomind-pack-index), `mtp-contract-ep/` (EP contract).
+
 ## Status
 
-Architecture established and the converter (the sole new-code deliverable)
-completed + validated to all 32 families. Prior MTP weight-pack work was
-LP-framed and is superseded. Next: the mechanical pack chain above, then the
-runtime layer-43 bind (Phase 2).
+Phase 1 (EP=8 MTP weight pack) COMPLETE + validated. Prior MTP weight-pack
+work was LP-framed and is superseded. Next: Phase 2 -- runtime layer-43 bind
+(extend `runtime_pack.cu` and `turbomind_bindings.cu:198` `layer < 43` -> `< 44`,
++ the MTP `enorm`/`e_proj`/`h_proj`/`hnorm`/`norm`/`hc_head_*` families).
