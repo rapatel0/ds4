@@ -204,6 +204,26 @@ to emit the real gpuN.weights shards (pack.c/turbomind-pack here ran in
 plan/dry-run + single-shard), `runtime_pack.cu` layer-43 bind, and sidecar delete.
 Then MTPBlock.forward and the specdec loop.
 
+
+
+## MTP shards emitted: appliance-pack --layer 43 (offline weight-pack COMPLETE)
+
+`appliance-pack` needed exactly one change: its layer-range guard rejected layer
+43 (`> 43u` -> `> 44u`, admitting the MTP block at index 43). With that 1-line
+fix + a CUDA rebuild, `appliance-pack --index <mtp pack-index> --source
+mtp-fragment.gguf --layer 43` packed the full MTP layer: 3 expert tensors
+(256/256 experts each, TurboMind weight/scale offsets) + 17 dense/control tensors
+-> `gpu0.weights` (3.58 GB), `skipped_rows=0`, no errors.
+
+**The MTP offline weight-pack is complete and validated end-to-end with only two
+code changes: the converter (new tool) and a 1-line appliance-pack layer bound.**
+pack.c, turbomind-pack, and tp-ep-pack-contract are all layer-generic. (The shards
+landed on gpu0 here because the standalone manifest set owning_gpu=0; full TP8/EP8
+distribution comes from the contract's per-GPU assignment in a real pack run.)
+
+Remaining MTP: `runtime_pack.cu` layer-43 bind (load the MTP weights at runtime),
+sidecar delete; then MTPBlock.forward and the specdec loop.
+
 ## Definition of Done
 
 - Converter implemented; emits an MTP GGUF fragment that satisfies

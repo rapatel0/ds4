@@ -220,8 +220,9 @@ static void parse_args(int argc, char **argv, options *opt) {
     if (opt->layer_filter < 0 && opt->layer_count != 1) {
         die("--layer-count requires --layer");
     }
+    /* 43 transformer layers (0-42) plus the optional MTP block at layer 43. */
     if (opt->layer_filter >= 0 &&
-        (uint64_t)opt->layer_filter + (uint64_t)opt->layer_count > 43u) {
+        (uint64_t)opt->layer_filter + (uint64_t)opt->layer_count > 44u) {
         die("--layer/--layer-count exceeds DS4 layer range");
     }
     if (opt->keep_separate_gate_up && !opt->fuse_gate_up) {
