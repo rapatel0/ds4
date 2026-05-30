@@ -1532,6 +1532,87 @@ int open_shared_hc_controls(const Options &opt,
     return 0;
 }
 
+/* MTP (layer 43) HC/norm controls: load the MTP block's global HC + norm +
+ * router control tensors into SharedHcControls slot 43, from the MTP contract +
+ * pack dir (NOT opt.pack_dir). Isolated from the 0-42 loop (no regression risk).
+ * ratio=0 (no compress/indexer). No-op unless the MTP source is configured.
+ * Loads the GLOBAL tensors; rank-distributed variants added if the decode path
+ * requires them (surfaced incrementally by the load test). */
+int load_mtp_hc_layer43(const Options &opt, SharedHcControls *out) {
+    if (!opt.mtp_contract_path || !opt.mtp_pack_dir) return 0;
+    if (!out || !out->initialized) return 1;
+    const int L = 43;
+    std::vector<ContractRow> rows;
+    LayerStats st;
+    if (parse_contract(opt.mtp_contract_path, L, &rows, &st) != 0 || st.bad_rows != 0) {
+        std::fprintf(stderr, "MTP HC contract parse failed: %s\n", opt.mtp_contract_path);
+        return 1;
+    }
+    Options mopt = opt;
+    mopt.pack_dir = opt.mtp_pack_dir;  /* read layer-43 control bytes from the MTP pack */
+    std::vector<float> attn_fn, attn_base, attn_scale, attn_norm_weight, q_a_norm_weight,
+        kv_a_norm_weight, attn_sinks, fn, base, scale, ffn_norm_weight, router_w, router_bias;
+    bool have_bias = false;
+    const std::string attn_fn_name = layer_tensor_name(L, "hc_attn_fn");
+    const std::string attn_base_name = layer_tensor_name(L, "hc_attn_base");
+    const std::string attn_scale_name = layer_tensor_name(L, "hc_attn_scale");
+    const std::string attn_norm_name = layer_tensor_name(L, "attn_norm.weight");
+    const std::string q_a_norm_name = layer_tensor_name(L, "attn_q_a_norm.weight");
+    const std::string kv_a_norm_name = layer_tensor_name(L, "attn_kv_a_norm.weight");
+    const std::string attn_sinks_name = layer_tensor_name(L, "attn_sinks");
+    const std::string fn_name = layer_tensor_name(L, "hc_ffn_fn");
+    const std::string base_name = layer_tensor_name(L, "hc_ffn_base");
+    const std::string scale_name = layer_tensor_name(L, "hc_ffn_scale");
+    const std::string ffn_norm_name = layer_tensor_name(L, "ffn_norm.weight");
+    const std::string router_name = layer_tensor_name(L, "ffn_gate_inp.weight");
+    const std::string bias_name = layer_tensor_name(L, "exp_probs_b");
+    if (load_control_f32(mopt, rows, attn_fn_name.c_str(),
+                         (size_t)kHcRows * (size_t)kHidden * kHcMix, &attn_fn) ||
+        load_control_f32(mopt, rows, attn_base_name.c_str(), kHcMix, &attn_base) ||
+        load_control_f32(mopt, rows, attn_scale_name.c_str(), 3, &attn_scale) ||
+        load_control_f32(mopt, rows, attn_norm_name.c_str(), kHidden, &attn_norm_weight) ||
+        load_control_f32(mopt, rows, q_a_norm_name.c_str(), 1024, &q_a_norm_weight) ||
+        load_control_f32(mopt, rows, kv_a_norm_name.c_str(), kHeadDim, &kv_a_norm_weight) ||
+        load_control_f32(mopt, rows, attn_sinks_name.c_str(), kHeadCount, &attn_sinks) ||
+        load_control_f32(mopt, rows, fn_name.c_str(),
+                         (size_t)kHcRows * (size_t)kHidden * kHcMix, &fn) ||
+        load_control_f32(mopt, rows, base_name.c_str(), kHcMix, &base) ||
+        load_control_f32(mopt, rows, scale_name.c_str(), 3, &scale) ||
+        load_control_f32(mopt, rows, ffn_norm_name.c_str(), kHidden, &ffn_norm_weight) ||
+        load_control_f32(mopt, rows, router_name.c_str(),
+                         (size_t)kHidden * kGlobalExperts, &router_w) ||
+        load_optional_control_f32(mopt, rows, bias_name.c_str(), kGlobalExperts,
+                                  &router_bias, &have_bias)) {
+        std::fprintf(stderr, "MTP HC layer-43 control load failed\n");
+        return 1;
+    }
+    CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+#define MTP_HC_UP(field, vec)                                                      \
+    do {                                                                           \
+        CHECK_CUDA(cudaMalloc(&out->field[L], (vec).size() * sizeof(float)));       \
+        CHECK_CUDA(cudaMemcpy(out->field[L], (vec).data(),                          \
+                              (vec).size() * sizeof(float), cudaMemcpyHostToDevice)); \
+    } while (0)
+    MTP_HC_UP(d_attn_fn, attn_fn);
+    MTP_HC_UP(d_attn_base, attn_base);
+    MTP_HC_UP(d_attn_scale, attn_scale);
+    MTP_HC_UP(d_attn_norm_weight, attn_norm_weight);
+    MTP_HC_UP(d_q_a_norm_weight, q_a_norm_weight);
+    MTP_HC_UP(d_kv_a_norm_weight, kv_a_norm_weight);
+    MTP_HC_UP(d_attn_sinks, attn_sinks);
+    MTP_HC_UP(d_ffn_fn, fn);
+    MTP_HC_UP(d_ffn_base, base);
+    MTP_HC_UP(d_ffn_scale, scale);
+    MTP_HC_UP(d_ffn_norm_weight, ffn_norm_weight);
+    MTP_HC_UP(d_router_w, router_w);
+    if (have_bias) MTP_HC_UP(d_router_bias, router_bias);
+#undef MTP_HC_UP
+    std::printf("tp_ep_mtp_hc_layer43_load\tlayer\t43\trouter_bias\t%d\tPASS\n",
+                have_bias ? 1 : 0);
+    std::fflush(stdout);
+    return 0;
+}
+
 void close_shared_hc_controls(const Options &opt, SharedHcControls *out) {
     if (!out || !out->initialized) return;
     close_route_plan_host_workspace(&out->route_plan_ws);

@@ -252,6 +252,20 @@ int run_tp_ep_appliance(Options opt) {
         std::printf("tp_ep_hc_final_expand_shared\tlayers\t43\tslots\t%d\t"
                     "control_bytes\t%llu\tPASS\n",
                     opt.slots, (unsigned long long)shared_hc_controls.control_bytes);
+        /* MTP (layer 43) HC/norm controls into slot 43 (no-op unless MTP source set). */
+        if (load_mtp_hc_layer43(opt, &shared_hc_controls) != 0) {
+            std::fprintf(stderr, "tp_ep MTP HC layer-43 controls open failed\n");
+            close_shared_hc_controls(opt, &shared_hc_controls);
+            free_shared_dense_ops(&shared_dense_ops, opt);
+            close_shared_expert_bindings(&shared_expert_bindings);
+            close_shared_tp_runtime(&shared_tp_runtime);
+            close_shared_rank_buffers(&shared_rank_buffers);
+            close_shared_api(&shared_api);
+            if (shared_dense_f16_cache) {
+                free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+            }
+            return 12;
+        }
         if (report_vram_checkpoint(opt, "after_hc_controls") != 0) {
             close_shared_hc_controls(opt, &shared_hc_controls);
             free_shared_dense_ops(&shared_dense_ops, opt);
