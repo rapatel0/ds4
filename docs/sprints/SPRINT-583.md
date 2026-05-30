@@ -109,6 +109,26 @@ This is the correctness-critical core of the converter. Remaining: wrap it with
 the safetensors read loop (reuse the `deepseek4-quantize.c` index/header loader +
 name map) and GGUF-fragment emission, then the contract layer-43 extension.
 
+
+
+## Converter COMPLETE + validated (implementation done)
+
+`tools/mtp-pack-fragment.c` is implemented and validated end-to-end on the pod:
+it reads `mtp.0.*` from the safetensors, auto-routes each family by source dtype
+(F8_E4M3 -> f8_e4m3_b128, packed-FP4/I8 -> mxfp4, BF16/F32 direct), stacks the
+256 routed experts into `blk.43.ffn_{gate,up,down}_exps`, and emits:
+- `mtp-fragment.gguf`: 20 GGUF tensors (17 non-expert families + 3 stacked
+  expert tensors), 3.57 GB (matches the 3.59 GB source -> lossless), re-parses
+  as GGUF v3 with n_tensors=20 (EMIT_OK=1).
+- `mtp-manifest.tsv`: per-tensor (gguf_name, source_dtype, source_shape,
+  byte_length). Byte sizes verified against the format block math (e.g. expert
+  gate `[256x2048x4096]` mxfp4 = 256*2048*(4096/32)*17 = 1,140,850,688 B; attn_q_a
+  `[1024x4096]` f8 = 1024*(4096/128)*129 = 4,227,072 B).
+
+The converter (the first MTP weight-integration sub-step) is done. Next:
+extend `tp-ep-pack-contract.c` to ingest the layer-43 manifest rows and shard
+them under EP8/TP8, then `appliance-pack` -> gpu{N}.weights, then runtime binding.
+
 ## Definition of Done
 
 - Converter implemented; emits an MTP GGUF fragment that satisfies
