@@ -915,12 +915,17 @@ int run_tp_ep_http_server(const Options &base_opt,
             req_opt.serving_bench = false;
             std::vector<uint32_t> decode_input_tokens((size_t)req_opt.slots, 0u);
             std::vector<unsigned char> decode_active_slots((size_t)req_opt.slots, 0u);
+            std::vector<uint32_t> mtp_raw_rows_by_slot((size_t)req_opt.slots, 0u);
             for (size_t i = 0; i < batch.size(); ++i) {
                 uint32_t input_token = 0;
                 if (assignments[i].slot >= 0 &&
                     assignments[i].slot < (int)sessions.slots.size()) {
                     const TpEpHttpSessionSlot &slot =
                         sessions.slots[(size_t)assignments[i].slot];
+                    if (assignments[i].slot < req_opt.slots) {
+                        mtp_raw_rows_by_slot[(size_t)assignments[i].slot] =
+                            slot.mtp_raw_rows;
+                    }
                     if (assignments[i].hit &&
                         slot.last_selected_token != UINT32_MAX) {
                         input_token = slot.last_selected_token;
@@ -986,6 +991,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                                   shared_token_embedding,
                                                   &prefill_input_tokens,
                                                   &prefill_active_slots,
+                                                  &mtp_raw_rows_by_slot,
                                                   resident_rows,
                                                   resident_stats,
                                                   true,
@@ -1020,6 +1026,7 @@ int run_tp_ep_http_server(const Options &base_opt,
                                                   shared_token_embedding,
                                                   &decode_input_tokens,
                                                   &decode_active_slots,
+                                                  &mtp_raw_rows_by_slot,
                                                   resident_rows,
                                                   resident_stats,
                                                   true,
@@ -1174,6 +1181,12 @@ int run_tp_ep_http_server(const Options &base_opt,
                                     request_generated,
                                     batch[i].prompt_prefill_tokens + request_generated,
                                     batch[i].generated_token_ids);
+                    if (batch[i].cache_slot >= 0 &&
+                        batch[i].cache_slot < (int)sessions.slots.size() &&
+                        batch[i].cache_slot < req_opt.slots) {
+                        sessions.slots[(size_t)batch[i].cache_slot].mtp_raw_rows =
+                            mtp_raw_rows_by_slot[(size_t)batch[i].cache_slot];
+                    }
                     const TpEpHttpSessionSlot *slot_state = nullptr;
                     if (batch[i].cache_slot >= 0 &&
                         batch[i].cache_slot < (int)sessions.slots.size()) {

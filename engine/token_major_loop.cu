@@ -11,6 +11,7 @@ int run_token_major_serving_loop(const Options &opt,
                                  SharedTokenEmbedding *shared_token_embedding,
                                  const std::vector<uint32_t> *decode_input_tokens,
                                  const std::vector<unsigned char> *decode_active_slots,
+                                 std::vector<uint32_t> *mtp_raw_rows_by_slot,
                                  std::vector<ContractRow> resident_rows[43],
                                  LayerStats resident_stats[43],
                                  bool resident_serving_loop,
@@ -362,8 +363,26 @@ int run_token_major_serving_loop(const Options &opt,
              * the MTP attention ran with a wrong raw-SWA window. */
             mtp_opt.position = opt.position + (uint64_t)step;
             mtp_opt.decode_steps = 1;
+            uint32_t mtp_raw_rows_before = (uint32_t)step;
+            if (mtp_raw_rows_by_slot &&
+                mtp_raw_rows_by_slot->size() >= (size_t)opt.slots) {
+                bool have_active_count = false;
+                uint32_t min_active_count = UINT32_MAX;
+                for (int slot = 0; slot < opt.slots; ++slot) {
+                    const bool active =
+                        !decode_active_slots ||
+                        decode_active_slots->size() <= (size_t)slot ||
+                        (*decode_active_slots)[(size_t)slot] != 0u;
+                    if (!active) continue;
+                    const uint32_t count = (*mtp_raw_rows_by_slot)[(size_t)slot];
+                    min_active_count = std::min(min_active_count, count);
+                    have_active_count = true;
+                }
+                if (have_active_count) mtp_raw_rows_before = min_active_count;
+            }
             mtp_opt.true_ds4_attention_raw_valid_rows =
-                std::max(1u, std::min((uint32_t)(step + 1), (uint32_t)kRawSwaRows));
+                std::max(1u, std::min(mtp_raw_rows_before + 1u,
+                                      (uint32_t)kRawSwaRows));
             mtp_opt.warmup = 0;
             /* Sprint 585: preserve the main model's final hidden (layer-42 output)
              * before the MTP prologue/body overwrite d_final_hc_shard, so the main
@@ -424,10 +443,25 @@ int run_token_major_serving_loop(const Options &opt,
                                       shared_rank_buffers, mtp_tp,
                                       shared_expert_bindings, shared_dense_ops,
                                       shared_hc_controls);
+            if (ms.decode_finite_bad == 0 && ms.decode_checksum != 0 &&
+                mtp_raw_rows_by_slot &&
+                mtp_raw_rows_by_slot->size() >= (size_t)opt.slots) {
+                for (int slot = 0; slot < opt.slots; ++slot) {
+                    const bool active =
+                        !decode_active_slots ||
+                        decode_active_slots->size() <= (size_t)slot ||
+                        (*decode_active_slots)[(size_t)slot] != 0u;
+                    if (!active) continue;
+                    uint32_t &count = (*mtp_raw_rows_by_slot)[(size_t)slot];
+                    if (count < (uint32_t)kRawSwaRows) ++count;
+                }
+            }
             std::printf("tp_ep_mtp_layer_scaffold\tstep\t%d\tlayer\t43\tratio\t%d\t"
-                        "expert_rows\t%llu\tdense_rows\t%llu\tcontrol_rows\t%llu\t"
+                        "mtp_raw_valid_rows\t%u\texpert_rows\t%llu\t"
+                        "dense_rows\t%llu\tcontrol_rows\t%llu\t"
                         "decode_ms_per_step\t%.6f\tdecode_checksum\t%llu\trc\t%d\t%s\n",
-                        step, ms.ratio, (unsigned long long)ms.expert_rows,
+                        step, ms.ratio, mtp_opt.true_ds4_attention_raw_valid_rows,
+                        (unsigned long long)ms.expert_rows,
                         (unsigned long long)ms.dense_rows,
                         (unsigned long long)ms.control_rows, ms.decode_ms_per_step,
                         (unsigned long long)ms.decode_checksum, mrc,

@@ -625,6 +625,7 @@ int run_tp_ep_appliance(Options opt) {
                                                     nullptr,
                                                     nullptr,
                                                     nullptr,
+                                                    nullptr,
                                                     resident_rows,
                                                     resident_stats,
                                                     resident_serving_loop,

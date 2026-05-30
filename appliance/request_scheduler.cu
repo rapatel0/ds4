@@ -15,6 +15,7 @@ struct TpEpHttpSessionSlot {
     uint64_t misses = 0;
     uint64_t last_used = 0;
     uint32_t last_selected_token = UINT32_MAX;
+    uint32_t mtp_raw_rows = 0;
 };
 
 struct TpEpHttpSessionAssignment {
@@ -136,6 +137,7 @@ struct TpEpHttpSessionTable {
                 slot.prompt_tokens = 0;
                 slot.generated_tokens = 0;
                 slot.last_selected_token = UINT32_MAX;
+                slot.mtp_raw_rows = 0;
             }
             return a;
         }
@@ -182,6 +184,7 @@ struct TpEpHttpSessionTable {
         slot.misses = 1;
         slot.last_used = clock;
         slot.last_selected_token = UINT32_MAX;
+        slot.mtp_raw_rows = 0;
         misses++;
 
         a.slot = idx;
@@ -242,6 +245,7 @@ struct TpEpHttpSessionTable {
                               "\"prompt_token_ids\":%zu,"
                               "\"generated_token_ids\":%zu,"
                               "\"last_selected_token\":%u,"
+                              "\"mtp_raw_rows\":%u,"
                               "\"hits\":%llu,\"misses\":%llu}",
                               i == 0 ? "" : ",",
                               slot.id, slot.occupied ? 1 : 0, key.c_str(),
@@ -255,6 +259,7 @@ struct TpEpHttpSessionTable {
                               slot.prompt_token_ids.size(),
                               slot.generated_token_ids.size(),
                               slot.last_selected_token,
+                              slot.mtp_raw_rows,
                               (unsigned long long)slot.hits,
                               (unsigned long long)slot.misses);
             if (n < 0) break;
