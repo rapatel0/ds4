@@ -493,7 +493,6 @@ int run_tp_ep_appliance(Options opt) {
     }
     SharedOutputHead *mtp_output_head_arg =
         (shared_output_head.initialized && opt.mtp_contract_path) ? &mtp_output_head : nullptr;
-    (void)mtp_output_head_arg;  /* threaded to the draft head next */
 
     SharedTokenEmbedding shared_token_embedding;
     if (opt.serve_http) {
@@ -589,6 +588,7 @@ int run_tp_ep_appliance(Options opt) {
                                        &shared_expert_bindings,
                                        &shared_dense_ops,
                                        shared_output_head_arg,
+                                       mtp_output_head_arg,
                                        shared_hc_controls_arg,
                                        shared_token_embedding_arg,
                                        resident_rows,
@@ -620,6 +620,7 @@ int run_tp_ep_appliance(Options opt) {
                                                     &shared_expert_bindings,
                                                     &shared_dense_ops,
                                                     shared_output_head_arg,
+                                                    mtp_output_head_arg,
                                                     shared_hc_controls_arg,
                                                     nullptr,
                                                     nullptr,

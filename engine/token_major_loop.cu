@@ -6,6 +6,7 @@ int run_token_major_serving_loop(const Options &opt,
                                  const SharedExpertBindings *shared_expert_bindings,
                                  const SharedDenseOps *shared_dense_ops,
                                  SharedOutputHead *shared_output_head,
+                                 SharedOutputHead *mtp_output_head,
                                  SharedHcControls *shared_hc_controls,
                                  SharedTokenEmbedding *shared_token_embedding,
                                  const std::vector<uint32_t> *decode_input_tokens,
@@ -372,6 +373,37 @@ int run_token_major_serving_loop(const Options &opt,
                         (unsigned long long)ms.decode_checksum, mrc,
                         (mrc == 0 && ms.pass) ? "PASS" : "FAIL");
             std::fflush(stdout);
+            /* Sprint 585 Phase 1 (increment 1.1): MTP draft head. After the MTP
+             * body (run_layer 43) leaves its output in ranks[].d_final_hc_shard,
+             * run the dedicated MTP output head (shares the LM matmul, overrides
+             * the head HC weights) to produce DRAFT logits/token. No new kernels;
+             * validates the serving-config MTP head end-to-end. mtp_output_head is
+             * loaded once in appliance_runtime (load_mtp_output_head) and threaded
+             * here; null unless MTP is configured + the head is open, so the
+             * shipped mtp=off serving path is untouched. The prologue
+             * (embedding-combine) that makes this the TRUE MTP draft lands next
+             * (increment 1.2); for now the head consumes the body output directly. */
+            /* Gate on the MTP body having computed finite output, NOT on mrc==0:
+             * run_layer(43) returns the benign rc=1 (kv_rows>0 scaffold check,
+             * inapplicable to the raw-SWA MTP per Sprint 584) while still
+             * producing a valid decode (decode_pass=1, finite). */
+            if (ms.decode_finite_bad == 0 && ms.decode_checksum != 0 &&
+                mtp_output_head && mtp_output_head->initialized &&
+                shared_rank_buffers && shared_rank_buffers->initialized) {
+                OutputHeadRunResult draft;
+                const int drc = run_shared_output_head_from_rank_hc(
+                    opt, mtp_output_head, shared_rank_buffers->ranks, &draft);
+                std::printf("tp_ep_mtp_draft_head\tstep\t%d\tslots\t%d\t"
+                            "draft_token\t%u\tdraft_logit\t%.9f\tfinite_bad\t%d\t"
+                            "total_ms\t%.6f\tchecksum\t%llu\t%s\n",
+                            step, opt.slots,
+                            draft.tokens.empty() ? UINT32_MAX : draft.tokens[0],
+                            draft.logits.empty() ? 0.0f : draft.logits[0],
+                            draft.finite_bad, draft.total_ms,
+                            (unsigned long long)draft.checksum,
+                            (drc == 0 && draft.pass) ? "PASS" : "FAIL");
+                std::fflush(stdout);
+            }
         }
         const auto step_stop = std::chrono::steady_clock::now();
         const double step_wall_ms =

@@ -180,6 +180,12 @@ bool parse_args(int argc, char **argv, Options *opt) {
         } else if (std::strcmp(arg, "--decode-stage-checksum-gate") == 0 ||
                    std::strcmp(arg, "--decode-stage-checksum") == 0) {
             opt->decode_stage_checksum_gate = true;
+        } else if (std::strcmp(arg, "--diagnostic-output-head-eager") == 0) {
+            /* Open the shared output head eagerly (not lazily) so it is available
+             * to the per-step decode body. Sprint 585: lets the scaffold path
+             * validate the MTP draft head without the HTTP serving harness. */
+            opt->diagnostic_output_head = true;
+            opt->diagnostic_output_head_lazy_gate = false;
         } else if (std::strcmp(arg, "--help") == 0 || std::strcmp(arg, "-h") == 0) {
             usage(argv[0]);
             std::exit(0);
