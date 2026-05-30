@@ -129,6 +129,35 @@ The converter (the first MTP weight-integration sub-step) is done. Next:
 extend `tp-ep-pack-contract.c` to ingest the layer-43 manifest rows and shard
 them under EP8/TP8, then `appliance-pack` -> gpu{N}.weights, then runtime binding.
 
+
+
+## pack.c manifest schema + conventions (pipeline ingestion unblocked)
+
+`pack.c --manifest` requires the 13-column Sprint 002 schema (validated against
+the reference `SPRINT-002-PACK-MANIFEST.tsv`):
+`semantic_tensor_id  source_name  source_dtype  source_shape  runtime_layout
+owning_gpu  layer_id  kernel_family  byte_offset  byte_length  scale_offset
+checksum  byte_offset_basis`. `byte_offset` is the absolute offset into the GGUF
+file; `byte_offset_basis=absolute_gguf_file`; `scale_offset=-1` (scales are inline
+in the f8/mxfp4 block layout -- matches the converter's re-pack); `checksum=pending`.
+
+Per-dtype conventions (from the reference, for the converter's manifest emission):
+- f8_e4m3_b128: runtime_layout `source_f8_e4m3_b128_blocked`,
+  kernel_family `v100_fp8_dequant_f16_hmma_pending` (attn) / equivalent for ffn.
+- mxfp4 experts: runtime_layout `source_mxfp4_grouped`,
+  kernel_family `v100_grouped_mxfp4_pending`.
+- norms: dtype `f32`, runtime_layout `source_f32_control`, kernel_family
+  `ds4_attention_control` / `ds4_ffn_control`. **The main model stores norms as
+  F32**, so the converter must widen the MTP BF16 norms to F32 to match (confirms
+  the open item from the GGUF-convention fix).
+
+Next increment (turnkey): extend the converter to emit this 13-column manifest
+with absolute GGUF offsets + the per-dtype convention strings (and F32 norm
+widening), then run `pack.c --manifest <mtp> --source mtp-fragment.gguf
+--write-index` and validate the blk.43 pack-index rows match the blk.0-42
+convention. Then `tp-ep-pack-contract` layer-43, `appliance-pack --layer 43`,
+runtime binding, sidecar delete; then MTPBlock.forward and the specdec loop.
+
 ## Definition of Done
 
 - Converter implemented; emits an MTP GGUF fragment that satisfies
