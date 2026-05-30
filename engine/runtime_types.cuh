@@ -682,7 +682,7 @@ struct LayerDenseOps {
 };
 
 struct SharedDenseOps {
-    LayerDenseOps layers[43];
+    LayerDenseOps layers[44];  /* +1 for the MTP block at layer 43 */
     uint64_t loaded_bytes = 0;
     bool initialized = false;
 };
