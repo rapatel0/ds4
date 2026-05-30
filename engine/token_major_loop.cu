@@ -384,6 +384,13 @@ int run_token_major_serving_loop(const Options &opt,
                 std::max(1u, std::min(mtp_raw_rows_before + 1u,
                                       (uint32_t)kRawSwaRows));
             mtp_opt.warmup = 0;
+            /* MTP is still a correctness scaffold. Keep layer 43 eager so it
+             * does not enter the promoted main 0-42 graph-capture path before
+             * MTP parity exists, and so same-point diagnostics can run without
+             * capture-time host-copy failures. */
+            mtp_opt.decode_cudagraph_gate = false;
+            mtp_opt.decode_cudagraph_persistent_replay_gate = false;
+            mtp_opt.decode_cudagraph_replay_probe_gate = false;
             /* Sprint 585: preserve the main model's final hidden (layer-42 output)
              * before the MTP prologue/body overwrite d_final_hc_shard, so the main
              * output head still produces the correct served token. Restored after
