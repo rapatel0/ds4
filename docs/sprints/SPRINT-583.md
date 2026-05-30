@@ -158,6 +158,29 @@ widening), then run `pack.c --manifest <mtp> --source mtp-fragment.gguf
 convention. Then `tp-ep-pack-contract` layer-43, `appliance-pack --layer 43`,
 runtime binding, sidecar delete; then MTPBlock.forward and the specdec loop.
 
+
+
+## Pipeline stages validated: pack.c + tp-ep-pack-contract (dense/control)
+
+Ran the converter output through the next two pack-pipeline stages on the pod:
+- `pack.c --manifest <mtp> --source mtp-fragment.gguf --write-index`: ingested
+  cleanly (tensors: 20, GGUF source ranges validated), emitted a pack-index with
+  20 blk.43 rows (f8 attn, mxfp4 experts, f32 norms) sharded to gpu0.weights.
+- `tp-ep-pack-contract --pack-dir <mtp-pack>`: produced **136 layer-43 rows**,
+  correctly TP-sharding the dense/control tensors (e.g. blk.43.attn_q_a f8
+  across 8 GPUs as dense_tp). **The contract handles layer 43 generically -- no
+  layer-43 source change is needed** for the dense/control families. (This
+  revises the steering item: the contract extension is largely a no-op.)
+
+Open gap: `expert_rows=0`. The MTP routed experts (blk.43.ffn_{gate,up,down}_exps,
+mxfp4) are handled by the contract's expert path, which reads the
+turbomind-pack-index (the routed-expert TP layout). That index is produced by
+`turbomind-pack.cu` (CUDA), which has not been run on the MTP experts. So the next
+sub-step is `turbomind-pack --layer 43` on the MTP GGUF experts to emit the tm
+index, after which the contract picks up the expert rows. Then `appliance-pack
+--layer 43` -> gpuN.weights, then runtime_pack.cu binding, sidecar delete; then
+MTPBlock.forward and the specdec loop.
+
 ## Definition of Done
 
 - Converter implemented; emits an MTP GGUF fragment that satisfies
