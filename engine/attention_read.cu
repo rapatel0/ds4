@@ -4,7 +4,7 @@ int run_true_ds4_attention_typed_kv_history_load(const Options &opt,
                                                  ds4_tp_runtime *rt,
                                                  int layer) {
     if (!opt.true_ds4_attention_typed_kv_history_gate) return 0;
-    if (!rt || layer < 0 || layer >= 43) return 1;
+    if (!rt || layer < 0 || layer >= 44) return 1;
     const int ratio = ds4_layer_ratio(layer);
     if (ratio == 0) return 0;
 
@@ -257,7 +257,7 @@ int run_true_ds4_attention_raw_read(const Options &opt,
                                     RankState ranks[kGpus],
                                     int layer) {
     if (!hc || !hc->initialized || !ops || !ops->initialized ||
-        layer < 0 || layer >= 43) {
+        layer < 0 || layer >= 44) {
         return 1;
     }
     if (!hc->d_attn_sinks[layer] ||
@@ -323,7 +323,7 @@ int run_true_ds4_attention_raw_window(const Options &opt,
                                       RankState ranks[kGpus],
                                       int layer) {
     if (!hc || !hc->initialized || !ops || !ops->initialized ||
-        layer < 0 || layer >= 43) {
+        layer < 0 || layer >= 44) {
         return 1;
     }
     if (!hc->d_attn_sinks[layer] ||

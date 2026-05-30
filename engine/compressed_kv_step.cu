@@ -8,7 +8,7 @@ int run_true_ds4_compressed_reference_diff_gate(const Options &opt,
                                                 uint32_t comp_row,
                                                 uint32_t visible_rows) {
     if (!opt.true_ds4_compressed_reference_diff_gate) return 0;
-    if (!hc || !hc->initialized || layer < 0 || layer >= 43) return 1;
+    if (!hc || !hc->initialized || layer < 0 || layer >= 44) return 1;
     if (ratio != 4 || !emitted) {
         std::printf("tp_ep_compressed_reference_diff\tlayer\t%d\tratio\t%d\t"
                     "emitted\t%u\tSKIP\n",
@@ -203,7 +203,7 @@ int run_true_ds4_compressed_kv_projection_gate(const Options &opt,
                                                int layer) {
     if (!opt.true_ds4_compressed_kv_gate) return 0;
     if (!hc || !hc->initialized || !ops || !ops->initialized ||
-        layer < 0 || layer >= 43 || !hc->d_attn_normed || !hc->d_q_a_normed) {
+        layer < 0 || layer >= 44 || !hc->d_attn_normed || !hc->d_q_a_normed) {
         return 1;
     }
     const int ratio = ds4_layer_ratio(layer);
@@ -1444,7 +1444,7 @@ int run_true_ds4_attention_state_update(const Options &opt,
                                         ds4_tp_runtime *rt,
                                         int layer) {
     if (!hc || !hc->initialized || !ops || !ops->initialized ||
-        layer < 0 || layer >= 43) {
+        layer < 0 || layer >= 44) {
         return 1;
     }
     if (!hc->d_kv_normed ||

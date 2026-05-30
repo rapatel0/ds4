@@ -3,7 +3,7 @@ int run_shared_hc_final_expand(const Options &opt,
                                RankState ranks[kGpus],
                                int layer) {
     if (!hc || !hc->initialized || hc->slots != opt.slots ||
-        layer < 0 || layer >= 43) {
+        layer < 0 || layer >= 44) {
         return 1;
     }
     const uint64_t shard_elems =

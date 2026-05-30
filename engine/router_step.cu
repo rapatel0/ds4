@@ -46,7 +46,7 @@ int run_model_router_rank_major_logits(const Options &opt,
                                        cudaStream_t control_stream,
                                        bool post_attention_input) {
     if (!opt.model_router_rank_major_logits_gate) return 0;
-    if (!hc || !hc->d_router_logits || layer < 0 || layer >= 43) return 1;
+    if (!hc || !hc->d_router_logits || layer < 0 || layer >= 44) return 1;
     for (int rank = 0; rank < kGpus; ++rank) {
         RankState &r = ranks[rank];
         if (!r.compose_nccl_initialized || !r.compose_nccl ||
@@ -119,7 +119,7 @@ int run_model_router_allreduce_logits(const Options &opt,
                                       cudaStream_t control_stream,
                                       bool post_attention_input) {
     if (!opt.model_router_allreduce_logits_gate) return 0;
-    if (!hc || !hc->d_router_logits || layer < 0 || layer >= 43) return 1;
+    if (!hc || !hc->d_router_logits || layer < 0 || layer >= 44) return 1;
     const uint32_t shard_cols = (uint32_t)(kHidden / kGpus);
     for (int rank = 0; rank < kGpus; ++rank) {
         RankState &r = ranks[rank];

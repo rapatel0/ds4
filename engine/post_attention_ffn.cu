@@ -5,7 +5,7 @@ int run_true_ds4_post_attention_ffn_input(const Options &opt,
                                           int layer,
                                           bool reuse_model_router_route_plan) {
     if (!hc || !hc->initialized || !ops || !ops->initialized ||
-        hc->slots != opt.slots || layer < 0 || layer >= 43) {
+        hc->slots != opt.slots || layer < 0 || layer >= 44) {
         return 1;
     }
     if (ops->attn.rows_per_gpu != kHidden / kGpus ||

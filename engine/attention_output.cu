@@ -2,7 +2,7 @@ int run_true_ds4_attention_output_projection(const Options &opt,
                                              const LayerDenseOps *ops,
                                              RankState ranks[kGpus],
                                              int layer) {
-    if (!ops || !ops->initialized || layer < 0 || layer >= 43) {
+    if (!ops || !ops->initialized || layer < 0 || layer >= 44) {
         return 1;
     }
     if (ops->attn_output_a.cols != kAttentionOutputAInput ||

@@ -7,7 +7,7 @@ int run_shared_hc_current_input(const Options &opt,
                                 bool reuse_model_router_route_plan,
                                 HcCurrentInputBreakdown *breakdown) {
     if (!hc || !hc->initialized || hc->slots != opt.slots ||
-        layer < 0 || layer >= 43) {
+        layer < 0 || layer >= 44) {
         return 1;
     }
     if (attn_op.cols <= 0 || shared_op.cols <= 0) return 2;

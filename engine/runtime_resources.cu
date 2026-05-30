@@ -432,10 +432,10 @@ int ensure_compose_buffers(const Options &opt, RankState ranks[kGpus]) {
     const int layer = opt.layer;
     if ((opt.true_ds4_attention_state_gate || opt.true_ds4_compressed_kv_gate ||
          opt.true_ds4_indexer_attention_gate) &&
-        (layer < 0 || layer >= 43)) {
+        (layer < 0 || layer >= 44)) {
         return 20;
     }
-    const int ratio = (layer >= 0 && layer < 43) ? ds4_layer_ratio(layer) : 0;
+    const int ratio = (layer >= 0 && layer < 44) ? ds4_layer_ratio(layer) : 0;
     for (int p = 0; p < kGpus; ++p) {
         RankState &r = ranks[p];
         CHECK_CUDA(cudaSetDevice(r.device));

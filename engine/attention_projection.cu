@@ -4,7 +4,7 @@ int run_true_ds4_attention_projection_prefix(const Options &opt,
                                              RankState ranks[kGpus],
                                              int layer) {
     if (!hc || !hc->initialized || !ops || !ops->initialized ||
-        layer < 0 || layer >= 43) {
+        layer < 0 || layer >= 44) {
         return 1;
     }
     if (!hc->d_current_full || !hc->d_attn_normed ||
