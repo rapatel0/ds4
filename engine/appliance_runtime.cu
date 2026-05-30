@@ -183,6 +183,20 @@ int run_tp_ep_appliance(Options opt) {
         }
         return 10;
     }
+    /* MTP (layer 43) dense F8 projections into slot 43 (no-op unless MTP source set). */
+    if (shared_dense_ops.initialized &&
+        load_mtp_dense_layer43(opt, shared_dense_f16_cache, &shared_dense_ops) != 0) {
+        std::fprintf(stderr, "tp_ep MTP dense layer-43 load failed\n");
+        free_shared_dense_ops(&shared_dense_ops, opt);
+        close_shared_expert_bindings(&shared_expert_bindings);
+        close_shared_tp_runtime(&shared_tp_runtime);
+        close_shared_rank_buffers(&shared_rank_buffers);
+        close_shared_api(&shared_api);
+        if (shared_dense_f16_cache) {
+            free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+        }
+        return 10;
+    }
     if (shared_dense_ops.initialized) {
         std::printf("tp_ep_all_layer_dense_ops_shared\tlayers\t43\tdevices\t%d\t"
                     "loaded_bytes\t%llu\tPASS\n",

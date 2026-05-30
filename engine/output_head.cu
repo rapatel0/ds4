@@ -1240,6 +1240,68 @@ int open_shared_dense_ops(const Options &opt,
     return 0;
 }
 
+/* MTP (layer 43) dense F8 projections into SharedDenseOps slot 43, from the MTP
+ * contract + pack dir. Isolated from the 0-42 loop. ratio=0 (no compress/
+ * indexer). F8 sources load direct on cache-miss, so no DenseF16Cache extension
+ * is needed. No-op unless the MTP source is configured. */
+int load_mtp_dense_layer43(const Options &opt, const DenseF16Cache *cache,
+                           SharedDenseOps *ops) {
+    if (!opt.mtp_contract_path || !opt.mtp_pack_dir) return 0;
+    if (!ops || !ops->initialized) return 1;
+    const int L = 43;
+    std::vector<ContractRow> rows;
+    LayerStats st;
+    if (parse_contract(opt.mtp_contract_path, L, &rows, &st) != 0 || st.bad_rows != 0) {
+        std::fprintf(stderr, "MTP dense contract parse failed: %s\n", opt.mtp_contract_path);
+        return 1;
+    }
+    Options mopt = opt;
+    mopt.pack_dir = opt.mtp_pack_dir;
+    mopt.layer = L;
+    LayerDenseOps &d = ops->layers[L];
+    const std::string attn_q_a_t = layer_tensor_name(L, "attn_q_a.weight");
+    const std::string attn_q_b_t = layer_tensor_name(L, "attn_q_b.weight");
+    const std::string attn_kv_t = layer_tensor_name(L, "attn_kv_latent.weight");
+    const std::string attn_output_a_t = layer_tensor_name(L, "attn_output_a.weight");
+    const std::string attn_output_b_t = layer_tensor_name(L, "attn_output_b.weight");
+    const std::string shared_t = layer_tensor_name(L, "ffn_down_shexp.weight");
+    const std::string shared_gate_t = layer_tensor_name(L, "ffn_gate_shexp.weight");
+    const std::string shared_up_t = layer_tensor_name(L, "ffn_up_shexp.weight");
+    if (opt.true_ds4_attention_residency_gate) {
+        if (prepare_resident_f8_dense(mopt, rows, attn_q_a_t.c_str(), 11, cache,
+                                      &d.attn_q_a, 1024 / kGpus) != 0 ||
+            prepare_resident_f8_dense(mopt, rows, attn_q_b_t.c_str(), 12, cache,
+                                      &d.attn_q_b, 32768 / kGpus) != 0 ||
+            prepare_resident_f8_dense(mopt, rows, attn_kv_t.c_str(), 13, cache,
+                                      &d.attn_kv_latent, kHeadDim / kGpus) != 0 ||
+            prepare_resident_f8_dense(mopt, rows, attn_output_a_t.c_str(), 14, cache,
+                                      &d.attn_output_a, 8192 / kGpus) != 0) {
+            std::fprintf(stderr, "MTP dense attn residency load failed\n");
+            return 5;
+        }
+    }
+    if (prepare_resident_f8_dense(mopt, rows, attn_output_b_t.c_str(), 1, cache, &d.attn) != 0 ||
+        prepare_resident_f8_dense(mopt, rows, shared_t.c_str(), 2, cache, &d.shared,
+                                  kHidden / kGpus, opt.true_shared_ffn_gate,
+                                  opt.true_shared_ffn_gate) != 0) {
+        std::fprintf(stderr, "MTP dense attn_output_b/shared load failed\n");
+        return 3;
+    }
+    if (opt.true_shared_ffn_gate) {
+        if (prepare_resident_f8_dense(mopt, rows, shared_gate_t.c_str(), 3, cache,
+                                      &d.shared_gate, kMid / kGpus) != 0 ||
+            prepare_resident_f8_dense(mopt, rows, shared_up_t.c_str(), 4, cache,
+                                      &d.shared_up, kMid / kGpus) != 0) {
+            std::fprintf(stderr, "MTP dense shared gate/up load failed\n");
+            return 4;
+        }
+    }
+    d.initialized = true;
+    std::printf("tp_ep_mtp_dense_layer43_load\tlayer\t43\tPASS\n");
+    std::fflush(stdout);
+    return 0;
+}
+
 int launch_resident_f8_dense(const Options &opt,
                              const ResidentF8Dense &op,
                              RankState ranks[kGpus]) {

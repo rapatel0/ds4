@@ -361,7 +361,7 @@ int run_token_major_serving_loop(const Options &opt,
                                                                       : nullptr;
             const int mrc = run_layer(mtp_opt, &ms, nullptr, shared_api,
                                       shared_rank_buffers, mtp_tp,
-                                      shared_expert_bindings, nullptr,
+                                      shared_expert_bindings, shared_dense_ops,
                                       shared_hc_controls);
             std::printf("tp_ep_mtp_layer_scaffold\tstep\t%d\tlayer\t43\tratio\t%d\t"
                         "expert_rows\t%llu\tdense_rows\t%llu\tcontrol_rows\t%llu\t"
