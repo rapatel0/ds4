@@ -229,9 +229,32 @@ weights stay decoupled (like the sidecar) but in the unified EP format
 (mxfp4/turbomind, fused gate_up, EP-split 32/rank). This is validatable: the
 appliance loads the MTP layer from its own dir, byte counts match, no crash.
 
+### Phase 2 expert bind IMPLEMENTED + runtime-validated (2026-05-30)
+
+Added a dedicated MTP expert bind (commit 193b555a): `Options` MTP fields,
+`SharedExpertBindings.mtp_layer`, `open_mtp_expert_bindings()` (reuses
+`parse_tm_index` + `pack_descriptor_set` for layer 43 from the MTP pack dir),
+wired into `appliance_runtime.cu`, with `--mtp-pack-dir`/`--mtp-tm-index`/
+`--mtp-contract` args. Built clean (nvcc, make rc=0).
+
+**Runtime load test PASSED** (no re-pack): ran the appliance against the s181
+pack (layers 0-42) + the MTP dir, GPUs free. Log:
+`tp_ep_shared_expert_bindings_load layers 43 ... PASS` then
+`tp_ep_mtp_expert_bindings_load layer 43 bytes 3422552064 PASS` -- the MTP
+layer's experts loaded EP-split 32/rank (3.42 GB, same as a main layer's expert
+load), and the appliance proceeded to decode normally (`decode_pass=1`, `rc=0`)
+-- the MTP bind did not disturb the serving path. The dedicated-pack-dir design
+works: layers 0-42 from s181, layer 43 from `mtp-shards-ep`, no unified re-pack.
+
+Still TODO in Phase 2: the non-expert MTP families (norms/hc/proj) dedicated
+bind (the 29 control/dense tensors via runtime_pack loaders from
+`mtp-contract-ep`); the experts (the EP-heavy part) are done + validated.
+
 ## Status
 
-Phase 1 (EP=8 MTP weight pack) COMPLETE + validated. Architecture fully mapped:
+Phase 1 (EP=8 MTP weight pack) COMPLETE + validated. Phase 2 expert bind
+IMPLEMENTED + runtime-validated (MTP layer-43 experts load EP-split from a
+dedicated pack dir, serving path undisturbed). Architecture fully mapped:
 Phase 2 = dedicated layer-43 bind (ratio-0, templated on `mtpf_views`, experts
 via the shared turbomind EP path); Phase 3 = MTP draft forward in the REPLAY
 pipeline (verify half `ds4_replay_verify_token_block` already exists); Phase 5
