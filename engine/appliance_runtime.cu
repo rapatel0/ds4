@@ -146,6 +146,20 @@ int run_tp_ep_appliance(Options opt) {
         }
         return 9;
     }
+    /* MTP (layer 43) non-expert families (norms/hc/proj/shared) from the MTP
+     * contract+pack (no-op unless --mtp-contract/--mtp-pack-dir are set). */
+    MtpNonExpertWeights mtp_nonexpert;
+    if (open_mtp_nonexpert_bindings(opt, &mtp_nonexpert) != 0) {
+        close_mtp_nonexpert_bindings(&mtp_nonexpert);
+        close_shared_expert_bindings(&shared_expert_bindings);
+        close_shared_tp_runtime(&shared_tp_runtime);
+        close_shared_rank_buffers(&shared_rank_buffers);
+        close_shared_api(&shared_api);
+        if (shared_dense_f16_cache) {
+            free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+        }
+        return 9;
+    }
     if (shared_expert_bindings.initialized) {
         std::printf("tp_ep_all_layer_expert_bindings_shared\tlayers\t43\tdevices\t%d\t"
                     "bytes\t%llu\tbytes_per_gpu\t%llu\tPASS\n",

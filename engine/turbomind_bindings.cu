@@ -300,6 +300,66 @@ int open_mtp_expert_bindings(const Options &opt, SharedExpertBindings *shared) {
     return 0;
 }
 
+/* MTP (layer 43) non-expert bind: loads the dense_tp + replicated_control
+ * families from the MTP contract+pack into per-(name,gpu) device buffers.
+ * Reuses parse_contract / physical_row_offset / read_exact_at (runtime_pack.cu,
+ * included earlier in the unity build). dense_tp rows carry per-rank shard
+ * offsets; replicated_control rows are read once on gpu0. No-op unless the MTP
+ * contract+pack are configured. */
+int open_mtp_nonexpert_bindings(const Options &opt, MtpNonExpertWeights *out) {
+    if (!opt.mtp_contract_path || !opt.mtp_pack_dir) return 0;
+    std::vector<ContractRow> rows;
+    LayerStats stats{};
+    if (parse_contract(opt.mtp_contract_path, 43, &rows, &stats) != 0) {
+        std::fprintf(stderr, "MTP contract parse failed: %s\n", opt.mtp_contract_path);
+        return 1;
+    }
+    for (const ContractRow &r : rows) {
+        const bool is_control = r.record_type == "replicated_control";
+        const bool is_dense = r.record_type == "dense_tp";
+        if (!is_control && !is_dense) continue;
+        if (is_control && r.owning_gpu > 0) continue;  /* replicated: load once */
+        std::vector<uint8_t> host(r.bytes_estimate);
+        const std::string path = path_join(opt.mtp_pack_dir, r.source_pack_file);
+        if (read_exact_at(path, physical_row_offset(r), host.data(),
+                          r.bytes_estimate) != 0) {
+            std::fprintf(stderr, "MTP non-expert read failed: %s (%s)\n",
+                         r.tensor_id.c_str(), path.c_str());
+            return 2;
+        }
+        const int gpu = (r.owning_gpu >= 0 && r.owning_gpu < kGpus) ? r.owning_gpu : 0;
+        CHECK_CUDA(cudaSetDevice(opt.devices[gpu]));
+        void *d = nullptr;
+        CHECK_CUDA(cudaMalloc(&d, r.bytes_estimate));
+        CHECK_CUDA(cudaMemcpy(d, host.data(), r.bytes_estimate, cudaMemcpyHostToDevice));
+        MtpNonExpertTensor t;
+        t.name = r.tensor_id;
+        t.gpu = gpu;
+        t.d_ptr = d;
+        t.bytes = r.bytes_estimate;
+        t.dtype = r.source_dtype;
+        t.record_type = r.record_type;
+        out->tensors.push_back(t);
+        out->bytes += r.bytes_estimate;
+    }
+    out->initialized = true;
+    std::printf("tp_ep_mtp_nonexpert_bindings_load\tlayer\t43\ttensors\t%zu\tbytes\t%llu\tPASS\n",
+                out->tensors.size(), (unsigned long long)out->bytes);
+    std::fflush(stdout);
+    return 0;
+}
+
+void close_mtp_nonexpert_bindings(MtpNonExpertWeights *out) {
+    if (!out) return;
+    for (MtpNonExpertTensor &t : out->tensors) {
+        if (t.d_ptr) {
+            cudaSetDevice(t.gpu);
+            cudaFree(t.d_ptr);
+        }
+    }
+    *out = MtpNonExpertWeights{};
+}
+
 void close_shared_expert_bindings(SharedExpertBindings *shared) {
     if (!shared) return;
     for (int layer = 0; layer < 43; ++layer) {

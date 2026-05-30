@@ -896,6 +896,24 @@ struct SharedExpertBindings {
     bool initialized = false;
 };
 
+/* MTP (layer 43) non-expert weights: the 29 dense_tp + replicated_control
+ * families (norms, hc_*, attn projections, e_proj/h_proj, shared experts,
+ * router). Loaded generically from the MTP contract+pack into per-(name,gpu)
+ * device buffers; the MTP forward looks them up by name. */
+struct MtpNonExpertTensor {
+    std::string name;
+    int gpu = 0;
+    void *d_ptr = nullptr;
+    uint64_t bytes = 0;
+    std::string dtype;
+    std::string record_type;
+};
+struct MtpNonExpertWeights {
+    std::vector<MtpNonExpertTensor> tensors;
+    uint64_t bytes = 0;
+    bool initialized = false;
+};
+
 struct DecodeLoopStats {
     bool enabled = false;
     bool pass = true;
