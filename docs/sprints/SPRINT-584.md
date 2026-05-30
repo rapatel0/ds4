@@ -107,9 +107,36 @@ layer-43 binding through the unified path, and the speculative-decode loop.
 - Steering + vision updated; committed (excluding user-owned
   `docs/sprints/VALIDATION_CONTROL_POLICY.md` and `research/`).
 
+## Phase 1 progress (2026-05-30) — guided by MTP_IMPLEMENTATION.md
+
+`MTP_IMPLEMENTATION.md` is the authoritative guide (user-confirmed). It defines
+the canonical **32-family** MTP tensor set, sourced from the safetensors
+(shard 46) and copied verbatim, experts kept separate (appliance-pack fuses).
+
+**Converter completed + validated (commit a24b978a).** `tools/mtp-pack-fragment.c`
+was emitting only 20 of the 32 families. Added the 12 missing — the
+hyper-connection sets (`hc_attn_{fn,scale,base}`, `hc_ffn_{fn,scale,base}`,
+`hc_head_{fn,scale,base}`), `h_proj`, `norm`, and the router bias `exp_probs_b`.
+GGUF names verified against the main model (`blk.N.hc_attn_fn` etc. are bare;
+`exp_probs_b` is bare, not `.bias`); HF source names verified against
+safetensors shard 46. Rebuilt + ran on the pod: **32 tensors, EMIT_OK=1, no
+duplicates**, all 12 new families present with correct dtype/shape (hc F32,
+`h_proj` f8_e4m3_b128 `[4096x4096]`, `norm` f32, `exp_probs_b` f32 `[256]`).
+Output: `/workspace/mtp-fragment-ep.gguf` + `/workspace/mtp-manifest-ep.tsv`.
+The converter is the only from-scratch code in the weight-integration steps
+(per the guide); it is now complete.
+
+**Remaining Phase 1 (mechanical, "re-run existing tools" per the guide):**
+from the 32-family GGUF: `pack.c --manifest mtp-manifest-ep.tsv --write-index`
+-> `tp-ep-pack-contract --pack-dir <dir>` (emits the layer-43 `ep_expert` rows,
+32/rank) -> `appliance-pack --fuse-gate-up-interleaved` (by-layer expert blob +
+fused gate_up). Validate: a fused `blk.43.ffn_gate_up_exps` turbomind row
+(256 experts) matching a main-model `blk.N` row. (Schema-matching across pack.c
+/contract/appliance-pack indices is the known fiddly part.)
+
 ## Status
 
-Planning + architecture established (this sprint). The prior MTP weight-pack
-work was LP-framed (separate gate/up, single-GPU emission) and is superseded by
-the EP=8 design above. Phase 1 (converter fused-gate_up for the EP layout) is
-the next build increment.
+Architecture established and the converter (the sole new-code deliverable)
+completed + validated to all 32 families. Prior MTP weight-pack work was
+LP-framed and is superseded. Next: the mechanical pack chain above, then the
+runtime layer-43 bind (Phase 2).
