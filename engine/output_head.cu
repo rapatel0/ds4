@@ -1560,9 +1560,9 @@ static int sync_all_devices(const Options &opt) {
 
 /* MTP embedding-combine prologue (EP, rank-sharded). Combines the last token's
  * embedding (enorm -> e_proj -> repeat across kHcRows) with the previous hidden
- * state in ranks[].d_final_hc_shard (hnorm per row -> h_proj), adds, applies the
- * flat post-combine RMS-norm, and writes the MTP input back into d_final_hc_shard
- * for run_layer(43) to consume. Mirrors engine/mtp_step.cu:606-615 in EP form.
+ * state in ranks[].d_final_hc_shard (hnorm per row -> h_proj), adds, and writes
+ * the MTP input back into d_final_hc_shard for run_layer(43) to consume. Mirrors
+ * the canonical ds4.c MTP prologue; there is no post-combine flat RMS-norm.
  * Synchronous (correctness-first); the prologue cost is tiny vs the 43-layer
  * forward. No-op unless the MTP dense ops (e_proj/h_proj/enorm/hnorm) are loaded. */
 int run_mtp_prologue(const Options &opt,
