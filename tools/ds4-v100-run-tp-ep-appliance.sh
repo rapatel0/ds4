@@ -74,7 +74,17 @@ fi
 : "${DS4_V100_ACTIVE_MICROBATCH:=$DS4_V100_SLOTS}"
 : "${DS4_V100_MICROBATCH_WAIT_US:=auto}"
 : "${DS4_V100_TOKENS:=2}"
-: "${DS4_V100_TP_EP_GRAPH_SUFFIX_REPLAY:=1}"
+# Decode graph mode. Promoted default is no-suffix full capture (Sprint 580):
+#   full   = no-suffix full-capture persistent replay (default; ~1.2x wall / ~1.5x
+#            decode vs suffix at 32 slots / 256K, parity within the determinism
+#            floor after the Sprint 579 dense<->rank barrier fix)
+#   suffix = suffix-stage replay (the prior promoted default; opt-out)
+#   eager  = no decode graph
+# Back-compat: DS4_V100_TP_EP_GRAPH_SUFFIX_REPLAY, if set, overrides the mode
+# (1/true/on -> suffix, 0/false/off -> eager). Leaving it unset selects the
+# promoted full-capture default.
+: "${DS4_V100_TP_EP_DECODE_GRAPH_MODE:=full}"
+: "${DS4_V100_TP_EP_GRAPH_SUFFIX_REPLAY:=}"
 : "${DS4_V100_TP_EP_EXTRA_ARGS:=}"
 : "${DS4_V100_TP_EP_VRAM_MIN_FREE_MIB:=64}"
 : "${DS4_V100_TP_EP_NCCL_MIN_FREE_MIB:=0}"
@@ -241,10 +251,17 @@ case "$DS4_V100_MTP_SERVING" in
     off|false|0) ;;
     *) fail "TP/EP does not support MTP yet; set DS4_V100_MTP_SERVING=off" ;;
 esac
-case "$DS4_V100_TP_EP_GRAPH_SUFFIX_REPLAY" in
-    1|true|on) DS4_V100_TP_EP_GRAPH_SUFFIX_REPLAY=1 ;;
-    0|false|off) DS4_V100_TP_EP_GRAPH_SUFFIX_REPLAY=0 ;;
-    *) fail "DS4_V100_TP_EP_GRAPH_SUFFIX_REPLAY must be 0/1, true/false, or on/off" ;;
+# Back-compat: GRAPH_SUFFIX_REPLAY, if explicitly set, overrides the graph mode.
+if [ -n "$DS4_V100_TP_EP_GRAPH_SUFFIX_REPLAY" ]; then
+    case "$DS4_V100_TP_EP_GRAPH_SUFFIX_REPLAY" in
+        1|true|on) DS4_V100_TP_EP_DECODE_GRAPH_MODE=suffix ;;
+        0|false|off) DS4_V100_TP_EP_DECODE_GRAPH_MODE=eager ;;
+        *) fail "DS4_V100_TP_EP_GRAPH_SUFFIX_REPLAY must be 0/1, true/false, or on/off" ;;
+    esac
+fi
+case "$DS4_V100_TP_EP_DECODE_GRAPH_MODE" in
+    full|suffix|eager) ;;
+    *) fail "DS4_V100_TP_EP_DECODE_GRAPH_MODE must be full, suffix, or eager" ;;
 esac
 
 microbatch_wait_us="$DS4_V100_MICROBATCH_WAIT_US"
@@ -343,15 +360,25 @@ fi
 if [ "$DS4_V100_MAX_REQUESTS" -gt 0 ]; then
     cmd+=(--max-requests "$DS4_V100_MAX_REQUESTS")
 fi
-if [ "$DS4_V100_TP_EP_GRAPH_SUFFIX_REPLAY" -eq 1 ]; then
-    cmd+=(
-        --decode-cudagraph-gate
-        --decode-cudagraph-replay-probe-gate
-        --decode-cudagraph-persistent-replay-gate
-        --decode-cudagraph-suffix-stage
-        compose_eager_final_hc
-    )
-fi
+case "$DS4_V100_TP_EP_DECODE_GRAPH_MODE" in
+    suffix)
+        cmd+=(
+            --decode-cudagraph-gate
+            --decode-cudagraph-replay-probe-gate
+            --decode-cudagraph-persistent-replay-gate
+            --decode-cudagraph-suffix-stage
+            compose_eager_final_hc
+        )
+        ;;
+    full)
+        cmd+=(
+            --decode-cudagraph-gate
+            --decode-cudagraph-replay-probe-gate
+            --decode-cudagraph-persistent-replay-gate
+        )
+        ;;
+    eager) ;;
+esac
 if [ -n "$DS4_V100_TP_EP_EXTRA_ARGS" ]; then
     while IFS= read -r extra_arg; do
         [ -n "$extra_arg" ] || continue
@@ -366,7 +393,7 @@ print_resolved() {
 }
 
 if [ "$mode" = "check" ]; then
-    echo "ds4-v100-run-tp-ep-appliance: config ok host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS graph_suffix_replay=$DS4_V100_TP_EP_GRAPH_SUFFIX_REPLAY tp_ep_bin=$DS4_V100_TP_EP_BIN tp_ep_contract=$DS4_V100_TP_EP_CONTRACT tp_ep_tm_index=$DS4_V100_TP_EP_TM_INDEX mtp=off"
+    echo "ds4-v100-run-tp-ep-appliance: config ok host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS decode_graph_mode=$DS4_V100_TP_EP_DECODE_GRAPH_MODE tp_ep_bin=$DS4_V100_TP_EP_BIN tp_ep_contract=$DS4_V100_TP_EP_CONTRACT tp_ep_tm_index=$DS4_V100_TP_EP_TM_INDEX mtp=off"
     exit 0
 fi
 if [ "$mode" = "print" ]; then
@@ -383,7 +410,7 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_MICROBATCH_WAIT_US=$DS4_V100_MICROBATCH_WAIT_US"
     echo "DS4_V100_MICROBATCH_WAIT_US_RESOLVED=$microbatch_wait_us"
     echo "DS4_V100_TOKENS=$DS4_V100_TOKENS"
-    echo "DS4_V100_TP_EP_GRAPH_SUFFIX_REPLAY=$DS4_V100_TP_EP_GRAPH_SUFFIX_REPLAY"
+    echo "DS4_V100_TP_EP_DECODE_GRAPH_MODE=$DS4_V100_TP_EP_DECODE_GRAPH_MODE"
     echo "DS4_V100_TP_EP_EXTRA_ARGS=$DS4_V100_TP_EP_EXTRA_ARGS"
     echo "DS4_V100_TP_EP_VRAM_MIN_FREE_MIB=$DS4_V100_TP_EP_VRAM_MIN_FREE_MIB"
     echo "DS4_V100_TP_EP_NCCL_MIN_FREE_MIB=$DS4_V100_TP_EP_NCCL_MIN_FREE_MIB"

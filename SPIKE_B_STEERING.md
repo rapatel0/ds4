@@ -456,7 +456,8 @@ bankable NCCL cleanup is the model-boundary output-head A1 pattern.**
 | Done | C1 full-capture promotion under noise-aware gate | full capture | Sprint 576: not promotable. Logit-space floors show eager-vs-eager is bit-identical on matched tokens (`7/32` discrete router-tie flips) but full-vs-full diverges `32/32` with logit Δ up to `3.63`. Full capture is batch-unstable: a real defect, not tolerated noise. | Med |
 | Done | C1 full-capture batch-instability localization | full capture | Sprint 577: full-vs-full logit floor scales with active routed tokens (1-2 active ~bit-exact, `8` -> Δ 1.21/`8` flips, `32` -> Δ 3.63/`32` flips). The 8-slot graph is constant across these, so it is not a static pointer/buffer bug; it tracks active route count -> accumulation-order nondeterminism in the graphed route/compose. compute-sanitizer OOMs before decode and no smoke reproduces the graph-replay path, so it cannot reach this bug. | Med-High |
 | Done | C1 captured-compose nondeterminism: FIXED | full capture | Sprint 579: runtime per-stage diff localized the divergence to the captured `compressed_kv` stage's `attn_q_b.d_out` on `dense_stream`, caused by `enqueue_rank_streams_wait_after_dense_streams` being a dense->rank-only barrier (eager fully drains both streams). Made it bidirectional (`output_head.cu`); full-vs-full sequence mismatch went `8/8 -> 0/8`. Determinism defect fixed; correctness-preserving (ordering-only). | Med-High |
-| 1 | C1 full-capture serving promotion gate (now deterministic) | full capture | With the determinism defect fixed, run the standard serving parity/perf gate for no-suffix full capture vs the eager floor at the reference shape, re-confirm the promoted suffix-control path under the strengthened barrier, then decide the launcher default. Full capture's `1.25-1.48x` decode win is now on a deterministic path. | Med |
+| Done | C1 full-capture serving promotion gate | full capture | Sprint 580: gate passed and **no-suffix full capture is now the promoted launcher default**. At `32` slots / pos `250000`, parity was perfect within the determinism floor (floor `0`, full-vs-full `0`, eager-vs-full `0`) and full capture was `1.203x` wall / `1.518x` decode faster than suffix-control (median latency `42.09s -> 34.98s`). Launcher uses a 3-mode `DS4_V100_TP_EP_DECODE_GRAPH_MODE` (`full` default; `suffix`/`eager` opt-outs; `GRAPH_SUFFIX_REPLAY` back-compat override). | Med |
+| 1 | Tuning sprint (reference-shape perf envelope) | both | Now that A1-A4 + C1 (suffix and full-capture) are promoted, measure the cumulative decode throughput at the reference shape and tune: reference-shape perf + domain table, shape envelope (slots x context sweep), NCCL pinning, and C4 spill. This is the de-confounded steady-state measurement before opening the MTP bet. Opts into perf measurement per VALIDATION_CONTROL_POLICY. | Med |
 | 2 | Larger executor/compose shape work | EP/compose | Sprint 550 shows the obvious compact-pack padding site is not a steady-state lever; any further padding work needs a grouped-GEMM/copy-shape design with direct evidence, not another tiny kernel rewrite. | Med-High |
 | 4 | A5/A6 fusion | HC/attention | Converts rank-local structure into fewer launches | Low-Med |
 | 5 | B2/B3/B4/B5 EP structural bets | EP 53% | B2 fusion, TP-expert A/B, routed/shared overlap, and correctness-preserving capacity balancing | Med |
@@ -655,4 +656,14 @@ runs now bit-identical). The fix is ordering-only (correctness-preserving) and i
 in the shared captured-region helper, so it strengthens every cudagraph path. Next
 is the standard serving parity/perf promotion gate vs the eager floor (full
 capture is now deterministic, so the `1.25-1.48x` decode win is on a sound path).
-MTP stays deferred until the ordered post-C1/tuning point.
+Sprint 580 ran that gate and **promoted no-suffix full capture to the launcher
+default**: at `32` slots / pos `250000` parity was perfect within the determinism
+floor (floor `0`, full-vs-full `0`, eager-vs-full `0`) and full capture was
+`1.203x` wall / `1.518x` decode faster than suffix-control (median latency
+`42.09s -> 34.98s`). The launcher now selects mode via
+`DS4_V100_TP_EP_DECODE_GRAPH_MODE` (`full` default; `suffix`/`eager` opt-outs;
+legacy `GRAPH_SUFFIX_REPLAY` still overrides). So **C1 is complete** -- both the
+suffix-replay and the (now-default) full-capture graph paths are correct and
+promoted. The next ordered item is the **tuning sprint** (reference-shape perf +
+domain table, shape envelope, NCCL pinning, C4 spill), then the MTP bet. MTP
+stays deferred until that post-C1/tuning point.
