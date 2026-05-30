@@ -3862,6 +3862,8 @@ These experiments should be run inside the TP/EP sprints, not as PP variants:
 
 | 2026-05-29 | Sprint 582 scoped MTP weight integration (B1 Phase A.1). | Confirmed the 32-family MTP tensor set in the safetensors cache (`1575` tensors). Found the expert weights are I8+E8M0 (not mxfp4 as `MTP_IMPLEMENTATION.md` assumed) and `ds4_source_formats` has no raw-I8 path, so the converter must re-quantize I8+E8M0 -> MXFP4 (acceptable: MTP is a verified draft model, ~Q4_K parity with the sidecar). Attn/proj F8_E4M3+E8M0 and BF16/F32 map directly. | Converter (with I8->MXFP4 re-quant) + contract layer-43 -> Sprint 583; binding + sidecar delete -> 584; then MTPBlock.forward and the specdec loop. Served path unchanged. |
 
+| 2026-05-29 | Sprint 583 designed the MTP converter + I8->MXFP4 re-quant spec. | Per-family source->target mapping fixed: attn/proj F8_E4M3+E8M0 -> f8_e4m3_b128 direct; norms BF16/F32 direct; experts I8+E8M0 -> MXFP4 via dequant (i8*2^e8m0, 16-elem blocks) then re-quant to 32-elem MXFP4 blocks (per-block amax -> E8M0 scale, nearest fp4 nibble). Mirrors the runtime mxfp4/e8m0 decode for round-trip consistency. | Converter tool (`tools/mtp-safetensors-to-gguf.c`, modeled on pack.c/appliance-pack.cu) + contract layer-43 extension are the implementation chunk; build + validate against the safetensors on the pod. Then binding + sidecar delete (584), forward (Phase A), specdec (Phase B). |
+
 ## Sprint Hygiene
 
 Sprint 481 established cleanup discipline for TP/EP feature gates and temporary
