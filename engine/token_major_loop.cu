@@ -356,6 +356,42 @@ int run_token_major_serving_loop(const Options &opt,
             opt.mtp_contract_path) {
             Options mtp_opt = opt;
             mtp_opt.layer = 43;
+            /* Sprint 585: preserve the main model's final hidden (layer-42 output)
+             * before the MTP prologue/body overwrite d_final_hc_shard, so the main
+             * output head still produces the correct served token. Restored after
+             * the draft head below. Without this the MTP draft clobbers the served
+             * token (MTP and the main head share d_final_hc_shard). */
+            static float *mtp_hc_snap[kGpus] = {nullptr};
+            static int mtp_hc_snap_slots = 0;
+            const uint64_t mtp_hc_elems =
+                (uint64_t)opt.slots * kHcRows * (kHidden / kGpus);
+            bool mtp_hc_saved = false;
+            if (shared_rank_buffers && shared_rank_buffers->initialized) {
+                if (mtp_hc_snap_slots != opt.slots) {
+                    for (int r = 0; r < kGpus; ++r) {
+                        if (mtp_hc_snap[r]) {
+                            CHECK_CUDA(cudaSetDevice(opt.devices[r]));
+                            CHECK_CUDA(cudaFree(mtp_hc_snap[r]));
+                            mtp_hc_snap[r] = nullptr;
+                        }
+                    }
+                    for (int r = 0; r < kGpus; ++r) {
+                        CHECK_CUDA(cudaSetDevice(opt.devices[r]));
+                        CHECK_CUDA(cudaMalloc(&mtp_hc_snap[r],
+                                              mtp_hc_elems * sizeof(float)));
+                    }
+                    mtp_hc_snap_slots = opt.slots;
+                }
+                for (int r = 0; r < kGpus; ++r) {
+                    RankState &rk = shared_rank_buffers->ranks[r];
+                    if (!rk.d_final_hc_shard || !mtp_hc_snap[r]) continue;
+                    CHECK_CUDA(cudaSetDevice(rk.device));
+                    CHECK_CUDA(cudaMemcpyAsync(mtp_hc_snap[r], rk.d_final_hc_shard,
+                                               mtp_hc_elems * sizeof(float),
+                                               cudaMemcpyDeviceToDevice, rk.stream));
+                }
+                mtp_hc_saved = true;
+            }
             /* Sprint 585 (1.2b): MTP embedding-combine prologue. Combines the
              * current token's embedding with the prev-hidden (layer-42 output)
              * already in ranks[].d_final_hc_shard, writing the MTP input back
@@ -418,6 +454,23 @@ int run_token_major_serving_loop(const Options &opt,
                             (unsigned long long)draft.checksum,
                             (drc == 0 && draft.pass) ? "PASS" : "FAIL");
                 std::fflush(stdout);
+            }
+            /* Sprint 585: restore the main model's final hidden so the main output
+             * head (serving_result block below) produces the correct served token,
+             * undisturbed by the MTP draft's use of d_final_hc_shard. */
+            if (mtp_hc_saved) {
+                for (int r = 0; r < kGpus; ++r) {
+                    RankState &rk = shared_rank_buffers->ranks[r];
+                    if (!rk.d_final_hc_shard || !mtp_hc_snap[r]) continue;
+                    CHECK_CUDA(cudaSetDevice(rk.device));
+                    CHECK_CUDA(cudaMemcpyAsync(rk.d_final_hc_shard, mtp_hc_snap[r],
+                                               mtp_hc_elems * sizeof(float),
+                                               cudaMemcpyDeviceToDevice, rk.stream));
+                }
+                for (int r = 0; r < kGpus; ++r) {
+                    CHECK_CUDA(cudaSetDevice(shared_rank_buffers->ranks[r].device));
+                    CHECK_CUDA(cudaStreamSynchronize(shared_rank_buffers->ranks[r].stream));
+                }
             }
         }
         const auto step_stop = std::chrono::steady_clock::now();
