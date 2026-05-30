@@ -28,12 +28,12 @@ static uint8_t*repack_f8(const uint8_t*w,const uint8_t*sc,int64_t out,int64_t in
 /* GGUF emit */
 static void pu32(FILE*f,uint32_t v){fwrite(&v,4,1,f);} static void pu64(FILE*f,uint64_t v){fwrite(&v,8,1,f);}
 static void pstr(FILE*f,const char*s){pu64(f,strlen(s));fwrite(s,1,strlen(s),f);}
-typedef struct{char name[80];uint8_t*data;uint64_t nbytes;char dtype[20];char shape[40];} ot;
+typedef struct{char name[80];uint8_t*data;uint64_t nbytes;char dtype[20];char shape[40];uint32_t gt;int64_t dims[4];int nd;} ot;
 static int emit_gguf(const char*path,ot*t,int n){FILE*f=fopen(path,"wb");if(!f)return 1;
  fwrite("GGUF",1,4,f);pu32(f,3);pu64(f,(uint64_t)n);pu64(f,2);
  pstr(f,"general.architecture");pu32(f,8);pstr(f,"ds4-mtp");
  pstr(f,"general.alignment");pu32(f,4);pu32(f,ALIGN);
- uint64_t off=0;for(int i=0;i<n;i++){pstr(f,t[i].name);pu32(f,1);pu64(f,t[i].nbytes);pu32(f,GGML_TYPE_I8);pu64(f,off);off+=(t[i].nbytes+ALIGN-1)/ALIGN*ALIGN;}
+ uint64_t off=0;for(int i=0;i<n;i++){pstr(f,t[i].name);pu32(f,(uint32_t)t[i].nd);for(int d=0;d<t[i].nd;d++)pu64(f,(uint64_t)t[i].dims[d]);pu32(f,t[i].gt);pu64(f,off);off+=(t[i].nbytes+ALIGN-1)/ALIGN*ALIGN;}
  long h=ftell(f),pd=(h+ALIGN-1)/ALIGN*ALIGN;for(long p=h;p<pd;p++)fputc(0,f);
  for(int i=0;i<n;i++){fwrite(t[i].data,1,t[i].nbytes,f);uint64_t pad=(t[i].nbytes+ALIGN-1)/ALIGN*ALIGN-t[i].nbytes;for(uint64_t p=0;p<pad;p++)fputc(0,f);}
  fclose(f);return 0;}
@@ -56,10 +56,10 @@ static int conv_one(const char*hf,ot*out,char*srcdt,char*srcshape){
  if(!st_find(use,&tw))return 0;
  snprintf(srcshape,40,"[%lldx%lld]",(long long)tw.shape[0],(long long)(tw.nd>1?tw.shape[1]:1));
  if(!strcmp(tw.dt,"F8_E4M3")){char sn[200];snprintf(sn,sizeof sn,"%s",use);char*p=strstr(sn,".weight");if(p)strcpy(p,".scale");st_t ts;st_find(sn,&ts);
-   uint8_t*w=st_read(&tw),*s=st_read(&ts);uint64_t ob;out->data=repack_f8(w,s,tw.shape[0],tw.shape[1],ts.shape[1],&ob);out->nbytes=ob;free(w);free(s);strcpy(srcdt,"f8_e4m3_b128");}
+   uint8_t*w=st_read(&tw),*s=st_read(&ts);uint64_t ob;out->data=repack_f8(w,s,tw.shape[0],tw.shape[1],ts.shape[1],&ob);out->nbytes=ob;free(w);free(s);strcpy(srcdt,"f8_e4m3_b128");out->gt=42;out->nd=2;out->dims[0]=tw.shape[1];out->dims[1]=tw.shape[0];}
  else if(!strcmp(tw.dt,"I8")){char sn[200];snprintf(sn,sizeof sn,"%s",use);char*p=strstr(sn,".weight");if(p)strcpy(p,".scale");st_t ts;st_find(sn,&ts);
-   uint8_t*w=st_read(&tw),*s=st_read(&ts);uint64_t ob;out->data=repack_mxfp4(w,s,tw.shape[0],tw.shape[1]*2,&ob);out->nbytes=ob;free(w);free(s);strcpy(srcdt,"mxfp4");}
- else { out->data=st_read(&tw);out->nbytes=tw.o1-tw.o0;strcpy(srcdt,!strcmp(tw.dt,"BF16")?"bf16":"f32"); }
+   uint8_t*w=st_read(&tw),*s=st_read(&ts);uint64_t ob;out->data=repack_mxfp4(w,s,tw.shape[0],tw.shape[1]*2,&ob);out->nbytes=ob;free(w);free(s);strcpy(srcdt,"mxfp4");out->gt=39;out->nd=2;out->dims[0]=tw.shape[1]*2;out->dims[1]=tw.shape[0];}
+ else { out->data=st_read(&tw);out->nbytes=tw.o1-tw.o0;int isbf=!strcmp(tw.dt,"BF16");strcpy(srcdt,isbf?"bf16":"f32");out->gt=isbf?30:0;out->nd=tw.nd;for(int d=0;d<tw.nd;d++)out->dims[d]=tw.shape[tw.nd-1-d];if(tw.nd==1){out->nd=1;out->dims[0]=tw.shape[0];} }
  return 1;}
 
 int main(int argc,char**argv){
@@ -79,7 +79,7 @@ int main(int argc,char**argv){
    for(int e=0;e<256;e++){char wn[96],sn[96];snprintf(wn,sizeof wn,"mtp.0.ffn.experts.%d.%s.weight",e,ew[wi]);snprintf(sn,sizeof sn,"mtp.0.ffn.experts.%d.%s.scale",e,ew[wi]);
      st_t tw,ts;if(!st_find(wn,&tw)||!st_find(sn,&ts)){fprintf(stderr,"missing expert %d %s\n",e,ew[wi]);return 1;}
      uint8_t*w=st_read(&tw),*s=st_read(&ts);uint64_t ob;uint8_t*mx=repack_mxfp4(w,s,tw.shape[0],tw.shape[1]*2,&ob);memcpy(buf+pos,mx,ob);pos+=ob;free(w);free(s);free(mx);}
-   ot o={0};snprintf(o.name,sizeof o.name,"blk.43.%s",eg[wi]);o.data=buf;o.nbytes=pos;strcpy(o.dtype,"mxfp4");snprintf(o.shape,sizeof o.shape,"[256x%lldx%lld]",(long long)out,(long long)in_dim);T[n++]=o;}
+   ot o={0};snprintf(o.name,sizeof o.name,"blk.43.%s",eg[wi]);o.data=buf;o.nbytes=pos;strcpy(o.dtype,"mxfp4");snprintf(o.shape,sizeof o.shape,"[256x%lldx%lld]",(long long)out,(long long)in_dim);o.gt=39;o.nd=3;o.dims[0]=in_dim;o.dims[1]=out;o.dims[2]=256;T[n++]=o;}
  if(emit_gguf(OUT,T,n)){fprintf(stderr,"emit failed\n");return 1;}
  FILE*mf=fopen(MAN,"w");fprintf(mf,"gguf_name\tsource_dtype\tsource_shape\tbyte_length\n");for(int i=0;i<n;i++)fprintf(mf,"%s\t%s\t%s\t%llu\n",T[i].name,T[i].dtype,T[i].shape,(unsigned long long)T[i].nbytes);fclose(mf);
  /* reparse + round-trip validate one mxfp4 expert-stack + one f8 */
