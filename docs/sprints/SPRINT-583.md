@@ -206,7 +206,7 @@ Then MTPBlock.forward and the specdec loop.
 
 
 
-## MTP shards emitted: appliance-pack --layer 43 (offline weight-pack COMPLETE)
+## MTP shards emitted: appliance-pack --layer 43 (SINGLE-GPU only; EP8 emission pending)
 
 `appliance-pack` needed exactly one change: its layer-range guard rejected layer
 43 (`> 43u` -> `> 44u`, admitting the MTP block at index 43). With that 1-line
@@ -215,14 +215,30 @@ mtp-fragment.gguf --layer 43` packed the full MTP layer: 3 expert tensors
 (256/256 experts each, TurboMind weight/scale offsets) + 17 dense/control tensors
 -> `gpu0.weights` (3.58 GB), `skipped_rows=0`, no errors.
 
-**The MTP offline weight-pack is complete and validated end-to-end with only two
-code changes: the converter (new tool) and a 1-line appliance-pack layer bound.**
-pack.c, turbomind-pack, and tp-ep-pack-contract are all layer-generic. (The shards
-landed on gpu0 here because the standalone manifest set owning_gpu=0; full TP8/EP8
-distribution comes from the contract's per-GPU assignment in a real pack run.)
+**CORRECTION (Sprint 584 re-validation, 2026-05-30):** the earlier
+"weight-pack complete + validated end-to-end" claim was overstated. The CONTRACT
+level is genuinely correct and EP8-validated -- `mtp-contract2/tp-ep-pack-contract.tsv`
+holds `24` `ep_expert` rows (3 expert tensors x 8 ranks, `expert_first`
+0/32/.../224, `expert_count=32`), plus `72` `dense_tp`, `512` `kv_shard`,
+`328` `kv_comp_state`, `64` `replicated_control` rows -- a proper TP8/EP8 plan.
+But the SHARD EMISSION that ran was **single-GPU**: `appliance-pack`/`turbomind-pack`
+were driven from the standalone `owning_gpu=0` pack-index, so all 256 experts
+landed in `gpu0.weights` (3.58 GB) and `gpu1-7.weights` are **0 bytes**. The
+EP8-distributed 8-GPU shard emission (32 experts/rank, 8 non-zero shards) was
+never executed or validated. The missing step is the contract -> per-rank
+pack-index translation that feeds the EP8 contract (not the single-GPU manifest)
+into `turbomind-pack`/`appliance-pack`. That is the true remaining
+weight-integration step, and the prerequisite for the `runtime_pack.cu` layer-43
+bind (the runtime loads each rank's shard, which must be non-empty).
 
-Remaining MTP: `runtime_pack.cu` layer-43 bind (load the MTP weights at runtime),
-sidecar delete; then MTPBlock.forward and the specdec loop.
+What IS validated: the converter (`tools/mtp-pack-fragment.c`) re-packs all
+families losslessly; the EP8 contract plan is correct; the single-GPU shard
+emission path works. What is NOT yet validated: 8-GPU EP8 shard emission, the
+runtime bind, the forward, and the specdec loop.
+
+Remaining MTP: (1) drive appliance-pack/turbomind-pack from the EP8 contract ->
+8 non-zero shards; (2) `runtime_pack.cu` layer-43 bind + sidecar delete;
+(3) MTPBlock.forward; (4) the specdec loop.
 
 ## Definition of Done
 
