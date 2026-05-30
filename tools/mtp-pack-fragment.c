@@ -42,8 +42,8 @@ static int emit_gguf(const char*path,ot*t,int n){FILE*f=fopen(path,"wb");if(!f)r
 typedef struct{const char*gguf;const char*hf;} nm;
 static const nm FAM[]={
  {"attn_q_a.weight","attn.wq_a"},{"attn_q_b.weight","attn.wq_b"},{"attn_q_a_norm.weight","attn.q_norm"},
- {"attn_kv.weight","attn.wkv"},{"attn_kv_a_norm.weight","attn.kv_norm"},{"attn_output_a.weight","attn.wo_a"},
- {"attn_output_b.weight","attn.wo_b"},{"attn_sinks.weight","attn.attn_sink"},{"attn_norm.weight","attn_norm"},
+ {"attn_kv_latent.weight","attn.wkv"},{"attn_kv_a_norm.weight","attn.kv_norm"},{"attn_output_a.weight","attn.wo_a"},
+ {"attn_output_b.weight","attn.wo_b"},{"attn_sinks","attn.attn_sink"},{"attn_norm.weight","attn_norm"},
  {"enorm.weight","enorm"},{"hnorm.weight","hnorm"},{"norm.weight","norm"},
  {"e_proj.weight","e_proj"},{"h_proj.weight","h_proj"},{"ffn_norm.weight","ffn_norm"},
  {"ffn_gate_inp.weight","ffn.gate"},{"exp_probs_b","ffn.gate.bias"},
