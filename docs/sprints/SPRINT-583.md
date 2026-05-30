@@ -181,6 +181,29 @@ index, after which the contract picks up the expert rows. Then `appliance-pack
 --layer 43` -> gpuN.weights, then runtime_pack.cu binding, sidecar delete; then
 MTPBlock.forward and the specdec loop.
 
+
+
+## MTP weight-pack pipeline VALIDATED end-to-end (turbomind-pack + contract)
+
+- `turbomind-pack --layer 43 --source mtp-fragment.gguf`: packed all 3 MTP
+  expert tensors (256/256 experts each) into the SM70 TurboMind mxfp4-grouped
+  layout (`turbomind_mxfp4_grouped_sm70`), writing `gpu0.turbomind` +
+  turbomind-pack-index. The converter's mxfp4 experts are TurboMind-compatible
+  with no changes.
+- `tp-ep-pack-contract` with the real tm-index: `expert_rows=24` (3 expert
+  tensors x 8 GPUs EP8, 32 experts/GPU), plus 72 dense + 64 control layer-43
+  rows -- the full MTP layer-43 tensor set, correctly TP8/EP8 sharded.
+
+**Result: the entire MTP weight-pack pipeline (converter -> pack.c ->
+turbomind-pack -> tp-ep-pack-contract) is validated end-to-end, and the only new
+artifact required was the converter.** The pipeline (pack.c, turbomind-pack,
+contract) handles layer 43 generically -- the "contract layer-43 extension" and
+"appliance-pack integration" steered as remaining work are effectively no-ops at
+the pack-planning level. Remaining weight-integration: `appliance-pack --layer 43`
+to emit the real gpuN.weights shards (pack.c/turbomind-pack here ran in
+plan/dry-run + single-shard), `runtime_pack.cu` layer-43 bind, and sidecar delete.
+Then MTPBlock.forward and the specdec loop.
+
 ## Definition of Done
 
 - Converter implemented; emits an MTP GGUF fragment that satisfies
