@@ -28,13 +28,14 @@ static uint8_t*repack_f8(const uint8_t*w,const uint8_t*sc,int64_t out,int64_t in
 /* GGUF emit */
 static void pu32(FILE*f,uint32_t v){fwrite(&v,4,1,f);} static void pu64(FILE*f,uint64_t v){fwrite(&v,8,1,f);}
 static void pstr(FILE*f,const char*s){pu64(f,strlen(s));fwrite(s,1,strlen(s),f);}
-typedef struct{char name[80];uint8_t*data;uint64_t nbytes;char dtype[20];char shape[40];uint32_t gt;int64_t dims[4];int nd;} ot;
+typedef struct{char name[80];uint8_t*data;uint64_t nbytes;char dtype[20];char shape[40];uint32_t gt;int64_t dims[4];int nd;uint64_t abs_off;} ot;
 static int emit_gguf(const char*path,ot*t,int n){FILE*f=fopen(path,"wb");if(!f)return 1;
  fwrite("GGUF",1,4,f);pu32(f,3);pu64(f,(uint64_t)n);pu64(f,2);
  pstr(f,"general.architecture");pu32(f,8);pstr(f,"ds4-mtp");
  pstr(f,"general.alignment");pu32(f,4);pu32(f,ALIGN);
- uint64_t off=0;for(int i=0;i<n;i++){pstr(f,t[i].name);pu32(f,(uint32_t)t[i].nd);for(int d=0;d<t[i].nd;d++)pu64(f,(uint64_t)t[i].dims[d]);pu32(f,t[i].gt);pu64(f,off);off+=(t[i].nbytes+ALIGN-1)/ALIGN*ALIGN;}
+ uint64_t off=0;for(int i=0;i<n;i++){pstr(f,t[i].name);pu32(f,(uint32_t)t[i].nd);for(int d=0;d<t[i].nd;d++)pu64(f,(uint64_t)t[i].dims[d]);pu32(f,t[i].gt);pu64(f,off);t[i].abs_off=off;off+=(t[i].nbytes+ALIGN-1)/ALIGN*ALIGN;}
  long h=ftell(f),pd=(h+ALIGN-1)/ALIGN*ALIGN;for(long p=h;p<pd;p++)fputc(0,f);
+ for(int i=0;i<n;i++)t[i].abs_off+=(uint64_t)pd;
  for(int i=0;i<n;i++){fwrite(t[i].data,1,t[i].nbytes,f);uint64_t pad=(t[i].nbytes+ALIGN-1)/ALIGN*ALIGN-t[i].nbytes;for(uint64_t p=0;p<pad;p++)fputc(0,f);}
  fclose(f);return 0;}
 /* family table: gguf suffix <- hf suffix (non-expert) */
@@ -80,8 +81,21 @@ int main(int argc,char**argv){
      st_t tw,ts;if(!st_find(wn,&tw)||!st_find(sn,&ts)){fprintf(stderr,"missing expert %d %s\n",e,ew[wi]);return 1;}
      uint8_t*w=st_read(&tw),*s=st_read(&ts);uint64_t ob;uint8_t*mx=repack_mxfp4(w,s,tw.shape[0],tw.shape[1]*2,&ob);memcpy(buf+pos,mx,ob);pos+=ob;free(w);free(s);free(mx);}
    ot o={0};snprintf(o.name,sizeof o.name,"blk.43.%s",eg[wi]);o.data=buf;o.nbytes=pos;strcpy(o.dtype,"mxfp4");snprintf(o.shape,sizeof o.shape,"[256x%lldx%lld]",(long long)out,(long long)in_dim);o.gt=39;o.nd=3;o.dims[0]=in_dim;o.dims[1]=out;o.dims[2]=256;T[n++]=o;}
+ /* widen BF16 norms/control to F32 to match the main-model convention */
+ for(int i=0;i<n;i++) if(T[i].gt==30){uint64_t ne=T[i].nbytes/2;float*fb=malloc(ne*4);const uint16_t*sp=(const uint16_t*)T[i].data;for(uint64_t e=0;e<ne;e++)fb[e]=ds4_src_bf16_to_f32(sp[e]);free(T[i].data);T[i].data=(uint8_t*)fb;T[i].nbytes=ne*4;T[i].gt=0;strcpy(T[i].dtype,"f32");}
  if(emit_gguf(OUT,T,n)){fprintf(stderr,"emit failed\n");return 1;}
- FILE*mf=fopen(MAN,"w");fprintf(mf,"gguf_name\tsource_dtype\tsource_shape\tbyte_length\n");for(int i=0;i<n;i++)fprintf(mf,"%s\t%s\t%s\t%llu\n",T[i].name,T[i].dtype,T[i].shape,(unsigned long long)T[i].nbytes);fclose(mf);
+ /* 13-column Sprint-002 manifest with absolute GGUF offsets + per-dtype conventions */
+ FILE*mf=fopen(MAN,"w");
+ fprintf(mf,"semantic_tensor_id\tsource_name\tsource_dtype\tsource_shape\truntime_layout\towning_gpu\tlayer_id\tkernel_family\tbyte_offset\tbyte_length\tscale_offset\tchecksum\tbyte_offset_basis\n");
+ for(int i=0;i<n;i++){
+   char shp[48]; if(T[i].nd==1)snprintf(shp,sizeof shp,"[%lld]",(long long)T[i].dims[0]); else if(T[i].nd==2)snprintf(shp,sizeof shp,"[%lldx%lld]",(long long)T[i].dims[0],(long long)T[i].dims[1]); else snprintf(shp,sizeof shp,"[%lldx%lldx%lld]",(long long)T[i].dims[0],(long long)T[i].dims[1],(long long)T[i].dims[2]);
+   const char*rl,*kf; int isffn=strstr(T[i].name,"ffn")!=NULL;
+   if(!strcmp(T[i].dtype,"f8_e4m3_b128")){rl="source_f8_e4m3_b128_blocked";kf="v100_fp8_dequant_f16_hmma_pending";}
+   else if(!strcmp(T[i].dtype,"mxfp4")){rl="source_mxfp4_grouped";kf="v100_grouped_mxfp4_pending";}
+   else {rl="source_f32_control";kf=isffn?"ds4_ffn_control":"ds4_attention_control";}
+   fprintf(mf,"%s\t%s\t%s\t%s\t%s\t0\t43\t%s\t%llu\t%llu\t-1\tpending\tabsolute_gguf_file\n",T[i].name,T[i].name,T[i].dtype,shp,rl,kf,(unsigned long long)T[i].abs_off,(unsigned long long)T[i].nbytes);
+ }
+ fclose(mf);
  /* reparse + round-trip validate one mxfp4 expert-stack + one f8 */
  FILE*g=fopen(OUT,"rb");char m[4];fread(m,1,4,g);uint32_t ver;fread(&ver,4,1,g);uint64_t nt,nkv;fread(&nt,8,1,g);fread(&nkv,8,1,g);fclose(g);
  printf("emitted %s: %d tensors; reparse magic=%.4s ver=%u n_tensors=%llu n_kv=%llu\n",OUT,n,m,ver,(unsigned long long)nt,(unsigned long long)nkv);
