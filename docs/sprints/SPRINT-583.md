@@ -83,6 +83,32 @@ This is a bounded extension of an existing, validated tool rather than a
 greenfield converter -- lower risk, and the dequant correctness is already
 proven (it built the working sidecar).
 
+## Correction + validated re-pack core (implementation progress)
+
+Reading `deepseek4-quantize.c:699-725` corrected the Sprint 582/583 assumption:
+the expert weights are stored as **packed FP4** (the `I8` dtype is 2 fp4 nibbles
+per byte: `in_dim = packed_in*2`) with E8M0 32-elem block scales -- structurally
+identical to MXFP4. So the conversion is a **lossless re-pack**, not a lossy
+I8->MXFP4 re-quant. No draft-quality loss; better than the ~Q4_K sidecar.
+
+Exact layouts (from `ds4_source_formats`):
+- mxfp4: `32`-elem / `17`-byte blocks = `[e8m0 scale][16 bytes]`, low nibbles ->
+  elems `0..15`, high -> `16..31`. Source fp4 is interleaved (low->even,
+  high->odd), so the expert path is a **nibble permutation** carrying the same
+  e8m0 scale.
+- f8_e4m3_b128: `128`-elem / `129`-byte blocks = `[e8m0 scale][128 e4m3]`. Source
+  F8_E4M3 + 2D E8M0 scale -> per-row 128-blocks (byte-exact e4m3 + the row's
+  column-block scale byte).
+
+`tools/mtp-repack.c` implements both re-pack functions with a round-trip
+self-test that decodes the re-packed bytes via `ds4_src_mxfp4_row_to_f32` /
+`ds4_src_f8_e4m3_b128_row_to_f32` and compares to the source dequant:
+**mxfp4 `0/64` mismatch, f8_e4m3_b128 `0/256` mismatch -- lossless, validated.**
+
+This is the correctness-critical core of the converter. Remaining: wrap it with
+the safetensors read loop (reuse the `deepseek4-quantize.c` index/header loader +
+name map) and GGUF-fragment emission, then the contract layer-43 extension.
+
 ## Definition of Done
 
 - Converter implemented; emits an MTP GGUF fragment that satisfies
