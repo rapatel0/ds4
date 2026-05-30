@@ -62,6 +62,27 @@ layer-43 extension are the implementation work; they build and validate on the
 pod against the real safetensors. This is the substantial code chunk of the MTP
 weight-integration phase.
 
+## Converter approach refined: reuse `gguf-tools/deepseek4-quantize.c`
+
+Inspection of `gguf-tools/deepseek4-quantize.c` (1878 LoC) shows it already
+implements the **input half** the MTP converter needs: safetensors index/header
+loading, the GGUF<->safetensors name-mapping table, FP8_E4M3+E8M0 dequant (dense),
+and **I8/FP4+E8M0 expert dequant** (it treats the I8 expert weight + E8M0 scale as
+packed FP4 -> f32). That is exactly the MTP source format (Sprint 582 finding).
+
+But its **output** is Q8_0/Q4_K/Q2_K/IQ2_XXS -- it is the tool that produced the
+**sidecar** GGUF (Q4_K/Q8_0/F32), not the TP/EP pack-pipeline format
+(f8_e4m3_b128 + mxfp4 read by `ds4_source_formats`). So the converter is not new
+from scratch and not a trivial re-point: it is **deepseek4-quantize's dequant
+half + a new f32 -> mxfp4 / f8_e4m3_b128 emission half** in the pack-pipeline GGUF
+layout, scoped to the `mtp.0.*` block emitted as layer 43. The expert re-quant
+spec above (f32 -> 32-elem MXFP4 blocks) is that emission half; dense/proj go
+f32 -> f8_e4m3_b128; norms/sink stay BF16/F32.
+
+This is a bounded extension of an existing, validated tool rather than a
+greenfield converter -- lower risk, and the dequant correctness is already
+proven (it built the working sidecar).
+
 ## Definition of Done
 
 - Converter implemented; emits an MTP GGUF fragment that satisfies
