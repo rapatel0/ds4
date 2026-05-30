@@ -134,6 +134,18 @@ int run_tp_ep_appliance(Options opt) {
         }
         return 9;
     }
+    /* MTP (layer 43) experts from the dedicated MTP pack dir (no-op unless
+     * --mtp-pack-dir/--mtp-tm-index are set). EP-split 32/rank like 0-42. */
+    if (open_mtp_expert_bindings(opt, &shared_expert_bindings) != 0) {
+        close_shared_expert_bindings(&shared_expert_bindings);
+        close_shared_tp_runtime(&shared_tp_runtime);
+        close_shared_rank_buffers(&shared_rank_buffers);
+        close_shared_api(&shared_api);
+        if (shared_dense_f16_cache) {
+            free_dense_f16_cache(all_layer_dense_f16_cache, opt);
+        }
+        return 9;
+    }
     if (shared_expert_bindings.initialized) {
         std::printf("tp_ep_all_layer_expert_bindings_shared\tlayers\t43\tdevices\t%d\t"
                     "bytes\t%llu\tbytes_per_gpu\t%llu\tPASS\n",

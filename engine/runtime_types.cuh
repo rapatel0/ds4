@@ -887,6 +887,11 @@ struct LayerExpertCache {
 
 struct SharedExpertBindings {
     LayerExpertCache layers[43];
+    /* Dedicated MTP (layer 43) expert cache -- loaded from the MTP pack dir,
+     * not the main [43] array, since the MTP block is structurally special
+     * (ratio=0 attention, prologue + head). Experts still EP-split 32/rank. */
+    LayerExpertCache mtp_layer;
+    bool mtp_initialized = false;
     uint64_t bytes = 0;
     bool initialized = false;
 };

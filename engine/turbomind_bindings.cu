@@ -267,11 +267,45 @@ int open_shared_expert_bindings(const Options &opt, SharedExpertBindings *shared
     return 0;
 }
 
+/* Dedicated MTP (layer 43) expert bind. Reuses the same parse_tm_index +
+ * pack_descriptor_set path as layers 0-42, but reads the MTP tm-index/pack-dir
+ * (opt.mtp_tm_index_path / opt.mtp_pack_dir) for layer 43. Each rank loads its
+ * own [rank*32, rank*32+32) slice of the MTP layer's 256 experts (EP-split).
+ * No-op (returns 0) when no MTP source is configured. */
+int open_mtp_expert_bindings(const Options &opt, SharedExpertBindings *shared) {
+    if (!opt.mtp_tm_index_path || !opt.mtp_pack_dir) return 0;
+    std::vector<int> active;
+    for (int e = 0; e < kPackedLocalExperts; ++e) active.push_back(e);
+    LayerExpertCache &cache = shared->mtp_layer;
+    if (parse_tm_index(opt.mtp_tm_index_path, 43, &cache.bindings) != 0) {
+        std::fprintf(stderr, "MTP tm index parse failed for layer 43\n");
+        return 1;
+    }
+    for (int p = 0; p < kGpus; ++p) {
+        uint64_t layer_bytes = 0;
+        if (pack_descriptor_set(opt.devices[p], cache.bindings.gated, p, active,
+                                opt.mtp_pack_dir, &cache.gated[p], &layer_bytes) != 0 ||
+            pack_descriptor_set(opt.devices[p], cache.bindings.down, p, active,
+                                opt.mtp_pack_dir, &cache.down[p], &layer_bytes) != 0) {
+            free_layer_expert_cache(&cache);
+            return 2;
+        }
+        cache.bytes += layer_bytes;
+    }
+    cache.initialized = true;
+    shared->mtp_initialized = true;
+    std::printf("tp_ep_mtp_expert_bindings_load\tlayer\t43\tbytes\t%llu\tPASS\n",
+                (unsigned long long)cache.bytes);
+    std::fflush(stdout);
+    return 0;
+}
+
 void close_shared_expert_bindings(SharedExpertBindings *shared) {
     if (!shared) return;
     for (int layer = 0; layer < 43; ++layer) {
         free_layer_expert_cache(&shared->layers[layer]);
     }
+    free_layer_expert_cache(&shared->mtp_layer);
     *shared = SharedExpertBindings{};
 }
 

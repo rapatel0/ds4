@@ -94,6 +94,18 @@ bool parse_args(int argc, char **argv, Options *opt) {
             if (!val) return false;
             opt->tm_index_path = val;
             ++i;
+        } else if (std::strcmp(arg, "--mtp-pack-dir") == 0) {
+            if (!val) return false;
+            opt->mtp_pack_dir = val;
+            ++i;
+        } else if (std::strcmp(arg, "--mtp-tm-index") == 0) {
+            if (!val) return false;
+            opt->mtp_tm_index_path = val;
+            ++i;
+        } else if (std::strcmp(arg, "--mtp-contract") == 0) {
+            if (!val) return false;
+            opt->mtp_contract_path = val;
+            ++i;
         } else if (std::strcmp(arg, "--tokenizer-model") == 0) {
             if (!val) return false;
             opt->tokenizer_model_path = val;

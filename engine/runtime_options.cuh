@@ -3,6 +3,12 @@ struct Options {
     const char *pack_dir = nullptr;
     const char *contract_path = nullptr;
     const char *tm_index_path = nullptr;
+    /* MTP (layer 43) dedicated weight source -- decoupled from the main pack
+     * so the appliance loads 0-42 from --pack-dir and the MTP block from its
+     * own EP-format pack (mxfp4/turbomind, fused gate_up, EP-split 32/rank). */
+    const char *mtp_pack_dir = nullptr;
+    const char *mtp_tm_index_path = nullptr;
+    const char *mtp_contract_path = nullptr;
     const char *tokenizer_model_path = nullptr;
     int devices[kGpus] = {0, 1, 2, 3, 4, 5, 6, 7};
     int slots = 32;
