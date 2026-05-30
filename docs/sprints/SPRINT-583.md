@@ -240,6 +240,39 @@ Remaining MTP: (1) drive appliance-pack/turbomind-pack from the EP8 contract ->
 8 non-zero shards; (2) `runtime_pack.cu` layer-43 bind + sidecar delete;
 (3) MTPBlock.forward; (4) the specdec loop.
 
+### Further Sprint 584 findings (production-pack archaeology)
+
+Comparing the live production pack `/workspace/packs/ds4-appliance-full-tm-gated-s181`
+(8 non-zero shards, gpu0 22.5 GB .. gpu7 11.8 GB) against the MTP attempt
+surfaced two divergences that must be resolved before a correct MTP pack:
+
+1. **Gate/up fusion.** Production experts are FUSED:
+   `blk.N.ffn_gate_up_exps.weight` (source `ffn_gate_exps+ffn_up_exps`,
+   shape `[4096x4096x256]`, runtime_layout `turbomind_mxfp4_grouped_gate_up_interleaved`,
+   kernel `turbomind_mxfp4_grouped_gated_silu_sm70`). The MTP converter
+   `tools/mtp-pack-fragment.c` emits SEPARATE `ffn_gate_exps` + `ffn_up_exps`.
+   The converter must fuse+interleave gate/up to match the runtime kernel.
+
+2. **Expert placement is BY LAYER, not 32-experts-per-rank.** In the s181
+   `turbomind-pack-index.tsv`, each layer's expert tensor is a single row with
+   `owning_gpu = f(layer)` and `experts_packed = experts_total = 256` -- i.e. a
+   whole layer's 256 experts live on one GPU, and the 43 layers spread across
+   the 8 GPUs (row counts 12/12/12/12/12/10/10/6). This CONTRADICTS the older
+   `sprint245` contract (which EP-split a single layer's experts 32/rank across
+   8 GPUs, `expert_first` 0..224). The two pack strategies are not the same;
+   the current production strategy is layer->GPU expert placement. The MTP
+   block (layer 43) must be assigned to ONE owning GPU under this strategy, not
+   EP-split. The `.weights` files hold the TP-sharded dense/attention tensors
+   (pack-index has 0 `exps` rows); experts ride in the turbomind sidecar that
+   appliance-pack merges in.
+
+CONCLUSION: the correct MTP pack is NOT reproducible from artifacts alone --
+it needs the actual production pack driver/recipe (which tool assigns
+layer->GPU and drives turbomind-pack per layer) or a careful read of the full
+pipeline source. Producing a pack blind would likely be wrong (separate vs
+fused gate/up; EP-split vs layer-placed). This is the scoped next step; it was
+NOT completed this pass to avoid shipping an incorrect pack.
+
 ## Definition of Done
 
 - Converter implemented; emits an MTP GGUF fragment that satisfies
