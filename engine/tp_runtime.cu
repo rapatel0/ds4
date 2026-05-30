@@ -14,7 +14,7 @@
 namespace {
 
 constexpr int kGpus = 8;
-constexpr int kLayers = 43;
+constexpr int kLayers = 44;  /* 43 transformer layers (0-42) + the MTP block at layer 43 */
 constexpr int kSwa = 128;
 constexpr int kHeadDim = 512;
 constexpr int kIndexerHeadDim = 128;
