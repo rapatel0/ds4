@@ -1607,8 +1607,48 @@ int load_mtp_hc_layer43(const Options &opt, SharedHcControls *out) {
     MTP_HC_UP(d_router_w, router_w);
     if (have_bias) MTP_HC_UP(d_router_bias, router_bias);
 #undef MTP_HC_UP
-    std::printf("tp_ep_mtp_hc_layer43_load\tlayer\t43\trouter_bias\t%d\tPASS\n",
-                have_bias ? 1 : 0);
+    /* Rank-distributed HC variants (the tp_hc_current_allreduce path needs
+     * d_attn_fn_rank[43][rank] etc.) -- mirror the 0-42 loop's sharding. */
+    if (opt.tp_hc_current_allreduce_gate) {
+        const int shard_cols = kHidden / kGpus;
+        const size_t local_cols = (size_t)kHcRows * (size_t)shard_cols;
+        std::vector<float> fn_rank(local_cols * (size_t)kHcMix);
+        std::vector<float> attn_fn_rank(local_cols * (size_t)kHcMix);
+        for (int rank = 0; rank < kGpus; ++rank) {
+            for (int row = 0; row < kHcRows; ++row) {
+                for (int local_h = 0; local_h < shard_cols; ++local_h) {
+                    const size_t local_c =
+                        (size_t)row * (size_t)shard_cols + (size_t)local_h;
+                    const size_t global_c =
+                        (size_t)row * (size_t)kHidden +
+                        (size_t)rank * (size_t)shard_cols + (size_t)local_h;
+                    for (int mix = 0; mix < kHcMix; ++mix) {
+                        attn_fn_rank[local_c * (size_t)kHcMix + (size_t)mix] =
+                            attn_fn[global_c * (size_t)kHcMix + (size_t)mix];
+                        fn_rank[local_c * (size_t)kHcMix + (size_t)mix] =
+                            fn[global_c * (size_t)kHcMix + (size_t)mix];
+                    }
+                }
+            }
+            CHECK_CUDA(cudaSetDevice(opt.devices[rank]));
+#define MTP_HC_RANK(field, vec)                                                     \
+    do {                                                                            \
+        CHECK_CUDA(cudaMalloc(&out->field[L][rank], (vec).size() * sizeof(float)));   \
+        CHECK_CUDA(cudaMemcpy(out->field[L][rank], (vec).data(),                     \
+                              (vec).size() * sizeof(float), cudaMemcpyHostToDevice)); \
+    } while (0)
+            MTP_HC_RANK(d_attn_fn_rank, attn_fn_rank);
+            MTP_HC_RANK(d_attn_base_rank, attn_base);
+            MTP_HC_RANK(d_attn_scale_rank, attn_scale);
+            MTP_HC_RANK(d_ffn_fn_rank, fn_rank);
+            MTP_HC_RANK(d_ffn_base_rank, base);
+            MTP_HC_RANK(d_ffn_scale_rank, scale);
+#undef MTP_HC_RANK
+        }
+        CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    }
+    std::printf("tp_ep_mtp_hc_layer43_load\tlayer\t43\trouter_bias\t%d\trank_dist\t%d\tPASS\n",
+                have_bias ? 1 : 0, opt.tp_hc_current_allreduce_gate ? 1 : 0);
     std::fflush(stdout);
     return 0;
 }
