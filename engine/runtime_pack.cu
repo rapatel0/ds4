@@ -1607,6 +1607,34 @@ int load_mtp_hc_layer43(const Options &opt, SharedHcControls *out) {
     MTP_HC_UP(d_router_w, router_w);
     if (have_bias) MTP_HC_UP(d_router_bias, router_bias);
 #undef MTP_HC_UP
+    /* Per-rank norm weights: rank 0 aliases the global; ranks 1-7 replicate
+     * (the allreduce-router + rank-major-attention paths read these). */
+    out->d_ffn_norm_weight_rank[L][0] = out->d_ffn_norm_weight[L];
+    if (opt.model_router_allreduce_logits_gate || opt.routed_ffn_rank_major_input_gate ||
+        opt.routed_ffn_rank_major_shared_input_gate ||
+        opt.routed_ffn_rank_major_route_input_gate ||
+        opt.routed_ffn_rank_major_input_parity_gate) {
+        for (int rank = 1; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(opt.devices[rank]));
+            CHECK_CUDA(cudaMalloc(&out->d_ffn_norm_weight_rank[L][rank],
+                                  ffn_norm_weight.size() * sizeof(float)));
+            CHECK_CUDA(cudaMemcpy(out->d_ffn_norm_weight_rank[L][rank], ffn_norm_weight.data(),
+                                  ffn_norm_weight.size() * sizeof(float), cudaMemcpyHostToDevice));
+        }
+        CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    }
+    out->d_attn_norm_weight_rank[L][0] = out->d_attn_norm_weight[L];
+    if (opt.true_ds4_attention_projection_rank_local_input_gate ||
+        opt.true_ds4_attention_projection_rank_major_input_gate) {
+        for (int rank = 1; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(opt.devices[rank]));
+            CHECK_CUDA(cudaMalloc(&out->d_attn_norm_weight_rank[L][rank],
+                                  attn_norm_weight.size() * sizeof(float)));
+            CHECK_CUDA(cudaMemcpy(out->d_attn_norm_weight_rank[L][rank], attn_norm_weight.data(),
+                                  attn_norm_weight.size() * sizeof(float), cudaMemcpyHostToDevice));
+        }
+        CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    }
     /* Rank-distributed HC variants (the tp_hc_current_allreduce path needs
      * d_attn_fn_rank[43][rank] etc.) -- mirror the 0-42 loop's sharding. */
     if (opt.tp_hc_current_allreduce_gate) {
@@ -1644,6 +1672,44 @@ int load_mtp_hc_layer43(const Options &opt, SharedHcControls *out) {
             MTP_HC_RANK(d_ffn_base_rank, base);
             MTP_HC_RANK(d_ffn_scale_rank, scale);
 #undef MTP_HC_RANK
+        }
+        CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    }
+    /* Router weight EP/TP shards (the dense-router-logits path needs
+     * d_router_w_ep[43][rank] / d_router_w_shard[43][rank]) -- mirror the loop. */
+    if (opt.model_router_rank_major_logits_gate) {
+        std::vector<float> router_w_ep((size_t)kHidden * (size_t)kLocalExperts);
+        for (int rank = 0; rank < kGpus; ++rank) {
+            for (int h = 0; h < kHidden; ++h)
+                for (int e = 0; e < kLocalExperts; ++e)
+                    router_w_ep[(size_t)h * (size_t)kLocalExperts + (size_t)e] =
+                        router_w[(size_t)h * (size_t)kGlobalExperts +
+                                 (size_t)(rank * kLocalExperts + e)];
+            CHECK_CUDA(cudaSetDevice(opt.devices[rank]));
+            CHECK_CUDA(cudaMalloc(&out->d_router_w_ep[L][rank],
+                                  router_w_ep.size() * sizeof(float)));
+            CHECK_CUDA(cudaMemcpy(out->d_router_w_ep[L][rank], router_w_ep.data(),
+                                  router_w_ep.size() * sizeof(float),
+                                  cudaMemcpyHostToDevice));
+        }
+        CHECK_CUDA(cudaSetDevice(opt.devices[0]));
+    }
+    if (opt.model_router_allreduce_logits_gate) {
+        const int shard_cols = kHidden / kGpus;
+        std::vector<float> router_w_shard((size_t)shard_cols * (size_t)kGlobalExperts);
+        for (int rank = 0; rank < kGpus; ++rank) {
+            for (int local_h = 0; local_h < shard_cols; ++local_h) {
+                const int global_h = rank * shard_cols + local_h;
+                for (int expert = 0; expert < kGlobalExperts; ++expert)
+                    router_w_shard[(size_t)local_h * (size_t)kGlobalExperts + (size_t)expert] =
+                        router_w[(size_t)global_h * (size_t)kGlobalExperts + (size_t)expert];
+            }
+            CHECK_CUDA(cudaSetDevice(opt.devices[rank]));
+            CHECK_CUDA(cudaMalloc(&out->d_router_w_shard[L][rank],
+                                  router_w_shard.size() * sizeof(float)));
+            CHECK_CUDA(cudaMemcpy(out->d_router_w_shard[L][rank], router_w_shard.data(),
+                                  router_w_shard.size() * sizeof(float),
+                                  cudaMemcpyHostToDevice));
         }
         CHECK_CUDA(cudaSetDevice(opt.devices[0]));
     }
