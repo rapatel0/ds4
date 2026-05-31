@@ -14,6 +14,46 @@ We support the following backends:
 * **NVIDIA CUDA** with special care for the DGX Spark.
 * **AMD ROCm** is only supported in the [rocm](https://github.com/antirez/ds4/tree/rocm) branch. It is kept separate from main since I (antirez) don't have direct hardware access, so the community rebases the branch as needed.
 
+## V100 CUDA Appliance Status
+
+The V100 appliance work is experimental and currently punted.
+
+Top-line metrics from the latest TP/EP work:
+
+- Promoted full-capture TP/EP baseline: about `26.8` aggregate decode tok/s at
+  `32` slots / `256K` context / `64` tokens per request.
+- Gap attribution at that shape: EP/MoE all-to-all and expert orchestration are
+  about `65.2%` of decode time; attention is about `12%`, compose about `11%`,
+  HC about `8%`, and host sync about `5%`.
+- The MTP/speculative draft path runs but is numerically wrong on the V100 TP/EP
+  appliance: deterministic draft acceptance is `0/71`, so it is not a useful
+  speed path.
+
+DeepSeek V4 Flash is a routed MoE model, and the V100 configurations tested so
+far have structural throughput limits that ordinary kernel cleanup does not fix.
+In the earlier LP/layer-parallel layout, whole layers or large layer-owned expert
+blocks sit on individual GPUs. The model fits, but decode remains a mostly
+serial pipeline with uneven device work and idle time between layer handoffs. In
+the newer EP/expert-parallel layout, every layer can use all 8 GPUs, but the
+routed MoE work is too sparse at normal serving batch sizes. At 32 slots with
+top-6 routing, 192 routed activations are spread over 256 experts, so the average
+expert sees less than one token. The result is tiny grouped-GEMMs, heavy
+dispatch/compose/all-to-all overhead, and poor SM occupancy even after CUDA graph
+launch overhead is reduced.
+
+There are still research ideas that could be pursued:
+
+- Pack experts onto GPUs based on observed load patterns rather than static
+  expert ranges.
+- Fuse expert routing / gate-up / activation / down / compose work into a
+  single kernel, hoping to improve expert compute density and reduce orchestration
+  overhead.
+
+None of these look like a clear 10x win from the current evidence, so this track
+is punted for now. The production-quality path remains the main Metal/macOS
+engine; treat the V100 LP/EP appliance code as research scaffolding unless a
+future sprint explicitly reopens it.
+
 This project would not exist without **llama.cpp and GGML**, make sure to read
 the acknowledgements section, a big thank you to Georgi Gerganov and all the
 other contributors.
@@ -62,32 +102,6 @@ only for a few days. It will take months to reach a more stable form.
 However, we try to keep the project in a usable state, and we are making
 progresses. If you have issues, make sure to use `--trace` to log the
 sessions, and open issues including the full trace.
-
-### V100 CUDA Appliance Status
-
-The V100 appliance work is experimental and currently punted. DeepSeek V4 Flash
-is a routed MoE model, and the V100 configurations tested so far have structural
-throughput limits that are not fixed by ordinary kernel cleanup:
-
-- In the earlier LP/layer-parallel layout, whole layers or large layer-owned
-  expert blocks sit on individual GPUs. The model fits, but decode remains a
-  mostly serial pipeline with uneven device work and idle time between layer
-  handoffs.
-- In the newer EP/expert-parallel layout, every layer can use all 8 GPUs, but
-  the routed MoE work is too sparse at normal serving batch sizes. At 32 slots
-  with top-6 routing, 192 routed activations are spread over 256 experts, so the
-  average expert sees less than one token. The result is tiny grouped-GEMMs,
-  heavy dispatch/compose/all-to-all overhead, and poor SM occupancy even after
-  CUDA graph launch overhead is reduced.
-- MTP/speculative decoding was investigated as the obvious EP-fill lever:
-  accepting K draft tokens would make each verified step feed roughly `(K+1)x`
-  more routed tokens through the experts. The current V100 TP/EP MTP draft path
-  runs but is numerically wrong (`0/71` deterministic draft acceptance in the
-  serving harness), so it does not provide useful throughput.
-
-The production-quality path remains the main Metal/macOS engine. Treat the V100
-LP/EP appliance code as research scaffolding unless a future sprint explicitly
-reopens it.
 
 ## More Documentation
 
