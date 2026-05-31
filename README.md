@@ -4,7 +4,8 @@
 > reference, but it is not worth actively pursuing for the moment. The V100
 > 8-GPU appliance work did not reach a useful serving configuration, and the
 > MTP speculative path is numerically wrong. Treat this repo as an engineering
-> record, not an active product direction.
+> record, not an active product direction. *Still think there is a big win
+> somewhere in here, but I'm tapped out.*
 
 ## What This Is
 
@@ -48,7 +49,7 @@ The repo contains a substantial amount of experimental V100-specific work:
 
 - An 8-GPU TP/EP serving appliance path.
 - TurboMind integration for routed expert execution.
-- Custom CUDA kernels for the V100 path.
+- Custom CUDA kernels for packed int8 and int4 for the V100 path.
 - Int8-oriented computation designed to use V100 FP16 tensor cores where
   practical.
 - NCCL transport replacements for hot cross-rank movement.
