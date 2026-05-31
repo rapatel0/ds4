@@ -20,6 +20,39 @@ Tool: `tools/ds4-v100-http-response-tolerance.py`. The strict parity tool
 `tools/ds4-v100-http-response-parity.py` is reserved for opt-in bit-exact
 checks.
 
+## Performance metrics are opt-in, not a per-sprint default
+
+Per-sprint validation gates **correctness only.** Performance metrics —
+server decode tok/s, request-window GPU util, fine-bucket timing breakdowns,
+domain-table profile — are **not measured by default per sprint**.
+
+The rationale: for the structural-change class of work (rank-local norms,
+rank-major consumers, NCCL collective replacements, host-sync removal), each
+sprint is a clear win over the prior centralized pattern; per-sprint
+reference-shape runs add cost (10–15 min each), noise (shape variance), and
+no decision value at single-digit-percent expected magnitudes. The
+aggregate measurement happens at the tuning sprint at the end of the
+structural program.
+
+A sprint **opts into** in-sprint perf measurement only when its **failure
+mode is "structurally landed but the perf didn't transfer to serving."**
+The canonical case is **CUDA graph capture (C1 in `SPIKE_B_STEERING.md`)**:
+prior attempts produced large wins in the smoke and zero transfer to serving.
+For that class, the sprint plan names "decode tok/s at reference shape" as
+an in-scope gate alongside the tolerance gate, and the candidate is run at
+the full reference shape with timing captured.
+
+For all other sprints, the candidate run targets the **smallest shape that
+exercises the changed path correctly** — typically a selected-token gate at
+32 requests is enough to confirm the tolerance gate, peer-copy invariants,
+and scaffold-log path-confirmation. Decode tok/s and util from such a run
+are dominated by warm-up costs and **should not be reported as
+performance numbers**.
+
+A sprint plan that wants perf measurement in-scope must say so explicitly
+and name the shape and timing fields it will capture. Silence on perf
+defaults to "correctness only."
+
 ## When Bit-Exact Is Valid
 
 Use bit-exact only when **both** of these hold:
@@ -130,6 +163,10 @@ Sprint plans state, per validation step:
 - The control artifact reference (reused from sprint N-K, or fresh with one
   of the five invalidators named).
 - The candidate run to be produced (one per sprint).
+- Whether perf measurement is in-scope (opt-in; default off — see "Performance
+  metrics are opt-in" above). If in-scope, name the shape and the timing
+  fields being captured.
 
 A sprint plan that does not state these defaults to: tolerance gate,
-control reused from prior promoted artifact, one candidate run.
+control reused from prior promoted artifact, one candidate run, no perf
+measurement.

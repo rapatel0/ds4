@@ -1,5 +1,12 @@
 # DwarfStar 4
 
+> **Status: abandoned / research archive.** This repository is being made
+> public for reference, but it is not worth actively pursuing for the moment.
+> The main Metal path remains the most coherent implementation. The V100 CUDA
+> LP/EP appliance work exposed structural MoE saturation problems and the MTP
+> speculative path does not work, so that track is punted rather than maintained
+> as an active product direction.
+
 DwarfStar 4 is a small native inference engine specific for **DeepSeek V4 Flash**. It is
 intentionally narrow: not a generic GGUF runner, not a wrapper around another
 runtime: it is completely self-contained. Other than running the model in a
