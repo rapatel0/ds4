@@ -13,7 +13,7 @@ entirely new and different V100-focused experiment. The goal was to see whether
 DeepSeek V4 Flash could be generalized into an 8x NVIDIA V100 appliance with
 high-throughput serving.
 
-The original project direction was centered around a narrow DeepSeek V4 Flash
+The original DwarfStar4 project direction was centered around a narrow DeepSeek V4 Flash
 engine, especially the Metal/macOS path. This repo diverged into a CUDA
 appliance effort with new runtime structure, new packing assumptions, a
 TurboMind integration, custom V100 kernels, and a long sequence of TP/EP serving
@@ -66,7 +66,7 @@ There are still ideas that could be pursued, but none looked like a clear 10x
 win from the evidence:
 
 - Pack experts onto GPUs based on observed load patterns rather than static
-  expert ranges.
+  expert ranges. (hard to do without lots of data and throughput is too slow on this hardware)
 - Fuse expert routing / gate-up / activation / down / compose into a single
   kernel to improve expert compute density and reduce orchestration overhead.
 
@@ -76,9 +76,6 @@ continuing this track right now.
 ## Repository Notes
 
 Useful context lives in:
-
-- `SPIKE_B_STEERING.md` - current steering record and final V100 conclusions.
-- `MTP_IMPLEMENTATION.md` - MTP integration plan and non-working status.
 - `docs/sprints/` - sprint-by-sprint execution history.
 - `appliance/`, `engine/`, `kernels/`, `tools/` - the experimental CUDA/TP/EP
   implementation.
