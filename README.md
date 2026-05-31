@@ -63,6 +63,32 @@ However, we try to keep the project in a usable state, and we are making
 progresses. If you have issues, make sure to use `--trace` to log the
 sessions, and open issues including the full trace.
 
+### V100 CUDA Appliance Status
+
+The V100 appliance work is experimental and currently punted. DeepSeek V4 Flash
+is a routed MoE model, and the V100 configurations tested so far have structural
+throughput limits that are not fixed by ordinary kernel cleanup:
+
+- In the earlier LP/layer-parallel layout, whole layers or large layer-owned
+  expert blocks sit on individual GPUs. The model fits, but decode remains a
+  mostly serial pipeline with uneven device work and idle time between layer
+  handoffs.
+- In the newer EP/expert-parallel layout, every layer can use all 8 GPUs, but
+  the routed MoE work is too sparse at normal serving batch sizes. At 32 slots
+  with top-6 routing, 192 routed activations are spread over 256 experts, so the
+  average expert sees less than one token. The result is tiny grouped-GEMMs,
+  heavy dispatch/compose/all-to-all overhead, and poor SM occupancy even after
+  CUDA graph launch overhead is reduced.
+- MTP/speculative decoding was investigated as the obvious EP-fill lever:
+  accepting K draft tokens would make each verified step feed roughly `(K+1)x`
+  more routed tokens through the experts. The current V100 TP/EP MTP draft path
+  runs but is numerically wrong (`0/71` deterministic draft acceptance in the
+  serving harness), so it does not provide useful throughput.
+
+The production-quality path remains the main Metal/macOS engine. Treat the V100
+LP/EP appliance code as research scaffolding unless a future sprint explicitly
+reopens it.
+
 ## More Documentation
 
 If you are looking for very specific things, we have other
@@ -129,8 +155,8 @@ weights.
 `./download_model.sh mtp` fetches the optional speculative decoding support
 GGUF. It can be used with q2-imatrix, q4-imatrix, q2, and q4, but must be
 enabled explicitly with `--mtp`. The current MTP/speculative decoding path is
-still experimental: it is correctness-gated and currently provides at most a
-slight speedup, not a meaningful generation-speed win.
+not a supported performance feature. On the V100 TP/EP appliance it currently
+does not work (`0/71` deterministic draft acceptance in the serving harness).
 
 Then build:
 
@@ -281,9 +307,9 @@ and returns to `ds4>`.
 
 The CLI defaults to thinking mode. Use `/nothink` or `--nothink` for direct
 answers. `--mtp MTP.gguf --mtp-draft 2` enables the optional MTP speculative
-path; it is useful only for greedy decoding, currently uses a confidence gate
-(`--mtp-margin`) to avoid slow partial accepts, and should be treated as an
-experimental slight-speedup path.
+path, but MTP is currently experimental and not a supported speed path. On the
+V100 TP/EP appliance the draft model is known not to work; see
+`MTP_IMPLEMENTATION.md` for the current status.
 
 ## Server
 

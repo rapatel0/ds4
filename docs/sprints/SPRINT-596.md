@@ -73,3 +73,19 @@ deeper into routed-FFN activation order.
 - Clean source is recopied to `/workspace/s573-continuation-instrument` and the
   clean pod build passes.
 - `VISION.md` and `SPIKE_B_STEERING.md` record the result and next target.
+
+## Result
+
+Status: ABORTED / PUNTED by user decision.
+
+The first temporary residual-handoff diagnostic was implemented and built on the
+pod, but the run was intentionally interrupted before it produced usable
+evidence. No diagnostic code was promoted. The temporary changes were removed
+from `engine/post_attention_ffn.cu`, and the clean local source tree has no
+engine diff.
+
+The broader MTP finding is now recorded in `MTP_IMPLEMENTATION.md`: the V100
+TP/EP MTP draft path currently does not work. The integrated draft executes and
+does not corrupt the main token stream, but deterministic draft acceptance stays
+at `0/71`, so MTP is not a performance feature. The remaining MTP body
+localization work is punted until explicitly reopened.

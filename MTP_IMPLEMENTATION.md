@@ -5,6 +5,30 @@ appliance's main weight-pack pipeline. Prerequisite-discharged record for
 SPIKE B item **B1** — research is done, the existing pack tools do most of
 the work, and the remaining scope is small and mechanical.
 
+## Current Status: V100 TP/EP MTP Does Not Work
+
+As of 2026-05-30, the V100 TP/EP serving MTP path is **not working** and should
+not be used as a performance feature.
+
+What is known:
+
+- The integrated draft path runs without corrupting normal serving output; the
+  main model token stream remains byte-identical with MTP on/off.
+- The layer-43 MTP weight loading, dense F8 pack/orientation, output-head HC
+  slicing, HC-current reduction, raw-SWA state/frontier, and raw-SWA attention
+  math have all been checked or repaired through Sprints 590-595.
+- Despite that, deterministic draft acceptance remains `0/71` in the serving
+  harness, so the MTP draft is numerically wrong and provides no throughput
+  benefit.
+- Debug MTP runs can show higher GPU activity while lowering useful tok/s,
+  because they add rejected draft work and diagnostic host synchronizations.
+
+The remaining blocker is downstream of raw-SWA attention and upstream of the
+already-cleared output head, likely in attention-output handoff,
+post-attention/FFN handoff, routed-FFN activation order, or another subtle
+layer-43 semantic mismatch. Work is intentionally punted until there is a fresh
+reason to resume it.
+
 ## TL;DR
 
 - The sidecar (`engine/mtp_sidecar.{c,h}`) runs **complete canonical MTP**,
