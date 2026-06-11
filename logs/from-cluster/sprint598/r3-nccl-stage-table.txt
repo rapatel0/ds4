@@ -1,0 +1,25 @@
+== Phase 3 decomposition: /workspace/s598-artifacts/r3-nccl-prof/cases/case_0_ctx262144_s32_tok64_selected-token/server.log ==
+
+-- mode replay_cache_hit (samples per stage ~87720) --
+stage	mean_ms	max_ms	rank_mean_sum_x43_ms
+barrier_1144_contrib_pack	0.0342	0.2519	1.47
+barrier_1373_compose	0.0373	0.4812	1.61
+barrier_954_post_dense_launch	0.0755	0.6816	3.25
+barrier_978_shared_down	0.1510	3.1678	6.49
+compose	0.0133	0.0179	0.57
+contrib_pack	0.0079	0.0103	0.34
+dense_overlap	0.0687	0.2291	2.95
+down_gemm	0.0658	0.1334	2.83
+ep_return_nccl	0.6113	0.8699	26.28
+gate_up_gemm	0.1320	0.3039	5.67
+route_plan_pack	0.5281	1.4247	22.71
+shared_swiglu_down	0.7764	4.2092	33.39
+sum_named_stages_mean	2.5015	per_step_x43	107.57 ms (rank-mean, rank-local elapsed)
+ep_window mean 2.4742 ms; named-stage coverage pct: mean 101.1 p5 96.5 p50 101.8 p95 102.6 -> residual(other/overlap) mean -1.1%
+per-rank ep_window mean ms: r0:2.670 r1:2.604 r2:2.548 r3:2.500 r4:2.448 r5:2.392 r6:2.339 r7:2.293
+
+layer replay_ms (cache-hit): mean 4.2475 over 10965 layer-replays; nodes per layer graph: [3017]
+
+route-skew over 10965 layer-steps (per-rank actual routes, capacity 192):
+  per-rank routes: p50 24 p95 52 max 120; zero-route rank occurrences 3877 (4.4%)
+  per-layer-step max-rank routes: p50 48 p95 68 max 120

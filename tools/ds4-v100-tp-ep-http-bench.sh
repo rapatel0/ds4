@@ -144,7 +144,8 @@ for tokens in "${token_values[@]}"; do
     "$run_appliance" >"$server_log" 2>"$server_err" &
     server_pid=$!
 
-    for _ in $(seq 1 180); do
+    # s598: cold weight load (~155 GB) can exceed 180 s.
+    for _ in $(seq 1 900); do
         if grep -q "tp_ep_http_serving" "$server_log"; then break; fi
         if ! kill -0 "$server_pid" 2>/dev/null; then
             cat "$server_err" >&2 || true
@@ -236,14 +237,19 @@ try:
                     post_path,
                     json.dumps(payload).encode(),
                 )
-                responses[i] = json.loads(body.decode("utf-8"))
+                responses[i] = json.loads(body.decode("utf-8", "replace"))
             except Exception as exc:
                 errors.append(f"request {i}: {exc}")
         workers = [threading.Thread(target=post_one, args=(i,)) for i in range(generation_requests)]
-        for worker in workers:
-            worker.start()
-        for worker in workers:
-            worker.join()
+        # s598: submit in waves of 32 so each wave coalesces into one full
+        # 32-slot batch (deterministic batch composition for A/B runs).
+        wave = 32
+        for w0 in range(0, len(workers), wave):
+            grp = workers[w0:w0 + wave]
+            for worker in grp:
+                worker.start()
+            for worker in grp:
+                worker.join()
         responses = [r for r in responses if r is not None]
     else:
         for i in range(generation_requests):
@@ -261,7 +267,7 @@ try:
                 post_path,
                 json.dumps(payload).encode(),
             )
-            responses.append(json.loads(body.decode("utf-8")))
+            responses.append(json.loads(body.decode("utf-8", "replace")))
     if errors:
         raise RuntimeError("; ".join(errors))
 finally:

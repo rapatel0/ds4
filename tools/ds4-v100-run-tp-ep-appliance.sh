@@ -114,6 +114,13 @@ fi
 # appliance arms per-rank CUDA-event markers at the EP sub-stage boundaries
 # and emits tp_ep_ep_stage_profile TSV lines; flag-off is byte-identical.
 : "${DS4_V100_TP_EP_EP_STAGE_PROFILE:=0}"
+# Sprint 598 B2-C: EP-return transport for the full-capture graph branch.
+#   nccl = grouped per-source NCCL broadcasts captured in-graph (promoted
+#          default after the Sprint 598 reference gate: EP return
+#          6.92 -> 0.61 ms/layer, decode-domain 71.2 -> 162.1 tok/s (2.28x),
+#          tolerance bit-exact vs the s597 control)
+#   copy = the prior per-pair copy_f32 remote-load path (rollback flag)
+: "${DS4_V100_TP_EP_EP_RETURN_TRANSPORT:=nccl}"
 
 is_uint() {
     case "${1:-}" in
@@ -259,6 +266,10 @@ case "$DS4_V100_TP_EP_EP_STAGE_PROFILE" in
     0|1) ;;
     *) fail "DS4_V100_TP_EP_EP_STAGE_PROFILE must be 0 or 1" ;;
 esac
+case "$DS4_V100_TP_EP_EP_RETURN_TRANSPORT" in
+    copy|nccl) ;;
+    *) fail "DS4_V100_TP_EP_EP_RETURN_TRANSPORT must be copy or nccl" ;;
+esac
 # Back-compat: GRAPH_SUFFIX_REPLAY, if explicitly set, overrides the graph mode.
 if [ -n "$DS4_V100_TP_EP_GRAPH_SUFFIX_REPLAY" ]; then
     case "$DS4_V100_TP_EP_GRAPH_SUFFIX_REPLAY" in
@@ -401,7 +412,7 @@ print_resolved() {
 }
 
 if [ "$mode" = "check" ]; then
-    echo "ds4-v100-run-tp-ep-appliance: config ok host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS decode_graph_mode=$DS4_V100_TP_EP_DECODE_GRAPH_MODE ep_stage_profile=$DS4_V100_TP_EP_EP_STAGE_PROFILE tp_ep_bin=$DS4_V100_TP_EP_BIN tp_ep_contract=$DS4_V100_TP_EP_CONTRACT tp_ep_tm_index=$DS4_V100_TP_EP_TM_INDEX mtp=off"
+    echo "ds4-v100-run-tp-ep-appliance: config ok host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS decode_graph_mode=$DS4_V100_TP_EP_DECODE_GRAPH_MODE ep_stage_profile=$DS4_V100_TP_EP_EP_STAGE_PROFILE ep_return_transport=$DS4_V100_TP_EP_EP_RETURN_TRANSPORT tp_ep_bin=$DS4_V100_TP_EP_BIN tp_ep_contract=$DS4_V100_TP_EP_CONTRACT tp_ep_tm_index=$DS4_V100_TP_EP_TM_INDEX mtp=off"
     exit 0
 fi
 if [ "$mode" = "print" ]; then
@@ -420,6 +431,7 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_TOKENS=$DS4_V100_TOKENS"
     echo "DS4_V100_TP_EP_DECODE_GRAPH_MODE=$DS4_V100_TP_EP_DECODE_GRAPH_MODE"
     echo "DS4_V100_TP_EP_EP_STAGE_PROFILE=$DS4_V100_TP_EP_EP_STAGE_PROFILE"
+    echo "DS4_V100_TP_EP_EP_RETURN_TRANSPORT=$DS4_V100_TP_EP_EP_RETURN_TRANSPORT"
     echo "DS4_V100_TP_EP_EXTRA_ARGS=$DS4_V100_TP_EP_EXTRA_ARGS"
     echo "DS4_V100_TP_EP_VRAM_MIN_FREE_MIB=$DS4_V100_TP_EP_VRAM_MIN_FREE_MIB"
     echo "DS4_V100_TP_EP_NCCL_MIN_FREE_MIB=$DS4_V100_TP_EP_NCCL_MIN_FREE_MIB"
@@ -449,6 +461,7 @@ fi
 export DS4_LOCK_FILE
 export DS4_V100_TURBOMIND_LIB
 export DS4_V100_TP_EP_EP_STAGE_PROFILE
+export DS4_V100_TP_EP_EP_RETURN_TRANSPORT
 export DS4_V100_NCCL_TOPOLOGY_POLICY
 export DS4_V100_NCCL_NO_SYS_RING
 export DS4_V100_NCCL_ALLOW_VISIBLE_REMAP

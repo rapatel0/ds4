@@ -111,7 +111,8 @@ enum EpProfStage {
     kEpProfBarrier1170 = 14,
     kEpProfBarrier1373 = 15,
     kEpProfCopySrcBase = 16, /* +src in [0,7] -> 16..23 */
-    kEpProfStageCount = 24,
+    kEpProfEpReturnNccl = 24, /* s598 C1: grouped NCCL broadcast return */
+    kEpProfStageCount = 25,
 };
 
 static const char *ep_stage_prof_name(int stage) {
@@ -132,6 +133,7 @@ static const char *ep_stage_prof_name(int stage) {
     case kEpProfBarrier1144: return "barrier_1144_contrib_pack";
     case kEpProfBarrier1170: return "barrier_1170_nccl_rs";
     case kEpProfBarrier1373: return "barrier_1373_compose";
+    case kEpProfEpReturnNccl: return "ep_return_nccl";
     default:
         if (stage >= kEpProfCopySrcBase &&
             stage < kEpProfCopySrcBase + kGpus) {

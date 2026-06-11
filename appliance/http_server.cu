@@ -411,8 +411,11 @@ int run_tp_ep_http_server(const Options &base_opt,
         close(listen_fd);
         return 31;
     }
+    /* s598: backlog 16 -> 256. Reference-shape benchmarking submits up to
+     * 128 concurrent connections; with backlog 16 the kernel drops SYN for
+     * the overflow and clients stall in connect timeouts (Sprint 597). */
     if (bind(listen_fd, (sockaddr *)&addr, sizeof(addr)) != 0 ||
-        listen(listen_fd, 16) != 0) {
+        listen(listen_fd, 256) != 0) {
         std::perror("tp_ep_http_bind_listen");
         close(listen_fd);
         return 32;

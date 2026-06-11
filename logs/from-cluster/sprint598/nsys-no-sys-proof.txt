@@ -1,0 +1,13 @@
+grid384_copy_f32_kernels 0 (expect 0)
+ncclDevKernel_Broadcast_RING_LL	n=24768	total_ms=1937.4	per_layer_step_all_ranks=5.6321
+ncclDevKernel_AllReduce_Sum_f32_RING_LL	n=14016	total_ms=646.7	per_layer_step_all_ranks=1.8801
+ncclDevKernel_AllGather_RING_LL	n=5568	total_ms=477.1	per_layer_step_all_ranks=1.3869
+--- top kernels (total ms, all ranks, 344 layer-steps) ---
+   1973.4  copy_f32_kernel
+   1937.4  ncclDevKernel_Broadcast_RING_LL
+    646.7  ncclDevKernel_AllReduce_Sum_f32_RING_LL
+    497.4  gemm_kernel
+    477.1  ncclDevKernel_AllGather_RING_LL
+    476.8  bf16_dense_kernel
+    433.7  f8_b128_dense_kernel
+    414.1  Kernel

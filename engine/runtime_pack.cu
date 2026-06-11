@@ -269,7 +269,12 @@ int broadcast_ep_return_slices(RankState ranks[kGpus],
                                bool skip_self_copy,
                                uint64_t src_stride_elems,
                                const uint64_t copy_elems_by_src[kGpus],
-                               const char *label) {
+                               const char *label,
+                               bool skip_stream_sync = false) {
+    /* s598: skip_stream_sync=true is the graph-capture-safe mode -- the
+     * caller is inside stream capture, host stream syncs are illegal, and
+     * downstream consumers are ordered by the per-rank stream + the
+     * existing cross-rank barriers. */
     if (!copy_elems_by_src || src_stride_elems == 0) return 1;
     int prior_device = 0;
     CHECK_CUDA(cudaGetDevice(&prior_device));
@@ -337,9 +342,11 @@ int broadcast_ep_return_slices(RankState ranks[kGpus],
             }
         }
     }
-    for (int rank = 0; rank < kGpus; ++rank) {
-        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
-        CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    if (!skip_stream_sync) {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+            CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        }
     }
     CHECK_CUDA(cudaSetDevice(prior_device));
     return 0;

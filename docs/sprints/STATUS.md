@@ -1,8 +1,26 @@
 # DS4 V100 Appliance Status
 
-Last updated: 2026-06-11
+Last updated: 2026-06-11 (Sprint 598)
 
 ## Topline
+
+Sprint 598 (2026-06-11) PROMOTED B2-C: the EP return on the full-capture
+graph branch now runs as grouped per-source NCCL broadcasts captured
+in-graph (`DS4_V100_TP_EP_EP_RETURN_TRANSPORT=nccl`, launcher default;
+`copy` is the rollback flag). Reference shape, fixed harness (listen
+backlog 16→256, wave submission upstreamed): decode-domain `71.21 ->
+162.06` tok/s (**2.28x**; 2.20x vs the s597 anchor), wall `59.20 -> 108.50`
+(1.83x); EP-return stage `6.92 -> 0.611` ms/layer; layer replay `10.2 ->
+4.25` ms; tolerance vs the s597 control bit-exact (1.0/1.0); nsys confirms
+zero SYS-class remote-load kernels (EP return is `Broadcast_RING_LL` on the
+NVLink rings). Both Sprint-396 controls beaten. The Sprint 597 cycle target
+as written (>= ~80 tok/s aggregate decode) is exceeded. Next dominant cost
+(s598 post-C1 profile, ms/layer): pre-EP prefix ~1.78 (HC-current +
+attention), shared swiglu_down 0.78, route_plan_pack 0.53, barriers 0.30 —
+Sprint 599 targets the prefix + overlap. Report:
+`docs/sprints/SPRINT-598-REPORT.md`.
+
+## Prior topline (Sprint 597)
 
 Sprint 597 (2026-06-11) reopened the TP/EP track with a measurement-only
 cycle and re-grounded the throughput program. Environment rebuilt from

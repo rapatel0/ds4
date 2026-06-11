@@ -1,4 +1,20 @@
-# Spike B Decode-Optimization Steering (updated 2026-06-11 after Sprint 597)
+# Spike B Decode-Optimization Steering (updated 2026-06-11 after Sprint 598)
+
+**Sprint 598: B2-C DONE and PROMOTED.** EP return = grouped per-source NCCL
+broadcasts captured in-graph (launcher default
+`DS4_V100_TP_EP_EP_RETURN_TRANSPORT=nccl`; `copy` rollback). Reference shape,
+fixed harness: decode-domain `162.06` tok/s (2.28x), wall `108.50` (1.83x);
+EP-return `0.611` ms/layer (was 6.92); layer replay `4.25` ms (was 10.2);
+bit-exact tolerance; nsys-proven no-SYS. NCCL 2.19.3 capture+replay of the
+grouped broadcast pattern verified by standalone probe
+(`tools/s598-nccl-capture-probe.cu`, 0.72 ms/round). **The s597 cycle target
+as written (>=80 tok/s) is exceeded.** Post-C1 per-layer profile: pre-EP
+prefix ~1.78 ms (HC-current + attention — s597 follow-up #1 now the #1
+target), shared swiglu_down 0.78, route_plan_pack 0.53, barriers 0.30,
+GEMMs 0.20. **Next: Sprint 599 = prefix/HC-current reduction + shared-FFN
+overlap with the now-cheap EP return; B2-D (per-pair events) folds in as the
+barrier piece. Honest stretch for the cycle: 3x of the re-anchored 73.59 ≈
+220 decode-domain.**
 
 **Sprint 597 (2026-06-11): track REOPENED; B2 is ACTIVE and re-grounded by
 measurement.** Full results: `docs/sprints/SPRINT-597-REPORT.md`. The

@@ -8,6 +8,16 @@ static inline bool ds4_ep_stage_profile_env_default() {
     return !(v[0] == '0' && v[1] == '\0');
 }
 
+/* Sprint 598 B2-C: EP-return transport selector for the promoted
+ * full-capture graph branch. DS4_V100_TP_EP_EP_RETURN_TRANSPORT=copy|nccl;
+ * default copy (the s597 per-pair copy_f32 path, byte-identical). nccl
+ * captures the grouped per-source NCCL broadcast return
+ * (broadcast_ep_return_slices) inside the decode graph instead. */
+static inline bool ds4_ep_return_transport_env_nccl() {
+    const char *v = std::getenv("DS4_V100_TP_EP_EP_RETURN_TRANSPORT");
+    return v && std::strcmp(v, "nccl") == 0;
+}
+
 struct Options {
     const char *lib_path = "./build/turbomind-v100/libggml-turbomind.so";
     const char *pack_dir = nullptr;
@@ -153,4 +163,6 @@ struct Options {
     uint64_t nccl_min_free_mib = 0;
     /* Sprint 597 Phase 2: EP sub-stage profiler (default off). */
     bool ep_stage_profile = ds4_ep_stage_profile_env_default();
+    /* Sprint 598 B2-C: EP-return transport (default copy = s597 path). */
+    bool ep_return_nccl = ds4_ep_return_transport_env_nccl();
 };

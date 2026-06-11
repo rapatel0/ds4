@@ -1239,7 +1239,32 @@ int run_decode_loop(const Options &opt,
             t_reduce_done = std::chrono::steady_clock::now();
             t_copy_done = t_reduce_done;
         } else if (!opt.direct_remote_compose || opt.ep_return_fp16) {
-            if (opt.source_copy_schedule && opt.decode_cudagraph_gate) {
+            if (opt.source_copy_schedule && opt.decode_cudagraph_gate &&
+                opt.ep_return_nccl) {
+                /* s598 C1: EP return via the grouped per-source NCCL
+                 * broadcasts (same primitive as the eager branch), captured
+                 * inside the decode graph. skip_stream_sync=true: capture-
+                 * safe; consumers are ordered by each rank's stream and the
+                 * post-compose barrier. */
+                if (opt.ep_return_fp16) return 13;
+                uint64_t copy_elems_by_src[kGpus] = {};
+                for (int src = 0; src < kGpus; ++src) {
+                    copy_elems_by_src[src] = compact_route
+                        ? (uint64_t)routed_compose_rows(ranks[src], opt) *
+                              (uint64_t)(kHidden / kGpus)
+                        : shard_elems;
+                }
+                const uint64_t src_stride_elems =
+                    compact_route ? compact_segment_elems : shard_elems;
+                epprof_all_begin(kEpProfEpReturnNccl);
+                if (broadcast_ep_return_slices(
+                        ranks, false, skip_self_copy, src_stride_elems,
+                        copy_elems_by_src, "serving_ep_return_nccl_graph",
+                        /*skip_stream_sync=*/true) != 0) {
+                    return 14;
+                }
+                epprof_all_end(kEpProfEpReturnNccl);
+            } else if (opt.source_copy_schedule && opt.decode_cudagraph_gate) {
                 if (opt.ep_return_fp16) return 13;
                 for (int dst = 0; dst < kGpus; ++dst) {
                     CHECK_CUDA(cudaSetDevice(ranks[dst].device));
