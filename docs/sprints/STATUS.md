@@ -1,8 +1,30 @@
 # DS4 V100 Appliance Status
 
-Last updated: 2026-05-26
+Last updated: 2026-06-11
 
 ## Topline
+
+Sprint 597 (2026-06-11) reopened the TP/EP track with a measurement-only
+cycle and re-grounded the throughput program. Environment rebuilt from
+scratch on gpu-01 (the workspace had been wiped post-archive): regenerated
+s597 appliance pack + contract, clean build, probe smoke passed. Re-anchored
+reference baseline at 32 slots / 256K / 64 tok/req: full-capture `73.59`
+tok/s decode-domain steady (`59.3` wall; the old `26.8` aggregate was a
+bench-harness artifact — listen backlog 16 vs 128 simultaneous connects);
+eager attribution `18.165` ms/layer-step with EP `11.136` ms (61.3%) and
+HC-current drifted to `5.552` ms (post-MTP churn). The EP decomposition
+(new `DS4_V100_TP_EP_EP_STAGE_PROFILE` flag, default off, flag-off
+byte-identical, flag-on decode delta `-1.85%`, residual closure `0.4%`)
+plus an nsys authority leg and a 56-pair transport microbench established:
+the promoted EP return's 24 SYS-crossing per-pair copy kernels cost ~`2 ms`
+each under congestion = **81% of the 8.52 ms EP window** (expert math ~3%;
+padded-executor tax ~0), while the eager NCCL-broadcast control moves the
+same data in `0.68 ms`/layer. Decision: B2-C transport first (NCCL-in-graph
+candidate, then one-hop NVLink relay; projected ~2.3-2.6x), then B2-D
+per-pair events; B2-A dropped. Full report:
+`docs/sprints/SPRINT-597-REPORT.md`. MTP remains punted; PP remains frozen.
+
+## Prior topline (2026-05-26)
 
 Latest semantic/NCCL status: Sprint 414 promoted semantic skip-stats for the
 TP/EP true-attention plus post-attention FFN-input serving path. At the

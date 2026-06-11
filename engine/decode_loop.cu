@@ -87,6 +87,9 @@ int run_decode_loop(const Options &opt,
         }
         return 2;
     }
+    /* s597: pre-allocate the EP sub-stage profiler device stamp slots
+     * outside any capture region (flag-gated no-op when off). */
+    ep_stage_prof_device_init(opt, ranks);
     int cudagraph_audit_sync_all_calls = 0;
     int cudagraph_audit_event_barrier_calls = 0;
     int cudagraph_audit_stream_syncs = 0;
@@ -236,6 +239,38 @@ int run_decode_loop(const Options &opt,
                 }
             }
         }
+    };
+    /* Sprint 597 Phase 2: EP sub-stage profiler helpers (flag-gated;
+     * ep_stage_prof_mark returns immediately when the flag is off, so the
+     * flag-off path is byte-identical). */
+    auto epprof_begin = [&](int rank, int stage, cudaStream_t stream,
+                            unsigned long long bytes = 0ull) {
+        ep_stage_prof_mark(opt, rank, ranks[rank].device, stage, stream, true,
+                           bytes);
+    };
+    auto epprof_end = [&](int rank, int stage, cudaStream_t stream,
+                          unsigned long long bytes = 0ull) {
+        ep_stage_prof_mark(opt, rank, ranks[rank].device, stage, stream, false,
+                           bytes);
+    };
+    auto epprof_all_begin = [&](int stage) {
+        if (!opt.ep_stage_profile) return;
+        for (int p = 0; p < kGpus; ++p) {
+            epprof_begin(p, stage, ranks[p].stream);
+        }
+    };
+    auto epprof_all_end = [&](int stage) {
+        if (!opt.ep_stage_profile) return;
+        for (int p = 0; p < kGpus; ++p) {
+            epprof_end(p, stage, ranks[p].stream);
+        }
+    };
+    /* Wraps the named sync_all() sites so each rank's barrier drain time is
+     * captured as a stage. Flag-off this is exactly sync_all(). */
+    auto sync_all_prof = [&](int barrier_stage) {
+        epprof_all_begin(barrier_stage);
+        sync_all();
+        epprof_all_end(barrier_stage);
     };
     auto checksum_device_bytes = [&](int device, const void *ptr,
                                      uint64_t bytes,
@@ -861,9 +896,14 @@ int run_decode_loop(const Options &opt,
         if (should_run_graph_stage(kStagePostAttentionFfnInput) &&
             opt.true_ds4_post_attention_ffn_input_gate) {
             const auto t_stage = std::chrono::steady_clock::now();
+            /* s597: route-plan kernels + routed-input pack run inside this
+             * call (engine/post_attention_ffn.cu); profiled as one combined
+             * stage here, split by kernel name in the nsys authority leg. */
+            epprof_all_begin(kEpProfRoutePlanPack);
             const int post_rc = run_true_ds4_post_attention_ffn_input(
                 opt, shared_hc_controls, shared_dense_ops, ranks, opt.layer,
                 capture_probe_active);
+            epprof_all_end(kEpProfRoutePlanPack);
             if (post_rc != 0) {
                 std::fprintf(stderr,
                              "tp_ep_post_attention_ffn_input_failed\tlayer\t%d\trc\t%d\n",
@@ -911,8 +951,16 @@ int run_decode_loop(const Options &opt,
             }
         }
         for (int p = 0; p < kGpus; ++p) {
+            epprof_begin(p, kEpProfGateUpGemm, ranks[p].stream);
             const int gate_rc = run_gate_selected(ranks[p], api, opt);
-            if (gate_rc != 0 || run_down(ranks[p], api, opt) != 0) return 1;
+            epprof_end(p, kEpProfGateUpGemm, ranks[p].stream);
+            int down_rc = 0;
+            if (gate_rc == 0) {
+                epprof_begin(p, kEpProfDownGemm, ranks[p].stream);
+                down_rc = run_down(ranks[p], api, opt);
+                epprof_end(p, kEpProfDownGemm, ranks[p].stream);
+            }
+            if (gate_rc != 0 || down_rc != 0) return 1;
         }
         log_rank_stage("routed_ffn");
         sync_after_decode_stage("routed_ffn");
@@ -924,6 +972,13 @@ int run_decode_loop(const Options &opt,
         double ep_stage_ms = 0.0;
         double dense_stage_ms = 0.0;
         if (opt.overlap_ep_dense) {
+            if (opt.ep_stage_profile) {
+                for (int p = 0; p < kGpus; ++p) {
+                    epprof_begin(p, kEpProfDenseOverlap,
+                                 ranks[p].dense_stream ? ranks[p].dense_stream
+                                                       : ranks[p].stream);
+                }
+            }
             if (launch_resident_f8_dense(opt, *attn_op, ranks) != 0) {
                 return 2;
             }
@@ -951,8 +1006,16 @@ int run_decode_loop(const Options &opt,
             } else if (launch_resident_f8_dense(opt, *shared_op, ranks) != 0) {
                 return 2;
             }
-            sync_all();
+            if (opt.ep_stage_profile) {
+                for (int p = 0; p < kGpus; ++p) {
+                    epprof_end(p, kEpProfDenseOverlap,
+                               ranks[p].dense_stream ? ranks[p].dense_stream
+                                                     : ranks[p].stream);
+                }
+            }
+            sync_all_prof(kEpProfBarrier954); /* s597: was sync_all() (954) */
             if (opt.true_shared_ffn_gate) {
+                epprof_all_begin(kEpProfSharedSwigluDown);
                 const int swiglu_rc = materialize_shared_swiglu_down_input(
                     opt, *shared_gate_op, *shared_up_op, *shared_op, ranks);
                 if (swiglu_rc != 0) {
@@ -975,7 +1038,8 @@ int run_decode_loop(const Options &opt,
                 if (launch_resident_f8_dense_f32_input(opt, *shared_op, ranks) != 0) {
                     return 2;
                 }
-                sync_all();
+                epprof_all_end(kEpProfSharedSwigluDown);
+                sync_all_prof(kEpProfBarrier978); /* s597: was sync_all() (978) */
                 log_rank_stage("shared_down");
                 sync_after_decode_stage("shared_down");
                 if (!opt.decode_cudagraph_gate &&
@@ -993,7 +1057,7 @@ int run_decode_loop(const Options &opt,
             auto t2 = std::chrono::steady_clock::now();
             ep_stage_ms = std::chrono::duration<double, std::milli>(t2 - t0).count();
         } else {
-            sync_all();
+            sync_all_prof(kEpProfBarrier996); /* s597: was sync_all() (996) */
             auto t1 = std::chrono::steady_clock::now();
             if (launch_resident_f8_dense(opt, *attn_op, ranks) != 0) {
                 return 2;
@@ -1003,7 +1067,7 @@ int run_decode_loop(const Options &opt,
                     launch_resident_f8_dense(opt, *shared_up_op, ranks) != 0) {
                     return 2;
                 }
-                sync_all();
+                sync_all_prof(kEpProfBarrier1006); /* s597: was sync_all() (1006) */
                 if (!opt.decode_cudagraph_gate &&
                     (opt.layer <= 4 || should_log_reference_hc_window(opt))) {
                     for (int p = 0; p < kGpus; ++p) {
@@ -1042,7 +1106,7 @@ int run_decode_loop(const Options &opt,
                 if (launch_resident_f8_dense_f32_input(opt, *shared_op, ranks) != 0) {
                     return 2;
                 }
-                sync_all();
+                sync_all_prof(kEpProfBarrier1045); /* s597: was sync_all() (1045) */
                 log_rank_stage("shared_down");
                 sync_after_decode_stage("shared_down");
                 if (!opt.decode_cudagraph_gate &&
@@ -1059,7 +1123,7 @@ int run_decode_loop(const Options &opt,
             } else if (launch_resident_f8_dense(opt, *shared_op, ranks) != 0) {
                 return 2;
             }
-            sync_all();
+            sync_all_prof(kEpProfBarrier1062); /* s597: was sync_all() (1062) */
             auto t2 = std::chrono::steady_clock::now();
             ep_stage_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
             dense_stage_ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
@@ -1107,6 +1171,8 @@ int run_decode_loop(const Options &opt,
                 ? routed_compose_rows(r, opt)
                 : r.routes;
             const uint64_t route_hidden_elems = (uint64_t)compose_routes * kHidden;
+            epprof_begin(p, kEpProfContribPack, r.stream,
+                         route_hidden_elems * sizeof(float));
             const int *route_total_limit =
                 opt.post_attention_fixed_capacity_route_plan_gate
                     ? r.d_route_totals
@@ -1140,8 +1206,10 @@ int run_decode_loop(const Options &opt,
                     r.d_ep_contrib_half_all, r.d_ep_contrib_all, all_contrib_elems);
                 CHECK_CUDA(cudaGetLastError());
             }
+            epprof_end(p, kEpProfContribPack, r.stream,
+                       route_hidden_elems * sizeof(float));
         }
-        sync_all();
+        sync_all_prof(kEpProfBarrier1144); /* s597: was sync_all() (1144) */
         log_rank_stage("ep_pack");
         sync_after_decode_stage("ep_pack");
         auto t_reduce_done = std::chrono::steady_clock::now();
@@ -1167,7 +1235,7 @@ int run_decode_loop(const Options &opt,
                                              r.stream));
             }
             CHECK_NCCL(ncclGroupEnd());
-            sync_all();
+            sync_all_prof(kEpProfBarrier1170); /* s597: was sync_all() (1170) */
             t_reduce_done = std::chrono::steady_clock::now();
             t_copy_done = t_reduce_done;
         } else if (!opt.direct_remote_compose || opt.ep_return_fp16) {
@@ -1186,10 +1254,16 @@ int run_decode_loop(const Options &opt,
                                   (uint64_t)(kHidden / kGpus)
                             : shard_elems;
                         if (copy_elems > 0) {
+                            epprof_begin(dst, kEpProfCopySrcBase + src,
+                                         ranks[dst].stream,
+                                         copy_elems * sizeof(float));
                             enqueue_graph_f32_copy_between_devices(
                                 opt, ranks[dst].device, ranks[src].device,
                                 ranks[dst].d_ep_remote[src], src_ptr,
                                 copy_elems, ranks[dst].stream, block);
+                            epprof_end(dst, kEpProfCopySrcBase + src,
+                                       ranks[dst].stream,
+                                       copy_elems * sizeof(float));
                         }
                     }
                 }
@@ -1240,6 +1314,7 @@ int run_decode_loop(const Options &opt,
         for (int dst = 0; dst < kGpus; ++dst) {
             RankState &r = ranks[dst];
             CHECK_CUDA(cudaSetDevice(r.device));
+            epprof_begin(dst, kEpProfCompose, r.stream);
             if (!opt.decode_cudagraph_gate &&
                 opt.copy_event_compose && opt.source_copy_schedule &&
                 (!opt.direct_remote_compose || opt.ep_return_fp16) &&
@@ -1369,8 +1444,9 @@ int run_decode_loop(const Options &opt,
                     shared_op->d_out[(size_t)dst], r.d_ep_sum, dst, opt.slots);
             }
             CHECK_CUDA(cudaGetLastError());
+            epprof_end(dst, kEpProfCompose, r.stream);
         }
-        sync_all();
+        sync_all_prof(kEpProfBarrier1373); /* s597: was sync_all() (1373) */
         log_rank_stage("compose");
         sync_after_decode_stage("compose");
         if (should_log_reference_hc_window(opt)) {
@@ -1646,6 +1722,10 @@ int run_decode_loop(const Options &opt,
             if (rc == cudaSuccess) {
                 apply_full_capture_replay_host_swaps();
                 apply_full_capture_replay_compressed_kv_host_state();
+                /* s597: replay finished and synced; read the EP sub-stage
+                 * graph events for this layer-step (flag-gated). */
+                ep_stage_prof_collect(opt, ranks, "replay_cache_hit",
+                                      current_decode_step);
             }
             if (rc == cudaSuccess &&
                 suffix_stage_ends_compose_eager_final_hc()) {
@@ -1921,6 +2001,9 @@ int run_decode_loop(const Options &opt,
                 print_rank_major_half_input_parity_audit(
                     persistent_enabled ? "persistent-capture-replay"
                                        : "capture-replay");
+                /* s597: first-capture replay finished and synced. */
+                ep_stage_prof_collect(opt, ranks, "first_capture_replay",
+                                      current_decode_step);
             }
         }
         if (!replay_after_capture || !replay_success) {
@@ -2023,6 +2106,19 @@ int run_decode_loop(const Options &opt,
                              &hc_current_breakdown, &pre_ep_breakdown,
                              &final_hc_ms) != 0) {
                 return 4;
+            }
+            if (opt.ep_stage_profile && !opt.decode_cudagraph_gate) {
+                /* s597: drain rank streams, then read the eager-step
+                 * EP sub-stage events (flag-gated; eager leg only). */
+                for (int p = 0; p < kGpus; ++p) {
+                    CHECK_CUDA(cudaSetDevice(ranks[p].device));
+                    CHECK_CUDA(cudaStreamSynchronize(ranks[p].stream));
+                    if (ranks[p].dense_stream &&
+                        ranks[p].dense_stream != ranks[p].stream) {
+                        CHECK_CUDA(cudaStreamSynchronize(ranks[p].dense_stream));
+                    }
+                }
+                ep_stage_prof_collect(opt, ranks, "eager", i);
             }
         }
         current_decode_step = -1;

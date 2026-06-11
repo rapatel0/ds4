@@ -1,0 +1,1820 @@
+{
+  "candidate_count": 128,
+  "candidate_dir": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format",
+  "control_count": 128,
+  "control_dir": "/workspace/s597-phase01-artifacts/phase0-full-control",
+  "generated_sequence_agreement": 0.957275390625,
+  "generated_sequence_matches": 7842,
+  "generated_sequence_total": 8192,
+  "http_failures": 128,
+  "max_selected_logit_relative_error": 0.10402468713496463,
+  "max_selected_logit_relative_error_advisory_ok": false,
+  "max_selected_logit_relative_error_policy": "advisory_only",
+  "max_selected_logit_relative_error_threshold": 0.001,
+  "min_pairs": 1,
+  "min_top1_agreement": 0.99,
+  "missing_in_candidate": [],
+  "missing_in_control": [],
+  "paired_count": 128,
+  "pairs": [
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-0.txt",
+      "candidate_selected_logit": 17.241455078,
+      "candidate_selected_token": 32461,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-0.txt",
+      "control_selected_logit": 17.241455078,
+      "control_selected_token": 32461,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 0,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-1.txt",
+      "candidate_selected_logit": 17.241455078,
+      "candidate_selected_token": 32461,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-1.txt",
+      "control_selected_logit": 17.241455078,
+      "control_selected_token": 32461,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 1,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-2.txt",
+      "candidate_selected_logit": 17.241455078,
+      "candidate_selected_token": 32461,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-2.txt",
+      "control_selected_logit": 17.241455078,
+      "control_selected_token": 32461,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 2,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-3.txt",
+      "candidate_selected_logit": 17.241455078,
+      "candidate_selected_token": 32461,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-3.txt",
+      "control_selected_logit": 17.241455078,
+      "control_selected_token": 32461,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 3,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-4.txt",
+      "candidate_selected_logit": 16.893051147,
+      "candidate_selected_token": 118452,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-4.txt",
+      "control_selected_logit": 16.893051147,
+      "control_selected_token": 118452,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 4,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-5.txt",
+      "candidate_selected_logit": 16.893051147,
+      "candidate_selected_token": 118452,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-5.txt",
+      "control_selected_logit": 16.893051147,
+      "control_selected_token": 118452,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 5,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-6.txt",
+      "candidate_selected_logit": 16.893051147,
+      "candidate_selected_token": 118452,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-6.txt",
+      "control_selected_logit": 16.893051147,
+      "control_selected_token": 118452,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 6,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-7.txt",
+      "candidate_selected_logit": 16.893051147,
+      "candidate_selected_token": 118452,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-7.txt",
+      "control_selected_logit": 16.893051147,
+      "control_selected_token": 118452,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 7,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-8.txt",
+      "candidate_selected_logit": 16.593753815,
+      "candidate_selected_token": 65804,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-8.txt",
+      "control_selected_logit": 16.593753815,
+      "control_selected_token": 65804,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 8,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-9.txt",
+      "candidate_selected_logit": 16.593753815,
+      "candidate_selected_token": 65804,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-9.txt",
+      "control_selected_logit": 16.593753815,
+      "control_selected_token": 65804,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 9,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-10.txt",
+      "candidate_selected_logit": 16.593753815,
+      "candidate_selected_token": 65804,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-10.txt",
+      "control_selected_logit": 16.593753815,
+      "control_selected_token": 65804,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 10,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-11.txt",
+      "candidate_selected_logit": 16.593753815,
+      "candidate_selected_token": 65804,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-11.txt",
+      "control_selected_logit": 16.593753815,
+      "control_selected_token": 65804,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 11,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-12.txt",
+      "candidate_selected_logit": 18.319913864,
+      "candidate_selected_token": 113976,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-12.txt",
+      "control_selected_logit": 18.319913864,
+      "control_selected_token": 113976,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 12,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-13.txt",
+      "candidate_selected_logit": 18.319913864,
+      "candidate_selected_token": 113976,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-13.txt",
+      "control_selected_logit": 18.319913864,
+      "control_selected_token": 113976,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 13,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-14.txt",
+      "candidate_selected_logit": 18.319913864,
+      "candidate_selected_token": 113976,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-14.txt",
+      "control_selected_logit": 18.319913864,
+      "control_selected_token": 113976,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 14,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-15.txt",
+      "candidate_selected_logit": 18.319913864,
+      "candidate_selected_token": 113976,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-15.txt",
+      "control_selected_logit": 18.319913864,
+      "control_selected_token": 113976,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 15,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-16.txt",
+      "candidate_selected_logit": 15.838236809,
+      "candidate_selected_token": 55730,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-16.txt",
+      "control_selected_logit": 15.838236809,
+      "control_selected_token": 55730,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 16,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-17.txt",
+      "candidate_selected_logit": 15.838236809,
+      "candidate_selected_token": 55730,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-17.txt",
+      "control_selected_logit": 15.838236809,
+      "control_selected_token": 55730,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 17,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-18.txt",
+      "candidate_selected_logit": 15.838236809,
+      "candidate_selected_token": 55730,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-18.txt",
+      "control_selected_logit": 15.838236809,
+      "control_selected_token": 55730,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 18,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-19.txt",
+      "candidate_selected_logit": 15.838236809,
+      "candidate_selected_token": 55730,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-19.txt",
+      "control_selected_logit": 15.838236809,
+      "control_selected_token": 55730,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 19,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-20.txt",
+      "candidate_selected_logit": 15.691845894,
+      "candidate_selected_token": 25890,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-20.txt",
+      "control_selected_logit": 15.691845894,
+      "control_selected_token": 25890,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 20,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-21.txt",
+      "candidate_selected_logit": 15.691845894,
+      "candidate_selected_token": 25890,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-21.txt",
+      "control_selected_logit": 15.691845894,
+      "control_selected_token": 25890,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 21,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-22.txt",
+      "candidate_selected_logit": 15.691845894,
+      "candidate_selected_token": 25890,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-22.txt",
+      "control_selected_logit": 15.691845894,
+      "control_selected_token": 25890,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 22,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-23.txt",
+      "candidate_selected_logit": 15.691845894,
+      "candidate_selected_token": 25890,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-23.txt",
+      "control_selected_logit": 15.691845894,
+      "control_selected_token": 25890,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 23,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-24.txt",
+      "candidate_selected_logit": 15.090538025,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-24.txt",
+      "control_selected_logit": 15.090538025,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 24,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-25.txt",
+      "candidate_selected_logit": 15.090538025,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-25.txt",
+      "control_selected_logit": 15.090538025,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 25,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-26.txt",
+      "candidate_selected_logit": 15.090538025,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-26.txt",
+      "control_selected_logit": 15.090538025,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 26,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-27.txt",
+      "candidate_selected_logit": 15.090538025,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-27.txt",
+      "control_selected_logit": 15.090538025,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 27,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-28.txt",
+      "candidate_selected_logit": 15.080978394,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-28.txt",
+      "control_selected_logit": 15.080978394,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 28,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-29.txt",
+      "candidate_selected_logit": 15.080978394,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-29.txt",
+      "control_selected_logit": 15.080978394,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 29,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-30.txt",
+      "candidate_selected_logit": 15.080978394,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-30.txt",
+      "control_selected_logit": 15.080978394,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 30,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-31.txt",
+      "candidate_selected_logit": 15.080978394,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-31.txt",
+      "control_selected_logit": 15.080978394,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 31,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-32.txt",
+      "candidate_selected_logit": 17.241455078,
+      "candidate_selected_token": 32461,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-32.txt",
+      "control_selected_logit": 17.241455078,
+      "control_selected_token": 32461,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 32,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-33.txt",
+      "candidate_selected_logit": 17.241455078,
+      "candidate_selected_token": 32461,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-33.txt",
+      "control_selected_logit": 17.241455078,
+      "control_selected_token": 32461,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 33,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-34.txt",
+      "candidate_selected_logit": 17.241455078,
+      "candidate_selected_token": 32461,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-34.txt",
+      "control_selected_logit": 17.241455078,
+      "control_selected_token": 32461,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 34,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-35.txt",
+      "candidate_selected_logit": 17.241455078,
+      "candidate_selected_token": 32461,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-35.txt",
+      "control_selected_logit": 17.241455078,
+      "control_selected_token": 32461,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 35,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-36.txt",
+      "candidate_selected_logit": 16.893051147,
+      "candidate_selected_token": 118452,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-36.txt",
+      "control_selected_logit": 16.893051147,
+      "control_selected_token": 118452,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 36,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-37.txt",
+      "candidate_selected_logit": 16.893051147,
+      "candidate_selected_token": 118452,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-37.txt",
+      "control_selected_logit": 16.893051147,
+      "control_selected_token": 118452,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 37,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-38.txt",
+      "candidate_selected_logit": 16.893051147,
+      "candidate_selected_token": 118452,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-38.txt",
+      "control_selected_logit": 16.893051147,
+      "control_selected_token": 118452,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 38,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-39.txt",
+      "candidate_selected_logit": 16.893051147,
+      "candidate_selected_token": 118452,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-39.txt",
+      "control_selected_logit": 16.893051147,
+      "control_selected_token": 118452,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 39,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-40.txt",
+      "candidate_selected_logit": 16.593753815,
+      "candidate_selected_token": 65804,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-40.txt",
+      "control_selected_logit": 16.593753815,
+      "control_selected_token": 65804,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 40,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-41.txt",
+      "candidate_selected_logit": 16.593753815,
+      "candidate_selected_token": 65804,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-41.txt",
+      "control_selected_logit": 16.593753815,
+      "control_selected_token": 65804,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 41,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-42.txt",
+      "candidate_selected_logit": 16.593753815,
+      "candidate_selected_token": 65804,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-42.txt",
+      "control_selected_logit": 16.593753815,
+      "control_selected_token": 65804,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 42,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-43.txt",
+      "candidate_selected_logit": 16.593753815,
+      "candidate_selected_token": 65804,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-43.txt",
+      "control_selected_logit": 16.593753815,
+      "control_selected_token": 65804,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 43,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-44.txt",
+      "candidate_selected_logit": 18.319913864,
+      "candidate_selected_token": 113976,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-44.txt",
+      "control_selected_logit": 18.319913864,
+      "control_selected_token": 113976,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 44,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-45.txt",
+      "candidate_selected_logit": 18.319913864,
+      "candidate_selected_token": 113976,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-45.txt",
+      "control_selected_logit": 18.319913864,
+      "control_selected_token": 113976,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 45,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-46.txt",
+      "candidate_selected_logit": 18.319913864,
+      "candidate_selected_token": 113976,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-46.txt",
+      "control_selected_logit": 18.319913864,
+      "control_selected_token": 113976,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 46,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-47.txt",
+      "candidate_selected_logit": 18.319913864,
+      "candidate_selected_token": 113976,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-47.txt",
+      "control_selected_logit": 18.319913864,
+      "control_selected_token": 113976,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 47,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-48.txt",
+      "candidate_selected_logit": 15.838236809,
+      "candidate_selected_token": 55730,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-48.txt",
+      "control_selected_logit": 15.838236809,
+      "control_selected_token": 55730,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 48,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-49.txt",
+      "candidate_selected_logit": 15.838236809,
+      "candidate_selected_token": 55730,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-49.txt",
+      "control_selected_logit": 15.838236809,
+      "control_selected_token": 55730,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 49,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-50.txt",
+      "candidate_selected_logit": 15.838236809,
+      "candidate_selected_token": 55730,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-50.txt",
+      "control_selected_logit": 15.838236809,
+      "control_selected_token": 55730,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 50,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-51.txt",
+      "candidate_selected_logit": 15.691845894,
+      "candidate_selected_token": 25890,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-51.txt",
+      "control_selected_logit": 15.838236809,
+      "control_selected_token": 55730,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 51,
+      "selected_logit_relative_error": 0.009242879543057069
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-52.txt",
+      "candidate_selected_logit": 15.838236809,
+      "candidate_selected_token": 55730,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-52.txt",
+      "control_selected_logit": 15.691845894,
+      "control_selected_token": 25890,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 52,
+      "selected_logit_relative_error": 0.009329107358617012
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-53.txt",
+      "candidate_selected_logit": 15.691845894,
+      "candidate_selected_token": 25890,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-53.txt",
+      "control_selected_logit": 15.691845894,
+      "control_selected_token": 25890,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 53,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-54.txt",
+      "candidate_selected_logit": 15.691845894,
+      "candidate_selected_token": 25890,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-54.txt",
+      "control_selected_logit": 15.691845894,
+      "control_selected_token": 25890,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 54,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-55.txt",
+      "candidate_selected_logit": 15.691845894,
+      "candidate_selected_token": 25890,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-55.txt",
+      "control_selected_logit": 15.090538025,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 55,
+      "selected_logit_relative_error": 0.03984668194095083
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-56.txt",
+      "candidate_selected_logit": 15.090538025,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-56.txt",
+      "control_selected_logit": 15.691845894,
+      "control_selected_token": 25890,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 56,
+      "selected_logit_relative_error": 0.038319766397267384
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-57.txt",
+      "candidate_selected_logit": 15.090538025,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-57.txt",
+      "control_selected_logit": 15.090538025,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 57,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-58.txt",
+      "candidate_selected_logit": 15.090538025,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-58.txt",
+      "control_selected_logit": 15.090538025,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 58,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-59.txt",
+      "candidate_selected_logit": 15.090538025,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-59.txt",
+      "control_selected_logit": 15.090538025,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 59,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-60.txt",
+      "candidate_selected_logit": 15.080978394,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-60.txt",
+      "control_selected_logit": 15.080978394,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 60,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-61.txt",
+      "candidate_selected_logit": 15.080978394,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-61.txt",
+      "control_selected_logit": 15.080978394,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 61,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-62.txt",
+      "candidate_selected_logit": 15.080978394,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-62.txt",
+      "control_selected_logit": 15.080978394,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 62,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-63.txt",
+      "candidate_selected_logit": 15.080978394,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-63.txt",
+      "control_selected_logit": 15.080978394,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 63,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-64.txt",
+      "candidate_selected_logit": 17.241455078,
+      "candidate_selected_token": 32461,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-64.txt",
+      "control_selected_logit": 17.241455078,
+      "control_selected_token": 32461,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 64,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-65.txt",
+      "candidate_selected_logit": 17.241455078,
+      "candidate_selected_token": 32461,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-65.txt",
+      "control_selected_logit": 17.241455078,
+      "control_selected_token": 32461,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 65,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-66.txt",
+      "candidate_selected_logit": 17.241455078,
+      "candidate_selected_token": 32461,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-66.txt",
+      "control_selected_logit": 17.241455078,
+      "control_selected_token": 32461,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 66,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-67.txt",
+      "candidate_selected_logit": 17.241455078,
+      "candidate_selected_token": 32461,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-67.txt",
+      "control_selected_logit": 17.241455078,
+      "control_selected_token": 32461,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 67,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-68.txt",
+      "candidate_selected_logit": 16.893051147,
+      "candidate_selected_token": 118452,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-68.txt",
+      "control_selected_logit": 16.893051147,
+      "control_selected_token": 118452,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 68,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-69.txt",
+      "candidate_selected_logit": 16.893051147,
+      "candidate_selected_token": 118452,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-69.txt",
+      "control_selected_logit": 16.893051147,
+      "control_selected_token": 118452,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 69,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-70.txt",
+      "candidate_selected_logit": 16.893051147,
+      "candidate_selected_token": 118452,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-70.txt",
+      "control_selected_logit": 16.893051147,
+      "control_selected_token": 118452,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 70,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-71.txt",
+      "candidate_selected_logit": 16.893051147,
+      "candidate_selected_token": 118452,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-71.txt",
+      "control_selected_logit": 16.893051147,
+      "control_selected_token": 118452,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 71,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-72.txt",
+      "candidate_selected_logit": 16.593753815,
+      "candidate_selected_token": 65804,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-72.txt",
+      "control_selected_logit": 16.593753815,
+      "control_selected_token": 65804,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 72,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-73.txt",
+      "candidate_selected_logit": 16.593753815,
+      "candidate_selected_token": 65804,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-73.txt",
+      "control_selected_logit": 16.593753815,
+      "control_selected_token": 65804,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 73,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-74.txt",
+      "candidate_selected_logit": 16.593753815,
+      "candidate_selected_token": 65804,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-74.txt",
+      "control_selected_logit": 16.593753815,
+      "control_selected_token": 65804,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 74,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-75.txt",
+      "candidate_selected_logit": 18.319913864,
+      "candidate_selected_token": 113976,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-75.txt",
+      "control_selected_logit": 16.593753815,
+      "control_selected_token": 65804,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 75,
+      "selected_logit_relative_error": 0.10402468713496463
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-76.txt",
+      "candidate_selected_logit": 16.593753815,
+      "candidate_selected_token": 65804,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-76.txt",
+      "control_selected_logit": 18.319913864,
+      "control_selected_token": 113976,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 76,
+      "selected_logit_relative_error": 0.09422315311165486
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-77.txt",
+      "candidate_selected_logit": 18.319913864,
+      "candidate_selected_token": 113976,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-77.txt",
+      "control_selected_logit": 18.319913864,
+      "control_selected_token": 113976,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 77,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-78.txt",
+      "candidate_selected_logit": 18.319913864,
+      "candidate_selected_token": 113976,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-78.txt",
+      "control_selected_logit": 18.319913864,
+      "control_selected_token": 113976,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 78,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-79.txt",
+      "candidate_selected_logit": 18.319913864,
+      "candidate_selected_token": 113976,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-79.txt",
+      "control_selected_logit": 18.319913864,
+      "control_selected_token": 113976,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 79,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-80.txt",
+      "candidate_selected_logit": 15.838236809,
+      "candidate_selected_token": 55730,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-80.txt",
+      "control_selected_logit": 15.838236809,
+      "control_selected_token": 55730,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 80,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-81.txt",
+      "candidate_selected_logit": 15.838236809,
+      "candidate_selected_token": 55730,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-81.txt",
+      "control_selected_logit": 15.838236809,
+      "control_selected_token": 55730,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 81,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-82.txt",
+      "candidate_selected_logit": 15.838236809,
+      "candidate_selected_token": 55730,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-82.txt",
+      "control_selected_logit": 15.838236809,
+      "control_selected_token": 55730,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 82,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-83.txt",
+      "candidate_selected_logit": 15.838236809,
+      "candidate_selected_token": 55730,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-83.txt",
+      "control_selected_logit": 15.838236809,
+      "control_selected_token": 55730,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 83,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-84.txt",
+      "candidate_selected_logit": 15.691845894,
+      "candidate_selected_token": 25890,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-84.txt",
+      "control_selected_logit": 15.691845894,
+      "control_selected_token": 25890,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 84,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-85.txt",
+      "candidate_selected_logit": 15.691845894,
+      "candidate_selected_token": 25890,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-85.txt",
+      "control_selected_logit": 15.691845894,
+      "control_selected_token": 25890,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 85,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-86.txt",
+      "candidate_selected_logit": 15.691845894,
+      "candidate_selected_token": 25890,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-86.txt",
+      "control_selected_logit": 15.691845894,
+      "control_selected_token": 25890,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 86,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-87.txt",
+      "candidate_selected_logit": 15.691845894,
+      "candidate_selected_token": 25890,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-87.txt",
+      "control_selected_logit": 15.691845894,
+      "control_selected_token": 25890,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 87,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-88.txt",
+      "candidate_selected_logit": 15.090538025,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-88.txt",
+      "control_selected_logit": 15.090538025,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 88,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-89.txt",
+      "candidate_selected_logit": 15.090538025,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-89.txt",
+      "control_selected_logit": 15.090538025,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 89,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-90.txt",
+      "candidate_selected_logit": 15.090538025,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-90.txt",
+      "control_selected_logit": 15.090538025,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 90,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-91.txt",
+      "candidate_selected_logit": 15.090538025,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-91.txt",
+      "control_selected_logit": 15.090538025,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 91,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-92.txt",
+      "candidate_selected_logit": 15.080978394,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-92.txt",
+      "control_selected_logit": 15.080978394,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 92,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-93.txt",
+      "candidate_selected_logit": 15.080978394,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-93.txt",
+      "control_selected_logit": 15.080978394,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 93,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-94.txt",
+      "candidate_selected_logit": 15.080978394,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-94.txt",
+      "control_selected_logit": 15.080978394,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 94,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-95.txt",
+      "candidate_selected_logit": 15.080978394,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-95.txt",
+      "control_selected_logit": 15.080978394,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 95,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-96.txt",
+      "candidate_selected_logit": 17.241455078,
+      "candidate_selected_token": 32461,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-96.txt",
+      "control_selected_logit": 17.241455078,
+      "control_selected_token": 32461,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 96,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-97.txt",
+      "candidate_selected_logit": 17.241455078,
+      "candidate_selected_token": 32461,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-97.txt",
+      "control_selected_logit": 17.241455078,
+      "control_selected_token": 32461,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 97,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-98.txt",
+      "candidate_selected_logit": 17.241455078,
+      "candidate_selected_token": 32461,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-98.txt",
+      "control_selected_logit": 17.241455078,
+      "control_selected_token": 32461,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 98,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-99.txt",
+      "candidate_selected_logit": 17.241455078,
+      "candidate_selected_token": 32461,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-99.txt",
+      "control_selected_logit": 17.241455078,
+      "control_selected_token": 32461,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 99,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-100.txt",
+      "candidate_selected_logit": 16.893051147,
+      "candidate_selected_token": 118452,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-100.txt",
+      "control_selected_logit": 16.893051147,
+      "control_selected_token": 118452,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 100,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-101.txt",
+      "candidate_selected_logit": 16.893051147,
+      "candidate_selected_token": 118452,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-101.txt",
+      "control_selected_logit": 16.893051147,
+      "control_selected_token": 118452,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 101,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-102.txt",
+      "candidate_selected_logit": 16.893051147,
+      "candidate_selected_token": 118452,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-102.txt",
+      "control_selected_logit": 16.893051147,
+      "control_selected_token": 118452,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 102,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-103.txt",
+      "candidate_selected_logit": 16.893051147,
+      "candidate_selected_token": 118452,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-103.txt",
+      "control_selected_logit": 16.893051147,
+      "control_selected_token": 118452,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 103,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-104.txt",
+      "candidate_selected_logit": 16.593753815,
+      "candidate_selected_token": 65804,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-104.txt",
+      "control_selected_logit": 16.593753815,
+      "control_selected_token": 65804,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 104,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-105.txt",
+      "candidate_selected_logit": 16.593753815,
+      "candidate_selected_token": 65804,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-105.txt",
+      "control_selected_logit": 16.593753815,
+      "control_selected_token": 65804,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 105,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-106.txt",
+      "candidate_selected_logit": 16.593753815,
+      "candidate_selected_token": 65804,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-106.txt",
+      "control_selected_logit": 16.593753815,
+      "control_selected_token": 65804,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 106,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-107.txt",
+      "candidate_selected_logit": 16.593753815,
+      "candidate_selected_token": 65804,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-107.txt",
+      "control_selected_logit": 16.593753815,
+      "control_selected_token": 65804,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 107,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-108.txt",
+      "candidate_selected_logit": 18.319913864,
+      "candidate_selected_token": 113976,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-108.txt",
+      "control_selected_logit": 18.319913864,
+      "control_selected_token": 113976,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 108,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-109.txt",
+      "candidate_selected_logit": 18.319913864,
+      "candidate_selected_token": 113976,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-109.txt",
+      "control_selected_logit": 18.319913864,
+      "control_selected_token": 113976,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 109,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-110.txt",
+      "candidate_selected_logit": 18.319913864,
+      "candidate_selected_token": 113976,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-110.txt",
+      "control_selected_logit": 18.319913864,
+      "control_selected_token": 113976,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 110,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-111.txt",
+      "candidate_selected_logit": 18.319913864,
+      "candidate_selected_token": 113976,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-111.txt",
+      "control_selected_logit": 18.319913864,
+      "control_selected_token": 113976,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 111,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-112.txt",
+      "candidate_selected_logit": 15.838236809,
+      "candidate_selected_token": 55730,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-112.txt",
+      "control_selected_logit": 15.838236809,
+      "control_selected_token": 55730,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 112,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-113.txt",
+      "candidate_selected_logit": 15.838236809,
+      "candidate_selected_token": 55730,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-113.txt",
+      "control_selected_logit": 15.838236809,
+      "control_selected_token": 55730,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 113,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-114.txt",
+      "candidate_selected_logit": 15.838236809,
+      "candidate_selected_token": 55730,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-114.txt",
+      "control_selected_logit": 15.838236809,
+      "control_selected_token": 55730,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 114,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-115.txt",
+      "candidate_selected_logit": 15.691845894,
+      "candidate_selected_token": 25890,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-115.txt",
+      "control_selected_logit": 15.838236809,
+      "control_selected_token": 55730,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 115,
+      "selected_logit_relative_error": 0.009242879543057069
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-116.txt",
+      "candidate_selected_logit": 15.838236809,
+      "candidate_selected_token": 55730,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-116.txt",
+      "control_selected_logit": 15.691845894,
+      "control_selected_token": 25890,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 116,
+      "selected_logit_relative_error": 0.009329107358617012
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-117.txt",
+      "candidate_selected_logit": 15.691845894,
+      "candidate_selected_token": 25890,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-117.txt",
+      "control_selected_logit": 15.691845894,
+      "control_selected_token": 25890,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 117,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-118.txt",
+      "candidate_selected_logit": 15.691845894,
+      "candidate_selected_token": 25890,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-118.txt",
+      "control_selected_logit": 15.691845894,
+      "control_selected_token": 25890,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 118,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-119.txt",
+      "candidate_selected_logit": 15.691845894,
+      "candidate_selected_token": 25890,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-119.txt",
+      "control_selected_logit": 15.691845894,
+      "control_selected_token": 25890,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 119,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-120.txt",
+      "candidate_selected_logit": 15.090538025,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-120.txt",
+      "control_selected_logit": 15.090538025,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 120,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-121.txt",
+      "candidate_selected_logit": 15.090538025,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-121.txt",
+      "control_selected_logit": 15.090538025,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 121,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-122.txt",
+      "candidate_selected_logit": 15.090538025,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-122.txt",
+      "control_selected_logit": 15.090538025,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 122,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-123.txt",
+      "candidate_selected_logit": 15.090538025,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-123.txt",
+      "control_selected_logit": 15.090538025,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 123,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-124.txt",
+      "candidate_selected_logit": 15.080978394,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-124.txt",
+      "control_selected_logit": 15.080978394,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 124,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-125.txt",
+      "candidate_selected_logit": 15.080978394,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-125.txt",
+      "control_selected_logit": 15.080978394,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 125,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-126.txt",
+      "candidate_selected_logit": 15.080978394,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-126.txt",
+      "control_selected_logit": 15.080978394,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 126,
+      "selected_logit_relative_error": 0.0
+    },
+    {
+      "candidate_path": "/workspace/s597-phase234-artifacts/p2-flagoff-control-format/response-127.txt",
+      "candidate_selected_logit": 15.080978394,
+      "candidate_selected_token": 98751,
+      "control_path": "/workspace/s597-phase01-artifacts/phase0-full-control/response-127.txt",
+      "control_selected_logit": 15.080978394,
+      "control_selected_token": 98751,
+      "http_status": {
+        "candidate": null,
+        "control": null
+      },
+      "index": 127,
+      "selected_logit_relative_error": 0.0
+    }
+  ],
+  "parse_failures": 0,
+  "pass": false,
+  "schema": "ds4_http_response_tolerance.v1",
+  "selected_logit_pairs": 128,
+  "selected_token_agreement": 0.9375,
+  "selected_token_matches": 120,
+  "selected_token_total": 128
+}

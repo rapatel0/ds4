@@ -1,0 +1,20 @@
+== legA-full ==
+batch_id	batch_size	total_decode_ms	total_wall_ms	ep_ms	dense_ms	compose_ms
+1	32	31263.293	38275.316	416.957	0.000	422.067
+2	32	27862.469	33354.019	0.000	0.000	0.000
+3	32	27822.072	33305.505	0.000	0.000	0.000
+4	32	27808.045	33298.518	0.000	0.000	0.000
+all_batches	n=4	gen=8192	agg_tok_s_decode=71.386	agg_tok_s_wall=59.262
+steady_state(excl batch 1)	n=3	gen=6144	agg_tok_s_decode=73.587	agg_tok_s_wall=61.466
+per_request_decode_tok_s_mean(steady)	73.587
+per_request_wall_tok_s_mean(steady)	61.466
+token_major_rows	11008	batches_detected	4
+eager_attribution(steady, n=8256 layer-steps, total 10.113 ms/layer-step):
+  EP (MoE all-to-all)	0.000	0.0%
+  attention (proj+kv+state+hist+raw+output)	0.000	0.0%
+  compose (+reduce/copy/final)	0.000	0.0%
+  HC-current input	0.000	0.0%
+  final_hc	0.000	0.0%
+  host-sync (route_upload+fill_pack+router_select)	0.000	0.0%
+  [graph counters] replay_attempted=1.00 replay_succeeded=1.00 cache_hits=1.00
+first_batch_total_ms_per_layer_step	11.360

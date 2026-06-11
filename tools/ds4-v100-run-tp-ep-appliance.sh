@@ -110,6 +110,10 @@ fi
 : "${DS4_V100_NCCL_ALGO:=auto}"
 : "${DS4_V100_NCCL_PROTO:=auto}"
 : "${DS4_V100_MTP_SERVING:=off}"
+# Sprint 597 Phase 2: EP sub-stage profiler (default off). When 1, the
+# appliance arms per-rank CUDA-event markers at the EP sub-stage boundaries
+# and emits tp_ep_ep_stage_profile TSV lines; flag-off is byte-identical.
+: "${DS4_V100_TP_EP_EP_STAGE_PROFILE:=0}"
 
 is_uint() {
     case "${1:-}" in
@@ -250,6 +254,10 @@ fi
 case "$DS4_V100_MTP_SERVING" in
     off|false|0) ;;
     *) fail "TP/EP does not support MTP yet; set DS4_V100_MTP_SERVING=off" ;;
+esac
+case "$DS4_V100_TP_EP_EP_STAGE_PROFILE" in
+    0|1) ;;
+    *) fail "DS4_V100_TP_EP_EP_STAGE_PROFILE must be 0 or 1" ;;
 esac
 # Back-compat: GRAPH_SUFFIX_REPLAY, if explicitly set, overrides the graph mode.
 if [ -n "$DS4_V100_TP_EP_GRAPH_SUFFIX_REPLAY" ]; then
@@ -393,7 +401,7 @@ print_resolved() {
 }
 
 if [ "$mode" = "check" ]; then
-    echo "ds4-v100-run-tp-ep-appliance: config ok host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS decode_graph_mode=$DS4_V100_TP_EP_DECODE_GRAPH_MODE tp_ep_bin=$DS4_V100_TP_EP_BIN tp_ep_contract=$DS4_V100_TP_EP_CONTRACT tp_ep_tm_index=$DS4_V100_TP_EP_TM_INDEX mtp=off"
+    echo "ds4-v100-run-tp-ep-appliance: config ok host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS decode_graph_mode=$DS4_V100_TP_EP_DECODE_GRAPH_MODE ep_stage_profile=$DS4_V100_TP_EP_EP_STAGE_PROFILE tp_ep_bin=$DS4_V100_TP_EP_BIN tp_ep_contract=$DS4_V100_TP_EP_CONTRACT tp_ep_tm_index=$DS4_V100_TP_EP_TM_INDEX mtp=off"
     exit 0
 fi
 if [ "$mode" = "print" ]; then
@@ -411,6 +419,7 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_MICROBATCH_WAIT_US_RESOLVED=$microbatch_wait_us"
     echo "DS4_V100_TOKENS=$DS4_V100_TOKENS"
     echo "DS4_V100_TP_EP_DECODE_GRAPH_MODE=$DS4_V100_TP_EP_DECODE_GRAPH_MODE"
+    echo "DS4_V100_TP_EP_EP_STAGE_PROFILE=$DS4_V100_TP_EP_EP_STAGE_PROFILE"
     echo "DS4_V100_TP_EP_EXTRA_ARGS=$DS4_V100_TP_EP_EXTRA_ARGS"
     echo "DS4_V100_TP_EP_VRAM_MIN_FREE_MIB=$DS4_V100_TP_EP_VRAM_MIN_FREE_MIB"
     echo "DS4_V100_TP_EP_NCCL_MIN_FREE_MIB=$DS4_V100_TP_EP_NCCL_MIN_FREE_MIB"
@@ -439,6 +448,7 @@ if [ -n "$cuda_lib_dir" ]; then
 fi
 export DS4_LOCK_FILE
 export DS4_V100_TURBOMIND_LIB
+export DS4_V100_TP_EP_EP_STAGE_PROFILE
 export DS4_V100_NCCL_TOPOLOGY_POLICY
 export DS4_V100_NCCL_NO_SYS_RING
 export DS4_V100_NCCL_ALLOW_VISIBLE_REMAP

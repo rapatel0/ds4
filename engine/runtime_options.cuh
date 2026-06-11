@@ -1,3 +1,13 @@
+/* Sprint 597 Phase 2: EP sub-stage profiler gate. Plumbed from the launcher
+ * via the DS4_V100_TP_EP_EP_STAGE_PROFILE environment variable; default off.
+ * Flag-off leaves the promoted path byte-identical (every profiler entry
+ * point returns immediately). */
+static inline bool ds4_ep_stage_profile_env_default() {
+    const char *v = std::getenv("DS4_V100_TP_EP_EP_STAGE_PROFILE");
+    if (!v || !*v) return false;
+    return !(v[0] == '0' && v[1] == '\0');
+}
+
 struct Options {
     const char *lib_path = "./build/turbomind-v100/libggml-turbomind.so";
     const char *pack_dir = nullptr;
@@ -141,4 +151,6 @@ struct Options {
     uint32_t true_ds4_attention_raw_valid_rows = 1;
     uint64_t vram_min_free_mib = 0;
     uint64_t nccl_min_free_mib = 0;
+    /* Sprint 597 Phase 2: EP sub-stage profiler (default off). */
+    bool ep_stage_profile = ds4_ep_stage_profile_env_default();
 };

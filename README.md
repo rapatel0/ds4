@@ -1,11 +1,15 @@
 # DS4 V100 Research Archive
 
-> **Status: abandoned / research archive.** This repository is public for
-> reference, but it is not worth actively pursuing for the moment. The V100
-> 8-GPU appliance work did not reach a useful serving configuration, and the
-> MTP speculative path is numerically wrong. Treat this repo as an engineering
-> record, not an active product direction. *Still think there is a big win
-> somewhere in here, but I'm tapped out.*
+> **Status: reopened (2026-06-11) — B2 EP-overhead track.** Sprint 597
+> measured the decode step end-to-end and found the prior abandonment
+> rationale was wrong: the dominant cost is not MoE compute density but the
+> EP return transport — 24 of 56 per-pair copies cross SYS (PCIe/QPI) at
+> ~2 ms each under congestion, ~81% of the EP window, invisible to the old
+> counters. Expert math is ~3% of the EP stage. Projected headroom from
+> fixing transport alone is ~2.3-2.6x. The cycle plan and measured
+> decomposition live in `docs/sprints/SPRINT-597.md` /
+> `SPRINT-597-REPORT.md`. The MTP speculative path remains punted
+> (`MTP_IMPLEMENTATION.md`); PP/layer-split remains a frozen baseline only.
 
 ## What This Is
 
@@ -42,6 +46,15 @@ experts. The average expert sees less than one token. That is a hard shape for
 the V100: grouped GEMMs are tiny, dispatch/compose/all-to-all overhead is large,
 and SM occupancy stays poor even after CUDA graph launch overhead is reduced.
 MoE compute density, not just kernel launch overhead, is the structural blocker.
+
+**Correction (Sprint 597, 2026-06-11):** the compute-density conclusion above
+did not survive measurement. The expert GEMMs are ~0.25 ms of an ~8.5 ms EP
+window (~3%), and the padded fixed-capacity executor tax measured ~0. The
+structural blocker is the EP return transport: the promoted graph path issues
+56 per-pair remote-load copy kernels per layer, 24 of which cross SYS
+(PCIe/QPI) at ~2 ms each under congestion — ~81% of the EP window — while the
+eager NCCL-broadcast control moves the same data in 0.68 ms/layer. See
+`docs/sprints/SPRINT-597-REPORT.md`.
 
 ## What Was Added
 

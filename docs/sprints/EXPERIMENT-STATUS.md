@@ -1,6 +1,12 @@
 # DS4 V100 Experiment Status
 
-Last updated: 2026-05-23
+Last updated: 2026-06-11
+
+## Active experiment gates (Sprint 597)
+
+| Gate | Default | Status | Notes |
+|---|---|---|---|
+| `DS4_V100_TP_EP_EP_STAGE_PROFILE` | `0` (off) | diagnostic, validated | EP sub-stage profiler: per-rank paired timing marks at all EP sub-stage boundaries + per-(dst,src) return-copy stages; TSV (`tp_ep_ep_stage_profile`) + route-skew lines. Flag-off byte-identical (slot-indexed tolerance 1.0/1.0, node counts unchanged); flag-on decode delta `-1.85%` (≤3% gate). Graph mode times via paired `%globaltimer` stamp kernels (CUDA cannot time capture-recorded events); eager mode uses real event pairs. Sunset: superseded if/when B2-C restructures the EP return path's stage list. |
 
 ## Topline
 

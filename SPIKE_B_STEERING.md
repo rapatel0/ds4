@@ -1,4 +1,37 @@
-# Spike B Decode-Optimization Steering (updated 2026-05-29 after Sprint 571)
+# Spike B Decode-Optimization Steering (updated 2026-06-11 after Sprint 597)
+
+**Sprint 597 (2026-06-11): track REOPENED; B2 is ACTIVE and re-grounded by
+measurement.** Full results: `docs/sprints/SPRINT-597-REPORT.md`. The
+load-bearing corrections to everything below:
+
+- **Re-anchored baseline** (32 slots / 256K / 64 tok/req, regenerated s597
+  pack): full-capture **73.6 tok/s decode-domain steady / 59.3 wall**
+  (per-request decode reproduces Sprint 581 within 2%; the old `26.8`
+  aggregate was depressed by a bench-harness artifact — 128 simultaneous
+  connects vs the server's listen backlog of 16). Eager attribution
+  re-anchored at 18.17 ms/layer-step total, EP 11.14 ms (61.3%); HC-current
+  drifted 1.10 → 5.55 ms since Sprint 581 (post-MTP churn, now the clear #2).
+- **The EP cost is the return transport, not tile underfill.** The promoted
+  full-capture EP return is 56 per-pair `copy_f32_kernel` remote loads/layer
+  (`decode_loop.cu` graph branch — NOT NCCL); 24 directed pairs cross SYS at
+  ~2 ms each under congestion (60-280x NVLink pairs in situ) = **81% of the
+  8.52 ms EP window**. Expert math is ~0.25 ms (~3%). The padded 192-row
+  executor tax measured **~0** (launch-bound). `peer_copy_sys_bytes=0`
+  throughout — the kernel remote-load path was never accounted.
+- **Eager NCCL-broadcast control: 0.68 ms/layer** for the same return — 10x
+  cheaper than the promoted graph copies. Sprint 396 stands: NCCL beat custom
+  doubling 2.96x; custom transport must beat BOTH controls.
+- **B2 order (measured, supersedes prior ranking):** **B2-C first**
+  (eliminate SYS from EP return; candidate 1 = NCCL broadcast captured
+  in-graph at the 0.68 ms control, candidate 2 = static one-hop NVLink relay
+  ~0.2 ms bound) → **B2-D** (per-pair events; barriers measured 0.85 ms/layer)
+  → B2-B as a C-refinement → **B2-A dropped** (tax ~0) → B2-E only if needed.
+  Projected B2-C gain alone: ~2.3-2.6x decode-domain.
+- Decomposition tooling promoted-adjacent: `DS4_V100_TP_EP_EP_STAGE_PROFILE`
+  (default off, flag-off byte-identical, flag-on -1.85% decode).
+
+Historical steering below (2026-05-29 era) is retained for record; where it
+conflicts with the Sprint 597 measurement, the above wins.
 
 Steering for the next TP/EP serving-throughput phase, off the de-confounded
 steady-state reference (32 slots / 256K / 256 req / 64 tok/req, ~35.9 tok/s

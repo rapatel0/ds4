@@ -1,0 +1,5 @@
+schema	ds4_v100_tp_ep_sustained_http.v4
+backend	tp_ep_launcher_http
+
+endpoint	tokens	request_token_pattern	ctx	slots	generation_requests	coalesced_batches	coalesced_batch_max	status_200	generated_tokens	continuation_tokens	elapsed_s	generated_tok_s	continuation_tok_s	generated_tok_s_decode	continuation_tok_s_decode	ep_ms	dense_ms	compose_ms	compose_reduce_ms	compose_copy_ms	compose_final_ms	gpu_util_avg	gpu_util_max	gpu_mem_used_max_mib
+selected-token	64	64	262144	32	128	4	32	128	8192	8064	215.675815	37.982933	38.064879	41.373367	41.388774	121048.001460	0.000000	9680.398308	589.540055	8455.334295	635.523958	19.572552	46.000000	28642.000000

@@ -1,0 +1,19 @@
+kernels 837632; window wall 12283.6 ms over 344 layer-steps -> 35.708 ms wall per layer-step (x8 ranks busy budget 285.66 ms)
+stage	sum_ms_all_ranks	ms_per_layer_step_all_ranks	ms_per_layer_step_per_rank_mean
+ep_return_copy_384	16596.9	48.2469	6.0309
+other_copies	1774.8	5.1594	0.6449
+nccl	1276.8	3.7117	0.4640
+dense_f8_bf16	955.1	2.7764	0.3470
+expert_gemm_turbomind	820.6	2.3854	0.2982
+route_plan	273.4	0.7949	0.0994
+hc_current	229.5	0.6670	0.0834
+routed_input_pack	170.1	0.4945	0.0618
+compose	127.6	0.3708	0.0464
+attention_kv	102.3	0.2974	0.0372
+other	99.6	0.2896	0.0362
+gate_up_swiglu_epilogue	17.4	0.0505	0.0063
+contrib_pack	14.1	0.0409	0.0051
+total_busy	22458.2	65.2855	8.1607
+idle_share_of_window 77.1% (per-rank stream idle/wait incl. barriers)
+
+per-rank ep_return_copy ms/layer-step: r0:5.562 r1:4.891 r2:6.528 r3:6.440 r4:6.165 r5:6.524 r6:6.076 r7:6.061
