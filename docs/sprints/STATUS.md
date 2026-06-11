@@ -1,8 +1,32 @@
 # DS4 V100 Appliance Status
 
-Last updated: 2026-06-11 (Sprint 598)
+Last updated: 2026-06-11 (Sprint 599)
 
 ## Topline
+
+Sprint 599 (2026-06-11) adjudicated the cycle stretch target (3x re-anchored
+= ~220 decode-domain): **not reached; measured-reachable; gated on a latent
+ordering hazard discovered in the promoted path.** Post-C1 decomposition
+shows the layer is wait-bound (GPU busy 2.94 ms of the 4.25 ms replay):
+prefix_attn_output 0.723, swiglu_down 0.793 (= 1,792 per-slot UVA remote-load
+copies/layer, partly SYS — pre-existing), ep_return_nccl 0.614,
+route_plan_pack 0.517, final_hc 0.407, barriers 0.298. Five swiglu-exchange
+replacements were built; the fast ones gained +11.5% to +17.9% (186.33 /
+197.17 decode-domain) but ALL failed tolerance — including a variant with
+bit-identical byte mechanics at 1/32 the launches — proving a
+timing-dependent ordering hazard downstream that the promoted path's own
+launch-storm slowness currently masks. C-B (early EP return + per-rank
+ordering, replacing two 8x8 barriers) passed tolerance 1.0/1.0 but measured
+noise-level (+0.5%); kept opt-in, not promoted. No promotions; clean
+re-measured promoted baseline **167.19 decode-domain / 112.70 wall**. Floor
+math to 220: swiglu fix -0.50 (demonstrated), barrier edges -0.26
+(demonstrated clean), route-plan shadow -0.3..0.5 (unattempted), prefix pool
+1.54 — sums past the 3.13 ms budget, so 220 remains reachable in B2 scope
+once the hazard is root-caused. Sprint 600 leads with that root-cause
+(it is also a correctness debt in the promoted path). Report:
+`docs/sprints/SPRINT-599-REPORT.md`.
+
+## Prior topline (Sprint 598)
 
 Sprint 598 (2026-06-11) PROMOTED B2-C: the EP return on the full-capture
 graph branch now runs as grouped per-source NCCL broadcasts captured

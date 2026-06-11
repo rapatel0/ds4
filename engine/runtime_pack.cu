@@ -1864,3 +1864,249 @@ cudaEvent_t graph_dense_done_event(RankState &r, int slot) {
     cudaEvent_t ev = r.graph_dense_done[slot % kGraphOrderEventSlots];
     return ev ? ev : r.dense_done;
 }
+
+/* ------------------------------------------------------------------------- */
+/* Sprint 599 C-A: shared swiglu_down input exchange via one grouped         */
+/* ncclAllGather instead of the per-(dst,src,slot) UVA remote-load copies    */
+/* (8 x 7 x slots tiny copy_f32 kernels per layer, 24/56 pairs crossing      */
+/* SYS). Layout:                                                             */
+/*   1. per-rank local swiglu writes the rank's strided segment of d_x       */
+/*      (same kernel as materialize_shared_swiglu_down_input);               */
+/*   2. one local 2D memcpy packs the segment contiguous;                    */
+/*   3. one grouped ncclAllGather (seg = slots x rows floats per rank);      */
+/*   4. seven local 2D memcpys unpack the other ranks' segments strided.     */
+/* Scratch reuses d_ep_contrib_bcast_all (recv at offset 0: 8*seg; send at   */
+/* offset 8*seg) -- same-stream ordering vs the EP-return broadcasts keeps   */
+/* the reuse safe. Capture-safe: stream ops only; ends with the same         */
+/* dense-waits-rank edge materialize ends with.                              */
+/* ------------------------------------------------------------------------- */
+int swiglu_down_exchange_nccl(const Options &opt,
+                              RankState ranks[kGpus],
+                              const ResidentF8Dense &gate,
+                              const ResidentF8Dense &up,
+                              const ResidentF8Dense &down) {
+    if (gate.rows_per_gpu != kMid / kGpus ||
+        up.rows_per_gpu != kMid / kGpus ||
+        down.cols != kMid) {
+        return 1;
+    }
+    const int block = 256;
+    const uint32_t rows = (uint32_t)gate.rows_per_gpu;
+    const uint32_t slots = (uint32_t)opt.slots;
+    const uint64_t seg_elems = (uint64_t)slots * rows;
+    const size_t seg_bytes = (size_t)seg_elems * sizeof(float);
+    const uint64_t scratch_need = 9ull * seg_elems;
+    const uint64_t scratch_have = (uint64_t)kGpus *
+        (opt.compact_moe_decode_gate
+             ? (uint64_t)opt.slots * (uint64_t)opt.top_k
+             : (uint64_t)opt.slots) *
+        (uint64_t)(kHidden / kGpus);
+    if (scratch_need > scratch_have) return 2;
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        if (!r.compose_nccl_initialized || !r.compose_nccl ||
+            !r.d_ep_contrib_bcast_all ||
+            !down.d_x[(size_t)rank] ||
+            !gate.d_out[(size_t)rank] || !up.d_out[(size_t)rank]) {
+            return 3;
+        }
+    }
+    int prior_device = 0;
+    CHECK_CUDA(cudaGetDevice(&prior_device));
+    /* 1. local swiglu into the rank's own strided segment + 2. pack. */
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        shared_swiglu_shard_to_float_kernel<<<
+            (unsigned int)((seg_elems + block - 1) / block), block, 0,
+            r.stream>>>(down.d_x[(size_t)rank], gate.d_out[(size_t)rank],
+                        up.d_out[(size_t)rank], (uint32_t)rank, rows, slots,
+                        kRoutedSwigluClamp);
+        CHECK_CUDA(cudaGetLastError());
+        float *send = r.d_ep_contrib_bcast_all + 8ull * seg_elems;
+        CHECK_CUDA(cudaMemcpy2DAsync(
+            send, (size_t)rows * sizeof(float),
+            down.d_x[(size_t)rank] + (size_t)rank * rows,
+            (size_t)kMid * sizeof(float), (size_t)rows * sizeof(float),
+            slots, cudaMemcpyDeviceToDevice, r.stream));
+    }
+    /* 3. grouped allgather: recv = bcast scratch [8 * seg]. (Variant note:
+     * a per-src grouped-broadcast variant diverged MORE under contention --
+     * the divergence scales with the number of small captured collectives,
+     * pointing at NCCL LL-protocol staleness across graph replays; the
+     * single-allgather form plus NCCL_PROTO=Simple is the validated combo.) */
+    CHECK_NCCL(ncclGroupStart());
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        const float *send = r.d_ep_contrib_bcast_all + 8ull * seg_elems;
+        CHECK_NCCL(ncclAllGather(send, r.d_ep_contrib_bcast_all,
+                                 (size_t)seg_elems, ncclFloat,
+                                 r.compose_nccl, r.stream));
+    }
+    CHECK_NCCL(ncclGroupEnd());
+    /* 4. unpack the other ranks' segments strided into d_x. */
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        for (int src = 0; src < kGpus; ++src) {
+            if (src == rank) continue;
+            CHECK_CUDA(cudaMemcpy2DAsync(
+                down.d_x[(size_t)rank] + (size_t)src * rows,
+                (size_t)kMid * sizeof(float),
+                r.d_ep_contrib_bcast_all + (size_t)src * seg_elems,
+                (size_t)rows * sizeof(float), (size_t)rows * sizeof(float),
+                slots, cudaMemcpyDeviceToDevice, r.stream));
+        }
+    }
+    (void)seg_bytes;
+    /* s599 C-A2: cross-GPU barrier after the unpack. The allgather syncs the
+     * exchange itself, but the rest of the layer (dense down GEMM, compose,
+     * and the later EP-return broadcasts that reuse this scratch) ran under
+     * materialize's stronger two-sync structure; restore equivalent ordering
+     * before handing d_x to the dense stream. */
+    if (enqueue_cross_gpu_stream_barrier(ranks, false) != 0) {
+        CHECK_CUDA(cudaSetDevice(prior_device));
+        return 5;
+    }
+    if (enqueue_dense_wait_after_rank_stream(ranks) != 0) {
+        CHECK_CUDA(cudaSetDevice(prior_device));
+        return 4;
+    }
+    CHECK_CUDA(cudaSetDevice(prior_device));
+    return 0;
+}
+
+/* s599 C-A4: swiglu_down input exchange via direct strided P2P 2D memcpys.
+ * Replaces materialize's 8 x 7 x slots per-slot copy_f32 remote-load kernels
+ * with one 2D DMA per (dst,src) pair (rows x slots strided). Pure copies of
+ * the same bytes -- bit-exact vs the promoted path by construction; the
+ * cross-rank ordering mirrors materialize (barrier after the local swiglu
+ * kernels, dense-waits-rank at the end). */
+int swiglu_down_exchange_memcpy2d(const Options &opt,
+                                  RankState ranks[kGpus],
+                                  const ResidentF8Dense &gate,
+                                  const ResidentF8Dense &up,
+                                  const ResidentF8Dense &down) {
+    if (gate.rows_per_gpu != kMid / kGpus ||
+        up.rows_per_gpu != kMid / kGpus ||
+        down.cols != kMid) {
+        return 1;
+    }
+    const int block = 256;
+    const uint32_t rows = (uint32_t)gate.rows_per_gpu;
+    const uint32_t slots = (uint32_t)opt.slots;
+    const uint64_t seg_elems = (uint64_t)slots * rows;
+    int prior_device = 0;
+    CHECK_CUDA(cudaGetDevice(&prior_device));
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        if (!down.d_x[(size_t)rank] || !gate.d_out[(size_t)rank] ||
+            !up.d_out[(size_t)rank]) {
+            return 2;
+        }
+        CHECK_CUDA(cudaSetDevice(r.device));
+        shared_swiglu_shard_to_float_kernel<<<
+            (unsigned int)((seg_elems + block - 1) / block), block, 0,
+            r.stream>>>(down.d_x[(size_t)rank], gate.d_out[(size_t)rank],
+                        up.d_out[(size_t)rank], (uint32_t)rank, rows, slots,
+                        kRoutedSwigluClamp);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    if (enqueue_cross_gpu_stream_barrier(ranks, false) != 0) {
+        CHECK_CUDA(cudaSetDevice(prior_device));
+        return 3;
+    }
+    for (int dst = 0; dst < kGpus; ++dst) {
+        RankState &r = ranks[dst];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        for (int src = 0; src < kGpus; ++src) {
+            if (src == dst) continue;
+            CHECK_CUDA(cudaMemcpy2DAsync(
+                down.d_x[(size_t)dst] + (size_t)src * rows,
+                (size_t)kMid * sizeof(float),
+                down.d_x[(size_t)src] + (size_t)src * rows,
+                (size_t)kMid * sizeof(float),
+                (size_t)rows * sizeof(float), slots,
+                cudaMemcpyDeviceToDevice, r.stream));
+        }
+    }
+    if (enqueue_dense_wait_after_rank_stream(ranks) != 0) {
+        CHECK_CUDA(cudaSetDevice(prior_device));
+        return 4;
+    }
+    CHECK_CUDA(cudaSetDevice(prior_device));
+    return 0;
+}
+
+/* s599 C-A5: batched swiglu_down exchange with the SAME UVA remote-load
+ * kernel mechanics materialize uses (proven capture-safe on this path),
+ * but one strided-gather kernel per (dst,src) pair instead of one
+ * copy_f32_kernel per (dst,src,slot): 56 launches/layer instead of 1792.
+ * Pure copies of the same bytes; ordering identical to materialize. */
+__global__ void s599_strided_seg_copy_kernel(float *dst, const float *src,
+                                             uint32_t rows, uint32_t slots,
+                                             uint32_t seg_off) {
+    const uint64_t n = (uint64_t)slots * rows;
+    for (uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x; i < n;
+         i += (uint64_t)blockDim.x * gridDim.x) {
+        const uint32_t slot = (uint32_t)(i / rows);
+        const uint32_t r = (uint32_t)(i % rows);
+        const uint64_t o = (uint64_t)slot * kMid + seg_off + r;
+        dst[o] = src[o];
+    }
+}
+
+int swiglu_down_exchange_batched(const Options &opt,
+                                 RankState ranks[kGpus],
+                                 const ResidentF8Dense &gate,
+                                 const ResidentF8Dense &up,
+                                 const ResidentF8Dense &down) {
+    if (gate.rows_per_gpu != kMid / kGpus ||
+        up.rows_per_gpu != kMid / kGpus ||
+        down.cols != kMid) {
+        return 1;
+    }
+    const int block = 256;
+    const uint32_t rows = (uint32_t)gate.rows_per_gpu;
+    const uint32_t slots = (uint32_t)opt.slots;
+    const uint64_t seg_elems = (uint64_t)slots * rows;
+    int prior_device = 0;
+    CHECK_CUDA(cudaGetDevice(&prior_device));
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        if (!down.d_x[(size_t)rank] || !gate.d_out[(size_t)rank] ||
+            !up.d_out[(size_t)rank]) {
+            return 2;
+        }
+        CHECK_CUDA(cudaSetDevice(r.device));
+        shared_swiglu_shard_to_float_kernel<<<
+            (unsigned int)((seg_elems + block - 1) / block), block, 0,
+            r.stream>>>(down.d_x[(size_t)rank], gate.d_out[(size_t)rank],
+                        up.d_out[(size_t)rank], (uint32_t)rank, rows, slots,
+                        kRoutedSwigluClamp);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    if (enqueue_cross_gpu_stream_barrier(ranks, false) != 0) {
+        CHECK_CUDA(cudaSetDevice(prior_device));
+        return 3;
+    }
+    for (int dst = 0; dst < kGpus; ++dst) {
+        RankState &r = ranks[dst];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        for (int src = 0; src < kGpus; ++src) {
+            if (src == dst) continue;
+            s599_strided_seg_copy_kernel<<<
+                (unsigned int)((seg_elems + block - 1) / block), block, 0,
+                r.stream>>>(down.d_x[(size_t)dst], down.d_x[(size_t)src],
+                            rows, slots, (uint32_t)src * rows);
+            CHECK_CUDA(cudaGetLastError());
+        }
+    }
+    if (enqueue_dense_wait_after_rank_stream(ranks) != 0) {
+        CHECK_CUDA(cudaSetDevice(prior_device));
+        return 4;
+    }
+    CHECK_CUDA(cudaSetDevice(prior_device));
+    return 0;
+}

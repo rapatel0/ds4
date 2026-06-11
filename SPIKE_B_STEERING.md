@@ -1,4 +1,19 @@
-# Spike B Decode-Optimization Steering (updated 2026-06-11 after Sprint 598)
+# Spike B Decode-Optimization Steering (updated 2026-06-11 after Sprint 599)
+
+**Sprint 599: stretch (220) NOT reached; reachable-on-evidence; blocked on a
+latent ordering hazard in the promoted path.** Clean promoted baseline
+re-measured **167.19 decode-domain / 112.70 wall**. The post-C1 layer is
+wait-bound (GPU busy 2.94 of 4.25 ms). Every faster shared-swiglu exchange
+(5 variants incl. bit-identical-mechanics batched remote loads) gains
++11.5-17.9% but fails tolerance — the promoted path's 1,792-launch swiglu
+exchange is masking a timing-dependent missing-dependency downstream. THAT
+root-cause is the Sprint 600 lead (correctness debt + the gate on ~20-30
+tok/s demonstrated). C-B early-return/per-rank ordering: tolerance-clean,
+perf-neutral, opt-in. Floor math says 220 sums within B2 scope once unblocked
+(swiglu -0.50 demonstrated, barriers -0.26 clean, route-plan shadow
+-0.3..0.5 unattempted, prefix pool 1.54). New opt-in flags:
+`DS4_V100_TP_EP_SWIGLU_EXCHANGE=copy|nccl|memcpy2d|batched` (default copy),
+early-return gate (default off).
 
 **Sprint 598: B2-C DONE and PROMOTED.** EP return = grouped per-source NCCL
 broadcasts captured in-graph (launcher default

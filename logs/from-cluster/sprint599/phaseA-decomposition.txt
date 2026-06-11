@@ -1,0 +1,33 @@
+selected-token	64	64	262144	32	32	1	32	32	2048	2016	23.366153	87.648146	108.164801	123.899009	163.732604	430.690842	0.000000	237.119498	94.898152	45.531822	96.689524	14.794931	48.000000	30340.000000
+== Phase 3 decomposition: /workspace/s599-artifacts/pa-prefix-decomp/cases/case_0_ctx262144_s32_tok64_selected-token/server.log ==
+
+-- mode replay_cache_hit (samples per stage ~21672) --
+stage	mean_ms	max_ms	rank_mean_sum_x43_ms
+barrier_1144_contrib_pack	0.0336	2.6980	1.44
+barrier_1373_compose	0.0390	0.5299	1.68
+barrier_954_post_dense_launch	0.0735	0.4504	3.16
+barrier_978_shared_down	0.1519	2.0637	6.53
+compose	0.0135	0.0177	0.58
+contrib_pack	0.0080	0.0154	0.34
+dense_overlap	0.0694	0.2332	2.98
+down_gemm	0.0668	0.1468	2.87
+ep_return_nccl	0.6143	3.2839	26.41
+final_hc	0.4067	0.9869	17.49
+gate_up_gemm	0.1360	0.3039	5.85
+prefix_attn_output	0.7229	1.3772	31.08
+prefix_attn_projection	0.2621	0.6306	11.27
+prefix_attn_state	0.2502	1.4901	10.76
+prefix_hc_current	0.2457	0.5941	10.57
+prefix_raw_read	0.0123	0.0235	0.53
+prefix_typed_history	0.0485	1.2523	2.08
+route_plan_pack	0.5174	1.0809	22.25
+shared_swiglu_down	0.7933	2.8242	34.11
+sum_named_stages_mean	4.4649	per_step_x43	191.99 ms (rank-mean, rank-local elapsed)
+ep_window mean 2.4921 ms; named-stage coverage pct: mean 179.6 p5 165.3 p50 179.0 p95 194.6 -> residual(other/overlap) mean -79.6%
+per-rank ep_window mean ms: r0:2.669 r1:2.604 r2:2.548 r3:2.512 r4:2.479 r5:2.423 r6:2.371 r7:2.331
+
+layer replay_ms (cache-hit): mean 4.5451 over 2709 layer-replays; nodes per layer graph: [3129]
+
+route-skew over 2709 layer-steps (per-rank actual routes, capacity 192):
+  per-rank routes: p50 24 p95 52 max 120; zero-route rank occurrences 865 (4.0%)
+  per-layer-step max-rank routes: p50 48 p95 68 max 120

@@ -112,7 +112,16 @@ enum EpProfStage {
     kEpProfBarrier1373 = 15,
     kEpProfCopySrcBase = 16, /* +src in [0,7] -> 16..23 */
     kEpProfEpReturnNccl = 24, /* s598 C1: grouped NCCL broadcast return */
-    kEpProfStageCount = 25,
+    /* s599 Phase A: pre-EP prefix + final_hc decomposition */
+    kEpProfHcCurrent = 25,
+    kEpProfAttnProjection = 26,
+    kEpProfCompressedKv = 27,
+    kEpProfAttnState = 28,
+    kEpProfTypedHistory = 29,
+    kEpProfRawRead = 30,
+    kEpProfAttnOutput = 31,
+    kEpProfFinalHc = 32,
+    kEpProfStageCount = 33,
 };
 
 static const char *ep_stage_prof_name(int stage) {
@@ -134,6 +143,14 @@ static const char *ep_stage_prof_name(int stage) {
     case kEpProfBarrier1170: return "barrier_1170_nccl_rs";
     case kEpProfBarrier1373: return "barrier_1373_compose";
     case kEpProfEpReturnNccl: return "ep_return_nccl";
+    case kEpProfHcCurrent: return "prefix_hc_current";
+    case kEpProfAttnProjection: return "prefix_attn_projection";
+    case kEpProfCompressedKv: return "prefix_compressed_kv";
+    case kEpProfAttnState: return "prefix_attn_state";
+    case kEpProfTypedHistory: return "prefix_typed_history";
+    case kEpProfRawRead: return "prefix_raw_read";
+    case kEpProfAttnOutput: return "prefix_attn_output";
+    case kEpProfFinalHc: return "final_hc";
     default:
         if (stage >= kEpProfCopySrcBase &&
             stage < kEpProfCopySrcBase + kGpus) {

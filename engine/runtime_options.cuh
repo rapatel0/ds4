@@ -18,6 +18,39 @@ static inline bool ds4_ep_return_transport_env_nccl() {
     return v && std::strcmp(v, "nccl") == 0;
 }
 
+/* Sprint 599 C-A: shared swiglu_down input exchange transport. copy =
+ * per-(dst,src,slot) UVA remote-load copies inside
+ * materialize_shared_swiglu_down_input (the s198-era path; crosses SYS).
+ * nccl = local pack + one grouped ncclAllGather + local strided unpack
+ * (no remote loads). Default copy. */
+static inline bool ds4_swiglu_exchange_env_nccl() {
+    const char *v = std::getenv("DS4_V100_TP_EP_SWIGLU_EXCHANGE");
+    return v && std::strcmp(v, "nccl") == 0;
+}
+
+/* memcpy2d variant: one strided P2P 2D DMA per (dst,src) pair. */
+static inline bool ds4_swiglu_exchange_env_memcpy2d() {
+    const char *v = std::getenv("DS4_V100_TP_EP_SWIGLU_EXCHANGE");
+    return v && std::strcmp(v, "memcpy2d") == 0;
+}
+
+/* batched variant: one strided UVA remote-load kernel per (dst,src). */
+static inline bool ds4_swiglu_exchange_env_batched() {
+    const char *v = std::getenv("DS4_V100_TP_EP_SWIGLU_EXCHANGE");
+    return v && std::strcmp(v, "batched") == 0;
+}
+
+/* Sprint 599 C-B: enqueue the EP contribution pack + NCCL return right
+ * after the routed GEMMs (before the dense/swiglu chain) and replace the
+ * 8x8 cross-GPU barriers at the 954/978 sites with per-rank rank<->dense
+ * event ordering, so the EP return overlaps the dense+swiglu work.
+ * Requires the nccl EP-return transport. Default off. */
+static inline bool ds4_ep_return_early_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_EP_RETURN_EARLY");
+    if (!v || !*v) return false;
+    return !(v[0] == '0' && v[1] == '\0');
+}
+
 struct Options {
     const char *lib_path = "./build/turbomind-v100/libggml-turbomind.so";
     const char *pack_dir = nullptr;
@@ -165,4 +198,9 @@ struct Options {
     bool ep_stage_profile = ds4_ep_stage_profile_env_default();
     /* Sprint 598 B2-C: EP-return transport (default copy = s597 path). */
     bool ep_return_nccl = ds4_ep_return_transport_env_nccl();
+    /* Sprint 599 C-A / C-B (default off = s598 promoted path). */
+    bool swiglu_exchange_nccl = ds4_swiglu_exchange_env_nccl();
+    bool swiglu_exchange_memcpy2d = ds4_swiglu_exchange_env_memcpy2d();
+    bool swiglu_exchange_batched = ds4_swiglu_exchange_env_batched();
+    bool ep_return_early = ds4_ep_return_early_env();
 };

@@ -456,6 +456,7 @@ int run_decode_loop(const Options &opt,
     auto run_final_hc_carry = [&](double *final_hc_ms) -> int {
         if (!opt.final_hc_carry_gate) return 0;
         const auto t_start = std::chrono::steady_clock::now();
+        epprof_all_begin(kEpProfFinalHc);
         const int block = 256;
         const uint64_t shard_elems =
             (uint64_t)opt.slots * (uint64_t)(kHidden / kGpus);
@@ -481,6 +482,7 @@ int run_decode_loop(const Options &opt,
                 return 7;
             }
         }
+        epprof_all_end(kEpProfFinalHc);
         if (should_log_reference_hc_window(opt)) {
             for (int dst = 0; dst < kGpus; ++dst) {
                 RankState &r = ranks[dst];
@@ -728,6 +730,7 @@ int run_decode_loop(const Options &opt,
                              opt.layer);
                 return 8;
             }
+            epprof_all_begin(kEpProfHcCurrent);
             const int hc_rc = run_shared_hc_current_input(opt, shared_hc_controls, ranks,
                                                           *attn_op, *shared_op,
                                                           opt.layer,
@@ -738,6 +741,7 @@ int run_decode_loop(const Options &opt,
                              opt.layer, hc_rc);
                 return 9;
             }
+            epprof_all_end(kEpProfHcCurrent);
             if (pre_ep_breakdown) {
                 const auto t_done = std::chrono::steady_clock::now();
                 pre_ep_breakdown->hc_current_ms +=
@@ -772,6 +776,7 @@ int run_decode_loop(const Options &opt,
         if (should_run_graph_stage(kStageAttentionProjection) &&
             opt.true_ds4_attention_projection_gate) {
             const auto t_stage = std::chrono::steady_clock::now();
+            epprof_all_begin(kEpProfAttnProjection);
             const int attn_rc = run_true_ds4_attention_projection_prefix(
                 opt, shared_hc_controls, shared_dense_ops, ranks, opt.layer);
             if (attn_rc != 0) {
@@ -780,6 +785,7 @@ int run_decode_loop(const Options &opt,
                              opt.layer, attn_rc);
                 return 14;
             }
+            epprof_all_end(kEpProfAttnProjection);
             if (pre_ep_breakdown) {
                 const auto t_done = std::chrono::steady_clock::now();
                 pre_ep_breakdown->attention_projection_ms +=
@@ -792,6 +798,7 @@ int run_decode_loop(const Options &opt,
         if (should_run_graph_stage(kStageCompressedKv) &&
             opt.true_ds4_compressed_kv_gate) {
             const auto t_stage = std::chrono::steady_clock::now();
+            epprof_all_begin(kEpProfCompressedKv);
             const int comp_rc = run_true_ds4_compressed_kv_projection_gate(
                 opt, shared_hc_controls, shared_dense_ops, ranks, rt, opt.layer);
             if (comp_rc != 0) {
@@ -800,6 +807,7 @@ int run_decode_loop(const Options &opt,
                              opt.layer, comp_rc);
                 return 19;
             }
+            epprof_all_end(kEpProfCompressedKv);
             if (pre_ep_breakdown) {
                 const auto t_done = std::chrono::steady_clock::now();
                 pre_ep_breakdown->compressed_kv_ms +=
@@ -812,6 +820,7 @@ int run_decode_loop(const Options &opt,
         if (should_run_graph_stage(kStageAttentionState) &&
             opt.true_ds4_attention_state_gate) {
             const auto t_stage = std::chrono::steady_clock::now();
+            epprof_all_begin(kEpProfAttnState);
             const int state_rc = run_true_ds4_attention_state_update(
                 opt, shared_hc_controls, shared_dense_ops, ranks, rt, opt.layer);
             if (state_rc != 0) {
@@ -820,6 +829,7 @@ int run_decode_loop(const Options &opt,
                              opt.layer, state_rc);
                 return 15;
             }
+            epprof_all_end(kEpProfAttnState);
             if (pre_ep_breakdown) {
                 const auto t_done = std::chrono::steady_clock::now();
                 pre_ep_breakdown->attention_state_ms +=
@@ -832,6 +842,7 @@ int run_decode_loop(const Options &opt,
         if (should_run_graph_stage(kStageTypedHistory) &&
             opt.true_ds4_attention_typed_kv_history_gate) {
             const auto t_stage = std::chrono::steady_clock::now();
+            epprof_all_begin(kEpProfTypedHistory);
             const int history_rc = run_true_ds4_attention_typed_kv_history_load(
                 opt, shared_hc_controls, ranks, rt, opt.layer);
             if (history_rc != 0) {
@@ -841,6 +852,7 @@ int run_decode_loop(const Options &opt,
                              opt.layer, history_rc);
                 return 24;
             }
+            epprof_all_end(kEpProfTypedHistory);
             if (pre_ep_breakdown) {
                 const auto t_done = std::chrono::steady_clock::now();
                 pre_ep_breakdown->typed_history_ms +=
@@ -853,6 +865,7 @@ int run_decode_loop(const Options &opt,
         if (should_run_graph_stage(kStageRawRead) &&
             opt.true_ds4_attention_raw_read_gate) {
             const auto t_stage = std::chrono::steady_clock::now();
+            epprof_all_begin(kEpProfRawRead);
             const int raw_read_rc = opt.true_ds4_attention_raw_window_gate
                 ? run_true_ds4_attention_raw_window(
                       opt, shared_hc_controls, shared_dense_ops, ranks, opt.layer)
@@ -864,6 +877,7 @@ int run_decode_loop(const Options &opt,
                              opt.layer, raw_read_rc);
                 return 16;
             }
+            epprof_all_end(kEpProfRawRead);
             if (pre_ep_breakdown) {
                 const auto t_done = std::chrono::steady_clock::now();
                 pre_ep_breakdown->raw_read_ms +=
@@ -876,6 +890,7 @@ int run_decode_loop(const Options &opt,
         if (should_run_graph_stage(kStageAttentionOutput) &&
             opt.true_ds4_attention_output_gate) {
             const auto t_stage = std::chrono::steady_clock::now();
+            epprof_all_begin(kEpProfAttnOutput);
             const int output_rc = run_true_ds4_attention_output_projection(
                 opt, shared_dense_ops, ranks, opt.layer);
             if (output_rc != 0) {
@@ -884,6 +899,7 @@ int run_decode_loop(const Options &opt,
                              opt.layer, output_rc);
                 return 17;
             }
+            epprof_all_end(kEpProfAttnOutput);
             if (pre_ep_breakdown) {
                 const auto t_done = std::chrono::steady_clock::now();
                 pre_ep_breakdown->attention_output_ms +=
@@ -969,6 +985,62 @@ int run_decode_loop(const Options &opt,
             *ep_ms += std::chrono::duration<double, std::milli>(t_done - t0).count();
             return 0;
         }
+        /* s599 C-B: contribution pack + NCCL EP return immediately after the
+         * routed GEMMs. Same-stream ordering (pack and broadcast follow the
+         * down GEMM on each rank's stream) plus NCCL collective semantics
+         * make the cross-GPU barrier unnecessary; the return then overlaps
+         * the dense/swiglu chain below. */
+        bool ep_return_done_early = false;
+        if (opt.ep_return_early && opt.ep_return_nccl &&
+            opt.decode_cudagraph_gate && opt.source_copy_schedule &&
+            opt.overlap_ep_dense && opt.true_shared_ffn_gate &&
+            opt.compact_route_compose && !opt.ep_return_fp16 &&
+            !opt.direct_remote_compose && !nccl_reduce_scatter) {
+            const int block_e = 256;
+            const uint64_t seg_routes_e = opt.compact_moe_decode_gate
+                ? (uint64_t)opt.slots * (uint64_t)opt.top_k
+                : (uint64_t)opt.slots;
+            const uint64_t seg_elems_e =
+                seg_routes_e * (uint64_t)(kHidden / kGpus);
+            for (int p = 0; p < kGpus; ++p) {
+                RankState &r = ranks[p];
+                CHECK_CUDA(cudaSetDevice(r.device));
+                const int compose_routes_e = routed_compose_rows(r, opt);
+                const uint64_t route_hidden_elems_e =
+                    (uint64_t)compose_routes_e * kHidden;
+                epprof_begin(p, kEpProfContribPack, r.stream,
+                             route_hidden_elems_e * sizeof(float));
+                const int *route_total_limit_e =
+                    opt.post_attention_fixed_capacity_route_plan_gate
+                        ? r.d_route_totals
+                        : nullptr;
+                if (route_hidden_elems_e > 0) {
+                    ep_pack_route_dest_shards_kernel<<<
+                        (unsigned int)compose_routes_e, block_e, 0, r.stream>>>(
+                        r.d_ep_contrib_all, r.d_down, r.d_route_weights,
+                        route_total_limit_e, compose_routes_e,
+                        (int)seg_routes_e, p);
+                }
+                CHECK_CUDA(cudaGetLastError());
+                epprof_end(p, kEpProfContribPack, r.stream,
+                           route_hidden_elems_e * sizeof(float));
+            }
+            uint64_t copy_elems_by_src_e[kGpus] = {};
+            for (int src = 0; src < kGpus; ++src) {
+                copy_elems_by_src_e[src] =
+                    (uint64_t)routed_compose_rows(ranks[src], opt) *
+                    (uint64_t)(kHidden / kGpus);
+            }
+            epprof_all_begin(kEpProfEpReturnNccl);
+            if (broadcast_ep_return_slices(
+                    ranks, false, skip_self_copy, seg_elems_e,
+                    copy_elems_by_src_e, "serving_ep_return_nccl_early",
+                    /*skip_stream_sync=*/true) != 0) {
+                return 14;
+            }
+            epprof_all_end(kEpProfEpReturnNccl);
+            ep_return_done_early = true;
+        }
         double ep_stage_ms = 0.0;
         double dense_stage_ms = 0.0;
         if (opt.overlap_ep_dense) {
@@ -1013,11 +1085,38 @@ int run_decode_loop(const Options &opt,
                                                      : ranks[p].stream);
                 }
             }
-            sync_all_prof(kEpProfBarrier954); /* s597: was sync_all() (954) */
+            if (ep_return_done_early) {
+                /* s599 C-B: per-rank rank<->dense ordering instead of the
+                 * 8x8 barrier; swiglu/dense deps are rank-local here. */
+                epprof_all_begin(kEpProfBarrier954);
+                if (enqueue_rank_streams_wait_after_dense_streams(ranks) != 0) {
+                    return 2;
+                }
+                epprof_all_end(kEpProfBarrier954);
+            } else {
+                sync_all_prof(kEpProfBarrier954); /* s597: was sync_all() (954) */
+            }
             if (opt.true_shared_ffn_gate) {
                 epprof_all_begin(kEpProfSharedSwigluDown);
-                const int swiglu_rc = materialize_shared_swiglu_down_input(
-                    opt, *shared_gate_op, *shared_up_op, *shared_op, ranks);
+                const int swiglu_rc =
+                    (opt.swiglu_exchange_batched && opt.decode_cudagraph_gate)
+                        ? swiglu_down_exchange_batched(opt, ranks,
+                                                       *shared_gate_op,
+                                                       *shared_up_op,
+                                                       *shared_op)
+                        : (opt.swiglu_exchange_memcpy2d && opt.decode_cudagraph_gate)
+                        ? swiglu_down_exchange_memcpy2d(opt, ranks,
+                                                        *shared_gate_op,
+                                                        *shared_up_op,
+                                                        *shared_op)
+                        : (opt.swiglu_exchange_nccl &&
+                           opt.decode_cudagraph_gate)
+                        ? swiglu_down_exchange_nccl(opt, ranks,
+                                                    *shared_gate_op,
+                                                    *shared_up_op, *shared_op)
+                        : materialize_shared_swiglu_down_input(
+                              opt, *shared_gate_op, *shared_up_op,
+                              *shared_op, ranks);
                 if (swiglu_rc != 0) {
                     std::fprintf(stderr,
                                  "tp_ep_true_shared_ffn_swiglu_failed\tlayer\t%d\trc\t%d\n",
@@ -1039,7 +1138,16 @@ int run_decode_loop(const Options &opt,
                     return 2;
                 }
                 epprof_all_end(kEpProfSharedSwigluDown);
-                sync_all_prof(kEpProfBarrier978); /* s597: was sync_all() (978) */
+                if (ep_return_done_early) {
+                    epprof_all_begin(kEpProfBarrier978);
+                    if (enqueue_rank_streams_wait_after_dense_streams(ranks) !=
+                        0) {
+                        return 2;
+                    }
+                    epprof_all_end(kEpProfBarrier978);
+                } else {
+                    sync_all_prof(kEpProfBarrier978); /* s597: was sync_all() (978) */
+                }
                 log_rank_stage("shared_down");
                 sync_after_decode_stage("shared_down");
                 if (!opt.decode_cudagraph_gate &&
@@ -1164,7 +1272,7 @@ int run_decode_loop(const Options &opt,
             compact_segment_routes * (uint64_t)(kHidden / kGpus);
         const bool use_nccl_reduce_scatter =
             nccl_reduce_scatter && !compact_route && !opt.ep_return_fp16;
-        for (int p = 0; p < kGpus; ++p) {
+        for (int p = 0; ep_return_done_early ? false : p < kGpus; ++p) {
             RankState &r = ranks[p];
             CHECK_CUDA(cudaSetDevice(r.device));
             const int compose_routes = compact_route
@@ -1209,14 +1317,19 @@ int run_decode_loop(const Options &opt,
             epprof_end(p, kEpProfContribPack, r.stream,
                        route_hidden_elems * sizeof(float));
         }
-        sync_all_prof(kEpProfBarrier1144); /* s597: was sync_all() (1144) */
+        if (!ep_return_done_early) {
+            sync_all_prof(kEpProfBarrier1144); /* s597: was sync_all() (1144) */
+        }
         log_rank_stage("ep_pack");
         sync_after_decode_stage("ep_pack");
         auto t_reduce_done = std::chrono::steady_clock::now();
         auto t_copy_done = t_reduce_done;
 
         bool ep_broadcast_copy_used = false;
-        if (use_nccl_reduce_scatter) {
+        if (ep_return_done_early) {
+            /* s599 C-B: pack + NCCL return already enqueued before the
+             * dense/swiglu chain. */
+        } else if (use_nccl_reduce_scatter) {
             for (int p = 0; p < kGpus; ++p) {
                 if (!ranks[p].compose_nccl_initialized || !ranks[p].compose_nccl) {
                     return 12;
