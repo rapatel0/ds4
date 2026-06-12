@@ -456,6 +456,711 @@ int ep_return_relay_graph(const Options &opt,
 }
 /* ======================================================================== */
 
+/* ============== Sprint 602: NCCL-free hc-class collectives ============== */
+/* Replaces the remaining captured NCCL collectives (the s601-localized
+ * racing set) with peer-write/kernel-reduction equivalents built on the
+ * s601 relay topology (dst^4 one-hop staging for SYS pairs; fixed 8x8
+ * event-barrier order; graph-capturable; no SYS traffic).
+ *
+ *   - allgathers + the root-0 broadcast are pure byte moves (bit-exact by
+ *     construction);
+ *   - the sum allreduces are ring-order-exact kernel folds reproducing
+ *     NCCL's ring reduce-scatter accumulation order (chunk schedule
+ *     calibrated by tools/s602-fold-probe; per-element fold = left fold
+ *     along the ring starting at chunk+delta), so the s597 control anchor
+ *     stays bit-valid; max allreduces are order-free bitwise.
+ *
+ * Everything is enqueued on the existing rank streams between two full
+ * cross-GPU barriers per collective site (B0: inputs visible to relays
+ * and cross-rank fold reads; B1: staged forwards visible to folds /
+ * relay-written outputs visible to consumers). The promoted path
+ * (DS4_V100_TP_EP_HC_TRANSPORT unset/nccl) allocates nothing and enqueues
+ * nothing - byte-identical. */
+
+enum S602Cls {
+    kS602HcMax = 0, kS602HcMix, kS602HcSumsq, kS602HcAg, kS602FfnBcast,
+    kS602RMax, kS602RSumsq, kS602RLogits, kS602PostAg, kS602ClsCount
+};
+static const char *const kS602ClsNames[kS602ClsCount] = {
+    "hc_max", "hc_mix", "hc_sumsq", "hc_ag", "ffn_bcast",
+    "r_max", "r_sumsq", "r_logits", "post_ag"};
+/* DS4_V100_TP_EP_S602_KERNEL_MASK bit per class (hc max+mix share bit 0). */
+static const int kS602ClsMaskBit[kS602ClsCount] = {0, 0, 1, 2, 3, 4, 5, 6, 7};
+/* Allreduce stage layout: per-class element count = mult * slots. */
+static const int kS602ClsSlotMult[kS602ClsCount] = {1, kHcMix, 1, 0, 0,
+                                                    1, 1, kGlobalExperts, 0};
+
+struct S602State {
+    bool initialized = false;
+    bool any = false;
+    bool verify = false;
+    int nrings = 0;
+    int ring[kGpus][kGpus];
+    int delta = 1;
+    int min_chunk = 512;
+    int nchannels = 1;
+    uint64_t stage_slot_stride = 0;        /* floats per src slot */
+    uint64_t cls_off[kS602ClsCount] = {};  /* float offset within a slot */
+};
+static S602State g_s602x;
+
+static inline bool s602_cls_masked(const Options &opt, int cls) {
+    return (opt.s602_kernel_mask >> kS602ClsMaskBit[cls]) & 1u;
+}
+/* kernel transport feeds the consumers (NCCL skipped) */
+static inline bool s602_use_kernel(const Options &opt, int cls) {
+    return opt.hc_transport_kernel && !opt.s602_verify &&
+           s602_cls_masked(opt, cls);
+}
+/* bring-up verifier: NCCL still feeds the consumers; the kernel transport
+ * runs on shadow inputs and is bit-compared in-graph (s600 pattern) */
+static inline bool s602_use_verify(const Options &opt, int cls) {
+    return opt.hc_transport_kernel && opt.s602_verify &&
+           s602_cls_masked(opt, cls);
+}
+static inline bool s602_any_active(const Options &opt) {
+    return opt.hc_transport_kernel && opt.s602_kernel_mask != 0u;
+}
+
+static int s602_parse_rings(const char *spec, int ring[kGpus][kGpus]) {
+    int nrings = 0;
+    const char *p = spec;
+    int cur[kGpus];
+    int n = 0;
+    while (p && nrings < kGpus) {
+        if (*p == ';' || *p == '\0') {
+            if (n == kGpus) {
+                bool seen[kGpus] = {};
+                bool ok = true;
+                for (int i = 0; i < kGpus; ++i) {
+                    if (cur[i] < 0 || cur[i] >= kGpus || seen[cur[i]]) {
+                        ok = false;
+                        break;
+                    }
+                    seen[cur[i]] = true;
+                }
+                if (!ok) return 0;
+                for (int i = 0; i < kGpus; ++i) ring[nrings][i] = cur[i];
+                ++nrings;
+            } else if (n != 0) {
+                return 0;
+            }
+            n = 0;
+            if (*p == '\0') break;
+            ++p;
+            continue;
+        }
+        if (*p == ' ' || *p == '\t' || *p == ',') {
+            ++p;
+            continue;
+        }
+        char *end = nullptr;
+        const long v = std::strtol(p, &end, 10);
+        if (end == p || n >= kGpus) return 0;
+        cur[n++] = (int)v;
+        p = end;
+    }
+    return nrings;
+}
+
+int s602_state_init(const Options &opt, RankState ranks[kGpus]) {
+    if (g_s602x.initialized) return 0;
+    g_s602x.initialized = true;
+    if (!s602_any_active(opt)) return 0;
+    g_s602x.any = true;
+    g_s602x.verify = opt.s602_verify;
+    g_s602x.delta = opt.s602_fold_delta & 7;
+    /* 0 = auto size rule (fold-probe run3): see s602_min_chunk_for(). */
+    g_s602x.min_chunk = opt.s602_min_chunk > 0 ? opt.s602_min_chunk : 0;
+    g_s602x.nchannels =
+        (opt.s602_nchannels > 0 && opt.s602_nchannels <= kGpus)
+            ? opt.s602_nchannels
+            : 1;
+    g_s602x.nrings = s602_parse_rings(opt.s602_ring_spec, g_s602x.ring);
+    if (g_s602x.nrings <= 0) {
+        std::fprintf(stderr, "tp_ep_s602_init bad ring spec '%s'\n",
+                     opt.s602_ring_spec);
+        return 1;
+    }
+    uint64_t off = 0;
+    for (int c = 0; c < kS602ClsCount; ++c) {
+        g_s602x.cls_off[c] = off;
+        off += (uint64_t)kS602ClsSlotMult[c] * (uint64_t)opt.slots;
+    }
+    g_s602x.stage_slot_stride = off;
+    int prior_device = 0;
+    CHECK_CUDA(cudaGetDevice(&prior_device));
+    const size_t stage_bytes =
+        (size_t)kGpus * off * sizeof(float);
+    const size_t slots_b = (size_t)opt.slots * sizeof(float);
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        CHECK_CUDA(cudaMalloc(&r.d_s602_stage, stage_bytes));
+        CHECK_CUDA(cudaMalloc(&r.d_s602_out_max, slots_b));
+        CHECK_CUDA(cudaMalloc(&r.d_s602_out_mix, slots_b * kHcMix));
+        CHECK_CUDA(cudaMalloc(&r.d_s602_out_sumsq, slots_b));
+        CHECK_CUDA(cudaMalloc(&r.d_s602_out_rmax, slots_b));
+        CHECK_CUDA(cudaMalloc(&r.d_s602_out_rsumsq, slots_b));
+        CHECK_CUDA(cudaMalloc(&r.d_s602_out_logits, slots_b * kGlobalExperts));
+        if (g_s602x.verify) {
+            CHECK_CUDA(cudaMalloc(&r.d_s602_ver_in, off * sizeof(float)));
+            CHECK_CUDA(cudaMalloc(&r.d_s602_ver_out,
+                                  3ull * (size_t)opt.slots * kHidden *
+                                      sizeof(float)));
+            CHECK_CUDA(cudaMalloc(&r.d_s602_mismatch,
+                                  (size_t)kS602ClsCount * 4 *
+                                      sizeof(unsigned long long)));
+            CHECK_CUDA(cudaMemset(r.d_s602_mismatch, 0,
+                                  (size_t)kS602ClsCount * 4 *
+                                      sizeof(unsigned long long)));
+        }
+    }
+    CHECK_CUDA(cudaSetDevice(prior_device));
+    std::printf("tp_ep_s602_init\ttransport\tkernel\tmask\t0x%02x\tverify\t%d\t"
+                "rings\t%d\tdelta\t%d\tmin_chunk\t%d\tnchannels\t%d\t"
+                "stage_kib\t%llu\tPASS\n",
+                opt.s602_kernel_mask, g_s602x.verify ? 1 : 0, g_s602x.nrings,
+                g_s602x.delta, g_s602x.min_chunk, g_s602x.nchannels,
+                (unsigned long long)(stage_bytes / 1024ull));
+    std::fflush(stdout);
+    return 0;
+}
+
+/* ---- device kernels ---- */
+struct S602Ptrs8 {
+    const float *p[kGpus];
+};
+constexpr int kS602MaxSegs = 40;
+struct S602FoldPlan {
+    int nsegs;
+    unsigned long long seg_begin[kS602MaxSegs];
+    int seg_start[kS602MaxSegs];
+    int seg_ring[kS602MaxSegs];
+};
+struct S602Rings {
+    int r[kGpus][kGpus];
+};
+
+/* Ring-order-exact fold: out[e] = left-fold of in[ring[(start+k)&7]][e].
+ * Plain float adds (no FMA contraction possible: adds only), fmaxf for the
+ * max reductions (order-free bitwise on finite data). */
+__global__ void s602_fold_kernel(S602Ptrs8 in, float *out,
+                                 unsigned long long count, int is_max,
+                                 S602FoldPlan plan, S602Rings rings) {
+    for (unsigned long long i =
+             (unsigned long long)blockIdx.x * blockDim.x + threadIdx.x;
+         i < count; i += (unsigned long long)blockDim.x * gridDim.x) {
+        int s = 0;
+        while (s + 1 < plan.nsegs && i >= plan.seg_begin[s + 1]) ++s;
+        const int *ring = rings.r[plan.seg_ring[s]];
+        const int start = plan.seg_start[s];
+        float acc = in.p[ring[start]][i];
+#pragma unroll
+        for (int k = 1; k < kGpus; ++k) {
+            const float v = in.p[ring[(start + k) & 7]][i];
+            acc = is_max ? fmaxf(acc, v) : (acc + v);
+        }
+        out[i] = acc;
+    }
+}
+
+/* Three independent same-length copies in one launch (the per-relay
+ * forward: each relay GPU serves exactly its 3 quad-mates' SYS slices). */
+__global__ void s602_copy3_kernel(const float *s0, const float *s1,
+                                  const float *s2, float *d0, float *d1,
+                                  float *d2, unsigned long long elems) {
+    const unsigned long long total = 3ull * elems;
+    for (unsigned long long i =
+             (unsigned long long)blockIdx.x * blockDim.x + threadIdx.x;
+         i < total; i += (unsigned long long)blockDim.x * gridDim.x) {
+        const int which = (int)(i / elems);
+        const unsigned long long e = i % elems;
+        const float v = which == 0 ? s0[e] : which == 1 ? s1[e] : s2[e];
+        float *d = which == 0 ? d0 : which == 1 ? d1 : d2;
+        d[e] = v;
+    }
+}
+
+/* Rank-major gather of the non-null sources (self + the 4 NVLink peers;
+ * the 3 SYS sources are relay-written into the same output). */
+__global__ void s602_gather8_kernel(S602Ptrs8 in, float *out,
+                                    unsigned long long shard_elems) {
+    const unsigned long long total = (unsigned long long)kGpus * shard_elems;
+    for (unsigned long long i =
+             (unsigned long long)blockIdx.x * blockDim.x + threadIdx.x;
+         i < total; i += (unsigned long long)blockDim.x * gridDim.x) {
+        const int src = (int)(i / shard_elems);
+        if (in.p[src]) out[i] = in.p[src][i - (unsigned long long)src * shard_elems];
+    }
+}
+
+/* In-graph bit comparator -> per-class mismatch counters (s600 pattern). */
+__global__ void s602_bitcmp_kernel(const float *a, const float *b,
+                                   unsigned long long elems,
+                                   unsigned long long *out) {
+    for (unsigned long long i =
+             (unsigned long long)blockIdx.x * blockDim.x + threadIdx.x;
+         i < elems; i += (unsigned long long)blockDim.x * gridDim.x) {
+        const unsigned int ab = __float_as_uint(a[i]);
+        const unsigned int bb = __float_as_uint(b[i]);
+        if (ab != bb) {
+            if (atomicAdd(out, 1ull) == 0ull) {
+                out[1] = i;
+                out[2] = (unsigned long long)ab |
+                         ((unsigned long long)bb << 32);
+            }
+        }
+    }
+}
+
+/* NCCL 2.19 LL minChunk by op size (fold-probe run3 calibration):
+ * nthreads steps with size as pow2ceil(bytes/64) clamped to [96, 512];
+ * minChunk = nthreads * 2 floats. Verified bit-exact on the probe for
+ * every engine shape (hc_mix 384/576/768 -> 192; r_logits 256..1024 ->
+ * 192, 2048 -> 256, 4096 -> 512, 6144/8192 -> 1024; sumsq <= 32 single
+ * chunk under any mc >= count). */
+static uint64_t s602_min_chunk_for(uint64_t count) {
+    uint64_t nt = (count + 15) / 16;
+    uint64_t p = 1;
+    while (p < nt) p <<= 1;
+    if (p < 96) p = 96;
+    if (p > 512) p = 512;
+    return 2 * p;
+}
+
+/* ---- host-side fold plan (mirrors the NCCL 2.19 ring AR chunk loop with
+ * the calibrated parameters) ---- */
+static void s602_build_plan(uint64_t count, S602FoldPlan *plan) {
+    plan->nsegs = 0;
+    const uint64_t loop = (uint64_t)g_s602x.nchannels * kGpus;
+    const uint64_t mc = g_s602x.min_chunk > 0 ? (uint64_t)g_s602x.min_chunk
+                                              : s602_min_chunk_for(count);
+    uint64_t gridOffset = 0;
+    while (gridOffset < count) {
+        const uint64_t remaining = count - gridOffset;
+        uint64_t rcs = ((remaining + loop * mc - 1) / (loop * mc)) * mc;
+        if (rcs > (1ull << 20)) rcs = 1ull << 20;
+        for (int bid = 0; bid < g_s602x.nchannels; ++bid) {
+            for (int c = 0; c < kGpus; ++c) {
+                const uint64_t begin =
+                    gridOffset + ((uint64_t)bid * kGpus + (uint64_t)c) * rcs;
+                if (begin >= count) break;
+                const int start = (c + g_s602x.delta) & 7;
+                const int ringsel = bid % g_s602x.nrings;
+                if (plan->nsegs > 0 &&
+                    plan->seg_start[plan->nsegs - 1] == start &&
+                    plan->seg_ring[plan->nsegs - 1] == ringsel) {
+                    continue; /* merge */
+                }
+                if (plan->nsegs >= kS602MaxSegs) {
+                    /* should not happen at the engine shapes; extend the
+                     * last segment rather than overflow (loud once). */
+                    static bool warned = false;
+                    if (!warned) {
+                        std::fprintf(stderr,
+                                     "tp_ep_s602_fold_plan overflow count=%llu\n",
+                                     (unsigned long long)count);
+                        warned = true;
+                    }
+                    break;
+                }
+                plan->seg_begin[plan->nsegs] = begin;
+                plan->seg_start[plan->nsegs] = start;
+                plan->seg_ring[plan->nsegs] = ringsel;
+                ++plan->nsegs;
+            }
+        }
+        gridOffset += loop * rcs;
+    }
+    if (plan->nsegs == 0) {
+        plan->nsegs = 1;
+        plan->seg_begin[0] = 0;
+        plan->seg_start[0] = g_s602x.delta & 7;
+        plan->seg_ring[0] = 0;
+    }
+}
+
+static inline float *s602_stage_ptr(RankState &dst_rank, int src, int cls) {
+    return dst_rank.d_s602_stage +
+           (uint64_t)src * g_s602x.stage_slot_stride + g_s602x.cls_off[cls];
+}
+
+/* ---- site synchronization ----
+ * Full 8x8 join across the RANK STREAMS ONLY at both sync points of every
+ * site. Both alternatives were falsified empirically:
+ *   - The s601 full barrier additionally joins the DENSE streams; 16 of
+ *     those per layer destroy the layer's rank<->dense overlap (replay
+ *     10.9 ms/layer vs 4.13 control; b-sb-fb confirmed bit-stable but
+ *     slow). The replaced NCCL collectives only ever ordered the rank
+ *     streams, so the dense joins are pure over-synchronization.
+ *   - A minimal pairwise dependency set (B0 = wait 4 NVLink peers, B1 =
+ *     wait mirror g^4) restores full speed but is run-to-run
+ *     NONDETERMINISTIC under the Simple-stress detector (agreement
+ *     0.79-0.95, b-sb/b-sb-kc), while the full barrier is bit-identical
+ *     (b-sb-fb 1.0/1.0): NCCL's completion semantics join all 8 rank
+ *     streams at every collective and something downstream relies on it.
+ * The all-rank rank-stream join keeps NCCL's contract without the
+ * dense-stream cost. DS4_V100_TP_EP_S602_FULL_BARRIER=1 restores the
+ * s601 rank+dense barrier at both points (rollback/diagnosis). */
+static inline bool s602_full_barrier_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_S602_FULL_BARRIER");
+    return v && *v && !(v[0] == '0' && v[1] == '\0');
+}
+int next_graph_order_event_slot(RankState ranks[kGpus]);
+cudaEvent_t graph_stream_done_event(RankState &r, int slot);
+static int s602_rank_join(RankState ranks[kGpus]) {
+    if (s602_full_barrier_env()) {
+        return enqueue_cross_gpu_stream_barrier(ranks, false);
+    }
+    const int slot = next_graph_order_event_slot(ranks);
+    for (int g = 0; g < kGpus; ++g) {
+        RankState &r = ranks[g];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        cudaEvent_t ev = graph_stream_done_event(r, slot);
+        if (!ev) return 1;
+        CHECK_CUDA(cudaEventRecord(ev, r.stream));
+    }
+    for (int g = 0; g < kGpus; ++g) {
+        RankState &r = ranks[g];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        for (int p = 0; p < kGpus; ++p) {
+            if (p == g) continue;
+            CHECK_CUDA(cudaStreamWaitEvent(
+                r.stream, graph_stream_done_event(ranks[p], slot), 0));
+        }
+    }
+    return 0;
+}
+static int s602_sync_inputs(RankState ranks[kGpus]) {
+    return s602_rank_join(ranks);
+}
+static int s602_sync_relayed(RankState ranks[kGpus]) {
+    return s602_rank_join(ranks);
+}
+
+/* ---- allreduce site ---- */
+struct S602ArOp {
+    int cls;
+    float *in[kGpus];     /* live (NCCL in-place) partial buffers */
+    float *out[kGpus];    /* fold destinations */
+    uint64_t count;
+    bool is_max;
+    bool fold_all;        /* false: only rank 0 consumes the reduction */
+    const float *src[kGpus]; /* filled by pre/post: fold/relay inputs */
+};
+
+/* Verify mode: shadow the inputs on each rank's own stream BEFORE the
+ * caller's NCCL group overwrites them in place. */
+int s602_allreduce_site_pre(const Options &opt, RankState ranks[kGpus],
+                            S602ArOp *ops, int nops) {
+    const int block = 256;
+    int prior_device = 0;
+    CHECK_CUDA(cudaGetDevice(&prior_device));
+    for (int o = 0; o < nops; ++o) {
+        S602ArOp &op = ops[o];
+        const bool ver = s602_use_verify(opt, op.cls);
+        const bool ker = s602_use_kernel(opt, op.cls);
+        if (!ver && !ker) continue;
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            if (!r.d_s602_stage || !op.in[rank] || !op.out[rank]) return 1;
+            if (ver) {
+                if (!r.d_s602_ver_in) return 1;
+                float *shadow = r.d_s602_ver_in + g_s602x.cls_off[op.cls];
+                CHECK_CUDA(cudaSetDevice(r.device));
+                copy_f32_kernel<<<
+                    (unsigned int)((op.count + (uint64_t)block - 1) /
+                                   (uint64_t)block),
+                    block, 0, r.stream>>>(shadow, op.in[rank], op.count);
+                CHECK_CUDA(cudaGetLastError());
+                op.src[rank] = shadow;
+            } else {
+                op.src[rank] = op.in[rank];
+            }
+        }
+    }
+    CHECK_CUDA(cudaSetDevice(prior_device));
+    return 0;
+}
+
+/* Transport + fold (+ in-graph compare in verify mode). Shares the two
+ * cross-GPU barriers across every op of the site. */
+int s602_allreduce_site_post(const Options &opt, RankState ranks[kGpus],
+                             S602ArOp *ops, int nops) {
+    const int block = 256;
+    bool any = false;
+    for (int o = 0; o < nops; ++o) {
+        if (s602_use_kernel(opt, ops[o].cls) ||
+            s602_use_verify(opt, ops[o].cls)) {
+            any = true;
+        }
+    }
+    if (!any) return 0;
+    int prior_device = 0;
+    CHECK_CUDA(cudaGetDevice(&prior_device));
+    /* B0: every rank's partial (and shadow) visible to relays + folds. */
+    if (s602_sync_inputs(ranks) != 0) return 2;
+    /* relay wave: for each folding dst, relay dst^4 forwards the 3 SYS
+     * srcs' inputs (its own quad-mates - all NVLink) into dst's stage. */
+    for (int o = 0; o < nops; ++o) {
+        S602ArOp &op = ops[o];
+        if (!s602_use_kernel(opt, op.cls) && !s602_use_verify(opt, op.cls)) {
+            continue;
+        }
+        for (int dst = 0; dst < kGpus; ++dst) {
+            if (!op.fold_all && dst != 0) continue;
+            const int relay = dst ^ 4;
+            RankState &rr = ranks[relay];
+            const float *s[3] = {};
+            float *d[3] = {};
+            int n = 0;
+            for (int src = 0; src < kGpus; ++src) {
+                if (src == dst || s601_nv_adjacent(src, dst)) continue;
+                if (n >= 3) return 3;
+                s[n] = op.src[src];
+                d[n] = s602_stage_ptr(ranks[dst], src, op.cls);
+                ++n;
+            }
+            if (n != 3) return 3;
+            CHECK_CUDA(cudaSetDevice(rr.device));
+            s602_copy3_kernel<<<
+                (unsigned int)((3ull * op.count + (uint64_t)block - 1) /
+                               (uint64_t)block),
+                block, 0, rr.stream>>>(s[0], s[1], s[2], d[0], d[1], d[2],
+                                       op.count);
+            CHECK_CUDA(cudaGetLastError());
+        }
+    }
+    /* B1: staged forwards visible to the folds. */
+    if (s602_sync_relayed(ranks) != 0) return 4;
+    S602Rings rings;
+    std::memcpy(rings.r, g_s602x.ring, sizeof(rings.r));
+    for (int o = 0; o < nops; ++o) {
+        S602ArOp &op = ops[o];
+        const bool ver = s602_use_verify(opt, op.cls);
+        const bool ker = s602_use_kernel(opt, op.cls);
+        if (!ver && !ker) continue;
+        S602FoldPlan plan;
+        s602_build_plan(op.count, &plan);
+        for (int dst = 0; dst < kGpus; ++dst) {
+            if (!op.fold_all && dst != 0) continue;
+            RankState &r = ranks[dst];
+            S602Ptrs8 in;
+            for (int src = 0; src < kGpus; ++src) {
+                in.p[src] = (src == dst || s601_nv_adjacent(src, dst))
+                                ? op.src[src]
+                                : s602_stage_ptr(r, src, op.cls);
+            }
+            CHECK_CUDA(cudaSetDevice(r.device));
+            s602_fold_kernel<<<
+                (unsigned int)((op.count + (uint64_t)block - 1) /
+                               (uint64_t)block),
+                block, 0, r.stream>>>(in, op.out[dst], op.count,
+                                      op.is_max ? 1 : 0, plan, rings);
+            CHECK_CUDA(cudaGetLastError());
+            if (ver) {
+                /* compare the fold against NCCL's in-place result (both
+                 * resident on this rank, both produced on this stream). */
+                s602_bitcmp_kernel<<<
+                    (unsigned int)((op.count + (uint64_t)block - 1) /
+                                   (uint64_t)block),
+                    block, 0, r.stream>>>(op.out[dst], op.in[dst], op.count,
+                                          r.d_s602_mismatch +
+                                              (size_t)op.cls * 4);
+                CHECK_CUDA(cudaGetLastError());
+            }
+        }
+    }
+    CHECK_CUDA(cudaSetDevice(prior_device));
+    return 0;
+}
+
+/* ---- allgather site (byte moves; rank-major output) ----
+ * kernel mode: writes out_by_rank directly (caller skips NCCL).
+ * verify mode: caller ran NCCL; the kernel gather writes the shadow region
+ * and is bit-compared against NCCL's output on every rank. */
+int s602_allgather_site(const Options &opt, RankState ranks[kGpus], int cls,
+                        float *const shard_by_rank[kGpus],
+                        float *const out_by_rank[kGpus], uint64_t shard_elems,
+                        int ver_region) {
+    const bool ker = s602_use_kernel(opt, cls);
+    const bool ver = s602_use_verify(opt, cls);
+    if (!ker && !ver) return 0;
+    const int block = 256;
+    const uint64_t full_elems = (uint64_t)kGpus * shard_elems;
+    int prior_device = 0;
+    CHECK_CUDA(cudaGetDevice(&prior_device));
+    float *dst_by_rank[kGpus] = {};
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        if (!shard_by_rank[rank] || !out_by_rank[rank]) return 1;
+        if (ver) {
+            if (!r.d_s602_ver_out) return 1;
+            dst_by_rank[rank] = r.d_s602_ver_out +
+                                (uint64_t)ver_region * (uint64_t)opt.slots *
+                                    kHidden;
+        } else {
+            dst_by_rank[rank] = out_by_rank[rank];
+        }
+    }
+    /* B0: every rank's shard visible to peer pulls + relay forwards. */
+    if (s602_sync_inputs(ranks) != 0) return 2;
+    for (int dst = 0; dst < kGpus; ++dst) {
+        RankState &r = ranks[dst];
+        S602Ptrs8 in;
+        for (int src = 0; src < kGpus; ++src) {
+            in.p[src] = (src == dst || s601_nv_adjacent(src, dst))
+                            ? shard_by_rank[src]
+                            : nullptr;
+        }
+        CHECK_CUDA(cudaSetDevice(r.device));
+        s602_gather8_kernel<<<
+            (unsigned int)((full_elems + (uint64_t)block - 1) /
+                           (uint64_t)block),
+            block, 0, r.stream>>>(in, dst_by_rank[dst], shard_elems);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    for (int relay = 0; relay < kGpus; ++relay) {
+        RankState &rr = ranks[relay];
+        const int dst = relay ^ 4;
+        const float *s[3] = {};
+        float *d[3] = {};
+        int n = 0;
+        for (int src = 0; src < kGpus; ++src) {
+            if (src == dst || s601_nv_adjacent(src, dst)) continue;
+            if (n >= 3) return 3;
+            s[n] = shard_by_rank[src];
+            d[n] = dst_by_rank[dst] + (uint64_t)src * shard_elems;
+            ++n;
+        }
+        if (n != 3) return 3;
+        CHECK_CUDA(cudaSetDevice(rr.device));
+        s602_copy3_kernel<<<
+            (unsigned int)((3ull * shard_elems + (uint64_t)block - 1) /
+                           (uint64_t)block),
+            block, 0, rr.stream>>>(s[0], s[1], s[2], d[0], d[1], d[2],
+                                   shard_elems);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    /* B1: relay-written segments visible to the consumers (or comparator). */
+    if (s602_sync_relayed(ranks) != 0) return 4;
+    if (ver) {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            CHECK_CUDA(cudaSetDevice(r.device));
+            s602_bitcmp_kernel<<<
+                (unsigned int)((full_elems + (uint64_t)block - 1) /
+                               (uint64_t)block),
+                block, 0, r.stream>>>(dst_by_rank[rank], out_by_rank[rank],
+                                      full_elems,
+                                      r.d_s602_mismatch + (size_t)cls * 4);
+            CHECK_CUDA(cudaGetLastError());
+        }
+    }
+    CHECK_CUDA(cudaSetDevice(prior_device));
+    return 0;
+}
+
+/* ---- root-0 broadcast site (byte moves) ----
+ * NVLink dsts 1..4 pull from the root; dsts 5,6,7 are written by relays
+ * 1,2,3 (= dst^4, NVLink-adjacent to both ends); rank 0 takes a local
+ * copy (the NCCL call it replaces also writes the root's recv buffer). */
+int s602_broadcast0_site(const Options &opt, RankState ranks[kGpus], int cls,
+                         const float *src_device0,
+                         float *const out_by_rank[kGpus], uint64_t elems,
+                         int ver_region) {
+    const bool ker = s602_use_kernel(opt, cls);
+    const bool ver = s602_use_verify(opt, cls);
+    if (!ker && !ver) return 0;
+    const int block = 256;
+    int prior_device = 0;
+    CHECK_CUDA(cudaGetDevice(&prior_device));
+    float *dst_by_rank[kGpus] = {};
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        if (!out_by_rank[rank]) return 1;
+        if (ver) {
+            if (!r.d_s602_ver_out) return 1;
+            dst_by_rank[rank] = r.d_s602_ver_out +
+                                (uint64_t)ver_region * (uint64_t)opt.slots *
+                                    kHidden;
+        } else {
+            dst_by_rank[rank] = out_by_rank[rank];
+        }
+    }
+    /* B0: root data visible to all readers; WAR on the dst buffers. */
+    if (s602_sync_inputs(ranks) != 0) return 2;
+    for (int dst = 0; dst < kGpus; ++dst) {
+        if (!s601_nv_adjacent(0, dst) && dst != 0) continue; /* 0..4 */
+        RankState &r = ranks[dst];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        copy_f32_kernel<<<
+            (unsigned int)((elems + (uint64_t)block - 1) / (uint64_t)block),
+            block, 0, r.stream>>>(dst_by_rank[dst], src_device0, elems);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    for (int dst = 0; dst < kGpus; ++dst) {
+        if (dst == 0 || s601_nv_adjacent(0, dst)) continue; /* 5,6,7 */
+        const int relay = dst ^ 4; /* 1,2,3 */
+        RankState &rr = ranks[relay];
+        CHECK_CUDA(cudaSetDevice(rr.device));
+        copy_f32_kernel<<<
+            (unsigned int)((elems + (uint64_t)block - 1) / (uint64_t)block),
+            block, 0, rr.stream>>>(dst_by_rank[dst], src_device0, elems);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    /* B1: relay-written dsts visible to their consumers. */
+    if (s602_sync_relayed(ranks) != 0) return 3;
+    if (ver) {
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            CHECK_CUDA(cudaSetDevice(r.device));
+            s602_bitcmp_kernel<<<
+                (unsigned int)((elems + (uint64_t)block - 1) /
+                               (uint64_t)block),
+                block, 0, r.stream>>>(dst_by_rank[rank], out_by_rank[rank],
+                                      elems,
+                                      r.d_s602_mismatch + (size_t)cls * 4);
+            CHECK_CUDA(cudaGetLastError());
+        }
+    }
+    CHECK_CUDA(cudaSetDevice(prior_device));
+    return 0;
+}
+
+/* Host-side, after a fully synced replay (next to s600_collect_verify). */
+void s602_collect_verify(int layer, int step, RankState ranks[kGpus]) {
+    if (!g_s602x.any || !g_s602x.verify) return;
+    int prior_device = 0;
+    CHECK_CUDA(cudaGetDevice(&prior_device));
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        if (!r.d_s602_mismatch) continue;
+        CHECK_CUDA(cudaSetDevice(r.device));
+        unsigned long long h[kS602ClsCount * 4] = {};
+        CHECK_CUDA(cudaMemcpy(h, r.d_s602_mismatch, sizeof(h),
+                              cudaMemcpyDeviceToHost));
+        bool any = false;
+        for (int cls = 0; cls < kS602ClsCount; ++cls) {
+            if (!h[cls * 4]) continue;
+            any = true;
+            std::printf("tp_ep_s602_verify_mismatch\tstep\t%d\tlayer\t%d\t"
+                        "rank\t%d\tclass\t%s\tcount\t%llu\telem\t%llu\t"
+                        "kernel_bits\t%08llx\tnccl_bits\t%08llx\n",
+                        step, layer, rank, kS602ClsNames[cls], h[cls * 4],
+                        h[cls * 4 + 1], h[cls * 4 + 2] & 0xffffffffull,
+                        h[cls * 4 + 2] >> 32);
+        }
+        if (any) {
+            std::fflush(stdout);
+            CHECK_CUDA(cudaMemset(r.d_s602_mismatch, 0, sizeof(h)));
+        }
+    }
+    CHECK_CUDA(cudaSetDevice(prior_device));
+}
+/* ======================================================================== */
+
 int parse_contract(const char *path, int layer, std::vector<ContractRow> *rows,
                    LayerStats *stats) {
     FILE *fp = std::fopen(path, "rb");

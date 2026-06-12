@@ -106,18 +106,34 @@ int run_true_ds4_post_attention_ffn_input(const Options &opt,
                 return 10;
             }
         }
-        CHECK_NCCL(ncclGroupStart());
-        for (int rank = 0; rank < kGpus; ++rank) {
-            RankState &r = ranks[rank];
-            CHECK_CUDA(cudaSetDevice(r.device));
-            CHECK_NCCL(ncclAllGather(r.d_post_attn_shard,
-                                     r.d_post_attn_full_rank_major,
-                                     (size_t)shard_elems,
-                                     ncclFloat,
-                                     ds4_comm_hc(r),
-                                     r.stream));
+        /* s602: post-attention allgather site (byte moves). */
+        const bool s602_k_pag = s602_use_kernel(opt, kS602PostAg);
+        if (!s602_k_pag) {
+            CHECK_NCCL(ncclGroupStart());
+            for (int rank = 0; rank < kGpus; ++rank) {
+                RankState &r = ranks[rank];
+                CHECK_CUDA(cudaSetDevice(r.device));
+                CHECK_NCCL(ncclAllGather(r.d_post_attn_shard,
+                                         r.d_post_attn_full_rank_major,
+                                         (size_t)shard_elems,
+                                         ncclFloat,
+                                         ds4_comm_hc(r),
+                                         r.stream));
+            }
+            CHECK_NCCL(ncclGroupEnd());
         }
-        CHECK_NCCL(ncclGroupEnd());
+        if (s602_k_pag || s602_use_verify(opt, kS602PostAg)) {
+            float *pag_shards[kGpus] = {};
+            float *pag_outs[kGpus] = {};
+            for (int rank = 0; rank < kGpus; ++rank) {
+                pag_shards[rank] = ranks[rank].d_post_attn_shard;
+                pag_outs[rank] = ranks[rank].d_post_attn_full_rank_major;
+            }
+            if (s602_allgather_site(opt, ranks, kS602PostAg, pag_shards,
+                                    pag_outs, shard_elems, 2) != 0) {
+                return 10;
+            }
+        }
         if (graph_event_order) {
             if (enqueue_control_wait_after_rank_streams(opt, ranks,
                                                         control_stream) != 0) {

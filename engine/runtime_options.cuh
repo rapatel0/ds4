@@ -183,6 +183,77 @@ static inline bool ds4_comm_split_hc_env() {
     return v && std::strstr(v, "hc") != nullptr;
 }
 
+/* Sprint 602: hc-class collective transport.
+ * DS4_V100_TP_EP_HC_TRANSPORT=nccl|kernel (default nccl, byte-identical
+ * off-path). kernel replaces the remaining captured NCCL collectives (the
+ * s601-localized racing set) with peer-write/kernel-reduction equivalents
+ * built on the s601 relay machinery:
+ *   hc max+mix allreduces, hc sumsq allreduce, hc current allgather,
+ *   ffn_normed full-current broadcast, router max/sumsq/logits allreduces,
+ *   post-attention allgather.
+ * Broadcast/allgathers are pure byte moves (bit-exact by construction;
+ * dst^4 one-hop relay for SYS pairs). Allreduces are ring-order-exact
+ * kernel folds reproducing NCCL's ring reduce-scatter accumulation order
+ * (chunk schedule calibrated by tools/s602-fold-probe; parameters
+ * overridable via the DS4_V100_TP_EP_S602_* envs below) so the s597
+ * control anchor stays bit-valid. Combined with EP_RETURN_TRANSPORT=relay
+ * + SWIGLU_EXCHANGE=batched the captured decode graph contains ZERO NCCL
+ * ops. */
+static inline bool ds4_hc_transport_env_kernel() {
+    const char *v = std::getenv("DS4_V100_TP_EP_HC_TRANSPORT");
+    return v && std::strcmp(v, "kernel") == 0;
+}
+/* DS4_V100_TP_EP_S602_VERIFY=1: bring-up bit-verifier (s600 pattern). The
+ * NCCL collectives still run and feed the consumers (so the run's bits are
+ * anchored); the kernel transport runs in parallel on shadow copies of the
+ * same inputs and every result is bit-compared in-graph, with per-class
+ * mismatch counters read back after each replay. */
+static inline bool ds4_s602_verify_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_S602_VERIFY");
+    if (!v || !*v) return false;
+    return !(v[0] == '0' && v[1] == '\0');
+}
+/* DS4_V100_TP_EP_S602_KERNEL_MASK: per-collective bring-up mask (hex or
+ * decimal; default 0xFF = all). Bits: 0 hc max+mix, 1 hc sumsq, 2 hc
+ * allgather, 3 ffn_normed broadcast, 4 router max, 5 router sumsq,
+ * 6 router logits, 7 post-attn allgather. */
+static inline unsigned ds4_s602_kernel_mask_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_S602_KERNEL_MASK");
+    if (!v || !*v) return 0xFFu;
+    return (unsigned)std::strtoul(v, nullptr, 0);
+}
+/* Ring-order-exact fold parameters (defaults = s602 fold-probe findings;
+ * envs allow recalibration without rebuild).
+ *   DS4_V100_TP_EP_S602_RING       semicolon-separated per-channel rings
+ *   DS4_V100_TP_EP_S602_FOLD_DELTA fold start = chunk + delta (mod 8)
+ *   DS4_V100_TP_EP_S602_MIN_CHUNK  NCCL LL min chunk granularity (elems)
+ *   DS4_V100_TP_EP_S602_NCHANNELS  channels the chunk loop assumes */
+static inline const char *ds4_s602_ring_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_S602_RING");
+    /* Default = NCCL's measured channel-0 auto ring on this pod under
+     * NCCL_P2P_LEVEL=NVL (s602 fold-probe run2). NOT the s597 NO_SYS_RING
+     * "0 3 2 1 5 7 6 4", which is only exported when ALLOW_VISIBLE_REMAP=1
+     * (not the reference config). */
+    return (v && *v) ? v : "0 3 2 1 5 6 7 4";
+}
+static inline int ds4_s602_fold_delta_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_S602_FOLD_DELTA");
+    return (v && *v) ? std::atoi(v) : 1;
+}
+static inline int ds4_s602_min_chunk_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_S602_MIN_CHUNK");
+    /* Default 0 = auto size rule calibrated by fold-probe run3:
+     * mc(count) = 2 * clamp(pow2ceil(count/16), 96, 512) -- NCCL 2.19's
+     * LL nthreads-by-size stepping (minChunk = nthreads*2 floats).
+     * Matches every probed shape: 768->192, 8192->1024, 6144->1024,
+     * 4096->512, 2048->256, <=1024->192. */
+    return (v && *v) ? std::atoi(v) : 0;
+}
+static inline int ds4_s602_nchannels_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_S602_NCHANNELS");
+    return (v && *v) ? std::atoi(v) : 1;
+}
+
 /* Sprint 599 C-B: enqueue the EP contribution pack + NCCL return right
  * after the routed GEMMs (before the dense/swiglu chain) and replace the
  * 8x8 cross-GPU barriers at the 954/978 sites with per-rank rank<->dense
@@ -361,6 +432,14 @@ struct Options {
     /* Sprint 601 Phase A (see comment above): default none. */
     bool comm_split_epret = ds4_comm_split_epret_env();
     bool comm_split_hc = ds4_comm_split_hc_env();
+    /* Sprint 602: hc-class collective transport (default nccl). */
+    bool hc_transport_kernel = ds4_hc_transport_env_kernel();
+    bool s602_verify = ds4_s602_verify_env();
+    unsigned s602_kernel_mask = ds4_s602_kernel_mask_env();
+    const char *s602_ring_spec = ds4_s602_ring_env();
+    int s602_fold_delta = ds4_s602_fold_delta_env();
+    int s602_min_chunk = ds4_s602_min_chunk_env();
+    int s602_nchannels = ds4_s602_nchannels_env();
     const char *s600_graph_dot_dir = ds4_s600_graph_dot_dir_env();
     int s600_graph_dot_layer = ds4_s600_graph_dot_layer_env();
 };

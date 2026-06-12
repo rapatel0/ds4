@@ -144,15 +144,30 @@ int run_model_router_allreduce_logits(const Options &opt,
             (uint32_t)opt.slots);
         CHECK_CUDA(cudaGetLastError());
     }
-    CHECK_NCCL(ncclGroupStart());
+    /* s602: router max allreduce site. */
+    S602ArOp r_max_op[1] = {};
+    r_max_op[0].cls = kS602RMax;
+    r_max_op[0].count = (uint64_t)opt.slots;
+    r_max_op[0].is_max = true;
+    r_max_op[0].fold_all = true;
     for (int rank = 0; rank < kGpus; ++rank) {
-        RankState &r = ranks[rank];
-        CHECK_CUDA(cudaSetDevice(r.device));
-        CHECK_NCCL(ncclAllReduce(r.d_hc_reduce_max, r.d_hc_reduce_max,
-                                 (size_t)opt.slots, ncclFloat, ncclMax,
-                                 ds4_comm_hc(r), r.stream));
+        r_max_op[0].in[rank] = ranks[rank].d_hc_reduce_max;
+        r_max_op[0].out[rank] = ranks[rank].d_s602_out_rmax;
     }
-    CHECK_NCCL(ncclGroupEnd());
+    const bool s602_k_rmax = s602_use_kernel(opt, kS602RMax);
+    if (s602_allreduce_site_pre(opt, ranks, r_max_op, 1) != 0) return 4;
+    if (!s602_k_rmax) {
+        CHECK_NCCL(ncclGroupStart());
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            CHECK_CUDA(cudaSetDevice(r.device));
+            CHECK_NCCL(ncclAllReduce(r.d_hc_reduce_max, r.d_hc_reduce_max,
+                                     (size_t)opt.slots, ncclFloat, ncclMax,
+                                     ds4_comm_hc(r), r.stream));
+        }
+        CHECK_NCCL(ncclGroupEnd());
+    }
+    if (s602_allreduce_site_post(opt, ranks, r_max_op, 1) != 0) return 4;
     for (int rank = 0; rank < kGpus; ++rank) {
         RankState &r = ranks[rank];
         const float *input_shard = post_attention_input
@@ -161,19 +176,35 @@ int run_model_router_allreduce_logits(const Options &opt,
         CHECK_CUDA(cudaSetDevice(r.device));
         current_shard_stable_sumsq_kernel<<<
             (unsigned int)opt.slots, 256, 0, r.stream>>>(
-            r.d_hc_reduce_sumsq, input_shard, r.d_hc_reduce_max,
+            r.d_hc_reduce_sumsq, input_shard,
+            s602_k_rmax ? r.d_s602_out_rmax : r.d_hc_reduce_max,
             shard_cols, (uint32_t)opt.slots);
         CHECK_CUDA(cudaGetLastError());
     }
-    CHECK_NCCL(ncclGroupStart());
+    /* s602: router sumsq allreduce site. */
+    S602ArOp r_ss_op[1] = {};
+    r_ss_op[0].cls = kS602RSumsq;
+    r_ss_op[0].count = (uint64_t)opt.slots;
+    r_ss_op[0].is_max = false;
+    r_ss_op[0].fold_all = true;
     for (int rank = 0; rank < kGpus; ++rank) {
-        RankState &r = ranks[rank];
-        CHECK_CUDA(cudaSetDevice(r.device));
-        CHECK_NCCL(ncclAllReduce(r.d_hc_reduce_sumsq, r.d_hc_reduce_sumsq,
-                                 (size_t)opt.slots, ncclFloat, ncclSum,
-                                 ds4_comm_hc(r), r.stream));
+        r_ss_op[0].in[rank] = ranks[rank].d_hc_reduce_sumsq;
+        r_ss_op[0].out[rank] = ranks[rank].d_s602_out_rsumsq;
     }
-    CHECK_NCCL(ncclGroupEnd());
+    const bool s602_k_rss = s602_use_kernel(opt, kS602RSumsq);
+    if (s602_allreduce_site_pre(opt, ranks, r_ss_op, 1) != 0) return 4;
+    if (!s602_k_rss) {
+        CHECK_NCCL(ncclGroupStart());
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            CHECK_CUDA(cudaSetDevice(r.device));
+            CHECK_NCCL(ncclAllReduce(r.d_hc_reduce_sumsq, r.d_hc_reduce_sumsq,
+                                     (size_t)opt.slots, ncclFloat, ncclSum,
+                                     ds4_comm_hc(r), r.stream));
+        }
+        CHECK_NCCL(ncclGroupEnd());
+    }
+    if (s602_allreduce_site_post(opt, ranks, r_ss_op, 1) != 0) return 4;
     for (int rank = 0; rank < kGpus; ++rank) {
         RankState &r = ranks[rank];
         const float *input_shard = post_attention_input
@@ -184,22 +215,40 @@ int run_model_router_allreduce_logits(const Options &opt,
                         (unsigned int)opt.slots, 1u);
         router_logits_allreduce_partial_kernel<<<grid, 256, 0, r.stream>>>(
             r.d_router_logits_rank_major, input_shard,
-            hc->d_ffn_norm_weight_rank[layer][rank], r.d_hc_reduce_max,
-            r.d_hc_reduce_sumsq, hc->d_router_w_shard[layer][rank],
+            hc->d_ffn_norm_weight_rank[layer][rank],
+            s602_k_rmax ? r.d_s602_out_rmax : r.d_hc_reduce_max,
+            s602_k_rss ? r.d_s602_out_rsumsq : r.d_hc_reduce_sumsq,
+            hc->d_router_w_shard[layer][rank],
             (uint32_t)rank, shard_cols, (uint32_t)opt.slots, 1.0e-6f);
         CHECK_CUDA(cudaGetLastError());
     }
-    CHECK_NCCL(ncclGroupStart());
+    /* s602: router logits allreduce site (only rank 0 consumes the
+     * reduction -> fold on rank 0 only). */
+    S602ArOp r_lg_op[1] = {};
+    r_lg_op[0].cls = kS602RLogits;
+    r_lg_op[0].count = (uint64_t)opt.slots * kGlobalExperts;
+    r_lg_op[0].is_max = false;
+    r_lg_op[0].fold_all = false;
     for (int rank = 0; rank < kGpus; ++rank) {
-        RankState &r = ranks[rank];
-        CHECK_CUDA(cudaSetDevice(r.device));
-        CHECK_NCCL(ncclAllReduce(r.d_router_logits_rank_major,
-                                 r.d_router_logits_rank_major,
-                                 (size_t)opt.slots * kGlobalExperts,
-                                 ncclFloat, ncclSum, ds4_comm_hc(r),
-                                 r.stream));
+        r_lg_op[0].in[rank] = ranks[rank].d_router_logits_rank_major;
+        r_lg_op[0].out[rank] = ranks[rank].d_s602_out_logits;
     }
-    CHECK_NCCL(ncclGroupEnd());
+    const bool s602_k_rlg = s602_use_kernel(opt, kS602RLogits);
+    if (s602_allreduce_site_pre(opt, ranks, r_lg_op, 1) != 0) return 4;
+    if (!s602_k_rlg) {
+        CHECK_NCCL(ncclGroupStart());
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            CHECK_CUDA(cudaSetDevice(r.device));
+            CHECK_NCCL(ncclAllReduce(r.d_router_logits_rank_major,
+                                     r.d_router_logits_rank_major,
+                                     (size_t)opt.slots * kGlobalExperts,
+                                     ncclFloat, ncclSum, ds4_comm_hc(r),
+                                     r.stream));
+        }
+        CHECK_NCCL(ncclGroupEnd());
+    }
+    if (s602_allreduce_site_post(opt, ranks, r_lg_op, 1) != 0) return 4;
     for (int rank = 0; rank < kGpus; ++rank) {
         CHECK_CUDA(cudaSetDevice(ranks[rank].device));
         if (opt.decode_cudagraph_gate) {
@@ -213,7 +262,8 @@ int run_model_router_allreduce_logits(const Options &opt,
         return 3;
     }
     CHECK_CUDA(cudaMemcpyAsync(hc->d_router_logits,
-                               ranks[0].d_router_logits_rank_major,
+                               s602_k_rlg ? ranks[0].d_s602_out_logits
+                                          : ranks[0].d_router_logits_rank_major,
                                (size_t)opt.slots * kGlobalExperts *
                                    sizeof(float),
                                cudaMemcpyDeviceToDevice,

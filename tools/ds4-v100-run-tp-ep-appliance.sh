@@ -114,19 +114,32 @@ fi
 # appliance arms per-rank CUDA-event markers at the EP sub-stage boundaries
 # and emits tp_ep_ep_stage_profile TSV lines; flag-off is byte-identical.
 : "${DS4_V100_TP_EP_EP_STAGE_PROFILE:=0}"
+# CORRECTNESS DEFAULT (Sprint 602 orchestrator decision): the launcher
+# defaults below select the zero-NCCL captured graph (relay + batched +
+# kernel). It is the ONLY configuration with zero observed token corruption
+# (s602 LL census: 6/6 token-bit-exact, 0 token events, 0.17 checksum-only
+# events/run vs 1.0/run WITH token flips on the prior nccl/copy defaults -
+# any captured NCCL produces token events). Cost vs the prior default:
+# ~-9% decode-domain (the 16 rank-join syncs/layer; Sprint 603 reclaims
+# them). Rollback to the prior racing defaults: EP_RETURN_TRANSPORT=nccl,
+# SWIGLU_EXCHANGE=copy, HC_TRANSPORT=nccl.
 # Sprint 598 B2-C: EP-return transport for the full-capture graph branch.
-#   nccl = grouped per-source NCCL broadcasts captured in-graph (promoted
-#          default after the Sprint 598 reference gate: EP return
-#          6.92 -> 0.61 ms/layer, decode-domain 71.2 -> 162.1 tok/s (2.28x),
-#          tolerance bit-exact vs the s597 control)
-#   copy = the prior per-pair copy_f32 remote-load path (rollback flag)
-: "${DS4_V100_TP_EP_EP_RETURN_TRANSPORT:=nccl}"
+#   relay = src-side peer-write NVLink copies; SYS pairs one-hop via dst^4
+#           (s601; 0.24-0.26 ms/layer; bit-exact byte moves)
+#   nccl  = grouped per-source NCCL broadcasts captured in-graph (s598;
+#           subject to the s600 captured-NCCL race)
+#   copy  = the s597-era per-pair copy_f32 remote-load path (rollback)
+: "${DS4_V100_TP_EP_EP_RETURN_TRANSPORT:=relay}"
 # Sprint 599 C-A: shared swiglu_down input exchange (copy = per-pair UVA
 # remote loads, the prior default; nccl = grouped allgather, no remote loads).
-: "${DS4_V100_TP_EP_SWIGLU_EXCHANGE:=copy}"
+: "${DS4_V100_TP_EP_SWIGLU_EXCHANGE:=batched}"
 # Sprint 599 C-B: enqueue the EP return before the dense/swiglu chain and use
 # per-rank ordering instead of the 8x8 barriers at the 954/978 sites.
 : "${DS4_V100_TP_EP_EP_RETURN_EARLY:=0}"
+# Sprint 602: hc-class collective transport (nccl = promoted default;
+# kernel = NCCL-free peer-write/kernel-reduction replacements for the
+# captured hc/router/bcast/post-attn collectives, ring-order-exact folds).
+: "${DS4_V100_TP_EP_HC_TRANSPORT:=kernel}"
 # Sprint 600/601: output-head communicator mode (shared = legacy single
 # comm; dedicated = eager head collectives on their own comm; host = no
 # eager NCCL, host-side reductions + UVA-copy allgather).
@@ -292,6 +305,10 @@ case "$DS4_V100_TP_EP_EP_RETURN_EARLY" in
     0|1) ;;
     *) fail "DS4_V100_TP_EP_EP_RETURN_EARLY must be 0 or 1" ;;
 esac
+case "$DS4_V100_TP_EP_HC_TRANSPORT" in
+    nccl|kernel) ;;
+    *) fail "DS4_V100_TP_EP_HC_TRANSPORT must be nccl or kernel" ;;
+esac
 case "$DS4_V100_TP_EP_HEAD_COMM" in
     shared|dedicated|host) ;;
     *) fail "DS4_V100_TP_EP_HEAD_COMM must be shared, dedicated, or host" ;;
@@ -442,7 +459,7 @@ print_resolved() {
 }
 
 if [ "$mode" = "check" ]; then
-    echo "ds4-v100-run-tp-ep-appliance: config ok host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS decode_graph_mode=$DS4_V100_TP_EP_DECODE_GRAPH_MODE ep_stage_profile=$DS4_V100_TP_EP_EP_STAGE_PROFILE ep_return_transport=$DS4_V100_TP_EP_EP_RETURN_TRANSPORT swiglu_exchange=$DS4_V100_TP_EP_SWIGLU_EXCHANGE ep_return_early=$DS4_V100_TP_EP_EP_RETURN_EARLY head_comm=$DS4_V100_TP_EP_HEAD_COMM comm_split=$DS4_V100_TP_EP_COMM_SPLIT tp_ep_bin=$DS4_V100_TP_EP_BIN tp_ep_contract=$DS4_V100_TP_EP_CONTRACT tp_ep_tm_index=$DS4_V100_TP_EP_TM_INDEX mtp=off"
+    echo "ds4-v100-run-tp-ep-appliance: config ok host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS decode_graph_mode=$DS4_V100_TP_EP_DECODE_GRAPH_MODE ep_stage_profile=$DS4_V100_TP_EP_EP_STAGE_PROFILE ep_return_transport=$DS4_V100_TP_EP_EP_RETURN_TRANSPORT swiglu_exchange=$DS4_V100_TP_EP_SWIGLU_EXCHANGE ep_return_early=$DS4_V100_TP_EP_EP_RETURN_EARLY hc_transport=$DS4_V100_TP_EP_HC_TRANSPORT head_comm=$DS4_V100_TP_EP_HEAD_COMM comm_split=$DS4_V100_TP_EP_COMM_SPLIT tp_ep_bin=$DS4_V100_TP_EP_BIN tp_ep_contract=$DS4_V100_TP_EP_CONTRACT tp_ep_tm_index=$DS4_V100_TP_EP_TM_INDEX mtp=off"
     exit 0
 fi
 if [ "$mode" = "print" ]; then
@@ -464,6 +481,7 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_TP_EP_EP_RETURN_TRANSPORT=$DS4_V100_TP_EP_EP_RETURN_TRANSPORT"
     echo "DS4_V100_TP_EP_SWIGLU_EXCHANGE=$DS4_V100_TP_EP_SWIGLU_EXCHANGE"
     echo "DS4_V100_TP_EP_EP_RETURN_EARLY=$DS4_V100_TP_EP_EP_RETURN_EARLY"
+    echo "DS4_V100_TP_EP_HC_TRANSPORT=$DS4_V100_TP_EP_HC_TRANSPORT"
     echo "DS4_V100_TP_EP_HEAD_COMM=$DS4_V100_TP_EP_HEAD_COMM"
     echo "DS4_V100_TP_EP_COMM_SPLIT=$DS4_V100_TP_EP_COMM_SPLIT"
     echo "DS4_V100_TP_EP_EXTRA_ARGS=$DS4_V100_TP_EP_EXTRA_ARGS"
@@ -498,6 +516,7 @@ export DS4_V100_TP_EP_EP_STAGE_PROFILE
 export DS4_V100_TP_EP_EP_RETURN_TRANSPORT
 export DS4_V100_TP_EP_SWIGLU_EXCHANGE
 export DS4_V100_TP_EP_EP_RETURN_EARLY
+export DS4_V100_TP_EP_HC_TRANSPORT
 export DS4_V100_TP_EP_HEAD_COMM
 export DS4_V100_TP_EP_COMM_SPLIT
 export DS4_V100_NCCL_TOPOLOGY_POLICY

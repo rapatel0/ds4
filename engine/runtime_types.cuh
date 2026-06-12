@@ -578,6 +578,19 @@ struct RankState {
      * (kGpus slots of src_stride capacity; only the 3 SYS sources whose
      * relay is this GPU are used). Allocated when ep_return_relay. */
     float *d_ep_relay_stage = nullptr;
+    /* Sprint 602: NCCL-free hc-class collectives (allocated by
+     * s602_state_init when DS4_V100_TP_EP_HC_TRANSPORT=kernel or the
+     * verifier is armed; all nullptr on the promoted path). */
+    float *d_s602_stage = nullptr;      /* kGpus src slots x per-class strides */
+    float *d_s602_out_max = nullptr;    /* slots (hc max fold) */
+    float *d_s602_out_mix = nullptr;    /* slots*kHcMix */
+    float *d_s602_out_sumsq = nullptr;  /* slots */
+    float *d_s602_out_rmax = nullptr;   /* slots (router) */
+    float *d_s602_out_rsumsq = nullptr; /* slots (router) */
+    float *d_s602_out_logits = nullptr; /* slots*kGlobalExperts (router) */
+    float *d_s602_ver_in = nullptr;     /* verify: shadow AR inputs */
+    float *d_s602_ver_out = nullptr;    /* verify: shadow AG/bcast outputs x3 */
+    unsigned long long *d_s602_mismatch = nullptr; /* verify: 9 classes x 4 */
     cudaEvent_t dense_wait = nullptr;
     cudaEvent_t start = nullptr;
     cudaEvent_t mid = nullptr;

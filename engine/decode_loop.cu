@@ -1919,6 +1919,8 @@ int run_decode_loop(const Options &opt,
                                       current_decode_step);
                 /* s600: swiglu exchange staleness counters (flag-gated). */
                 s600_collect_verify(opt.layer, current_decode_step, ranks);
+                /* s602: kernel-collective bit-verifier counters (flag-gated). */
+                s602_collect_verify(opt.layer, current_decode_step, ranks);
             }
             if (rc == cudaSuccess &&
                 suffix_stage_ends_compose_eager_final_hc()) {
@@ -2219,6 +2221,8 @@ int run_decode_loop(const Options &opt,
                                       current_decode_step);
                 /* s600: swiglu exchange staleness counters (flag-gated). */
                 s600_collect_verify(opt.layer, current_decode_step, ranks);
+                /* s602: kernel-collective bit-verifier counters (flag-gated). */
+                s602_collect_verify(opt.layer, current_decode_step, ranks);
             }
         }
         if (!replay_after_capture || !replay_success) {

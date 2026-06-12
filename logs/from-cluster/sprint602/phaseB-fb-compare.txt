@@ -1,0 +1,6 @@
+=== compare b-sb-fb-2 vs b-sb-fb-1
+pairs=128 ctl_only=0 cand_only=0
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {None: 128}
+first_tok_step histogram: {None: 128}

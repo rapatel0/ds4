@@ -116,18 +116,41 @@ int run_shared_hc_current_input(const Options &opt,
                 hc->d_attn_fn_rank[layer][rank], (uint32_t)opt.slots);
             CHECK_CUDA(cudaGetLastError());
         }
-        CHECK_NCCL(ncclGroupStart());
+        /* s602: hc max+mix allreduce site (kernel transport shares one
+         * barrier pair across both ops; flag-off this block is byte-
+         * identical to the plain NCCL group). */
+        S602ArOp hc_mm_ops[2] = {};
+        hc_mm_ops[0].cls = kS602HcMax;
+        hc_mm_ops[0].count = (uint64_t)opt.slots;
+        hc_mm_ops[0].is_max = true;
+        hc_mm_ops[0].fold_all = true;
+        hc_mm_ops[1].cls = kS602HcMix;
+        hc_mm_ops[1].count = (uint64_t)opt.slots * kHcMix;
+        hc_mm_ops[1].is_max = false;
+        hc_mm_ops[1].fold_all = true;
         for (int rank = 0; rank < kGpus; ++rank) {
-            RankState &r = ranks[rank];
-            CHECK_CUDA(cudaSetDevice(r.device));
-            CHECK_NCCL(ncclAllReduce(r.d_hc_reduce_max, r.d_hc_reduce_max,
-                                     (size_t)opt.slots, ncclFloat, ncclMax,
-                                     ds4_comm_hc(r), r.stream));
-            CHECK_NCCL(ncclAllReduce(r.d_hc_reduce_mix, r.d_hc_reduce_mix,
-                                     (size_t)opt.slots * kHcMix, ncclFloat,
-                                     ncclSum, ds4_comm_hc(r), r.stream));
+            hc_mm_ops[0].in[rank] = ranks[rank].d_hc_reduce_max;
+            hc_mm_ops[0].out[rank] = ranks[rank].d_s602_out_max;
+            hc_mm_ops[1].in[rank] = ranks[rank].d_hc_reduce_mix;
+            hc_mm_ops[1].out[rank] = ranks[rank].d_s602_out_mix;
         }
-        CHECK_NCCL(ncclGroupEnd());
+        const bool s602_k_mm = s602_use_kernel(opt, kS602HcMax);
+        if (s602_allreduce_site_pre(opt, ranks, hc_mm_ops, 2) != 0) return 14;
+        if (!s602_k_mm) {
+            CHECK_NCCL(ncclGroupStart());
+            for (int rank = 0; rank < kGpus; ++rank) {
+                RankState &r = ranks[rank];
+                CHECK_CUDA(cudaSetDevice(r.device));
+                CHECK_NCCL(ncclAllReduce(r.d_hc_reduce_max, r.d_hc_reduce_max,
+                                         (size_t)opt.slots, ncclFloat, ncclMax,
+                                         ds4_comm_hc(r), r.stream));
+                CHECK_NCCL(ncclAllReduce(r.d_hc_reduce_mix, r.d_hc_reduce_mix,
+                                         (size_t)opt.slots * kHcMix, ncclFloat,
+                                         ncclSum, ds4_comm_hc(r), r.stream));
+            }
+            CHECK_NCCL(ncclGroupEnd());
+        }
+        if (s602_allreduce_site_post(opt, ranks, hc_mm_ops, 2) != 0) return 14;
         bool have_ref_mix_for_full_parity = false;
         if (opt.tp_hc_current_full_parity_gate) {
             CHECK_CUDA(cudaSetDevice(opt.devices[0]));
@@ -159,26 +182,46 @@ int run_shared_hc_current_input(const Options &opt,
             CHECK_CUDA(cudaSetDevice(r.device));
             hc_local_stable_sumsq_kernel<<<
                 (unsigned int)opt.slots, 256, 0, r.stream>>>(
-                r.d_hc_reduce_sumsq, r.d_final_hc_shard, r.d_hc_reduce_max,
+                r.d_hc_reduce_sumsq, r.d_final_hc_shard,
+                s602_k_mm ? r.d_s602_out_max : r.d_hc_reduce_max,
                 (uint32_t)opt.slots);
             CHECK_CUDA(cudaGetLastError());
         }
-        CHECK_NCCL(ncclGroupStart());
+        /* s602: hc sumsq allreduce site. */
+        S602ArOp hc_ss_op[1] = {};
+        hc_ss_op[0].cls = kS602HcSumsq;
+        hc_ss_op[0].count = (uint64_t)opt.slots;
+        hc_ss_op[0].is_max = false;
+        hc_ss_op[0].fold_all = true;
         for (int rank = 0; rank < kGpus; ++rank) {
-            RankState &r = ranks[rank];
-            CHECK_CUDA(cudaSetDevice(r.device));
-            CHECK_NCCL(ncclAllReduce(r.d_hc_reduce_sumsq, r.d_hc_reduce_sumsq,
-                                     (size_t)opt.slots, ncclFloat, ncclSum,
-                                     ds4_comm_hc(r), r.stream));
+            hc_ss_op[0].in[rank] = ranks[rank].d_hc_reduce_sumsq;
+            hc_ss_op[0].out[rank] = ranks[rank].d_s602_out_sumsq;
         }
-        CHECK_NCCL(ncclGroupEnd());
+        const bool s602_k_ss = s602_use_kernel(opt, kS602HcSumsq);
+        if (s602_allreduce_site_pre(opt, ranks, hc_ss_op, 1) != 0) return 14;
+        if (!s602_k_ss) {
+            CHECK_NCCL(ncclGroupStart());
+            for (int rank = 0; rank < kGpus; ++rank) {
+                RankState &r = ranks[rank];
+                CHECK_CUDA(cudaSetDevice(r.device));
+                CHECK_NCCL(ncclAllReduce(r.d_hc_reduce_sumsq,
+                                         r.d_hc_reduce_sumsq,
+                                         (size_t)opt.slots, ncclFloat, ncclSum,
+                                         ds4_comm_hc(r), r.stream));
+            }
+            CHECK_NCCL(ncclGroupEnd());
+        }
+        if (s602_allreduce_site_post(opt, ranks, hc_ss_op, 1) != 0) return 14;
         if (have_ref_mix_for_full_parity) {
             CHECK_CUDA(cudaSetDevice(opt.devices[0]));
             hc_scale_reduced_mix_kernel<<<
                 (unsigned int)(((uint64_t)opt.slots * kHcMix + 255) / 256),
                 256, 0, control_stream>>>(
-                hc->d_mix, ranks[0].d_hc_reduce_max,
-                ranks[0].d_hc_reduce_sumsq, ranks[0].d_hc_reduce_mix,
+                hc->d_mix,
+                s602_k_mm ? ranks[0].d_s602_out_max : ranks[0].d_hc_reduce_max,
+                s602_k_ss ? ranks[0].d_s602_out_sumsq
+                          : ranks[0].d_hc_reduce_sumsq,
+                s602_k_mm ? ranks[0].d_s602_out_mix : ranks[0].d_hc_reduce_mix,
                 (uint32_t)opt.slots, 1.0e-6f);
             CHECK_CUDA(cudaGetLastError());
             sync_control_device();
@@ -199,8 +242,11 @@ int run_shared_hc_current_input(const Options &opt,
             hc_apply_reduced_mix_split_kernel<<<
                 (unsigned int)(((uint64_t)opt.slots + 255) / 256), 256, 0,
                 r.stream>>>(
-                r.d_hc_split, r.d_hc_reduce_max, r.d_hc_reduce_sumsq,
-                r.d_hc_reduce_mix, hc->d_attn_scale_rank[layer][rank],
+                r.d_hc_split,
+                s602_k_mm ? r.d_s602_out_max : r.d_hc_reduce_max,
+                s602_k_ss ? r.d_s602_out_sumsq : r.d_hc_reduce_sumsq,
+                s602_k_mm ? r.d_s602_out_mix : r.d_hc_reduce_mix,
+                hc->d_attn_scale_rank[layer][rank],
                 hc->d_attn_base_rank[layer][rank], (uint32_t)opt.slots,
                 opt.reference_hc_reduce_gate ? 20u : 4u, 1.0e-6f);
             CHECK_CUDA(cudaGetLastError());
@@ -289,18 +335,34 @@ int run_shared_hc_current_input(const Options &opt,
                 return 9;
             }
         }
-        CHECK_NCCL(ncclGroupStart());
-        for (int rank = 0; rank < kGpus; ++rank) {
-            RankState &r = ranks[rank];
-            CHECK_CUDA(cudaSetDevice(r.device));
-            CHECK_NCCL(ncclAllGather(r.d_current_shard,
-                                     r.d_current_full_rank_major,
-                                     (size_t)shard_elems,
-                                     ncclFloat,
-                                     ds4_comm_hc(r),
-                                     r.stream));
+        /* s602: hc current allgather site (byte moves). */
+        const bool s602_k_ag = s602_use_kernel(opt, kS602HcAg);
+        if (!s602_k_ag) {
+            CHECK_NCCL(ncclGroupStart());
+            for (int rank = 0; rank < kGpus; ++rank) {
+                RankState &r = ranks[rank];
+                CHECK_CUDA(cudaSetDevice(r.device));
+                CHECK_NCCL(ncclAllGather(r.d_current_shard,
+                                         r.d_current_full_rank_major,
+                                         (size_t)shard_elems,
+                                         ncclFloat,
+                                         ds4_comm_hc(r),
+                                         r.stream));
+            }
+            CHECK_NCCL(ncclGroupEnd());
         }
-        CHECK_NCCL(ncclGroupEnd());
+        if (s602_k_ag || s602_use_verify(opt, kS602HcAg)) {
+            float *ag_shards[kGpus] = {};
+            float *ag_outs[kGpus] = {};
+            for (int rank = 0; rank < kGpus; ++rank) {
+                ag_shards[rank] = ranks[rank].d_current_shard;
+                ag_outs[rank] = ranks[rank].d_current_full_rank_major;
+            }
+            if (s602_allgather_site(opt, ranks, kS602HcAg, ag_shards, ag_outs,
+                                    shard_elems, 0) != 0) {
+                return 9;
+            }
+        }
         for (int rank = 0; rank < kGpus; ++rank) {
             RankState &r = ranks[rank];
             CHECK_CUDA(cudaSetDevice(r.device));

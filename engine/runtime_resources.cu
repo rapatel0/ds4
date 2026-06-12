@@ -306,15 +306,29 @@ int nccl_broadcast_f32_from_device0_to_current_full(
             return 2;
         }
     }
-    CHECK_NCCL(ncclGroupStart());
-    for (int rank = 0; rank < kGpus; ++rank) {
-        RankState &r = ranks[rank];
-        CHECK_CUDA(cudaSetDevice(r.device));
-        const float *send = rank == 0 ? src_device0 : r.d_current_full;
-        CHECK_NCCL(ncclBroadcast(send, r.d_current_full, (size_t)elems,
-                                 ncclFloat, 0, ds4_comm_hc(r), r.stream));
+    /* s602: full-current broadcast site (byte moves; root-0). */
+    const bool s602_k_bc = s602_use_kernel(opt, kS602FfnBcast);
+    if (!s602_k_bc) {
+        CHECK_NCCL(ncclGroupStart());
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            CHECK_CUDA(cudaSetDevice(r.device));
+            const float *send = rank == 0 ? src_device0 : r.d_current_full;
+            CHECK_NCCL(ncclBroadcast(send, r.d_current_full, (size_t)elems,
+                                     ncclFloat, 0, ds4_comm_hc(r), r.stream));
+        }
+        CHECK_NCCL(ncclGroupEnd());
     }
-    CHECK_NCCL(ncclGroupEnd());
+    if (s602_k_bc || s602_use_verify(opt, kS602FfnBcast)) {
+        float *dsts[kGpus] = {};
+        for (int rank = 0; rank < kGpus; ++rank) {
+            dsts[rank] = ranks[rank].d_current_full;
+        }
+        if (s602_broadcast0_site(opt, ranks, kS602FfnBcast, src_device0, dsts,
+                                 elems, 1) != 0) {
+            return 3;
+        }
+    }
     return 0;
 }
 
@@ -364,6 +378,16 @@ void close_shared_rank_buffers(SharedRankBuffers *shared) {
         if (r.d_gated) CHECK_CUDA(cudaFree(r.d_gated));
         if (r.d_down) CHECK_CUDA(cudaFree(r.d_down));
         if (r.d_ep_relay_stage) CHECK_CUDA(cudaFree(r.d_ep_relay_stage));
+        if (r.d_s602_stage) CHECK_CUDA(cudaFree(r.d_s602_stage));
+        if (r.d_s602_out_max) CHECK_CUDA(cudaFree(r.d_s602_out_max));
+        if (r.d_s602_out_mix) CHECK_CUDA(cudaFree(r.d_s602_out_mix));
+        if (r.d_s602_out_sumsq) CHECK_CUDA(cudaFree(r.d_s602_out_sumsq));
+        if (r.d_s602_out_rmax) CHECK_CUDA(cudaFree(r.d_s602_out_rmax));
+        if (r.d_s602_out_rsumsq) CHECK_CUDA(cudaFree(r.d_s602_out_rsumsq));
+        if (r.d_s602_out_logits) CHECK_CUDA(cudaFree(r.d_s602_out_logits));
+        if (r.d_s602_ver_in) CHECK_CUDA(cudaFree(r.d_s602_ver_in));
+        if (r.d_s602_ver_out) CHECK_CUDA(cudaFree(r.d_s602_ver_out));
+        if (r.d_s602_mismatch) CHECK_CUDA(cudaFree(r.d_s602_mismatch));
         if (r.d_ep_contrib_all) CHECK_CUDA(cudaFree(r.d_ep_contrib_all));
         if (r.d_ep_contrib_half_all) CHECK_CUDA(cudaFree(r.d_ep_contrib_half_all));
         if (r.d_ep_contrib_bcast_all) CHECK_CUDA(cudaFree(r.d_ep_contrib_bcast_all));
@@ -724,5 +748,8 @@ int ensure_compose_buffers(const Options &opt, RankState ranks[kGpus]) {
             }
         }
     }
+    /* s602: kernel-transport staging/output buffers (no-op when
+     * DS4_V100_TP_EP_HC_TRANSPORT is unset/nccl; idempotent). */
+    if (s602_state_init(opt, ranks) != 0) return 21;
     return 0;
 }

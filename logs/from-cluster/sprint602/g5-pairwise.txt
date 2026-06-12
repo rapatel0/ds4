@@ -1,0 +1,76 @@
+=== compare g5-2 vs g5-1
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {None: 128}
+first_tok_step histogram: {None: 128}
+=== compare g5-3 vs g5-1
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {None: 128}
+first_tok_step histogram: {None: 128}
+=== compare g5-4 vs g5-1
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {None: 128}
+first_tok_step histogram: {None: 128}
+=== compare g5-5 vs g5-1
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {None: 128}
+first_tok_step histogram: {None: 128}
+=== compare g5-6 vs g5-1
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {62: 32, None: 96}
+first_tok_step histogram: {None: 128}
+=== compare g5-3 vs g5-2
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {None: 128}
+first_tok_step histogram: {None: 128}
+=== compare g5-4 vs g5-2
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {None: 128}
+first_tok_step histogram: {None: 128}
+=== compare g5-5 vs g5-2
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {None: 128}
+first_tok_step histogram: {None: 128}
+=== compare g5-6 vs g5-2
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {62: 32, None: 96}
+first_tok_step histogram: {None: 128}
+=== compare g5-4 vs g5-3
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {None: 128}
+first_tok_step histogram: {None: 128}
+=== compare g5-5 vs g5-3
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {None: 128}
+first_tok_step histogram: {None: 128}
+=== compare g5-6 vs g5-3
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {62: 32, None: 96}
+first_tok_step histogram: {None: 128}
+=== compare g5-5 vs g5-4
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {None: 128}
+first_tok_step histogram: {None: 128}
+=== compare g5-6 vs g5-4
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {62: 32, None: 96}
+first_tok_step histogram: {None: 128}
+=== compare g5-6 vs g5-5
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {62: 32, None: 96}
+first_tok_step histogram: {None: 128}
+G5_PAIRWISE_DONE

@@ -1,8 +1,35 @@
 # DS4 V100 Appliance Status
 
-Last updated: 2026-06-12 (Sprint 601)
+Last updated: 2026-06-13 (Sprint 602)
 
 ## Topline
+
+Sprint 602 (2026-06-12/13) built the **zero-NCCL captured decode graph**
+and killed the token-corrupting race. The 9-class kernel-collective set
+replaces every captured NCCL op (verbose dot proof: 0 nccl nodes);
+fold-probe calibration reverse-engineered NCCL's exact accumulation (auto
+ch0 ring `0 3 2 1 5 6 7 4` — the documented NO_SYS_RING was never actually
+exported — nc=1, delta=1, minChunk `2*clamp(pow2ceil(count/16),96,512)`),
+so the result is **bit-exact vs the s597 control** (tolerance 1.0/1.0,
+8192/8192) and the bit anchor survives. **LL serving census: 6/6 runs
+token-bit-exact, ZERO token events, 0.17 checksum-only events/run — vs
+1.0/run WITH token flips (2/3 controls) on any config with captured NCCL.**
+The batched swiglu exchange is exonerated (its s599 tolerance failures were
+the NCCL race). Residual: a rare checksum-only late-step flicker in the
+s602 site sync (rank-join build; 30x divergence-mass cut from the racy
+pairwise attempt; Simple-stress only) — lead 603 hunt item. Sprint
+promotion gates: tolerance/race/VRAM/no-SYS PASS, perf FAIL (~153 median vs
+≥194.4 — the 16 rank-joins/layer cost ~1.5 ms/layer and mask the
+relay+batched gains). **Orchestrator decision: launcher defaults flipped to
+the zero-NCCL stack anyway (kernel/relay/batched) as the CORRECTNESS
+baseline** — the only config with zero observed token corruption; ~-9%
+decode-domain accepted; rollback envs retained; every future control is now
+trustworthy. ≥50/slot restated: required MTP multiplier 9.3-9.4 at the
+current zero-NCCL floor; Sprint 603 = join reclaim (~1.5 ms/layer pool,
+the largest single lever) + the flicker hunt + relay/batched gain recovery
+toward ≥194-208. Report: `docs/sprints/SPRINT-602-REPORT.md`.
+
+## Prior topline (Sprint 601)
 
 Sprint 601 (2026-06-12) exhausted the in-NCCL fix space and sharpened the
 race localization: communicator isolation FAILS at every granularity

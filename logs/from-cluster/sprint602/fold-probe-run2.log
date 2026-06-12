@@ -1,0 +1,79 @@
+s602_fold_probe	rings	12	trials	6
+  ring 0: 0 3 2 1 5 6 7 4
+  ring 1: 0 3 2 1 5 6 7 4
+  ring 2: 0 4 7 6 5 1 2 3
+  ring 3: 0 4 7 6 5 1 2 3
+  ring 4: 0 1 3 7 5 4 6 2
+  ring 5: 0 2 6 4 5 7 3 1
+  ring 6: 0 3 2 1 5 6 7 4
+  ring 7: 0 3 2 1 5 6 7 4
+  ring 8: 0 4 7 6 5 1 2 3
+  ring 9: 0 4 7 6 5 1 2 3
+  ring 10: 0 1 3 7 5 4 6 2
+  ring 11: 0 2 6 4 5 7 3 1
+comm init OK
+collected slots=1
+collected slots=2
+collected slots=4
+collected slots=8
+collected slots=16
+collected slots=24
+collected slots=32
+  per-shape hc_mix     slots=1  hits=256 first: nc=1 minChunk=32 delta=1 rbase=0
+  per-shape hc_mix     slots=2  hits=224 first: nc=1 minChunk=64 delta=1 rbase=0
+  per-shape hc_mix     slots=4  hits=192 first: nc=1 minChunk=128 delta=1 rbase=0
+  per-shape hc_mix     slots=8  hits=160 first: nc=1 minChunk=256 delta=1 rbase=0
+  per-shape hc_mix     slots=16 hits=0 NO-MATCH
+  per-shape hc_mix     slots=24 hits=0 NO-MATCH
+  per-shape hc_mix     slots=32 hits=0 NO-MATCH
+collective hc_mix     matching hypotheses: 0
+  per-shape hc_sumsq   slots=1  hits=288 first: nc=1 minChunk=16 delta=1 rbase=0
+  per-shape hc_sumsq   slots=2  hits=288 first: nc=1 minChunk=16 delta=1 rbase=0
+  per-shape hc_sumsq   slots=4  hits=288 first: nc=1 minChunk=16 delta=1 rbase=0
+  per-shape hc_sumsq   slots=8  hits=288 first: nc=1 minChunk=16 delta=1 rbase=0
+  per-shape hc_sumsq   slots=16 hits=288 first: nc=1 minChunk=16 delta=1 rbase=0
+  per-shape hc_sumsq   slots=24 hits=256 first: nc=1 minChunk=32 delta=1 rbase=0
+  per-shape hc_sumsq   slots=32 hits=256 first: nc=1 minChunk=32 delta=1 rbase=0
+collective hc_sumsq   matching hypotheses: 256
+  HIT nc=1 minChunk=32 delta=1 rbase=0
+  HIT nc=1 minChunk=32 delta=1 rbase=1
+  HIT nc=1 minChunk=32 delta=1 rbase=6
+  HIT nc=1 minChunk=32 delta=1 rbase=7
+  HIT nc=1 minChunk=64 delta=1 rbase=0
+  HIT nc=1 minChunk=64 delta=1 rbase=1
+  HIT nc=1 minChunk=64 delta=1 rbase=6
+  HIT nc=1 minChunk=64 delta=1 rbase=7
+  HIT nc=1 minChunk=128 delta=1 rbase=0
+  HIT nc=1 minChunk=128 delta=1 rbase=1
+  HIT nc=1 minChunk=128 delta=1 rbase=6
+  HIT nc=1 minChunk=128 delta=1 rbase=7
+  per-shape r_sumsq    slots=1  hits=288 first: nc=1 minChunk=16 delta=1 rbase=0
+  per-shape r_sumsq    slots=2  hits=288 first: nc=1 minChunk=16 delta=1 rbase=0
+  per-shape r_sumsq    slots=4  hits=288 first: nc=1 minChunk=16 delta=1 rbase=0
+  per-shape r_sumsq    slots=8  hits=288 first: nc=1 minChunk=16 delta=1 rbase=0
+  per-shape r_sumsq    slots=16 hits=288 first: nc=1 minChunk=16 delta=1 rbase=0
+  per-shape r_sumsq    slots=24 hits=256 first: nc=1 minChunk=32 delta=1 rbase=0
+  per-shape r_sumsq    slots=32 hits=256 first: nc=1 minChunk=32 delta=1 rbase=0
+collective r_sumsq    matching hypotheses: 256
+  HIT nc=1 minChunk=32 delta=1 rbase=0
+  HIT nc=1 minChunk=32 delta=1 rbase=1
+  HIT nc=1 minChunk=32 delta=1 rbase=6
+  HIT nc=1 minChunk=32 delta=1 rbase=7
+  HIT nc=1 minChunk=64 delta=1 rbase=0
+  HIT nc=1 minChunk=64 delta=1 rbase=1
+  HIT nc=1 minChunk=64 delta=1 rbase=6
+  HIT nc=1 minChunk=64 delta=1 rbase=7
+  HIT nc=1 minChunk=128 delta=1 rbase=0
+  HIT nc=1 minChunk=128 delta=1 rbase=1
+  HIT nc=1 minChunk=128 delta=1 rbase=6
+  HIT nc=1 minChunk=128 delta=1 rbase=7
+  per-shape r_logits   slots=1  hits=0 NO-MATCH
+  per-shape r_logits   slots=2  hits=0 NO-MATCH
+  per-shape r_logits   slots=4  hits=0 NO-MATCH
+  per-shape r_logits   slots=8  hits=48 first: nc=1 minChunk=16 delta=1 rbase=0
+  per-shape r_logits   slots=16 hits=52 first: nc=1 minChunk=16 delta=1 rbase=0
+  per-shape r_logits   slots=24 hits=36 first: nc=1 minChunk=512 delta=1 rbase=0
+  per-shape r_logits   slots=32 hits=56 first: nc=1 minChunk=16 delta=1 rbase=0
+collective r_logits   matching hypotheses: 0
+---- intersection over all four sum collectives ----
+s602_fold_probe_done	global_hits	0	NO-MATCH

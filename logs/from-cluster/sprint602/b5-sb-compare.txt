@@ -1,0 +1,42 @@
+=== compare b5-sb-2 vs b5-sb-1
+pairs=128 ctl_only=0 cand_only=0
+batch=1 slot=0 first_ck_step=59 first_tok_step=59
+batch=1 slot=1 first_ck_step=59 first_tok_step=59
+batch=1 slot=2 first_ck_step=59 first_tok_step=59
+batch=1 slot=3 first_ck_step=59 first_tok_step=59
+batch=1 slot=4 first_ck_step=59 first_tok_step=None
+batch=1 slot=5 first_ck_step=59 first_tok_step=None
+batch=1 slot=6 first_ck_step=59 first_tok_step=None
+batch=1 slot=7 first_ck_step=59 first_tok_step=None
+selected_token_agreement: 0.96875 (124/128)
+sequence_agreement: 0.997559 (8172/8192)
+first_ck_step histogram: {59: 32, None: 96}
+first_tok_step histogram: {59: 4, None: 124}
+=== compare b5-sb-3 vs b5-sb-1
+pairs=128 ctl_only=0 cand_only=0
+batch=1 slot=0 first_ck_step=6 first_tok_step=59
+batch=1 slot=1 first_ck_step=6 first_tok_step=59
+batch=1 slot=2 first_ck_step=6 first_tok_step=59
+batch=1 slot=3 first_ck_step=6 first_tok_step=59
+batch=1 slot=4 first_ck_step=6 first_tok_step=None
+batch=1 slot=5 first_ck_step=6 first_tok_step=None
+batch=1 slot=6 first_ck_step=6 first_tok_step=None
+batch=1 slot=7 first_ck_step=6 first_tok_step=None
+selected_token_agreement: 0.929688 (119/128)
+sequence_agreement: 0.996948 (8167/8192)
+first_ck_step histogram: {6: 32, 63: 32, None: 64}
+first_tok_step histogram: {59: 4, 63: 5, None: 119}
+=== compare b5-sb-3 vs b5-sb-2
+pairs=128 ctl_only=0 cand_only=0
+batch=1 slot=0 first_ck_step=6 first_tok_step=None
+batch=1 slot=1 first_ck_step=6 first_tok_step=None
+batch=1 slot=2 first_ck_step=6 first_tok_step=None
+batch=1 slot=3 first_ck_step=6 first_tok_step=None
+batch=1 slot=4 first_ck_step=6 first_tok_step=None
+batch=1 slot=5 first_ck_step=6 first_tok_step=None
+batch=1 slot=6 first_ck_step=6 first_tok_step=None
+batch=1 slot=7 first_ck_step=6 first_tok_step=None
+selected_token_agreement: 0.960938 (123/128)
+sequence_agreement: 0.99939 (8187/8192)
+first_ck_step histogram: {6: 32, 63: 32, None: 64}
+first_tok_step histogram: {63: 5, None: 123}

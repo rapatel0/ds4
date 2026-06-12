@@ -1,4 +1,17 @@
-# Spike B Decode-Optimization Steering (updated 2026-06-12 after Sprint 601)
+# Spike B Decode-Optimization Steering (updated 2026-06-13 after Sprint 602)
+
+**Sprint 602: the zero-NCCL captured graph is built, bit-exact, and
+token-race-free; launcher defaults flipped to it (correctness baseline,
+orchestrator decision).** Ring-order-exact kernel folds (real auto ring
+`0 3 2 1 5 6 7 4`; minChunk rule cracked) keep the s597 bit anchor. LL
+census 6/6 token-bit-exact, 0 token events (vs 1.0/run + token flips on any
+captured-NCCL config). Batched exchange exonerated. Perf not yet recovered:
+~153 vs the racing 169 (16 rank-joins/layer ≈ 1.5 ms/layer) — **Sprint 603
+= join reclaim** (finer producer-consumer edges that keep token-race-zero;
+the largest single lever pool), the late-step checksum-only flicker hunt
+(ours, instrumentable, Simple-stress only), then prefix compaction /
+route-plan shadow. ≥50/slot: required MTP multiplier 9.3-9.4 at the current
+zero-NCCL floor — MTP stays sequenced behind 603+.
 
 **Sprint 601: in-NCCL fix space exhausted; race localized to the hc-class
 collectives; promoted path now shows TOKEN-FLIPPING events (2/3 controls).**

@@ -1,0 +1,7 @@
+ds4-v100-tp-ep-http-bench: PASS report=/workspace/s602-artifacts/averify1/sustained_http.tsv json=/workspace/s602-artifacts/averify1/sustained_http.json
+=== bench rc=0
+=== summary row:
+selected-token	8	8	262144	32	32	1	32	32	256	224	10.014022	25.564154	52.575105	29.425607	63.444099	435.418595	0.000000	232.420469	92.135386	46.523600	93.761483	8.460648	29.000000	30338.000000
+=== s600/s601/s602 flag lines in server.log:
+tp_ep_nccl	devices	8	compose_reduce_scatter	0	attention_output_allgather	0	hc_current_nccl	1	full_current_broadcast	1	transport_sweep	1	PASS
+tp_ep_s602_init	transport	kernel	mask	0xff	verify	1	rings	1	delta	1	min_chunk	0	nchannels	1	stage_kib	284	PASS

@@ -1,0 +1,9 @@
+kernels by name (top 20):
+     57 s602_copy3_kernel
+     41 s602_fold_kernel
+     16 s602_gather8_kernel
+nccl_count: 0
+memcpy/memset/kernel/event nodes:
+    762 KERNEL
+     65 MEMCPY
+     32 MEMSET
