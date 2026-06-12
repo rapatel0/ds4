@@ -1866,6 +1866,397 @@ cudaEvent_t graph_dense_done_event(RankState &r, int slot) {
 }
 
 /* ------------------------------------------------------------------------- */
+/* Sprint 600: flag-gated root-cause probes (default off; with all probe     */
+/* env vars unset no kernels are enqueued and no device state is allocated,  */
+/* so the flag-off captured graph is byte-identical).                        */
+/* ------------------------------------------------------------------------- */
+enum S600DelaySite {
+    kS600XchgTail = 0,
+    kS600PreDown,
+    kS600PostDown,
+    kS600PrePack,
+    kS600PreReturn,
+    kS600PostReturn,
+    kS600PostCompose,
+    kS600DelaySiteCount
+};
+static const char *const kS600DelaySiteNames[kS600DelaySiteCount] = {
+    "xchg_tail", "pre_down", "post_down", "pre_pack",
+    "pre_return", "post_return", "post_compose"};
+
+/* V100 SM clock ~1.5 GHz; approximate us->cycles is fine for injection. */
+constexpr unsigned long long kS600CyclesPerUs = 1500ull;
+
+struct S600ProbeState {
+    bool initialized = false;
+    bool any_delay = false;
+    bool verify = false;
+    bool return_verify = false;
+    bool jitter = false;
+    unsigned int jitter_min_us = 0;
+    unsigned int jitter_max_us = 0;
+    unsigned int jitter_state = 0;
+    bool site_enabled[kS600DelaySiteCount] = {};
+    unsigned long long site_us[kS600DelaySiteCount] = {};
+    bool ag_verify = false;
+    unsigned long long *d_delay[kGpus] = {};    /* kS600DelaySiteCount slots */
+    unsigned long long *d_mismatch[kGpus] = {}; /* 4: count, src, idx, bits */
+    unsigned long long *d_mismatch_ret[kGpus] = {}; /* 4: same, EP return */
+    unsigned long long *d_mismatch_ag[kGpus] = {};  /* 4: same, post-attn AG */
+};
+static S600ProbeState g_s600;
+
+/* Busy-wait whose duration is read from device memory at execution time, so
+ * the host can retune/jitter it between graph replays without re-capture. */
+__global__ void s600_delay_kernel(const unsigned long long *cycles_slot) {
+    const unsigned long long target = *cycles_slot;
+    if (!target) return;
+    const long long start = clock64();
+    while ((unsigned long long)(clock64() - start) < target) {
+    }
+}
+
+/* Bit-compare the locally exchanged swiglu segment against a fresh remote
+ * read of the source rank's segment. A nonzero mismatch count proves the
+ * exchange consumed data the producer had not yet written (stale read). */
+__global__ void s600_verify_seg_kernel(const float *dst, const float *src,
+                                       uint32_t rows, uint32_t slots,
+                                       uint32_t seg_off, int src_rank,
+                                       unsigned long long *out) {
+    const uint64_t n = (uint64_t)slots * rows;
+    for (uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x; i < n;
+         i += (uint64_t)blockDim.x * gridDim.x) {
+        const uint32_t slot = (uint32_t)(i / rows);
+        const uint32_t r = (uint32_t)(i % rows);
+        const uint64_t o = (uint64_t)slot * kMid + seg_off + r;
+        const unsigned int a = __float_as_uint(dst[o]);
+        const unsigned int b = __float_as_uint(src[o]);
+        if (a != b) {
+            if (atomicAdd(out, 1ull) == 0ull) {
+                out[1] = (unsigned long long)src_rank;
+                out[2] = o;
+                out[3] = (unsigned long long)a | ((unsigned long long)b << 32);
+            }
+        }
+    }
+}
+
+/* Flat bit-compare of two float arrays (used for the EP-return slices). */
+__global__ void s600_verify_flat_kernel(const float *a_buf, const float *b_buf,
+                                        uint64_t elems, int src_rank,
+                                        unsigned long long *out) {
+    for (uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+         i < elems; i += (uint64_t)blockDim.x * gridDim.x) {
+        const unsigned int a = __float_as_uint(a_buf[i]);
+        const unsigned int b = __float_as_uint(b_buf[i]);
+        if (a != b) {
+            if (atomicAdd(out, 1ull) == 0ull) {
+                out[1] = (unsigned long long)src_rank;
+                out[2] = i;
+                out[3] = (unsigned long long)a | ((unsigned long long)b << 32);
+            }
+        }
+    }
+}
+
+int s600_probe_init(const Options &opt, RankState ranks[kGpus]) {
+    if (g_s600.initialized) return 0;
+    g_s600.initialized = true;
+    if (!opt.s600_delay_spec && !opt.s600_swiglu_verify &&
+        !opt.s600_return_verify && !opt.s600_ag_verify) {
+        return 0;
+    }
+    if (opt.s600_delay_spec) {
+        const char *p = opt.s600_delay_spec;
+        while (p && *p) {
+            while (*p == ',' || *p == ' ') ++p;
+            if (!*p) break;
+            const char *colon = std::strchr(p, ':');
+            if (!colon) {
+                std::fprintf(stderr,
+                             "s600_delay_spec parse error near '%s'\n", p);
+                return 1;
+            }
+            const size_t name_len = (size_t)(colon - p);
+            int site = -1;
+            for (int s = 0; s < kS600DelaySiteCount; ++s) {
+                if (std::strlen(kS600DelaySiteNames[s]) == name_len &&
+                    std::strncmp(kS600DelaySiteNames[s], p, name_len) == 0) {
+                    site = s;
+                    break;
+                }
+            }
+            if (site < 0) {
+                std::fprintf(stderr,
+                             "s600_delay_spec unknown site near '%s'\n", p);
+                return 1;
+            }
+            g_s600.site_enabled[site] = true;
+            g_s600.site_us[site] = std::strtoull(colon + 1, nullptr, 10);
+            g_s600.any_delay = true;
+            p = std::strchr(colon + 1, ',');
+        }
+    }
+    if (opt.s600_jitter_spec) {
+        unsigned int mn = 0;
+        unsigned int mx = 0;
+        unsigned int seed = 1;
+        if (std::sscanf(opt.s600_jitter_spec, "%u:%u:%u", &mn, &mx, &seed) < 2 ||
+            mx < mn || !g_s600.any_delay) {
+            std::fprintf(stderr,
+                         "s600_jitter_spec invalid (need min:max[:seed] and "
+                         "at least one delay site): %s\n",
+                         opt.s600_jitter_spec);
+            return 1;
+        }
+        g_s600.jitter = true;
+        g_s600.jitter_min_us = mn;
+        g_s600.jitter_max_us = mx;
+        g_s600.jitter_state = seed ? seed : 1u;
+    }
+    g_s600.verify = opt.s600_swiglu_verify;
+    g_s600.return_verify = opt.s600_return_verify;
+    g_s600.ag_verify = opt.s600_ag_verify;
+    int prior_device = 0;
+    CHECK_CUDA(cudaGetDevice(&prior_device));
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        if (g_s600.any_delay) {
+            unsigned long long h[kS600DelaySiteCount] = {};
+            for (int s = 0; s < kS600DelaySiteCount; ++s) {
+                h[s] = g_s600.site_us[s] * kS600CyclesPerUs;
+            }
+            CHECK_CUDA(cudaMalloc(&g_s600.d_delay[rank], sizeof(h)));
+            CHECK_CUDA(cudaMemcpy(g_s600.d_delay[rank], h, sizeof(h),
+                                  cudaMemcpyHostToDevice));
+        }
+        if (g_s600.verify) {
+            CHECK_CUDA(cudaMalloc(&g_s600.d_mismatch[rank],
+                                  4 * sizeof(unsigned long long)));
+            CHECK_CUDA(cudaMemset(g_s600.d_mismatch[rank], 0,
+                                  4 * sizeof(unsigned long long)));
+        }
+        if (g_s600.return_verify) {
+            CHECK_CUDA(cudaMalloc(&g_s600.d_mismatch_ret[rank],
+                                  4 * sizeof(unsigned long long)));
+            CHECK_CUDA(cudaMemset(g_s600.d_mismatch_ret[rank], 0,
+                                  4 * sizeof(unsigned long long)));
+        }
+        if (g_s600.ag_verify) {
+            CHECK_CUDA(cudaMalloc(&g_s600.d_mismatch_ag[rank],
+                                  4 * sizeof(unsigned long long)));
+            CHECK_CUDA(cudaMemset(g_s600.d_mismatch_ag[rank], 0,
+                                  4 * sizeof(unsigned long long)));
+        }
+    }
+    CHECK_CUDA(cudaSetDevice(prior_device));
+    std::printf("tp_ep_s600_probe_init\tdelay\t%s\tjitter\t%s\tverify\t%d\t"
+                "return_verify\t%d\tag_verify\t%d\n",
+                opt.s600_delay_spec ? opt.s600_delay_spec : "-",
+                opt.s600_jitter_spec ? opt.s600_jitter_spec : "-",
+                g_s600.verify ? 1 : 0, g_s600.return_verify ? 1 : 0,
+                g_s600.ag_verify ? 1 : 0);
+    std::fflush(stdout);
+    return 0;
+}
+
+/* Verify the EP-return slices against a fresh remote read of the source
+ * rank's contrib slice. Runs on the DENSE streams (idle during the return/
+ * compose window) behind a rank->dense event edge, so the rank-stream
+ * critical path is not lengthened (low-masking detection: the s600 rca5v
+ * run proved rank-stream verifiers re-mask the race like the copy storm). */
+void s600_return_verify_enqueue(RankState ranks[kGpus],
+                                uint64_t src_stride_elems,
+                                const uint64_t copy_elems_by_src[kGpus],
+                                bool skip_self_copy) {
+    if (!g_s600.return_verify) return;
+    const int block = 256;
+    const int slot = next_graph_order_event_slot(ranks);
+    int prior_device = 0;
+    CHECK_CUDA(cudaGetDevice(&prior_device));
+    for (int dst = 0; dst < kGpus; ++dst) {
+        RankState &r = ranks[dst];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        cudaStream_t vstream = r.stream;
+        if (r.dense_stream && r.dense_stream != r.stream) {
+            cudaEvent_t ev = graph_stream_done_event(r, slot);
+            if (ev) {
+                CHECK_CUDA(cudaEventRecord(ev, r.stream));
+                CHECK_CUDA(cudaStreamWaitEvent(r.dense_stream, ev, 0));
+                vstream = r.dense_stream;
+            }
+        }
+        for (int src = 0; src < kGpus; ++src) {
+            if (skip_self_copy && src == dst) continue;
+            const uint64_t copy_elems = copy_elems_by_src[src];
+            if (!copy_elems || !r.d_ep_remote[src]) continue;
+            const float *truth = ranks[src].d_ep_contrib_all +
+                                 (uint64_t)dst * src_stride_elems;
+            const unsigned int grid = (unsigned int)(
+                (copy_elems + (uint64_t)block - 1) / (uint64_t)block);
+            s600_verify_flat_kernel<<<grid, block, 0, vstream>>>(
+                r.d_ep_remote[src], truth, copy_elems, src,
+                g_s600.d_mismatch_ret[dst]);
+            CHECK_CUDA(cudaGetLastError());
+        }
+    }
+    CHECK_CUDA(cudaSetDevice(prior_device));
+}
+
+/* Late-verify the post-attention allgather: each rank-major segment src of
+ * d_post_attn_full_rank_major must equal the source rank's d_post_attn_shard
+ * (both stable until the next layer replay). Caller hooks this AFTER the 978
+ * barrier on the dense streams, which are idle from there to the end of the
+ * layer, so detection runs under the pack/return/compose shadow. */
+void s600_ag_verify_enqueue(const Options &opt, RankState ranks[kGpus]) {
+    if (!g_s600.ag_verify) return;
+    const int block = 256;
+    const uint64_t shard_elems =
+        (uint64_t)opt.slots * (uint64_t)(kHidden / kGpus);
+    const unsigned int grid = (unsigned int)(
+        (shard_elems + (uint64_t)block - 1) / (uint64_t)block);
+    int prior_device = 0;
+    CHECK_CUDA(cudaGetDevice(&prior_device));
+    for (int dst = 0; dst < kGpus; ++dst) {
+        RankState &r = ranks[dst];
+        if (!r.d_post_attn_full_rank_major) continue;
+        CHECK_CUDA(cudaSetDevice(r.device));
+        cudaStream_t vstream =
+            (r.dense_stream && r.dense_stream != r.stream) ? r.dense_stream
+                                                           : r.stream;
+        for (int src = 0; src < kGpus; ++src) {
+            if (src == dst) continue;
+            if (!ranks[src].d_post_attn_shard) continue;
+            s600_verify_flat_kernel<<<grid, block, 0, vstream>>>(
+                r.d_post_attn_full_rank_major + (uint64_t)src * shard_elems,
+                ranks[src].d_post_attn_shard, shard_elems, src,
+                g_s600.d_mismatch_ag[dst]);
+            CHECK_CUDA(cudaGetLastError());
+        }
+    }
+    CHECK_CUDA(cudaSetDevice(prior_device));
+}
+
+void s600_delay_enqueue(RankState ranks[kGpus], int site, bool on_dense) {
+    if (!g_s600.any_delay || !g_s600.site_enabled[site]) return;
+    int prior_device = 0;
+    CHECK_CUDA(cudaGetDevice(&prior_device));
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        cudaStream_t stream =
+            (on_dense && r.dense_stream) ? r.dense_stream : r.stream;
+        s600_delay_kernel<<<1, 1, 0, stream>>>(g_s600.d_delay[rank] + site);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    CHECK_CUDA(cudaSetDevice(prior_device));
+}
+
+/* Host-side, between replays only (streams idle at the call site). */
+void s600_jitter_refresh(RankState ranks[kGpus]) {
+    if (!g_s600.jitter || !g_s600.any_delay) return;
+    int prior_device = 0;
+    CHECK_CUDA(cudaGetDevice(&prior_device));
+    for (int rank = 0; rank < kGpus; ++rank) {
+        unsigned long long h[kS600DelaySiteCount] = {};
+        for (int s = 0; s < kS600DelaySiteCount; ++s) {
+            if (!g_s600.site_enabled[s]) continue;
+            unsigned int x = g_s600.jitter_state;
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            g_s600.jitter_state = x;
+            const unsigned int span =
+                g_s600.jitter_max_us - g_s600.jitter_min_us + 1u;
+            h[s] = (g_s600.jitter_min_us + (x % span)) * kS600CyclesPerUs;
+        }
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        CHECK_CUDA(cudaMemcpy(g_s600.d_delay[rank], h, sizeof(h),
+                              cudaMemcpyHostToDevice));
+    }
+    CHECK_CUDA(cudaSetDevice(prior_device));
+}
+
+void s600_swiglu_verify_enqueue(const Options &opt, RankState ranks[kGpus],
+                                const ResidentF8Dense &down, uint32_t rows) {
+    if (!g_s600.verify) return;
+    const int block = 256;
+    const uint64_t seg_elems = (uint64_t)opt.slots * rows;
+    const unsigned int grid =
+        (unsigned int)((seg_elems + (uint64_t)block - 1) / (uint64_t)block);
+    int prior_device = 0;
+    CHECK_CUDA(cudaGetDevice(&prior_device));
+    for (int dst = 0; dst < kGpus; ++dst) {
+        RankState &r = ranks[dst];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        for (int src = 0; src < kGpus; ++src) {
+            if (src == dst) continue;
+            s600_verify_seg_kernel<<<grid, block, 0, r.stream>>>(
+                down.d_x[(size_t)dst], down.d_x[(size_t)src], rows,
+                (uint32_t)opt.slots, (uint32_t)src * rows, src,
+                g_s600.d_mismatch[dst]);
+            CHECK_CUDA(cudaGetLastError());
+        }
+    }
+    CHECK_CUDA(cudaSetDevice(prior_device));
+}
+
+/* Host-side, after a fully synced replay. Prints + resets on mismatch. */
+void s600_collect_verify(int layer, int step, RankState ranks[kGpus]) {
+    if (!g_s600.verify && !g_s600.return_verify && !g_s600.ag_verify) return;
+    int prior_device = 0;
+    CHECK_CUDA(cudaGetDevice(&prior_device));
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        if (g_s600.verify) {
+            unsigned long long h[4] = {};
+            CHECK_CUDA(cudaMemcpy(h, g_s600.d_mismatch[rank], sizeof(h),
+                                  cudaMemcpyDeviceToHost));
+            if (h[0]) {
+                std::printf("tp_ep_s600_swiglu_verify_mismatch\tstep\t%d\t"
+                            "layer\t%d\tdst\t%d\tcount\t%llu\tsrc\t%llu\t"
+                            "elem\t%llu\tdst_bits\t%08llx\tsrc_bits\t%08llx\n",
+                            step, layer, rank, h[0], h[1], h[2],
+                            h[3] & 0xffffffffull, h[3] >> 32);
+                std::fflush(stdout);
+                CHECK_CUDA(cudaMemset(g_s600.d_mismatch[rank], 0, sizeof(h)));
+            }
+        }
+        if (g_s600.return_verify) {
+            unsigned long long h[4] = {};
+            CHECK_CUDA(cudaMemcpy(h, g_s600.d_mismatch_ret[rank], sizeof(h),
+                                  cudaMemcpyDeviceToHost));
+            if (h[0]) {
+                std::printf("tp_ep_s600_return_verify_mismatch\tstep\t%d\t"
+                            "layer\t%d\tdst\t%d\tcount\t%llu\tsrc\t%llu\t"
+                            "elem\t%llu\tdst_bits\t%08llx\tsrc_bits\t%08llx\n",
+                            step, layer, rank, h[0], h[1], h[2],
+                            h[3] & 0xffffffffull, h[3] >> 32);
+                std::fflush(stdout);
+                CHECK_CUDA(cudaMemset(g_s600.d_mismatch_ret[rank], 0,
+                                      sizeof(h)));
+            }
+        }
+        if (g_s600.ag_verify) {
+            unsigned long long h[4] = {};
+            CHECK_CUDA(cudaMemcpy(h, g_s600.d_mismatch_ag[rank], sizeof(h),
+                                  cudaMemcpyDeviceToHost));
+            if (h[0]) {
+                std::printf("tp_ep_s600_ag_verify_mismatch\tstep\t%d\t"
+                            "layer\t%d\tdst\t%d\tcount\t%llu\tsrc\t%llu\t"
+                            "elem\t%llu\tdst_bits\t%08llx\tsrc_bits\t%08llx\n",
+                            step, layer, rank, h[0], h[1], h[2],
+                            h[3] & 0xffffffffull, h[3] >> 32);
+                std::fflush(stdout);
+                CHECK_CUDA(cudaMemset(g_s600.d_mismatch_ag[rank], 0,
+                                      sizeof(h)));
+            }
+        }
+    }
+    CHECK_CUDA(cudaSetDevice(prior_device));
+}
+
+/* ------------------------------------------------------------------------- */
 /* Sprint 599 C-A: shared swiglu_down input exchange via one grouped         */
 /* ncclAllGather instead of the per-(dst,src,slot) UVA remote-load copies    */
 /* (8 x 7 x slots tiny copy_f32 kernels per layer, 24/56 pairs crossing      */
@@ -1969,6 +2360,8 @@ int swiglu_down_exchange_nccl(const Options &opt,
         CHECK_CUDA(cudaSetDevice(prior_device));
         return 5;
     }
+    s600_swiglu_verify_enqueue(opt, ranks, down, (uint32_t)gate.rows_per_gpu);
+    s600_delay_enqueue(ranks, kS600XchgTail, false);
     if (enqueue_dense_wait_after_rank_stream(ranks) != 0) {
         CHECK_CUDA(cudaSetDevice(prior_device));
         return 4;
@@ -2031,6 +2424,8 @@ int swiglu_down_exchange_memcpy2d(const Options &opt,
                 cudaMemcpyDeviceToDevice, r.stream));
         }
     }
+    s600_swiglu_verify_enqueue(opt, ranks, down, rows);
+    s600_delay_enqueue(ranks, kS600XchgTail, false);
     if (enqueue_dense_wait_after_rank_stream(ranks) != 0) {
         CHECK_CUDA(cudaSetDevice(prior_device));
         return 4;
@@ -2103,6 +2498,8 @@ int swiglu_down_exchange_batched(const Options &opt,
             CHECK_CUDA(cudaGetLastError());
         }
     }
+    s600_swiglu_verify_enqueue(opt, ranks, down, rows);
+    s600_delay_enqueue(ranks, kS600XchgTail, false);
     if (enqueue_dense_wait_after_rank_stream(ranks) != 0) {
         CHECK_CUDA(cudaSetDevice(prior_device));
         return 4;

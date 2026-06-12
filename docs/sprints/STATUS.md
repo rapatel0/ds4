@@ -1,8 +1,35 @@
 # DS4 V100 Appliance Status
 
-Last updated: 2026-06-11 (Sprint 599)
+Last updated: 2026-06-12 (Sprint 600)
 
 ## Topline
+
+Sprint 600 (2026-06-12) root-caused the s599 ordering hazard and **falsified
+the missing-engine-edge hypothesis**: the corruption is a rare,
+timing-dependent data race **inside the captured NCCL collectives** on the
+single 8-rank-per-process communicator (16 RING_LL collectives per rank per
+layer). Proven by an eight-way elimination matrix: not an engine edge
+(static audit + cudaGraphDebugDotPrint diff: identical NCCL node sets),
+not stale payloads (three bit-verifiers, zero mismatches), not cross-replay
+overlap, not atomics, not NCCL-version (2.27.7 reproduces), not protocol,
+not eager/captured mixing. **The race fires on the promoted path too
+(~1/256 steps, caught live; whole-batch events up to 12/32 token flips)**
+— the production tolerance results to date have been sampling around a
+real, rare corruption. Trigger law: firing scales with intra-replay pacing;
+~600 µs/layer delay at any of three sites restores bit-identity. Fix
+candidates: dedicated head communicator **blocked by the pod's 64 MiB
+/dev/shm cap (k8s default — infrastructure, NOT platform; Sprint 601 lifts
+it)**; host-side head reductions and NCCL 2.27.7/Ring did not affect the
+race. No promotion; launcher defaults unchanged; final-binary copy-leg gate
+1.0/1.0 with all 8192 step-checksums bit-identical in the gate run;
+baseline re-measured **170.18 decode-domain / 117.08 wall**. The s599
+"220 reachable, gated on the fix" call was revised by the sprint to
+not-reachable-within-B2 — **the orchestrator review amends this: the
+verdict is contingent on the /dev/shm cap, which is a one-line pod-spec
+change; the dedicated-comm candidate was never tested at size.** Report:
+`docs/sprints/SPRINT-600-REPORT.md`.
+
+## Prior topline (Sprint 599)
 
 Sprint 599 (2026-06-11) adjudicated the cycle stretch target (3x re-anchored
 = ~220 decode-domain): **not reached; measured-reachable; gated on a latent

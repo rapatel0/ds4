@@ -584,11 +584,126 @@ void close_shared_output_head(const Options &opt, SharedOutputHead *out) {
     *out = SharedOutputHead{};
 }
 
+/* Sprint 600 fix: dedicated NCCL communicator for the EAGER output-head
+ * collectives below. The decode layer graphs capture their collectives on
+ * compose_nccl; issuing eager collectives on that same communicator between
+ * graph replays is NCCL "graph mixing" (documented fragile; multi-GPU-per-
+ * process capture explicitly cautioned). S600 forensics: a rare timing-
+ * dependent step-wide logit corruption whose rate scales inversely with the
+ * EP-window duration, with every engine-side transfer (swiglu exchange,
+ * EP-return slices, post-attn allgather) verifying bit-clean -- the
+ * corruption enters through the mixed-communicator machinery. With
+ * DS4_V100_TP_EP_HEAD_COMM=dedicated the captured communicator becomes
+ * graph-only after capture. Process-lifetime comms; intentionally not
+ * destroyed (s598 documented ncclCommDestroy hangs when graph execs from
+ * the same process are still alive). */
+static ncclComm_t g_head_dedicated_comms[kGpus] = {};
+static bool g_head_dedicated_ready = false;
+
+static int ensure_head_dedicated_comms(const Options &opt,
+                                       RankState ranks[kGpus]) {
+    if (!opt.head_comm_dedicated || g_head_dedicated_ready) return 0;
+    /* The pod's /dev/shm is 64 MiB and the SYS pairs use NCCL's SHM
+     * transport (P2P over SYS is disabled by the no-sys policy); a second
+     * comm at the default 4 MiB buffsize does not fit next to the main one.
+     * Every head collective is <= 64 KiB, so init this comm with a 1 MiB
+     * buffer. The setenv happens once, at startup (open_compose_nccl),
+     * before serving threads exist. */
+    const char *prev = std::getenv("NCCL_BUFFSIZE");
+    std::string saved = prev ? prev : "";
+    setenv("NCCL_BUFFSIZE", "1048576", 1);
+    int devices[kGpus] = {};
+    ncclComm_t comms[kGpus] = {};
+    for (int p = 0; p < kGpus; ++p) devices[p] = ranks[p].device;
+    const ncclResult_t rc = ncclCommInitAll(comms, kGpus, devices);
+    if (prev) {
+        setenv("NCCL_BUFFSIZE", saved.c_str(), 1);
+    } else {
+        unsetenv("NCCL_BUFFSIZE");
+    }
+    if (rc != ncclSuccess) {
+        std::fprintf(stderr, "s600 head comm init failed: %s\n",
+                     ncclGetErrorString(rc));
+        return 1;
+    }
+    for (int p = 0; p < kGpus; ++p) g_head_dedicated_comms[p] = comms[p];
+    g_head_dedicated_ready = true;
+    std::printf("tp_ep_s600_head_comm\tmode\tdedicated\tbuffsize_mib\t1\tPASS\n");
+    std::fflush(stdout);
+    return 0;
+}
+
+static inline ncclComm_t head_collective_comm(const Options &opt,
+                                              RankState &r, int rank) {
+    return opt.head_comm_dedicated ? g_head_dedicated_comms[rank]
+                                   : r.compose_nccl;
+}
+
+/* head_comm=host support: replace the tiny eager allreduces with
+ * D2H + host reduce + H2D (sums in fixed rank order 0..7). Producer kernels
+ * ran on each rank's stream; sync those streams first, push the reduced
+ * value back on the same streams so downstream consumers stay ordered. */
+static int head_host_allreduce(RankState ranks[kGpus],
+                               float *const d_buf[kGpus],
+                               size_t elems,
+                               bool reduce_max) {
+    float acc[256];
+    float tmp[256];
+    if (elems > 256) return 1;
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+        CHECK_CUDA(cudaMemcpy(tmp, d_buf[rank], elems * sizeof(float),
+                              cudaMemcpyDeviceToHost));
+        if (rank == 0) {
+            std::memcpy(acc, tmp, elems * sizeof(float));
+        } else if (reduce_max) {
+            for (size_t i = 0; i < elems; ++i) {
+                acc[i] = tmp[i] > acc[i] ? tmp[i] : acc[i];
+            }
+        } else {
+            for (size_t i = 0; i < elems; ++i) acc[i] += tmp[i];
+        }
+    }
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        CHECK_CUDA(cudaMemcpyAsync(d_buf[rank], acc, elems * sizeof(float),
+                                   cudaMemcpyHostToDevice,
+                                   ranks[rank].stream));
+    }
+    return 0;
+}
+
+/* head_comm=host allgather replacement: UVA peer copies (pure byte moves,
+ * bit-exact regardless of order). Sources are synced first; copies land on
+ * each destination rank's stream so downstream consumers stay ordered. */
+static int head_host_allgather(RankState ranks[kGpus],
+                               float *const d_src_shard[kGpus],
+                               float *const d_dst_rank_major[kGpus],
+                               size_t shard_elems) {
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        CHECK_CUDA(cudaStreamSynchronize(ranks[rank].stream));
+    }
+    const size_t shard_bytes = shard_elems * sizeof(float);
+    for (int dst = 0; dst < kGpus; ++dst) {
+        CHECK_CUDA(cudaSetDevice(ranks[dst].device));
+        for (int src = 0; src < kGpus; ++src) {
+            CHECK_CUDA(cudaMemcpyAsync(
+                d_dst_rank_major[dst] + (size_t)src * shard_elems,
+                d_src_shard[src], shard_bytes, cudaMemcpyDeviceToDevice,
+                ranks[dst].stream));
+        }
+    }
+    return 0;
+}
+
 int run_shared_output_head_from_rank_hc(const Options &opt,
                                         SharedOutputHead *head,
                                         RankState ranks[kGpus],
                                         OutputHeadRunResult *result) {
     if (!head || !head->initialized || head->slots != opt.slots) return 1;
+    if (ensure_head_dedicated_comms(opt, ranks) != 0) return 1;
     const auto total_start = std::chrono::steady_clock::now();
     const uint64_t embd_elems = (uint64_t)opt.slots * (uint64_t)kHidden;
     const uint64_t embd_shard_elems =
@@ -638,20 +753,29 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
             (uint32_t)opt.slots);
         CHECK_CUDA(cudaGetLastError());
     }
-    CHECK_NCCL(ncclGroupStart());
-    for (int rank = 0; rank < kGpus; ++rank) {
-        RankState &r = ranks[rank];
-        CHECK_CUDA(cudaSetDevice(r.device));
-        CHECK_NCCL(ncclAllReduce(head->d_reduce_max[rank],
-                                 head->d_reduce_max[rank],
-                                 (size_t)opt.slots, ncclFloat, ncclMax,
-                                 r.compose_nccl, r.stream));
-        CHECK_NCCL(ncclAllReduce(head->d_head_pre_rank[rank],
-                                 head->d_head_pre_rank[rank],
-                                 (size_t)opt.slots * 4u, ncclFloat, ncclSum,
-                                 r.compose_nccl, r.stream));
+    if (opt.head_comm_host) {
+        if (head_host_allreduce(ranks, head->d_reduce_max,
+                                (size_t)opt.slots, true) != 0 ||
+            head_host_allreduce(ranks, head->d_head_pre_rank,
+                                (size_t)opt.slots * 4u, false) != 0) {
+            return 3;
+        }
+    } else {
+        CHECK_NCCL(ncclGroupStart());
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            CHECK_CUDA(cudaSetDevice(r.device));
+            CHECK_NCCL(ncclAllReduce(head->d_reduce_max[rank],
+                                     head->d_reduce_max[rank],
+                                     (size_t)opt.slots, ncclFloat, ncclMax,
+                                     head_collective_comm(opt, r, rank), r.stream));
+            CHECK_NCCL(ncclAllReduce(head->d_head_pre_rank[rank],
+                                     head->d_head_pre_rank[rank],
+                                     (size_t)opt.slots * 4u, ncclFloat, ncclSum,
+                                     head_collective_comm(opt, r, rank), r.stream));
+        }
+        CHECK_NCCL(ncclGroupEnd());
     }
-    CHECK_NCCL(ncclGroupEnd());
     const auto gather_stop = std::chrono::steady_clock::now();
 
     const auto prep_start = std::chrono::steady_clock::now();
@@ -665,16 +789,23 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
             (uint32_t)opt.slots);
         CHECK_CUDA(cudaGetLastError());
     }
-    CHECK_NCCL(ncclGroupStart());
-    for (int rank = 0; rank < kGpus; ++rank) {
-        RankState &r = ranks[rank];
-        CHECK_CUDA(cudaSetDevice(r.device));
-        CHECK_NCCL(ncclAllReduce(head->d_reduce_sumsq[rank],
-                                 head->d_reduce_sumsq[rank],
-                                 (size_t)opt.slots, ncclFloat, ncclSum,
-                                 r.compose_nccl, r.stream));
+    if (opt.head_comm_host) {
+        if (head_host_allreduce(ranks, head->d_reduce_sumsq,
+                                (size_t)opt.slots, false) != 0) {
+            return 3;
+        }
+    } else {
+        CHECK_NCCL(ncclGroupStart());
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            CHECK_CUDA(cudaSetDevice(r.device));
+            CHECK_NCCL(ncclAllReduce(head->d_reduce_sumsq[rank],
+                                     head->d_reduce_sumsq[rank],
+                                     (size_t)opt.slots, ncclFloat, ncclSum,
+                                     head_collective_comm(opt, r, rank), r.stream));
+        }
+        CHECK_NCCL(ncclGroupEnd());
     }
-    CHECK_NCCL(ncclGroupEnd());
     for (int rank = 0; rank < kGpus; ++rank) {
         CHECK_CUDA(cudaSetDevice(ranks[rank].device));
         output_head_weights_from_reduced_mix4_kernel<<<
@@ -701,16 +832,23 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
             (uint32_t)opt.slots);
         CHECK_CUDA(cudaGetLastError());
     }
-    CHECK_NCCL(ncclGroupStart());
-    for (int rank = 0; rank < kGpus; ++rank) {
-        RankState &r = ranks[rank];
-        CHECK_CUDA(cudaSetDevice(r.device));
-        CHECK_NCCL(ncclAllReduce(head->d_reduce_max[rank],
-                                 head->d_reduce_max[rank],
-                                 (size_t)opt.slots, ncclFloat, ncclMax,
-                                 r.compose_nccl, r.stream));
+    if (opt.head_comm_host) {
+        if (head_host_allreduce(ranks, head->d_reduce_max,
+                                (size_t)opt.slots, true) != 0) {
+            return 3;
+        }
+    } else {
+        CHECK_NCCL(ncclGroupStart());
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            CHECK_CUDA(cudaSetDevice(r.device));
+            CHECK_NCCL(ncclAllReduce(head->d_reduce_max[rank],
+                                     head->d_reduce_max[rank],
+                                     (size_t)opt.slots, ncclFloat, ncclMax,
+                                     head_collective_comm(opt, r, rank), r.stream));
+        }
+        CHECK_NCCL(ncclGroupEnd());
     }
-    CHECK_NCCL(ncclGroupEnd());
     for (int rank = 0; rank < kGpus; ++rank) {
         CHECK_CUDA(cudaSetDevice(ranks[rank].device));
         output_head_embd_local_stable_sumsq_kernel<<<
@@ -721,16 +859,23 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
             (uint32_t)opt.slots);
         CHECK_CUDA(cudaGetLastError());
     }
-    CHECK_NCCL(ncclGroupStart());
-    for (int rank = 0; rank < kGpus; ++rank) {
-        RankState &r = ranks[rank];
-        CHECK_CUDA(cudaSetDevice(r.device));
-        CHECK_NCCL(ncclAllReduce(head->d_reduce_sumsq[rank],
-                                 head->d_reduce_sumsq[rank],
-                                 (size_t)opt.slots, ncclFloat, ncclSum,
-                                 r.compose_nccl, r.stream));
+    if (opt.head_comm_host) {
+        if (head_host_allreduce(ranks, head->d_reduce_sumsq,
+                                (size_t)opt.slots, false) != 0) {
+            return 3;
+        }
+    } else {
+        CHECK_NCCL(ncclGroupStart());
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            CHECK_CUDA(cudaSetDevice(r.device));
+            CHECK_NCCL(ncclAllReduce(head->d_reduce_sumsq[rank],
+                                     head->d_reduce_sumsq[rank],
+                                     (size_t)opt.slots, ncclFloat, ncclSum,
+                                     head_collective_comm(opt, r, rank), r.stream));
+        }
+        CHECK_NCCL(ncclGroupEnd());
     }
-    CHECK_NCCL(ncclGroupEnd());
     for (int rank = 0; rank < kGpus; ++rank) {
         CHECK_CUDA(cudaSetDevice(ranks[rank].device));
         output_head_apply_output_norm_shard_kernel<<<
@@ -747,16 +892,24 @@ int run_shared_output_head_from_rank_hc(const Options &opt,
     const auto prep_stop = std::chrono::steady_clock::now();
 
     const auto broadcast_start = std::chrono::steady_clock::now();
-    CHECK_NCCL(ncclGroupStart());
-    for (int rank = 0; rank < kGpus; ++rank) {
-        RankState &r = ranks[rank];
-        CHECK_CUDA(cudaSetDevice(r.device));
-        CHECK_NCCL(ncclAllGather(head->d_embd_norm_shard[rank],
-                                 head->d_embd_rank_major[rank],
-                                 (size_t)embd_shard_elems, ncclFloat,
-                                 r.compose_nccl, r.stream));
+    if (opt.head_comm_host) {
+        if (head_host_allgather(ranks, head->d_embd_norm_shard,
+                                head->d_embd_rank_major,
+                                (size_t)embd_shard_elems) != 0) {
+            return 3;
+        }
+    } else {
+        CHECK_NCCL(ncclGroupStart());
+        for (int rank = 0; rank < kGpus; ++rank) {
+            RankState &r = ranks[rank];
+            CHECK_CUDA(cudaSetDevice(r.device));
+            CHECK_NCCL(ncclAllGather(head->d_embd_norm_shard[rank],
+                                     head->d_embd_rank_major[rank],
+                                     (size_t)embd_shard_elems, ncclFloat,
+                                     head_collective_comm(opt, r, rank), r.stream));
+        }
+        CHECK_NCCL(ncclGroupEnd());
     }
-    CHECK_NCCL(ncclGroupEnd());
     for (int rank = 0; rank < kGpus; ++rank) {
         CHECK_CUDA(cudaSetDevice(ranks[rank].device));
         output_head_rank_major_to_slot_major_kernel<<<

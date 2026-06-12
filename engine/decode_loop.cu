@@ -90,6 +90,8 @@ int run_decode_loop(const Options &opt,
     /* s597: pre-allocate the EP sub-stage profiler device stamp slots
      * outside any capture region (flag-gated no-op when off). */
     ep_stage_prof_device_init(opt, ranks);
+    /* s600: probe state (flag-gated no-op when off; outside any capture). */
+    if (s600_probe_init(opt, ranks) != 0) return 2;
     int cudagraph_audit_sync_all_calls = 0;
     int cudagraph_audit_event_barrier_calls = 0;
     int cudagraph_audit_stream_syncs = 0;
@@ -1134,9 +1136,11 @@ int run_decode_loop(const Options &opt,
                                                                   : ranks[p].stream);
                     }
                 }
+                s600_delay_enqueue(ranks, kS600PreDown, true);
                 if (launch_resident_f8_dense_f32_input(opt, *shared_op, ranks) != 0) {
                     return 2;
                 }
+                s600_delay_enqueue(ranks, kS600PostDown, true);
                 epprof_all_end(kEpProfSharedSwigluDown);
                 if (ep_return_done_early) {
                     epprof_all_begin(kEpProfBarrier978);
@@ -1148,6 +1152,9 @@ int run_decode_loop(const Options &opt,
                 } else {
                     sync_all_prof(kEpProfBarrier978); /* s597: was sync_all() (978) */
                 }
+                /* s600 probe: late allgather verification on the now-idle
+                 * dense streams (flag-gated no-op). */
+                s600_ag_verify_enqueue(opt, ranks);
                 log_rank_stage("shared_down");
                 sync_after_decode_stage("shared_down");
                 if (!opt.decode_cudagraph_gate &&
@@ -1272,6 +1279,9 @@ int run_decode_loop(const Options &opt,
             compact_segment_routes * (uint64_t)(kHidden / kGpus);
         const bool use_nccl_reduce_scatter =
             nccl_reduce_scatter && !compact_route && !opt.ep_return_fp16;
+        if (!ep_return_done_early) {
+            s600_delay_enqueue(ranks, kS600PrePack, false);
+        }
         for (int p = 0; ep_return_done_early ? false : p < kGpus; ++p) {
             RankState &r = ranks[p];
             CHECK_CUDA(cudaSetDevice(r.device));
@@ -1369,6 +1379,7 @@ int run_decode_loop(const Options &opt,
                 }
                 const uint64_t src_stride_elems =
                     compact_route ? compact_segment_elems : shard_elems;
+                s600_delay_enqueue(ranks, kS600PreReturn, false);
                 epprof_all_begin(kEpProfEpReturnNccl);
                 if (broadcast_ep_return_slices(
                         ranks, false, skip_self_copy, src_stride_elems,
@@ -1377,6 +1388,9 @@ int run_decode_loop(const Options &opt,
                     return 14;
                 }
                 epprof_all_end(kEpProfEpReturnNccl);
+                s600_return_verify_enqueue(ranks, src_stride_elems,
+                                           copy_elems_by_src, skip_self_copy);
+                s600_delay_enqueue(ranks, kS600PostReturn, false);
             } else if (opt.source_copy_schedule && opt.decode_cudagraph_gate) {
                 if (opt.ep_return_fp16) return 13;
                 for (int dst = 0; dst < kGpus; ++dst) {
@@ -1584,6 +1598,7 @@ int run_decode_loop(const Options &opt,
             CHECK_CUDA(cudaGetLastError());
             epprof_end(dst, kEpProfCompose, r.stream);
         }
+        s600_delay_enqueue(ranks, kS600PostCompose, false);
         sync_all_prof(kEpProfBarrier1373); /* s597: was sync_all() (1373) */
         log_rank_stage("compose");
         sync_after_decode_stage("compose");
@@ -1839,6 +1854,9 @@ int run_decode_loop(const Options &opt,
             CHECK_CUDA(cudaSetDevice(root_device));
             CHECK_CUDA(cudaEventCreate(&replay_start));
             CHECK_CUDA(cudaEventCreate(&replay_stop));
+            /* s600: randomized delay-site retune before the replay (flag-
+             * gated no-op; streams are idle at this point). */
+            s600_jitter_refresh(ranks);
             rc = cudaEventRecord(replay_start, root_stream);
             if (rc == cudaSuccess) rc = cudaGraphLaunch(persistent_graph->exec, root_stream);
             if (rc == cudaSuccess) rc = cudaEventRecord(replay_stop, root_stream);
@@ -1857,6 +1875,15 @@ int run_decode_loop(const Options &opt,
             cudagraph_replay_error = rc == cudaSuccess ? 0 : (int)rc;
             cudagraph_capture_nodes = persistent_graph->nodes;
             if (rc != cudaSuccess) persistent_graph->failures++;
+            if (rc == cudaSuccess && opt.s600_postsync) {
+                /* s600 probe: prove/disprove that the root-stream replay_stop
+                 * event covers the whole multi-device graph. */
+                for (int rank = 0; rank < kGpus; ++rank) {
+                    CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+                    CHECK_CUDA(cudaDeviceSynchronize());
+                }
+                CHECK_CUDA(cudaSetDevice(root_device));
+            }
             if (rc == cudaSuccess) {
                 apply_full_capture_replay_host_swaps();
                 apply_full_capture_replay_compressed_kv_host_state();
@@ -1864,6 +1891,8 @@ int run_decode_loop(const Options &opt,
                  * graph events for this layer-step (flag-gated). */
                 ep_stage_prof_collect(opt, ranks, "replay_cache_hit",
                                       current_decode_step);
+                /* s600: swiglu exchange staleness counters (flag-gated). */
+                s600_collect_verify(opt.layer, current_decode_step, ranks);
             }
             if (rc == cudaSuccess &&
                 suffix_stage_ends_compose_eager_final_hc()) {
@@ -2029,6 +2058,26 @@ int run_decode_loop(const Options &opt,
                                                          &graph_nodes);
                 if (count_rc == cudaSuccess) node_count += graph_nodes;
                 graphs.push_back(graph);
+                /* s600: archive the captured layer DAG for edge-set diffing
+                 * (flag-gated; one layer, selected by env). */
+                if (opt.s600_graph_dot_dir &&
+                    opt.layer == opt.s600_graph_dot_layer) {
+                    const char *xchg = opt.swiglu_exchange_batched
+                        ? "batched"
+                        : opt.swiglu_exchange_memcpy2d
+                        ? "memcpy2d"
+                        : opt.swiglu_exchange_nccl ? "nccl" : "copy";
+                    char dot_path[512];
+                    std::snprintf(dot_path, sizeof(dot_path),
+                                  "%s/s600-layer%d-%s.dot",
+                                  opt.s600_graph_dot_dir, opt.layer, xchg);
+                    const cudaError_t dot_rc = cudaGraphDebugDotPrint(
+                        graph, dot_path, cudaGraphDebugDotFlagsVerbose);
+                    std::printf("tp_ep_s600_graph_dot\tlayer\t%d\t"
+                                "path\t%s\trc\t%d\n",
+                                opt.layer, dot_path, (int)dot_rc);
+                    std::fflush(stdout);
+                }
             } else if (first_error == cudaSuccess) {
                 first_error = rc;
             }
@@ -2142,6 +2191,8 @@ int run_decode_loop(const Options &opt,
                 /* s597: first-capture replay finished and synced. */
                 ep_stage_prof_collect(opt, ranks, "first_capture_replay",
                                       current_decode_step);
+                /* s600: swiglu exchange staleness counters (flag-gated). */
+                s600_collect_verify(opt.layer, current_decode_step, ranks);
             }
         }
         if (!replay_after_capture || !replay_success) {

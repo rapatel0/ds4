@@ -118,6 +118,9 @@ int materialize_shared_swiglu_down_input(const Options &opt,
         }
     }
     if (graph_event_order) {
+        /* Sprint 600 probes (no-ops when the probe env vars are unset). */
+        s600_swiglu_verify_enqueue(opt, ranks, down, rows);
+        s600_delay_enqueue(ranks, kS600XchgTail, false);
         if (enqueue_dense_wait_after_rank_stream(ranks) != 0) return 4;
     } else {
         for (int dst = 0; dst < kGpus; ++dst) {

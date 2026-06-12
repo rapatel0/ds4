@@ -1,0 +1,8 @@
+S600 layer-2 captured-graph dot summary (verbose dumps on pod: /workspace/s600-artifacts/dot/)
+copy:    nodes 2825 edges 4534 (16 roots / 16 leaves; 401 non-kernel nodes)
+batched: nodes 1089 edges 2798 (16 roots / 16 leaves; 401 non-kernel nodes)
+NCCL kernel nodes (identical in BOTH graphs):
+     16 ncclDevKernel_AllGather_RING_LLP
+     40 ncclDevKernel_AllReduce_Sum_f
+     72 ncclDevKernel_Broadcast_RING_LLP
+exchange kernels: copy_f32 x1824 (copy) vs s599_strided_seg x56 (batched); rest identical

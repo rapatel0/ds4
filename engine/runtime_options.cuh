@@ -40,6 +40,111 @@ static inline bool ds4_swiglu_exchange_env_batched() {
     return v && std::strcmp(v, "batched") == 0;
 }
 
+/* Sprint 600 root-cause probes (all default off; flag-off path is
+ * byte-identical because no kernels are enqueued and no state allocated).
+ *
+ * DS4_V100_TP_EP_S600_DELAY="site:us[,site:us...]" inserts a flag-gated
+ * busy-wait kernel at named points of the captured layer graph. The wait
+ * duration is read from device memory at replay time, so the host can
+ * retune (or jitter) it between replays without re-capturing. Sites:
+ *   xchg_tail   on each rank stream after the swiglu exchange writes
+ *   pre_down    on each dense stream before the shared-down GEMM
+ *   post_down   on each dense stream after the shared-down GEMM
+ *   pre_pack    on each rank stream before the EP contribution pack
+ *   pre_return  on each rank stream before the EP-return broadcasts
+ *   post_return on each rank stream after the EP-return broadcasts
+ *   post_compose on each rank stream after compose
+ *
+ * DS4_V100_TP_EP_S600_JITTER="min_us:max_us:seed" randomizes every enabled
+ * delay site's duration before each replay (perturbation stress).
+ *
+ * DS4_V100_TP_EP_S600_SWIGLU_VERIFY=1 enqueues, after the swiglu exchange,
+ * one checker kernel per (dst,src) pair that re-reads the remote source
+ * segment and bit-compares it with the locally exchanged copy; mismatch
+ * counts are read back and printed after every replay (a nonzero count
+ * proves the exchange consumed stale data).
+ *
+ * DS4_V100_TP_EP_GRAPH_DOT_DIR=/path dumps cudaGraphDebugDotPrint of the
+ * captured layer graph (layer selected by DS4_V100_TP_EP_GRAPH_DOT_LAYER,
+ * default 2) right after capture. */
+static inline const char *ds4_s600_delay_spec_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_S600_DELAY");
+    return (v && *v) ? v : nullptr;
+}
+static inline const char *ds4_s600_jitter_spec_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_S600_JITTER");
+    return (v && *v) ? v : nullptr;
+}
+static inline bool ds4_s600_swiglu_verify_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_S600_SWIGLU_VERIFY");
+    if (!v || !*v) return false;
+    return !(v[0] == '0' && v[1] == '\0');
+}
+/* DS4_V100_TP_EP_S600_RETURN_VERIFY=1: after the EP-return broadcasts,
+ * bit-compare each rank's received slice (d_ep_remote[src]) against a fresh
+ * remote read of the source rank's d_ep_contrib_all dst-slice; a mismatch
+ * proves the NCCL return delivered stale/incorrect bytes. */
+static inline bool ds4_s600_return_verify_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_S600_RETURN_VERIFY");
+    if (!v || !*v) return false;
+    return !(v[0] == '0' && v[1] == '\0');
+}
+/* DS4_V100_TP_EP_S600_AG_VERIFY=1: late-verify the post-attention NCCL
+ * allgather output (d_post_attn_full_rank_major) against a fresh remote read
+ * of each source rank's d_post_attn_shard, on the dense streams after the
+ * 978 barrier (the dense streams are idle there, so the verification runs
+ * under the pack/return/compose shadow with near-zero timing perturbation). */
+static inline bool ds4_s600_ag_verify_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_S600_AG_VERIFY");
+    if (!v || !*v) return false;
+    return !(v[0] == '0' && v[1] == '\0');
+}
+/* DS4_V100_TP_EP_S600_POSTSYNC=1: after every layer-graph replay (which the
+ * replay loop already host-syncs via a root-stream event), additionally
+ * cudaDeviceSynchronize every rank device. If this restores correctness, the
+ * root-stream replay_stop event does NOT cover the whole multi-device graph
+ * and successive replays overlap (the missing-edge mechanism). */
+static inline bool ds4_s600_postsync_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_S600_POSTSYNC");
+    if (!v || !*v) return false;
+    return !(v[0] == '0' && v[1] == '\0');
+}
+static inline const char *ds4_s600_graph_dot_dir_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_GRAPH_DOT_DIR");
+    return (v && *v) ? v : nullptr;
+}
+static inline int ds4_s600_graph_dot_layer_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_GRAPH_DOT_LAYER");
+    return (v && *v) ? std::atoi(v) : 2;
+}
+
+/* Sprint 600 FIX: NCCL communicator isolation for the eager output head.
+ * The decode layer graphs capture ~11 collectives per layer on the compose
+ * communicator; the output head then issues ~6 EAGER collectives per step on
+ * the SAME communicator. Interleaving captured-plan replays with eager
+ * launches on one communicator is NCCL "graph mixing" (documented fragile;
+ * multi-GPU-per-process capture is explicitly cautioned). S600 forensics
+ * localized a rare, timing-dependent, step-wide logit corruption to this
+ * interleaving. DS4_V100_TP_EP_HEAD_COMM=shared|dedicated selects the legacy
+ * shared communicator or a dedicated output-head communicator (which makes
+ * the captured communicator graph-only after capture). */
+static inline bool ds4_head_comm_dedicated_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_HEAD_COMM");
+    return v && std::strcmp(v, "dedicated") == 0;
+}
+/* head_comm=host: remove the eager output-head NCCL entirely. The five
+ * reductions are tiny (32-128 floats per rank): D2H + host reduce + H2D.
+ * The 64 KiB-per-rank allgather becomes UVA peer copies (byte moves,
+ * order-free). The sum reductions run in fixed rank order 0..7, which is a
+ * different float associativity than the NCCL ring -- the tolerance gate
+ * adjudicates whether the token stream is preserved. This mode needs no
+ * second communicator (the pod's 64 MiB /dev/shm cannot host one: NCCL
+ * allocates a fixed 8 x 4 MiB of proxy pools per comm). */
+static inline bool ds4_head_comm_host_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_HEAD_COMM");
+    return v && std::strcmp(v, "host") == 0;
+}
+
 /* Sprint 599 C-B: enqueue the EP contribution pack + NCCL return right
  * after the routed GEMMs (before the dense/swiglu chain) and replace the
  * 8x8 cross-GPU barriers at the 954/978 sites with per-rank rank<->dense
@@ -203,4 +308,16 @@ struct Options {
     bool swiglu_exchange_memcpy2d = ds4_swiglu_exchange_env_memcpy2d();
     bool swiglu_exchange_batched = ds4_swiglu_exchange_env_batched();
     bool ep_return_early = ds4_ep_return_early_env();
+    /* Sprint 600 probes (default off; see comments above). */
+    const char *s600_delay_spec = ds4_s600_delay_spec_env();
+    const char *s600_jitter_spec = ds4_s600_jitter_spec_env();
+    bool s600_swiglu_verify = ds4_s600_swiglu_verify_env();
+    bool s600_return_verify = ds4_s600_return_verify_env();
+    bool s600_ag_verify = ds4_s600_ag_verify_env();
+    bool s600_postsync = ds4_s600_postsync_env();
+    /* Sprint 600 fix (see comment above): default shared until gated. */
+    bool head_comm_dedicated = ds4_head_comm_dedicated_env();
+    bool head_comm_host = ds4_head_comm_host_env();
+    const char *s600_graph_dot_dir = ds4_s600_graph_dot_dir_env();
+    int s600_graph_dot_layer = ds4_s600_graph_dot_layer_env();
 };

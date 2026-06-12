@@ -1,4 +1,22 @@
-# Spike B Decode-Optimization Steering (updated 2026-06-11 after Sprint 599)
+# Spike B Decode-Optimization Steering (updated 2026-06-12 after Sprint 600)
+
+**Sprint 600: hazard root-caused — it is a race INSIDE the captured NCCL
+collectives (single 8-rank-per-process comm, 16 RING_LL collectives/rank/
+layer), NOT an engine edge. It fires on the promoted path (~1/256 steps,
+whole-batch token corruption).** Eight-way elimination matrix in
+SPRINT-600-REPORT.md. No fix promoted in 600; baseline 170.18 decode-domain /
+117.08 wall. **Sprint 601 leads with the orchestrator-identified unblock: the
+dedicated-comm fix candidate failed only on the pod's 64 MiB /dev/shm k8s
+default (33.5 MiB/comm) — lift via emptyDir medium:Memory and retest; then
+the NCCL-free EP window track (batched exchange + s597 relay-table return,
+removing 9/16 collectives/rank/layer, projecting ~195-205), the empirical
+scaling curve S=1/4/8/16/32, and the MTP-reopen decision gate.** Clarified
+program target (user, 2026-06-12): **≥50 tok/s PER SLOT** (80 ideal) — step
+≤20 ms; per-slot is slot-flat; bandwidth caps ~47/slot at 32 slots so the
+target implies S≤16; credible path = optimized base × MTP ~2x. NOTE: the
+s600 result weakens (but does not kill) the s599 race-as-MTP-lead
+hypothesis — the NCCL race is rare (~1/256), which cannot alone explain
+0/71 deterministic MTP rejection.
 
 **Sprint 599: stretch (220) NOT reached; reachable-on-evidence; blocked on a
 latent ordering hazard in the promoted path.** Clean promoted baseline

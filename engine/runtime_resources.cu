@@ -197,6 +197,10 @@ int open_compose_nccl(const Options &opt, RankState ranks[kGpus]) {
                 need_hc_current ? 1 : 0,
                 need_full_current_broadcast ? 1 : 0,
                 need_transport_sweep ? 1 : 0);
+    /* Sprint 600 fix: init the dedicated output-head communicator at
+     * startup, before any capture and before serving threads (no-op when
+     * DS4_V100_TP_EP_HEAD_COMM != dedicated). */
+    if (ensure_head_dedicated_comms(opt, ranks) != 0) return 1;
     return 0;
 }
 
