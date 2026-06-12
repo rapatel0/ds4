@@ -26,6 +26,8 @@ spec:
         - name: models
           mountPath: /models
           readOnly: true
+        - name: shm
+          mountPath: /dev/shm
   volumes:
     - name: workspace
       hostPath:
@@ -34,3 +36,9 @@ spec:
     - name: models
       persistentVolumeClaim:
         claimName: llm-models-local
+    # Sprint 600: NCCL needs 33.5 MiB /dev/shm per communicator; the k8s
+    # default 64 MiB shm blocked multi-communicator fix candidates.
+    - name: shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 16Gi
