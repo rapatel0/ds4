@@ -1,8 +1,35 @@
 # DS4 V100 Appliance Status
 
-Last updated: 2026-06-12 (Sprint 600)
+Last updated: 2026-06-12 (Sprint 601)
 
 ## Topline
+
+Sprint 601 (2026-06-12) exhausted the in-NCCL fix space and sharpened the
+race localization: communicator isolation FAILS at every granularity
+(dedicated head comm, EP-return split, full class split — /dev/shm
+unblocked at 16 Gi, comms init fine, race unchanged), and a new NCCL-free
+EP-return transport (`relay`: peer-write NVLink + balanced one-hop staging
+via relay GPU `dst^4` for SYS pairs; `0.24-0.26` ms/layer vs `0.61` NCCL;
+relay+batched demonstrated **208.18 decode-domain, +23.8%**) ALSO leaves
+the race firing — **the race lives in the hc-class collectives** (hc
+allreduces/allgather, router allreduce, full-current broadcast, post-attn
+allgather). **CORRECTNESS ESCALATION: the promoted path fired
+token-flipping events in 2 of 3 control runs** (first token-level events
+ever recorded on it; previously checksum-only). NO PROMOTION: the relay
+stack is tolerance-clean in isolation but RAISES race exposure (1.5 vs 1.0
+events/run — faster window ⇒ tighter pacing). All new modes retained
+opt-in. Scaling curve (promoted stack, 256K): per-slot `8.11/7.67/7.96/
+7.00/5.28` tok/s at S=`1/4/8/16/32`; the step is a `~123-130` ms
+launch/wait floor flat to S=8. ≥50/slot budget: required MTP multiplier at
+the current floor is `6.3-7.1x` — NOT reachable by MTP (~2-3x) alone; base
+step must first fall to `~40-60` ms (race fix unlocking the relay+batched
+stack, prefix launch compaction ~1.1 ms/layer, route-plan shadow ~0.45,
+cross-layer graph consolidation). Next lead: the fully NCCL-free decode
+graph (ring-order-exact kernel reductions for hc/router) — it is now BOTH
+the correctness fix and the perf unlock. Report:
+`docs/sprints/SPRINT-601-REPORT.md`.
+
+## Prior topline (Sprint 600)
 
 Sprint 600 (2026-06-12) root-caused the s599 ordering hazard and **falsified
 the missing-engine-edge hypothesis**: the corruption is a rare,

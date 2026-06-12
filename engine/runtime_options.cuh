@@ -18,6 +18,19 @@ static inline bool ds4_ep_return_transport_env_nccl() {
     return v && std::strcmp(v, "nccl") == 0;
 }
 
+/* Sprint 601 Phase B: NCCL-free EP return. relay = src-side peer-WRITE
+ * kernels over NVLink; the 12 SYS pairs are forwarded one-hop through a
+ * staging buffer on the relay GPU dst^4 (NVLink-adjacent to both ends per
+ * the s597 Phase 1 relay table; each GPU relays exactly 3 directed pairs).
+ * Pure byte moves (bit-exact by construction), fixed event order (the s597
+ * 8x8 event barriers), graph-capturable, no SYS-path traffic. Combined
+ * with SWIGLU_EXCHANGE=batched this removes 9 of 16 captured NCCL
+ * collectives per rank-layer. Default off. */
+static inline bool ds4_ep_return_transport_env_relay() {
+    const char *v = std::getenv("DS4_V100_TP_EP_EP_RETURN_TRANSPORT");
+    return v && std::strcmp(v, "relay") == 0;
+}
+
 /* Sprint 599 C-A: shared swiglu_down input exchange transport. copy =
  * per-(dst,src,slot) UVA remote-load copies inside
  * materialize_shared_swiglu_down_input (the s198-era path; crosses SYS).
@@ -143,6 +156,31 @@ static inline bool ds4_head_comm_dedicated_env() {
 static inline bool ds4_head_comm_host_env() {
     const char *v = std::getenv("DS4_V100_TP_EP_HEAD_COMM");
     return v && std::strcmp(v, "host") == 0;
+}
+
+/* Sprint 601 Phase A: captured-collective communicator class split.
+ * S600 localized a rare timing-dependent corruption to the ~16 captured
+ * NCCL RING_LL collectives per rank-layer on the ONE 8-rank-per-process
+ * communicator. DS4_V100_TP_EP_COMM_SPLIT moves whole collective CLASSES
+ * onto dedicated communicators (created once at startup, before capture):
+ *   none      (default) everything stays on the shared compose comm
+ *   epret     the 8 EP-return broadcasts (+ swiglu nccl allgather + any
+ *             compose reduce-scatter) move to a dedicated comm
+ *   hc        every other captured collective (hc allreduces/allgather,
+ *             router allreduce, full-current broadcast, post-attn
+ *             allgather, attn-output allgather) moves to a dedicated comm
+ *   epret+hc  both splits (three comms total incl. the main one)
+ * Flag-off the per-class comm handles alias the compose comm, so the
+ * captured graph is byte-identical. Each extra comm costs device memory
+ * (s598: ~0.9 GiB/GPU at default buffsize) -- the init path prints free
+ * VRAM before/after every comm it creates. */
+static inline bool ds4_comm_split_epret_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_COMM_SPLIT");
+    return v && std::strstr(v, "epret") != nullptr;
+}
+static inline bool ds4_comm_split_hc_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_COMM_SPLIT");
+    return v && std::strstr(v, "hc") != nullptr;
 }
 
 /* Sprint 599 C-B: enqueue the EP contribution pack + NCCL return right
@@ -303,6 +341,8 @@ struct Options {
     bool ep_stage_profile = ds4_ep_stage_profile_env_default();
     /* Sprint 598 B2-C: EP-return transport (default copy = s597 path). */
     bool ep_return_nccl = ds4_ep_return_transport_env_nccl();
+    /* Sprint 601 Phase B: NCCL-free peer-write relay EP return. */
+    bool ep_return_relay = ds4_ep_return_transport_env_relay();
     /* Sprint 599 C-A / C-B (default off = s598 promoted path). */
     bool swiglu_exchange_nccl = ds4_swiglu_exchange_env_nccl();
     bool swiglu_exchange_memcpy2d = ds4_swiglu_exchange_env_memcpy2d();
@@ -318,6 +358,9 @@ struct Options {
     /* Sprint 600 fix (see comment above): default shared until gated. */
     bool head_comm_dedicated = ds4_head_comm_dedicated_env();
     bool head_comm_host = ds4_head_comm_host_env();
+    /* Sprint 601 Phase A (see comment above): default none. */
+    bool comm_split_epret = ds4_comm_split_epret_env();
+    bool comm_split_hc = ds4_comm_split_hc_env();
     const char *s600_graph_dot_dir = ds4_s600_graph_dot_dir_env();
     int s600_graph_dot_layer = ds4_s600_graph_dot_layer_env();
 };

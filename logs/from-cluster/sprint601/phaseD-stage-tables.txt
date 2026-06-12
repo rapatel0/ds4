@@ -1,0 +1,52 @@
+d4	4	16	22.667532	30.676057
+
+d1	1	8	6.134314	8.113134
+
+d8p	8	32	35.687944	50.433176
+
+d1p	1	8	4.852752	6.439745
+
+=== d1p stage table:
+stage                               mean_ms      n
+ep_window                            1.5864    200
+prefix_attn_output                   0.6359    200
+route_plan_pack                      0.4231    200
+final_hc                             0.3583    200
+ep_return_nccl                       0.3495    200
+prefix_hc_current                    0.2116    200
+barrier_978_shared_down              0.1902    200
+prefix_attn_projection               0.1831    200
+barrier_1144_contrib_pack            0.1791    200
+prefix_typed_history                 0.1495    200
+barrier_954_post_dense_launch        0.1278    200
+barrier_1373_compose                 0.1069    200
+gate_up_gemm                         0.0749    200
+prefix_attn_state                    0.0566    200
+shared_swiglu_down                   0.0511    200
+dense_overlap                        0.0499    200
+down_gemm                            0.0405    200
+prefix_raw_read                      0.0125    200
+compose                              0.0120    200
+contrib_pack                         0.0072    200
+=== d8p stage table:
+stage                               mean_ms      n
+ep_window                            1.5314    200
+prefix_attn_output                   0.6593    200
+route_plan_pack                      0.4489    200
+ep_return_nccl                       0.3747    200
+final_hc                             0.2867    200
+shared_swiglu_down                   0.2413    200
+prefix_hc_current                    0.2231    200
+prefix_attn_projection               0.2079    200
+gate_up_gemm                         0.1649    200
+prefix_typed_history                 0.0929    200
+prefix_attn_state                    0.0876    200
+down_gemm                            0.0767    200
+dense_overlap                        0.0692    200
+barrier_954_post_dense_launch        0.0633    200
+barrier_978_shared_down              0.0384    200
+barrier_1144_contrib_pack            0.0294    200
+barrier_1373_compose                 0.0192    200
+compose                              0.0132    200
+prefix_raw_read                      0.0129    200
+contrib_pack                         0.0091    200

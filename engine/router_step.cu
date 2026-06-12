@@ -87,7 +87,7 @@ int run_model_router_rank_major_logits(const Options &opt,
                                  r.d_router_logits_rank_major,
                                  (size_t)opt.slots * kLocalExperts,
                                  ncclFloat,
-                                 r.compose_nccl,
+                                 ds4_comm_hc(r),
                                  r.stream));
     }
     CHECK_NCCL(ncclGroupEnd());
@@ -150,7 +150,7 @@ int run_model_router_allreduce_logits(const Options &opt,
         CHECK_CUDA(cudaSetDevice(r.device));
         CHECK_NCCL(ncclAllReduce(r.d_hc_reduce_max, r.d_hc_reduce_max,
                                  (size_t)opt.slots, ncclFloat, ncclMax,
-                                 r.compose_nccl, r.stream));
+                                 ds4_comm_hc(r), r.stream));
     }
     CHECK_NCCL(ncclGroupEnd());
     for (int rank = 0; rank < kGpus; ++rank) {
@@ -171,7 +171,7 @@ int run_model_router_allreduce_logits(const Options &opt,
         CHECK_CUDA(cudaSetDevice(r.device));
         CHECK_NCCL(ncclAllReduce(r.d_hc_reduce_sumsq, r.d_hc_reduce_sumsq,
                                  (size_t)opt.slots, ncclFloat, ncclSum,
-                                 r.compose_nccl, r.stream));
+                                 ds4_comm_hc(r), r.stream));
     }
     CHECK_NCCL(ncclGroupEnd());
     for (int rank = 0; rank < kGpus; ++rank) {
@@ -196,7 +196,7 @@ int run_model_router_allreduce_logits(const Options &opt,
         CHECK_NCCL(ncclAllReduce(r.d_router_logits_rank_major,
                                  r.d_router_logits_rank_major,
                                  (size_t)opt.slots * kGlobalExperts,
-                                 ncclFloat, ncclSum, r.compose_nccl,
+                                 ncclFloat, ncclSum, ds4_comm_hc(r),
                                  r.stream));
     }
     CHECK_NCCL(ncclGroupEnd());

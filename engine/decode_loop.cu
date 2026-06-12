@@ -1354,7 +1354,7 @@ int run_decode_loop(const Options &opt,
                                              (size_t)shard_elems,
                                              ncclFloat,
                                              ncclSum,
-                                             r.compose_nccl,
+                                             ds4_comm_epret(r),
                                              r.stream));
             }
             CHECK_NCCL(ncclGroupEnd());
@@ -1363,6 +1363,32 @@ int run_decode_loop(const Options &opt,
             t_copy_done = t_reduce_done;
         } else if (!opt.direct_remote_compose || opt.ep_return_fp16) {
             if (opt.source_copy_schedule && opt.decode_cudagraph_gate &&
+                opt.ep_return_relay) {
+                /* s601 Phase B: NCCL-free EP return - peer-write copy
+                 * kernels + one-hop NVLink relay for the SYS pairs, fixed
+                 * event order, captured in-graph. Bit-exact byte moves. */
+                if (opt.ep_return_fp16) return 13;
+                uint64_t copy_elems_by_src[kGpus] = {};
+                for (int src = 0; src < kGpus; ++src) {
+                    copy_elems_by_src[src] = compact_route
+                        ? (uint64_t)routed_compose_rows(ranks[src], opt) *
+                              (uint64_t)(kHidden / kGpus)
+                        : shard_elems;
+                }
+                const uint64_t src_stride_elems =
+                    compact_route ? compact_segment_elems : shard_elems;
+                s600_delay_enqueue(ranks, kS600PreReturn, false);
+                epprof_all_begin(kEpProfEpReturnRelay);
+                if (ep_return_relay_graph(opt, ranks, skip_self_copy,
+                                          src_stride_elems,
+                                          copy_elems_by_src) != 0) {
+                    return 14;
+                }
+                epprof_all_end(kEpProfEpReturnRelay);
+                s600_return_verify_enqueue(ranks, src_stride_elems,
+                                           copy_elems_by_src, skip_self_copy);
+                s600_delay_enqueue(ranks, kS600PostReturn, false);
+            } else if (opt.source_copy_schedule && opt.decode_cudagraph_gate &&
                 opt.ep_return_nccl) {
                 /* s598 C1: EP return via the grouped per-source NCCL
                  * broadcasts (same primitive as the eager branch), captured

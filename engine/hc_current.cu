@@ -122,10 +122,10 @@ int run_shared_hc_current_input(const Options &opt,
             CHECK_CUDA(cudaSetDevice(r.device));
             CHECK_NCCL(ncclAllReduce(r.d_hc_reduce_max, r.d_hc_reduce_max,
                                      (size_t)opt.slots, ncclFloat, ncclMax,
-                                     r.compose_nccl, r.stream));
+                                     ds4_comm_hc(r), r.stream));
             CHECK_NCCL(ncclAllReduce(r.d_hc_reduce_mix, r.d_hc_reduce_mix,
                                      (size_t)opt.slots * kHcMix, ncclFloat,
-                                     ncclSum, r.compose_nccl, r.stream));
+                                     ncclSum, ds4_comm_hc(r), r.stream));
         }
         CHECK_NCCL(ncclGroupEnd());
         bool have_ref_mix_for_full_parity = false;
@@ -169,7 +169,7 @@ int run_shared_hc_current_input(const Options &opt,
             CHECK_CUDA(cudaSetDevice(r.device));
             CHECK_NCCL(ncclAllReduce(r.d_hc_reduce_sumsq, r.d_hc_reduce_sumsq,
                                      (size_t)opt.slots, ncclFloat, ncclSum,
-                                     r.compose_nccl, r.stream));
+                                     ds4_comm_hc(r), r.stream));
         }
         CHECK_NCCL(ncclGroupEnd());
         if (have_ref_mix_for_full_parity) {
@@ -297,7 +297,7 @@ int run_shared_hc_current_input(const Options &opt,
                                      r.d_current_full_rank_major,
                                      (size_t)shard_elems,
                                      ncclFloat,
-                                     r.compose_nccl,
+                                     ds4_comm_hc(r),
                                      r.stream));
         }
         CHECK_NCCL(ncclGroupEnd());

@@ -1,0 +1,42 @@
+=== compare a3-sb-2 vs a3-sb-1
+pairs=128 ctl_only=0 cand_only=0
+batch=1 slot=0 first_ck_step=2 first_tok_step=3
+batch=1 slot=1 first_ck_step=2 first_tok_step=3
+batch=1 slot=2 first_ck_step=2 first_tok_step=3
+batch=1 slot=3 first_ck_step=2 first_tok_step=3
+batch=1 slot=4 first_ck_step=2 first_tok_step=6
+batch=1 slot=5 first_ck_step=2 first_tok_step=6
+batch=1 slot=6 first_ck_step=2 first_tok_step=4
+batch=1 slot=7 first_ck_step=2 first_tok_step=4
+selected_token_agreement: 0.023438 (3/128)
+sequence_agreement: 0.082275 (674/8192)
+first_ck_step histogram: {0: 96, 2: 32}
+first_tok_step histogram: {0: 60, 1: 15, 2: 2, 3: 8, 4: 18, 5: 13, 6: 3, 7: 1, 10: 5, 14: 1, 15: 1, 18: 1}
+=== compare a3-sb-3 vs a3-sb-1
+pairs=128 ctl_only=0 cand_only=0
+batch=1 slot=0 first_ck_step=2 first_tok_step=6
+batch=1 slot=1 first_ck_step=2 first_tok_step=3
+batch=1 slot=2 first_ck_step=2 first_tok_step=6
+batch=1 slot=3 first_ck_step=2 first_tok_step=3
+batch=1 slot=4 first_ck_step=2 first_tok_step=4
+batch=1 slot=5 first_ck_step=2 first_tok_step=6
+batch=1 slot=6 first_ck_step=2 first_tok_step=4
+batch=1 slot=7 first_ck_step=2 first_tok_step=6
+selected_token_agreement: 0.03125 (4/128)
+sequence_agreement: 0.086792 (711/8192)
+first_ck_step histogram: {0: 96, 2: 32}
+first_tok_step histogram: {0: 69, 1: 10, 2: 4, 3: 8, 4: 3, 5: 18, 6: 8, 7: 2, 8: 1, 10: 2, 15: 2, 18: 1}
+=== compare a3-sb-3 vs a3-sb-2
+pairs=128 ctl_only=0 cand_only=0
+batch=1 slot=0 first_ck_step=2 first_tok_step=3
+batch=1 slot=1 first_ck_step=2 first_tok_step=5
+batch=1 slot=2 first_ck_step=2 first_tok_step=3
+batch=1 slot=3 first_ck_step=2 first_tok_step=5
+batch=1 slot=4 first_ck_step=2 first_tok_step=4
+batch=1 slot=5 first_ck_step=2 first_tok_step=10
+batch=1 slot=6 first_ck_step=2 first_tok_step=7
+batch=1 slot=7 first_ck_step=2 first_tok_step=4
+selected_token_agreement: 0.015625 (2/128)
+sequence_agreement: 0.088745 (727/8192)
+first_ck_step histogram: {0: 96, 2: 32}
+first_tok_step histogram: {0: 74, 1: 7, 2: 4, 3: 4, 4: 12, 5: 5, 6: 4, 7: 6, 8: 2, 10: 3, 14: 3, 21: 1, 25: 1, 28: 1, 29: 1}

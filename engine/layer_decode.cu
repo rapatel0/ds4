@@ -15,8 +15,13 @@ int run_resident_layer_decode(const Options &opt,
     char err[512] = {0};
     ds4_tp_dense_kv_result kv_result;
     const int write_indexer = ds4_layer_ratio(opt.layer) == 4 ? 1 : 0;
-    const uint32_t kv_first_slot = opt.tp_kv_all_slots_gate ? 0u : opt.kv_slot;
-    const uint32_t kv_end_slot = opt.tp_kv_all_slots_gate ? (uint32_t)opt.slots : opt.kv_slot + 1u;
+    /* s601 Phase D: clamp the fixture KV slot into the configured slot
+     * count (default 7; unchanged for slots >= 8). */
+    const uint32_t kv_fixture_slot =
+        opt.kv_slot < (uint32_t)opt.slots ? opt.kv_slot
+                                          : (uint32_t)(opt.slots - 1);
+    const uint32_t kv_first_slot = opt.tp_kv_all_slots_gate ? 0u : kv_fixture_slot;
+    const uint32_t kv_end_slot = opt.tp_kv_all_slots_gate ? (uint32_t)opt.slots : kv_fixture_slot + 1u;
     for (uint32_t slot = kv_first_slot; slot < kv_end_slot; ++slot) {
         if (ds4_tp_runtime_dense_kv_slice(rt, opt.layer, slot, opt.position,
                                                write_indexer, &kv_result, err,

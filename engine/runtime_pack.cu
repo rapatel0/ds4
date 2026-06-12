@@ -223,7 +223,10 @@ int nccl_broadcast_bytes_from_rank(RankState ranks[kGpus],
                                    const void *src_root,
                                    void *dst_by_rank[kGpus],
                                    size_t bytes,
-                                   const char *label) {
+                                   const char *label,
+                                   bool epret_class = false) {
+    /* s601: epret_class routes the broadcast onto the EP-return-class comm
+     * (alias of the compose comm unless DS4_V100_TP_EP_COMM_SPLIT=epret). */
     if (root < 0 || root >= kGpus || !src_root || !dst_by_rank || bytes == 0) {
         return 1;
     }
@@ -248,7 +251,9 @@ int nccl_broadcast_bytes_from_rank(RankState ranks[kGpus],
         CHECK_CUDA(cudaSetDevice(r.device));
         const void *send = rank == root ? src_root : dst_by_rank[rank];
         CHECK_NCCL(ncclBroadcast(send, dst_by_rank[rank], bytes, ncclChar, root,
-                                 r.compose_nccl, r.stream));
+                                 epret_class ? ds4_comm_epret(r)
+                                             : ds4_comm_hc(r),
+                                 r.stream));
     }
     CHECK_NCCL(ncclGroupEnd());
     CHECK_CUDA(cudaSetDevice(prior_device));
@@ -317,7 +322,8 @@ int broadcast_ep_return_slices(RankState ranks[kGpus],
         }
         if (nccl_broadcast_bytes_from_rank(
                 ranks, src, src_all, scratch_by_rank, bcast_bytes,
-                label ? label : "ep_return_broadcast") != 0) {
+                label ? label : "ep_return_broadcast",
+                /*epret_class=*/true) != 0) {
             return 4;
         }
         const size_t copy_bytes = (size_t)(copy_elems * elem_bytes);
@@ -351,6 +357,104 @@ int broadcast_ep_return_slices(RankState ranks[kGpus],
     CHECK_CUDA(cudaSetDevice(prior_device));
     return 0;
 }
+
+/* ===================== Sprint 601 Phase B: relay EP return =============== */
+/* NCCL-free EP return: pure peer-WRITE copy kernels over NVLink with a
+ * one-hop staging relay for the 12 SYS pairs (s597 Phase 1 relay table).
+ * Topology fact (gpu-01, 8x V100 SXM2): GPUs {0,1,2,3} and {4,5,6,7} are
+ * NVLink cliques and i <-> i^4 are NVLink partners; the only non-NVLink
+ * (SYS) pairs are cross-half non-partners, and for each such directed pair
+ * src->dst the partner GPU dst^4 is NVLink-adjacent to BOTH ends (it is in
+ * src's half-clique and is dst's partner). Each GPU therefore relays
+ * exactly 3 directed pairs - the balanced one-hop schedule from the s597
+ * relay table, expressible without a table.
+ * Ordering: stage W (src streams: local read -> remote write; direct for
+ * NVLink dsts, staging on the relay for SYS dsts), 8x8 event barrier,
+ * stage F (relay streams: local staging read -> NVLink write to dst),
+ * 8x8 event barrier, then compose consumes d_ep_remote as usual. All
+ * copies are byte moves - bit-exact by construction - and the event order
+ * is fixed in the captured graph. */
+static inline bool s601_nv_adjacent(int a, int b) {
+    return ((a >> 2) == (b >> 2)) || (b == (a ^ 4));
+}
+
+int ep_return_relay_graph(const Options &opt,
+                          RankState ranks[kGpus],
+                          bool skip_self_copy,
+                          uint64_t src_stride_elems,
+                          const uint64_t copy_elems_by_src[kGpus]) {
+    if (!copy_elems_by_src || src_stride_elems == 0) return 1;
+    const int block = 256;
+    int prior_device = 0;
+    CHECK_CUDA(cudaGetDevice(&prior_device));
+    for (int rank = 0; rank < kGpus; ++rank) {
+        if (!ranks[rank].d_ep_relay_stage || !ranks[rank].d_ep_contrib_all) {
+            return 2;
+        }
+        for (int src = 0; src < kGpus; ++src) {
+            if (!ranks[rank].d_ep_remote[src]) return 2;
+        }
+    }
+    /* Stage W: per-src peer writes (reads local, writes remote/posted). */
+    for (int src = 0; src < kGpus; ++src) {
+        RankState &s = ranks[src];
+        const uint64_t copy_elems = copy_elems_by_src[src];
+        if (copy_elems == 0) continue;
+        if (copy_elems > src_stride_elems) return 3;
+        CHECK_CUDA(cudaSetDevice(s.device));
+        for (int dst = 0; dst < kGpus; ++dst) {
+            if (src == dst) continue;
+            const float *src_ptr =
+                s.d_ep_contrib_all + (uint64_t)dst * src_stride_elems;
+            if (s601_nv_adjacent(src, dst)) {
+                enqueue_graph_f32_copy_between_devices(
+                    opt, ranks[dst].device, s.device,
+                    ranks[dst].d_ep_remote[src], src_ptr, copy_elems,
+                    s.stream, block);
+            } else {
+                const int relay = dst ^ 4;
+                float *stage = ranks[relay].d_ep_relay_stage +
+                               (uint64_t)src * src_stride_elems;
+                enqueue_graph_f32_copy_between_devices(
+                    opt, ranks[relay].device, s.device, stage, src_ptr,
+                    copy_elems, s.stream, block);
+            }
+        }
+        if (!skip_self_copy) {
+            const float *src_ptr =
+                s.d_ep_contrib_all + (uint64_t)src * src_stride_elems;
+            enqueue_graph_f32_copy_between_devices(
+                opt, s.device, s.device, s.d_ep_remote[src], src_ptr,
+                copy_elems, s.stream, block);
+        }
+    }
+    /* Relays must observe the staged slices (and dsts their direct
+     * slices) before forwarding/compose: fixed-slot 8x8 event barrier. */
+    if (enqueue_cross_gpu_stream_barrier(ranks, false) != 0) return 4;
+    /* Stage F: each GPU forwards the 3 staged SYS slices to its partner
+     * dst = relay^4 (local staging read, NVLink peer write). */
+    for (int relay = 0; relay < kGpus; ++relay) {
+        RankState &r = ranks[relay];
+        const int dst = relay ^ 4;
+        CHECK_CUDA(cudaSetDevice(r.device));
+        for (int src = 0; src < kGpus; ++src) {
+            if (src == dst || s601_nv_adjacent(src, dst)) continue;
+            const uint64_t copy_elems = copy_elems_by_src[src];
+            if (copy_elems == 0) continue;
+            const float *stage =
+                r.d_ep_relay_stage + (uint64_t)src * src_stride_elems;
+            enqueue_graph_f32_copy_between_devices(
+                opt, ranks[dst].device, r.device,
+                ranks[dst].d_ep_remote[src], stage, copy_elems, r.stream,
+                block);
+        }
+    }
+    /* Dst rank streams wait for the relay forwards before compose. */
+    if (enqueue_cross_gpu_stream_barrier(ranks, false) != 0) return 5;
+    CHECK_CUDA(cudaSetDevice(prior_device));
+    return 0;
+}
+/* ======================================================================== */
 
 int parse_contract(const char *path, int layer, std::vector<ContractRow> *rows,
                    LayerStats *stats) {
@@ -2333,7 +2437,7 @@ int swiglu_down_exchange_nccl(const Options &opt,
         const float *send = r.d_ep_contrib_bcast_all + 8ull * seg_elems;
         CHECK_NCCL(ncclAllGather(send, r.d_ep_contrib_bcast_all,
                                  (size_t)seg_elems, ncclFloat,
-                                 r.compose_nccl, r.stream));
+                                 ds4_comm_epret(r), r.stream));
     }
     CHECK_NCCL(ncclGroupEnd());
     /* 4. unpack the other ranks' segments strided into d_x. */

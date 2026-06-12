@@ -155,6 +155,85 @@ int open_shared_rank_buffers(const Options &opt, SharedRankBuffers *shared) {
     return 0;
 }
 
+/* Sprint 601 Phase A: create the per-class dedicated communicators.
+ * Process-lifetime, intentionally never destroyed (ncclCommDestroy hangs
+ * when graph execs from the same process are still alive -- s598 finding,
+ * same policy as the s600 dedicated head comm). Prints min free VRAM
+ * across the 8 GPUs before/after each comm so the ~1.3 GiB budget is
+ * measured, not assumed. */
+static uint64_t s601_min_free_vram_mib(const RankState ranks[kGpus]) {
+    uint64_t min_free = ~0ull;
+    int prior_device = 0;
+    CHECK_CUDA(cudaGetDevice(&prior_device));
+    for (int p = 0; p < kGpus; ++p) {
+        size_t free_b = 0, total_b = 0;
+        CHECK_CUDA(cudaSetDevice(ranks[p].device));
+        CHECK_CUDA(cudaMemGetInfo(&free_b, &total_b));
+        const uint64_t mib = (uint64_t)(free_b / (1024ull * 1024ull));
+        if (mib < min_free) min_free = mib;
+    }
+    CHECK_CUDA(cudaSetDevice(prior_device));
+    return min_free;
+}
+
+static int s601_init_class_comm(const RankState ranks[kGpus],
+                                const char *cls,
+                                const char *buffsize_bytes,
+                                ncclComm_t out[kGpus]) {
+    const uint64_t free_before = s601_min_free_vram_mib(ranks);
+    const char *prev = std::getenv("NCCL_BUFFSIZE");
+    std::string saved = prev ? prev : "";
+    if (buffsize_bytes) setenv("NCCL_BUFFSIZE", buffsize_bytes, 1);
+    int devices[kGpus] = {};
+    for (int p = 0; p < kGpus; ++p) devices[p] = ranks[p].device;
+    const ncclResult_t rc = ncclCommInitAll(out, kGpus, devices);
+    if (buffsize_bytes) {
+        if (prev) setenv("NCCL_BUFFSIZE", saved.c_str(), 1);
+        else unsetenv("NCCL_BUFFSIZE");
+    }
+    if (rc != ncclSuccess) {
+        std::fprintf(stderr, "tp_ep_s601_comm_split\tclass\t%s\tFAIL\t%s\n",
+                     cls, ncclGetErrorString(rc));
+        return 1;
+    }
+    const uint64_t free_after = s601_min_free_vram_mib(ranks);
+    std::printf("tp_ep_s601_comm_split\tclass\t%s\tbuffsize\t%s\t"
+                "min_free_mib_before\t%llu\tmin_free_mib_after\t%llu\t"
+                "cost_mib\t%lld\tPASS\n",
+                cls, buffsize_bytes ? buffsize_bytes : "default",
+                (unsigned long long)free_before,
+                (unsigned long long)free_after,
+                (long long)free_before - (long long)free_after);
+    std::fflush(stdout);
+    return 0;
+}
+
+static int ensure_class_split_comms(const Options &opt, RankState ranks[kGpus]) {
+    static ncclComm_t s_epret[kGpus] = {};
+    static ncclComm_t s_hc[kGpus] = {};
+    static bool s_epret_ready = false;
+    static bool s_hc_ready = false;
+    if (opt.comm_split_epret && !s_epret_ready) {
+        /* EP-return payloads are ~3 MiB/src: keep the default buffsize. */
+        if (s601_init_class_comm(ranks, "epret", nullptr, s_epret) != 0) {
+            return 1;
+        }
+        s_epret_ready = true;
+    }
+    if (opt.comm_split_hc && !s_hc_ready) {
+        /* hc/router/post-attn payloads are <= ~0.9 MiB: 1 MiB buffsize. */
+        if (s601_init_class_comm(ranks, "hc", "1048576", s_hc) != 0) {
+            return 1;
+        }
+        s_hc_ready = true;
+    }
+    for (int p = 0; p < kGpus; ++p) {
+        if (opt.comm_split_epret) ranks[p].comm_epret = s_epret[p];
+        if (opt.comm_split_hc) ranks[p].comm_hc = s_hc[p];
+    }
+    return 0;
+}
+
 int open_compose_nccl(const Options &opt, RankState ranks[kGpus]) {
     const bool need_compose =
         opt.nccl_reduce_scatter_compose_gate &&
@@ -201,6 +280,9 @@ int open_compose_nccl(const Options &opt, RankState ranks[kGpus]) {
      * startup, before any capture and before serving threads (no-op when
      * DS4_V100_TP_EP_HEAD_COMM != dedicated). */
     if (ensure_head_dedicated_comms(opt, ranks) != 0) return 1;
+    /* Sprint 601 Phase A: per-class captured-collective comms (no-op when
+     * DS4_V100_TP_EP_COMM_SPLIT is unset/none). */
+    if (ensure_class_split_comms(opt, ranks) != 0) return 1;
     return 0;
 }
 
@@ -230,7 +312,7 @@ int nccl_broadcast_f32_from_device0_to_current_full(
         CHECK_CUDA(cudaSetDevice(r.device));
         const float *send = rank == 0 ? src_device0 : r.d_current_full;
         CHECK_NCCL(ncclBroadcast(send, r.d_current_full, (size_t)elems,
-                                 ncclFloat, 0, r.compose_nccl, r.stream));
+                                 ncclFloat, 0, ds4_comm_hc(r), r.stream));
     }
     CHECK_NCCL(ncclGroupEnd());
     return 0;
@@ -281,6 +363,7 @@ void close_shared_rank_buffers(SharedRankBuffers *shared) {
         if (r.d_gate_up) CHECK_CUDA(cudaFree(r.d_gate_up));
         if (r.d_gated) CHECK_CUDA(cudaFree(r.d_gated));
         if (r.d_down) CHECK_CUDA(cudaFree(r.d_down));
+        if (r.d_ep_relay_stage) CHECK_CUDA(cudaFree(r.d_ep_relay_stage));
         if (r.d_ep_contrib_all) CHECK_CUDA(cudaFree(r.d_ep_contrib_all));
         if (r.d_ep_contrib_half_all) CHECK_CUDA(cudaFree(r.d_ep_contrib_half_all));
         if (r.d_ep_contrib_bcast_all) CHECK_CUDA(cudaFree(r.d_ep_contrib_bcast_all));
@@ -447,6 +530,12 @@ int ensure_compose_buffers(const Options &opt, RankState ranks[kGpus]) {
                                                         (size_t)all_contrib_bytes));
         if (!r.d_ep_contrib_bcast_all) {
             CHECK_CUDA(cudaMalloc(&r.d_ep_contrib_bcast_all,
+                                  (size_t)all_contrib_bytes));
+        }
+        if (opt.ep_return_relay && !r.d_ep_relay_stage) {
+            /* s601 Phase B: kGpus staging slots of one (src->dst) slice
+             * capacity each (~5.5 MiB/GPU at the reference shape). */
+            CHECK_CUDA(cudaMalloc(&r.d_ep_relay_stage,
                                   (size_t)all_contrib_bytes));
         }
         if (opt.ep_return_fp16 && !r.d_ep_contrib_half_all) {

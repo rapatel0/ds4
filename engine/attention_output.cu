@@ -68,7 +68,7 @@ int run_true_ds4_attention_output_projection(const Options &opt,
                                      r.d_attn_output_a_full,
                                      (size_t)opt.slots * out_a_shard_cols,
                                      ncclFloat,
-                                     r.compose_nccl,
+                                     ds4_comm_hc(r),
                                      r.stream));
         }
         CHECK_NCCL(ncclGroupEnd());

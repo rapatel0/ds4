@@ -1,4 +1,20 @@
-# Spike B Decode-Optimization Steering (updated 2026-06-12 after Sprint 600)
+# Spike B Decode-Optimization Steering (updated 2026-06-12 after Sprint 601)
+
+**Sprint 601: in-NCCL fix space exhausted; race localized to the hc-class
+collectives; promoted path now shows TOKEN-FLIPPING events (2/3 controls).**
+Comm isolation fails at every granularity (shm unblocked, comms init, race
+identical). The new `relay` EP return (peer-write + one-hop via `dst^4`) is
+fast (0.24-0.26 ms/layer) and tolerance-clean — relay+batched demonstrated
+**208.18 decode-domain (+23.8%)** — but NOT promoted: it raises race
+exposure (1.5 vs 1.0 events/run; faster window = tighter pacing). Scaling
+curve: per-slot ~8 tok/s flat S=1..8 (step floor ~123-130 ms, launch/wait
+bound); 5.28/slot at S=32. ≥50/slot program math: MTP alone needs 6.3-7.1x
+(impossible); the base step must reach ~40-60 ms FIRST, then MTP ~2-3x
+closes it at S≤8. **Sprint 602 lead: the fully NCCL-free decode graph —
+ring-order-exact kernel reductions for the hc/router collectives. It is
+simultaneously the correctness fix (kills the race by removing its host),
+the unlock for the +23.8% relay+batched stack, and the prerequisite for
+every remaining step lever.**
 
 **Sprint 600: hazard root-caused — it is a race INSIDE the captured NCCL
 collectives (single 8-rank-per-process comm, 16 RING_LL collectives/rank/

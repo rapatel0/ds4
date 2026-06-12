@@ -127,6 +127,14 @@ fi
 # Sprint 599 C-B: enqueue the EP return before the dense/swiglu chain and use
 # per-rank ordering instead of the 8x8 barriers at the 954/978 sites.
 : "${DS4_V100_TP_EP_EP_RETURN_EARLY:=0}"
+# Sprint 600/601: output-head communicator mode (shared = legacy single
+# comm; dedicated = eager head collectives on their own comm; host = no
+# eager NCCL, host-side reductions + UVA-copy allgather).
+: "${DS4_V100_TP_EP_HEAD_COMM:=shared}"
+# Sprint 601 Phase A: captured-collective communicator class split
+# (none | epret | hc | epret+hc). Each extra comm costs device memory;
+# the appliance prints measured per-comm VRAM cost at init.
+: "${DS4_V100_TP_EP_COMM_SPLIT:=none}"
 
 is_uint() {
     case "${1:-}" in
@@ -273,8 +281,8 @@ case "$DS4_V100_TP_EP_EP_STAGE_PROFILE" in
     *) fail "DS4_V100_TP_EP_EP_STAGE_PROFILE must be 0 or 1" ;;
 esac
 case "$DS4_V100_TP_EP_EP_RETURN_TRANSPORT" in
-    copy|nccl) ;;
-    *) fail "DS4_V100_TP_EP_EP_RETURN_TRANSPORT must be copy or nccl" ;;
+    copy|nccl|relay) ;;
+    *) fail "DS4_V100_TP_EP_EP_RETURN_TRANSPORT must be copy, nccl, or relay" ;;
 esac
 case "$DS4_V100_TP_EP_SWIGLU_EXCHANGE" in
     copy|nccl|memcpy2d|batched) ;;
@@ -283,6 +291,14 @@ esac
 case "$DS4_V100_TP_EP_EP_RETURN_EARLY" in
     0|1) ;;
     *) fail "DS4_V100_TP_EP_EP_RETURN_EARLY must be 0 or 1" ;;
+esac
+case "$DS4_V100_TP_EP_HEAD_COMM" in
+    shared|dedicated|host) ;;
+    *) fail "DS4_V100_TP_EP_HEAD_COMM must be shared, dedicated, or host" ;;
+esac
+case "$DS4_V100_TP_EP_COMM_SPLIT" in
+    none|epret|hc|epret+hc) ;;
+    *) fail "DS4_V100_TP_EP_COMM_SPLIT must be none, epret, hc, or epret+hc" ;;
 esac
 # Back-compat: GRAPH_SUFFIX_REPLAY, if explicitly set, overrides the graph mode.
 if [ -n "$DS4_V100_TP_EP_GRAPH_SUFFIX_REPLAY" ]; then
@@ -426,7 +442,7 @@ print_resolved() {
 }
 
 if [ "$mode" = "check" ]; then
-    echo "ds4-v100-run-tp-ep-appliance: config ok host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS decode_graph_mode=$DS4_V100_TP_EP_DECODE_GRAPH_MODE ep_stage_profile=$DS4_V100_TP_EP_EP_STAGE_PROFILE ep_return_transport=$DS4_V100_TP_EP_EP_RETURN_TRANSPORT swiglu_exchange=$DS4_V100_TP_EP_SWIGLU_EXCHANGE ep_return_early=$DS4_V100_TP_EP_EP_RETURN_EARLY tp_ep_bin=$DS4_V100_TP_EP_BIN tp_ep_contract=$DS4_V100_TP_EP_CONTRACT tp_ep_tm_index=$DS4_V100_TP_EP_TM_INDEX mtp=off"
+    echo "ds4-v100-run-tp-ep-appliance: config ok host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS decode_graph_mode=$DS4_V100_TP_EP_DECODE_GRAPH_MODE ep_stage_profile=$DS4_V100_TP_EP_EP_STAGE_PROFILE ep_return_transport=$DS4_V100_TP_EP_EP_RETURN_TRANSPORT swiglu_exchange=$DS4_V100_TP_EP_SWIGLU_EXCHANGE ep_return_early=$DS4_V100_TP_EP_EP_RETURN_EARLY head_comm=$DS4_V100_TP_EP_HEAD_COMM comm_split=$DS4_V100_TP_EP_COMM_SPLIT tp_ep_bin=$DS4_V100_TP_EP_BIN tp_ep_contract=$DS4_V100_TP_EP_CONTRACT tp_ep_tm_index=$DS4_V100_TP_EP_TM_INDEX mtp=off"
     exit 0
 fi
 if [ "$mode" = "print" ]; then
@@ -448,6 +464,8 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_TP_EP_EP_RETURN_TRANSPORT=$DS4_V100_TP_EP_EP_RETURN_TRANSPORT"
     echo "DS4_V100_TP_EP_SWIGLU_EXCHANGE=$DS4_V100_TP_EP_SWIGLU_EXCHANGE"
     echo "DS4_V100_TP_EP_EP_RETURN_EARLY=$DS4_V100_TP_EP_EP_RETURN_EARLY"
+    echo "DS4_V100_TP_EP_HEAD_COMM=$DS4_V100_TP_EP_HEAD_COMM"
+    echo "DS4_V100_TP_EP_COMM_SPLIT=$DS4_V100_TP_EP_COMM_SPLIT"
     echo "DS4_V100_TP_EP_EXTRA_ARGS=$DS4_V100_TP_EP_EXTRA_ARGS"
     echo "DS4_V100_TP_EP_VRAM_MIN_FREE_MIB=$DS4_V100_TP_EP_VRAM_MIN_FREE_MIB"
     echo "DS4_V100_TP_EP_NCCL_MIN_FREE_MIB=$DS4_V100_TP_EP_NCCL_MIN_FREE_MIB"
@@ -480,6 +498,8 @@ export DS4_V100_TP_EP_EP_STAGE_PROFILE
 export DS4_V100_TP_EP_EP_RETURN_TRANSPORT
 export DS4_V100_TP_EP_SWIGLU_EXCHANGE
 export DS4_V100_TP_EP_EP_RETURN_EARLY
+export DS4_V100_TP_EP_HEAD_COMM
+export DS4_V100_TP_EP_COMM_SPLIT
 export DS4_V100_NCCL_TOPOLOGY_POLICY
 export DS4_V100_NCCL_NO_SYS_RING
 export DS4_V100_NCCL_ALLOW_VISIBLE_REMAP

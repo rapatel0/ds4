@@ -176,7 +176,13 @@ int run_layer(const Options &opt,
     ds4_tp_dense_kv_result kv_result;
     const auto kv_start = std::chrono::steady_clock::now();
     const int write_indexer = ds4_layer_ratio(opt.layer) == 4 ? 1 : 0;
-    if (ds4_tp_runtime_dense_kv_slice(rt, opt.layer, opt.kv_slot, opt.position,
+    /* s601 Phase D: the fixture KV slot defaults to 7; clamp it into the
+     * configured slot count so slot-scaling points S<8 can serve (S>=8
+     * behavior unchanged). */
+    const uint32_t kv_fixture_slot =
+        opt.kv_slot < (uint32_t)opt.slots ? opt.kv_slot
+                                          : (uint32_t)(opt.slots - 1);
+    if (ds4_tp_runtime_dense_kv_slice(rt, opt.layer, kv_fixture_slot, opt.position,
                                            write_indexer, &kv_result, err, sizeof(err)) != 0) {
         std::fprintf(stderr, "tp_runtime_dense_kv_slice_failed\t%s\n", err);
         close_local_runtime();

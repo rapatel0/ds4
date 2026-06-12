@@ -121,7 +121,8 @@ enum EpProfStage {
     kEpProfRawRead = 30,
     kEpProfAttnOutput = 31,
     kEpProfFinalHc = 32,
-    kEpProfStageCount = 33,
+    kEpProfEpReturnRelay = 33, /* s601 Phase B: peer-write relay return */
+    kEpProfStageCount = 34,
 };
 
 static const char *ep_stage_prof_name(int stage) {
@@ -151,6 +152,7 @@ static const char *ep_stage_prof_name(int stage) {
     case kEpProfRawRead: return "prefix_raw_read";
     case kEpProfAttnOutput: return "prefix_attn_output";
     case kEpProfFinalHc: return "final_hc";
+    case kEpProfEpReturnRelay: return "ep_return_relay";
     default:
         if (stage >= kEpProfCopySrcBase &&
             stage < kEpProfCopySrcBase + kGpus) {

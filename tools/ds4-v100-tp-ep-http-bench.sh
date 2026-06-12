@@ -75,7 +75,12 @@ done
 
 [ -n "$log_dir" ] || fail "--log-dir is required"
 [ "$ctx" = "262144" ] || fail "current TP/EP HTTP bench requires ctx=262144"
-[ "$slots" = "32" ] || fail "current TP/EP HTTP bench requires slots=32"
+# s601 Phase D: allow the slot-scaling curve points (wave size follows slots
+# below, so every wave still coalesces into one full S-slot batch).
+case "$slots" in
+    1|2|4|8|16|24|32) ;;
+    *) fail "current TP/EP HTTP bench requires slots in {1,2,4,8,16,24,32}" ;;
+esac
 [ -x "$run_appliance" ] || fail "missing launcher: $run_appliance"
 [ -x "$tp_ep_bin" ] || fail "missing TP/EP binary: $tp_ep_bin"
 [ -d "$appliance_dir" ] || fail "missing appliance dir: $appliance_dir"
@@ -155,8 +160,10 @@ for tokens in "${token_values[@]}"; do
     done
     grep -q "tp_ep_http_serving" "$server_log" || fail "server did not listen for token case $tokens"
 
+    DS4_V100_BENCH_WAVE="${DS4_V100_BENCH_WAVE:-$slots}" \
     python3 - "$case_dir" "$port" "$tokens" "$generation_requests" "$concurrent_requests" "$request_token_pattern" "$endpoint" <<'PY'
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -241,9 +248,10 @@ try:
             except Exception as exc:
                 errors.append(f"request {i}: {exc}")
         workers = [threading.Thread(target=post_one, args=(i,)) for i in range(generation_requests)]
-        # s598: submit in waves of 32 so each wave coalesces into one full
-        # 32-slot batch (deterministic batch composition for A/B runs).
-        wave = 32
+        # s598: submit in waves of <slots> so each wave coalesces into one
+        # full batch (deterministic batch composition for A/B runs).
+        # s601: wave follows the slot count for the scaling-curve points.
+        wave = int(os.environ.get("DS4_V100_BENCH_WAVE", "32"))
         for w0 in range(0, len(workers), wave):
             grp = workers[w0:w0 + wave]
             for worker in grp:

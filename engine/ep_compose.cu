@@ -99,7 +99,7 @@ int run_next_hidden_compose(const Options &opt,
                                          (size_t)shard_elems,
                                          ncclFloat,
                                          ncclSum,
-                                         ranks[p].compose_nccl,
+                                         ds4_comm_epret(ranks[p]),
                                          ranks[p].stream));
         }
         CHECK_NCCL(ncclGroupEnd());

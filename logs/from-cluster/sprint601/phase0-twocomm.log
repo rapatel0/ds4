@@ -1,0 +1,8 @@
+init A...
+A rc=0 (no error)
+tmpfs            16G   33M   16G   1% /dev/shm
+0
+init B...
+B rc=0 (no error)
+tmpfs            16G   65M   16G   1% /dev/shm
+0

@@ -114,7 +114,7 @@ int run_true_ds4_post_attention_ffn_input(const Options &opt,
                                      r.d_post_attn_full_rank_major,
                                      (size_t)shard_elems,
                                      ncclFloat,
-                                     r.compose_nccl,
+                                     ds4_comm_hc(r),
                                      r.stream));
         }
         CHECK_NCCL(ncclGroupEnd());

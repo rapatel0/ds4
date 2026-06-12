@@ -1,0 +1,20 @@
+ds4-v100-tp-ep-http-bench: PASS report=/workspace/s601-artifacts/rctl601b/sustained_http.tsv json=/workspace/s601-artifacts/rctl601b/sustained_http.json
+=== bench rc=0
+=== summary row:
+selected-token	64	64	262144	32	128	4	32	128	8192	8064	71.822247	114.059366	121.364345	167.531450	181.781370	399.538095	0.000000	222.618205	90.561136	41.007395	91.049674	15.468594	50.000000	30338.000000
+=== tolerance vs /workspace/s597-phase01-artifacts/phase0-full-control:
+pairs=128 ctl_only=0 cand_only=0
+batch=1 slot=0 first_ck_step=2 first_tok_step=2
+batch=1 slot=1 first_ck_step=2 first_tok_step=2
+batch=1 slot=2 first_ck_step=2 first_tok_step=2
+batch=1 slot=3 first_ck_step=2 first_tok_step=2
+batch=1 slot=4 first_ck_step=2 first_tok_step=2
+batch=1 slot=5 first_ck_step=2 first_tok_step=2
+batch=1 slot=6 first_ck_step=2 first_tok_step=2
+batch=1 slot=7 first_ck_step=2 first_tok_step=2
+selected_token_agreement: 0.9375 (120/128)
+sequence_agreement: 0.939453 (7696/8192)
+first_ck_step histogram: {2: 32, None: 96}
+first_tok_step histogram: {2: 8, None: 120}
+=== s600/s601 flag lines in server.log:
+tp_ep_nccl	devices	8	compose_reduce_scatter	0	attention_output_allgather	0	hc_current_nccl	1	full_current_broadcast	1	transport_sweep	1	PASS

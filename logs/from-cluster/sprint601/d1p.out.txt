@@ -1,0 +1,6 @@
+ds4-v100-tp-ep-http-bench: PASS report=/workspace/s601-artifacts/d1p/sustained_http.tsv json=/workspace/s601-artifacts/d1p/sustained_http.json
+=== bench rc=0
+=== summary row:
+selected-token	64	64	262144	1	8	8	1	8	512	504	105.507138	4.852752	5.015580	6.439745	6.719497	252.157459	0.000000	223.456039	93.960717	34.007934	95.487388	8.166577	29.000000	26332.000000
+=== s600/s601 flag lines in server.log:
+tp_ep_nccl	devices	8	compose_reduce_scatter	0	attention_output_allgather	0	hc_current_nccl	1	full_current_broadcast	1	transport_sweep	1	PASS

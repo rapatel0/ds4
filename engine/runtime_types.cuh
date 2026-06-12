@@ -569,11 +569,29 @@ struct RankState {
     PackedExperts down;
     ncclComm_t compose_nccl = nullptr;
     bool compose_nccl_initialized = false;
+    /* Sprint 601 Phase A comm class split: aliases of compose_nccl unless
+     * DS4_V100_TP_EP_COMM_SPLIT creates dedicated per-class comms (set in
+     * open_compose_nccl, before any capture). */
+    ncclComm_t comm_epret = nullptr;
+    ncclComm_t comm_hc = nullptr;
+    /* Sprint 601 Phase B: relay staging for the NCCL-free EP return
+     * (kGpus slots of src_stride capacity; only the 3 SYS sources whose
+     * relay is this GPU are used). Allocated when ep_return_relay. */
+    float *d_ep_relay_stage = nullptr;
     cudaEvent_t dense_wait = nullptr;
     cudaEvent_t start = nullptr;
     cudaEvent_t mid = nullptr;
     cudaEvent_t stop = nullptr;
 };
+
+/* Sprint 601: class-comm accessors (fall back to the shared compose comm
+ * when the split is off or not yet initialized -- byte-identical default). */
+static inline ncclComm_t ds4_comm_epret(const RankState &r) {
+    return r.comm_epret ? r.comm_epret : r.compose_nccl;
+}
+static inline ncclComm_t ds4_comm_hc(const RankState &r) {
+    return r.comm_hc ? r.comm_hc : r.compose_nccl;
+}
 
 struct RoutePlanHostWorkspace {
     bool initialized = false;
