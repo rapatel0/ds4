@@ -254,6 +254,45 @@ static inline int ds4_s602_nchannels_env() {
     return (v && *v) ? std::atoi(v) : 1;
 }
 
+/* Sprint 603: site-synchronization mode for the s602 kernel collectives.
+ * DS4_V100_TP_EP_S602_SYNC=join|edges (default join = the s602 all-rank
+ * rank-stream join at both sync points of every site - the correctness
+ * default; byte-identical captures). edges = per-collective producer ->
+ * consumer dependency edges derived from the kernel read/write sets
+ * (SPRINT-603-REPORT Phase A table): E0 each rank waits its 4 NVLink
+ * peers (copy3/gather8/fold direct reads + relay-write WAR), E1 each fold
+ * dst waits its mirror g^4 (the staged SYS forwards; peers at the
+ * allgather/broadcast sites where E1 is also the site exit), E2 after the
+ * AR folds launch each rank waits its 4 peers (the "my buffers are free
+ * at collective completion" closure the falsified s602 pairwise set
+ * lacked). Per-point bisect overrides, read only in edges mode:
+ *   DS4_V100_TP_EP_S602_SYNC_E0=join|peers
+ *   DS4_V100_TP_EP_S602_SYNC_E1=join|peers|mirror
+ *   DS4_V100_TP_EP_S602_SYNC_E2=join|peers|none */
+static inline bool ds4_s602_sync_env_edges() {
+    const char *v = std::getenv("DS4_V100_TP_EP_S602_SYNC");
+    return v && std::strcmp(v, "edges") == 0;
+}
+/* Sprint 603 Phase D: dense-WAR guard. The ffn_bcast site's writers
+ * (ranks 0..4 own-copy; relays 1,2,3 cross-write d_current_full of
+ * 5,6,7) overwrite a buffer whose PREVIOUS value is consumed on the
+ * destination's DENSE streams; the s602 rank-stream sync (join or edges)
+ * never orders those readers, and the s601 full rank+dense barrier -
+ * which does - is the only configuration with a zero event census. The
+ * guard records one event on every dense stream at the site's E0 and
+ * makes each writer's rank stream wait the dense event of every GPU
+ * whose buffer it writes (own + mirror).
+ *   0 = off (s602 behavior), 1 = bcast site only (the derived hazard),
+ *   2 = every s602 site (diagnostic superset). */
+static inline int ds4_s602_dense_guard_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_S602_DENSE_GUARD");
+    return (v && *v) ? std::atoi(v) : 0;
+}
+static inline const char *ds4_s602_sync_point_env(const char *name) {
+    const char *v = std::getenv(name);
+    return (v && *v) ? v : "";
+}
+
 /* Sprint 599 C-B: enqueue the EP contribution pack + NCCL return right
  * after the routed GEMMs (before the dense/swiglu chain) and replace the
  * 8x8 cross-GPU barriers at the 954/978 sites with per-rank rank<->dense
@@ -440,6 +479,14 @@ struct Options {
     int s602_fold_delta = ds4_s602_fold_delta_env();
     int s602_min_chunk = ds4_s602_min_chunk_env();
     int s602_nchannels = ds4_s602_nchannels_env();
+    bool s602_sync_edges = ds4_s602_sync_env_edges();
+    int s602_dense_guard = ds4_s602_dense_guard_env();
+    const char *s602_sync_e0 =
+        ds4_s602_sync_point_env("DS4_V100_TP_EP_S602_SYNC_E0");
+    const char *s602_sync_e1 =
+        ds4_s602_sync_point_env("DS4_V100_TP_EP_S602_SYNC_E1");
+    const char *s602_sync_e2 =
+        ds4_s602_sync_point_env("DS4_V100_TP_EP_S602_SYNC_E2");
     const char *s600_graph_dot_dir = ds4_s600_graph_dot_dir_env();
     int s600_graph_dot_layer = ds4_s600_graph_dot_layer_env();
 };

@@ -140,6 +140,12 @@ fi
 # kernel = NCCL-free peer-write/kernel-reduction replacements for the
 # captured hc/router/bcast/post-attn collectives, ring-order-exact folds).
 : "${DS4_V100_TP_EP_HC_TRANSPORT:=kernel}"
+# Sprint 603: s602 site-synchronization mode (join = all-rank rank-stream
+# join at both sync points of every site, the s602 correctness default;
+# edges = derived per-collective producer->consumer dependency edges, the
+# SPRINT-603 Phase A table). Per-point bisect overrides pass through:
+# DS4_V100_TP_EP_S602_SYNC_E0/_E1/_E2.
+: "${DS4_V100_TP_EP_S602_SYNC:=join}"
 # Sprint 600/601: output-head communicator mode (shared = legacy single
 # comm; dedicated = eager head collectives on their own comm; host = no
 # eager NCCL, host-side reductions + UVA-copy allgather).
@@ -309,6 +315,10 @@ case "$DS4_V100_TP_EP_HC_TRANSPORT" in
     nccl|kernel) ;;
     *) fail "DS4_V100_TP_EP_HC_TRANSPORT must be nccl or kernel" ;;
 esac
+case "$DS4_V100_TP_EP_S602_SYNC" in
+    join|edges) ;;
+    *) fail "DS4_V100_TP_EP_S602_SYNC must be join or edges" ;;
+esac
 case "$DS4_V100_TP_EP_HEAD_COMM" in
     shared|dedicated|host) ;;
     *) fail "DS4_V100_TP_EP_HEAD_COMM must be shared, dedicated, or host" ;;
@@ -459,7 +469,7 @@ print_resolved() {
 }
 
 if [ "$mode" = "check" ]; then
-    echo "ds4-v100-run-tp-ep-appliance: config ok host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS decode_graph_mode=$DS4_V100_TP_EP_DECODE_GRAPH_MODE ep_stage_profile=$DS4_V100_TP_EP_EP_STAGE_PROFILE ep_return_transport=$DS4_V100_TP_EP_EP_RETURN_TRANSPORT swiglu_exchange=$DS4_V100_TP_EP_SWIGLU_EXCHANGE ep_return_early=$DS4_V100_TP_EP_EP_RETURN_EARLY hc_transport=$DS4_V100_TP_EP_HC_TRANSPORT head_comm=$DS4_V100_TP_EP_HEAD_COMM comm_split=$DS4_V100_TP_EP_COMM_SPLIT tp_ep_bin=$DS4_V100_TP_EP_BIN tp_ep_contract=$DS4_V100_TP_EP_CONTRACT tp_ep_tm_index=$DS4_V100_TP_EP_TM_INDEX mtp=off"
+    echo "ds4-v100-run-tp-ep-appliance: config ok host=$DS4_V100_HOST port=$DS4_V100_PORT ctx=$DS4_V100_CTX slots=$DS4_V100_SLOTS microbatch_wait_us=$microbatch_wait_us tokens=$DS4_V100_TOKENS decode_graph_mode=$DS4_V100_TP_EP_DECODE_GRAPH_MODE ep_stage_profile=$DS4_V100_TP_EP_EP_STAGE_PROFILE ep_return_transport=$DS4_V100_TP_EP_EP_RETURN_TRANSPORT swiglu_exchange=$DS4_V100_TP_EP_SWIGLU_EXCHANGE ep_return_early=$DS4_V100_TP_EP_EP_RETURN_EARLY hc_transport=$DS4_V100_TP_EP_HC_TRANSPORT s602_sync=$DS4_V100_TP_EP_S602_SYNC head_comm=$DS4_V100_TP_EP_HEAD_COMM comm_split=$DS4_V100_TP_EP_COMM_SPLIT tp_ep_bin=$DS4_V100_TP_EP_BIN tp_ep_contract=$DS4_V100_TP_EP_CONTRACT tp_ep_tm_index=$DS4_V100_TP_EP_TM_INDEX mtp=off"
     exit 0
 fi
 if [ "$mode" = "print" ]; then
@@ -482,6 +492,10 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_TP_EP_SWIGLU_EXCHANGE=$DS4_V100_TP_EP_SWIGLU_EXCHANGE"
     echo "DS4_V100_TP_EP_EP_RETURN_EARLY=$DS4_V100_TP_EP_EP_RETURN_EARLY"
     echo "DS4_V100_TP_EP_HC_TRANSPORT=$DS4_V100_TP_EP_HC_TRANSPORT"
+    echo "DS4_V100_TP_EP_S602_SYNC=$DS4_V100_TP_EP_S602_SYNC"
+    echo "DS4_V100_TP_EP_S602_SYNC_E0=${DS4_V100_TP_EP_S602_SYNC_E0:-}"
+    echo "DS4_V100_TP_EP_S602_SYNC_E1=${DS4_V100_TP_EP_S602_SYNC_E1:-}"
+    echo "DS4_V100_TP_EP_S602_SYNC_E2=${DS4_V100_TP_EP_S602_SYNC_E2:-}"
     echo "DS4_V100_TP_EP_HEAD_COMM=$DS4_V100_TP_EP_HEAD_COMM"
     echo "DS4_V100_TP_EP_COMM_SPLIT=$DS4_V100_TP_EP_COMM_SPLIT"
     echo "DS4_V100_TP_EP_EXTRA_ARGS=$DS4_V100_TP_EP_EXTRA_ARGS"
@@ -517,6 +531,7 @@ export DS4_V100_TP_EP_EP_RETURN_TRANSPORT
 export DS4_V100_TP_EP_SWIGLU_EXCHANGE
 export DS4_V100_TP_EP_EP_RETURN_EARLY
 export DS4_V100_TP_EP_HC_TRANSPORT
+export DS4_V100_TP_EP_S602_SYNC
 export DS4_V100_TP_EP_HEAD_COMM
 export DS4_V100_TP_EP_COMM_SPLIT
 export DS4_V100_NCCL_TOPOLOGY_POLICY

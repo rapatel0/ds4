@@ -1,0 +1,75 @@
+=== compare ge-2 vs ge-1
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {42: 32, None: 96}
+first_tok_step histogram: {None: 128}
+=== compare ge-3 vs ge-1
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {15: 32, None: 96}
+first_tok_step histogram: {None: 128}
+=== compare ge-4 vs ge-1
+selected_token_agreement: 0.929688 (119/128)
+sequence_agreement: 0.973877 (7978/8192)
+first_ck_step histogram: {26: 32, 42: 32, None: 64}
+first_tok_step histogram: {26: 5, 58: 4, None: 119}
+=== compare ge-5 vs ge-1
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {39: 32, None: 96}
+first_tok_step histogram: {None: 128}
+=== compare ge-6 vs ge-1
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {42: 32, None: 96}
+first_tok_step histogram: {None: 128}
+=== compare ge-3 vs ge-2
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {15: 32, None: 96}
+first_tok_step histogram: {None: 128}
+=== compare ge-4 vs ge-2
+selected_token_agreement: 0.929688 (119/128)
+sequence_agreement: 0.973877 (7978/8192)
+first_ck_step histogram: {26: 32, 58: 32, None: 64}
+first_tok_step histogram: {26: 5, 58: 4, None: 119}
+=== compare ge-5 vs ge-2
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {39: 32, None: 96}
+first_tok_step histogram: {None: 128}
+=== compare ge-6 vs ge-2
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {None: 128}
+first_tok_step histogram: {None: 128}
+=== compare ge-4 vs ge-3
+selected_token_agreement: 0.929688 (119/128)
+sequence_agreement: 0.973877 (7978/8192)
+first_ck_step histogram: {15: 32, 26: 32, None: 64}
+first_tok_step histogram: {26: 5, 58: 4, None: 119}
+=== compare ge-5 vs ge-3
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {15: 32, None: 96}
+first_tok_step histogram: {None: 128}
+=== compare ge-6 vs ge-3
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {15: 32, None: 96}
+first_tok_step histogram: {None: 128}
+=== compare ge-5 vs ge-4
+selected_token_agreement: 0.929688 (119/128)
+sequence_agreement: 0.973877 (7978/8192)
+first_ck_step histogram: {26: 32, 39: 32, None: 64}
+first_tok_step histogram: {26: 5, 58: 4, None: 119}
+=== compare ge-6 vs ge-4
+selected_token_agreement: 0.929688 (119/128)
+sequence_agreement: 0.973877 (7978/8192)
+first_ck_step histogram: {26: 32, 58: 32, None: 64}
+first_tok_step histogram: {26: 5, 58: 4, None: 119}
+=== compare ge-6 vs ge-5
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {39: 32, None: 96}
+first_tok_step histogram: {None: 128}

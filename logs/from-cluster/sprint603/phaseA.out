@@ -1,0 +1,10 @@
+ESMOKE_DONE rc=0
+tp_ep_s602_init	transport	kernel	mask	0xff	verify	0	rings	1	delta	1	min_chunk	0	nchannels	1	stage_kib	284	sync	edges	e0	peers	e1	mirror/peers	e2	peers	PASS
+tp_ep_decode_cudagraph_capture	layer	0	streams	88	roots	1	attempted	1	succeeded	1	error_code	0	error_name	cudaSuccess	phase	instantiate	nodes	971	step_rc	0	replay_probe	1	replay_succeeded	0	persistent	1	cache_hit	0	cache_miss	1	persistent_invalidations	0	invalidate_layer	0	invalidate_slots	0	invalidate_position	0	invalidate_root_device	0	invalidate_root_stream	0	replay_launches	0	instantiate_ms	12.460251	replay_ms	0.000000
+tp_ep_decode_cudagraph_capture	layer	1	streams	88	roots	1	attempted	1	succeeded	1	error_code	0	error_name	cudaSuccess	phase	instantiate	nodes	971	step_rc	0	replay_probe	1	replay_succeeded	0	persistent	1	cache_hit	0	cache_miss	1	persistent_invalidations	0	invalidate_layer	0	invalidate_slots	0	invalidate_position	0	invalidate_root_device	0	invalidate_root_stream	0	replay_launches	0	instantiate_ms	8.572766	replay_ms	0.000000
+tp_ep_decode_cudagraph_capture	layer	2	streams	88	roots	1	attempted	1	succeeded	1	error_code	0	error_name	cudaSuccess	phase	instantiate	nodes	971	step_rc	0	replay_probe	1	replay_succeeded	0	persistent	1	cache_hit	0	cache_miss	1	persistent_invalidations	0	invalidate_layer	0	invalidate_slots	0	invalidate_position	0	invalidate_root_device	0	invalidate_root_stream	0	replay_launches	0	instantiate_ms	18.204763	replay_ms	0.000000
+tp_ep_decode_cudagraph_capture	layer	3	streams	88	roots	1	attempted	1	succeeded	1	error_code	0	error_name	cudaSuccess	phase	instantiate	nodes	971	step_rc	0	replay_probe	1	replay_succeeded	0	persistent	1	cache_hit	0	cache_miss	1	persistent_invalidations	0	invalidate_layer	0	invalidate_slots	0	invalidate_position	0	invalidate_root_device	0	invalidate_root_stream	0	replay_launches	0	instantiate_ms	8.634066	replay_ms	0.000000
+ACTL603_DONE rc=0
+tp_ep_s602_init	transport	kernel	mask	0xff	verify	0	rings	1	delta	1	min_chunk	0	nchannels	1	stage_kib	284	sync	join	e0	join	e1	join/join	e2	none	PASS
+     43 971
+PHASEA_DONE

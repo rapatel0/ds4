@@ -501,6 +501,15 @@ struct S602State {
     int nchannels = 1;
     uint64_t stage_slot_stride = 0;        /* floats per src slot */
     uint64_t cls_off[kS602ClsCount] = {};  /* float offset within a slot */
+    /* Sprint 603 sync modes per point: 0 join, 1 peers, 2 mirror, 3 none.
+     * join defaults (byte-identical to s602): E0/E1 join, AG/BC-E1 join,
+     * E2 none (the next site's E0 join covers the exit closure). */
+    int sync_e0 = 0;
+    int sync_e1 = 0;       /* AR sites (pre-fold) */
+    int sync_e1_exit = 0;  /* AG/BC sites (E1 doubles as the site exit) */
+    int sync_e2 = 3;       /* AR site exit (post-fold) */
+    /* Sprint 603 Phase D: 0 off, 1 bcast site, 2 all sites. */
+    int dense_guard = 0;
 };
 static S602State g_s602x;
 
@@ -563,6 +572,18 @@ static int s602_parse_rings(const char *spec, int ring[kGpus][kGpus]) {
     return nrings;
 }
 
+/* Sprint 603: parse one sync-point override (see runtime_options.cuh). */
+static int s602_parse_sync_point(const char *v, int dflt) {
+    if (!v || !*v) return dflt;
+    if (std::strcmp(v, "join") == 0) return 0;
+    if (std::strcmp(v, "peers") == 0) return 1;
+    if (std::strcmp(v, "mirror") == 0) return 2;
+    if (std::strcmp(v, "none") == 0) return 3;
+    return -1;
+}
+static const char *const kS602SyncNames[4] = {"join", "peers", "mirror",
+                                              "none"};
+
 int s602_state_init(const Options &opt, RankState ranks[kGpus]) {
     if (g_s602x.initialized) return 0;
     g_s602x.initialized = true;
@@ -576,6 +597,24 @@ int s602_state_init(const Options &opt, RankState ranks[kGpus]) {
         (opt.s602_nchannels > 0 && opt.s602_nchannels <= kGpus)
             ? opt.s602_nchannels
             : 1;
+    if (opt.s602_sync_edges) {
+        /* edges defaults = the SPRINT-603 Phase A table; per-point env
+         * overrides for bisection. */
+        g_s602x.sync_e0 = s602_parse_sync_point(opt.s602_sync_e0, 1);
+        g_s602x.sync_e1 = s602_parse_sync_point(opt.s602_sync_e1, 2);
+        g_s602x.sync_e1_exit = s602_parse_sync_point(opt.s602_sync_e1, 1);
+        g_s602x.sync_e2 = s602_parse_sync_point(opt.s602_sync_e2, 1);
+        if (g_s602x.sync_e0 < 0 || g_s602x.sync_e0 > 1 ||
+            g_s602x.sync_e1 < 0 || g_s602x.sync_e1 > 2 ||
+            g_s602x.sync_e2 < 0 || g_s602x.sync_e2 == 2) {
+            std::fprintf(stderr,
+                         "tp_ep_s602_init bad sync override e0='%s' e1='%s' "
+                         "e2='%s'\n",
+                         opt.s602_sync_e0, opt.s602_sync_e1, opt.s602_sync_e2);
+            return 1;
+        }
+    }
+    g_s602x.dense_guard = opt.s602_dense_guard;
     g_s602x.nrings = s602_parse_rings(opt.s602_ring_spec, g_s602x.ring);
     if (g_s602x.nrings <= 0) {
         std::fprintf(stderr, "tp_ep_s602_init bad ring spec '%s'\n",
@@ -619,10 +658,16 @@ int s602_state_init(const Options &opt, RankState ranks[kGpus]) {
     CHECK_CUDA(cudaSetDevice(prior_device));
     std::printf("tp_ep_s602_init\ttransport\tkernel\tmask\t0x%02x\tverify\t%d\t"
                 "rings\t%d\tdelta\t%d\tmin_chunk\t%d\tnchannels\t%d\t"
-                "stage_kib\t%llu\tPASS\n",
+                "stage_kib\t%llu\tsync\t%s\te0\t%s\te1\t%s/%s\te2\t%s\t"
+                "dense_guard\t%d\tPASS\n",
                 opt.s602_kernel_mask, g_s602x.verify ? 1 : 0, g_s602x.nrings,
                 g_s602x.delta, g_s602x.min_chunk, g_s602x.nchannels,
-                (unsigned long long)(stage_bytes / 1024ull));
+                (unsigned long long)(stage_bytes / 1024ull),
+                opt.s602_sync_edges ? "edges" : "join",
+                kS602SyncNames[g_s602x.sync_e0],
+                kS602SyncNames[g_s602x.sync_e1],
+                kS602SyncNames[g_s602x.sync_e1_exit],
+                kS602SyncNames[g_s602x.sync_e2], g_s602x.dense_guard);
     std::fflush(stdout);
     return 0;
 }
@@ -809,6 +854,7 @@ static inline bool s602_full_barrier_env() {
 }
 int next_graph_order_event_slot(RankState ranks[kGpus]);
 cudaEvent_t graph_stream_done_event(RankState &r, int slot);
+cudaEvent_t graph_dense_done_event(RankState &r, int slot);
 static int s602_rank_join(RankState ranks[kGpus]) {
     if (s602_full_barrier_env()) {
         return enqueue_cross_gpu_stream_barrier(ranks, false);
@@ -832,11 +878,90 @@ static int s602_rank_join(RankState ranks[kGpus]) {
     }
     return 0;
 }
-static int s602_sync_inputs(RankState ranks[kGpus]) {
-    return s602_rank_join(ranks);
+/* Sprint 603 edge points: record one pre-allocated event slot on every
+ * rank stream, then each rank waits only its mirror (g^4) or its 4 NVLink
+ * peers (quad-mates + mirror) - the derived dependency sets of the
+ * SPRINT-603 Phase A edge table. Fixed order, graph-capturable, rank
+ * streams only. */
+static int s602_edge_sync(RankState ranks[kGpus], bool mirror_only) {
+    const int slot = next_graph_order_event_slot(ranks);
+    for (int g = 0; g < kGpus; ++g) {
+        RankState &r = ranks[g];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        cudaEvent_t ev = graph_stream_done_event(r, slot);
+        if (!ev) return 1;
+        CHECK_CUDA(cudaEventRecord(ev, r.stream));
+    }
+    for (int g = 0; g < kGpus; ++g) {
+        RankState &r = ranks[g];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        if (mirror_only) {
+            CHECK_CUDA(cudaStreamWaitEvent(
+                r.stream, graph_stream_done_event(ranks[g ^ 4], slot), 0));
+            continue;
+        }
+        for (int p = 0; p < kGpus; ++p) {
+            if (p == g || !s601_nv_adjacent(g, p)) continue;
+            CHECK_CUDA(cudaStreamWaitEvent(
+                r.stream, graph_stream_done_event(ranks[p], slot), 0));
+        }
+    }
+    return 0;
 }
+
+/* mode: 0 join, 1 peers, 2 mirror, 3 none. none enqueues nothing and
+ * consumes no event slot (the default-join capture stays byte-identical).
+ * DS4_V100_TP_EP_S602_FULL_BARRIER=1 still overrides every non-none point
+ * to the s601 rank+dense barrier (s602_rank_join handles it for join). */
+static int s602_sync_point(RankState ranks[kGpus], int mode) {
+    if (mode == 3) return 0;
+    if (mode == 0) return s602_rank_join(ranks);
+    if (s602_full_barrier_env()) {
+        return enqueue_cross_gpu_stream_barrier(ranks, false);
+    }
+    return s602_edge_sync(ranks, mode == 2);
+}
+
+/* Sprint 603 Phase D fix: dense-WAR guard (see runtime_options.cuh).
+ * Records one pre-allocated dense event per GPU, then each rank stream
+ * waits the dense events of the GPUs whose buffers this site writes from
+ * that stream (own + mirror - the relay write target). Enqueued AFTER the
+ * site's E0 rank sync, BEFORE the byte moves. */
+static int s602_dense_war_guard(RankState ranks[kGpus]) {
+    const int slot = next_graph_order_event_slot(ranks);
+    for (int g = 0; g < kGpus; ++g) {
+        RankState &r = ranks[g];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        cudaEvent_t ev = graph_dense_done_event(r, slot);
+        if (!ev) return 1;
+        CHECK_CUDA(cudaEventRecord(ev,
+                                   r.dense_stream ? r.dense_stream : r.stream));
+    }
+    for (int g = 0; g < kGpus; ++g) {
+        RankState &r = ranks[g];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        CHECK_CUDA(cudaStreamWaitEvent(
+            r.stream, graph_dense_done_event(ranks[g], slot), 0));
+        CHECK_CUDA(cudaStreamWaitEvent(
+            r.stream, graph_dense_done_event(ranks[g ^ 4], slot), 0));
+    }
+    return 0;
+}
+
+static int s602_sync_inputs(RankState ranks[kGpus]) {
+    return s602_sync_point(ranks, g_s602x.sync_e0);
+}
+/* AR sites: pre-fold point. */
 static int s602_sync_relayed(RankState ranks[kGpus]) {
-    return s602_rank_join(ranks);
+    return s602_sync_point(ranks, g_s602x.sync_e1);
+}
+/* AG/BC sites: the post-byte-move point doubles as the site exit. */
+static int s602_sync_relayed_exit(RankState ranks[kGpus]) {
+    return s602_sync_point(ranks, g_s602x.sync_e1_exit);
+}
+/* AR sites: post-fold exit closure (none in join mode). */
+static int s602_sync_exit(RankState ranks[kGpus]) {
+    return s602_sync_point(ranks, g_s602x.sync_e2);
 }
 
 /* ---- allreduce site ---- */
@@ -901,6 +1026,9 @@ int s602_allreduce_site_post(const Options &opt, RankState ranks[kGpus],
     CHECK_CUDA(cudaGetDevice(&prior_device));
     /* B0: every rank's partial (and shadow) visible to relays + folds. */
     if (s602_sync_inputs(ranks) != 0) return 2;
+    if (g_s602x.dense_guard >= 2 && s602_dense_war_guard(ranks) != 0) {
+        return 2;
+    }
     /* relay wave: for each folding dst, relay dst^4 forwards the 3 SYS
      * srcs' inputs (its own quad-mates - all NVLink) into dst's stage. */
     for (int o = 0; o < nops; ++o) {
@@ -972,6 +1100,11 @@ int s602_allreduce_site_post(const Options &opt, RankState ranks[kGpus],
             }
         }
     }
+    /* E2: exit closure - each rank's in-place partials are remote-read by
+     * its NV peers' folds above; the site must not complete on a rank
+     * before those reads do (NCCL's buffer-free contract). none in join
+     * mode (the next site's E0 join covers it transitively). */
+    if (s602_sync_exit(ranks) != 0) return 5;
     CHECK_CUDA(cudaSetDevice(prior_device));
     return 0;
 }
@@ -1006,6 +1139,9 @@ int s602_allgather_site(const Options &opt, RankState ranks[kGpus], int cls,
     }
     /* B0: every rank's shard visible to peer pulls + relay forwards. */
     if (s602_sync_inputs(ranks) != 0) return 2;
+    if (g_s602x.dense_guard >= 2 && s602_dense_war_guard(ranks) != 0) {
+        return 2;
+    }
     for (int dst = 0; dst < kGpus; ++dst) {
         RankState &r = ranks[dst];
         S602Ptrs8 in;
@@ -1043,8 +1179,9 @@ int s602_allgather_site(const Options &opt, RankState ranks[kGpus], int cls,
                                    shard_elems);
         CHECK_CUDA(cudaGetLastError());
     }
-    /* B1: relay-written segments visible to the consumers (or comparator). */
-    if (s602_sync_relayed(ranks) != 0) return 4;
+    /* B1: relay-written segments visible to the consumers (or comparator);
+     * doubles as the site exit (all shard reads are pre-B1). */
+    if (s602_sync_relayed_exit(ranks) != 0) return 4;
     if (ver) {
         for (int rank = 0; rank < kGpus; ++rank) {
             RankState &r = ranks[rank];
@@ -1091,6 +1228,11 @@ int s602_broadcast0_site(const Options &opt, RankState ranks[kGpus], int cls,
     }
     /* B0: root data visible to all readers; WAR on the dst buffers. */
     if (s602_sync_inputs(ranks) != 0) return 2;
+    /* Dense-WAR: the previous d_current_full value is consumed on the
+     * destinations' dense streams; order those reads before the writes. */
+    if (g_s602x.dense_guard >= 1 && s602_dense_war_guard(ranks) != 0) {
+        return 2;
+    }
     for (int dst = 0; dst < kGpus; ++dst) {
         if (!s601_nv_adjacent(0, dst) && dst != 0) continue; /* 0..4 */
         RankState &r = ranks[dst];
@@ -1110,8 +1252,9 @@ int s602_broadcast0_site(const Options &opt, RankState ranks[kGpus], int cls,
             block, 0, rr.stream>>>(dst_by_rank[dst], src_device0, elems);
         CHECK_CUDA(cudaGetLastError());
     }
-    /* B1: relay-written dsts visible to their consumers. */
-    if (s602_sync_relayed(ranks) != 0) return 3;
+    /* B1: relay-written dsts visible to their consumers; doubles as the
+     * site exit (all src reads are pre-B1). */
+    if (s602_sync_relayed_exit(ranks) != 0) return 3;
     if (ver) {
         for (int rank = 0; rank < kGpus; ++rank) {
             RankState &r = ranks[rank];

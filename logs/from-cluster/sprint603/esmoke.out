@@ -1,0 +1,7 @@
+ds4-v100-tp-ep-http-bench: PASS report=/workspace/s603-artifacts/esmoke/sustained_http.tsv json=/workspace/s603-artifacts/esmoke/sustained_http.json
+=== bench rc=0
+=== summary row:
+selected-token	8	8	262144	32	32	1	32	32	256	224	4.135363	61.905091	115.977226	82.755897	159.131513	238.552000	0.000000	231.958682	92.591454	46.348535	93.018693	7.992647	34.000000	28768.000000
+=== s600/s601/s602 flag lines in server.log:
+tp_ep_nccl	devices	8	compose_reduce_scatter	0	attention_output_allgather	0	hc_current_nccl	1	full_current_broadcast	1	transport_sweep	1	PASS
+tp_ep_s602_init	transport	kernel	mask	0xff	verify	0	rings	1	delta	1	min_chunk	0	nchannels	1	stage_kib	284	sync	edges	e0	peers	e1	mirror/peers	e2	peers	PASS

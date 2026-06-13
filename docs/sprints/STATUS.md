@@ -1,8 +1,38 @@
 # DS4 V100 Appliance Status
 
-Last updated: 2026-06-13 (Sprint 602)
+Last updated: 2026-06-13 (Sprint 603)
 
 ## Topline
+
+Sprint 603 (2026-06-13) derived and implemented per-collective dependency
+edges (`DS4_V100_TP_EP_S602_SYNC=join|edges` + per-point bisect overrides)
+and produced two corrections that supersede parts of the s602 record:
+
+1. **s602's "token-race-zero" is falsified at larger n.** The LL census at
+   higher run counts shows rare token-level events on EVERY
+   rank-stream-only sync mode — edges (1 token-run/6) AND the s602 join
+   incumbent (1/3). Only `FULL_BARRIER=1` is event-free (6/6 bit-exact,
+   closing s602's n=1 caveat) at ~2.1x slower (decode-domain 71-73). The
+   hazard is a **rank↔dense ordering gap**; the one code-derivable
+   dense-WAR fix (`DENSE_GUARD` on `d_current_full`) was built, gated, and
+   **falsified**. The zero-NCCL stack remains far better than any
+   captured-NCCL config (rare events vs 1.0/run with flips) and stays the
+   launcher default, but it is "rare-hazard", not "zero".
+2. **Cross-day census comparisons are confounded**: event rates on
+   identical configs moved 3-5x between the s602 and s603 measurement
+   days. Small-n promotion gates are invalid; a ≥50-run alternating soak
+   with pod telemetry is the recommended gate format going forward.
+
+Edges themselves: Simple-stress pairwise 3/3 bit-identical (stronger than
+join's 0.997-0.999), perf +6.4% (163.9 vs 153.8) — below the +15% gate, NO
+PROMOTION; only ~25% of the 1.5 ms/layer join pool reclaims (the
+transitive peer-rendezvous bounds the rest; fused sites / join-free folds
+are the 604-class lever). Floors: edges 175.0/177.1 ms (S=1/S=8) →
+required MTP multiplier 8.8-9.4 for ≥50/slot. **Correctness (the
+rank↔dense gap) now gates everything.** Report:
+`docs/sprints/SPRINT-603-REPORT.md`.
+
+## Prior topline (Sprint 602)
 
 Sprint 602 (2026-06-12/13) built the **zero-NCCL captured decode graph**
 and killed the token-corrupting race. The 9-class kernel-collective set

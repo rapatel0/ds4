@@ -1,4 +1,17 @@
-# Spike B Decode-Optimization Steering (updated 2026-06-13 after Sprint 602)
+# Spike B Decode-Optimization Steering (updated 2026-06-13 after Sprint 603)
+
+**Sprint 603 corrections: s602's "token-race-zero" was small-n luck —
+every rank-stream-only sync mode (edges AND join) fires rare token events;
+only FULL_BARRIER (2.1x slower) is event-free; the hazard is an
+un-root-caused rank↔dense ordering gap (the derivable dense-WAR candidate
+was falsified). Event rates swing 3-5x day-to-day — small-n gates are
+invalid; use ≥50-run alternating soaks.** Edges: stress-clean, +6.4% only
+(~25% of the join pool reclaims; transitive rendezvous bounds the rest) —
+not promoted. Floors: 175 ms S=1 → required MTP multiplier 8.8-9.4.
+**Program state: the correctness hazard gates everything; the base-step
+trajectory is showing diminishing returns (598: +128%; 601: +23.8%
+demonstrated; 603: +6.4%); the ≥50/slot verdict accounting is with the
+orchestrator/user.**
 
 **Sprint 602: the zero-NCCL captured graph is built, bit-exact, and
 token-race-free; launcher defaults flipped to it (correctness baseline,

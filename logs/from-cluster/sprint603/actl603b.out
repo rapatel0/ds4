@@ -1,0 +1,13 @@
+ds4-v100-tp-ep-http-bench: PASS report=/workspace/s603-artifacts/actl603b/sustained_http.tsv json=/workspace/s603-artifacts/actl603b/sustained_http.json
+=== bench rc=0
+=== summary row:
+selected-token	64	64	262144	32	128	4	32	128	8192	8064	72.850658	112.449224	115.497854	153.807363	158.233903	235.276498	0.000000	229.931654	91.904547	46.042780	91.984327	10.940955	34.000000	28768.000000
+=== tolerance vs /workspace/s597-phase01-artifacts/phase0-full-control:
+pairs=128 ctl_only=0 cand_only=0
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {None: 128}
+first_tok_step histogram: {None: 128}
+=== s600/s601/s602 flag lines in server.log:
+tp_ep_nccl	devices	8	compose_reduce_scatter	0	attention_output_allgather	0	hc_current_nccl	1	full_current_broadcast	1	transport_sweep	1	PASS
+tp_ep_s602_init	transport	kernel	mask	0xff	verify	0	rings	1	delta	1	min_chunk	0	nchannels	1	stage_kib	284	sync	join	e0	join	e1	join/join	e2	none	PASS

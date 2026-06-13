@@ -1,0 +1,18 @@
+# Sprint 603 run summary (pod llamacpp-build-8gpu, 2026-06-12; build1 = HEAD bb0756ec + s603 sync edits, build2 = + DENSE_GUARD)
+# columns: run | config | decode-domain | tolerance vs s597 | events (ck/token)
+esmoke    edges (8tok smoke)            -       -            rc=0, init echo OK
+actl603   join (default)                154.84  0.992/0.997  1 ck (s42, all 32) incl 1 TOKEN flip
+actl603b  join                          153.81  1.0/1.0      0
+actl603c  join                          154.90  1.0/1.0      0
+e-sb-1..3 edges + NCCL_PROTO=Simple     -       pairwise     3/3 BIT-IDENTICAL
+ge-1..6   edges census                  158.4-166.0  5/6 1.0/1.0  5 ck-events; ge-4 TOKEN (s26+s58, 9 slots)
+fb-1..6   FULL_BARRIER=1 census         71.1-72.8    6/6 1.0/1.0  0 events
+vb-1..3   edges + E0=join               157.6-159.7  2/3 1.0/1.0  2 ck; vb-2 TOKEN (s21, 2 slots)
+vc-1..3   edges + E1=join               149.7-153.3  3/3 1.0/1.0  1 ck-only (s53)
+gd-1..6   edges + DENSE_GUARD=1 census  158-166      5/6 1.0/1.0  gd-2 ck (s21); gd-6 TOKEN (s1, 19 slots + s38 ck)
+gd-sb-1..3 edges+guard Simple stress    -       pairwise     2/3 identical; 1 ck-only batch (s40)
+gj-1..3   join + DENSE_GUARD=1          152.1-155.1  2/3 1.0/1.0  gj-1 TOKEN (s42+s52, 15 flips); gj-2 2x ck
+d8ep      edges S=8 profiler            36.63   -            stage table
+d8jp      join S=8 profiler             34.81   -            stage table
+d1f603    edges S=1 floor               5.71 tok/s -> step 175.0 ms
+d8f603    edges S=8 floor               45.18 tok/s -> step 177.1 ms (5.65/slot)
