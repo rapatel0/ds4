@@ -62,3 +62,7 @@
 - e-edges-fix-1, e-edges-fix-2: BOTH 1.0/1.0 ZERO events (edges+fix composition gate PASS, 2/2).
 - e-edges-fix-3, e-edges-fix-amp20, e-floor-{s1,s8,edges-s1,edges-s8}: still running (pod severely degraded over ~38h uptime, ~25-30 min/run). Floors are confirmatory for the fix-adds-~0 cost claim; the MTP restatement is reasoned from the s602/s603 measured floors (join 186.9/188.7, edges 175.0/177.1) since the fix adds no GEMMs/copies.
 - GPUs left to the running Phase E; pod stays up per hygiene.
+
+## Phase E floors (post-report)
+- e-edges-fix-1/2/3 + e-edges-fix-amp20: ALL 1.0/1.0 zero events (composition 3/3 + amp-proof).
+- e-floor-{s1,s8,edges-s1,edges-s8}: running, very slow on the degraded pod (~38h+ uptime). Confirmatory for the fix-adds-~0 cost claim; floor numbers carried from s602/s603 (join 186.9/188.7, edges 175.0/177.1) in the report. Orchestrator can fold in e-floor-* when they land.
