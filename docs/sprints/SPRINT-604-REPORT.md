@@ -195,12 +195,18 @@ gate matrix:
 | Flag-off byte-identical | - | yes (early-return) | PASS |
 | Cost (decode-domain) | baseline ~153 | parity (cheap edge: 8 records + ~14 waits/site, no full join) | PASS |
 
-**Composition gate (E1) PASSES**: `edges + DENSE_FIX=1` (e-edges-fix-1 AND
-e-edges-fix-2) are both **1.0/1.0 bit-exact, zero ck, zero token** vs the s597
-control. The fix composes with the fast stack and is event-clean at full speed
-- directly resolving the s603 edges census FAIL (0.83 ck/run + token events
-without the fix). The edges path's correctness objection is removed.
-(e-edges-fix-3 + e-edges-fix-amp20 confirmation trees in flight.)
+**Composition gate (E1) PASSES**: `edges + DENSE_FIX=1` is **3/3 bit-exact,
+zero ck, zero token** (e-edges-fix-1/2/3, all 1.0/1.0 vs the s597 control). The
+fix composes with the fast stack and is event-clean at full speed - directly
+resolving the s603 edges census FAIL (0.83 ck/run + token events without the
+fix). The edges path's correctness objection is removed.
+
+**The strongest composition proof - edges + fix UNDER the amplifier**:
+`e-edges-fix-amp20` (edges + DENSE_FIX=1 + DENSE_HAZARD_AMP=20us @ attn_out_a)
+is **1.0/1.0 bit-exact, zero events**. The amplifier drives the UNFIXED config
+to ~100% token corruption (Phase A); with the fix on, even the amplified fast
+stack is bit-exact - the cleanest demonstration that the fix closes exactly the
+window the amplifier widens.
 
 Follow-ups for the orchestrator on promotion:
 - Set `DS4_V100_TP_EP_DENSE_FIX=1` as the launcher default (the fix closes the
