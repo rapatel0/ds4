@@ -5,10 +5,52 @@ appliance's main weight-pack pipeline. Prerequisite-discharged record for
 SPIKE B item **B1** — research is done, the existing pack tools do most of
 the work, and the remaining scope is small and mechanical.
 
+## FRESH REASON TO RESUME (2026-06-13, Sprint 604): the s604 hazard is a prime 0/71 suspect
+
+The 0/71 investigation (s590-595) punted with the blocker localized to
+"attention-output handoff, post-attention/FFN handoff, or routed-FFN activation
+order" — all checked **statically** (same-activation CPU oracles) and found
+clean. Sprint 604 then found and fixed a real bug in the MAIN decode path at
+**exactly the attention-output handoff**: a cross-rank dense→rank ordering
+hazard (`attn_output_a.d_out` written on src's dense stream, read cross-rank on
+dst's rank stream, no ordering edge — `engine/attention_output.cu:48/87-98/51`).
+
+Three facts make this the leading 0/71 hypothesis:
+
+1. **The MTP draft path reuses the same code.** The draft runs
+   `run_layer(mtp_opt, ...)` for layer 43 (`engine/token_major_loop.cu:450`),
+   which goes through the same attention-output allgather handoff that carried
+   the s604 hazard. The MTP draft inherited the bug.
+2. **It explains the static-vs-live paradox.** In a full-capture graph a
+   missing dependency edge is NOT a random race — the captured schedule replays
+   identically, so it manifests as a *deterministically wrong* ordering. The
+   s590-595 oracles synchronized before reading (seeing correct math); the live
+   captured draft replayed a fixed mis-ordering. That is precisely "deterministic
+   0/71 with every static check passing."
+3. **0/71 was last measured 2026-05-30, before DENSE_FIX existed** (s604,
+   promoted default-on 2026-06-13). MTP acceptance has never been measured with
+   the attention-output handoff correctly ordered.
+
+**The test is cheap and concrete** (queued for the MTP gate, after the s605+
+step-floor campaign owning the GPU): re-run MTP serving acceptance on current
+HEAD with `DENSE_FIX=1` (default) vs `DENSE_FIX=0`, and under the s604
+amplifier (`DENSE_HAZARD_AMP`). If acceptance moves off 0 with the fix on, or
+changes with the amplifier, the ordering hazard was (part of) the blocker. If
+it stays 0/71 deterministically regardless, the blocker is a genuine
+draft-math/semantic error and the s585-596 conclusion stands — but this must be
+ruled out first, because it is the cheapest test with the highest information
+value and it directly targets the s590-595-named suspect stage.
+
+Caveat: s604's main-path hazard was rare (~1/256 steps) in the un-amplified
+measured window, which argues a pure race cannot alone produce *deterministic*
+0/71 — but the full-capture-determinism point (#2) is the reconciliation: the
+draft is computed through a fixed captured schedule, so a mis-order there is
+fixed per replay, not rare. Resolve empirically.
+
 ## Current Status: V100 TP/EP MTP Does Not Work
 
-As of 2026-05-30, the V100 TP/EP serving MTP path is **not working** and should
-not be used as a performance feature.
+As of 2026-05-30, the V100 TP/EP serving MTP path was **not working** (see the
+fresh-reason-to-resume note above — this status predates the s604 fix).
 
 What is known:
 
