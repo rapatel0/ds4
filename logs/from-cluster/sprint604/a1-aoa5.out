@@ -1,0 +1,21 @@
+ds4-v100-tp-ep-http-bench: PASS report=/workspace/s604-artifacts/a1-aoa5/sustained_http.tsv json=/workspace/s604-artifacts/a1-aoa5/sustained_http.json
+=== bench rc=0
+=== summary row:
+selected-token	64	64	262144	32	128	4	32	128	8192	8064	72.947111	112.300541	115.315893	154.657508	159.048557	226.402659	0.000000	221.489569	88.355973	44.077084	89.056512	11.003494	35.000000	28768.000000
+=== tolerance vs /workspace/s597-phase01-artifacts/phase0-full-control:
+pairs=128 ctl_only=0 cand_only=0
+batch=1 slot=0 first_ck_step=9 first_tok_step=30
+batch=1 slot=1 first_ck_step=9 first_tok_step=30
+batch=1 slot=2 first_ck_step=9 first_tok_step=30
+batch=1 slot=3 first_ck_step=9 first_tok_step=30
+batch=1 slot=4 first_ck_step=9 first_tok_step=46
+batch=1 slot=5 first_ck_step=9 first_tok_step=46
+batch=1 slot=6 first_ck_step=9 first_tok_step=46
+batch=1 slot=7 first_ck_step=9 first_tok_step=46
+selected_token_agreement: 0.507812 (65/128)
+sequence_agreement: 0.759277 (6220/8192)
+first_ck_step histogram: {1: 32, 5: 32, 9: 32, 12: 32}
+first_tok_step histogram: {5: 4, 8: 4, 12: 4, 18: 12, 23: 4, 24: 4, 30: 4, 34: 4, 38: 4, 41: 4, 45: 8, 46: 8, 49: 1, 57: 12, 58: 4, None: 47}
+=== s600/s601/s602 flag lines in server.log:
+tp_ep_nccl	devices	8	compose_reduce_scatter	0	attention_output_allgather	0	hc_current_nccl	1	full_current_broadcast	1	transport_sweep	1	PASS
+tp_ep_s602_init	transport	kernel	mask	0xff	verify	0	rings	1	delta	1	min_chunk	0	nchannels	1	stage_kib	284	sync	join	e0	join	e1	join/join	e2	none	dense_guard	0	PASS

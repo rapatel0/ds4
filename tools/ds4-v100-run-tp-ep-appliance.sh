@@ -154,6 +154,17 @@ fi
 # (none | epret | hc | epret+hc). Each extra comm costs device memory;
 # the appliance prints measured per-comm VRAM cost at init.
 : "${DS4_V100_TP_EP_COMM_SPLIT:=none}"
+# Sprint 604: cross-rank dense->rank ordering edge at the attention-output
+# allgather hand-off - the fix for the rank<->dense token-corruption hazard
+# (carrier: attn_output_a.d_out written on src dense stream, read cross-rank
+# on dst rank stream with no ordering; attention_output.cu). PROMOTED
+# default-on: 34-run soak fix-off = 7/17 token-corrupt, fix-on = 17/17 clean,
+# near-zero cost; composes with edges (2/2 clean). Rollback: =0 (diagnosis only).
+: "${DS4_V100_TP_EP_DENSE_FIX:=1}"
+# Sprint 604: deterministic hazard amplifier (busy-wait widening the dense<->
+# rank window). Diagnostic only; default 0 (byte-identical). _SITE selects the
+# hand-off (attn_out_a/attn_out_b/pre_compose/...).
+: "${DS4_V100_TP_EP_DENSE_HAZARD_AMP:=0}"
 
 is_uint() {
     case "${1:-}" in
@@ -496,6 +507,9 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_TP_EP_S602_SYNC_E0=${DS4_V100_TP_EP_S602_SYNC_E0:-}"
     echo "DS4_V100_TP_EP_S602_SYNC_E1=${DS4_V100_TP_EP_S602_SYNC_E1:-}"
     echo "DS4_V100_TP_EP_S602_SYNC_E2=${DS4_V100_TP_EP_S602_SYNC_E2:-}"
+    echo "DS4_V100_TP_EP_DENSE_HAZARD_AMP=${DS4_V100_TP_EP_DENSE_HAZARD_AMP:-0}"
+    echo "DS4_V100_TP_EP_DENSE_HAZARD_AMP_SITE=${DS4_V100_TP_EP_DENSE_HAZARD_AMP_SITE:-}"
+    echo "DS4_V100_TP_EP_DENSE_FIX=${DS4_V100_TP_EP_DENSE_FIX:-0}"
     echo "DS4_V100_TP_EP_HEAD_COMM=$DS4_V100_TP_EP_HEAD_COMM"
     echo "DS4_V100_TP_EP_COMM_SPLIT=$DS4_V100_TP_EP_COMM_SPLIT"
     echo "DS4_V100_TP_EP_EXTRA_ARGS=$DS4_V100_TP_EP_EXTRA_ARGS"

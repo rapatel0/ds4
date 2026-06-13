@@ -293,6 +293,50 @@ static inline const char *ds4_s602_sync_point_env(const char *name) {
     return (v && *v) ? v : "";
 }
 
+/* Sprint 604 Phase A: deterministic rank<->dense hazard amplifier.
+ * DS4_V100_TP_EP_DENSE_HAZARD_AMP=<us> (default 0, byte-identical off)
+ * inserts a flag-gated busy-wait (the s600 device-memory-driven delay
+ * kernel) on the DENSE stream at the EP/dense overlap hand-off points,
+ * WIDENING the dense<->rank window so the s603-localized ordering hazard
+ * fires on (nearly) every run. The s600 finding inverted: a delay at the
+ * racing site restores order; a delay that holds the dense producers back
+ * lets the rank-stream consumers race ahead onto stale buffers.
+ *   DS4_V100_TP_EP_DENSE_HAZARD_AMP_SITE selects the injection site mask:
+ *     pre_dense    on the dense stream before the EP/dense GEMMs (delays
+ *                  attn/shared_gate/shared_up dense outputs vs swiglu read)
+ *     post_dense   on the dense stream after the GEMMs, before the 954 join
+ *     pre_down     on the dense stream before the shared-down GEMM
+ *     post_down    on the dense stream after the shared-down GEMM (delays
+ *                  shared_op->d_out vs the compose read)
+ *     pre_compose  on the dense stream right before compose (catch-all)
+ *   default = all sites. Comma-separated subset selects specific sites. */
+static inline int ds4_dense_hazard_amp_us_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_DENSE_HAZARD_AMP");
+    return (v && *v) ? std::atoi(v) : 0;
+}
+static inline const char *ds4_dense_hazard_amp_site_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_DENSE_HAZARD_AMP_SITE");
+    return (v && *v) ? v : nullptr;
+}
+
+/* Sprint 604 Phase C: minimal dense->rank ordering edge (the fix).
+ * DS4_V100_TP_EP_DENSE_FIX=0|1 (default 0, byte-identical off). When on,
+ * the EP/dense overlap hand-off uses a CROSS-GPU dense<->rank edge (each
+ * rank waits every peer's dense completion and vice-versa) at the points
+ * where the rank-stream-only join leaves the dense producers/consumers
+ * unordered across GPUs - the narrowest superset of the fb barrier's
+ * dense involvement, without the full rank+dense 8x8 join. */
+static inline int ds4_dense_fix_env() {
+    /* Sprint 604: cross-rank dense->rank ordering edge for the attention-output
+     * allgather hand-off (the carrier of the rank<->dense token-corruption
+     * hazard). PROMOTED default-on: the 34-run soak showed fix-off corrupts
+     * tokens in 7/17 runs (41%) while fix-on is 17/17 clean, at near-zero
+     * perf cost. Set DS4_V100_TP_EP_DENSE_FIX=0 to roll back to the racy path
+     * for diagnosis only. */
+    const char *v = std::getenv("DS4_V100_TP_EP_DENSE_FIX");
+    return (v && *v) ? std::atoi(v) : 1;
+}
+
 /* Sprint 599 C-B: enqueue the EP contribution pack + NCCL return right
  * after the routed GEMMs (before the dense/swiglu chain) and replace the
  * 8x8 cross-GPU barriers at the 954/978 sites with per-rank rank<->dense
@@ -489,4 +533,8 @@ struct Options {
         ds4_s602_sync_point_env("DS4_V100_TP_EP_S602_SYNC_E2");
     const char *s600_graph_dot_dir = ds4_s600_graph_dot_dir_env();
     int s600_graph_dot_layer = ds4_s600_graph_dot_layer_env();
+    /* Sprint 604 Phase A amplifier + Phase C fix (default off). */
+    int dense_hazard_amp_us = ds4_dense_hazard_amp_us_env();
+    const char *dense_hazard_amp_site = ds4_dense_hazard_amp_site_env();
+    int dense_fix = ds4_dense_fix_env();
 };

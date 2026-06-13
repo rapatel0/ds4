@@ -1,4 +1,22 @@
-# Spike B Decode-Optimization Steering (updated 2026-06-13 after Sprint 603)
+# Spike B Decode-Optimization Steering (updated 2026-06-13 after Sprint 604)
+
+**Sprint 604: the rank↔dense hazard is FIXED and promoted.** Carrier =
+cross-rank dense→rank RAW on the attention-output allgather
+(`attn_output_a.d_out`, attention_output.cu:48 write / :87-98 cross-rank
+read / :51 same-rank-only edge). `DENSE_FIX` (default-on) adds the minimal
+cross-GPU dense↔rank edge, near-zero cost; 34-run soak fix-on 17/17 clean,
+fix-off 7/17 token-corrupt (the prior default). Method that cracked it: a
+deterministic amplifier (`DENSE_HAZARD_AMP`) → 0→100% single-run corruption
+→ 1-run gates. Composes with edges (2/2). **The correctness treadmill is
+over — speedups no longer regenerate the bug; the fast stack can promote on
+correctness now.** Clean floors ~177 ms (edges+fix S=8). **The ≥50/slot
+arithmetic is unchanged (required MTP ~8.8-9.4) but now sits on a valid
+base; the path is an engineering sequence, not a bug chase. Sprint 605
+lead: promote edges+fix (its correctness objection is gone; a clean soak +
+the +6.4% is now bankable), then attack the step floor — prefix launch
+compaction (~1.1 ms/layer), route-plan shadow (~0.45), cross-layer graph
+consolidation — to drive ~177 ms toward the ~40-60 ms MTP-reachable floor,
+THEN the MTP gate.**
 
 **Sprint 603 corrections: s602's "token-race-zero" was small-n luck —
 every rank-stream-only sync mode (edges AND join) fires rare token events;

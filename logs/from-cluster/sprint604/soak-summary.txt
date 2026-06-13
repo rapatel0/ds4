@@ -1,0 +1,45 @@
+run fix sel seq first_ck_hist first_tok_hist
+soak-off-1 fix=0 sel=(128/128) seq=(8192/8192) ck={20: 32, None: 96} tok={None: 128}
+soak-off-2 fix=0 sel=(128/128) seq=(8192/8192) ck={None: 128} tok={None: 128}
+soak-off-3 fix=0 sel=(127/128) seq=(8144/8192) ck={16: 32, None: 96} tok={16: 1, None: 127}
+soak-off-4 fix=0 sel=(126/128) seq=(8146/8192) ck={41: 32, 49: 32, None: 64} tok={41: 2, None: 126}
+soak-off-5 fix=0 sel=(128/128) seq=(8192/8192) ck={9: 32, 43: 32, 63: 32, None: 32} tok={None: 128}
+soak-off-6 fix=0 sel=(128/128) seq=(8192/8192) ck={None: 128} tok={None: 128}
+soak-off-7 fix=0 sel=(128/128) seq=(8192/8192) ck={None: 128} tok={None: 128}
+soak-off-8 fix=0 sel=(128/128) seq=(8192/8192) ck={63: 32, None: 96} tok={None: 128}
+soak-off-9 fix=0 sel=(124/128) seq=(8048/8192) ck={28: 32, None: 96} tok={28: 4, None: 124}
+soak-off-10 fix=0 sel=(128/128) seq=(8192/8192) ck={None: 128} tok={None: 128}
+soak-off-11 fix=0 sel=(128/128) seq=(8192/8192) ck={None: 128} tok={None: 128}
+soak-off-12 fix=0 sel=(110/128) seq=(8102/8192) ck={19: 32, 59: 32, None: 64} tok={59: 18, None: 110}
+soak-off-13 fix=0 sel=(127/128) seq=(8179/8192) ck={26: 32, None: 96} tok={51: 1, None: 127}
+soak-off-14 fix=0 sel=(123/128) seq=(8052/8192) ck={36: 32, None: 96} tok={36: 5, None: 123}
+soak-off-15 fix=0 sel=(128/128) seq=(8192/8192) ck={None: 128} tok={None: 128}
+soak-off-16 fix=0 sel=(120/128) seq=(7936/8192) ck={32: 32, None: 96} tok={32: 8, None: 120}
+soak-off-17 fix=0 sel=(96/96) seq=(6144/6144) ck={43: 32, None: 64} tok={None: 96}
+soak-on-1 fix=1 sel=(128/128) seq=(8192/8192) ck={None: 128} tok={None: 128}
+soak-on-2 fix=1 sel=(128/128) seq=(8192/8192) ck={None: 128} tok={None: 128}
+soak-on-3 fix=1 sel=(128/128) seq=(8192/8192) ck={None: 128} tok={None: 128}
+soak-on-4 fix=1 sel=(128/128) seq=(8192/8192) ck={None: 128} tok={None: 128}
+soak-on-5 fix=1 sel=(128/128) seq=(8192/8192) ck={None: 128} tok={None: 128}
+soak-on-6 fix=1 sel=(128/128) seq=(8192/8192) ck={None: 128} tok={None: 128}
+soak-on-7 fix=1 sel=(128/128) seq=(8192/8192) ck={None: 128} tok={None: 128}
+soak-on-8 fix=1 sel=(128/128) seq=(8192/8192) ck={None: 128} tok={None: 128}
+soak-on-9 fix=1 sel=(128/128) seq=(8192/8192) ck={None: 128} tok={None: 128}
+soak-on-10 fix=1 sel=(128/128) seq=(8192/8192) ck={None: 128} tok={None: 128}
+soak-on-11 fix=1 sel=(128/128) seq=(8192/8192) ck={None: 128} tok={None: 128}
+soak-on-12 fix=1 sel=(128/128) seq=(8192/8192) ck={None: 128} tok={None: 128}
+soak-on-13 fix=1 sel=(128/128) seq=(8192/8192) ck={None: 128} tok={None: 128}
+soak-on-14 fix=1 sel=(128/128) seq=(8192/8192) ck={None: 128} tok={None: 128}
+soak-on-15 fix=1 sel=(128/128) seq=(8192/8192) ck={None: 128} tok={None: 128}
+soak-on-16 fix=1 sel=(128/128) seq=(8192/8192) ck={None: 128} tok={None: 128}
+soak-on-17 fix=1 sel=(128/128) seq=(8192/8192) ck={None: 128} tok={None: 128}
+soak-on-18 fix=1 sel= seq= ck= tok=
+=== ARM TOTALS ===
+arm=on runs=18 runs_with_token_event=0 runs_with_ck_event=0
+arm=off runs=17 runs_with_token_event=7 runs_with_ck_event=11
+=== TELEMETRY (mean per arm) ===
+fix=1 n=18 mean_temp=38.6 mean_sm_mhz=1439 mean_power=67.9 ecc=0
+fix=0 n=17 mean_temp=38.8 mean_sm_mhz=1530 mean_power=70.1 ecc=0
+=== concurrent-proc check (should be 0 every run) ===
+WARNING foreign proc at soak-on-18: 8
+(no warnings above = clean)

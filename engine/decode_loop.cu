@@ -92,6 +92,8 @@ int run_decode_loop(const Options &opt,
     ep_stage_prof_device_init(opt, ranks);
     /* s600: probe state (flag-gated no-op when off; outside any capture). */
     if (s600_probe_init(opt, ranks) != 0) return 2;
+    /* s604: rank<->dense hazard amplifier state (flag-gated no-op when off). */
+    if (s604_amp_init(opt, ranks) != 0) return 2;
     int cudagraph_audit_sync_all_calls = 0;
     int cudagraph_audit_event_barrier_calls = 0;
     int cudagraph_audit_stream_syncs = 0;
@@ -1053,6 +1055,7 @@ int run_decode_loop(const Options &opt,
                                                        : ranks[p].stream);
                 }
             }
+            s604_amp_enqueue(ranks, kS604PreDense, true);
             if (launch_resident_f8_dense(opt, *attn_op, ranks) != 0) {
                 return 2;
             }
@@ -1061,6 +1064,7 @@ int run_decode_loop(const Options &opt,
                     launch_resident_f8_dense(opt, *shared_up_op, ranks) != 0) {
                     return 2;
                 }
+                s604_amp_enqueue(ranks, kS604PostDense, true);
                 if (!opt.decode_cudagraph_gate &&
                     (opt.layer <= 4 || should_log_reference_hc_window(opt))) {
                     for (int p = 0; p < kGpus; ++p) {
@@ -1094,6 +1098,7 @@ int run_decode_loop(const Options &opt,
                 if (enqueue_rank_streams_wait_after_dense_streams(ranks) != 0) {
                     return 2;
                 }
+                if (s604_dense_fix_enqueue(opt, ranks) != 0) return 2;
                 epprof_all_end(kEpProfBarrier954);
             } else {
                 sync_all_prof(kEpProfBarrier954); /* s597: was sync_all() (954) */
@@ -1137,10 +1142,12 @@ int run_decode_loop(const Options &opt,
                     }
                 }
                 s600_delay_enqueue(ranks, kS600PreDown, true);
+                s604_amp_enqueue(ranks, kS604PreDown, true);
                 if (launch_resident_f8_dense_f32_input(opt, *shared_op, ranks) != 0) {
                     return 2;
                 }
                 s600_delay_enqueue(ranks, kS600PostDown, true);
+                s604_amp_enqueue(ranks, kS604PostDown, true);
                 epprof_all_end(kEpProfSharedSwigluDown);
                 if (ep_return_done_early) {
                     epprof_all_begin(kEpProfBarrier978);
@@ -1148,6 +1155,7 @@ int run_decode_loop(const Options &opt,
                         0) {
                         return 2;
                     }
+                    if (s604_dense_fix_enqueue(opt, ranks) != 0) return 2;
                     epprof_all_end(kEpProfBarrier978);
                 } else {
                     sync_all_prof(kEpProfBarrier978); /* s597: was sync_all() (978) */
@@ -1489,6 +1497,7 @@ int run_decode_loop(const Options &opt,
         log_rank_stage("ep_copy");
         sync_after_decode_stage("ep_copy");
 
+        s604_amp_enqueue(ranks, kS604PreCompose, true);
         for (int dst = 0; dst < kGpus; ++dst) {
             RankState &r = ranks[dst];
             CHECK_CUDA(cudaSetDevice(r.device));

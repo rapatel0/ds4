@@ -3129,6 +3129,155 @@ void s600_jitter_refresh(RankState ranks[kGpus]) {
     CHECK_CUDA(cudaSetDevice(prior_device));
 }
 
+/* ------------------------------------------------------------------------- */
+/* Sprint 604 Phase A: rank<->dense hazard amplifier + Phase C fix edge.      */
+/* Default off; with both envs unset no kernels/events are enqueued and no    */
+/* device state is allocated, so the flag-off captured graph is byte-ident.   */
+/* ------------------------------------------------------------------------- */
+enum S604AmpSite {
+    kS604PreDense = 0,   /* dense stream, before the EP/dense GEMMs */
+    kS604PostDense,      /* dense stream, after the GEMMs (pre-954) */
+    kS604PreDown,        /* dense stream, before shared-down GEMM */
+    kS604PostDown,       /* dense stream, after shared-down (pre-978) */
+    kS604PreCompose,     /* dense stream, right before compose */
+    kS604AttnOutA,       /* dense stream, before the attn-output-A GEMM
+                          * (widens the cross-rank dense->rank gap at
+                          * attention_output.cu:48->87 - codex candidate 1) */
+    kS604AttnOutB,       /* dense stream, before the attn-output-B GEMM */
+    kS604AmpSiteCount
+};
+static const char *const kS604AmpSiteNames[kS604AmpSiteCount] = {
+    "pre_dense", "post_dense", "pre_down", "post_down", "pre_compose",
+    "attn_out_a", "attn_out_b"};
+
+struct S604AmpState {
+    bool initialized = false;
+    bool any = false;
+    bool site_enabled[kS604AmpSiteCount] = {};
+    unsigned long long cycles = 0;          /* amp duration, same on all sites */
+    unsigned long long *d_cycles[kGpus] = {}; /* one slot, device-read by kernel */
+};
+static S604AmpState g_s604;
+
+int s604_amp_init(const Options &opt, RankState ranks[kGpus]) {
+    if (g_s604.initialized) return 0;
+    g_s604.initialized = true;
+    if (opt.dense_hazard_amp_us <= 0) return 0;
+    g_s604.cycles = (unsigned long long)opt.dense_hazard_amp_us * kS600CyclesPerUs;
+    if (opt.dense_hazard_amp_site && *opt.dense_hazard_amp_site) {
+        const char *p = opt.dense_hazard_amp_site;
+        while (p && *p) {
+            while (*p == ',' || *p == ' ') ++p;
+            if (!*p) break;
+            const char *end = p;
+            while (*end && *end != ',' && *end != ' ') ++end;
+            const size_t len = (size_t)(end - p);
+            int site = -1;
+            for (int s = 0; s < kS604AmpSiteCount; ++s) {
+                if (std::strlen(kS604AmpSiteNames[s]) == len &&
+                    std::strncmp(kS604AmpSiteNames[s], p, len) == 0) {
+                    site = s;
+                    break;
+                }
+            }
+            if (site < 0) {
+                std::fprintf(stderr,
+                             "s604_amp_site unknown site near '%s'\n", p);
+                return 1;
+            }
+            g_s604.site_enabled[site] = true;
+            p = end;
+        }
+    } else {
+        for (int s = 0; s < kS604AmpSiteCount; ++s) g_s604.site_enabled[s] = true;
+    }
+    g_s604.any = true;
+    int prior_device = 0;
+    CHECK_CUDA(cudaGetDevice(&prior_device));
+    for (int rank = 0; rank < kGpus; ++rank) {
+        CHECK_CUDA(cudaSetDevice(ranks[rank].device));
+        CHECK_CUDA(cudaMalloc(&g_s604.d_cycles[rank], sizeof(unsigned long long)));
+        CHECK_CUDA(cudaMemcpy(g_s604.d_cycles[rank], &g_s604.cycles,
+                              sizeof(unsigned long long), cudaMemcpyHostToDevice));
+    }
+    CHECK_CUDA(cudaSetDevice(prior_device));
+    char sites[128] = {0};
+    for (int s = 0; s < kS604AmpSiteCount; ++s) {
+        if (!g_s604.site_enabled[s]) continue;
+        std::strncat(sites, kS604AmpSiteNames[s], sizeof(sites) - std::strlen(sites) - 2);
+        std::strncat(sites, ",", sizeof(sites) - std::strlen(sites) - 1);
+    }
+    std::printf("tp_ep_s604_amp_init\tus\t%d\tsites\t%s\tPASS\n",
+                opt.dense_hazard_amp_us, sites[0] ? sites : "-");
+    std::fflush(stdout);
+    return 0;
+}
+
+/* Busy-wait on the DENSE stream (delays the dense producers, letting rank
+ * consumers race ahead). on_dense=false targets the rank stream instead. */
+void s604_amp_enqueue(RankState ranks[kGpus], int site, bool on_dense) {
+    if (!g_s604.any || site < 0 || site >= kS604AmpSiteCount ||
+        !g_s604.site_enabled[site]) {
+        return;
+    }
+    int prior_device = 0;
+    CHECK_CUDA(cudaGetDevice(&prior_device));
+    for (int rank = 0; rank < kGpus; ++rank) {
+        RankState &r = ranks[rank];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        cudaStream_t stream =
+            (on_dense && r.dense_stream) ? r.dense_stream : r.stream;
+        s600_delay_kernel<<<1, 1, 0, stream>>>(g_s604.d_cycles[rank]);
+        CHECK_CUDA(cudaGetLastError());
+    }
+    CHECK_CUDA(cudaSetDevice(prior_device));
+}
+
+/* Sprint 604 Phase C: minimal CROSS-GPU dense<->rank ordering edge. The
+ * rank-stream-only join (s602_rank_join / enqueue_rank_streams_wait_after_
+ * dense_streams) orders only same-GPU dense<->rank or all-GPU rank<->rank;
+ * it leaves a peer GPU's dense producer/consumer unordered against this
+ * rank's stream. This records BOTH the rank and dense completion of every
+ * GPU, then makes each rank stream AND each dense stream wait every peer's
+ * rank and dense events - the dense involvement of the fb barrier, without
+ * the redundant rank<->rank 8x8 join the default already supplies. Graph-
+ * capturable, pre-allocated event slots. Flag-gated (opt.dense_fix). */
+static int s604_dense_rank_edge(RankState ranks[kGpus]) {
+    const int slot = next_graph_order_event_slot(ranks);
+    for (int g = 0; g < kGpus; ++g) {
+        RankState &r = ranks[g];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        cudaEvent_t sev = graph_stream_done_event(r, slot);
+        cudaEvent_t dev = graph_dense_done_event(r, slot);
+        if (!sev || !dev) return 1;
+        CHECK_CUDA(cudaEventRecord(sev, r.stream));
+        CHECK_CUDA(cudaEventRecord(dev,
+                                   r.dense_stream ? r.dense_stream : r.stream));
+    }
+    for (int g = 0; g < kGpus; ++g) {
+        RankState &r = ranks[g];
+        CHECK_CUDA(cudaSetDevice(r.device));
+        for (int p = 0; p < kGpus; ++p) {
+            /* rank stream waits every peer's dense completion (the missing
+             * cross-GPU dense->rank edge). */
+            CHECK_CUDA(cudaStreamWaitEvent(
+                r.stream, graph_dense_done_event(ranks[p], slot), 0));
+            /* dense stream waits every peer's rank completion (the reverse
+             * edge: a peer's rank producer before this dense consumer). */
+            if (r.dense_stream && r.dense_stream != r.stream) {
+                CHECK_CUDA(cudaStreamWaitEvent(
+                    r.dense_stream, graph_stream_done_event(ranks[p], slot), 0));
+            }
+        }
+    }
+    return 0;
+}
+
+int s604_dense_fix_enqueue(const Options &opt, RankState ranks[kGpus]) {
+    if (opt.dense_fix <= 0) return 0;
+    return s604_dense_rank_edge(ranks);
+}
+
 void s600_swiglu_verify_enqueue(const Options &opt, RankState ranks[kGpus],
                                 const ResidentF8Dense &down, uint32_t rows) {
     if (!g_s600.verify) return;

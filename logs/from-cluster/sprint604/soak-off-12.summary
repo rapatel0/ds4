@@ -1,0 +1,4 @@
+selected_token_agreement: 0.859375 (110/128)
+sequence_agreement: 0.989014 (8102/8192)
+first_ck_step histogram: {19: 32, 59: 32, None: 64}
+first_tok_step histogram: {59: 18, None: 110}

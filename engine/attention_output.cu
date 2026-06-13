@@ -45,10 +45,20 @@ int run_true_ds4_attention_output_projection(const Options &opt,
     }
     if (enqueue_dense_wait_after_rank_stream(ranks) != 0) return 4;
 
+    /* s604 amplifier: widen the cross-rank dense->rank window by holding the
+     * attn-output-A dense producers back, so the dst rank streams race ahead
+     * onto src's not-yet-written d_out at the peer copies below. */
+    s604_amp_enqueue(ranks, kS604AttnOutA, true);
     if (launch_resident_f8_dense(opt, ops->attn_output_a, ranks) != 0) {
         return 5;
     }
+    /* Per-GPU rank<->dense edge (each rank waits its OWN dense): leaves the
+     * cross-rank dense->rank dependency at the non-NCCL peer copies below
+     * UNORDERED (codex candidate 1 / the s603 rank<->dense hazard). */
     if (enqueue_rank_streams_wait_after_dense_streams(ranks) != 0) return 5;
+    /* s604 fix: cross-GPU dense->rank edge - each dst rank stream waits every
+     * src dense stream before reading src's d_out shard at lines 87-98. */
+    if (s604_dense_fix_enqueue(opt, ranks) != 0) return 5;
 
     const bool use_nccl_allgather =
         opt.true_ds4_attention_output_nccl_allgather_gate;
@@ -107,10 +117,12 @@ int run_true_ds4_attention_output_projection(const Options &opt,
     }
     if (enqueue_dense_wait_after_rank_stream(ranks) != 0) return 6;
 
+    s604_amp_enqueue(ranks, kS604AttnOutB, true);
     if (launch_resident_f8_dense(opt, ops->attn, ranks) != 0) {
         return 7;
     }
     if (enqueue_rank_streams_wait_after_dense_streams(ranks) != 0) return 7;
+    if (s604_dense_fix_enqueue(opt, ranks) != 0) return 7;
 
     TensorF32Stats head_stats;
     TensorF32Stats out_a_stats;

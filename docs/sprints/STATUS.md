@@ -1,8 +1,34 @@
 # DS4 V100 Appliance Status
 
-Last updated: 2026-06-13 (Sprint 603)
+Last updated: 2026-06-13 (Sprint 604)
 
 ## Topline
+
+Sprint 604 (2026-06-13) ROOT-CAUSED AND FIXED the rank↔dense ordering
+hazard — the correctness bug that gated the whole program. **Carrier**: a
+cross-rank dense→rank RAW on the attention-output allgather hand-off —
+`attn_output_a.d_out` is written on each src's dense stream
+(`attention_output.cu:48`) and read cross-rank on dst's rank stream
+(`:87-98`), while the only ordering (`:51`) covers same-rank dense→rank
+only. Pre-existing, batch-wide, feeds the same-step FFN prefix (the
+early/step-1 token class); a weaker secondary site (pre_compose) is the
+same family (late-step class). **Method**: a deterministic amplifier
+(`DENSE_HAZARD_AMP`, busy-wait widening the dense↔rank window) drove the
+hazard 0→~100% single-run token corruption, turning multi-run soaks into
+1-run pass/fail; codex static audit named the carrier; both converged.
+**Fix** (`DENSE_FIX`, PROMOTED default-on): a minimal cross-GPU dense↔rank
+edge (the full barrier's dense ordering WITHOUT the redundant rank↔rank
+8×8 join), near-zero cost. **Proof**: 34-run alternating soak,
+un-amplified, with telemetry — **fix-on 17/17 token+ck clean (1.0/1.0);
+fix-off 7/17 token events (the prior promoted default corrupts 41% of
+runs)**; ECC 0 both arms; composes with edges (edges+fix 2/2 clean,
+resolving the s603 edges census failure). Clean-base floors: ~177 ms
+(edges+fix, S=8) / ~189 ms (join+fix), required MTP multiplier ~8.8-9.4 —
+now on a VALID foundation. The "rising correctness bar" that bounded the
+s598-603 gains curve is gone; speedups no longer regenerate the bug.
+Report: `docs/sprints/SPRINT-604-REPORT.md`.
+
+## Prior topline (Sprint 603)
 
 Sprint 603 (2026-06-13) derived and implemented per-collective dependency
 edges (`DS4_V100_TP_EP_S602_SYNC=join|edges` + per-point bisect overrides)
