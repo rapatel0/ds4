@@ -2,11 +2,41 @@
 created: 2026-05-17
 last_updated: 2026-06-14
 last_updated_by: sprint-execute
-revision: 572
+revision: 573
 archived_previous: docs/sprints/archive/VISION-2026-05-23-pre-tp-hard-cut.md
 ---
 
 # Vision: DS4 V100 TP/EP Appliance
+
+## PROGRAM CEILING FINDING (2026-06-14, after Sprints 597-606)
+
+The ≥50 tok/s-per-slot target is **not reachable on the 8×V100 TP8/EP8
+appliance**, with measured evidence. The decode step is
+cross-GPU-communication-latency-bound: routed-FFN GEMMs are <5% of the step
+(s605), per-slot throughput is flat S=1→8 (s601, = fixed latency not
+bandwidth), and the 8-sprint optimization curve is flat (+128% s598 → +24%
+s601 → +6% s603 → 0% s605) — the signature of a hard floor.
+
+Arithmetic: ≥50/slot ⇔ 20 ms/step ⇔ 0.47 ms/layer; current is 199 ms (S=8) =
+4.6 ms/layer (10× gap). ~95% is per-layer cross-GPU rendezvous (mandatory
+allgather + all-to-all per layer for every-GPU-in-every-layer TP8/EP8 on V100
+NVLink), ~3-4 ms/layer that no overlap/batching/launch-compaction removes
+because it is latency, not compute or bandwidth. Microbatch ping-pong (the
+nominal highest-ceiling lever) gains only ~5% here because compute is only 5%
+of the step — nothing to hide behind the comm. Optimistic-everything stack
+(all small levers 1.4× + microbatch 1.05× → ~135 ms base) then MTP at 3× →
+**~22 tok/s/slot ceiling**, less than half the 50 target; reaching 50 from a
+135 ms base would need an MTP multiplier of ~6.8× (does not exist).
+
+Reaching ≥50/slot requires a CATEGORY change outside this optimization
+program: (1) a different parallel mapping with far less cross-GPU comm per
+token (fewer GPUs/layer — abandons the every-GPU-every-layer premise);
+(2) different hardware (NVSwitch/H100-class interconnect); or (3) the vLLM
+SM70 port (`~/repos/dsv4-vllm`, Spike A) with a different comm structure and
+working MTP. The program DID deliver: a correctness fix for a live
+token-corruption hazard (s604), ~2.4× throughput (71→~170 decode-domain), a
+fully characterized comm-latency bottleneck, and reusable amplifier/test
+infra. Full quantification: STATUS.md topline + SPRINT-605/606 reports.
 
 ## North Star
 
