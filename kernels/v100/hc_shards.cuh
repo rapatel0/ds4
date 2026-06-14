@@ -83,6 +83,35 @@ __global__ void gather_current_shards_to_full8_kernel(float *full,
     full[i] = src[src_i];
 }
 
+/* Sprint 605: single-launch gather of all 8 attention-output-A src shards into
+ * one dst's full buffer (replaces the 8 per-src cudaMemcpy2DAsync). full has
+ * `full_cols` columns laid out as [src * shard_cols + h]; each src shard is
+ * [slots][shard_cols]. Byte-identical to the memcpy2D gather it replaces. */
+__global__ void gather_attn_output_a_shards_to_full8_kernel(
+    float *full,
+    const float *shard0, const float *shard1, const float *shard2,
+    const float *shard3, const float *shard4, const float *shard5,
+    const float *shard6, const float *shard7,
+    uint32_t full_cols, uint32_t shard_cols, uint32_t slots) {
+    const uint64_t i = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const uint64_t n = (uint64_t)slots * (uint64_t)full_cols;
+    if (i >= n) return;
+    const uint32_t slot = (uint32_t)(i / full_cols);
+    const uint32_t col = (uint32_t)(i % full_cols);
+    const uint32_t src = col / shard_cols;
+    const uint32_t local_h = col - src * shard_cols;
+    const uint64_t src_i = (uint64_t)slot * shard_cols + local_h;
+    const float *s = shard0;
+    if (src == 1u) s = shard1;
+    else if (src == 2u) s = shard2;
+    else if (src == 3u) s = shard3;
+    else if (src == 4u) s = shard4;
+    else if (src == 5u) s = shard5;
+    else if (src == 6u) s = shard6;
+    else if (src == 7u) s = shard7;
+    full[i] = s[src_i];
+}
+
 __global__ void rank_major_current_shards_to_slot_major_kernel(
     float *full,
     const float *rank_major,

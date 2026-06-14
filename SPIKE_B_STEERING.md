@@ -1,4 +1,20 @@
-# Spike B Decode-Optimization Steering (updated 2026-06-13 after Sprint 604)
+# Spike B Decode-Optimization Steering (updated 2026-06-14 after Sprint 605)
+
+**Sprint 605: edges+fix PROMOTED (default); step-floor campaign opened; the
+heaviest prefix stage is DMA-transport-bound, so OVERLAP (microbatch) is the
+lever, not launch compaction.** Clean-base floors: S=8 199 ms (5.0 tok/s/slot),
+S=32 222 ms (4.5/slot); GEMMs <5% of the step (launch/sync/transport-bound,
+s601 thesis reconfirmed on a correct base). The attn_output gather8 lever
+(72→16 launches/layer) was correctness-clean but regressed ~10% — the 64
+memcpy2D are NVLink copy-engine DMA, gather kernels serialize on SMs; launch
+count is NOT the bottleneck there. Microbatch VRAM-feasibility resolved
+(~180× headroom). **Required MTP multiplier ~10 @ S=8; the base step must fall
+~3.3-4× (199→~50 ms) before MTP's 2-3× closes ≥50/slot. Sprint 606 lead:
+microbatch ping-pong (split S into 2 half-batches, overlap one's
+transport-bound prefix + EP collective window with the other's GEMM compute) —
+the highest-ceiling lever and now clearly the RIGHT one for a transport-bound
+step. Then route-plan shadow + rendezvous merge, then the MTP gate (the s604
+fix is a fresh 0/71 lead — see MTP_IMPLEMENTATION.md + docs/sprints/drafts/MTP-GATE-PLAN.md).**
 
 **Sprint 604: the rank↔dense hazard is FIXED and promoted.** Carrier =
 cross-rank dense→rank RAW on the attention-output allgather

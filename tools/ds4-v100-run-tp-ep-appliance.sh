@@ -145,7 +145,12 @@ fi
 # edges = derived per-collective producer->consumer dependency edges, the
 # SPRINT-603 Phase A table). Per-point bisect overrides pass through:
 # DS4_V100_TP_EP_S602_SYNC_E0/_E1/_E2.
-: "${DS4_V100_TP_EP_S602_SYNC:=join}"
+# Sprint 605: PROMOTED edges as the default. The s603 blockers are both
+# closed - correctness (the s604 DENSE_FIX) and perf (edges+fix ~+15% over
+# join+fix). Phase A gate: edges+fix 1.0/1.0 under the attn_out_a amplifier
+# (3/3) + the pre_compose late-step amplifier; soak: 32/32 un-amplified runs
+# token+ck clean (ECC 0). Rollback: DS4_V100_TP_EP_S602_SYNC=join.
+: "${DS4_V100_TP_EP_S602_SYNC:=edges}"
 # Sprint 600/601: output-head communicator mode (shared = legacy single
 # comm; dedicated = eager head collectives on their own comm; host = no
 # eager NCCL, host-side reductions + UVA-copy allgather).
@@ -161,6 +166,10 @@ fi
 # default-on: 34-run soak fix-off = 7/17 token-corrupt, fix-on = 17/17 clean,
 # near-zero cost; composes with edges (2/2 clean). Rollback: =0 (diagnosis only).
 : "${DS4_V100_TP_EP_DENSE_FIX:=1}"
+# Sprint 605: attention-output gather compaction (64 memcpy2D -> 8 gather8
+# kernels at the non-NCCL attn-output-A allgather). Byte-identical dataflow;
+# launch-count reduction only. Default 0 (proven memcpy2D path); opt-in =1.
+: "${DS4_V100_TP_EP_ATTN_OUT_GATHER8:=0}"
 # Sprint 604: deterministic hazard amplifier (busy-wait widening the dense<->
 # rank window). Diagnostic only; default 0 (byte-identical). _SITE selects the
 # hand-off (attn_out_a/attn_out_b/pre_compose/...).
@@ -510,6 +519,7 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_TP_EP_DENSE_HAZARD_AMP=${DS4_V100_TP_EP_DENSE_HAZARD_AMP:-0}"
     echo "DS4_V100_TP_EP_DENSE_HAZARD_AMP_SITE=${DS4_V100_TP_EP_DENSE_HAZARD_AMP_SITE:-}"
     echo "DS4_V100_TP_EP_DENSE_FIX=${DS4_V100_TP_EP_DENSE_FIX:-0}"
+    echo "DS4_V100_TP_EP_ATTN_OUT_GATHER8=${DS4_V100_TP_EP_ATTN_OUT_GATHER8:-0}"
     echo "DS4_V100_TP_EP_HEAD_COMM=$DS4_V100_TP_EP_HEAD_COMM"
     echo "DS4_V100_TP_EP_COMM_SPLIT=$DS4_V100_TP_EP_COMM_SPLIT"
     echo "DS4_V100_TP_EP_EXTRA_ARGS=$DS4_V100_TP_EP_EXTRA_ARGS"
@@ -546,6 +556,8 @@ export DS4_V100_TP_EP_SWIGLU_EXCHANGE
 export DS4_V100_TP_EP_EP_RETURN_EARLY
 export DS4_V100_TP_EP_HC_TRANSPORT
 export DS4_V100_TP_EP_S602_SYNC
+export DS4_V100_TP_EP_DENSE_FIX
+export DS4_V100_TP_EP_ATTN_OUT_GATHER8
 export DS4_V100_TP_EP_HEAD_COMM
 export DS4_V100_TP_EP_COMM_SPLIT
 export DS4_V100_NCCL_TOPOLOGY_POLICY

@@ -97,14 +97,33 @@ int run_true_ds4_attention_output_projection(const Options &opt,
         for (int dst = 0; dst < kGpus; ++dst) {
             RankState &dr = ranks[dst];
             CHECK_CUDA(cudaSetDevice(dr.device));
-            for (int src = 0; src < kGpus; ++src) {
-                const float *src_shard = ops->attn_output_a.d_out[(size_t)src];
-                if (!src_shard) return 6;
-                CHECK_CUDA(cudaMemcpy2DAsync(
-                    dr.d_attn_output_a_full + (size_t)src * out_a_shard_cols,
-                    out_a_full_row_bytes, src_shard, out_a_shard_row_bytes,
-                    out_a_shard_row_bytes, (size_t)opt.slots, cudaMemcpyDefault,
-                    dr.stream));
+            if (opt.attn_out_gather8) {
+                /* s605: collapse the 8 per-src memcpy2D into one gather kernel
+                 * (reads all 8 src d_out shards by pointer, same dst layout).
+                 * Byte-identical to the memcpy2D gather; cross-GPU dense->rank
+                 * ordering is the same s604 DENSE_FIX edge enqueued above. */
+                const float *s[kGpus];
+                for (int src = 0; src < kGpus; ++src) {
+                    s[src] = ops->attn_output_a.d_out[(size_t)src];
+                    if (!s[src]) return 6;
+                }
+                gather_attn_output_a_shards_to_full8_kernel<<<
+                    (unsigned int)((out_a_full_elems + block - 1) / block),
+                    block, 0, dr.stream>>>(
+                    dr.d_attn_output_a_full, s[0], s[1], s[2], s[3], s[4], s[5],
+                    s[6], s[7], (uint32_t)kAttentionOutputAFull,
+                    (uint32_t)out_a_shard_cols, (uint32_t)opt.slots);
+                CHECK_CUDA(cudaGetLastError());
+            } else {
+                for (int src = 0; src < kGpus; ++src) {
+                    const float *src_shard = ops->attn_output_a.d_out[(size_t)src];
+                    if (!src_shard) return 6;
+                    CHECK_CUDA(cudaMemcpy2DAsync(
+                        dr.d_attn_output_a_full + (size_t)src * out_a_shard_cols,
+                        out_a_full_row_bytes, src_shard, out_a_shard_row_bytes,
+                        out_a_shard_row_bytes, (size_t)opt.slots, cudaMemcpyDefault,
+                        dr.stream));
+                }
             }
             fill_dense_input_half_from_tensor_kernel<<<
                 (unsigned int)((out_a_full_elems + block - 1) / block), block, 0,

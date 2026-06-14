@@ -337,6 +337,21 @@ static inline int ds4_dense_fix_env() {
     return (v && *v) ? std::atoi(v) : 1;
 }
 
+/* Sprint 605 Phase C: attention-output gather compaction.
+ * DS4_V100_TP_EP_ATTN_OUT_GATHER8=0|1 (default 0, byte-identical off). When
+ * on, the non-NCCL attention-output-A allgather replaces its 64 per-(dst,src)
+ * cudaMemcpy2DAsync launches (8 per dst x 8 dst) with 8 single-launch gather8
+ * kernels (one per dst, reading all 8 src d_out shards by pointer and writing
+ * the dst's full buffer in the same [slot*Full + src*shard + h] layout). Pure
+ * launch-count reduction (72->16 launches/layer for this stage); the dataflow
+ * is byte-identical and the cross-GPU dense->rank ordering is unchanged (the
+ * s604 DENSE_FIX edge enqueued before this block still covers the peer reads).
+ * Off = the proven memcpy2D path. */
+static inline int ds4_attn_out_gather8_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_ATTN_OUT_GATHER8");
+    return (v && *v) ? std::atoi(v) : 0;
+}
+
 /* Sprint 599 C-B: enqueue the EP contribution pack + NCCL return right
  * after the routed GEMMs (before the dense/swiglu chain) and replace the
  * 8x8 cross-GPU barriers at the 954/978 sites with per-rank rank<->dense
@@ -537,4 +552,5 @@ struct Options {
     int dense_hazard_amp_us = ds4_dense_hazard_amp_us_env();
     const char *dense_hazard_amp_site = ds4_dense_hazard_amp_site_env();
     int dense_fix = ds4_dense_fix_env();
+    int attn_out_gather8 = ds4_attn_out_gather8_env();
 };

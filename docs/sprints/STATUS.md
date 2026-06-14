@@ -1,8 +1,35 @@
 # DS4 V100 Appliance Status
 
-Last updated: 2026-06-13 (Sprint 604)
+Last updated: 2026-06-14 (Sprint 605)
 
 ## Topline
+
+Sprint 605 (2026-06-14) PROMOTED edges+fix and opened the step-floor
+campaign with a clarifying negative. **edges+fix promoted**: 5/5 amplifier
+gate (incl. attn_out_a ×3 + the pre_compose late-step class) + 32/32
+un-amplified soak token+ck clean; launcher default flipped
+`S602_SYNC=join → edges` (join = rollback). **Clean-base decomposition**:
+floors S=8 199.2 ms (5.02 tok/s/slot) / S=32 221.9 ms (4.51/slot); routed
+GEMMs <0.24 ms/layer (<5% of the step) — the step is ~95% launch/sync/
+transport, reconfirming the launch-bound thesis on a correct base.
+**Microbatch VRAM gate RESOLVED in its favor** (the prior #1 risk): the
+slot-scaled activation set is ~21 MiB/rank vs ~3.9 GiB free (the 28.8 GiB
+is per-layer KV state, shared across microbatches) → fits at all S with
+~180× headroom. **Phase C lever (attn_output gather8) — correctness PASS,
+perf REGRESSION ~10%, NOT promoted**: replacing the 64 memcpy2D peer copies
+with 8 gather kernels (72→16 launches/layer) is slower because the stage is
+**DMA-transport-bound, not launch-bound** — the 64 copies are NVLink
+copy-engine DMA; gather kernels serialize strided cross-GPU reads on the
+SMs. This falsifies the launch-count hypothesis for that stage and re-ranks
+the campaign: **overlap (microbatch) is the lever, not launch compaction**.
+≥50/slot restated: required MTP multiplier ~10 at S=8 (step must fall
+~3.3-4× to the 40-60 ms MTP-reachable floor); 0 captured this sprint
+(lever regressed), but the correct/stable fast base, the trustworthy
+decomposition, the microbatch feasibility, and the transport-bound finding
+are banked. Sprint 606 lead: microbatch ping-pong (overlap the
+transport-bound prefix). Report: `docs/sprints/SPRINT-605-REPORT.md`.
+
+## Prior topline (Sprint 604)
 
 Sprint 604 (2026-06-13) ROOT-CAUSED AND FIXED the rank↔dense ordering
 hazard — the correctness bug that gated the whole program. **Carrier**: a
