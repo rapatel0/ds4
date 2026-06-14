@@ -99,6 +99,7 @@ int run_decode_loop(const Options &opt,
     int cudagraph_audit_stream_syncs = 0;
     int cudagraph_audit_dense_stream_syncs = 0;
     int cudagraph_audit_copy_stream_syncs = 0;
+    int cudagraph_audit_rdzv_merge_elided_barriers = 0;
     int cudagraph_capture_attempted = 0;
     int cudagraph_capture_succeeded = 0;
     int cudagraph_capture_error = 0;
@@ -1634,7 +1635,29 @@ int run_decode_loop(const Options &opt,
             epprof_end(dst, kEpProfCompose, r.stream);
         }
         s600_delay_enqueue(ranks, kS600PostCompose, false);
-        sync_all_prof(kEpProfBarrier1373); /* s597: was sync_all() (1373) */
+        /* Sprint 606 rendezvous merge: the 1373 post-compose 8x8 barrier is
+         * redundant with the sync_all() inside run_final_hc_carry WHEN final_hc
+         * runs inline after compose. The compose kernels write r.d_next_hidden
+         * on r.stream; the immediate next consumer
+         * (expand_hidden_to_proxy_hc_shard_kernel) reads r.d_next_hidden on the
+         * SAME r.stream (same-stream ordered), and the cross-GPU rendezvous
+         * final_hc requires is supplied by that internal sync_all() before the
+         * hc final-expand allgather. We must KEEP 1373 when compose is the
+         * suffix terminus (no inline final_hc to carry the cross-GPU edge):
+         * that is exactly the early-return guard below. Amplifier-gated;
+         * default off = the proven path. */
+        const bool rdzv_compose_is_terminus =
+            suffix_stage_is("compose") ||
+            (suffix_stage_ends_compose_eager_final_hc() &&
+             (capture_probe_active || persistent_suffix_only_active));
+        const bool rdzv_skip_1373 =
+            opt.rdzv_merge && opt.decode_cudagraph_gate &&
+            opt.final_hc_carry_gate && !rdzv_compose_is_terminus;
+        if (rdzv_skip_1373) {
+            cudagraph_audit_rdzv_merge_elided_barriers++;
+        } else {
+            sync_all_prof(kEpProfBarrier1373); /* s597: was sync_all() (1373) */
+        }
         log_rank_stage("compose");
         sync_after_decode_stage("compose");
         if (should_log_reference_hc_window(opt)) {
@@ -2474,6 +2497,11 @@ int run_decode_loop(const Options &opt,
     stats->cudagraph_rank_stream_syncs = cudagraph_audit_stream_syncs;
     stats->cudagraph_dense_stream_syncs = cudagraph_audit_dense_stream_syncs;
     stats->cudagraph_copy_stream_syncs = cudagraph_audit_copy_stream_syncs;
+    if (opt.rdzv_merge && cudagraph_audit_rdzv_merge_elided_barriers > 0) {
+        std::printf("tp_ep_s606_rdzv_merge\tlayer\t%d\telided_1373_barriers\t%d\n",
+                    opt.layer, cudagraph_audit_rdzv_merge_elided_barriers);
+        std::fflush(stdout);
+    }
 
     if (opt.skip_decode_checksum) {
         stats->checksum = 0xD54D0000ull ^

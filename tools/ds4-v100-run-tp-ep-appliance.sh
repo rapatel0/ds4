@@ -170,6 +170,12 @@ fi
 # kernels at the non-NCCL attn-output-A allgather). Byte-identical dataflow;
 # launch-count reduction only. Default 0 (proven memcpy2D path); opt-in =1.
 : "${DS4_V100_TP_EP_ATTN_OUT_GATHER8:=0}"
+# Sprint 606: rendezvous merge - elide the redundant post-compose 1373 8x8
+# barrier (covered by the sync_all inside run_final_hc_carry; same-stream
+# d_next_hidden hand-off needs no barrier). Pure launch/sync reduction on the
+# ~95%-launch/sync step. Amplifier-gated. Default 0 (proven barrier path);
+# opt-in =1. Rollback: =0.
+: "${DS4_V100_TP_EP_RDZV_MERGE:=0}"
 # Sprint 604: deterministic hazard amplifier (busy-wait widening the dense<->
 # rank window). Diagnostic only; default 0 (byte-identical). _SITE selects the
 # hand-off (attn_out_a/attn_out_b/pre_compose/...).
@@ -520,6 +526,7 @@ mkdir -p "$DS4_V100_LOG_DIR"
     echo "DS4_V100_TP_EP_DENSE_HAZARD_AMP_SITE=${DS4_V100_TP_EP_DENSE_HAZARD_AMP_SITE:-}"
     echo "DS4_V100_TP_EP_DENSE_FIX=${DS4_V100_TP_EP_DENSE_FIX:-0}"
     echo "DS4_V100_TP_EP_ATTN_OUT_GATHER8=${DS4_V100_TP_EP_ATTN_OUT_GATHER8:-0}"
+    echo "DS4_V100_TP_EP_RDZV_MERGE=${DS4_V100_TP_EP_RDZV_MERGE:-0}"
     echo "DS4_V100_TP_EP_HEAD_COMM=$DS4_V100_TP_EP_HEAD_COMM"
     echo "DS4_V100_TP_EP_COMM_SPLIT=$DS4_V100_TP_EP_COMM_SPLIT"
     echo "DS4_V100_TP_EP_EXTRA_ARGS=$DS4_V100_TP_EP_EXTRA_ARGS"
@@ -558,6 +565,7 @@ export DS4_V100_TP_EP_HC_TRANSPORT
 export DS4_V100_TP_EP_S602_SYNC
 export DS4_V100_TP_EP_DENSE_FIX
 export DS4_V100_TP_EP_ATTN_OUT_GATHER8
+export DS4_V100_TP_EP_RDZV_MERGE
 export DS4_V100_TP_EP_HEAD_COMM
 export DS4_V100_TP_EP_COMM_SPLIT
 export DS4_V100_NCCL_TOPOLOGY_POLICY

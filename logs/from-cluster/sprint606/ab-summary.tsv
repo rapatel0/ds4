@@ -1,0 +1,7 @@
+-e run	slots	cont_decode_tok_s
+rdzv-off-s8	8	38.653910
+rdzv-on-s8	8	38.799185
+rdzv-off-s16	16	73.670527
+rdzv-on-s16	16	74.825706
+rdzv-off-s32	32	140.826458
+rdzv-on-s32	32	142.455756

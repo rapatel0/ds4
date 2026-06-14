@@ -1,0 +1,63 @@
++ cd /workspace/ds4
++ for spec in "fmt https://github.com/fmtlib/fmt.git 11.0.2" "cutlass https://github.com/NVIDIA/cutlass.git v2.11.0" "concurrentqueue https://github.com/cameron314/concurrentqueue.git v1.0.4"
++ set -- fmt https://github.com/fmtlib/fmt.git 11.0.2
++ name=fmt
++ url=https://github.com/fmtlib/fmt.git
++ tag=11.0.2
++ '[' -d /workspace/deps/fmt/.git ']'
++ echo 'dep fmt present'
+dep fmt present
++ continue
++ for spec in "fmt https://github.com/fmtlib/fmt.git 11.0.2" "cutlass https://github.com/NVIDIA/cutlass.git v2.11.0" "concurrentqueue https://github.com/cameron314/concurrentqueue.git v1.0.4"
++ set -- cutlass https://github.com/NVIDIA/cutlass.git v2.11.0
++ name=cutlass
++ url=https://github.com/NVIDIA/cutlass.git
++ tag=v2.11.0
++ '[' -d /workspace/deps/cutlass/.git ']'
++ echo 'dep cutlass present'
+dep cutlass present
++ continue
++ for spec in "fmt https://github.com/fmtlib/fmt.git 11.0.2" "cutlass https://github.com/NVIDIA/cutlass.git v2.11.0" "concurrentqueue https://github.com/cameron314/concurrentqueue.git v1.0.4"
++ set -- concurrentqueue https://github.com/cameron314/concurrentqueue.git v1.0.4
++ name=concurrentqueue
++ url=https://github.com/cameron314/concurrentqueue.git
++ tag=v1.0.4
++ '[' -d /workspace/deps/concurrentqueue/.git ']'
++ echo 'dep concurrentqueue present'
+dep concurrentqueue present
++ continue
++ cmake -S kernels/turbomind/ggml-turbomind -B build/turbomind-v100 -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=70 -DFETCHCONTENT_SOURCE_DIR_FMT=/workspace/deps/fmt -DFETCHCONTENT_SOURCE_DIR_CUTLASS=/workspace/deps/cutlass -DFETCHCONTENT_SOURCE_DIR_CONCURRENTQUEUE=/workspace/deps/concurrentqueue
+-- {fmt} version: 11.0.2
+-- Build type: Release
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /workspace/ds4/build/turbomind-v100
++ cmake --build build/turbomind-v100 --target ggml-turbomind test_ggml_turbomind_grouped_gate_up_fusion -j72
+Consolidate compiler generated dependencies of target parser
+Consolidate compiler generated dependencies of target fmt
+[  5%] Built target fmt
+[  8%] Built target parser
+Consolidate compiler generated dependencies of target cuda_utils
+[ 13%] Built target cuda_utils
+Consolidate compiler generated dependencies of target core
+[ 41%] Built target core
+Consolidate compiler generated dependencies of target gemm2
+[ 89%] Built target gemm2
+Consolidate compiler generated dependencies of target ggml-turbomind
+[100%] Built target ggml-turbomind
+[  3%] Built target parser
+[  8%] Built target fmt
+[ 13%] Built target cuda_utils
+[ 40%] Built target core
+[ 86%] Built target gemm2
+[ 96%] Built target ggml-turbomind
+Consolidate compiler generated dependencies of target test_ggml_turbomind_grouped_gate_up_fusion
+[100%] Built target test_ggml_turbomind_grouped_gate_up_fusion
++ CUDA_ARCH=sm_70
++ make -j72 tools/ds4-v100-appliance-pack tools/ds4-v100-tp-ep-pack-contract tools/ds4-v100-replay appliance/ds4-v100-tp-ep-appliance
+make: 'tools/ds4-v100-appliance-pack' is up to date.
+make: 'tools/ds4-v100-tp-ep-pack-contract' is up to date.
+make: 'tools/ds4-v100-replay' is up to date.
+/usr/local/cuda/bin/nvcc -O3 --use_fast_math -arch=sm_70 -Xcompiler -march=native -Xcompiler -pthread --std=c++17 -I. -o appliance/ds4-v100-tp-ep-appliance appliance/main.cu engine/tp_runtime.cu ds4_cpu.o ds4_pack.o ds4_source_formats.o -lm -Xcompiler -pthread -L/usr/local/cuda/targets/sbsa-linux/lib -L/usr/local/cuda/lib64 -lcudart -lcublas -ldl -lnccl
++ echo S597_BUILD_OK
+S597_BUILD_OK

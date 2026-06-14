@@ -1,0 +1,30 @@
+==== rdzv-amp20-aoa (slots=32) DS4_V100_TP_EP_RDZV_MERGE=1 DS4_V100_TP_EP_DENSE_HAZARD_AMP=20 DS4_V100_TP_EP_DENSE_HAZARD_AMP_SITE=attn_out_a ====
+ds4-v100-tp-ep-http-bench: PASS report=/workspace/s606-artifacts/rdzv-amp20-aoa/sustained_http.tsv json=/workspace/s606-artifacts/rdzv-amp20-aoa/sustained_http.json
+=== bench rc=0
+=== summary row:
+selected-token	64	64	262144	32	128	4	32	128	8192	8064	78.427663	104.452940	106.905297	140.681416	144.027555	240.439484	0.000000	141.502246	93.211990	46.407595	1.882661	10.511419	33.000000	28768.000000
+=== tolerance vs /workspace/s597-phase01-artifacts/phase0-full-control:
+pairs=128 ctl_only=0 cand_only=0
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {None: 128}
+first_tok_step histogram: {None: 128}
+=== s600/s601/s602 flag lines in server.log:
+tp_ep_nccl	devices	8	compose_reduce_scatter	0	attention_output_allgather	0	hc_current_nccl	1	full_current_broadcast	1	transport_sweep	1	PASS
+tp_ep_s602_init	transport	kernel	mask	0xff	verify	0	rings	1	delta	1	min_chunk	0	nchannels	1	stage_kib	284	sync	edges	e0	peers	e1	mirror/peers	e2	peers	dense_guard	0	PASS
+==== rdzv-amp20-aoa rc=0 ====
+==== rdzv-amp20-precompose (slots=32) DS4_V100_TP_EP_RDZV_MERGE=1 DS4_V100_TP_EP_DENSE_HAZARD_AMP=20 DS4_V100_TP_EP_DENSE_HAZARD_AMP_SITE=pre_compose ====
+ds4-v100-tp-ep-http-bench: PASS report=/workspace/s606-artifacts/rdzv-amp20-precompose/sustained_http.tsv json=/workspace/s606-artifacts/rdzv-amp20-precompose/sustained_http.json
+=== bench rc=0
+=== summary row:
+selected-token	64	64	262144	32	128	4	32	128	8192	8064	83.509729	98.096355	100.401971	130.710477	133.793513	258.344591	0.000000	154.598648	100.044724	50.852895	3.701029	10.783990	32.000000	28768.000000
+=== tolerance vs /workspace/s597-phase01-artifacts/phase0-full-control:
+pairs=128 ctl_only=0 cand_only=0
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {None: 128}
+first_tok_step histogram: {None: 128}
+=== s600/s601/s602 flag lines in server.log:
+tp_ep_nccl	devices	8	compose_reduce_scatter	0	attention_output_allgather	0	hc_current_nccl	1	full_current_broadcast	1	transport_sweep	1	PASS
+tp_ep_s602_init	transport	kernel	mask	0xff	verify	0	rings	1	delta	1	min_chunk	0	nchannels	1	stage_kib	284	sync	edges	e0	peers	e1	mirror/peers	e2	peers	dense_guard	0	PASS
+==== rdzv-amp20-precompose rc=0 ====

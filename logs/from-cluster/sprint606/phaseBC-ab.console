@@ -1,0 +1,66 @@
+==== rdzv-off-s8 (slots=8) DS4_V100_TP_EP_RDZV_MERGE=0 ====
+ds4-v100-tp-ep-http-bench: PASS report=/workspace/s606-artifacts/rdzv-off-s8/sustained_http.tsv json=/workspace/s606-artifacts/rdzv-off-s8/sustained_http.json
+=== bench rc=0
+=== summary row:
+selected-token	64	64	262144	8	32	4	8	32	2048	2016	63.730952	32.135092	33.158855	38.653910	39.813003	233.618374	0.000000	223.750351	89.849644	44.028921	89.871786	6.888333	24.000000	25730.000000
+=== s600/s601/s602 flag lines in server.log:
+tp_ep_nccl	devices	8	compose_reduce_scatter	0	attention_output_allgather	0	hc_current_nccl	1	full_current_broadcast	1	transport_sweep	1	PASS
+tp_ep_s602_init	transport	kernel	mask	0xff	verify	0	rings	1	delta	1	min_chunk	0	nchannels	1	stage_kib	71	sync	edges	e0	peers	e1	mirror/peers	e2	peers	dense_guard	0	PASS
+==== rdzv-off-s8 rc=0 ====
+==== rdzv-on-s8 (slots=8) DS4_V100_TP_EP_RDZV_MERGE=1 ====
+ds4-v100-tp-ep-http-bench: PASS report=/workspace/s606-artifacts/rdzv-on-s8/sustained_http.tsv json=/workspace/s606-artifacts/rdzv-on-s8/sustained_http.json
+=== bench rc=0
+=== summary row:
+selected-token	64	64	262144	8	32	4	8	32	2048	2016	63.528367	32.237567	33.303545	38.799185	39.952525	256.425334	0.000000	152.041503	100.331350	49.665444	2.044709	6.728946	23.000000	25730.000000
+=== s600/s601/s602 flag lines in server.log:
+tp_ep_nccl	devices	8	compose_reduce_scatter	0	attention_output_allgather	0	hc_current_nccl	1	full_current_broadcast	1	transport_sweep	1	PASS
+tp_ep_s602_init	transport	kernel	mask	0xff	verify	0	rings	1	delta	1	min_chunk	0	nchannels	1	stage_kib	71	sync	edges	e0	peers	e1	mirror/peers	e2	peers	dense_guard	0	PASS
+==== rdzv-on-s8 rc=0 ====
+==== rdzv-off-s32 (slots=32) DS4_V100_TP_EP_RDZV_MERGE=0 ====
+ds4-v100-tp-ep-http-bench: PASS report=/workspace/s606-artifacts/rdzv-off-s32/sustained_http.tsv json=/workspace/s606-artifacts/rdzv-off-s32/sustained_http.json
+=== bench rc=0
+=== summary row:
+selected-token	64	64	262144	32	128	4	32	128	8192	8064	78.384570	104.510365	107.324544	140.826458	144.745518	259.459729	0.000000	245.550947	97.311990	48.103852	100.135105	10.614609	33.000000	28768.000000
+=== tolerance vs /workspace/s597-phase01-artifacts/phase0-full-control:
+pairs=128 ctl_only=0 cand_only=0
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {None: 128}
+first_tok_step histogram: {None: 128}
+=== s600/s601/s602 flag lines in server.log:
+tp_ep_nccl	devices	8	compose_reduce_scatter	0	attention_output_allgather	0	hc_current_nccl	1	full_current_broadcast	1	transport_sweep	1	PASS
+tp_ep_s602_init	transport	kernel	mask	0xff	verify	0	rings	1	delta	1	min_chunk	0	nchannels	1	stage_kib	284	sync	edges	e0	peers	e1	mirror/peers	e2	peers	dense_guard	0	PASS
+==== rdzv-off-s32 rc=0 ====
+==== rdzv-on-s32 (slots=32) DS4_V100_TP_EP_RDZV_MERGE=1 ====
+ds4-v100-tp-ep-http-bench: PASS report=/workspace/s606-artifacts/rdzv-on-s32/sustained_http.tsv json=/workspace/s606-artifacts/rdzv-on-s32/sustained_http.json
+=== bench rc=0
+=== summary row:
+selected-token	64	64	262144	32	128	4	32	128	8192	8064	77.697821	105.434103	107.771054	142.455756	145.657563	233.059473	0.000000	138.735182	91.643460	45.483145	1.608577	10.592298	33.000000	28768.000000
+=== tolerance vs /workspace/s597-phase01-artifacts/phase0-full-control:
+pairs=128 ctl_only=0 cand_only=0
+selected_token_agreement: 1.0 (128/128)
+sequence_agreement: 1.0 (8192/8192)
+first_ck_step histogram: {None: 128}
+first_tok_step histogram: {None: 128}
+=== s600/s601/s602 flag lines in server.log:
+tp_ep_nccl	devices	8	compose_reduce_scatter	0	attention_output_allgather	0	hc_current_nccl	1	full_current_broadcast	1	transport_sweep	1	PASS
+tp_ep_s602_init	transport	kernel	mask	0xff	verify	0	rings	1	delta	1	min_chunk	0	nchannels	1	stage_kib	284	sync	edges	e0	peers	e1	mirror/peers	e2	peers	dense_guard	0	PASS
+==== rdzv-on-s32 rc=0 ====
+==== rdzv-off-s16 (slots=16) DS4_V100_TP_EP_RDZV_MERGE=0 ====
+ds4-v100-tp-ep-http-bench: PASS report=/workspace/s606-artifacts/rdzv-off-s16/sustained_http.tsv json=/workspace/s606-artifacts/rdzv-off-s16/sustained_http.json
+=== bench rc=0
+=== summary row:
+selected-token	64	64	262144	16	32	2	16	32	2048	2016	35.229408	58.133251	61.907503	73.670527	78.272200	263.290079	0.000000	250.880082	100.974625	49.289343	100.616114	7.732097	26.000000	26742.000000
+=== s600/s601/s602 flag lines in server.log:
+tp_ep_nccl	devices	8	compose_reduce_scatter	0	attention_output_allgather	0	hc_current_nccl	1	full_current_broadcast	1	transport_sweep	1	PASS
+tp_ep_s602_init	transport	kernel	mask	0xff	verify	0	rings	1	delta	1	min_chunk	0	nchannels	1	stage_kib	142	sync	edges	e0	peers	e1	mirror/peers	e2	peers	dense_guard	0	PASS
+==== rdzv-off-s16 rc=0 ====
+==== rdzv-on-s16 (slots=16) DS4_V100_TP_EP_RDZV_MERGE=1 ====
+ds4-v100-tp-ep-http-bench: PASS report=/workspace/s606-artifacts/rdzv-on-s16/sustained_http.tsv json=/workspace/s606-artifacts/rdzv-on-s16/sustained_http.json
+=== bench rc=0
+=== summary row:
+selected-token	64	64	262144	16	32	2	16	32	2048	2016	34.630934	59.137880	62.105241	74.825706	78.398258	226.707320	0.000000	137.891672	91.667101	44.621245	1.603326	7.763712	26.000000	26742.000000
+=== s600/s601/s602 flag lines in server.log:
+tp_ep_nccl	devices	8	compose_reduce_scatter	0	attention_output_allgather	0	hc_current_nccl	1	full_current_broadcast	1	transport_sweep	1	PASS
+tp_ep_s602_init	transport	kernel	mask	0xff	verify	0	rings	1	delta	1	min_chunk	0	nchannels	1	stage_kib	142	sync	edges	e0	peers	e1	mirror/peers	e2	peers	dense_guard	0	PASS
+==== rdzv-on-s16 rc=0 ====

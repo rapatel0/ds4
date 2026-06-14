@@ -1,8 +1,36 @@
 # DS4 V100 Appliance Status
 
-Last updated: 2026-06-14 (Sprint 605)
+Last updated: 2026-06-14 (Sprint 606 + program ceiling finding)
+
+## PROGRAM VERDICT: >=50 tok/s/slot NOT reachable on 8xV100 TP8/EP8
+
+See VISION.md "PROGRAM CEILING FINDING". Measured: the decode step is
+cross-GPU-communication-latency-bound (GEMMs <5%, per-slot flat S=1->8,
+the s598-606 gains curve flat: +128%/+24%/+6%/0%/+1%). ~95% is mandatory
+per-layer allgather + all-to-all on V100 NVLink (~3-4 ms/layer) that
+overlap/batch/launch-compaction cannot remove. Optimistic-everything stack
+(~135 ms base) x MTP 3x => ceiling ~22 tok/s/slot, <half the target.
+Reaching 50 needs a category change (different mapping / hardware / the
+vLLM SM70 port). Banked: the s604 live-corruption fix, ~2.4x throughput
+(71->~170 decode-domain), the characterized bottleneck, the amplifier/test
+infra. The goal's prove-impossible branch is resolved with numbers.
 
 ## Topline
+
+Sprint 606 (2026-06-14): microbatch ping-pong confirmed MULTI-SPRINT (no
+slot-range primitive; opt.slots is flat across ~157 sites + needs a second
+activation set on RankState + op structs; capture is one multi-stream
+fork/join graph per layer with a persistent single-launch cache, so only
+in-graph choreography is viable). Sanctioned fallback taken:
+`DS4_V100_TP_EP_RDZV_MERGE` (default-off) elides the redundant post-compose
+8x8 barrier (provably safe by dataflow; removes up to ~1280
+cudaStreamWaitEvent/layer). Amplifier gate 1.0/1.0 at both carrier sites
+(no hazard reopened); A/B the campaign's FIRST perf-positive lever
+(+0.4/+1.6/+1.2% at S=8/16/32) but below the +15% bar -> held opt-in as a
+proven-safe stackable template. This ~1% magnitude corroborates the program
+ceiling finding above. Report: `docs/sprints/SPRINT-606-REPORT.md`.
+
+## Prior topline (Sprint 605)
 
 Sprint 605 (2026-06-14) PROMOTED edges+fix and opened the step-floor
 campaign with a clarifying negative. **edges+fix promoted**: 5/5 amplifier

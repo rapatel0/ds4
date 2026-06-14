@@ -352,6 +352,27 @@ static inline int ds4_attn_out_gather8_env() {
     return (v && *v) ? std::atoi(v) : 0;
 }
 
+/* Sprint 606: rendezvous merge (no-graph-restructure step-floor lever).
+ * DS4_V100_TP_EP_RDZV_MERGE=0|1 (default 0, byte-identical off). When on,
+ * elides the final post-compose 8x8 cross-GPU event barrier (the 1373 site
+ * in run_one_step) on the promoted decode path. SAFE BY DATAFLOW: the
+ * compose kernels write r.d_next_hidden on r.stream; the next consumer
+ * (expand_hidden_to_proxy_hc_shard_kernel in run_final_hc_carry) reads
+ * r.d_next_hidden on the SAME r.stream (same-stream ordered, needs no
+ * barrier), and the cross-GPU rendezvous that final_hc actually requires is
+ * already supplied by the sync_all() INSIDE run_final_hc_carry (before the
+ * hc final-expand allgather). So the 1373 barrier is redundant with that
+ * internal sync_all. Eliding it removes ~16 event records + up to ~1280
+ * cudaStreamWaitEvent enqueues per layer (the full include_copy_streams 8x8
+ * barrier), a pure launch/sync reduction on the ~95%-launch/sync step.
+ * Amplifier-gated (DENSE_HAZARD_AMP @ pre_compose / attn_out_a must stay
+ * 1.0/1.0 with this on). Default off = the proven barrier path. Only takes
+ * effect on the cudagraph decode path with final_hc_carry on. */
+static inline int ds4_rdzv_merge_env() {
+    const char *v = std::getenv("DS4_V100_TP_EP_RDZV_MERGE");
+    return (v && *v) ? std::atoi(v) : 0;
+}
+
 /* Sprint 599 C-B: enqueue the EP contribution pack + NCCL return right
  * after the routed GEMMs (before the dense/swiglu chain) and replace the
  * 8x8 cross-GPU barriers at the 954/978 sites with per-rank rank<->dense
@@ -553,4 +574,7 @@ struct Options {
     const char *dense_hazard_amp_site = ds4_dense_hazard_amp_site_env();
     int dense_fix = ds4_dense_fix_env();
     int attn_out_gather8 = ds4_attn_out_gather8_env();
+    /* Sprint 606: rendezvous merge (elide redundant post-compose 1373
+     * barrier). Default off = byte-identical proven barrier path. */
+    int rdzv_merge = ds4_rdzv_merge_env();
 };
